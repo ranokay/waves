@@ -227,6 +227,7 @@ class Provider(ABC):
 
     def preview_url(self, track) -> str | None:
         """A directly-streamable preview URL, when the provider documents
-        one. TIDAL's previews ride the engine's own pipeline and leave this
-        unwired; the PREVIEW capability says whether to call it at all."""
+        one; None (the inherited default) when it does not. TIDAL's previews
+        ride the engine's own HLS preview pipeline and stay unwired here; the
+        PREVIEW capability says whether to call the hook at all."""
         return None

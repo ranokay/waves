@@ -391,6 +391,22 @@ class TestQuality:
 
         assert provider.advertised_deliveries(track) == [(QualityTier.HIGH, AudioType.ATMOS)]
 
+    def test_advertised_deliveries_omit_what_the_catalog_does_not_state(self):
+        # An unknown tier advertises nothing: inventing a floor rung for an
+        # unparseable object would be a product decision the spec never made.
+        provider, _ = _provider()
+        from tidalapi import Track
+
+        broken = Mock(spec=Track)
+        broken.media_metadata_tags = None  # the tier lookup cannot answer
+        broken.audio_modes = []
+        assert provider.advertised_deliveries(broken) == []
+
+        broken_atmos = Mock(spec=Track)
+        broken_atmos.media_metadata_tags = None
+        broken_atmos.audio_modes = [AudioMode.dolby_atmos]
+        assert provider.advertised_deliveries(broken_atmos) == [(QualityTier.HIGH, AudioType.ATMOS)]
+
 
 # ---------------------------------------------------- per-track delivery
 
@@ -438,9 +454,11 @@ class TestDelivery:
         assert resolved.delivered["tier"] == "LOSSLESS"
         assert resolved.delivered["bit_depth"] == 16
 
-    def test_translation_delivered_snapshot_matches_the_backend_normalizer(self):
+    def test_translation_delivered_snapshot_carries_the_backend_facts(self):
         # One fact, two spellings, until the contract ticket deletes the
-        # backend copy: pin them together.
+        # backend copy: the neutral snapshot carries the same measured facts
+        # in the seam's vocabulary (audio_type where the backend snapshot
+        # says audio_mode) -- pin the translation, not the spelling.
         from waves.waves_ui.backend import _stream_quality
 
         provider, _ = _provider()
@@ -454,8 +472,29 @@ class TestDelivery:
         info = self._track_stream_info(stream=stream, manifest=manifest)
 
         resolved = provider._as_stream_info(info)
+        backend_snapshot = _stream_quality(info)
 
-        assert resolved.delivered == _stream_quality(info)
+        assert resolved.delivered["tier"] == backend_snapshot["tier"]
+        assert resolved.delivered["bit_depth"] == backend_snapshot["bit_depth"]
+        assert resolved.delivered["sample_rate"] == backend_snapshot["sample_rate"]
+        assert resolved.delivered["codecs"] == backend_snapshot["codecs"]
+        assert resolved.delivered["audio_type"] == str(AudioType.ATMOS)
+        assert backend_snapshot["audio_mode"] == "DOLBY_ATMOS"
+
+    def test_delivered_audio_type_is_stereo_for_a_stereo_stream(self):
+        provider, _ = _provider()
+        stream = Mock()
+        stream.audio_quality = Quality.high_lossless
+        stream.audio_mode = AudioMode.stereo
+        stream.bit_depth = 16
+        stream.sample_rate = 44100
+        manifest = Mock()
+        manifest.codecs = "flac"
+        info = self._track_stream_info(stream=stream, manifest=manifest)
+
+        resolved = provider._as_stream_info(info)
+        assert resolved.delivered["audio_type"] == str(AudioType.STEREO)
+        assert resolved.delivered["tier"] == "LOSSLESS"
 
     def test_fetch_lyrics_prefers_synced_and_plain_pair(self):
         provider, _ = _provider()
@@ -520,6 +559,7 @@ class TestDelivery:
         artist.name = "Aphex Twin"
         artist.roles = None  # a role-less credit counts as main (the helper's guard)
         track = Mock(spec=Track)
+        track.id = "1"
         track.copyright = "1992"
         track.isrc = "GBAHT9200001"
         track.explicit = False
@@ -535,6 +575,10 @@ class TestDelivery:
 
         facts = provider.track_facts(track)
 
+        assert facts["item_id"] == "tidal:1"  # the seam's namespaced spelling (§4.2)
+        assert facts["artist_ids"] == ["tidal:100"]
+        assert facts["album_artist_ids"] == ["tidal:100"]
+        assert facts["artists"] == [("tidal:100", "Aphex Twin")]
         assert facts["copyright"] == "1992"
         assert facts["isrc"] == "GBAHT9200001"
         assert facts["explicit"] is False
@@ -544,8 +588,7 @@ class TestDelivery:
         assert facts["track_num"] == 3
         assert facts["release_date"] == "2024-03-01"
         assert facts["release_type"] == "album"
-        assert facts["artists"] == [(artist.id, artist.name)]
-        assert facts["album_artist_ids"] == [artist.id]
+        assert facts["album_artist_ids"] == ["tidal:100"]
         album_facts = facts["album"]
         assert album_facts["name"] == "Selected Ambient Works"
         assert album_facts["num_tracks"] == 10
@@ -576,6 +619,7 @@ class TestDelivery:
         assert facts["release_date"] == ""
         assert facts["release_type"] == ""
         assert facts["album"]["name"] == ""
+        assert facts["item_id"] == ""  # unknown stays unknown, never "tidal:"
 
     def test_preview_hook_stays_unwired_for_tidal(self):
         # TIDAL previews ride the engine's own HLS pipeline; the hook is the

@@ -57,6 +57,18 @@ _TIDAL_QUALITY_BY_TIER: dict[QualityTier, tidalapi.Quality] = {
 _ATMOS_MODE: str = str(AudioMode.dolby_atmos.value)
 
 
+def _enum_value(value):
+    """A provider enum to its plain string value, anything else unchanged."""
+    return getattr(value, "value", value)
+
+
+def _tidal_id(raw) -> str:
+    """A TIDAL id in the seam's namespaced spelling (§4.2: namespaced string
+    ids everywhere new), empty staying empty."""
+    raw = str(raw or "")
+    return f"{CTX_TIDAL}:{raw}" if raw else ""
+
+
 def tier_from_tidal(quality: tidalapi.Quality | str) -> QualityTier:
     """A TIDAL quality spelling onto the Waves ladder.
 
@@ -131,6 +143,13 @@ class TidalProvider(Provider):
         return search_results_all(self._tidal.session, needle, single_page=True)
 
     def open_url(self, url: str) -> object | None:
+        """Resolve a pasted share URL to the engine object it names.
+
+        None covers every "cannot show this" case for now -- not this
+        provider's grammar, an item that is gone, or a failed lookup (the
+        bridge's own handler reports them identically today). Telling those
+        apart to the user is the routing ticket's to decide.
+        """
         media_type = get_tidal_media_type(url)
         if media_type is False:
             return None
@@ -160,11 +179,11 @@ class TidalProvider(Provider):
     def advertised_deliveries(self, obj) -> list[tuple[QualityTier, AudioType]]:
         modes = getattr(obj, "audio_modes", None) or []
         deliveries: list[tuple[QualityTier, AudioType]] = []
-        if not modes or not all(str(mode) == _ATMOS_MODE for mode in modes):
-            # A stereo master exists (an Atmos-only row has none): the tier is
-            # the advertised one, or the ladder's floor when even that is
-            # unknown -- a delivery row with no tier reads as nothing.
-            deliveries.append((self.advertised_tier(obj) or QualityTier.LOW, AudioType.STEREO))
+        tier = self.advertised_tier(obj)
+        if tier is not None and (not modes or not all(str(mode) == _ATMOS_MODE for mode in modes)):
+            # A stereo master exists and its tier is known: advertise exactly
+            # what the catalog states, nothing more.
+            deliveries.append((tier, AudioType.STEREO))
         if _ATMOS_MODE in {str(mode) for mode in modes}:
             # Atmos rides ONE fixed request tier the quality setting cannot
             # raise; the UI words an Atmos delivery ATMOS, never a rung.
@@ -198,15 +217,14 @@ class TidalProvider(Provider):
     def _as_stream_info(info) -> StreamInfo:
         """The engine's stream answer into the neutral shape.
 
-        The delivered snapshot mirrors the backend's own normalizer field for
-        field (the suite pins the two together), and the URLs come off the
-        manifest exactly as the segment pipeline consumes them.
+        The delivered snapshot carries the same facts as the backend's own
+        normalizer, in the seam's vocabulary (``audio_type``, the neutral
+        word, where the backend snapshot says ``audio_mode``); the suite pins
+        the translation of the two together. URLs come off the manifest
+        exactly as the segment pipeline consumes them.
         """
         stream = getattr(info, "media_stream", None)
         manifest = getattr(info, "stream_manifest", None)
-
-        def _val(value):
-            return getattr(value, "value", value)  # a Quality / AudioMode enum to its str value
 
         urls: list = []
         if manifest is not None:
@@ -215,14 +233,15 @@ class TidalProvider(Provider):
             except Exception:
                 urls = []
 
+        audio_mode = _enum_value(getattr(stream, "audio_mode", None))
         return StreamInfo(
             urls=urls,
             file_extension=getattr(info, "file_extension", ""),
             codecs=getattr(manifest, "codecs", None),
             requires_flac_extraction=bool(getattr(info, "requires_flac_extraction", False)),
             delivered={
-                "tier": _val(getattr(stream, "audio_quality", None)),
-                "audio_mode": _val(getattr(stream, "audio_mode", None)),
+                "tier": _enum_value(getattr(stream, "audio_quality", None)),
+                "audio_type": str(AudioType.ATMOS if str(audio_mode) == _ATMOS_MODE else AudioType.STEREO),
                 "bit_depth": getattr(stream, "bit_depth", None),
                 "sample_rate": getattr(stream, "sample_rate", None),
                 "codecs": getattr(manifest, "codecs", None),
@@ -281,11 +300,14 @@ class TidalProvider(Provider):
         )
 
         return {
-            "item_id": _waves_item_id(track),
-            "artist_ids": _artist_ids(track),
-            "album_artist_ids": get_album_artist_ids(track),
+            # Identity rides the seam's namespaced spelling (§4.2) -- the new
+            # schema never bares an id; the legacy tag writer strips when it
+            # writes the WAVES_TIDAL_* tags it still owns.
+            "item_id": _tidal_id(_waves_item_id(track)),
+            "artist_ids": [_tidal_id(artist_id) for artist_id in _artist_ids(track)],
+            "album_artist_ids": [_tidal_id(artist_id) for artist_id in get_album_artist_ids(track)],
             "artists": [
-                (str(artist.id), artist.name)
+                (_tidal_id(artist.id), artist.name)
                 for artist in getattr(track, "artists", None) or []
                 if getattr(artist, "id", None)
             ],
@@ -325,10 +347,3 @@ class TidalProvider(Provider):
         if message is not None or isinstance(exc, StreamNotAvailable | ObjectNotFound | AssetNotAvailable):
             return Refusal(RefusalKind.UNAVAILABLE, message or "this item is not available on TIDAL")
         return Refusal(RefusalKind.FAILURE, str(exc) or type(exc).__name__)
-
-    # ----- optional hooks
-
-    def preview_url(self, track) -> str | None:
-        # TIDAL previews ride the engine's own HLS preview pipeline; this hook
-        # is the plug-in point a provider with a documented preview URL uses.
-        return None
