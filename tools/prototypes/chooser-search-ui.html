@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<!--
+  PROTOTYPE — THROWAWAY. Do not ship, do not imitate.
+
+  Wayfinder ticket ranokay/waves#13 (wayfinder:prototype):
+  "Three variants of the two-provider search page + per-download chooser +
+  standalone lyrics/art actions, switchable via ?variant=, mocked in the
+  Waves console theme (Main.qml palette, JetBrains Mono)."
+
+  Question each variant answers: how should provider-sectioned search,
+  the defaults-first chooser gesture, and the lyrics/art-only actions
+  look and behave? The winner (or a mix) is folded into the spec;
+  this file dies on a throwaway branch.
+
+  Open directly in a browser (double-click). Flip variants with the
+  floating bar or the ← → keys. Everything is fake data; nothing persists.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE — Waves · chooser &amp; provider-sectioned search</title>
+<style>
+  @font-face { font-family: "JetBrains Mono"; src: url("../../waves/waves_ui/fonts/JetBrainsMono-Regular.ttf"); font-weight: 400; }
+  @font-face { font-family: "JetBrains Mono"; src: url("../../waves/waves_ui/fonts/JetBrainsMono-Bold.ttf"); font-weight: 700; }
+  :root {
+    --bg:#0d0f12; --surface0:#121418; --surface:#15181d; --surface2:#191c22; --surface3:#1d2128;
+    --surfaceHi:#22262e; --border1:#262a31; --line1:#22262d; --outline:#3a3f49;
+    --textHi:#e6e8ec; --textLo:#a8acb4; --textDim:#6b6f78;
+    --accent:#3dff6e; --accentText:#03210e; --accentDim:#22a64a; --accentCont:#06210f; --accentContTx:#86ffaa;
+    --gold:#ffb01f; --goldCont:#2a2008; --goldContTx:#ffd27a;
+    --green:#3ef08a; --greenCont:#08230f; --greenContTx:#8bf0b8;
+    --cyan:#56c8d8; --cyanCont:#07232b; --cyanContTx:#a6e7f1;
+    --apple:#dfe3ea; --appleInk:#10131a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--textHi);
+    font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px; padding-bottom: 120px;
+  }
+  .topbar {
+    position: sticky; top: 0; z-index: 40; background: var(--surface0);
+    border-bottom: 1px solid var(--line1); padding: 12px 20px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .topbar .logo { color: var(--accent); font-weight: 700; letter-spacing: 2px; }
+  .topbar .crumb { color: var(--textDim); }
+  .searchbox {
+    flex: 1; max-width: 560px; background: var(--surface); border: 1px solid var(--outline);
+    border-radius: 8px; padding: 8px 12px; color: var(--textLo);
+  }
+  .searchbox b { color: var(--textHi); font-weight: 400; }
+  .badge {
+    display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .5px;
+    border-radius: 4px; padding: 2px 6px; vertical-align: middle; white-space: nowrap;
+  }
+  .b-hires  { background: var(--goldCont);  color: var(--goldContTx);  border: 1px solid var(--gold); }
+  .b-loss   { background: var(--greenCont); color: var(--greenContTx); border: 1px solid var(--green); }
+  .b-high   { background: var(--cyanCont);  color: var(--cyanContTx);  border: 1px solid var(--cyan); }
+  .b-atmos  { background: var(--goldCont);  color: var(--goldContTx);  border: 1px dashed var(--gold); }
+  .b-provider { border: 1px solid transparent; }
+  .b-tidal  { background: var(--accentCont); color: var(--accentContTx); border-color: var(--accentDim); }
+  .b-apple  { background: var(--apple); color: var(--appleInk); }
+  section { padding: 18px 20px 6px; }
+  h2.sec {
+    font-size: 11px; letter-spacing: 2px; color: var(--textDim);
+    border-bottom: 1px solid var(--line1); padding-bottom: 6px; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2.sec .count { color: var(--textDim); font-weight: 400; }
+  h2.sec .showall { margin-left: auto; color: var(--accent); cursor: pointer; font-size: 10px; }
+  .grouphead {
+    display: flex; align-items: baseline; gap: 12px; margin: 26px 0 2px;
+    padding-bottom: 8px; border-bottom: 2px solid var(--outline);
+  }
+  .grouphead.tidal { border-color: var(--accentDim); }
+  .grouphead.apple { border-color: var(--outline); }
+  .grouphead .gname { font-size: 15px; font-weight: 700; letter-spacing: 1px; }
+  .grouphead.tidal .gname { color: var(--accent); }
+  .grouphead.apple .gname { color: var(--apple); }
+  .grouphead .gcount { color: var(--textDim); font-size: 11px; }
+  .grid { display: flex; gap: 14px; flex-wrap: wrap; }
+  .card {
+    width: 148px; background: var(--surface); border: 1px solid var(--border1);
+    border-radius: 10px; padding: 10px; position: relative;
+  }
+  .art {
+    width: 100%; aspect-ratio: 1; border-radius: 6px; background: var(--surface3);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--textDim); font-size: 10px; margin-bottom: 8px; position: relative;
+  }
+  .card .t { font-size: 12px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .a { font-size: 11px; color: var(--textLo); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .meta { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .row {
+    display: flex; align-items: center; gap: 12px; padding: 7px 10px;
+    border-bottom: 1px solid var(--line1); border-radius: 6px;
+  }
+  .row:hover { background: var(--surface2); }
+  .row .num { color: var(--textDim); width: 22px; text-align: right; }
+  .row .rt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .ra { color: var(--textLo); width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .dur { color: var(--textDim); width: 44px; text-align: right; }
+  .row .tools { display: flex; gap: 6px; align-items: center; }
+  .btn {
+    font-family: inherit; font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    background: var(--accent); color: var(--accentText); border: none; border-radius: 5px;
+    padding: 6px 10px; cursor: pointer; display: inline-flex; align-items: center;
+  }
+  .btn.ghost {
+    background: transparent; color: var(--accentContTx);
+    border: 1px solid var(--accentDim);
+  }
+  .btn.mini { padding: 4px 7px; font-size: 9px; }
+  .btn.quiet { background: transparent; color: var(--textLo); border: 1px solid var(--border1); }
+  .btn.quiet:hover { color: var(--textHi); border-color: var(--outline); }
+  .split { display: inline-flex; }
+  .split .btn.main { border-radius: 5px 0 0 5px; }
+  .split .btn.chev {
+    background: var(--accentDim); color: var(--accentText); border-radius: 0 5px 5px 0;
+    padding: 6px 7px; border-left: 1px solid var(--accentText);
+  }
+  .chiprow { display: flex; gap: 8px; margin: 14px 0 4px; }
+  .chip {
+    font-size: 10px; font-weight: 700; letter-spacing: 1px; padding: 5px 12px;
+    border-radius: 999px; border: 1px solid var(--border1); color: var(--textLo); cursor: pointer;
+    background: var(--surface);
+  }
+  .chip.on { background: var(--accentCont); color: var(--accentContTx); border-color: var(--accentDim); }
+  .tabs { display: inline-flex; border: 1px solid var(--outline); border-radius: 8px; overflow: hidden; margin: 14px 0 6px; }
+  .tabs .tab { padding: 8px 22px; font-size: 11px; font-weight: 700; letter-spacing: 1px; cursor: pointer; color: var(--textLo); background: var(--surface); }
+  .tabs .tab.on-tidal { background: var(--accentCont); color: var(--accentContTx); }
+  .tabs .tab.on-apple { background: var(--surfaceHi); color: var(--apple); }
+  .tabs .tab .n { opacity: .6; font-weight: 400; margin-left: 6px; }
+  /* chooser popover (A) */
+  .pop {
+    position: absolute; z-index: 60; width: 320px; background: var(--surfaceHi);
+    border: 1px solid var(--outline); border-radius: 10px; padding: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.6);
+  }
+  .pop h3 { font-size: 11px; letter-spacing: 1px; color: var(--textDim); margin-bottom: 10px; }
+  .pop .frow { margin-bottom: 10px; }
+  .pop label.k { display: block; font-size: 9px; letter-spacing: 1px; color: var(--textDim); margin-bottom: 4px; }
+  .seg { display: inline-flex; border: 1px solid var(--outline); border-radius: 6px; overflow: hidden; }
+  .seg button {
+    font-family: inherit; font-size: 10px; font-weight: 700; letter-spacing: .5px;
+    background: transparent; color: var(--textLo); border: none; padding: 5px 10px; cursor: pointer;
+  }
+  .seg button.on { background: var(--accentCont); color: var(--accentContTx); }
+  .seg button:disabled { color: var(--textDim); cursor: not-allowed; opacity: .5; }
+  .radios .r { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
+  .radios .r:hover { background: var(--surface3); }
+  .radios .r.on { background: var(--accentCont); }
+  .radios .r .d { font-size: 10px; color: var(--textDim); }
+  .tog { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: var(--textLo); cursor: pointer; margin-right: 10px; }
+  .tog .sw { width: 22px; height: 12px; border-radius: 999px; background: var(--surface3); border: 1px solid var(--outline); position: relative; }
+  .tog.on .sw { background: var(--accentDim); border-color: var(--accentDim); }
+  .tog .sw::after { content: ""; position: absolute; top: 1px; left: 1px; width: 8px; height: 8px; border-radius: 50%; background: var(--textLo); }
+  .tog.on .sw::after { left: 11px; background: var(--accentText); }
+  .pop .acts { display: flex; gap: 8px; margin-top: 12px; }
+  .pop .note { font-size: 9px; color: var(--textDim); margin-top: 8px; }
+  /* modal chooser (B) */
+  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 80; display: flex; align-items: center; justify-content: center; }
+  .modal { width: 380px; background: var(--surfaceHi); border: 1px solid var(--outline); border-radius: 12px; padding: 18px; }
+  .modal h3 { font-size: 12px; margin-bottom: 2px; }
+  .modal .sub { font-size: 10px; color: var(--textDim); margin-bottom: 14px; }
+  /* inline expander (C) */
+  .expander { background: var(--surface0); border: 1px solid var(--line1); border-left: 3px solid var(--accentDim); border-radius: 0 8px 8px 0; padding: 12px 14px; margin: 2px 0 8px 32px; }
+  .expander .cols { display: flex; gap: 26px; flex-wrap: wrap; }
+  .expander .col { min-width: 200px; }
+  .expander label.k { display: block; font-size: 9px; letter-spacing: 1px; color: var(--textDim); margin: 8px 0 4px; }
+  .albumhead { display: flex; gap: 18px; padding: 16px 20px 6px; }
+  .albumhead .bigart { width: 180px; aspect-ratio: 1; background: var(--surface3); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--textDim); font-size: 11px; flex-shrink: 0; }
+  .albumhead .info { flex: 1; }
+  .albumhead .kind { font-size: 10px; letter-spacing: 2px; color: var(--textDim); }
+  .albumhead h1 { font-size: 22px; margin: 4px 0; }
+  .albumhead .sub { color: var(--textLo); font-size: 12px; }
+  .albumhead .cluster { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .toast {
+    position: fixed; right: 20px; bottom: 84px; z-index: 90; background: var(--surfaceHi);
+    border: 1px solid var(--accentDim); border-radius: 8px; padding: 10px 14px; font-size: 11px;
+    color: var(--accentContTx); box-shadow: 0 8px 30px rgba(0,0,0,.5); max-width: 380px;
+  }
+  .toast .q { color: var(--accent); font-weight: 700; letter-spacing: 1px; }
+  #switcher {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    z-index: 100; display: flex; align-items: center; gap: 10px;
+    background: #000; border: 2px solid var(--accent); border-radius: 999px; padding: 8px 14px;
+    box-shadow: 0 0 24px rgba(61,255,110,.25);
+  }
+  #switcher button.arr { background: none; border: none; color: var(--accent); font-size: 16px; cursor: pointer; font-family: inherit; }
+  #switcher .vname { color: var(--accentContTx); font-size: 11px; font-weight: 700; letter-spacing: .5px; min-width: 330px; text-align: center; }
+  .protoflag {
+    position: fixed; top: 64px; right: 14px; z-index: 100; transform: rotate(6deg);
+    background: var(--gold); color: #201800; font-size: 9px; font-weight: 700; letter-spacing: 2px;
+    padding: 4px 10px; border-radius: 4px; opacity: .9;
+  }
+  .hint { font-size: 10px; color: var(--textDim); padding: 0 20px; margin-top: 4px; }
+  .hint b { color: var(--textLo); }
+</style>
+</head>
+<body>
+<div class="protoflag">PROTOTYPE</div>
+<div class="topbar">
+  <span class="logo">≈ WAVES</span>
+  <span class="crumb">prototype — fake data, nothing persists</span>
+  <div class="searchbox"><b>midnight‑</b>&nbsp;· try the buttons, not the typing</div>
+</div>
+<div id="app"></div>
+<div id="switcher">
+  <button class="arr" onclick="cycle(-1)">‹</button>
+  <div class="vname" id="vname"></div>
+  <button class="arr" onclick="cycle(1)">›</button>
+</div>
+
+<script>
+/* ---------------- fake catalog ---------------- */
+const TIDAL = {
+  id: "tidal", name: "TIDAL",
+  artists: [{n:"Midnight Choir",m:"HI-RES"},{n:"The Harbor Lights",m:"LOSSLESS"},{n:"Vela Noir",m:"HIGH"}],
+  albums: [
+    {t:"Northern Grain", a:"Midnight Choir", y:"2024", badges:["HI-RES","ATMOS"]},
+    {t:"Salt & Static", a:"The Harbor Lights", y:"2023", badges:["LOSSLESS"]},
+    {t:"Paper Ferry", a:"Vela Noir", y:"2026", badges:["HI-RES","ATMOS"]},
+    {t:"Low Tide Letters", a:"Midnight Choir", y:"2021", badges:["LOSSLESS"]},
+  ],
+  tracks: [
+    {n:1,t:"Northern Grain",a:"Midnight Choir",d:"3:48",badges:["HI-RES","ATMOS"]},
+    {n:2,t:"Harbor Light",a:"The Harbor Lights",d:"4:12",badges:["LOSSLESS"]},
+    {n:3,t:"Static Bloom",a:"Vela Noir",d:"2:59",badges:["HIGH"]},
+    {n:4,t:"Paper Ferry",a:"Vela Noir",d:"3:31",badges:["HI-RES"]},
+    {n:5,t:"Grain (Atmos Mix)",a:"Midnight Choir",d:"3:48",badges:["ATMOS"],atmosOnly:true},
+  ],
+  playlists: [{t:"Midnight Drive",n:"TIDAL editorial"},{t:"Harbor Evenings",n:"Your favorite"}],
+};
+const APPLE = {
+  id: "apple", name: "Apple Music",
+  artists: [{n:"Midnight Choir",m:"HI-RES"},{n:"Cassette Sunrise",m:"HIGH"}],
+  albums: [
+    {t:"Northern Grain (Deluxe)", a:"Midnight Choir", y:"2024", badges:["HI-RES","ATMOS"]},
+    {t:"Analog Heart", a:"Cassette Sunrise", y:"2025", badges:["LOSSLESS"]},
+    {t:"Northern Grain", a:"Midnight Choir", y:"2024", badges:["HI-RES"]},
+  ],
+  tracks: [
+    {n:1,t:"Northern Grain",a:"Midnight Choir",d:"3:48",badges:["HI-RES","ATMOS"]},
+    {n:2,t:"Analog Heart",a:"Cassette Sunrise",d:"3:20",badges:["LOSSLESS"]},
+    {n:3,t:"Grain (Atmos Mix)",a:"Midnight Choir",d:"3:48",badges:["ATMOS"],atmosOnly:true},
+    {n:4,t:"Static Bloom",a:"Vela Noir",d:"2:59",badges:["HIGH"]},
+  ],
+  playlists: [{t:"Late Night Hi‑Fi",n:"Apple editorial"}],
+};
+const ENABLED = { tidal: true, apple: true };
+const DEFAULTS = { provider: "tidal", tier: "HI-RES", audio: "both", lyrLrc: true, lyrTtml: false, lyrEmbed: false, artSidecar: true, artEmbed: true };
+
+function badges(list){ return (list||[]).map(b=>`<span class="badge b-${b==="ATMOS"?"atmos":b==="LOSSLESS"?"loss":b==="HIGH"?"high":"hires"}">${b}</span>`).join(""); }
+function provChip(pid){ return pid==="apple" ? `<span class="badge b-provider b-apple">APPLE</span>` : `<span class="badge b-provider b-tidal">TIDAL</span>`; }
+function esc(s){ return s.replace(/&/g,"&amp;"); }
+
+/* ---------------- shared chooser form (content identical; structure differs per variant) -------- */
+function tierList(pid){
+  return pid==="apple"
+    ? [["HI-RES","ALAC 24‑bit/192 kHz"],["LOSSLESS","ALAC 16‑bit/44.1 kHz"],["HIGH","AAC 256 kbps"]]
+    : [["HI-RES","FLAC 24‑bit up to 192 kHz"],["LOSSLESS","FLAC 16‑bit/44.1 kHz"],["HIGH","AAC 320 kbps"],["LOW","AAC 96 kbps"]];
+}
+function chooserFields(pid, state, atmosOnly){
+  const tiers = tierList(pid).map(([t,d]) =>
+    `<div class="r ${state.tier===t?"on":""}" onclick="pickTier('${t}')"><b>${t}</b><span class="d">${d}</span></div>`).join("");
+  const audioSeg = atmosOnly
+    ? `<span class="badge b-atmos">ATMOS ONLY</span> <span class="d" style="font-size:9px;color:var(--textDim)">this track exists only as Atmos</span>`
+    : `<div class="seg">
+        ${["stereo","atmos","both"].map(a=>`<button class="${state.audio===a?"on":""}" onclick="pickAudio('${a}')">${a.toUpperCase()}</button>`).join("")}
+      </div>`;
+  const provSeg = `<div class="seg">
+      ${ENABLED.tidal?`<button class="${pid==="tidal"?"on":""}" onclick="pickProvider('tidal')">TIDAL</button>`:""}
+      ${ENABLED.apple?`<button class="${pid==="apple"?"on":""}" onclick="pickProvider('apple')">APPLE</button>`:""}
+    </div>`;
+  return `
+    <div class="frow"><label class="k">PROVIDER</label>${provSeg}</div>
+    <div class="frow"><label class="k">AUDIO QUALITY</label><div class="radios">${tiers}</div></div>
+    <div class="frow"><label class="k">AUDIO TYPE</label>${audioSeg}</div>
+    <div class="frow"><label class="k">LYRICS</label>
+      <span class="tog ${state.lyrEmbed?"on":""}" onclick="flip('lyrEmbed')"><span class="sw"></span>embed</span>
+      <span class="tog ${state.lyrLrc?"on":""}" onclick="flip('lyrLrc')"><span class="sw"></span>.lrc</span>
+      ${pid==="apple"?`<span class="tog ${state.lyrTtml?"on":""}" onclick="flip('lyrTtml')"><span class="sw"></span>.ttml</span>`:`<span class="tog" style="opacity:.4"><span class="sw"></span>.ttml</span>`}
+    </div>
+    <div class="frow"><label class="k">ALBUM ART</label>
+      <span class="tog ${state.artSidecar?"on":""}" onclick="flip('artSidecar')"><span class="sw"></span>sidecar (original)</span>
+      <span class="tog ${state.artEmbed?"on":""}" onclick="flip('artEmbed')"><span class="sw"></span>embed</span>
+    </div>`;
+}
+function queuedToast(state, ctx){
+  const p = (state.provider||DEFAULTS.provider).toUpperCase();
+  const files = state.audio==="both" ? "2 files · stereo + Atmos" : state.audio==="atmos" ? "Atmos only" : "stereo only";
+  toast(`<span class="q">QUEUED</span> ${ctx} · ${p} · ${state.tier} · ${files}`);
+}
+
+/* ---------------- VARIANT A — provider groups + split buttons ---------------- */
+function vA(){
+  const app = document.getElementById("app");
+  app.innerHTML = `
+  <section>
+    <div class="grouphead tidal"><span class="gname">TIDAL</span><span class="gcount">${TIDAL.artists.length+TIDAL.albums.length+TIDAL.tracks.length+TIDAL.playlists.length} results</span></div>
+    ${secHead("ARTISTS")}${cardGrid(TIDAL.artists.map(x=>({...x,pid:"tidal"})))}
+    ${secHead("ALBUMS")}${cardGrid(TIDAL.albums.map(x=>({...x,pid:"tidal"})))}
+    ${secHead("TRACKS")}${trackList(TIDAL.tracks.map(x=>({...x,pid:"tidal"})))}
+    <div class="grouphead apple"><span class="gname">APPLE MUSIC</span><span class="gcount">${APPLE.artists.length+APPLE.albums.length+APPLE.tracks.length+APPLE.playlists.length} results</span></div>
+    ${secHead("ALBUMS")}${cardGrid(APPLE.albums.map(x=>({...x,pid:"apple"})))}
+    ${secHead("TRACKS")}${trackList(APPLE.tracks.map(x=>({...x,pid:"apple"})))}
+  </section>
+  ${albumDetail("A")}`;
+  app.querySelectorAll("[data-split]").forEach(el => {
+    el.querySelector(".chev").addEventListener("click", e => { e.stopPropagation(); openPopA(el); });
+    el.querySelector(".main").addEventListener("click", () => queuedToast({...DEFAULTS}, el.dataset.ctx));
+    el.addEventListener("contextmenu", e => { e.preventDefault(); openPopA(el); });
+  });
+  document.body.addEventListener("click", closePops, {once:true});
+}
+function secHead(name, count, extra=""){ return `<h2 class="sec">${name} <span class="count">${count??""}</span>${extra}<span class="showall">SHOW ALL</span></h2>`; }
+function cardGrid(items){
+  return `<div class="grid">` + items.map(x=>`
+    <div class="card" data-pid="${x.pid||""}">
+      <div class="art">COVER</div>
+      <div class="t">${esc(x.t||x.n)}</div><div class="a">${esc(x.a||"Artist")}${x.y?" · "+x.y:""}</div>
+      <div class="meta">${badges(x.m?[x.m]:x.badges)}${x.pid?provChip(x.pid):""}</div>
+    </div>`).join("") + `</div>`;
+}
+function trackList(tracks){
+  return tracks.map((x,i)=>`
+    <div class="row" data-row>
+      <span class="num">${i+1}</span>
+      <span class="rt">${esc(x.t)} ${badges(x.badges)}</span>
+      <span class="ra">${esc(x.a)}</span>
+      <span class="dur">${x.d}</span>
+      <span class="tools">
+        <span class="split" data-split data-ctx="“${esc(x.t)}”" data-pid="${x.pid}" data-atmosonly="${!!x.atmosOnly}">
+          <button class="btn main">DOWNLOAD</button><button class="btn chev">▾</button>
+        </span>
+      </span>
+    </div>`).join("");
+}
+function openPopA(anchor){
+  closePops();
+  const pid = anchor.dataset.pid, atmosOnly = anchor.dataset.atmosonly==="true";
+  CH_STATE = {...DEFAULTS, provider: pid};
+  const pop = document.createElement("div");
+  pop.className = "pop"; pop.id = "pop";
+  pop.dataset.atmosonly = atmosOnly;
+  pop.innerHTML = `<h3>DOWNLOAD WITH…</h3>${chooserFields(pid, CH_STATE, atmosOnly)}
+    <div class="acts"><button class="btn ghost" onclick="saveDefaults()">SET AS DEFAULTS</button><button class="btn" onclick="confirmPop('${pid}',${atmosOnly},'${anchor.dataset.ctx}')">DOWNLOAD</button></div>
+    <div class="note">Defaults come from Settings; this choice applies to this click only.</div>`;
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = Math.min(r.left, innerWidth-340) + "px";
+  pop.style.top = (r.bottom + 6 + scrollY) + "px";
+  pop.style.position = "absolute";
+  document.body.appendChild(pop);
+  pop.addEventListener("click", e=>e.stopPropagation());
+}
+function confirmPop(pid, atmosOnly, ctx){
+  const s = {...CH_STATE}; s.provider = pid;
+  queuedToast(s, ctx); closePops();
+}
+let CH_STATE = {...DEFAULTS};
+function pickProvider(p){ CH_STATE.provider = p; rerenderChooser(); }
+function pickTier(t){ CH_STATE.tier = t; rerenderChooser(); }
+function pickAudio(a){ CH_STATE.audio = a; rerenderChooser(); }
+function flip(k){ CH_STATE[k] = !CH_STATE[k]; rerenderChooser(); }
+function saveDefaults(){ toast("Saved as defaults — Settings updated."); }
+function rerenderChooser(){
+  document.querySelectorAll("#pop .frow, .expander .cols, #modal .mbody").forEach(()=>{});
+  const pop = document.getElementById("pop");
+  if (pop) { const pid = CH_STATE.provider; const ao = pop.dataset.atmosonly==="true";
+    pop.innerHTML = `<h3>DOWNLOAD WITH…</h3>${chooserFields(pid, CH_STATE, ao)}
+      <div class="acts"><button class="btn ghost" onclick="saveDefaults()">SET AS DEFAULTS</button><button class="btn" onclick="confirmPop('${pid}',${ao},'row')">DOWNLOAD</button></div>
+      <div class="note">Defaults come from Settings; this choice applies to this click only.</div>`;
+    pop.dataset.atmosonly = ao;
+  }
+  const ex = document.getElementById("exp");
+  if (ex) ex.innerHTML = chooserFields(ex.dataset.pid, CH_STATE, ex.dataset.atmosonly==="true") +
+    `<div class="acts" style="margin-top:10px"><button class="btn ghost" onclick="saveDefaults()">SET AS DEFAULTS</button><button class="btn" onclick="confirmInline()">DOWNLOAD</button></div>`;
+  const m = document.getElementById("modal");
+  if (m) m.querySelector(".mbody").innerHTML = chooserFields(m.dataset.pid, CH_STATE, m.dataset.atmosonly==="true");
+}
+function closePops(){ document.getElementById("pop")?.remove(); document.getElementById("exp")?.remove(); document.getElementById("backdrop")?.remove(); }
+
+/* ---------------- VARIANT B — unified sections + badges + right-click dialog ---------------- */
+function vB(){
+  const app = document.getElementById("app");
+  const albums = [...TIDAL.albums.map(x=>({...x,pid:"tidal"})), ...APPLE.albums.map(x=>({...x,pid:"apple"}))];
+  const tracks = [...TIDAL.tracks.map(x=>({...x,pid:"tidal"})), ...APPLE.tracks.map(x=>({...x,pid:"apple"}))];
+  app.innerHTML = `
+  <section>
+    <div class="chiprow">
+      <span class="chip on" onclick="filterP('all',this)">ALL</span>
+      <span class="chip" onclick="filterP('tidal',this)">TIDAL</span>
+      <span class="chip" onclick="filterP('apple',this)">APPLE</span>
+    </div>
+    <div id="b-sec">
+      ${secHead("ALBUMS", albums.length)}${cardGrid(albums)}
+      ${secHead("TRACKS", tracks.length)}${trackListB(tracks)}
+    </div>
+  </section>
+  ${albumDetail("B")}`;
+  document.querySelectorAll("[data-btn]").forEach(el => {
+    el.addEventListener("click", () => queuedToast({...DEFAULTS}, el.dataset.ctx));
+  });
+  document.querySelectorAll("[data-more]").forEach(el => {
+    el.addEventListener("click", e => { e.stopPropagation(); openModal(el.dataset); });
+  });
+  document.querySelectorAll(".row[data-row]").forEach(r => r.addEventListener("contextmenu", e => {
+    e.preventDefault(); openModal({pid: r.dataset.pid, ctx: "“"+r.dataset.t+"”", atmosonly: r.dataset.atmosonly});
+  }));
+}
+function trackListB(tracks){
+  return tracks.map((x,i)=>`
+    <div class="row" data-row data-pid="${x.pid}" data-t="${esc(x.t)}" data-atmosonly="${!!x.atmosOnly}">
+      <span class="num">${i+1}</span>
+      <span class="rt">${provChip(x.pid)} ${esc(x.t)} ${badges(x.badges)}</span>
+      <span class="ra">${esc(x.a)}</span>
+      <span class="dur">${x.d}</span>
+      <span class="tools">
+        <button class="btn" data-btn data-ctx="“${esc(x.t)}”">DOWNLOAD</button>
+        <button class="btn quiet mini" data-more data-pid="${x.pid}" data-ctx="“${esc(x.t)}”" data-atmosonly="${!!x.atmosOnly}">⋯</button>
+      </span>
+    </div>`).join("");
+}
+function openModal(ds){
+  closePops();
+  const pid = ds.pid, atmosOnly = ds.atmosonly==="true";
+  CH_STATE = {...DEFAULTS, provider: pid};
+  const bd = document.createElement("div"); bd.id = "backdrop"; bd.className = "backdrop";
+  bd.innerHTML = `<div class="modal" id="modal" data-pid="${pid}" data-atmosonly="${atmosOnly}">
+    <h3>Download ${ds.ctx}</h3><div class="sub">Defaults preselected · applies to this click only</div>
+    <div class="mbody">${chooserFields(pid, {...DEFAULTS, provider: pid}, atmosOnly)}</div>
+    <div class="acts"><button class="btn ghost" onclick="saveDefaults()">SET AS DEFAULTS</button><button class="btn" onclick="queuedToast({...CH_STATE, provider:'${pid}'}, ${JSON.stringify(ds.ctx)}); closePops();">DOWNLOAD</button><button class="btn quiet" onclick="closePops()">CANCEL</button></div>
+  </div>`;
+  document.body.appendChild(bd);
+  bd.addEventListener("click", e => { if (e.target === bd) closePops(); });
+}
+function filterP(p, chip){
+  document.querySelectorAll(".chiprow .chip").forEach(c=>c.classList.remove("on")); chip.classList.add("on");
+  document.querySelectorAll("#b-sec [data-pid]").forEach(el=>{
+    el.style.display = (p==="all"||el.dataset.pid===p) ? "" : "none";
+  });
+}
+function albumDetail(variant){
+  const lyricArtCluster = variant==="A"
+    ? `<button class="btn ghost">LYRICS ONLY</button><button class="btn ghost">ART ONLY</button>`
+    : variant==="B"
+    ? `<button class="btn quiet mini" onclick="toast('Menu: Download lyrics only · Download album art only')">⋯ MORE</button>`
+    : `<button class="btn quiet">LYRICS ONLY</button><button class="btn quiet">ART ONLY</button>`;
+  const dl = variant==="A"
+    ? `<span class="split" data-split data-ctx="“Northern Grain” (album)" data-pid="tidal"><button class="btn main">DOWNLOAD ALBUM</button><button class="btn chev">▾</button></span>`
+    : variant==="B"
+    ? `<button class="btn" data-btn data-ctx="“Northern Grain” (album)">DOWNLOAD ALBUM</button> <button class="btn quiet mini" data-more data-pid="tidal" data-ctx="“Northern Grain” (album)" data-atmosonly="false">⋯</button>`
+    : `<button class="btn" onclick="toggleExp('tidal','false')">DOWNLOAD ALBUM ▾</button>`;
+  const trackTools = variant==="A"
+    ? `<span class="split" data-split data-ctx="“Paper Ferry”" data-pid="tidal"><button class="btn main">DOWNLOAD</button><button class="btn chev">▾</button></span>`
+    : variant==="B"
+    ? `<button class="btn" data-btn data-ctx="“Paper Ferry”">DOWNLOAD</button><button class="btn quiet mini" data-more data-pid="tidal" data-ctx="“Paper Ferry”" data-atmosonly="false">⋯</button>`
+    : `<button class="btn" onclick="toggleExp('tidal','false')">▾</button>`;
+  return `
+  <section>
+    <h2 class="sec">ALBUM DETAIL — where the standalone actions live</h2>
+    <div class="albumhead">
+      <div class="bigart">COVER<br>art</div>
+      <div class="info">
+        <div class="kind">ALBUM</div>
+        <h1>Northern Grain</h1>
+        <div class="sub">Midnight Choir · 2024 · 11 tracks ${badges(["HI-RES","ATMOS"])}</div>
+        <div class="cluster">
+          ${dl}
+          ${lyricArtCluster}
+        </div>
+        <div class="hint" style="padding:0;margin-top:10px">Variant ${variant}: standalone <b>lyrics-only</b> and <b>art-only</b> actions sit ${variant==="A"?"as first-class buttons beside DOWNLOAD":variant==="B"?"inside the ⋯ overflow menu, plus per-track glyphs on hover":"as quiet buttons in the album header, plus inside each row's inline expander"}.</div>
+      </div>
+    </div>
+    <div style="padding:0 20px">
+      <div class="row" data-row data-pid="tidal" data-t="Paper Ferry">
+        <span class="num">4</span><span class="rt">Paper Ferry ${badges(["HI-RES"])}</span>
+        <span class="ra">Midnight Choir</span><span class="dur">3:31</span>
+        <span class="tools">${trackTools}</span>
+      </div>
+      <div id="expHost"></div>
+    </div>
+  </section>`;
+}
+function toggleExp(pid, atmosOnly){
+  closePops();
+  CH_STATE = {...DEFAULTS, provider: pid};
+  const host = document.getElementById("expHost");
+  const ex = document.createElement("div"); ex.className = "expander"; ex.id = "exp";
+  ex.dataset.pid = pid; ex.dataset.atmosonly = atmosOnly;
+  ex.innerHTML = `<div class="cols">${chooserFields(pid, {...DEFAULTS, provider: pid}, atmosOnly==="true")}</div>
+    <div class="acts"><button class="btn ghost" onclick="saveDefaults()">SET AS DEFAULTS</button><button class="btn" onclick="confirmInline()">DOWNLOAD</button></div>`;
+  host.appendChild(ex);
+  ex.addEventListener("click", e=>e.stopPropagation());
+}
+function confirmInline(){ queuedToast(CH_STATE, "row"); closePops(); }
+
+/* ---------------- VARIANT C — provider tabs + inline expander ---------------- */
+function vC(){
+  const app = document.getElementById("app");
+  app.innerHTML = `
+  <section>
+    <div class="tabs">
+      <span class="tab on-tidal" id="tab-tidal" onclick="showTab('tidal')">TIDAL<span class="n">· ${TIDAL.artists.length+TIDAL.albums.length+TIDAL.tracks.length+TIDAL.playlists.length}</span></span>
+      <span class="tab" id="tab-apple" onclick="showTab('apple')">APPLE MUSIC<span class="n">· ${APPLE.artists.length+APPLE.albums.length+APPLE.tracks.length+APPLE.playlists.length}</span></span>
+    </div>
+    <div id="tabbody"></div>
+  </section>
+  ${albumDetail("C")}`;
+  showTab("tidal");
+  document.querySelectorAll("[data-split]").forEach(el => {
+    el.querySelector(".main")?.addEventListener("click", () => queuedToast({...DEFAULTS}, el.dataset.ctx));
+  });
+}
+function showTab(pid){
+  document.getElementById("tab-tidal").className = "tab " + (pid==="tidal"?"on-tidal":"");
+  document.getElementById("tab-apple").className = "tab " + (pid==="apple"?"on-apple":"");
+  const P = pid==="tidal"?TIDAL:APPLE;
+  document.getElementById("tabbody").innerHTML =
+    secHead("ARTISTS", P.artists.length)+cardGrid(P.artists.map(x=>({...x,pid})))
+    + secHead("ALBUMS", P.albums.length)+cardGrid(P.albums.map(x=>({...x,pid})))
+    + secHead("TRACKS", P.tracks.length)+trackListC(P.tracks.map(x=>({...x,pid})));
+  document.querySelectorAll("[data-exp]").forEach(el =>
+    el.addEventListener("click", e => { e.stopPropagation(); toggleExp(el.dataset.exp, el.dataset.atmosonly); }));
+}
+function trackListC(tracks){
+  return tracks.map((x,i)=>`
+    <div class="row" data-row>
+      <span class="num">${i+1}</span>
+      <span class="rt">${esc(x.t)} ${badges(x.badges)}</span>
+      <span class="ra">${esc(x.a)}</span>
+      <span class="dur">${x.d}</span>
+      <span class="tools">
+        <button class="btn" onclick="queuedToast({...DEFAULTS, provider:'${x.pid}'}, '“${esc(x.t)}”')">DOWNLOAD</button>
+        <button class="btn quiet mini" data-exp="${x.pid}" data-atmosonly="${!!x.atmosOnly}">▾</button>
+      </span>
+    </div>`).join("");
+}
+
+/* ---------------- toast + switcher ---------------- */
+let toastTimer;
+function toast(html){
+  document.querySelector(".toast")?.remove();
+  const t = document.createElement("div"); t.className = "toast"; t.innerHTML = html;
+  document.body.appendChild(t);
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.remove(), 2600);
+}
+const VARIANTS = [
+  ["A", "Provider groups · split-button chooser", vA],
+  ["B", "Unified sections · provider badges · dialog chooser", vB],
+  ["C", "Provider tabs · inline chooser", vC],
+];
+function currentV(){ return new URLSearchParams(location.search).get("variant") ?? "A"; }
+function render(){
+  const v = currentV();
+  const found = VARIANTS.find(x=>x[0]===v) ?? VARIANTS[0];
+  document.getElementById("vname").textContent = `${found[0]} (${found[1]})`;
+  found[2]();
+  scrollTo(0,0);
+}
+function cycle(d){
+  const i = VARIANTS.findIndex(x=>x[0]===currentV());
+  const next = VARIANTS[(i+d+VARIANTS.length)%VARIANTS.length][0];
+  const u = new URL(location); u.searchParams.set("variant", next); history.replaceState(null,"",u); render();
+}
+document.addEventListener("keydown", e => {
+  if (["INPUT","TEXTAREA"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
+  if (e.key==="ArrowLeft") cycle(-1);
+  if (e.key==="ArrowRight") cycle(1);
+  if (e.key==="Escape") closePops();
+});
+render();
+</script>
+</body>
+</html>
