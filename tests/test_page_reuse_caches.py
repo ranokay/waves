@@ -30,9 +30,13 @@ def _sweep_bridge(monkeypatch, calls):
         calls.append("sweep")
         return {"playlists": [], "mixes": ["m1", "m2"]}
 
-    # The sweep rides the Provider seam (ticket #20): the fake answers the
-    # bridge's ``user_collections()`` call.
-    b.providers = {"tidal": SimpleNamespace(user_collections=fake_sweep)}
+    # The sweep and the folder walk ride the Provider seam (tickets #20/#22).
+    b.providers = {
+        "tidal": SimpleNamespace(
+            user_collections=fake_sweep,
+            folder_tree=lambda root_folders=None: SimpleNamespace(nodes=[], playlist_paths={}, partial=False),
+        )
+    }
     return b
 
 
@@ -194,6 +198,8 @@ def _cache_bridge(tmp_path):
     b._page_cache_lock = Lock()
     b.tidal = MagicMock()
     b.tidal.session.user.id = "42"
+    # The snapshot's user stamp reads the provider (ticket #22).
+    b.providers = {"tidal": SimpleNamespace(account_id=lambda: "42")}
     return b
 
 
@@ -216,6 +222,6 @@ def test_home_landing_snapshot_ignored_for_other_account(tmp_path):
     saver._save_page_cache()
 
     loader = _cache_bridge(tmp_path)
-    loader.tidal.session.user.id = "43"
+    loader.providers["tidal"].account_id = lambda: "43"  # a different account
     loader._load_page_cache()
     assert loader._home_cache is None

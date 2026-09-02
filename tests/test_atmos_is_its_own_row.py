@@ -34,7 +34,13 @@ from types import SimpleNamespace
 from tidalapi.album import Album
 from tidalapi.media import AudioMode, Quality, Track
 
+from waves.providers import TidalProvider
 from waves.waves_ui import backend
+
+# The quality read rides the provider now; over a bare stand-in the advertised
+# tier answers None and the label falls back to the object's audio_quality,
+# exactly the shapes these rows carry.
+_PROVIDER = TidalProvider(SimpleNamespace())
 
 ATMOS = AudioMode.dolby_atmos.value
 
@@ -93,11 +99,11 @@ def test_atmos_only_means_atmos_and_nothing_else():
 def test_an_atmos_only_release_is_labelled_atmos_not_its_container_tier():
     """TIDAL reports LOSSLESS for the Atmos edition's container. There is no
     stereo stream at that tier, so the pill says what the row IS."""
-    assert backend._quality_label(_album("1", "A", [ATMOS], quality=Quality.high_lossless)) == backend.ATMOS_WORD
-    assert backend._quality_label(_track("1", "A", [ATMOS], quality=Quality.hi_res_lossless)) == backend.ATMOS_WORD
+    assert backend._quality_label(_album("1", "A", [ATMOS], quality=Quality.high_lossless), _PROVIDER) == backend.ATMOS_WORD
+    assert backend._quality_label(_track("1", "A", [ATMOS], quality=Quality.hi_res_lossless), _PROVIDER) == backend.ATMOS_WORD
     # A stereo edition, and a dual-mode id, keep their tier.
-    assert backend._quality_label(_album("1", "A", ["STEREO"], quality=Quality.high_lossless)) == "LOSSLESS"
-    assert backend._quality_label(_album("1", "A", [ATMOS, "STEREO"], quality=Quality.high_lossless)) == "LOSSLESS"
+    assert backend._quality_label(_album("1", "A", ["STEREO"], quality=Quality.high_lossless), _PROVIDER) == "LOSSLESS"
+    assert backend._quality_label(_album("1", "A", [ATMOS, "STEREO"], quality=Quality.high_lossless), _PROVIDER) == "LOSSLESS"
 
 
 # --------------------------------------------------------------------------- #

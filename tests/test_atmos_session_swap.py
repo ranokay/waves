@@ -186,21 +186,22 @@ def test_a_real_atmos_copy_settles_instead_of_re_fetching_forever():
 
 
 def test_rebuilding_the_session_recaptures_every_original_the_swap_restores():
-    """``_reset_tidal_session`` (after a sign-out) says it mirrors
-    ``Tidal.__init__``. If it captures fewer originals than the swap restores,
-    a sign-out leaves the Atmos restore reaching for a stale value. Pin the two
-    sets against each other rather than a hand-written list, so adding a field
-    to the constructor and forgetting the reset fails here."""
+    """The post-sign-out session rebuild (now ``TidalProvider.reset_session``,
+    behind the seam) says it mirrors ``Tidal.__init__``. If it captures fewer
+    originals than the swap restores, a sign-out leaves the Atmos restore
+    reaching for a stale value. Pin the two sets against each other rather
+    than a hand-written list, so adding a field to the constructor and
+    forgetting the reset fails here."""
     import inspect
     import re
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.providers.tidal import TidalProvider
 
     def _captured(src: str) -> set[str]:
         return set(re.findall(r"original_client_\w+", src))
 
     in_init = _captured(inspect.getsource(Tidal.__init__))
-    in_reset = _captured(inspect.getsource(WavesBridge._reset_tidal_session))
+    in_reset = _captured(inspect.getsource(TidalProvider.reset_session))
     assert in_init, "guard is looking at the wrong constructor"
     assert in_init == in_reset, (
         "the session rebuild does not capture the same originals as the "

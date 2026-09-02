@@ -290,8 +290,9 @@ class _MediaListsStub:
 def test_a_walking_caller_rejects_the_treeless_mixes_entry():
     stub = _MediaListsStub(cached_tree=None)
     tree = SimpleNamespace(nodes=[1], playlist_paths={}, partial=False)
-    with patch.object(backend_mod, "walk_playlist_tree", return_value=tree):
-        _fresh, got = stub._media_lists(refresh=True, walk=True)
+    # The walk rides the provider (ticket #22).
+    stub.providers["tidal"].folder_tree = lambda root_folders=None: tree
+    _fresh, got = stub._media_lists(refresh=True, walk=True)
     assert got is tree, "Playlists within the TTL must sweep, not render folder-less"
 
 

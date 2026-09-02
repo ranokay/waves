@@ -110,22 +110,39 @@ def test_no_slot_resolves_media_objects_on_the_gui_thread():
 
 
 def test_browse_fetch_does_not_hold_the_lock_across_the_request():
-    """The HTTP request must be issued before the lock is taken."""
-    node = _slot_ast("_browse_fetch")
+    """The HTTP request must be issued before the lock is taken.
 
-    with_statements = [n for n in ast.walk(node) if isinstance(n, ast.With)]
-    assert with_statements, "_browse_fetch no longer takes the browse lock; update this guard"
+    The read-and-parse moved behind the Provider seam (ticket #22), so the
+    discipline moved with it: TidalProvider.browse_page owns the lock now,
+    and the finding's shape is pinned there -- the request issued outside,
+    the parse (the reason the lock exists; tidalapi's shared parser is not
+    thread-safe) inside."""
+    import inspect
+    import textwrap
 
-    lock_block = with_statements[0]
-    calls_under_lock = {
-        sub.func.attr
-        for sub in ast.walk(lock_block)
-        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
-    }
-    assert "request" not in calls_under_lock, (
-        "_browse_fetch issues its HTTP request while holding the process-wide browse "
-        "lock; a wedged peer blocks every other acquirer and saturates the UI pool"
+    from waves.providers.tidal import TidalProvider
+
+    node = ast.parse(textwrap.dedent(inspect.getsource(TidalProvider.browse_page)))
+
+    # The request is issued while NOT inside any with-block.
+    with_blocks = [n for n in ast.walk(node) if isinstance(n, ast.With)]
+    assert with_blocks, "browse_page stopped taking the browse lock; update this guard"
+
+    def _inside_with(n: ast.AST) -> bool:
+        for w in with_blocks:
+            if (
+                w.lineno <= n.lineno
+                and getattr(n, "end_lineno", n.lineno) <= getattr(w, "end_lineno", w.lineno)
+            ):
+                return True
+        return False
+
+    calls = [n for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+    under = {n.func.attr for n in calls if _inside_with(n)}
+    assert "request" not in under, (
+        "browse_page issues its HTTP request while holding the provider's browse "
+        "lock; a wedged peer blocks every other acquirer (and get_object) for good"
     )
 
     # ...and the parse, which is the reason the lock exists, must stay inside.
-    assert "parse" in calls_under_lock, "the page parse escaped the lock; tidalapi's shared parser is not thread-safe"
+    assert "parse" in under, "the page parse escaped the lock; tidalapi's shared parser is not thread-safe"

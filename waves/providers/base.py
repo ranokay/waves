@@ -17,6 +17,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import NamedTuple
 
 # ============================================================================
 # The row-dict schema (the catalog contract with QML)
@@ -86,8 +87,8 @@ from enum import StrEnum
 # below return: the reads are the seam, the builders are the rendering, and
 # the schema above is what both must agree on. Object-method calls on an
 # already-resolved object (an album's .tracks(), an artist's .get_albums())
-# are the bridge's page-building policy, not catalog reads -- they retire
-# behind the interface with the contract pass.
+# are the bridge's page-building policy, not session reaches -- they move
+# behind the interface when the dict builders do.
 
 # The one delivered-quality ladder, lowest to highest. Its strings are the
 # keys of the ownership store's QUALITY_RANK scale (and, as it happens,
@@ -175,6 +176,17 @@ class FavoritesUnavailable(Exception):
         self.ids = ids
 
 
+class BrowseWindow(NamedTuple):
+    """One paged window of an editorial category: the parsed category, the
+    RAW item count the window returned (a parse may drop items; the caller's
+    offset must advance by what the endpoint actually sent, or it rewinds),
+    and the collection total."""
+
+    category: object
+    n: int
+    total: int
+
+
 @dataclass
 class StreamInfo:
     """What a provider's stream resolution hands the download pipeline:
@@ -208,6 +220,10 @@ class StreamInfo:
     # The delivery arrived as one complete file (no fragmented-segment merge),
     # so its container is already whole and needs no duration-repairing remux.
     single_file: bool = False
+    # The HLS master playlist URL when the delivery is HLS-shaped (TIDAL's
+    # non-BTS streams): the preview pipeline reads it, the download pipeline
+    # does not. Empty when the delivery is not HLS.
+    hls_url: str = ""
 
 
 class Provider(ABC):
@@ -236,6 +252,31 @@ class Provider(ABC):
     @abstractmethod
     def logout(self) -> None:
         """Forget the account's credentials."""
+
+    @abstractmethod
+    def login_resume(self) -> bool:
+        """Reopen the session from the credentials stored on disk (the app's
+        launch path). False when there is nothing usable stored, or the
+        provider refused them."""
+
+    @abstractmethod
+    def reset_session(self) -> None:
+        """Rebuild a clean session after a sign-out, so the user can sign
+        back in without restarting the app. A long-lived GUI cannot share the
+        CLI's assumption that the process exits right after logging out."""
+
+    @abstractmethod
+    def account_id(self) -> str:
+        """The signed-in account's id, as a plain string ("" unknown). The
+        key cached page snapshots are stamped with, so one account's
+        personalized pages never render for another."""
+
+    @abstractmethod
+    def credential_facts(self) -> dict[str, str]:
+        """The session's secret-bearing facts, keyed by what they are (e.g.
+        ``access_token``, ``session_id``, ``account_id``, ``username``). The
+        caller registers each value with the log redactor at the moment it
+        exists; the mapping to redactor tags stays with the caller."""
 
     @property
     @abstractmethod
@@ -280,6 +321,43 @@ class Provider(ABC):
     def user_collections(self) -> dict | None:
         """The signed-in user's collections (playlists/mixes), or None when
         the provider has no such capability."""
+
+    @abstractmethod
+    def folder_tree(self, root_folders: list | None = None) -> object | None:
+        """The user's playlist-folder tree (every level's folders, each
+        folder's playlists, and the playlist-id -> folder-path map), or None
+        when the provider has no folders.
+
+        ``root_folders`` are already-fetched root folders to reuse (a caller
+        mid-sweep has them in hand); fetched fresh when None."""
+
+    @abstractmethod
+    def search_tracks(self, needle: str, limit: int = 10) -> list:
+        """A lightweight, track-only search: the first ``limit`` track matches
+        for ``needle``, as engine objects. The video player's title-link
+        fallback lives on this shape -- a full search payload would pay for
+        buckets the heuristic never reads."""
+
+    @abstractmethod
+    def browse_page(self, title: str, api_path: str) -> object | None:
+        """One editorial (Browse) page, read and parsed: the engine's page
+        object for ``api_path``, ``title``-labelled. None when the page
+        cannot be read. The bridge renders the parsed categories; where the
+        bytes come from stays the provider's business."""
+
+    @abstractmethod
+    def browse_home(self) -> object | None:
+        """The personalized home feed as a parsed page object, or None when
+        the provider has no such feed."""
+
+    @abstractmethod
+    def browse_window(
+        self, title: str, data_path: str, mod_type: str, offset: int, limit: int = 50
+    ) -> BrowseWindow:
+        """One paged window of an editorial category: the parsed category,
+        the RAW item count the window returned (the paging arithmetic's
+        input -- a parse may drop items, the offset may not rewind), and the
+        collection total."""
 
     @abstractmethod
     def favorites_page(
@@ -360,7 +438,18 @@ class Provider(ABC):
 
     def preview_url(self, track) -> str | None:
         """A directly-streamable preview URL, when the provider documents
-        one; None (the inherited default) when it does not. TIDAL's previews
-        ride the engine's own HLS preview pipeline and stay unwired here; the
-        PREVIEW capability says whether to call the hook at all."""
+        one; None (the inherited default) when it does not. The PREVIEW
+        capability says whether to call the hook at all."""
         return None
+
+    def resolve_preview(self, track) -> StreamInfo:
+        """A full preview STREAM resolution for providers whose previews need
+        their own session machinery (TIDAL's full-track preview: the stream
+        lock, the session normalisation, the LOW-tier pin and its restore are
+        fenced provider business, never the caller's).
+
+        The all-default StreamInfo (the inherited default) is "could not
+        resolve": the caller reports the preview failed rather than crashing.
+        A provider answering through :meth:`preview_url` alone never needs
+        this hook."""
+        return StreamInfo()

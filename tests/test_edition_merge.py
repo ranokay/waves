@@ -12,6 +12,7 @@ import pytest
 from tidalapi.media import Quality
 
 from waves.download import Download
+from waves.providers import TidalProvider
 from waves.waves_ui.backend import (
     WavesBridge,
     _align_edition,
@@ -373,10 +374,10 @@ def test_seed_merge_registry_keys_rows_by_identity_id():
         _PlanEntry(_Track("s-a", "A", 200), 1, 1, "d-a"),
         _PlanEntry(_Track("d-c", "C", 180), 2, 1, "d-c"),
     ]
-    reg = _seed_merge_registry(plan)
+    reg = _seed_merge_registry(plan, TidalProvider(SimpleNamespace()))
     assert sorted(reg) == ["d-a", "d-c"]
     assert all(reg[k]["id"] == k and reg[k]["status"] == "pending" for k in reg)
-    assert _seed_merge_registry(None) == {}
+    assert _seed_merge_registry(None, TidalProvider(SimpleNamespace())) == {}
 
 
 # ---- a refused track is not a failed track ----------------------------------

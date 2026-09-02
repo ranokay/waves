@@ -2,11 +2,10 @@
 
 Every method hands the work to the body that has always done it --
 ``waves.helper.tidal``'s catalog adapters, ``waves.config``'s session, and the
-engine's own normalizers in ``waves.download`` -- with no logic moved and no
-behavior changed. The call-site routing that makes the bridge speak through
-here is deliberately NOT part of this module's arrival (expand first, contract
-later): until then the old paths keep running, and the tests pin that this
-delegation returns what those paths return.
+engine's own normalizers in ``waves.download``. The bridge routes every TIDAL
+session, catalog and editorial read through this module (the seam's contract
+half, ticket #22); the only tidal-object touches left in the bridge are the
+engine hand-off and the config layer's credential-event wiring.
 
 Where the provider adds code at all, it is vocabulary translation between the
 engine's TIDAL-shaped facts and the seam's neutral types (quality rungs, audio
@@ -16,14 +15,21 @@ suite to the backend normalizer it must agree with.
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import threading
+
 import tidalapi
 from requests import HTTPError
+from tidalapi import page as tidal_page
 from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvailable, TooManyRequests
-from tidalapi.media import AudioMode
+from tidalapi.media import AudioMode, Track
+from tidalapi.mix import Mix
 
-from waves.config import Tidal
+from waves.config import Tidal, harden_api_session
 from waves.constants import ATMOS_REQUEST_QUALITY, CTX_TIDAL, LIBRARY_PAGE, MediaType
 from waves.download import _artist_ids, _tidal_refuses_asset, _waves_item_id
+from waves.helper.folders import walk_playlist_tree
 from waves.helper.tidal import (
     get_album_artist_ids,
     get_album_artists,
@@ -37,6 +43,7 @@ from waves.helper.tidal import (
 )
 from waves.providers.base import (
     AudioType,
+    BrowseWindow,
     Capability,
     FavoritesUnavailable,
     Provider,
@@ -47,6 +54,8 @@ from waves.providers.base import (
     quality_rank,
 )
 from waves.waves_ui.manifest import overgenerated_tail_urls
+
+logger = logging.getLogger("waves.providers.tidal")
 
 # The Waves tier each TIDAL request rides: the rungs the UI's own spec lines
 # name (LOW = AAC 96, HIGH = AAC 320, then lossless and hi-res lossless).
@@ -148,6 +157,12 @@ class TidalProvider(Provider):
     def __init__(self, tidal: Tidal, stream_resolver=None):
         self._tidal = tidal
         self._stream_resolver = stream_resolver
+        # The editorial (Browse) reads serialize behind their own lock: they
+        # parse through the session's SHARED page parser, which mutates itself
+        # on every parse and is not thread-safe. The lock lives here because
+        # the shared parser does -- every read that parses a page takes it,
+        # whoever calls.
+        self._browse_lock = threading.Lock()
 
     def set_stream_resolver(self, resolver) -> None:
         """The engine registers its per-job resolver here.
@@ -164,6 +179,12 @@ class TidalProvider(Provider):
     # ----- session / auth
 
     def login_begin(self) -> str:
+        # A prior sign-out tears the session down (the engine's logout deletes
+        # it outright); rebuild one so a fresh PKCE login can start -- the
+        # self-heal the bridge's login slot used to carry, now where the
+        # session actually lives.
+        if getattr(self._tidal, "session", None) is None:
+            self.reset_session()
         return self._tidal.session.pkce_login_url()
 
     def login_complete(self, payload: str) -> bool:
@@ -174,9 +195,68 @@ class TidalProvider(Provider):
     def logout(self) -> None:
         self._tidal.logout()
 
+    def login_resume(self) -> bool:
+        """Reopen the session from the credentials stored on disk.
+
+        The WavesTidal wrapper the GUI passes in owns the resilience policy
+        (a dead network must not cost the user their saved sign-in); the
+        provider only forwards the ask."""
+        return bool(self._tidal.login_token())
+
+    def reset_session(self) -> None:
+        """Rebuild the underlying tidalapi session after a sign-out.
+
+        The engine's ``Tidal.logout()`` deletes the session object outright (a
+        CLI assumption, the process exits right after logging out). The GUI is
+        long-running and lets the user sign back in, so a clean session is
+        rebuilt, mirroring ``Tidal.__init__``, and the configured quality is
+        reapplied. Without this, a sign-out leaves the wrapper with no
+        ``session`` and the next login, or any session call, raises
+        ``AttributeError``.
+        """
+        self._tidal.session = tidalapi.Session(tidalapi.Config(item_limit=10000))
+        # The rebuilt session is a fresh requests.Session too, so it needs the
+        # catalog retry/timeout policy re-mounted or every call after a
+        # sign-out goes back to being a single un-retried attempt.
+        harden_api_session(self._tidal.session)
+        self._tidal.original_client_id = self._tidal.session.config.client_id
+        self._tidal.original_client_secret = self._tidal.session.config.client_secret
+        # Both pairs, the same four the constructor captures: the Atmos swap
+        # moves the PKCE pair too, and these are what it restores to.
+        self._tidal.original_client_id_pkce = self._tidal.session.config.client_id_pkce
+        self._tidal.original_client_secret_pkce = self._tidal.session.config.client_secret_pkce
+        self._tidal.is_atmos_session = False
+        self._tidal.settings_apply()
+
     @property
     def is_logged_in(self) -> bool:
         return bool(self._tidal.session.check_login())
+
+    def account_id(self) -> str:
+        try:
+            return str(getattr(self._tidal.session.user, "id", "") or "")
+        except Exception:
+            return ""
+
+    def credential_facts(self) -> dict[str, str]:
+        """The session's secret-bearing facts for the caller's redactor.
+
+        A missing session or a missing attribute answers empty rather than
+        raising: this is called on every credential mint and every redactor
+        refresh, and a failure must never take a login or a quality switch
+        down with it.
+        """
+        facts: dict[str, str] = {}
+        try:
+            session = self._tidal.session
+            for key in ("access_token", "refresh_token", "session_id"):
+                facts[key] = str(getattr(session, key, "") or "")
+            user = getattr(session, "user", None)
+            facts["account_id"] = str(getattr(user, "id", "") or "")
+            facts["username"] = str(getattr(user, "username", "") or "")
+        except Exception:
+            logger.debug("Could not collect the session's credential facts", exc_info=True)
+        return facts
 
     def apply_quality(self, tier: QualityTier, audio_type: AudioType) -> None:
         # The session carries only the stereo tier, written exactly the way
@@ -211,13 +291,130 @@ class TidalProvider(Provider):
             return None
 
     def get_object(self, kind: str, raw_id: str) -> object:
-        return instantiate_media(self._tidal.session, MediaType(kind), raw_id)
+        # Under the browse lock: a Mix construction parses through the SHARED
+        # session.page instance (the same non-thread-safe parser the editorial
+        # reads guard against); the other fetchers don't need it but holding
+        # it uniformly is harmless -- and it closes the dispatch path's
+        # unguarded Mix parse (a queued job resolving its object raced any
+        # concurrent Browse parse).
+        with self._browse_lock:
+            return instantiate_media(self._tidal.session, MediaType(kind), raw_id)
 
     def collection_items(self, obj, include_videos: bool = True) -> list:
+        # Under the browse lock: a mix's lazy items() parse runs through the
+        # SHARED session.page instance (the same non-thread-safe parser the
+        # editorial reads serialize), and a parse racing a browse parse
+        # corrupts both. The other collections page through typed endpoints
+        # that do not touch that parser; holding it uniformly was judged
+        # harmless, but a long album pagination has no business blocking a
+        # browse parse, so only the mix branch takes it.
+        if isinstance(obj, Mix):
+            with self._browse_lock:
+                return items_results_all(obj, videos_include=include_videos)
         return items_results_all(obj, videos_include=include_videos)
 
     def user_collections(self) -> dict:
         return user_media_lists(self._tidal.session)
+
+    def folder_tree(self, root_folders: list | None = None):
+        return walk_playlist_tree(self._tidal.session, root_folders=root_folders)
+
+    def search_tracks(self, needle: str, limit: int = 10) -> list:
+        try:
+            res = self._tidal.session.search(needle, models=[Track], limit=limit)
+        except Exception:
+            logger.debug("Track search failed for %r", needle, exc_info=True)
+            return []
+        return list(res.get("tracks") or [])
+
+    # ----- editorial reads (Browse) ---------------------------------------
+
+    def browse_page(self, title: str, api_path: str):
+        """One editorial page, read and parsed. The parse is the only part
+        that needs the lock (the shared session.page parser mutates itself on
+        every parse), so the request is issued BEFORE the lock: an untimed
+        request held under it meant one wedged peer blocked every other
+        acquirer. The V2 home-feed shape degrades to the stock parser rather
+        than misreading the payload, an unparseable module is dropped and
+        logged, and every parsed category carries the raw paging handle
+        (``_waves_pl``: dataApiPath + totals) endless scroll pages from
+        later."""
+        with self._browse_lock:
+            page = tidal_page.Page(self._tidal.session, title)
+        json_obj = page.request.request("GET", api_path, params={"deviceType": "BROWSER"}).json()
+        if "rows" not in json_obj:
+            # V2 home-feed shape, Browse never requests it, but degrade
+            # to the stock parser rather than misreading the payload.
+            with self._browse_lock:
+                return page.parse(json_obj)
+        page.title = str(json_obj.get("title") or "") or title
+        categories = []
+        for row in json_obj.get("rows") or []:
+            try:
+                with self._browse_lock:
+                    modules = row.get("modules") or []
+                    if not modules:
+                        continue
+                    cat = page.page_category.parse(modules[0])
+                # Stash the module's raw paging handle on the parsed
+                # category: dataApiPath + totals let a row load further
+                # pages later (endless scroll), tidalapi's own objects
+                # drop this information.
+                pl = modules[0].get("pagedList") or {}
+                cat._waves_pl = {
+                    "data": str(pl.get("dataApiPath") or ""),
+                    "total": int(pl.get("totalNumberOfItems") or 0),
+                    "n": len(pl.get("items") or []),
+                    "modType": str(modules[0].get("type") or ""),
+                }
+                categories.append(cat)
+            except Exception:
+                logger.debug("Skipped an unparseable browse module", exc_info=True)
+        page.categories = categories
+        return page
+
+    def browse_home(self):
+        """The V2 home feed as a parsed page ("Home"), each module parsed
+        tolerantly: one module type tidalapi doesn't know is dropped and
+        logged, the rest of the feed lives. The request runs before the
+        lock (see browse_page); the parse holds it."""
+        session = self._tidal.session
+        json_obj = session.request.request(
+            "GET",
+            "home/feed/static",
+            base_url=session.config.api_v2_location,
+            params={"deviceType": "BROWSER", "locale": session.locale, "platform": "WEB"},
+        ).json()
+        # A private parser instance for the same reason as browse_page:
+        # the shared session.page mutates itself on every parse.
+        with self._browse_lock:
+            parser = tidal_page.PageCategoryV2(session)
+            page = tidal_page.Page(session, "Home")
+            categories = []
+            for item in json_obj.get("items") or []:
+                try:
+                    categories.append(parser.parse_item(item))
+                except Exception:
+                    logger.debug("Skipped an unparseable home module", exc_info=True)
+            page.categories = categories
+            return page
+
+    def browse_window(self, title: str, data_path: str, mod_type: str, offset: int, limit: int = 50) -> BrowseWindow:
+        """One paged window of an editorial category, with the RAW item count
+        (the offset must advance by what the endpoint sent, never by what
+        survived the parse) and the collection total. The request is issued
+        before the lock; the parse holds it (see browse_page)."""
+        with self._browse_lock:
+            page = tidal_page.Page(self._tidal.session, title)
+        j = page.request.request(
+            "GET",
+            data_path,
+            params={"deviceType": "BROWSER", "locale": "en_US", "offset": offset, "limit": limit},
+        ).json()
+        raw = j.get("items") or []
+        with self._browse_lock:
+            cat = page.page_category.parse({"type": mod_type, "title": title, "pagedList": {"items": raw}})
+        return BrowseWindow(category=cat, n=len(raw), total=int(j.get("totalNumberOfItems") or 0))
 
     def _favorites_parts(self, kind: str) -> tuple:
         """The favorites accessor for ``kind`` plus its total-count answer
@@ -297,6 +494,12 @@ class TidalProvider(Provider):
         try:
             quality = quality_audio_highest(obj)
         except Exception:
+            return None
+        if quality is None:
+            # No answer at all (no tags, no fallback quality): unknown stays
+            # unknown. The fold below turns an unrecognized spelling into the
+            # ladder's bottom rung -- that is its documented job for a REAL
+            # spelling -- but a missing quality must not read as LOW.
             return None
         return tier_from_tidal(quality)
 
@@ -391,6 +594,57 @@ class TidalProvider(Provider):
             tail_spurious=overgenerated_tail_urls(manifest),
             single_file=bool(getattr(stream, "is_bts", False)),
         )
+
+    def resolve_preview(self, track) -> StreamInfo:
+        """The full-track preview's stream resolution.
+
+        The caller's preview pipeline (HLS localisation, the ffmpeg remux)
+        stays app-side; what moved behind the seam is the session work the
+        resolve needs: it holds the stream lock (a concurrent or subsequent
+        download is never silently downgraded), normalises the session out of
+        Atmos mode, pins LOW for its own fetch and restores the configured
+        tier in ``finally`` (``restore_normal_session`` early-returns without
+        touching quality in normal mode, per config.py). An encrypted stream
+        answers ``encrypted`` -- Waves does not process encrypted streams, so
+        there is nothing here to preview. A failed normalisation answers the
+        all-default StreamInfo: the caller reports the preview failed.
+        """
+        with self._tidal.stream_lock:
+            try:
+                if not self._tidal.restore_normal_session():
+                    return StreamInfo()
+                self._tidal.session.audio_quality = tidalapi.Quality.low_96k
+            except Exception:
+                logger.debug("Could not normalise the session for preview", exc_info=True)
+                return StreamInfo()
+            try:
+                stream = track.get_stream()
+                manifest = stream.get_stream_manifest()
+                if manifest.is_encrypted:
+                    return StreamInfo(encrypted=True)
+                is_bts = bool(stream.is_bts)
+                return StreamInfo(
+                    urls=list(manifest.get_urls() or []),
+                    codecs=getattr(manifest, "codecs", "") or "",
+                    encrypted=False,
+                    single_file=is_bts,
+                    # Only an MPD manifest has an HLS answer; a BTS one raises.
+                    hls_url=("" if is_bts else self._hls_url(manifest)),
+                )
+            finally:
+                # Canonical resting quality, NOT restore_normal_session(),
+                # which leaves quality untouched in normal mode (config.py).
+                with contextlib.suppress(Exception):
+                    self._tidal.session.audio_quality = tidalapi.Quality(
+                        self._tidal.settings.data.quality_audio
+                    )
+
+    @staticmethod
+    def _hls_url(manifest) -> str:
+        try:
+            return str(manifest.get_hls() or "")
+        except Exception:
+            return ""
 
     def fetch_lyrics(self, track) -> tuple[str, str]:
         # TIDAL's native lyrics only: the LRCLIB-first precedence is shared

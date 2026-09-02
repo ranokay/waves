@@ -23,6 +23,8 @@ from types import SimpleNamespace
 
 import tidalapi
 
+from waves.constants import CTX_TIDAL
+from waves.providers import TidalProvider
 from waves.waves_ui.backend import WavesBridge
 
 # ----- fixture: a small but shape-faithful home/feed/static payload ---------
@@ -149,8 +151,10 @@ def _rows_bridge(payload: dict) -> WavesBridge:
     b._objs = {k: {} for k in ("album", "artist", "track", "playlist", "video", "mix")}
     b._objs_max = 50
     b._objs_lock = Lock()
-    b._browse_lock = Lock()
+    # The home read rides the provider: the real V2 parser runs behind the
+    # seam, over the offline session's stubbed request.
     b.tidal = SimpleNamespace(session=_offline_session(payload))
+    b.providers = {CTX_TIDAL: TidalProvider(b.tidal)}
     return b
 
 

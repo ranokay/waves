@@ -4,7 +4,9 @@ Streams are requested at the SESSION's audio quality (the Waves UI never
 passes a per-download quality), and historically that was only written at
 startup, so a settings change kept downloading at the old quality until the
 app was restarted. applySettings must re-apply settings to the tidal session
-whenever quality_audio changes.
+whenever quality_audio changes -- through the provider's ``apply_quality``
+(the seam, ticket #22), which writes the tier it maps the Waves rung to and
+then runs the same settings_apply body.
 
 Tested with the method-bound stub pattern (no display, no live bridge).
 """
@@ -51,9 +53,19 @@ def _apply_stub():
     stub.dl_pool = SimpleNamespace(setMaxThreadCount=lambda n: None)
     stub._logged_in = False
     stub._set_status = lambda text: None
+    # The quality re-apply rides the provider (ticket #22). The fake records
+    # the (tier, audio type) it was asked for, then does what the real
+    # provider's apply_quality does: write the mapped tier and run
+    # settings_apply against the stub's own settings object.
     calls = []
-    stub.tidal = SimpleNamespace(settings_apply=lambda: calls.append(True) or True)
-    stub._settings_apply_calls = calls
+
+    def fake_apply_quality(tier, audio_type):
+        calls.append((str(tier), str(audio_type)))
+        stub.settings.data.quality_audio = str(tier.value)
+
+    stub.providers = {"tidal": SimpleNamespace(apply_quality=fake_apply_quality)}
+    stub._apply_quality_calls = calls
+    stub._reapply_quality = WavesBridge._reapply_quality.__get__(stub, _Stub)
     return stub
 
 
@@ -64,11 +76,13 @@ def _apply(stub, values):
 def test_quality_audio_change_reapplies_session_settings():
     stub = _apply_stub()
     _apply(stub, {"quality_audio": "hi_res_lossless"})
-    assert stub._settings_apply_calls, "quality change never reached the tidal session"
-    assert stub.settings.data.quality_audio.name == "hi_res_lossless"
+    assert stub._apply_quality_calls == [("HI_RES_LOSSLESS", "stereo")], (
+        "quality change never reached the provider's apply_quality"
+    )
+    assert stub.settings.data.quality_audio == "HI_RES_LOSSLESS"
 
 
 def test_unrelated_save_leaves_session_untouched():
     stub = _apply_stub()
     _apply(stub, {"skip_existing": True})
-    assert not stub._settings_apply_calls
+    assert not stub._apply_quality_calls

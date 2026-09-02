@@ -81,8 +81,6 @@ from waves.helper.path import (
     url_to_filename,
 )
 from waves.helper.tidal import (
-    get_album_artist_ids,  # noqa: F401 - the bridge reaches these as module attributes
-    get_album_artists,  # noqa: F401
     instantiate_media,
     items_results_all,
     name_builder_item,
@@ -317,6 +315,19 @@ def _artist_ids(media) -> list[str]:
     return [str(a.id) for a in getattr(media, "artists", None) or [] if getattr(a, "id", None)]
 
 
+def clean_album_artists(names: list) -> list:
+    """Reduce an album-artist list to only the primary (first) artist.
+
+    The tag-writer's rule for the opt-in 'Clean album-artist tag' setting:
+    Plex (and some other libraries) mis-read a multi-value album-artist
+    field, so the option collapses it to just the primary artist. The pref
+    itself lives above the engine (a waves.json pref the GUI passes as a live
+    probe); the rule lives here, beside the write it shapes. Folder paths use
+    a different binding and are never collapsed.
+    """
+    return [names[0]] if names else names
+
+
 def _waves_owned_ids(media) -> set[str]:
     """Every item id a file on disk may legitimately carry for ``media``.
 
@@ -520,6 +531,7 @@ class Download:
         event_abort: Event | None = None,
         event_run: Event | None = None,
         provider: Provider | None = None,
+        album_artist_tag_clean: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize the Download object and its dependencies.
 
@@ -532,7 +544,7 @@ class Download:
             fn_logger (Callable): Logger function or object.
             skip_existing (bool, optional): Whether to skip existing files. Defaults to False.
             progress_gui (ProgressBars | None, optional): GUI progress bars. Defaults to None.
-            progress (Progress | None, optional): Progress task table. Defaults to None.
+            progress (Progress | None, optional): GUI progress task table. Defaults to None.
             progress_overall (Progress | None, optional): Overall progress table. Defaults to None.
             event_abort (Event | None, optional): Abort event. Defaults to None.
             event_run (Event | None, optional): Run event. Defaults to None.
@@ -541,6 +553,11 @@ class Download:
                 refusal classification arrive through it). Defaults to None,
                 which composes the TIDAL provider over this download's own
                 TIDAL configuration.
+            album_artist_tag_clean (Callable[[], bool] | None, optional): A
+                live probe of the 'Clean album-artist tag' pref, consulted at
+                tag-write time so a settings change applies without a
+                restart. Defaults to None (the pref is off; every main-credit
+                album artist is written).
         """
         self.settings = Settings()
         self.tidal = tidal_obj
@@ -570,6 +587,7 @@ class Download:
         self.path_base = path_base
         self.event_abort = event_abort
         self.event_run = event_run
+        self._album_artist_tag_clean = album_artist_tag_clean or (lambda: False)
 
         # Destination directories already ensured by this instance (one
         # instance = one queued item, so this resets naturally per album).
@@ -3892,6 +3910,11 @@ class Download:
         explicit: bool = bool(facts.get("explicit", False))
         title = name_builder_title(track)
         title += METADATA_EXPLICIT if explicit and self.settings.data.mark_explicit else ""
+        # The albumartist tag honours the opt-in 'Clean album-artist' pref,
+        # read live (see __init__); every other credit is written as credited.
+        album_artist_names = facts.get("album_artists") or []
+        if self._album_artist_tag_clean():
+            album_artist_names = clean_album_artists(album_artist_names)
 
         # `None` values are not allowed.
         #
@@ -3917,7 +3940,7 @@ class Download:
                 tracknumber=facts.get("track_num"),
                 date=facts.get("release_date") or "",
                 isrc=facts.get("isrc") or "",
-                albumartist=facts.get("album_artists") or [],
+                albumartist=album_artist_names,
                 # An album fetched through the 404 fallback carries no track
                 # count, and "of 1" beside a real track number is a claim the
                 # data does not support (the naming rule for the same unknown,

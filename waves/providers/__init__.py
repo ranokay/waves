@@ -13,6 +13,7 @@ cycle; a lazy one keeps every direction working.
 
 from waves.providers.base import (
     AudioType,
+    BrowseWindow,
     Capability,
     FavoritesUnavailable,
     Provider,
@@ -45,6 +46,7 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "AudioType",
+    "BrowseWindow",
     "Capability",
     "FavoritesUnavailable",
     "Provider",

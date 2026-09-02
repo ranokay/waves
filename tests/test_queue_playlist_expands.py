@@ -107,7 +107,12 @@ def test_load_queue_tracks_orders_a_mix_by_its_own_list(monkeypatch):
     t = be.Track.__new__(be.Track)
     t.id, t.name, t.duration, t.artists, t.artist = "m-1", "Only", 90, [], None
 
-    class _Mix:
+    class _Mix(be.Mix):
+        # A real Mix subclass: the mix items read rides the provider's
+        # collection_items, whose dispatcher matches on the real type.
+        def __init__(self):
+            pass
+
         def items(self):
             return [t, object()]  # a non-track entry is dropped, not crashed on
 

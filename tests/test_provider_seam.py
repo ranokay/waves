@@ -13,10 +13,14 @@ rank scale.
 from __future__ import annotations
 
 import types
+from threading import Lock
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from tidalapi import Track
 from tidalapi.media import AudioMode, MediaMetadataTags, Quality
+from tidalapi.mix import Mix
 from tidalapi.session import Session
 
 from waves.constants import MediaType
@@ -68,7 +72,78 @@ def _http_error(status: int, body: dict) -> Exception:
     return error
 
 
+def _patch_tidal_page(monkeypatch, page, parser=None):
+    """Stand in for the module's tidalapi page classes; returns the Page and
+    PageCategoryV2 stand-ins so a test can assert the construction shape."""
+    page_cls = Mock(name="Page", return_value=page)
+    parser_cls = Mock(name="PageCategoryV2", return_value=parser) if parser is not None else Mock(name="PageCategoryV2")
+    monkeypatch.setattr("waves.providers.tidal.tidal_page", SimpleNamespace(Page=page_cls, PageCategoryV2=parser_cls))
+    return page_cls, parser_cls
+
+
+class _BareProvider(Provider):
+    """A provider implementing the whole fused interface, with no bodies."""
+
+    id = "x"
+    name = "X"
+    capabilities = frozenset()
+
+    def login_begin(self): ...
+    def login_complete(self, payload): ...
+    def logout(self): ...
+    @property
+    def is_logged_in(self): ...
+    def apply_quality(self, tier, audio_type): ...
+    def search(self, needle): ...
+    def open_url(self, url): ...
+    def get_object(self, kind, raw_id): ...
+    def collection_items(self, obj, include_videos=True): ...
+    def user_collections(self): ...
+    def favorites_page(self, kind, offset, limit, order=None): ...
+    def favorite_ids(self, kind): ...
+    def advertised_tier(self, obj): ...
+    def advertised_deliveries(self, obj): ...
+    def advertised_ceiling(self, obj): ...
+    def resolve_stream(self, track, tier, audio_type): ...
+    def fetch_lyrics(self, track): ...
+    def cover_url(self, obj, dimension): ...
+    def track_facts(self, track): ...
+    def classify_refusal(self, exc): ...
+    def login_resume(self): ...
+    def account_id(self): ...
+    def credential_facts(self): ...
+    def reset_session(self): ...
+    def folder_tree(self, root_folders=None): ...
+    def search_tracks(self, needle, limit=10): ...
+    def browse_page(self, title, api_path): ...
+    def browse_home(self): ...
+    def browse_window(self, title, data_path, mod_type, offset, limit=50): ...
+
+
 # ---------------------------------------------------------------- the seam
+
+
+    def test_login_begin_rebuilds_a_torn_down_session(self):
+        # The engine's logout deletes the session object outright; a fresh
+        # PKCE login rebuilds one instead of failing (the self-heal the
+        # bridge's login slot used to carry, now where the session lives).
+        provider, tidal = _provider()
+        tidal.session = None
+        built = []
+        provider.reset_session = lambda: built.append(True)  # type: ignore[method-assign]
+
+        provider.login_begin()
+
+        assert built == [True], "a torn-down session must be rebuilt before the flow starts"
+
+    def test_login_begin_keeps_a_live_session(self):
+        provider, _ = _provider()
+        rebuilds = []
+        provider.reset_session = lambda: rebuilds.append(True)  # type: ignore[method-assign]
+
+        provider.login_begin()
+
+        assert rebuilds == []
 
 
 class TestTheSeam:
@@ -198,6 +273,48 @@ class TestCatalog:
     def test_open_url_returns_none_for_an_unknown_grammar(self):
         provider, _ = _provider()
         assert provider.open_url("https://example.com/nothing/here") is None
+
+    def test_advertised_tier_answers_none_for_a_missing_quality_not_low(self):
+        # Empty tags and no audio_quality: the fold turns garbage into the
+        # ladder's bottom rung, but a MISSING quality must stay unknown -- a
+        # row labelled LOW is a claim the catalog never made.
+        provider, _ = _provider()
+        obj = Mock(spec=["media_metadata_tags", "audio_quality"])
+        obj.media_metadata_tags = []
+        obj.audio_quality = None
+        assert provider.advertised_tier(obj) is None
+
+    def test_collection_items_serializes_a_mix_parse(self):
+        # A mix's lazy items() parses through the SHARED session.page parser;
+        # the read holds the provider's browse lock, a browse parse can't
+        # corrupt it mid-flight. Non-mix collections page typed endpoints and
+        # stay lock-free.
+        provider, _ = _provider()
+        held = []
+        provider._browse_lock = type("_Recording", (), {
+            "__enter__": staticmethod(lambda: held.append("enter")),
+            "__exit__": staticmethod(lambda *a: held.append("exit")),
+        })()
+        mix = Mix.__new__(Mix)
+        mix_items = [Mock(name="t")]
+        mix.items = lambda: mix_items
+
+        class _ArtistLike:
+            # A real bound-method shape: the paginator reads __func__.
+            def __init__(self):
+                self.albums: list = []
+
+            def get_albums(self, limit=100, offset=0):
+                return self.albums
+
+            def get_ep_singles(self, limit=100, offset=0):
+                return []
+
+        artist = _ArtistLike()
+
+        assert provider.collection_items(mix) == mix_items
+        assert provider.collection_items(artist) == []
+        assert held == ["enter", "exit"], "only the mix parse takes the lock"
 
     def test_open_url_returns_none_when_the_lookup_fails(self):
         provider, tidal = _provider()
@@ -811,6 +928,326 @@ class TestDelivery:
         # second provider's plug-in point.
         provider, _ = _provider()
         assert provider.preview_url(Mock()) is None
+
+
+# ------------------------------------------------- session lifecycle (contract)
+
+
+class TestSessionLifecycleContract:
+    """The session work the GUI used to do by reaching the session directly
+    (ticket #22): resume from stored credentials, the account id, the
+    credential facts the redactor is taught, and the post-logout rebuild."""
+
+    def test_login_resume_delegates_to_the_cached_token_login(self):
+        provider, tidal = _provider()
+        tidal.login_token = Mock(return_value=True)
+        assert provider.login_resume() is True
+        tidal.login_token.assert_called_once_with()
+
+    def test_account_id_reads_the_session_user(self):
+        provider, tidal = _provider()
+        tidal.session.user.id = 4242
+        assert provider.account_id() == "4242"
+
+    def test_account_id_answers_empty_when_there_is_no_user(self):
+        provider, tidal = _provider()
+        tidal.session.user = None
+        assert provider.account_id() == ""
+
+    def test_credential_facts_carry_the_secrets_the_redactor_registers(self):
+        provider, tidal = _provider()
+        tidal.session.access_token = "tok"  # noqa: S105 - a canned test value
+        tidal.session.refresh_token = "ref"  # noqa: S105 - a canned test value
+        tidal.session.session_id = "sid"
+        tidal.session.user = Mock()
+        tidal.session.user.id = 7
+        tidal.session.user.username = "me@example.com"
+
+        facts = provider.credential_facts()
+
+        assert facts == {
+            "access_token": "tok",
+            "refresh_token": "ref",
+            "session_id": "sid",
+            "account_id": "7",
+            "username": "me@example.com",
+        }
+
+    def test_credential_facts_survive_a_missing_user(self):
+        provider, tidal = _provider()
+        tidal.session.user = None
+        facts = provider.credential_facts()
+        assert facts["account_id"] == "" and facts["username"] == ""
+
+    def test_reset_session_rebuilds_and_rehardens(self, monkeypatch):
+        # Sign-out in a long-lived GUI cannot leave a deleted session (the
+        # engine's CLI assumption): the provider rebuilds a clean one, mirrors
+        # the constructor's captured client pairs, and re-applies the quality.
+        import tidalapi
+
+        provider, tidal = _provider()
+        hardened: list = []
+        monkeypatch.setattr(
+            "waves.providers.tidal.harden_api_session", lambda session: hardened.append(session)
+        )
+        tidal.original_client_id = None
+        tidal.original_client_secret = None
+        tidal.original_client_id_pkce = None
+        tidal.original_client_secret_pkce = None
+        tidal.is_atmos_session = True  # a stale Atmos flag must not survive
+
+        provider.reset_session()
+
+        assert isinstance(tidal.session, tidalapi.Session)
+        assert hardened == [tidal.session]
+        assert tidal.original_client_id == tidal.session.config.client_id
+        assert tidal.original_client_secret == tidal.session.config.client_secret
+        assert tidal.original_client_id_pkce == tidal.session.config.client_id_pkce
+        assert tidal.original_client_secret_pkce == tidal.session.config.client_secret_pkce
+        assert tidal.is_atmos_session is False
+        assert tidal.session.audio_quality == tidal.settings.data.quality_audio  # re-applied
+
+
+# ------------------------------------------------------- catalog (contract)
+
+
+class TestCatalogContract:
+    """The reads the bridge still made against the session/helper directly
+    before the contract pass: the folder walk, the small track search, and
+    the editorial (Browse) reads."""
+
+    def test_search_tracks_is_a_lightweight_track_only_search(self):
+        provider, tidal = _provider()
+        track = Mock(name="track")
+        tidal.session.search.return_value = {"tracks": [track]}
+
+        result = provider.search_tracks("artist song", limit=10)
+
+        assert result == [track]
+        _, kwargs = tidal.session.search.call_args
+        assert kwargs.get("models") == [Track]
+        assert kwargs.get("limit") == 10
+
+    def test_search_tracks_answers_empty_when_the_bucket_is_missing(self):
+        provider, tidal = _provider()
+        tidal.session.search.return_value = {}
+        assert provider.search_tracks("x", limit=5) == []
+
+    def test_folder_tree_walks_the_helper_body(self, monkeypatch):
+        from waves.helper.folders import FolderTree
+
+        provider, tidal = _provider()
+        roots = [Mock(name="root folder")]
+        seen: dict = {}
+        monkeypatch.setattr(
+            "waves.providers.tidal.walk_playlist_tree",
+            lambda session, root_folders=None: seen.update(
+                session=session, root_folders=root_folders
+            )
+            or FolderTree(),
+        )
+
+        tree = provider.folder_tree(root_folders=roots)
+
+        assert isinstance(tree, FolderTree)
+        assert seen["session"] is tidal.session
+        assert seen["root_folders"] is roots
+
+    def test_browse_page_reads_the_editorial_path_and_degrades_to_the_stock_parse(self, monkeypatch):
+        provider, tidal = _provider()
+        page = Mock(name="page")
+        page.request.request.return_value.json.return_value = {"title": "Whatever"}  # no "rows": V2 shape
+        page_cls, _ = _patch_tidal_page(monkeypatch, page)
+
+        result = provider.browse_page("Explore", "pages/explore")
+
+        page_cls.assert_called_once_with(tidal.session, "Explore")
+        page.request.request.assert_called_once_with("GET", "pages/explore", params={"deviceType": "BROWSER"})
+        assert result is page.parse.return_value
+        page.parse.assert_called_once_with({"title": "Whatever"})
+
+    def test_browse_page_parses_rows_and_stashes_the_paging_handle(self, monkeypatch):
+        provider, _ = _provider()
+        cat = Mock(name="category")
+        page = Mock(name="page")
+        page.request.request.return_value.json.return_value = {
+            "title": "Explore",
+            "rows": [
+                {
+                    "modules": [
+                        {
+                            "type": "pagedList",
+                            "pagedList": {"dataApiPath": "pages/data/x", "totalNumberOfItems": 7, "items": [1, 2]},
+                        }
+                    ]
+                }
+            ],
+        }
+        page.page_category.parse.return_value = cat
+        _patch_tidal_page(monkeypatch, page)
+
+        result = provider.browse_page("Explore", "pages/explore")
+
+        assert result is page  # the parsed page comes back for the bridge to render
+        assert result.title == "Explore"  # the payload's own title wins
+        assert result.categories == [cat]
+        assert cat._waves_pl == {
+            "data": "pages/data/x",
+            "total": 7,
+            "n": 2,
+            "modType": "pagedList",
+        }
+
+    def test_browse_page_drops_an_unparseable_module_and_keeps_the_rest(self, monkeypatch):
+        provider, _ = _provider()
+        good = Mock(name="good")
+        page = Mock(name="page")
+        page.request.request.return_value.json.return_value = {
+            "title": "",
+            "rows": [{"modules": [{"type": "bad"}]}, {"modules": [{"type": "good"}]}],
+        }
+        page.page_category.parse.side_effect = [RuntimeError("unknown module"), good]
+        _patch_tidal_page(monkeypatch, page)
+
+        result = provider.browse_page("Explore", "pages/explore")
+
+        assert result.categories == [good]
+
+    def test_browse_home_reads_the_v2_feed(self, monkeypatch):
+        provider, tidal = _provider()
+        ok = Mock(name="ok")
+        parser = Mock(name="parser")
+        parser.parse_item.side_effect = [ok, RuntimeError("bad module")]
+        request = Mock(name="request")
+        request.request.return_value.json.return_value = {"items": [{"id": 1}, {"id": "bad"}]}
+        tidal.session.request = request
+        tidal.session.config = Mock()
+        tidal.session.config.api_v2_location = "https://api.tidal.com/v2"
+        tidal.session.locale = "en_US"
+        page = Mock(name="page")
+        _patch_tidal_page(monkeypatch, page, parser)
+
+        result = provider.browse_home()
+
+        request.request.assert_called_once_with(
+            "GET",
+            "home/feed/static",
+            base_url="https://api.tidal.com/v2",
+            params={"deviceType": "BROWSER", "locale": "en_US", "platform": "WEB"},
+        )
+        parser.parse_item.assert_called_with({"id": "bad"})  # every item was offered
+        assert result.categories == [ok]  # the bad module was dropped, the feed lives
+
+    def test_browse_window_reads_one_paged_window(self, monkeypatch):
+        provider, _ = _provider()
+        cat = Mock(name="category")
+        page = Mock(name="page")
+        page.request.request.return_value.json.return_value = {"items": [{"a": 1}, {"b": 2}], "totalNumberOfItems": 9}
+        page.page_category.parse.return_value = cat
+        _patch_tidal_page(monkeypatch, page)
+
+        window = provider.browse_window("Genre", "pages/data/x", "pagedList", offset=50)
+
+        page.request.request.assert_called_once_with(
+            "GET",
+            "pages/data/x",
+            params={"deviceType": "BROWSER", "locale": "en_US", "offset": 50, "limit": 50},
+        )
+        page.page_category.parse.assert_called_once_with(
+            {"type": "pagedList", "title": "Genre", "pagedList": {"items": [{"a": 1}, {"b": 2}]}}
+        )
+        assert window.category is cat
+        assert window.n == 2  # the RAW page length, the paging arithmetic's input
+        assert window.total == 9
+
+
+# ------------------------------------------------------- preview (contract)
+
+
+class TestPreviewContract:
+    """Full-track preview resolution: the session dance (stream lock, normal
+    session, LOW pin, restore) is TIDAL machinery and moved behind the seam
+    with it."""
+
+    @staticmethod
+    def _manifest(*, encrypted=False, is_bts=False, urls=None, hls="hls-master"):
+        manifest = Mock(name="manifest")
+        manifest.is_encrypted = encrypted
+        manifest.get_urls.return_value = urls or ["seg-1"]
+        manifest.get_hls.return_value = hls
+        return manifest
+
+    def _resolved(self, *, encrypted=False, is_bts=False, hls="hls-master"):
+        provider, tidal = _provider()
+        tidal.restore_normal_session = Mock(return_value=True)
+        tidal.stream_lock = Lock()
+        manifest = self._manifest(encrypted=encrypted, is_bts=is_bts, hls=hls)
+        stream = Mock(name="stream")
+        stream.is_bts = is_bts
+        stream.get_stream_manifest.return_value = manifest
+        track = Mock(name="track")
+        track.get_stream.return_value = stream
+        return provider, tidal, track
+
+    def test_a_bts_stream_resolves_to_its_single_file(self):
+        provider, _tidal, track = self._resolved(is_bts=True)
+
+        info = provider.resolve_preview(track)
+
+        assert info.single_file is True
+        assert info.urls == ["seg-1"]
+        assert info.encrypted is False
+        track.get_stream.assert_called_once_with()
+
+    def test_an_hls_stream_resolves_to_its_master_url(self):
+        provider, _, track = self._resolved(is_bts=False)
+
+        info = provider.resolve_preview(track)
+
+        assert info.single_file is False
+        assert info.hls_url == "hls-master"
+
+    def test_the_session_is_left_at_the_configured_quality(self):
+        # The resolve pins LOW for its own fetch and restores the configured
+        # tier in finally -- the guarantee the bridge's comment documents.
+        provider, tidal, track = self._resolved()
+        tidal.settings.data.quality_audio = Quality.high_lossless
+
+        provider.resolve_preview(track)
+
+        assert tidal.session.audio_quality == Quality.high_lossless
+
+    def test_the_fetch_rides_the_low_tier(self):
+        provider, tidal, track = self._resolved()
+        seen = []
+        track.get_stream.side_effect = lambda: seen.append(tidal.session.audio_quality) or Mock(
+            get_stream_manifest=lambda: self._manifest()
+        )
+        provider.resolve_preview(track)
+        assert seen == [Quality.low_96k]
+
+    def test_a_failed_session_restore_answers_unresolvable(self):
+        provider, tidal, track = self._resolved()
+        tidal.restore_normal_session = Mock(return_value=False)
+
+        info = provider.resolve_preview(track)
+
+        assert info.urls == [] and info.encrypted is False
+        track.get_stream.assert_not_called()
+
+    def test_an_encrypted_stream_is_marked_not_served(self):
+        provider, _, track = self._resolved(encrypted=True)
+
+        info = provider.resolve_preview(track)
+
+        assert info.encrypted is True
+        assert info.urls == []
+
+    def test_the_default_provider_hook_answers_unresolvable(self):
+        # The optional hook's inherited default: a provider without session
+        # machinery answers "could not resolve", never a crash.
+        info = _BareProvider().resolve_preview(Mock())
+        assert info.urls == [] and info.hls_url == ""
 
 
 # ------------------------------------------------------------- refusals

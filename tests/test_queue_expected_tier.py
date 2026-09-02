@@ -33,6 +33,7 @@ import sys
 import tempfile
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 
 import pytest
 
@@ -140,11 +141,11 @@ def test_merge_carries_the_ceiling_from_the_fetch_and_from_the_registry():
 def test_merge_seed_and_load_queue_tracks_read_the_catalog_ceiling(monkeypatch):
     from waves.waves_ui import backend
 
-    monkeypatch.setattr(backend, "_quality_label", lambda o: getattr(o, "adv", ""))
+    monkeypatch.setattr(backend, "_quality_label", lambda o, _p=None: getattr(o, "adv", ""))
     monkeypatch.setattr(backend, "name_builder_title", lambda t: getattr(t, "name", ""))
     src = backend.Track.__new__(backend.Track)
     src.id, src.name, src.duration, src.adv, src.artists, src.artist = "s", "S", 10, "LOSSLESS", [], None
-    reg = backend._seed_merge_registry([(src, 1, 1, "i-1")])
+    reg = backend._seed_merge_registry([(src, 1, 1, "i-1")], backend.TidalProvider(SimpleNamespace()))
     assert reg["i-1"]["expected"] == "LOSSLESS"
 
 
