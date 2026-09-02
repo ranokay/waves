@@ -75,7 +75,7 @@ def arm_queue(stub) -> None:
         # spec carries a name, not an object). A test that wants a specific
         # object or refusal sets its own before driving the job.
         (
-            "_providers",
+            "providers",
             lambda: {
                 "tidal": SimpleNamespace(
                     get_object=lambda kind, raw_id: SimpleNamespace(id=raw_id),

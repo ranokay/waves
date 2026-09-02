@@ -10294,7 +10294,7 @@ class WavesBridge(LibraryMixin, QObject):
             # here is the row's verdict, worded like the track-level one; any
             # other failure is a plain failed row.
             try:
-                obj = self._providers[spec.provider_id].get_object(spec.kind, spec.raw_object_id())
+                obj = self.providers[spec.provider_id].get_object(spec.kind, spec.raw_object_id())
             except Exception as exc:
                 if job_abort.is_set():
                     stopped_before_it_started()
@@ -10303,7 +10303,7 @@ class WavesBridge(LibraryMixin, QObject):
                 if isinstance(exc, DownloadIncomplete):
                     reason = str(exc)
                 else:
-                    verdict = self._providers[spec.provider_id].classify_refusal(exc)
+                    verdict = self.providers[spec.provider_id].classify_refusal(exc)
                     if verdict.kind is RefusalKind.UNAVAILABLE:
                         reason = verdict.message or "not available anymore"
                 logger.exception("Could not resolve the download target for %s", diagnostics.content(name))

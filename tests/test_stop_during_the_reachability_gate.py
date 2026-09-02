@@ -62,7 +62,7 @@ class _Stub:
     def __init__(self, stop_during_the_probe: bool) -> None:
         self._stop_during_the_probe = stop_during_the_probe
         self._logged_in = True
-        self._providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: _media())}
+        self.providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: _media())}
         self._job_aborts: dict[int, Event] = {}
         self._job_signals: dict = {}
         self._job_dls: dict = {}

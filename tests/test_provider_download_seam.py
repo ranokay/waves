@@ -521,7 +521,7 @@ class TestJobSpecDispatch:
         stub.downloadState = _Signal()
         stub.downloadProgress = _Signal()
         stub.statuses = []
-        stub._providers = {"tidal": provider}
+        stub.providers = {"tidal": provider}
         stub._track_poll = SimpleNamespace(isActive=lambda: True, start=lambda *a: None)
         stub._set_queue_status = lambda qid, status, reason="": (
             stub._queue[0].__setitem__("status", status),

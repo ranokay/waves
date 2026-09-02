@@ -166,7 +166,7 @@ class _JobStub:
     def __init__(self, *, press: str, merge_plan=None) -> None:
         self._press = press
         self._logged_in = True
-        self._providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: SimpleNamespace(id=raw_id))}
+        self.providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: SimpleNamespace(id=raw_id))}
         self._job_aborts: dict = {}
         self._job_signals: dict = {}
         self._job_dls: dict = {}
