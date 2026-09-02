@@ -164,7 +164,7 @@ class TestStreamInfoTranslation:
         # The pipeline's leniency decision is provider-proven: the manifest's
         # own timeline says how many trailing URLs are padding.
         resolved = TidalProvider._as_stream_info(_engine_info(manifest=_dash_manifest(4)))
-        assert resolved.tail_spurious is not None
+        assert resolved.tail_spurious == 1  # 1 init + (r+1) per S element, against 4 URLs
 
     def test_a_non_dash_delivery_proves_nothing(self):
         manifest = _dash_manifest(4)

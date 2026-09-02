@@ -27,6 +27,10 @@ class Provider:
     def logout(self) -> None                 # backend.py:4549 flow
     is_logged_in: bool                       # gates enqueue (backend.py:9996) and browse
     def apply_quality(self, tier: str) -> None            # config.py:467 settings_apply analogue
+                                                          #   [superseded: ships as (tier, audio_type) —
+                                                          #    spec §4.5; audio type stays orthogonal to the
+                                                          #    ladder, and how a provider delivers Atmos is
+                                                          #    that provider's fenced per-stream business]
 
     # --- catalog read (returns the app's plain dicts; see "Catalog metadata shapes") ---
     def search(self, needle: str) -> dict                 # backend.py:4826 payload shape

@@ -241,7 +241,11 @@ class TidalProvider(Provider):
 
     @property
     def is_logged_in(self) -> bool:
-        return bool(self._tidal.session.check_login())
+        # A sign-out deletes the session object outright (the engine's CLI
+        # assumption); a status refresh that lands after one reads as signed
+        # out, never an AttributeError.
+        session = getattr(self._tidal, "session", None)
+        return bool(session and session.check_login())
 
     def account_id(self) -> str:
         try:

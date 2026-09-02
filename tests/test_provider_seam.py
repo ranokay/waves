@@ -122,28 +122,6 @@ class _BareProvider(Provider):
 
         # ---------------------------------------------------------------- the seam
 
-    def test_login_begin_rebuilds_a_torn_down_session(self):
-        # The engine's logout deletes the session object outright; a fresh
-        # PKCE login rebuilds one instead of failing (the self-heal the
-        # bridge's login slot used to carry, now where the session lives).
-        provider, tidal = _provider()
-        tidal.session = None
-        built = []
-        provider.reset_session = lambda: built.append(True)  # type: ignore[method-assign]
-
-        provider.login_begin()
-
-        assert built == [True], "a torn-down session must be rebuilt before the flow starts"
-
-    def test_login_begin_keeps_a_live_session(self):
-        provider, _ = _provider()
-        rebuilds = []
-        provider.reset_session = lambda: rebuilds.append(True)  # type: ignore[method-assign]
-
-        provider.login_begin()
-
-        assert rebuilds == []
-
 
 class TestTheSeam:
     def test_tidal_provider_is_a_provider(self):
@@ -195,6 +173,42 @@ class TestSession:
         assert provider.is_logged_in is True
         tidal.session.check_login.return_value = False
         assert provider.is_logged_in is False
+
+    def test_is_logged_in_answers_signed_out_after_a_session_teardown(self):
+        # logout deletes the session object outright; a status refresh that
+        # lands afterwards reads as signed out, never an AttributeError.
+        provider, tidal = _provider()
+        tidal.session = None
+        assert provider.is_logged_in is False
+
+    def test_login_begin_rebuilds_a_torn_down_session(self):
+        # The engine's logout deletes the session object outright; a fresh
+        # PKCE login rebuilds one instead of failing (the self-heal the
+        # bridge's login slot used to carry, now where the session lives).
+        provider, tidal = _provider()
+        tidal.session = None
+        built = []
+        real_reset = provider.reset_session
+
+        def _recording_reset():
+            built.append(True)
+            real_reset()
+
+        provider.reset_session = _recording_reset  # type: ignore[method-assign]
+
+        url = provider.login_begin()
+
+        assert built == [True], "a torn-down session must be rebuilt before the flow starts"
+        assert url and "auth" in url  # the flow continues on the rebuilt session
+
+    def test_login_begin_keeps_a_live_session(self):
+        provider, _ = _provider()
+        rebuilds = []
+        provider.reset_session = lambda: rebuilds.append(True)  # type: ignore[method-assign]
+
+        provider.login_begin()
+
+        assert rebuilds == []
 
     def test_logout_delegates_to_the_config_body(self):
         provider, tidal = _provider()
