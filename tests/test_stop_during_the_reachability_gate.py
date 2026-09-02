@@ -62,6 +62,7 @@ class _Stub:
     def __init__(self, stop_during_the_probe: bool) -> None:
         self._stop_during_the_probe = stop_during_the_probe
         self._logged_in = True
+        self._providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: _media())}
         self._job_aborts: dict[int, Event] = {}
         self._job_signals: dict = {}
         self._job_dls: dict = {}
@@ -123,7 +124,7 @@ def _media():
 
 def _run(*, stop_during_the_probe: bool) -> _Stub:
     stub = _Stub(stop_during_the_probe)
-    spec = _JobSpec(_media(), "album", "Album", "{title}", True, "m1", None)
+    spec = _JobSpec("tidal", "album", "tidal:m1", "Album", "{title}", True, "m1", None)
     with patch.object(backend, "_ProgressSignals", lambda *a, **k: object()):
         WavesBridge._start_job(stub, 1, spec)
     return stub

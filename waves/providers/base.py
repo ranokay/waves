@@ -93,19 +93,36 @@ class Refusal:
 @dataclass
 class StreamInfo:
     """What a provider's stream resolution hands the download pipeline:
-    everything the shared segment/file pipeline needs, no engine types."""
+    everything the shared segment/file pipeline needs, no engine types.
+
+    The no-stream answer is the all-default instance: an empty ``urls`` means
+    the provider could not resolve a streamable delivery (the pipeline treats
+    it exactly like a failed fetch).
+    """
 
     urls: list[str] = field(default_factory=list)
     file_extension: str = ""
     codecs: str = ""
     requires_flac_extraction: bool = False
-    # The delivered-quality snapshot: {tier, audio_mode, bit_depth,
+    # The delivered-quality snapshot: {tier, audio_type, bit_depth,
     # sample_rate, codecs}, normalized to plain strings/ints for the
     # ownership record.
     delivered: dict = field(default_factory=dict)
     # ReplayGain measurements where the provider serves them; None leaves the
     # tags untagged (the existing rule for a stream without measurements).
+    # Keys, where measured: album_replay_gain, album_peak_amplitude,
+    # track_replay_gain, track_peak_amplitude.
     replay_gain: dict | None = None
+    # The provider refuses to serve an encrypted delivery as audio: the
+    # pipeline must fail the item rather than write an unplayable file.
+    encrypted: bool = False
+    # Provider-proven count of over-generated trailing URLs (padding whose
+    # failure is harmless); None when nothing is proven and the pipeline
+    # keeps its legacy last-segment leniency.
+    tail_spurious: int | None = None
+    # The delivery arrived as one complete file (no fragmented-segment merge),
+    # so its container is already whole and needs no duration-repairing remux.
+    single_file: bool = False
 
 
 class Provider(ABC):

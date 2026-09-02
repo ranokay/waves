@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 from tidalapi.media import Track
 
 from waves.constants import UNIQUIFY_THRESHOLD
-from waves.download import Download
+from waves.download import Download, StreamInfo
 from waves.helper.path import file_unique_suffix
 
 
@@ -42,7 +42,7 @@ def _make_download(tmp_path: pathlib.Path) -> Download:
     dl.event_run.set()
     dl._handle_metadata_and_extras = lambda *args, **kwargs: None
 
-    def _download(media, stream_manifest, path_file, event_stop=None):
+    def _download(media, stream_info, path_file, event_stop=None):
         path_file.write_bytes(b"id-" + str(media.id).encode())
 
         return True, path_file
@@ -67,10 +67,8 @@ def _run(dl: Download, destination: pathlib.Path, track_id: int = 111) -> tuple:
     return dl._perform_actual_download(
         media=_track(track_id),
         path_media_dst=destination,
-        stream_manifest=MagicMock(),
-        do_flac_extract=False,
+        stream_info=StreamInfo(),
         is_parent_album=False,
-        media_stream=None,
     )
 
 

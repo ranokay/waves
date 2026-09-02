@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 import mutagen.mp4
 from tidalapi.media import AudioMode, Track
 
-from waves.download import Download
+from waves.download import Download, StreamInfo
 from waves.helper.path import path_file_uniquify
 from waves.metadata import ITEM_ID_TAG, Metadata, read_item_id
 
@@ -217,7 +217,7 @@ class TestCollidingNamesUnderConcurrency:
         dl.settings.data.downsample_enabled = False
         dl.settings.data.path_binary_ffmpeg = ""
 
-        def _download(media, stream_manifest, path_file, event_stop=None):
+        def _download(media, stream_info, path_file, event_stop=None):
             path_file.write_bytes(b"audio bytes for " + str(media.id).encode())
 
             return True, path_file
@@ -245,10 +245,8 @@ class TestCollidingNamesUnderConcurrency:
             results[track_id] = dl._perform_actual_download(
                 media=_track(track_id, []),
                 path_media_dst=dst,
-                stream_manifest=MagicMock(),
-                do_flac_extract=False,
+                stream_info=StreamInfo(),
                 is_parent_album=False,
-                media_stream=None,
             )
 
         threads = [threading.Thread(target=_run, args=(track_id,)) for track_id in (111, 222)]
@@ -273,15 +271,13 @@ class TestCollidingNamesUnderConcurrency:
 
     def test_a_failed_download_gives_its_name_back(self, tmp_path):
         dl = self._make_racing_download(tmp_path)
-        dl._download = lambda media, stream_manifest, path_file, event_stop=None: (False, path_file)
+        dl._download = lambda media, stream_info, path_file, event_stop=None: (False, path_file)
 
         ok, _path = dl._perform_actual_download(
             media=_track(111, []),
             path_media_dst=tmp_path / "Song.flac",
-            stream_manifest=MagicMock(),
-            do_flac_extract=False,
+            stream_info=StreamInfo(),
             is_parent_album=False,
-            media_stream=None,
         )
 
         assert ok is False

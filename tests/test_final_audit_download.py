@@ -30,7 +30,7 @@ from collections import defaultdict
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from waves.download import Download
+from waves.download import Download, StreamInfo
 
 
 def _make_download(tmp_path: pathlib.Path, *, skip_existing: bool = True) -> Download:
@@ -81,7 +81,7 @@ def _run_to_the_guard(dl: Download, dst: pathlib.Path, media) -> tuple[bool, pat
     turns on: skipping onto the twin's file, or going on to write a second one.
     """
 
-    def _fake_download(self, *, media, stream_manifest, path_file, event_stop=None, **kw):
+    def _fake_download(self, *, media, stream_info, path_file, event_stop=None, **kw):
         return True, path_file
 
     def _plan(self, *a, **k):
@@ -99,10 +99,8 @@ def _run_to_the_guard(dl: Download, dst: pathlib.Path, media) -> tuple[bool, pat
         return dl._perform_actual_download(
             media=media,
             path_media_dst=dst,
-            stream_manifest=None,
-            do_flac_extract=False,
+            stream_info=StreamInfo(),
             is_parent_album=False,
-            media_stream=None,
         )
 
 
@@ -117,7 +115,7 @@ def _stubbed_stream(payload: bytes = b"fresh bytes"):
     last one out would leave it there for the rest of the suite.
     """
 
-    def _fake_download(self, *, media, stream_manifest, path_file, event_stop=None, **kw):
+    def _fake_download(self, *, media, stream_info, path_file, event_stop=None, **kw):
         path_file.write_bytes(payload)
 
         return True, path_file
@@ -138,10 +136,8 @@ def _run_to_the_end(dl: Download, dst: pathlib.Path, media) -> tuple[bool, pathl
     return dl._perform_actual_download(
         media=media,
         path_media_dst=dst,
-        stream_manifest=None,
-        do_flac_extract=False,
+        stream_info=StreamInfo(),
         is_parent_album=False,
-        media_stream=None,
     )
 
 

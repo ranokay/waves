@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 
 from _dispatch_stub import arm_dispatch, arm_queue
 
-from waves.download import Download
+from waves.download import Download, StreamInfo
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge, _JobSpec
 
@@ -188,7 +188,7 @@ def _twin_run(dl: Download, dst: pathlib.Path, media) -> tuple[bool, pathlib.Pat
     going on to write a second one.
     """
 
-    def _fake_download(self, *, media, stream_manifest, path_file, event_stop=None, **kw):
+    def _fake_download(self, *, media, stream_info, path_file, event_stop=None, **kw):
         return True, path_file
 
     def _plan(self, *a, **k):
@@ -206,10 +206,8 @@ def _twin_run(dl: Download, dst: pathlib.Path, media) -> tuple[bool, pathlib.Pat
         return dl._perform_actual_download(
             media=media,
             path_media_dst=dst,
-            stream_manifest=None,
-            do_flac_extract=False,
+            stream_info=StreamInfo(),
             is_parent_album=False,
-            media_stream=None,
         )
 
 
@@ -571,6 +569,7 @@ class _GateStub:
 
     def __init__(self) -> None:
         self._logged_in = True
+        self._providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: _media())}
         self._job_aborts: dict[int, Event] = {}
         self._job_signals: dict = {}
         self._job_dls: dict = {}
@@ -632,7 +631,7 @@ def _media():
 
 def test_a_download_held_at_the_gate_is_not_credited_as_failed():
     stub = _GateStub()
-    spec = _JobSpec(_media(), "album", "Album", "{title}", True, "m1", None)
+    spec = _JobSpec("tidal", "album", "tidal:m1", "Album", "{title}", True, "m1", None)
 
     with patch.object(backend, "_ProgressSignals", lambda *a, **k: object()):
         WavesBridge._start_job(stub, 1, spec)
@@ -649,7 +648,7 @@ def test_a_merge_held_at_the_gate_keeps_its_plan_even_if_a_clear_beat_the_stash(
     and would save a plain album over the tracks the merge had borrowed."""
     stub = _GateStub()
     plan = ["a plan the scan stashed"]
-    spec = _JobSpec(_media(), "album", "Album", "{title}", True, "m1", plan)
+    spec = _JobSpec("tidal", "album", "tidal:m1", "Album", "{title}", True, "m1", plan)
     # The clear already landed: the row is gone and the plan went with it.
     stub._queue.clear()
     stub._queue_index.clear()
@@ -665,7 +664,7 @@ def test_a_plain_album_held_at_the_gate_invents_no_plan():
     """The guard is only for a job that really carries one: a plain download
     must not acquire a merge plan by passing through the gate."""
     stub = _GateStub()
-    spec = _JobSpec(_media(), "album", "Album", "{title}", True, "m1", None)
+    spec = _JobSpec("tidal", "album", "tidal:m1", "Album", "{title}", True, "m1", None)
 
     with patch.object(backend, "_ProgressSignals", lambda *a, **k: object()):
         WavesBridge._start_job(stub, 1, spec)
@@ -677,7 +676,7 @@ def test_a_download_held_at_the_gate_still_withdraws_its_row():
     """The rest of the gate-block contract is unchanged: the queue reads as if
     the download never started, so only the CREDIT was wrong."""
     stub = _GateStub()
-    spec = _JobSpec(_media(), "album", "Album", "{title}", True, "m1", None)
+    spec = _JobSpec("tidal", "album", "tidal:m1", "Album", "{title}", True, "m1", None)
 
     with patch.object(backend, "_ProgressSignals", lambda *a, **k: object()):
         WavesBridge._start_job(stub, 1, spec)

@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 from tidalapi.media import Track
 
 from waves.download import Download
+from waves.providers import StreamInfo
 from waves.waves_ui import backend
 
 
@@ -140,7 +141,7 @@ def _finalize_fracs(tmp_path, *, extract=False, suffix=".flac", is_bts=True):
     media.id = "123"
     media.waves_identity_id = None
     dst = tmp_path / f"song{suffix}"
-    stream = SimpleNamespace(is_bts=is_bts)
+    stream_info = StreamInfo(requires_flac_extraction=extract, single_file=is_bts)
     cls = backend._TrackedDownload
     with (
         patch.object(cls, "_download", return_value=(True, pathlib.Path(tmp_path / "raw"))),
@@ -153,7 +154,7 @@ def _finalize_fracs(tmp_path, *, extract=False, suffix=".flac", is_bts=True):
         patch.object(cls, "_record_name_written"),
         patch("waves.download.name_builder_item", return_value="x"),
     ):
-        ok, _ = td._perform_actual_download(media, dst, None, extract, False, stream)
+        ok, _ = td._perform_actual_download(media, dst, stream_info, False, None)
     assert ok is True
     return [c.args[0]["fpct"] for c in relay.track_event.emit.call_args_list]
 

@@ -16,6 +16,7 @@ from collections import deque
 from threading import Lock
 from types import SimpleNamespace
 
+from waves.providers import Refusal, RefusalKind
 from waves.waves_ui.backend import WavesBridge
 
 
@@ -70,6 +71,18 @@ def arm_queue(stub) -> None:
         # which STOP now stops (the held downloads themselves are armed with
         # the rest of the rollup state, below).
         ("_recovery_poll", lambda: SimpleNamespace(stop=lambda: None, start=lambda: None, isActive=lambda: False)),
+        # The provider a job resolves its object through at dispatch (the
+        # spec carries a name, not an object). A test that wants a specific
+        # object or refusal sets its own before driving the job.
+        (
+            "_providers",
+            lambda: {
+                "tidal": SimpleNamespace(
+                    get_object=lambda kind, raw_id: SimpleNamespace(id=raw_id),
+                    classify_refusal=lambda exc: Refusal(RefusalKind.FAILURE, str(exc)),
+                )
+            },
+        ),
     )
     for name, make in defaults:
         if not hasattr(stub, name):

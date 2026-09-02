@@ -16,7 +16,6 @@ from __future__ import annotations
 import contextlib
 import copy
 import dataclasses
-import functools
 import json
 import logging
 import os
@@ -57,6 +56,7 @@ from waves.config import Settings, Tidal, harden_api_session
 from waves.constants import (
     DEFAULT_ILLEGAL_MAP,
     CoverDimensions,
+    CTX_TIDAL,
     DownsampleTarget,
     InitialKey,
     MediaType,
@@ -100,6 +100,7 @@ from waves.model.downloader import TrackStreamInfo
 from waves.model.gui_data import ProgressBars
 from waves.ownership import OwnershipStore, quality_rank
 from waves.poolgauge import PoolGauge
+from waves.providers import Provider, RefusalKind, TidalProvider
 from waves.waves_ui import proc
 from waves.waves_ui.session import WavesTidal
 from waves.worker import Worker
@@ -1449,7 +1450,7 @@ class _TrackedDownload(Download):
         with self._outcome_lock:
             self.unavailable_count += 1
 
-    def _get_track_stream_info(self, media):
+    def _get_track_stream_info(self, media, tier=None, audio_type=None):
         """Capture the delivered stream's quality as a side effect, without
         touching download.py. The engine calls this (tracks only, only when a
         stream is actually fetched) inside super().item(); stashing the real
@@ -1533,14 +1534,14 @@ class _TrackedDownload(Download):
         ownership gate ranks a copy on the scale it was delivered on."""
         return _delivers_atmos(media, bool(self.settings.data.download_dolby_atmos))
 
-    def _get_media_urls(self, media, stream_manifest=None):
+    def _get_media_urls(self, media, stream_info=None):
         """Capture that a video is really being fetched, as a side effect. Videos
         never pass through _get_track_stream_info, so without this the completion
         event carries no quality and the sink cannot tell a real video write from
         an existing-file skip (and would record nothing). The engine only asks for
         URLs when it is about to download, so a stash here means a real fetch. The
         tier stays None: TIDAL reports no delivered quality for videos."""
-        urls = super()._get_media_urls(media, stream_manifest=stream_manifest)
+        urls = super()._get_media_urls(media, stream_info)
         mid = getattr(media, "id", None)
         if urls and mid is not None and isinstance(media, Video):
             with self._delivered_lock:
@@ -2671,15 +2672,27 @@ class _JobSpec:
     Worker, about 19 KB apiece, with the 500 ms track poll walking every one
     of them. A backlog of thousands paid for all of that before a byte moved.
     The spec is the handful of arguments that job is built from, and
-    _pump_queue builds the job itself only when the pool is free."""
+    _pump_queue builds the job itself only when the pool is free.
 
-    obj: object
-    type_media: str
+    The catalog object is NOT among them: the job names what it wants as
+    (provider_id, kind, namespaced id) and _start_job resolves it through
+    that provider's get_object when its turn comes, so a backlog costs no
+    live engine objects. ``media_id`` stays the queue row's key (and the
+    button state's), unchanged by the namespace.
+    """
+
+    provider_id: str
+    kind: str
+    object_id: str
     name: str
     file_template: str
     collection: bool
     media_id: str
     merge_plan: list | None
+
+    def raw_object_id(self) -> str:
+        """The id inside the namespace, as the provider's get_object wants it."""
+        return self.object_id.partition(":")[2]
 
 
 def _norm_track_title(name: str) -> str:
@@ -3343,6 +3356,12 @@ class WavesBridge(LibraryMixin, QObject):
         # sign-in: the config layer calls this back on each token persist and on
         # each forced refresh (an Atmos switch or restore is one).
         self.tidal.on_session_credentials = self._register_session_secrets
+        # The Provider seam (spec §4): every catalog read the bridge makes
+        # dispatches through a provider keyed by its id, so a second service
+        # plugs in beside TIDAL without the bridge ever learning its shape.
+        # TIDAL delegates to the engine bodies unchanged; the download engine
+        # registers its stream resolver on it when the pipeline routes.
+        self.providers: dict[str, Provider] = {"tidal": TidalProvider(self.tidal)}
         # Quick metadata/UI work (search, album tracks, artist pages) runs on
         # one pool; downloads run on a separate pool so a long album download
         # can never starve the UI of threads.
@@ -9340,6 +9359,10 @@ class WavesBridge(LibraryMixin, QObject):
             progress_gui=progress_gui,
             event_abort=event_abort or self._event_abort,
             event_run=self._event_run,
+            # The engine resolves streams, facts and refusals through the
+            # provider (spec §4.1 composition); the registration of this job's
+            # stream resolver happens in Download.__init__.
+            provider=self.providers["tidal"],
             track_signals=signals,
             ownership_of=self._ownership.ownership_of,
             # Both the skip/upgrade decision and the fetch follow the job's
@@ -10041,6 +10064,7 @@ class WavesBridge(LibraryMixin, QObject):
         collection: bool,
         media_id: str,
         merge_plan: list | None = None,
+        provider_id: str = CTX_TIDAL,
     ) -> None:
         if not self._logged_in:
             self._set_status("Sign in before downloading")
@@ -10125,9 +10149,20 @@ class WavesBridge(LibraryMixin, QObject):
                 except Exception:
                     logger.debug("Could not record merge collection membership", exc_info=True)
         # The job itself is built when its turn comes (see _JobSpec): until
-        # then the row costs its dict and these seven fields.
+        # then the row costs its dict, the live object the row dressing reads,
+        # and the spec's name for the object -- who serves it, what it is, and
+        # the namespaced id it resolves from at dispatch.
         self._job_objs[qid] = obj
-        self._job_specs[qid] = _JobSpec(obj, type_media, name, file_template, collection, media_id, merge_plan)
+        self._job_specs[qid] = _JobSpec(
+            provider_id=provider_id,
+            kind=type_media,
+            object_id=f"{provider_id}:{media_id}",
+            name=name,
+            file_template=file_template,
+            collection=collection,
+            media_id=media_id,
+            merge_plan=merge_plan,
+        )
         self._pending_qids.append(qid)
         self._pump_queue()
 
@@ -10167,13 +10202,20 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _start_job(self, qid: int, spec: _JobSpec) -> None:
         """Build a queued row's download and hand it to the pool."""
-        obj, type_media, name = spec.obj, spec.type_media, spec.name
+        type_media, name = spec.kind, spec.name
         file_template, collection, media_id, merge_plan = (
             spec.file_template,
             spec.collection,
             spec.media_id,
             spec.merge_plan,
         )
+        # The job's object arrives at dispatch, not at the click: the spec
+        # names it as (provider, kind, namespaced id) and body() resolves it
+        # through that provider's get_object, on the job's own worker thread.
+        # The resolved object lands in this one-slot hand-off so the claim
+        # gate's album binding can read the same object it would have held
+        # under the old queue-time shape.
+        resolved: list = [None]
         # Per-job abort event so this one download can be cancelled on its own
         # (the shared _event_abort would stop every concurrent download).
         job_abort = Event()
@@ -10192,8 +10234,16 @@ class WavesBridge(LibraryMixin, QObject):
         if collection and self._job_library_skip(qid) and media_id not in self._library_claim_overrides:
             # An album job names its own release, and it is the only place the
             # release YEAR is reliably spelled out; a playlist or mix carries
-            # tracks from many, so those let each track name its own.
-            library_claim = functools.partial(self._library_claim_media, album=obj if type_media == "album" else None)
+            # tracks from many, so those let each track name its own. The
+            # album is the dispatch-resolved one (read once body() has it).
+            if type_media == "album":
+
+                def _claim_with_job_album(media, _resolved=resolved):
+                    return self._library_claim_media(media, album=_resolved[0])
+
+                library_claim = _claim_with_job_album
+            else:
+                library_claim = self._library_claim_media
         dl = self._build_download(
             signals,
             event_abort=job_abort,
@@ -10239,6 +10289,31 @@ class WavesBridge(LibraryMixin, QObject):
             if job_abort.is_set():
                 stopped_before_it_started()
                 return
+            # The job's first catalog act: resolve the object the spec named,
+            # through the provider it named, on this worker thread. A refusal
+            # here is the row's verdict, worded like the track-level one; any
+            # other failure is a plain failed row.
+            try:
+                obj = self._providers[spec.provider_id].get_object(spec.kind, spec.raw_object_id())
+            except Exception as exc:
+                if job_abort.is_set():
+                    stopped_before_it_started()
+                    return
+                reason = ""
+                if isinstance(exc, DownloadIncomplete):
+                    reason = str(exc)
+                else:
+                    verdict = self._providers[spec.provider_id].classify_refusal(exc)
+                    if verdict.kind is RefusalKind.UNAVAILABLE:
+                        reason = verdict.message or "not available anymore"
+                logger.exception("Could not resolve the download target for %s", diagnostics.content(name))
+                self.downloadState.emit(media_id, "failed")
+                self._set_queue_status(qid, "failed", reason)
+                self._bump_download_groups(media_id, None, "failed")
+                self._set_status(f"Failed {name}{': ' + reason if reason else ''}")
+                devlog.done("download", f"FAILED {type_media} id={media_id}", 0.0)
+                return
+            resolved[0] = obj
             # Reachability probe of the download folder, here on the worker so
             # the click stays instant (a write probe against a stale network
             # mount costs seconds). On a dead mount: dialog + held retry, and

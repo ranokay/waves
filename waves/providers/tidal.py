@@ -26,6 +26,7 @@ from waves.constants import ATMOS_REQUEST_QUALITY, CTX_TIDAL, MediaType
 from waves.download import _artist_ids, _tidal_refuses_asset, _waves_item_id
 from waves.helper.tidal import (
     get_album_artist_ids,
+    get_album_artists,
     get_tidal_media_id,
     get_tidal_media_type,
     instantiate_media,
@@ -44,6 +45,7 @@ from waves.providers.base import (
     StreamInfo,
     quality_rank,
 )
+from waves.waves_ui.manifest import overgenerated_tail_urls
 
 # The Waves tier each TIDAL request rides: the rungs the UI's own spec lines
 # name (LOW = AAC 96, HIGH = AAC 320, then lossless and hi-res lossless).
@@ -108,6 +110,18 @@ class TidalProvider(Provider):
     def __init__(self, tidal: Tidal, stream_resolver=None):
         self._tidal = tidal
         self._stream_resolver = stream_resolver
+
+    def set_stream_resolver(self, resolver) -> None:
+        """The engine registers its per-job resolver here.
+
+        Per-job state -- pacing, quality pinning, delivered-quality capture --
+        lives in the engine, not in this translation layer, so the provider
+        carries the contract and the engine the behavior: a resolve_stream
+        call hands the job straight back to whoever registered last. The GUI
+        runs one download job at a time, so the latest registration is the
+        live one.
+        """
+        self._stream_resolver = resolver
 
     # ----- session / auth
 
@@ -220,33 +234,52 @@ class TidalProvider(Provider):
         The delivered snapshot carries the same facts as the backend's own
         normalizer, in the seam's vocabulary (``audio_type``, the neutral
         word, where the backend snapshot says ``audio_mode``); the suite pins
-        the translation of the two together. URLs come off the manifest
-        exactly as the segment pipeline consumes them.
+        the translation of the two together. The URL list is the stream
+        itself: the engine's no-stream answer (no manifest behind it)
+        translates to the all-default StreamInfo, which is the seam's "could
+        not resolve". The byte-pipeline steering facts -- the DASH tail
+        arithmetic, the encrypted-stream verdict, the single-file shape --
+        come off the same engine answer, so the pipeline never touches the
+        manifest again.
         """
         stream = getattr(info, "media_stream", None)
         manifest = getattr(info, "stream_manifest", None)
 
+        if manifest is None:
+            return StreamInfo()
+
         urls: list = []
-        if manifest is not None:
-            try:
-                urls = list(manifest.get_urls() or [])
-            except Exception:
-                urls = []
+        try:
+            urls = list(manifest.get_urls() or [])
+        except Exception:
+            urls = []
 
         audio_mode = _enum_value(getattr(stream, "audio_mode", None))
+        replay_gain = None
+        if stream is not None:
+            replay_gain = {
+                "album_replay_gain": getattr(stream, "album_replay_gain", None),
+                "album_peak_amplitude": getattr(stream, "album_peak_amplitude", None),
+                "track_replay_gain": getattr(stream, "track_replay_gain", None),
+                "track_peak_amplitude": getattr(stream, "track_peak_amplitude", None),
+            }
+        codecs = getattr(manifest, "codecs", None)
         return StreamInfo(
             urls=urls,
-            file_extension=getattr(info, "file_extension", ""),
-            codecs=getattr(manifest, "codecs", None),
+            file_extension=getattr(info, "file_extension", "") or "",
+            codecs=codecs or "",
             requires_flac_extraction=bool(getattr(info, "requires_flac_extraction", False)),
             delivered={
                 "tier": _enum_value(getattr(stream, "audio_quality", None)),
                 "audio_type": str(AudioType.ATMOS if str(audio_mode) == _ATMOS_MODE else AudioType.STEREO),
                 "bit_depth": getattr(stream, "bit_depth", None),
                 "sample_rate": getattr(stream, "sample_rate", None),
-                "codecs": getattr(manifest, "codecs", None),
+                "codecs": codecs,
             },
-            replay_gain=None,
+            replay_gain=replay_gain,
+            encrypted=bool(getattr(manifest, "is_encrypted", False)),
+            tail_spurious=overgenerated_tail_urls(manifest),
+            single_file=bool(getattr(stream, "is_bts", False)),
         )
 
     def fetch_lyrics(self, track) -> tuple[str, str]:
@@ -278,8 +311,9 @@ class TidalProvider(Provider):
     def track_facts(self, track) -> dict:
         """The fact schema the tag writer reads, pulled once, here.
 
-        Mirrors the engine's inline fact pull field for field until the
-        pipeline routes it through this method; the suite pins the schema.
+        Mirrors the engine's inline fact pull field for field -- the engine's
+        metadata_write consumes this dict instead of reaching into the engine
+        objects, so tagging stays provider-neutral. The suite pins the schema.
         """
         album = getattr(track, "album", None)
 
@@ -311,6 +345,7 @@ class TidalProvider(Provider):
                 for artist in getattr(track, "artists", None) or []
                 if getattr(artist, "id", None)
             ],
+            "album_artists": get_album_artists(track),
             "copyright": track.copyright if getattr(track, "copyright", None) else "",
             "isrc": track.isrc if getattr(track, "isrc", None) else "",
             "explicit": bool(getattr(track, "explicit", False)),

@@ -82,6 +82,22 @@ ARTIST_ID_TAG = "WAVES_TIDAL_ARTIST_ID"
 ALBUM_ARTIST_ID_TAG = "WAVES_TIDAL_ALBUM_ARTIST_ID"
 
 
+def _legacy_id(value) -> str:
+    """A namespaced id in the legacy tag's bare spelling.
+
+    The Provider seam hands every id over namespaced ("tidal:123", §4.2 of the
+    provider spec); these WAVES_TIDAL_* tags predate the namespace and stay
+    bare, so the writer strips the prefix it is given. A value with no
+    namespace -- everything older builds wrote, and anything a caller passes
+    straight through -- is kept exactly as it is.
+    """
+    text = str(value or "")
+    provider_id, _sep, raw = text.partition(":")
+    if not raw or not provider_id:
+        return text
+    return raw
+
+
 def read_custom_ids(path_file: str | pathlib.Path, tag: str) -> list[str]:
     """Every value one of Waves' own id tags carries, in written order.
 
@@ -229,9 +245,10 @@ class Metadata:
         self.m: mutagen.FileType = mutagen.File(self.path_file)
         self.release_type = release_type
         self.is_video = is_video
-        self.item_id = item_id
-        self.artist_ids = artist_ids or []
-        self.album_artist_ids = album_artist_ids or []
+        # The seam's ids arrive namespaced; the legacy tags carry bare ids.
+        self.item_id = _legacy_id(item_id)
+        self.artist_ids = [_legacy_id(a) for a in artist_ids or []]
+        self.album_artist_ids = [_legacy_id(a) for a in album_artist_ids or []]
 
     def _cover(self) -> bool:
         result: bool = False

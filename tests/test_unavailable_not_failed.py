@@ -151,8 +151,7 @@ def test_stream_refusal_marks_the_track():
     media.get_stream.side_effect = _http_error(
         401, {"subStatus": 4005, "userMessage": "Asset is not ready for playback"}
     )
-    manifest, _ext, _flac, _stream = dl._get_stream_info(media)
-    assert manifest is None
+    assert dl._get_stream_info(media) is None
     assert dl._take_unavailable() is True
 
 
@@ -161,8 +160,7 @@ def test_stream_not_available_marks_the_track():
     dl, _relay = _make_tracked()
     media = _track(allow_streaming=True)
     media.get_stream.side_effect = StreamNotAvailable("Stream not available for this track")
-    manifest, _ext, _flac, _stream = dl._get_stream_info(media)
-    assert manifest is None
+    assert dl._get_stream_info(media) is None
     assert dl._take_unavailable() is True
 
 
@@ -172,8 +170,7 @@ def test_an_auth_error_at_stream_time_is_a_failure_not_a_refusal():
     media.get_stream.side_effect = _http_error(
         401, {"subStatus": 11003, "userMessage": "The token has expired. (Expired on ...)"}
     )
-    manifest, _ext, _flac, _stream = dl._get_stream_info(media)
-    assert manifest is None
+    assert dl._get_stream_info(media) is None
     assert dl._take_unavailable() is False  # a real failure keeps the retry
 
 

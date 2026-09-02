@@ -321,7 +321,7 @@ def _new_video(vid=7):
 
 
 def test_video_url_fetch_captures_marker(monkeypatch):
-    monkeypatch.setattr(backend.Download, "_get_media_urls", lambda self, media, stream_manifest=None: ["u1", "u2"])
+    monkeypatch.setattr(backend.Download, "_get_media_urls", lambda self, media, stream_info=None: ["u1", "u2"])
     td = _new_tracked()
     video = _new_video()
     td._get_media_urls(video)
@@ -329,7 +329,7 @@ def test_video_url_fetch_captures_marker(monkeypatch):
 
 
 def test_video_no_urls_captures_nothing(monkeypatch):
-    monkeypatch.setattr(backend.Download, "_get_media_urls", lambda self, media, stream_manifest=None: [])
+    monkeypatch.setattr(backend.Download, "_get_media_urls", lambda self, media, stream_info=None: [])
     td = _new_tracked()
     td._get_media_urls(_new_video())
     assert td._delivered == {}
@@ -338,7 +338,7 @@ def test_video_no_urls_captures_nothing(monkeypatch):
 def test_track_url_fetch_does_not_overwrite_capture(monkeypatch):
     # Tracks stash real delivered values in _get_track_stream_info; the URL hook
     # must not clobber them with a tier-less video marker.
-    monkeypatch.setattr(backend.Download, "_get_media_urls", lambda self, media, stream_manifest=None: ["u1"])
+    monkeypatch.setattr(backend.Download, "_get_media_urls", lambda self, media, stream_info=None: ["u1"])
     td = _new_tracked()
     media = SimpleNamespace(id=42)
     td._delivered[td._delivered_key(media)] = {"tier": "LOSSLESS"}
