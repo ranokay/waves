@@ -12,6 +12,11 @@ chart is still the workflow's job; the release simply stops undoing it.
 The scenario builds a throwaway repo with a fake "public" remote and runs the
 real release.sh in RELEASE_DRY_RUN mode, which stops after building the tree,
 before any prompt or push.
+
+release.sh itself is the maintainer's private release tool (untracked on
+purpose -- see the .gitignore note: it publishes the tree of a ref, so a
+stray `git add -A` can never sweep it into a commit). On any checkout without
+it these tests cannot run and say so, instead of failing like a regression.
 """
 
 from __future__ import annotations
@@ -24,6 +29,11 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 RELEASE_SH = REPO / "release.sh"
+
+pytestmark = pytest.mark.skipif(
+    not RELEASE_SH.is_file(),
+    reason="release.sh is the maintainer's private, untracked release tool; absent from this checkout",
+)
 
 _START = "<!-- star-history:start -->"
 _END = "<!-- star-history:end -->"
