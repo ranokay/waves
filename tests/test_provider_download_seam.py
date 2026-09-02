@@ -17,6 +17,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from tidalapi.media import AudioMode, Quality
 
 from waves.download import Download
@@ -179,9 +180,7 @@ class TestStreamInfoTranslation:
     def test_a_single_file_delivery_is_flagged(self):
         # A BTS stream arrives as one complete file: no fragmented merge, so
         # no duration-repairing remux downstream.
-        resolved = TidalProvider._as_stream_info(
-            _engine_info(manifest=_dash_manifest(1), stream=_stream(is_bts=True))
-        )
+        resolved = TidalProvider._as_stream_info(_engine_info(manifest=_dash_manifest(1), stream=_stream(is_bts=True)))
         assert resolved.single_file is True
         plain = TidalProvider._as_stream_info(_engine_info(manifest=_dash_manifest(4), stream=_stream()))
         assert plain.single_file is False
@@ -196,13 +195,12 @@ class TestStreamInfoTranslation:
 
 
 class TestResolveStreamRouting:
-    def test_the_registered_engine_resolver_answers(self):
+    def test_the_bound_engine_resolver_answers(self):
         provider = TidalProvider(MagicMock())
         info = _engine_info(manifest=_dash_manifest(4), stream=_stream())
-        provider.set_stream_resolver(lambda track, tier, audio_type: info)
 
-        track = object()
-        resolved = provider.resolve_stream(track, QualityTier.LOSSLESS, AudioType.STEREO)
+        with provider.stream_resolver_bound(lambda track, tier, audio_type: info):
+            resolved = provider.resolve_stream(object(), QualityTier.LOSSLESS, AudioType.STEREO)
 
         assert isinstance(resolved, StreamInfo)
         assert resolved.file_extension == ".flac"
@@ -210,11 +208,23 @@ class TestResolveStreamRouting:
 
     def test_an_empty_engine_answer_resolves_to_no_stream(self):
         provider = TidalProvider(MagicMock())
-        provider.set_stream_resolver(lambda *a: TrackStreamInfo(None, "", False, None))
 
-        resolved = provider.resolve_stream(object(), QualityTier.LOSSLESS, AudioType.STEREO)
+        with provider.stream_resolver_bound(lambda *a: TrackStreamInfo(None, "", False, None)):
+            resolved = provider.resolve_stream(object(), QualityTier.LOSSLESS, AudioType.STEREO)
 
         assert resolved.urls == []
+
+    def test_the_binding_is_restored_after_the_resolve(self):
+        provider = TidalProvider(MagicMock())
+        with pytest.raises(RuntimeError, match="bound"):
+            provider.resolve_stream(object(), QualityTier.LOSSLESS, AudioType.STEREO)
+        with provider.stream_resolver_bound(lambda *a: TrackStreamInfo(None, "", False, None)):
+            provider.resolve_stream(object(), QualityTier.LOSSLESS, AudioType.STEREO)
+        # The bind is scoped, not sticky: after it lifts, the provider is
+        # resolver-free again -- nothing survived that could answer for a
+        # different engine.
+        with pytest.raises(RuntimeError, match="bound"):
+            provider.resolve_stream(object(), QualityTier.LOSSLESS, AudioType.STEREO)
 
 
 # ------------------------------------------- the engine consumes the answer
@@ -225,9 +235,7 @@ class TestEngineStreamRouting:
         return _make_download(provider, tmp_path)
 
     def test_get_stream_info_returns_the_provider_answer(self, tmp_path):
-        provider = _StubProvider(
-            StreamInfo(urls=["https://seg/1"], file_extension=".flac", codecs="flac")
-        )
+        provider = _StubProvider(StreamInfo(urls=["https://seg/1"], file_extension=".flac", codecs="flac"))
         dl = self._dl(provider, tmp_path)
         track = _track("1")
 
@@ -255,9 +263,7 @@ class TestEngineStreamRouting:
         assert marks, "a refusal must be marked unavailable, not silently dropped"
 
     def test_a_throttle_maps_to_no_unavailable_mark(self, tmp_path):
-        provider = _StubProvider(
-            RuntimeError("429"), Refusal(RefusalKind.THROTTLED, "TIDAL is rate-limiting")
-        )
+        provider = _StubProvider(RuntimeError("429"), Refusal(RefusalKind.THROTTLED, "TIDAL is rate-limiting"))
         dl = self._dl(provider, tmp_path)
         marks: list = []
         dl._note_unavailable = lambda media: marks.append(media)
@@ -275,16 +281,37 @@ class TestEngineStreamRouting:
         assert dl._get_stream_info(_track("1")) is None
         assert not marks
 
-    def test_the_engine_registers_its_resolver_with_the_provider(self, tmp_path):
-        # Composition, wired once: the engine built with a provider that can
-        # carry a resolver hands its own fetch over at construction.
+    def test_a_resolve_answers_through_the_engine_that_asked(self, tmp_path):
+        # One shared provider, two engines -- the GUI's exact shape: an idle
+        # Download rebuilt by a settings save while a job is running. Each
+        # resolve must come straight back to the engine that asked, or the
+        # idle engine's answer would bypass the running job's quality pinning
+        # and delivered-quality capture.
         provider = TidalProvider(MagicMock())
-        dl = self._dl(provider, tmp_path)
-        provider.set_stream_resolver(lambda *a: TrackStreamInfo(None, "", False, None))
+        job = self._dl(provider, tmp_path)
+        idle = self._dl(provider, tmp_path)
+        asked_by: list[str] = []
 
-        # No resolver of its own left on the pipeline path: the provider's
-        # registration is what answers.
-        assert dl._get_stream_info(_track("1")) is None
+        def _resolver_for(tag: str, extension: str):
+            def _resolver(track, tier, audio_type):
+                asked_by.append(tag)
+                return _engine_info(manifest=_dash_manifest(4), stream=_stream(), file_extension=extension)
+
+            return _resolver
+
+        job._get_track_stream_info = _resolver_for("job", ".job")
+        idle._get_track_stream_info = _resolver_for("idle", ".idle")
+
+        # Interleaved, deliberately: the idle engine resolving between the
+        # job's resolves must not leave its binding behind.
+        job_info = job._get_stream_info(_track("1"))
+        assert job_info is not None and job_info.file_extension == ".job"
+        idle_info = idle._get_stream_info(_track("1"))
+        assert idle_info is not None and idle_info.file_extension == ".idle"
+        job_info = job._get_stream_info(_track("1"))
+        assert job_info is not None and job_info.file_extension == ".job"
+
+        assert asked_by == ["job", "idle", "job"]
 
 
 # --------------------------------------------------------- the tag fact pull
@@ -352,7 +379,15 @@ class TestTrackFactsConsumption:
 
         track = self._track()
         ok, _lyr, _suf, _cover = dl.metadata_write(
-            track, tmp_path / "s.flac", False, {"album_replay_gain": None, "album_peak_amplitude": None, "track_replay_gain": None, "track_peak_amplitude": None}
+            track,
+            tmp_path / "s.flac",
+            False,
+            {
+                "album_replay_gain": None,
+                "album_peak_amplitude": None,
+                "track_replay_gain": None,
+                "track_peak_amplitude": None,
+            },
         )
 
         assert ok is True
@@ -508,14 +543,10 @@ class TestJobSpecDispatch:
         stub._redownload_overrides = set()
         stub._library_claim_overrides = set()
         stub._library_claim_records = claim_records if claim_records is not None else []
-        stub._queue = [
-            {"qid": 1, "media_id": "m1", "status": "queued", "type": "album", "name": "Album"}
-        ]
+        stub._queue = [{"qid": 1, "media_id": "m1", "status": "queued", "type": "album", "name": "Album"}]
         stub._queue_index = {1: stub._queue[0]}
         stub._queue_lock = threading.Lock()
-        stub.settings = SimpleNamespace(
-            data=SimpleNamespace(download_base_path=str(tmp_path), download_delay=False)
-        )
+        stub.settings = SimpleNamespace(data=SimpleNamespace(download_base_path=str(tmp_path), download_delay=False))
         stub.dl = _Engine()
         stub.dl_pool = _Pool()
         stub.downloadState = _Signal()
@@ -534,9 +565,7 @@ class TestJobSpecDispatch:
         stub._build_download = _build_download
         stub._release_job_signals = lambda qid: stub._job_signals.pop(qid, None)
         stub._gate_reachability = lambda retry, media_id: True
-        stub._library_claim_media = lambda media, album=None: (
-            stub._library_claim_records.append(album) or False
-        )
+        stub._library_claim_media = lambda media, album=None: stub._library_claim_records.append(album) or False
         arm_dispatch(stub)
         return stub
 

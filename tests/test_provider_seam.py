@@ -117,11 +117,10 @@ class _BareProvider(Provider):
     def search_tracks(self, needle, limit=10): ...
     def browse_page(self, title, api_path): ...
     def browse_home(self): ...
-    def browse_window(self, title, data_path, mod_type, offset, limit=50): ...
+    def browse_window(self, title, data_path, mod_type, offset, limit=50):
+        ...
 
-
-# ---------------------------------------------------------------- the seam
-
+        # ---------------------------------------------------------------- the seam
 
     def test_login_begin_rebuilds_a_torn_down_session(self):
         # The engine's logout deletes the session object outright; a fresh
@@ -291,10 +290,14 @@ class TestCatalog:
         # stay lock-free.
         provider, _ = _provider()
         held = []
-        provider._browse_lock = type("_Recording", (), {
-            "__enter__": staticmethod(lambda: held.append("enter")),
-            "__exit__": staticmethod(lambda *a: held.append("exit")),
-        })()
+        provider._browse_lock = type(
+            "_Recording",
+            (),
+            {
+                "__enter__": staticmethod(lambda: held.append("enter")),
+                "__exit__": staticmethod(lambda *a: held.append("exit")),
+            },
+        )()
         mix = Mix.__new__(Mix)
         mix_items = [Mock(name="t")]
         mix.items = lambda: mix_items
@@ -897,6 +900,27 @@ class TestDelivery:
         assert album_facts["num_volumes"] == 2
         assert album_facts["upc"] == "00602547595134"
 
+    def test_track_facts_keep_an_id_less_credit_on_the_artists_tag(self):
+        # The old tag pull wrote EVERY credited artist's name while the id
+        # list filtered separately; the fact schema must not shrink a credit
+        # whose id never arrived -- the pair just carries an empty identity.
+        provider, _ = _provider()
+        from tidalapi import Track
+
+        credited, id_less = Mock(), Mock()
+        credited.id = "100"
+        credited.name = "Aphex Twin"
+        id_less.id = None
+        id_less.name = "DJ Anonymous"
+        track = Mock(spec=Track)
+        track.artists = [credited, id_less]
+        track.album = None  # keep the album-artist helpers out of this pin
+
+        facts = provider.track_facts(track)
+
+        assert facts["artists"] == [("tidal:100", "Aphex Twin"), ("", "DJ Anonymous")]
+        assert facts["artist_ids"] == ["tidal:100"]  # the id list filters separately
+
     def test_track_facts_survives_a_track_without_an_album(self):
         # Playlist pages carry album-less tracks; the fact pull must answer,
         # not raise (the tag writer guards the same way).
@@ -987,9 +1011,7 @@ class TestSessionLifecycleContract:
 
         provider, tidal = _provider()
         hardened: list = []
-        monkeypatch.setattr(
-            "waves.providers.tidal.harden_api_session", lambda session: hardened.append(session)
-        )
+        monkeypatch.setattr("waves.providers.tidal.harden_api_session", lambda session: hardened.append(session))
         tidal.original_client_id = None
         tidal.original_client_secret = None
         tidal.original_client_id_pkce = None
@@ -1041,10 +1063,7 @@ class TestCatalogContract:
         seen: dict = {}
         monkeypatch.setattr(
             "waves.providers.tidal.walk_playlist_tree",
-            lambda session, root_folders=None: seen.update(
-                session=session, root_folders=root_folders
-            )
-            or FolderTree(),
+            lambda session, root_folders=None: seen.update(session=session, root_folders=root_folders) or FolderTree(),
         )
 
         tree = provider.folder_tree(root_folders=roots)
@@ -1220,8 +1239,8 @@ class TestPreviewContract:
     def test_the_fetch_rides_the_low_tier(self):
         provider, tidal, track = self._resolved()
         seen = []
-        track.get_stream.side_effect = lambda: seen.append(tidal.session.audio_quality) or Mock(
-            get_stream_manifest=lambda: self._manifest()
+        track.get_stream.side_effect = lambda: (
+            seen.append(tidal.session.audio_quality) or Mock(get_stream_manifest=lambda: self._manifest())
         )
         provider.resolve_preview(track)
         assert seen == [Quality.low_96k]

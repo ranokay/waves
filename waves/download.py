@@ -564,20 +564,19 @@ class Download:
         self.session = tidal_obj.session
 
         # The Provider seam (spec §4.1): the pipeline's provider-shaped answers
-        # -- StreamInfo, track facts, refusal verdicts -- come from here, not
-        # from tidalapi payloads read inline. The engine's own stream fetch
-        # (per-job state: pacing, quality pinning, delivered capture) is
-        # registered as the provider's resolver, so a resolve_stream call
-        # crosses the seam and comes straight back to this job.
+        # -- StreamInfo, track facts and refusal verdicts -- come from here, not
+        # from tidalapi payloads read inline. The engine's stream fetch (per-job
+        # state: pacing, quality pinning, delivered capture) is bound around
+        # each resolve (see _get_stream_info), so a resolve_stream call crosses
+        # the seam and comes straight back to THIS engine -- never to whichever
+        # instance was constructed last (the GUI rebuilds its idle Download on
+        # every settings save while a job is running).
         if provider is None:
             # Deferred: the TIDAL provider imports this module's helpers.
             from waves.providers.tidal import TidalProvider
 
             provider = TidalProvider(tidal_obj)
         self.provider = provider
-        register_resolver = getattr(provider, "set_stream_resolver", None)
-        if register_resolver is not None:
-            register_resolver(self._get_track_stream_info)
 
         self.skip_existing = skip_existing
         self.fn_logger = fn_logger
@@ -2536,8 +2535,14 @@ class Download:
                     # The tier and audio type are the seam's contract shape;
                     # TIDAL's fetch decides from its own session state (the
                     # job's pinned quality and the Atmos swap), which is
-                    # fenced behind this engine's resolver.
-                    stream_info = self.provider.resolve_stream(media, None, None)
+                    # fenced behind this engine's resolver -- bound around the
+                    # resolve, so the answer is THIS engine's fetch even
+                    # though the provider instance is shared with idle
+                    # engines (a settings save rebuilds one mid-job).
+                    bind = getattr(self.provider, "stream_resolver_bound", None)
+                    binding = bind(self._get_track_stream_info) if bind is not None else contextlib.nullcontext()
+                    with binding:
+                        stream_info = self.provider.resolve_stream(media, None, None)
                 except Exception as error:
                     # Every arm ends the same way (nothing fetched and the
                     # caller is told so identically); only what gets recorded
@@ -2929,7 +2934,9 @@ class Download:
                         return True, path_media_own
 
                 # Tag the temp file and hold the sidecars it produced.
-                extras = self._handle_metadata_and_extras(media, tmp_path_file, path_media_dst, is_parent_album, stream_info)
+                extras = self._handle_metadata_and_extras(
+                    media, tmp_path_file, path_media_dst, is_parent_album, stream_info
+                )
 
                 self.fn_logger.info(f"Downloaded item '{log_content(name_builder_item(media))}'.")
 

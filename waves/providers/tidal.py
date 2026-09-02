@@ -144,10 +144,12 @@ def tier_from_tidal(quality: tidalapi.Quality | str) -> QualityTier:
 class TidalProvider(Provider):
     """TIDAL, through the existing engine bodies.
 
-    ``stream_resolver`` is the one collaborator the engine registers when the
-    download pipeline routes through the seam (per-job state -- pacing,
-    logging, tallies -- lives there, not here); without it the provider
-    carries the contract but cannot resolve streams.
+    ``stream_resolver`` is the one collaborator the engine binds when the
+    download pipeline resolves through the seam (per-job state -- pacing,
+    logging, tallies -- lives there, not here); without a bound resolver the
+    provider carries the contract but cannot resolve streams. The binding is
+    the engine's own act (:meth:`stream_resolver_bound`), scoped to each
+    resolve, never a construction-time registration.
     """
 
     id = CTX_TIDAL
@@ -164,17 +166,26 @@ class TidalProvider(Provider):
         # whoever calls.
         self._browse_lock = threading.Lock()
 
-    def set_stream_resolver(self, resolver) -> None:
-        """The engine registers its per-job resolver here.
+    @contextlib.contextmanager
+    def stream_resolver_bound(self, resolver):
+        """Bind this caller's engine resolver for the binding's duration.
 
         Per-job state -- pacing, quality pinning, delivered-quality capture --
-        lives in the engine, not in this translation layer, so the provider
-        carries the contract and the engine the behavior: a resolve_stream
-        call hands the job straight back to whoever registered last. The GUI
-        runs one download job at a time, so the latest registration is the
-        live one.
+        lives in the engine, not in this translation layer, so a resolve_stream
+        call crosses the seam and comes straight back to the engine that ASKED.
+        The engine therefore binds its own fetch around each resolve and the
+        binding is restored after it: one shared provider serves many engines
+        (the GUI rebuilds its idle ``Download`` on every settings save while a
+        job is running), and a construction-time registration would let the
+        newest engine steal a running job's resolves -- silently dropping the
+        job's pinned quality and delivered-quality capture mid-album.
         """
+        previous = self._stream_resolver
         self._stream_resolver = resolver
+        try:
+            yield
+        finally:
+            self._stream_resolver = previous
 
     # ----- session / auth
 
@@ -535,8 +546,9 @@ class TidalProvider(Provider):
     def resolve_stream(self, track, tier: QualityTier, audio_type: AudioType) -> StreamInfo:
         if self._stream_resolver is None:
             raise RuntimeError(  # noqa: TRY003
-                "TidalProvider has no stream resolver registered; "
-                "the download engine registers one when the pipeline routes through the seam"
+                "TidalProvider has no stream resolver bound; "
+                "the engine binds its own fetch around each resolve "
+                "(stream_resolver_bound) before calling through the seam"
             )
         return self._as_stream_info(self._stream_resolver(track, tier, audio_type))
 
@@ -635,9 +647,7 @@ class TidalProvider(Provider):
                 # Canonical resting quality, NOT restore_normal_session(),
                 # which leaves quality untouched in normal mode (config.py).
                 with contextlib.suppress(Exception):
-                    self._tidal.session.audio_quality = tidalapi.Quality(
-                        self._tidal.settings.data.quality_audio
-                    )
+                    self._tidal.session.audio_quality = tidalapi.Quality(self._tidal.settings.data.quality_audio)
 
     @staticmethod
     def _hls_url(manifest) -> str:
@@ -702,10 +712,14 @@ class TidalProvider(Provider):
             "item_id": _tidal_id(_waves_item_id(track)),
             "artist_ids": [_tidal_id(artist_id) for artist_id in _artist_ids(track)],
             "album_artist_ids": [_tidal_id(artist_id) for artist_id in get_album_artist_ids(track)],
+            # Every credited artist keeps its name, exactly the old tag pull
+            # (`a.name for a in track.artists`): a credit whose id never
+            # arrived still belongs on the ARTIST tag (the id lists below
+            # filter separately). Dropping the whole pair would silently
+            # shrink the tag.
             "artists": [
-                (_tidal_id(artist.id), artist.name)
+                (_tidal_id(getattr(artist, "id", None)), artist.name)
                 for artist in getattr(track, "artists", None) or []
-                if getattr(artist, "id", None)
             ],
             "album_artists": get_album_artists(track),
             "copyright": track.copyright if getattr(track, "copyright", None) else "",
