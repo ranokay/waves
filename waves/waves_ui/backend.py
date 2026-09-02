@@ -42,21 +42,12 @@ from tidalapi.media import AudioMode, Quality, Track, Video
 from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
 
-from waves.progress import Progress
-
-try:
-    # Ordered favourites (My Tidal sort). Absent on older tidalapi, in which
-    # case sorting silently degrades to the default (date-added) API order.
-    from tidalapi.types import AlbumOrder, ArtistOrder, ItemOrder, OrderDirection, VideoOrder
-except Exception:  # pragma: no cover - depends on installed tidalapi version
-    AlbumOrder = ArtistOrder = ItemOrder = OrderDirection = VideoOrder = None
-
 import waves.download as _waves_download
 from waves.config import Settings, Tidal, harden_api_session
 from waves.constants import (
+    CTX_TIDAL,
     DEFAULT_ILLEGAL_MAP,
     CoverDimensions,
-    CTX_TIDAL,
     DownsampleTarget,
     InitialKey,
     MediaType,
@@ -75,15 +66,10 @@ from waves.helper.path import (
     safe_filename_replacement_map,
 )
 from waves.helper.tidal import (
-    get_tidal_media_id,
-    get_tidal_media_type,
-    instantiate_media,
     name_builder_album_artist,
     name_builder_artist,
     name_builder_title,
     quality_audio_highest,
-    search_results_all,
-    user_media_lists,
 )
 from waves.library_index import (
     POLL_GAUGE,
@@ -100,6 +86,7 @@ from waves.model.downloader import TrackStreamInfo
 from waves.model.gui_data import ProgressBars
 from waves.ownership import OwnershipStore, quality_rank
 from waves.poolgauge import PoolGauge
+from waves.progress import Progress
 from waves.providers import Provider, RefusalKind, TidalProvider
 from waves.waves_ui import proc
 from waves.waves_ui.session import WavesTidal
@@ -979,25 +966,6 @@ _LEGACY_FORMAT_VIDEOS = (
     "Videos/{artist_name} - {track_title}{track_explicit}",
     "Videos/{artist_name}/{video_year_optional}{track_title}{track_explicit}",
 )
-
-# My Tidal sort: map the order keys QML sends to per-category tidalapi enums.
-# Direction is applied separately. Built only when the enums are importable;
-# an empty map means "no server-side sort" (older tidalapi) and every category
-# falls back to the default date-added order.
-if OrderDirection is not None:
-    _LIB_ORDER = {
-        "albums": {
-            "date": AlbumOrder.DateAdded,
-            "name": AlbumOrder.Name,
-            "release": AlbumOrder.ReleaseDate,
-            "artist": AlbumOrder.Artist,
-        },
-        "artists": {"date": ArtistOrder.DateAdded, "name": ArtistOrder.Name},
-        "tracks": {"date": ItemOrder.Date, "name": ItemOrder.Name, "artist": ItemOrder.Artist},
-        "videos": {"date": VideoOrder.DateAdded, "name": VideoOrder.Name, "artist": VideoOrder.Artist},
-    }
-else:  # pragma: no cover - older tidalapi
-    _LIB_ORDER = {}
 
 
 def _pretty(key: str) -> str:
@@ -2011,6 +1979,30 @@ def _video_image(video, width: int, height: int) -> str:
         return video.image(width, height) or ""
     except Exception:
         return ""
+
+
+def _open_kind(obj) -> str | None:
+    """Which search-payload bucket a seam-resolved object belongs to.
+
+    The Provider seam resolves a pasted link to the engine object it names
+    (``Provider.open_url``); the bridge builds the page payload from it, and
+    the bucket is read off the object itself (the engine's own class -- the
+    same classes the ``_*_dict`` builders already branch on). None means
+    "cannot show this".
+    """
+    if isinstance(obj, Album):
+        return "albums"
+    if isinstance(obj, Track):
+        return "tracks"
+    if isinstance(obj, Video):
+        return "videos"
+    if isinstance(obj, Playlist):
+        return "playlists"
+    if isinstance(obj, Mix):
+        return "mixes"
+    if isinstance(obj, Artist):
+        return "artists"
+    return None
 
 
 def _artist_roles(artist) -> str:
@@ -4459,7 +4451,7 @@ class WavesBridge(LibraryMixin, QObject):
         artist = self._objs["artist"].get(artist_id)
         if artist is None:
             try:
-                artist = self.tidal.session.artist(int(artist_id))
+                artist = self.providers[CTX_TIDAL].get_object(MediaType.ARTIST.value, artist_id)
             except Exception:
                 logger.exception("Could not fetch artist %s", artist_id)
                 return None
@@ -4783,9 +4775,11 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             try:
-                media_type = get_tidal_media_type(url)
-                media_id = get_tidal_media_id(url)
-                media = instantiate_media(self.tidal.session, media_type, media_id)
+                # The seam resolves the URL to the engine object it names; None
+                # covers every "cannot show this" case (not this provider's
+                # grammar, a gone item, a failed lookup) exactly as the old
+                # three-call chain's exceptions did.
+                media = self.providers[CTX_TIDAL].open_url(url)
             except Exception:
                 logger.exception("Could not open link")
                 if gen == self._search_gen:
@@ -4794,6 +4788,12 @@ class WavesBridge(LibraryMixin, QObject):
                 return
             if gen != self._search_gen:
                 return  # a newer search/link superseded this one
+            kind = _open_kind(media)
+            if kind is None:
+                if gen == self._search_gen:
+                    self._set_status("Could not open that link")
+                    self._set_busy(False)
+                return
             try:
                 payload = {
                     "artists": [],
@@ -4804,17 +4804,17 @@ class WavesBridge(LibraryMixin, QObject):
                     "mixes": [],
                     "top": None,
                 }
-                if media_type == MediaType.ALBUM:
+                if kind == "albums":
                     payload["albums"] = [self._album_dict(media)]
-                elif media_type == MediaType.TRACK:
+                elif kind == "tracks":
                     payload["tracks"] = [self._track_dict(media)]
-                elif media_type == MediaType.VIDEO:
+                elif kind == "videos":
                     payload["videos"] = [self._video_dict(media)]
-                elif media_type == MediaType.PLAYLIST:
+                elif kind == "playlists":
                     payload["playlists"] = [self._playlist_dict(media)]
-                elif media_type == MediaType.MIX:
+                elif kind == "mixes":
                     payload["mixes"] = [self._mix_dict(media)]
-                elif media_type == MediaType.ARTIST:
+                elif kind == "artists":
                     key = str(getattr(media, "id", id(media)))
                     self._remember("artist", key, media)
                     payload["artists"] = [
@@ -4887,7 +4887,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # One page covers every slice this payload keeps (the deepest
                 # is tracks at [:80] of the page's 300); the pager's serial
                 # follow-up round-trips only ever fetched rows discarded here.
-                results = search_results_all(self.tidal.session, needle, single_page=True)
+                results = self.providers[CTX_TIDAL].search(needle)
             except Exception:
                 logger.exception("Search failed")
                 results = {}
@@ -5139,10 +5139,10 @@ class WavesBridge(LibraryMixin, QObject):
                 # A new search clears every _objs bucket while expanded album
                 # rows outlive it; a silent return here would leave the row on
                 # "Loading tracks…" forever (albumTracksLoaded is the only
-                # writer of the QML track cache). Re-fetch by id instead, the
-                # same fallback the download entry points use.
+                # writer of the QML track cache). Re-resolve by id through the
+                # seam, the same fallback the download entry points use.
                 try:
-                    obj = self.tidal.session.album(int(album_id))
+                    obj = self.providers[CTX_TIDAL].get_object(MediaType.ALBUM.value, album_id)
                     self._remember("album", album_id, obj)
                 except Exception:
                     logger.exception("Could not re-fetch album %s for its tracks", album_id)
@@ -5193,8 +5193,9 @@ class WavesBridge(LibraryMixin, QObject):
             if obj is None:
                 # Same _objs-eviction fallback as loadAlbumTracks: a new
                 # search clears the buckets while expanded rows outlive it.
+                # Re-resolved through the seam, as the album page does.
                 try:
-                    obj = self.tidal.session.playlist(playlist_id)
+                    obj = self.providers[CTX_TIDAL].get_object(MediaType.PLAYLIST.value, playlist_id)
                     self._remember("playlist", playlist_id, obj)
                 except Exception:
                     logger.exception("Could not re-fetch playlist %s for its tracks", playlist_id)
@@ -5371,48 +5372,20 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _favorite_ids(self, kind: str) -> set:
         """The user's favourite album or track ids (``kind`` = "albums"|"tracks"),
-        paginated and cached behind a short TTL (a long-running app must pick
-        up favourites added elsewhere without a restart); cleared on logout."""
+        cached behind a short TTL (a long-running app must pick up favourites
+        added elsewhere without a restart); cleared on logout. The pagination
+        itself is the provider's ``favorite_ids``; failures serve what we have
+        but never cache it: a stale set beats an empty one, and a partial set
+        stamped fresh behind the 10-minute TTL reads as "you have nothing by
+        this artist" on every library-scoped page until it expires."""
         entry = self._fav_ids.get(kind)
         if entry is not None and time.monotonic() - entry[0] < self._FAV_IDS_TTL:
             return entry[1]
-        ids: set[str] = set()
         try:
-            favorites = self.tidal.session.user.favorites
-            method = getattr(favorites, kind)
-            # A limit-N window can return FEWER than N rows (tidalapi drops
-            # unavailable items inside the window), so "done" must come from
-            # the total count, same as _library_page; a short window alone
-            # would silently truncate the whole favourites set.
-            try:
-                total = int(getattr(favorites, f"get_{kind}_count")())
-            except Exception:
-                total = None  # no count available: fall back to the short-window stop
-            offset = 0
-            while True:
-                try:
-                    batch = method(limit=_LIBRARY_PAGE, offset=offset) or []
-                    paged = True
-                except TypeError:
-                    batch = method() or []  # older tidalapi: one unpaged call
-                    paged = False
-                for o in batch:
-                    ids.add(str(getattr(o, "id", "")))
-                offset += _LIBRARY_PAGE
-                if not paged:
-                    break
-                if total is not None:
-                    if offset >= total or not batch:  # empty guards a lying count
-                        break
-                elif len(batch) < _LIBRARY_PAGE:
-                    break
+            ids = self.providers[CTX_TIDAL].favorite_ids(kind)
         except Exception:
             logger.exception("Could not load favourite %s ids", kind)
-            # Serve what we have but never cache it: a stale set beats an empty
-            # one, and a partial set stamped fresh behind the 10-minute TTL
-            # reads as "you have nothing by this artist" on every
-            # library-scoped page until it expires.
-            return entry[1] if entry is not None else ids
+            return entry[1] if entry is not None else set()
         self._fav_ids[kind] = (time.monotonic(), ids)
         return ids
 
@@ -5511,18 +5484,6 @@ class WavesBridge(LibraryMixin, QObject):
             "popularity": -1,
         }
 
-    def _lib_order_kwargs(self, category: str, order_spec) -> dict:
-        """tidalapi favourites kwargs for a My Tidal sort, or ``{}`` for the
-        default order (or an older tidalapi without ordered favourites)."""
-        if OrderDirection is None or not order_spec:
-            return {}
-        order_key, direction = order_spec
-        enum = _LIB_ORDER.get(category, {}).get(order_key)
-        if enum is None:
-            return {}
-        direction_enum = OrderDirection.Ascending if direction == "asc" else OrderDirection.Descending
-        return {"order": enum, "order_direction": direction_enum}
-
     def _sort_local_library(self, items: list, order_spec) -> list:
         """Sort the locally-paged categories (playlists/mixes). Sorts on string
         keys (lower-cased name, or ISO added date) so a missing date never
@@ -5574,7 +5535,7 @@ class WavesBridge(LibraryMixin, QObject):
             and (not walk or entry[2] is not None)
         ):
             return entry[1], entry[2]
-        fresh = user_media_lists(self.tidal.session)
+        fresh = self.providers[CTX_TIDAL].user_collections()
         if not walk:
             with self._media_lists_lock:
                 tree = self._folder_tree
@@ -5682,10 +5643,10 @@ class WavesBridge(LibraryMixin, QObject):
           the requested ``limit`` each page (the windows are disjoint).
         - A ``limit``-N request can return *fewer* than N rows because tidalapi
           drops unavailable items within the window, so "more" must be derived
-          from the total ``get_*_count``, not the returned length.
+          from the total ``get_*_count``, not the returned length (the provider
+          owns that verdict now).
         Playlists and mixes come back as one list, paged and sorted locally
         against the cached sweep (see :meth:`_media_lists`)."""
-        session = self.tidal.session
         # order_override lets a caller force a specific order (e.g. Home's date-desc
         # previews) without touching the category's own persistent sort. Otherwise
         # use the category's chosen sort; when none is set, apply date-added
@@ -5722,33 +5683,22 @@ class WavesBridge(LibraryMixin, QObject):
             full = self._sort_local_library(full, order_spec)
             page = full[offset : offset + limit]
             return [self._mix_dict(m) for m in page], offset + limit < len(full)
-        # (favourites method, total-count method, row builder)
+        # (favourites kind, row builder) -- the seam call names the kind
         specs = {
-            "tracks": ("tracks", "get_tracks_count", self._track_dict),
-            "albums": ("albums", "get_albums_count", self._album_dict),
-            "artists": ("artists", "get_artists_count", self._fav_artist_dict),
-            "videos": ("videos", "get_videos_count", self._video_dict),
+            "tracks": ("tracks", self._track_dict),
+            "albums": ("albums", self._album_dict),
+            "artists": ("artists", self._fav_artist_dict),
+            "videos": ("videos", self._video_dict),
         }
         spec = specs.get(category)
         if spec is None:
             return [], False
-        method_name, count_name, builder = spec
-        favorites = session.user.favorites
-        method = getattr(favorites, method_name)
-        order_kwargs = self._lib_order_kwargs(category, order_spec)
-        try:
-            raw = method(limit=limit, offset=offset, **order_kwargs) or []
-        except TypeError:
-            # Older tidalapi: drop the order kwargs, then the limit/offset kwargs.
-            try:
-                raw = method(limit=limit, offset=offset) or []
-            except TypeError:
-                raw = (method() or [])[offset : offset + limit]
-        try:
-            more = offset + limit < int(getattr(favorites, count_name)())
-        except Exception:
-            # No count available: keep paging until a window comes back empty.
-            more = len(raw) > 0
+        method_name, builder = spec
+        # One window of the user's favorites through the seam: the provider
+        # maps the neutral order spec onto its engine's order enums and owns
+        # the count-based "more" verdict (a short window alone would silently
+        # truncate the set).
+        raw, more = self.providers[CTX_TIDAL].favorites_page(method_name, offset, limit, order_spec)
         return [builder(o) for o in raw], more
 
     def _lib_status(self, category: str, count: int, more: bool) -> str:

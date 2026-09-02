@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from tidalapi.album import Album
 
-from waves.waves_ui.backend import _LIBRARY_PAGE, WavesBridge
+from waves.waves_ui.backend import WavesBridge
 
 
 class _Signal:
@@ -311,7 +311,12 @@ class _FavStub:
 
     def __init__(self, favorites):
         self._fav_ids: dict = {}
+        # The pagination lives in TidalProvider now (ticket #20); the stub
+        # routes through a real provider over the same favorites fake.
+        from waves.providers.tidal import TidalProvider
+
         self.tidal = SimpleNamespace(session=SimpleNamespace(user=SimpleNamespace(favorites=favorites)))
+        self.providers = {"tidal": TidalProvider(self.tidal)}
 
 
 def _fav_items(ids):
@@ -323,7 +328,7 @@ def test_a_short_window_does_not_truncate_the_favourites_set():
     # dropped): completion must come from the count, not the window length.
     windows = {
         0: _fav_items(range(0, 90)),
-        _LIBRARY_PAGE: _fav_items(range(100, 150)),
+        100: _fav_items(range(100, 150)),
     }
     stub = _FavStub(_Favorites(windows, count=150))
     ids = stub._favorite_ids("albums")

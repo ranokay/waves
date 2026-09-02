@@ -67,7 +67,15 @@ class _AlbumTracksStub:
         self.albumTracksLoaded = _Signal()
         self.collectionMembershipChanged = _Signal()
         self._ownership = SimpleNamespace(record_members_replace=lambda *a: None)
-        self.tidal = SimpleNamespace(session=SimpleNamespace(album=session_album))
+        # The re-fetch rides the Provider seam (ticket #20): the fake answers
+        # get_object the way the session fallback used to.
+        self.providers = {
+            "tidal": SimpleNamespace(
+                get_object=lambda kind, raw_id: session_album(raw_id)
+                if session_album is not None
+                else None
+            )
+        }
 
     def _remember(self, bucket, key, obj):
         self._objs.setdefault(bucket, {})[key] = obj

@@ -58,6 +58,47 @@ _TIDAL_QUALITY_BY_TIER: dict[QualityTier, tidalapi.Quality] = {
 
 _ATMOS_MODE: str = str(AudioMode.dolby_atmos.value)
 
+# The favorites id-set window (the bridge's _LIBRARY_PAGE): one API page of
+# the user's favorites per request while collecting ids.
+_FAVORITES_WINDOW: int = 100
+
+# My Tidal sort: the order keys the UI speaks, mapped onto the per-category
+# tidalapi order enums (moved here from the bridge so the mapping rides the
+# seam with the favorites reads it serves). Direction is applied separately.
+# Built only when the enums are importable; an empty map means "no
+# server-side sort" (older tidalapi) and every category falls back to the API's
+# default date-added order.
+try:
+    from tidalapi.types import AlbumOrder, ArtistOrder, ItemOrder, OrderDirection, VideoOrder
+
+    _FAVORITES_ORDER: dict[str, dict[str, object]] = {
+        "albums": {
+            "date": AlbumOrder.DateAdded,
+            "name": AlbumOrder.Name,
+            "release": AlbumOrder.ReleaseDate,
+            "artist": AlbumOrder.Artist,
+        },
+        "artists": {"date": ArtistOrder.DateAdded, "name": ArtistOrder.Name},
+        "tracks": {"date": ItemOrder.Date, "name": ItemOrder.Name, "artist": ItemOrder.Artist},
+        "videos": {"date": VideoOrder.DateAdded, "name": VideoOrder.Name, "artist": VideoOrder.Artist},
+    }
+except Exception:  # pragma: no cover - depends on installed tidalapi version
+    _FAVORITES_ORDER = {}
+
+
+def _favorites_order_kwargs(kind: str, order: tuple[str, str] | None) -> dict:
+    """tidalapi favorites kwargs for a My Tidal sort, or ``{}`` for the
+    default order (an absent spec, an order key the category doesn't offer,
+    or an older tidalapi without ordered favourites)."""
+    if not _FAVORITES_ORDER or not order:
+        return {}
+    order_key, direction = order
+    enum = _FAVORITES_ORDER.get(kind, {}).get(order_key)
+    if enum is None:
+        return {}
+    direction_enum = OrderDirection.Ascending if direction == "asc" else OrderDirection.Descending
+    return {"order": enum, "order_direction": direction_enum}
+
 
 def _enum_value(value):
     """A provider enum to its plain string value, anything else unchanged."""
@@ -180,6 +221,69 @@ class TidalProvider(Provider):
 
     def user_collections(self) -> dict:
         return user_media_lists(self._tidal.session)
+
+    def favorites_page(
+        self, kind: str, offset: int, limit: int, order: tuple[str, str] | None = None
+    ) -> tuple[list, bool]:
+        # One window of the user's favorites, verbatim the bridge's ladder:
+        # the order kwargs first, dropped for older tidalapi, then the
+        # limit/offset kwargs, then one unpaged call sliced locally.
+        favorites = self._tidal.session.user.favorites
+        method = getattr(favorites, kind)
+        order_kwargs = _favorites_order_kwargs(kind, order)
+        try:
+            raw = method(limit=limit, offset=offset, **order_kwargs) or []
+        except TypeError:
+            try:
+                raw = method(limit=limit, offset=offset) or []
+            except TypeError:
+                raw = (method() or [])[offset : offset + limit]
+        # A limit-N window can return FEWER than N rows (tidalapi drops
+        # unavailable items inside the window), so "more" must come from the
+        # total count, not the returned length; without a count, keep paging
+        # until a window comes back empty.
+        try:
+            more = offset + limit < int(getattr(favorites, f"get_{kind}_count")())
+        except Exception:
+            more = len(raw) > 0
+        return list(raw), more
+
+    def favorite_ids(self, kind: str) -> set[str]:
+        """The user's favourite ids of ``kind``, paged to exhaustion.
+
+        The window size is the engine's own 100-row page (the bridge's
+        ``_LIBRARY_PAGE``), and "done" comes from the total count where one
+        exists -- a short window alone would silently truncate the set for
+        the same reason it would in :meth:`favorites_page`. Failures
+        propagate: the bridge decides what a partial set is worth (it serves
+        its last good one and caches nothing).
+        """
+        favorites = self._tidal.session.user.favorites
+        method = getattr(favorites, kind)
+        try:
+            total = int(getattr(favorites, f"get_{kind}_count")())
+        except Exception:
+            total = None  # no count available: fall back to the short-window stop
+        ids: set[str] = set()
+        offset = 0
+        while True:
+            try:
+                batch = method(limit=_FAVORITES_WINDOW, offset=offset) or []
+                paged = True
+            except TypeError:
+                batch = method() or []  # older tidalapi: one unpaged call
+                paged = False
+            for obj in batch:
+                ids.add(str(getattr(obj, "id", "")))
+            offset += _FAVORITES_WINDOW
+            if not paged:
+                break
+            if total is not None:
+                if offset >= total or not batch:  # empty guards a lying count
+                    break
+            elif len(batch) < _FAVORITES_WINDOW:
+                break
+        return ids
 
     # ----- quality
 
@@ -329,9 +433,7 @@ class TidalProvider(Provider):
             )
         else:
             release_date = ""
-        release_type = (
-            str(album.type).lower() if album is not None and getattr(album, "type", None) else ""
-        )
+        release_type = str(album.type).lower() if album is not None and getattr(album, "type", None) else ""
 
         return {
             # Identity rides the seam's namespaced spelling (§4.2) -- the new

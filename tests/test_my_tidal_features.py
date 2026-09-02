@@ -141,37 +141,27 @@ def test_reveal_download_path_opens_nearest_existing(tmp_path, monkeypatch):
 
 
 # ----- My Tidal sort -> tidalapi order enums -------------------------------
+# The enum mapping itself moved into TidalProvider with the favorites reads
+# (ticket #20); its verdicts are pinned in tests/test_provider_seam.py. Here:
+# the bridge's default-sort policy, still date-desc, now delivered through
+# the seam.
+
+try:
+    from tidalapi.types import OrderDirection as _OrderDirection
+except Exception:  # pragma: no cover - depends on installed tidalapi version
+    _OrderDirection = None
 
 
-@pytest.mark.skipif(backend.OrderDirection is None, reason="tidalapi has no ordered favourites")
-def test_lib_order_kwargs_maps_per_category():
-    # self is unused by the method, so calling it unbound is fine.
-    ka = WavesBridge._lib_order_kwargs(None, "albums", ("date", "desc"))
-    assert ka["order"] is backend.AlbumOrder.DateAdded
-    assert ka["order_direction"] is backend.OrderDirection.Descending
-
-    kt = WavesBridge._lib_order_kwargs(None, "tracks", ("name", "asc"))
-    assert kt["order"] is backend.ItemOrder.Name  # tracks use ItemOrder, not *Order.DateAdded
-    assert kt["order_direction"] is backend.OrderDirection.Ascending
-
-    assert WavesBridge._lib_order_kwargs(None, "albums", ("release", "asc"))["order"] is backend.AlbumOrder.ReleaseDate
-
-
-@pytest.mark.skipif(backend.OrderDirection is None, reason="tidalapi has no ordered favourites")
-def test_lib_order_kwargs_unsupported_is_empty():
-    # An order key a category doesn't offer, or no spec at all -> no kwargs
-    # (falls back to the API's default order).
-    assert WavesBridge._lib_order_kwargs(None, "artists", ("release", "desc")) == {}
-    assert WavesBridge._lib_order_kwargs(None, "albums", None) == {}
-    assert WavesBridge._lib_order_kwargs(None, "nonsense", ("date", "desc")) == {}
-
-
-@pytest.mark.skipif(backend.OrderDirection is None, reason="tidalapi has no ordered favourites")
+@pytest.mark.skipif(_OrderDirection is None, reason="tidalapi has no ordered favourites")
 def test_library_page_default_sort_is_date_desc():
     # A category with no explicit sort must still ASK tidalapi for date-added
     # descending. tidalapi's raw default is not date-added, so leaving it unset
     # made a tab's default "Recently added" show the wrong order and disagree
     # with the Home previews (which force date-desc).
+    from tidalapi.types import AlbumOrder, OrderDirection
+
+    from waves.providers.tidal import TidalProvider
+
     b = WavesBridge.__new__(WavesBridge)
     b._lib_sort = {}
     favorites = MagicMock()
@@ -179,13 +169,14 @@ def test_library_page_default_sort_is_date_desc():
     favorites.get_albums_count.return_value = 0
     b.tidal = MagicMock()
     b.tidal.session.user.favorites = favorites
+    b.providers = {"tidal": TidalProvider(b.tidal)}
 
     rows, more = WavesBridge._library_page(b, "albums", 0, 10)
 
     assert rows == [] and more is False
     _, kwargs = favorites.albums.call_args
-    assert kwargs["order"] is backend.AlbumOrder.DateAdded
-    assert kwargs["order_direction"] is backend.OrderDirection.Descending
+    assert kwargs["order"] is AlbumOrder.DateAdded
+    assert kwargs["order_direction"] is OrderDirection.Descending
 
 
 # ----- separate cover.jpg size ---------------------------------------------

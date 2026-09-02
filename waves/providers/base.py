@@ -18,6 +18,77 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+# ============================================================================
+# The row-dict schema (the catalog contract with QML)
+# ============================================================================
+#
+# Every provider serves the SAME plain dicts the QML consumes today; the
+# field names below are the contract, spelled exactly as the bridge's dict
+# builders write them. ``id`` is always the ENGINE's own id as a string (the
+# key the bridge remembers the live object under in its ``_objs`` buckets);
+# namespacing happens above this layer. A missing fact is "", 0, -1 or None
+# exactly as noted -- rows are never partial-keyed (a QML ListModel freezes
+# its roles on the first row appended).
+#
+# Result rows (search payload, library pages, artist pages, browse cards):
+#   artist row:   {id, name, art, roles, popularity}
+#                   art: cover URL at 320px, best-effort "" when absent.
+#                   roles: display words for the artist's credits ("Artist"
+#                   when none). popularity: 0-100, or -1 until enriched.
+#   album row:    {id, title, artist, artist_id, artists, art, year, date,
+#                  tracks, duration_sec, quality, popularity, explicit, added}
+#                   artist: the album-artist line; artist_id: its single id;
+#                   artists: the full credited list [{id, name, roles}];
+#                   tracks: track count (0 unknown); duration_sec: release
+#                   length in raw seconds (0 unknown) -- the presence
+#                   matcher's duration witness; quality: the advertised tier
+#                   word ("" unknown); date: "YYYY-MM-DD" or ""; added: the
+#                   user's date-added "YYYY-MM-DDTHH:MM:SS" or "".
+#   track row:    {id, title, artist, artist_id, artists, album, album_id,
+#                  num, vol, art, year, date, duration, duration_sec,
+#                  quality, popularity, explicit, added}
+#                   duration: "M:SS"; num/vol: track and volume numbers
+#                   (0/1 defaults); art: 160px thumb.
+#   video row:    {id, title, artist, artists, art, art_big, duration,
+#                  explicit, added, date, quality}
+#                   art/art_big: 160x107 / 750x500 stills (videos are sized
+#                   as a width-height PAIR, not a square); quality: the
+#                   resolution label ("1080p", "" unknown).
+#   playlist row: {id, title, art, tracks, creator, added, kind, sub, path,
+#                  plCount}
+#                   kind: "playlist"; sub/path/plCount: "" / "" / 0 here,
+#                   filled by the bridge for playlist FOLDER rows, which
+#                   share this exact key set (kind: "folder") so a QML
+#                   ListModel never sees a new role mid-list.
+#   mix row:      {id, title, art, subtitle, added}
+#
+# Payloads built from those rows:
+#   search payload:
+#     {artists, albums, tracks, videos, playlists, mixes: [row...], top}
+#     top: the provider's best match as a row dict tagged with its kind
+#     ("album"/"track"/"video"/"playlist" -- an artist top hit is dropped,
+#     the artist strip already leads with it), or None.
+#   album expansion rows:  {id, num, title, duration, popularity, explicit}
+#     num: 1-based position in the album.
+#   playlist expansion rows:
+#     {id, kind, num, title, artist, duration, popularity, explicit}
+#     kind: "track" or "video" (the row routes its own download).
+#   artist page payload:
+#     {id, name, art, bio, albums: [album row], eps: [album row],
+#      tracks: [track row]}
+#     plus the bridge's context flags (refresh, libraryScoped).
+#   My Tidal home payload:
+#     sections: [{rowKind: "cards"|"tracks", title, target, items: [row]}]
+#     items additionally tagged with their row kind ("album"/"track").
+#
+# Until the dict builders move into the providers (the second provider's
+# arrival), the bridge builds these rows FROM the engine objects the reads
+# below return: the reads are the seam, the builders are the rendering, and
+# the schema above is what both must agree on. Object-method calls on an
+# already-resolved object (an album's .tracks(), an artist's .get_albums())
+# are the bridge's page-building policy, not catalog reads -- they retire
+# behind the interface with the contract pass.
+
 # The one delivered-quality ladder, lowest to highest. Its strings are the
 # keys of the ownership store's QUALITY_RANK scale (and, as it happens,
 # tidalapi's own tier values): a caller asks "is a better tier available than
@@ -195,6 +266,32 @@ class Provider(ABC):
     def user_collections(self) -> dict | None:
         """The signed-in user's collections (playlists/mixes), or None when
         the provider has no such capability."""
+
+    @abstractmethod
+    def favorites_page(
+        self, kind: str, offset: int, limit: int, order: tuple[str, str] | None = None
+    ) -> tuple[list, bool]:
+        """One window ``[offset, offset+limit)`` of the signed-in user's
+        favorites of ``kind`` (e.g. "tracks", "albums"), as engine objects,
+        paired with whether more exist beyond the window.
+
+        ``order`` is the neutral sort spec ``(key, direction)`` -- keys from
+        the UI's vocabulary ("date", "name", "release", "artist"; direction
+        "asc"/"desc"), mapped onto the engine's own order enums inside the
+        provider. None asks for the engine's default order.
+
+        The "more" verdict must come from the provider's total count when it
+        has one: a limit-N window can return fewer than N rows (unavailable
+        items dropped inside the window), so a short window alone would
+        silently truncate the set.
+        """
+
+    @abstractmethod
+    def favorite_ids(self, kind: str) -> set[str]:
+        """Every id in the signed-in user's favorites of ``kind``, paged to
+        exhaustion, as plain strings. The bridge filters catalog rows against
+        these, so the ids are the engine's own (bare, not namespaced) -- the
+        same spelling a row's ``id`` field carries."""
 
     # ----- quality -- what the Chooser presents
 

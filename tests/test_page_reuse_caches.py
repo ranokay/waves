@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import json
 from threading import Lock
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
 
 # ----- playlists/mixes sweep cache ------------------------------------------
@@ -26,11 +26,13 @@ def _sweep_bridge(monkeypatch, calls):
     b._folder_tree = None
     b.tidal = MagicMock()
 
-    def fake_sweep(session):
-        calls.append(session)
+    def fake_sweep(*_args):
+        calls.append("sweep")
         return {"playlists": [], "mixes": ["m1", "m2"]}
 
-    monkeypatch.setattr(backend, "user_media_lists", fake_sweep)
+    # The sweep rides the Provider seam (ticket #20): the fake answers the
+    # bridge's ``user_collections()`` call.
+    b.providers = {"tidal": SimpleNamespace(user_collections=fake_sweep)}
     return b
 
 
@@ -120,16 +122,14 @@ def test_pop_cached_honours_ttl():
 def _fav_bridge(ids_per_call):
     b = WavesBridge.__new__(WavesBridge)
     b._fav_ids = {}
-    favorites = MagicMock()
     calls = []
 
-    def albums(limit=None, offset=0):
-        calls.append(offset)
-        return [] if offset else list(ids_per_call)
+    def fake_ids(kind):
+        calls.append(kind)
+        return {o.id for o in ids_per_call}
 
-    favorites.albums.side_effect = albums
-    b.tidal = MagicMock()
-    b.tidal.session.user.favorites = favorites
+    # The id pagination rides the Provider seam (ticket #20).
+    b.providers = {"tidal": SimpleNamespace(favorite_ids=fake_ids)}
     return b, calls
 
 
@@ -141,7 +141,7 @@ def test_favorite_ids_cached_within_ttl_and_refetched_after():
     assert b._favorite_ids("albums") == {"x1"}
     assert b._favorite_ids("albums") == {"x1"}  # served from cache
     assert len(calls) == 1
-    ts, ids = b._fav_ids["albums"]
+    _ts, ids = b._fav_ids["albums"]
     b._fav_ids["albums"] = (time.monotonic() - WavesBridge._FAV_IDS_TTL - 1, ids)
     assert b._favorite_ids("albums") == {"x1"}  # expired: refetched
     assert len(calls) == 2
@@ -152,8 +152,11 @@ def test_favorite_ids_failed_refresh_serves_stale():
 
     b = WavesBridge.__new__(WavesBridge)
     b._fav_ids = {"albums": (time.monotonic() - WavesBridge._FAV_IDS_TTL - 1, {"old"})}
-    b.tidal = MagicMock()
-    b.tidal.session.user.favorites.albums.side_effect = RuntimeError("blip")
+
+    def boom(kind):
+        raise RuntimeError("blip")
+
+    b.providers = {"tidal": SimpleNamespace(favorite_ids=boom)}
     assert b._favorite_ids("albums") == {"old"}
 
 

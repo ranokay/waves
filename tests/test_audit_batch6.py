@@ -282,16 +282,15 @@ class _MediaListsStub:
         self._media_lists_cache = (time.monotonic(), {"playlists": []}, cached_tree)
         self._folder_tree = cached_tree
         self.tidal = SimpleNamespace(session=object())
+        # The listing sweep rides the Provider seam (ticket #20).
+        self.providers = {"tidal": SimpleNamespace(user_collections=lambda: {"playlists": []})}
         self.swept = 0
 
 
 def test_a_walking_caller_rejects_the_treeless_mixes_entry():
     stub = _MediaListsStub(cached_tree=None)
     tree = SimpleNamespace(nodes=[1], playlist_paths={}, partial=False)
-    with (
-        patch.object(backend_mod, "user_media_lists", return_value={"playlists": []}),
-        patch.object(backend_mod, "walk_playlist_tree", return_value=tree),
-    ):
+    with patch.object(backend_mod, "walk_playlist_tree", return_value=tree):
         _fresh, got = stub._media_lists(refresh=True, walk=True)
     assert got is tree, "Playlists within the TTL must sweep, not render folder-less"
 

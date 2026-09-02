@@ -174,7 +174,9 @@ class _SearchStub(_StubBase):
 
 def test_a_choking_search_build_clears_busy_and_says_so(monkeypatch):
     stub = _SearchStub()
-    monkeypatch.setattr(backend, "search_results_all", lambda session, needle: {"albums": [SimpleNamespace(id="x")]})
+    stub.providers = {
+        "tidal": SimpleNamespace(search=lambda needle: {"albums": [SimpleNamespace(id="x")]})
+    }
 
     stub.search("aphex")
 
@@ -203,9 +205,11 @@ class _OpenUrlStub(_StubBase):
 
 def test_a_choking_link_payload_clears_busy(monkeypatch):
     stub = _OpenUrlStub()
-    monkeypatch.setattr(backend, "get_tidal_media_type", lambda url: backend.MediaType.ALBUM)
-    monkeypatch.setattr(backend, "get_tidal_media_id", lambda url: "42")
-    monkeypatch.setattr(backend, "instantiate_media", lambda session, mt, mid: SimpleNamespace(id="42"))
+    # The seam resolves the link to the engine object it names (an album, so
+    # the payload lands in the albums bucket); the builder then chokes.
+    from tidalapi.album import Album
+
+    stub.providers = {"tidal": SimpleNamespace(open_url=lambda url: Album.__new__(Album))}
 
     stub._open_url("https://tidal.com/album/42")
 

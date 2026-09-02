@@ -275,6 +275,174 @@ class TestCatalog:
         assert result == {"playlists": [folder, playlist], "mixes": [mix]}
 
 
+class TestFavoritesPages:
+    """The My Tidal favorites windows and the favorite-id sets, read through
+    the provider once the bridge routes (ticket #20). The order mapping moves
+    here from the bridge's ``_lib_order_kwargs``; these tests pin the same
+    verdicts that file pinned, against the same tidalapi enums."""
+
+    def test_favorites_page_maps_the_neutral_order_per_category(self):
+        from tidalapi.types import AlbumOrder, ArtistOrder, ItemOrder, OrderDirection, VideoOrder
+
+        provider, _ = _provider()
+        favorites_by_kind = {}
+        for kind in ("albums", "artists", "tracks", "videos"):
+            favorites = Mock()
+            method = getattr(favorites, kind)
+            method.return_value = []
+            getattr(favorites, f"get_{kind}_count").return_value = 0
+            favorites_by_kind[kind] = favorites
+
+        def page(kind, order):
+            provider._tidal.session.user.favorites = favorites_by_kind[kind]
+            provider.favorites_page(kind, 0, 10, order)
+            _, kwargs = getattr(favorites_by_kind[kind], kind).call_args
+            return kwargs["order"], kwargs["order_direction"]
+
+        assert page("albums", ("date", "desc")) == (AlbumOrder.DateAdded, OrderDirection.Descending)
+        assert page("albums", ("release", "asc")) == (AlbumOrder.ReleaseDate, OrderDirection.Ascending)
+        assert page("tracks", ("name", "asc")) == (ItemOrder.Name, OrderDirection.Ascending)
+        assert page("tracks", ("artist", "desc")) == (ItemOrder.Artist, OrderDirection.Descending)
+        assert page("artists", ("name", "asc")) == (ArtistOrder.Name, OrderDirection.Ascending)
+        assert page("videos", ("date", "desc")) == (VideoOrder.DateAdded, OrderDirection.Descending)
+
+    def test_favorites_page_without_a_spec_asks_no_order(self):
+        # No order spec -> the API's raw default, exactly as the bridge's
+        # empty kwargs did.
+        provider, _ = _provider()
+        favorites = Mock()
+        favorites.albums.return_value = []
+        favorites.get_albums_count.return_value = 0
+        provider._tidal.session.user.favorites = favorites
+
+        provider.favorites_page("albums", 0, 10, None)
+
+        _, kwargs = favorites.albums.call_args
+        assert "order" not in kwargs and "order_direction" not in kwargs
+
+    def test_favorites_page_unsupported_order_key_asks_no_order(self):
+        # An order key a category doesn't offer -> no kwargs, API default.
+        provider, _ = _provider()
+        favorites = Mock()
+        favorites.albums.return_value = []
+        favorites.get_albums_count.return_value = 0
+        provider._tidal.session.user.favorites = favorites
+
+        provider.favorites_page("albums", 0, 10, ("nonsense", "desc"))
+
+        _, kwargs = favorites.albums.call_args
+        assert "order" not in kwargs and "order_direction" not in kwargs
+
+    def test_favorites_page_more_comes_from_the_total_count(self):
+        # A limit-N window can return FEWER than N rows (tidalapi drops
+        # unavailable items), so "more" must come from the count.
+        provider, _ = _provider()
+        favorites = Mock()
+        favorites.tracks.return_value = [Mock(), Mock()]
+        favorites.get_tracks_count.return_value = 5
+        provider._tidal.session.user.favorites = favorites
+
+        _rows, more = provider.favorites_page("tracks", 0, 3)
+
+        assert more is True  # 0 + 3 < 5
+        _, kwargs = favorites.tracks.call_args
+        assert kwargs["limit"] == 3 and kwargs["offset"] == 0
+
+    def test_favorites_page_without_a_count_pages_until_a_short_window(self):
+        provider, _ = _provider()
+        favorites = Mock()
+        favorites.tracks.return_value = [Mock(), Mock()]
+        favorites.get_tracks_count.side_effect = RuntimeError("no count")
+        provider._tidal.session.user.favorites = favorites
+
+        rows, more = provider.favorites_page("tracks", 0, 3)
+
+        assert len(rows) == 2
+        assert more is True  # a full-looking window (len > 0) may continue
+
+    def test_favorites_page_survives_older_tidalapi(self):
+        # Older tidalapi: drop the order kwargs, then the limit/offset kwargs,
+        # then slice the one unpaged call -- the bridge's ladder, verbatim.
+        provider, _ = _provider()
+        rows = [Mock(name=f"t{i}") for i in range(4)]
+
+        class _OldFavorites:
+            def tracks(self, *args, **kwargs):
+                if kwargs:
+                    raise TypeError("unexpected keyword argument")
+                return rows
+
+            def get_tracks_count(self):
+                raise TypeError("no counts either")
+
+        provider._tidal.session.user.favorites = _OldFavorites()
+
+        got, more = provider.favorites_page("tracks", 2, 3, ("date", "desc"))
+
+        assert got == rows[2:5]
+        assert more is True  # len(raw) > 0
+
+    def test_favorite_ids_pages_to_the_total_count(self):
+        provider, _ = _provider()
+        albums = [Mock(id=str(i)) for i in range(3)]
+        favorites = Mock()
+        favorites.albums.side_effect = lambda limit, offset: albums[offset : offset + limit]
+        favorites.get_albums_count.return_value = 3
+        provider._tidal.session.user.favorites = favorites
+
+        ids = provider.favorite_ids("albums")
+
+        assert ids == {"0", "1", "2"}
+        # The last window (offset 100) is never fetched: the count said done.
+        assert favorites.albums.call_count == 1
+
+    def test_favorite_ids_empty_batch_guards_a_lying_count(self):
+        provider, _ = _provider()
+        favorites = Mock()
+        favorites.tracks.return_value = []  # count lies that more exist
+        favorites.get_tracks_count.return_value = 500
+        provider._tidal.session.user.favorites = favorites
+
+        assert provider.favorite_ids("tracks") == set()
+
+    def test_favorite_ids_without_a_count_stops_on_a_short_window(self):
+        provider, _ = _provider()
+        first = [Mock(id=str(i)) for i in range(100)]
+        favorites = Mock()
+        favorites.tracks.side_effect = lambda limit, offset: ([] if offset else first)
+        favorites.get_tracks_count.side_effect = RuntimeError("no count")
+        provider._tidal.session.user.favorites = favorites
+
+        ids = provider.favorite_ids("tracks")
+
+        assert len(ids) == 100
+
+    def test_favorite_ids_survives_older_tidalapi(self):
+        # One unpaged call, sliced by nothing: the ids still come out.
+        provider, _ = _provider()
+
+        class _OldFavorites:
+            def albums(self, *args, **kwargs):
+                if kwargs:
+                    raise TypeError("unexpected keyword argument")
+                return [Mock(id="7")]
+
+            def get_albums_count(self):
+                raise TypeError("no counts")
+
+        provider._tidal.session.user.favorites = _OldFavorites()
+
+        assert provider.favorite_ids("albums") == {"7"}
+
+    def test_favorite_ids_let_failures_propagate(self):
+        # The bridge keeps its serve-stale semantics; the provider must raise,
+        # not swallow a partial set as fresh (the old path's rule).
+        provider, _ = _provider()
+        provider._tidal.session.user.favorites = None
+        with pytest.raises(AttributeError):
+            provider.favorite_ids("albums")
+
+
 # ------------------------------------------------------------- quality
 
 

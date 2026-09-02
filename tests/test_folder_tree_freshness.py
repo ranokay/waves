@@ -40,7 +40,11 @@ def _tree(names, partial=False):
 
 
 def _bridge(monkeypatch, trees, sweeps=None):
-    """Bridge whose folder walk hands back `trees` one per call."""
+    """Bridge whose folder walk hands back `trees` one per call.
+
+    The listing sweep rides the Provider seam (ticket #20): the fake answers
+    the bridge's ``user_collections()`` call; the folder walk is still the
+    bridge-side helper over the sweep's root folders."""
     b = WavesBridge.__new__(WavesBridge)
     b._media_lists_cache = None
     b._media_lists_lock = Lock()
@@ -48,7 +52,7 @@ def _bridge(monkeypatch, trees, sweeps=None):
     b.tidal = MagicMock()
     calls = {"sweep": 0, "walk": 0}
 
-    def fake_sweep(session):
+    def fake_sweep(*_args):
         calls["sweep"] += 1
         return sweeps or {"playlists": [], "mixes": []}
 
@@ -56,7 +60,7 @@ def _bridge(monkeypatch, trees, sweeps=None):
         calls["walk"] += 1
         return trees.pop(0)
 
-    monkeypatch.setattr(backend, "user_media_lists", fake_sweep)
+    b.providers = {"tidal": SimpleNamespace(user_collections=fake_sweep)}
     monkeypatch.setattr(backend, "walk_playlist_tree", fake_walk)
     return b, calls
 
