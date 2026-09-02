@@ -53,7 +53,15 @@ def test_resting_on_a_playlist_card_prefetches_its_page_and_the_click_paints_who
 def _run_scenario() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
-        from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer, QUrl
+        from PySide6.QtCore import (
+            QCoreApplication,
+            QEventLoop,
+            QPoint,
+            QSettings,
+            Qt,
+            QTimer,
+            QUrl,
+        )
         from PySide6.QtGui import QColor, QGuiApplication, QImage
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
         from PySide6.QtQuick import QQuickWindow
@@ -61,6 +69,30 @@ def _run_scenario() -> int:
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
+
+    # The first-run gates (terms, ffmpeg setup, update opt-in) are full-window
+    # and sit above every surface -- the ffmpeg gate's MouseArea eats hover by
+    # design -- and all three wake the moment the scenario declares the session
+    # signed in. A machine that has run Waves has answered them; a fresh one
+    # has not, and the gates would block everything this scenario drives. So
+    # the QSettings store they read is sandboxed per run (a unique ini file, so
+    # nothing global is touched) and pre-seeded with the answered state. This
+    # must happen before the QGuiApplication exists: QSettings resolves its
+    # storage from the application identity at first use.
+    scenario_config = tempfile.mkdtemp(prefix="waves-hover-config-")
+    QCoreApplication.setOrganizationName("Waves")
+    QCoreApplication.setApplicationName("hover-prefetch-scenario")
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, scenario_config)
+    seeded = QSettings()
+    # The terms answer is (accepted, version stamp): a bare acceptance of an
+    # older revision re-prompts by design, so the stamp rides along.
+    seeded.setValue("legal/termsAccepted", True)
+    seeded.setValue("legal/termsAcceptedVersion", "1.0")
+    seeded.setValue("setup/ffmpegSetupDone", True)
+    seeded.setValue("setup/ffmpegPromptDismissed", True)
+    seeded.setValue("setup/updatePromptAnswered", True)
+    seeded.sync()
 
     app = QGuiApplication.instance() or QGuiApplication([])
     try:
