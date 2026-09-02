@@ -195,11 +195,17 @@ class _InlinePool:
 
 def _bridge(session):
     """A bare WavesBridge carcass carrying only the fields the scan touches."""
+    from waves.providers.tidal import TidalProvider
+
     bridge = WavesBridge.__new__(WavesBridge)
     bridge._objs = {"artist": {}, "album": {}}
     bridge._objs_lock = Lock()
     bridge._objs_max = 32
     bridge.tidal = SimpleNamespace(session=session)
+    # The artist resolution rides the Provider seam (ticket #20): a real
+    # provider over the same fake session, so "the artist really was asked"
+    # stays observable (as the string spelling the seam passes through).
+    bridge.providers = {"tidal": TidalProvider(bridge.tidal)}
     return bridge
 
 
@@ -238,7 +244,7 @@ def test_a_swallowed_artist_failure_is_not_a_finished_scan():
 
     assert complete is False, "an unreadable artist was reported as a complete edition scan"
     assert editions == [album], "the list half of the answer changed"
-    assert session.calls == [ARTIST_ID], "the artist really was asked for, and really did fail"
+    assert session.calls == [str(ARTIST_ID)], "the artist really was asked for, and really did fail"
 
 
 def test_an_album_with_no_artist_id_is_not_a_finished_scan():
@@ -360,7 +366,7 @@ def test_an_unreadable_artist_never_claims_there_is_only_one_edition(credit, mak
     # everything into one handler, so without these two the same honest wording
     # would appear (and this test would still pass) if the work never reached
     # the scan at all.
-    assert session.calls == expected_calls, "the scan did not reach the session the way this path does"
+    assert session.calls == [str(c) for c in expected_calls], "the scan did not reach the session the way this path does"
     assert failures, "the app gave up without writing down why"
     message, exc, traceback_text = failures[-1]
     assert "Edition scan failed" in message, message
@@ -382,5 +388,5 @@ def test_a_genuinely_single_edition_album_still_says_so_and_downloads():
     assert bridge.statusChanged.texts[-1] == "Only one edition of this album; downloading it"
     assert bridge._albumsQueued.emits == [(0, ["a1"])]
     assert bridge.downloadState.emits == [("a1", "preparing")]
-    assert session.calls == [ARTIST_ID]
+    assert session.calls == [str(ARTIST_ID)]
     assert artist.asked == ["get_albums", "get_ep_singles", "get_other"]

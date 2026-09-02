@@ -52,7 +52,7 @@ class _SearchStub:
     """The real search slot on the attributes it reads, nothing more."""
 
     search = WavesBridge.search
-    _search_total = WavesBridge._search_total
+    _search_total = staticmethod(WavesBridge._search_total)
     _SEARCH_TTL = 60.0
 
     def __init__(self):
@@ -65,8 +65,15 @@ class _SearchStub:
         self._objs: dict = {"album": {}, "track": {}, "artist": {}}
         self._objs_lock = Lock()
         self.tidal = SimpleNamespace(session=object())
+        # The fetch rides the Provider seam (ticket #20); the fake supersedes
+        # itself mid-fetch the way logout used to via the old helper patch.
+        self.providers = {"tidal": SimpleNamespace(search=self._superseded_search)}
         self.searchResults = _Signal()
         self.artistMetaLoaded = _Signal()
+
+    def _superseded_search(self, needle):
+        self._search_gen += 1  # what logout does to an in-flight search
+        return {}
 
     def _set_status(self, text):
         self.statuses.append(text)
@@ -75,7 +82,7 @@ class _SearchStub:
         self.busy.append(bool(on))
 
 
-def test_a_superseded_search_worker_cannot_clear_busy_itself(monkeypatch):
+def test_a_superseded_search_worker_cannot_clear_busy_itself():
     """The shape the sign-out fix has to answer for.
 
     Every generation-gated return in the search worker is a BARE return, and
@@ -83,15 +90,7 @@ def test_a_superseded_search_worker_cannot_clear_busy_itself(monkeypatch):
     worker whose generation was bumped out from under it leaves busy exactly
     as it found it: whoever bumps the generation owns clearing the flag.
     """
-    from waves.waves_ui import backend as backend_mod
-
     stub = _SearchStub()
-
-    def _superseded(session, needle, **kw):
-        stub._search_gen += 1  # what logout does to an in-flight search
-        return {}
-
-    monkeypatch.setattr(backend_mod, "search_results_all", _superseded)
 
     stub.search("anything")
 

@@ -7,13 +7,13 @@ of leaving a scrambled file behind in the user's library.
 """
 
 import pathlib
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from tidalapi.media import Track
 
 from waves.download import Download
+from waves.providers import StreamInfo
 
 
 @pytest.fixture
@@ -32,16 +32,16 @@ def downloader() -> Download:
     return instance
 
 
-def _manifest(*, encrypted: bool) -> SimpleNamespace:
-    """Build a stand-in stream manifest.
+def _manifest(*, encrypted: bool) -> StreamInfo:
+    """Build the seam's stream answer with the encrypted flag set.
 
     Args:
-        encrypted (bool): Value for the ``is_encrypted`` flag.
+        encrypted (bool): Value for the ``encrypted`` flag.
 
     Returns:
-        SimpleNamespace: Object exposing the one attribute the guard reads.
+        StreamInfo: The neutral stream answer the guard reads.
     """
-    return SimpleNamespace(is_encrypted=encrypted)
+    return StreamInfo(encrypted=encrypted)
 
 
 def test_encrypted_track_fails_the_download(downloader: Download, tmp_path: pathlib.Path) -> None:

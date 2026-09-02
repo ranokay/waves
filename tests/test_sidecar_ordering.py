@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 from tidalapi.media import Track
 
-from waves.download import Download
+from waves.download import Download, StreamInfo
 
 
 def _make_download(tmp_path: pathlib.Path) -> Download:
@@ -35,7 +35,7 @@ def _make_download(tmp_path: pathlib.Path) -> Download:
     dl.event_run = threading.Event()
     dl.event_run.set()
 
-    def _download(media, stream_manifest, path_file, event_stop=None):
+    def _download(media, stream_info, path_file, event_stop=None):
         path_file.write_bytes(b"audio")
 
         return True, path_file
@@ -74,10 +74,8 @@ def _run(dl: Download, destination: pathlib.Path) -> tuple:
     return dl._perform_actual_download(
         media=_track(),
         path_media_dst=destination,
-        stream_manifest=MagicMock(),
-        do_flac_extract=False,
+        stream_info=StreamInfo(),
         is_parent_album=False,
-        media_stream=MagicMock(),
     )
 
 

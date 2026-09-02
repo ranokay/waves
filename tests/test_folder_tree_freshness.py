@@ -25,7 +25,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from waves.helper.folders import FolderNode, FolderTree
-from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
 
 
@@ -40,7 +39,11 @@ def _tree(names, partial=False):
 
 
 def _bridge(monkeypatch, trees, sweeps=None):
-    """Bridge whose folder walk hands back `trees` one per call."""
+    """Bridge whose folder walk hands back `trees` one per call.
+
+    The listing sweep and the folder walk both ride the Provider seam
+    (tickets #20/#22): the fake answers the bridge's ``user_collections()``
+    and ``folder_tree()`` calls."""
     b = WavesBridge.__new__(WavesBridge)
     b._media_lists_cache = None
     b._media_lists_lock = Lock()
@@ -48,16 +51,15 @@ def _bridge(monkeypatch, trees, sweeps=None):
     b.tidal = MagicMock()
     calls = {"sweep": 0, "walk": 0}
 
-    def fake_sweep(session):
+    def fake_sweep(*_args):
         calls["sweep"] += 1
         return sweeps or {"playlists": [], "mixes": []}
 
-    def fake_walk(session, root_folders=None):
+    def fake_walk(session=None, root_folders=None):
         calls["walk"] += 1
         return trees.pop(0)
 
-    monkeypatch.setattr(backend, "user_media_lists", fake_sweep)
-    monkeypatch.setattr(backend, "walk_playlist_tree", fake_walk)
+    b.providers = {"tidal": SimpleNamespace(user_collections=fake_sweep, folder_tree=fake_walk)}
     return b, calls
 
 

@@ -18,6 +18,8 @@ from conftest import _InlinePool, _Signal
 from tidalapi.media import Track
 
 import waves.waves_ui.backend as backend
+from waves.constants import CTX_TIDAL
+from waves.providers import TidalProvider
 from waves.waves_ui.backend import WavesBridge
 
 # ----- fakes ----------------------------------------------------------------
@@ -69,7 +71,6 @@ def _bridge(obj, kind):
     b._browse_pages = {}
     b._browse_loading = set()
     b._browse_gen = 0
-    b._browse_lock = Lock()
     b._evict_lock = Lock()
     b._objs = {"album": {}, "playlist": {}, "mix": {}, "track": {}, "video": {}}
     b._objs_lock = Lock()
@@ -81,6 +82,10 @@ def _bridge(obj, kind):
     b.browsePagePrefetched = _Signal()
     b.threadpool = _InlinePool()
     b.tidal = SimpleNamespace(session=SimpleNamespace())
+    # The catalog reads ride the provider (ticket #22); the real one over the
+    # offline session keeps the builders' reads (advertised tier, mix items)
+    # on their production shapes.
+    b.providers = {CTX_TIDAL: TidalProvider(b.tidal)}
     b.busy_log = []
     b.status_log = []
     b._set_busy = lambda v: b.busy_log.append(v)

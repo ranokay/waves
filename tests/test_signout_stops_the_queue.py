@@ -50,7 +50,11 @@ def test_the_stop_comes_before_the_session_is_torn_down(tmp_path):
     WavesBridge.logout(bridge)
     order = _order(bridge)
 
-    assert order.index("stopAll") < order.index("tidal.logout"), "the aborts must be set while the session lives"
+    logout_calls = [i for i, name in enumerate(order) if name.endswith(".logout")]
+    assert logout_calls, "the sign-out must tear the session down through the provider"
+    assert all(order.index("stopAll") < i for i in logout_calls), (
+        "the aborts must be set while the session lives"
+    )
     assert order.index("stopAll") < order.index("_set_logged_in")
 
 

@@ -168,17 +168,23 @@ def test_the_writer_passes_the_count_it_has_and_nothing_more(num_tracks, expecte
     """The delisted-album fallback keeps the track's own album summary, whose
     JSON has no numberOfTracks, so tidalapi leaves num_tracks None."""
     dl = _download()
-    stream = SimpleNamespace(
-        album_replay_gain=None, album_peak_amplitude=None, track_replay_gain=None, track_peak_amplitude=None
-    )
+    # The ReplayGain facts arrive as the stream's plain dict now.
+    replay_gain = {
+        "album_replay_gain": None,
+        "album_peak_amplitude": None,
+        "track_replay_gain": None,
+        "track_peak_amplitude": None,
+    }
     with patch("waves.download.Metadata", _RecMeta):
-        dl.metadata_write(_track(_album(num_tracks)), pathlib.Path("t.flac"), True, stream)
+        dl.metadata_write(_track(_album(num_tracks)), pathlib.Path("t.flac"), True, replay_gain)
     assert _RecMeta.last.kw["totaltrack"] == expected
     assert _RecMeta.last.kw["tracknumber"] == 7
-    # The track call site really passes the artist ids: without this the whole
-    # wiring half of the same-name-artist tag could be reverted and stay green.
-    assert _RecMeta.last.kw["artist_ids"] == ["4676988", "77"]
-    assert _RecMeta.last.kw["album_artist_ids"] == ["4676988"]
+    # The track call site really passes the artist ids (the seam's namespaced
+    # spelling; the legacy strip is the tag writer's own, pinned separately):
+    # without this the whole wiring half of the same-name-artist tag could be
+    # reverted and stay green.
+    assert _RecMeta.last.kw["artist_ids"] == ["tidal:4676988", "tidal:77"]
+    assert _RecMeta.last.kw["album_artist_ids"] == ["tidal:4676988"]
 
 
 # --------------------------------------------------------------------------- #

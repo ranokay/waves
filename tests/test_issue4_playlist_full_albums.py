@@ -115,9 +115,18 @@ class _Stub:
     def __init__(self, playlist, albums, *, atmos=True, cached=True, fail_album=None, bulk_skip=False, claimed=()):
         self._dl = object()
         self.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=atmos))
-        self.tidal = SimpleNamespace(session=_Session(albums, playlist, fail_album))
+        session = _Session(albums, playlist, fail_album)
+        self.tidal = SimpleNamespace(session=session)
+        # The id lookups ride the provider (ticket #22): album -> the session
+        # fake's album fetch, playlist -> its playlist fetch.
+        self.providers = {
+            "tidal": SimpleNamespace(
+                get_object=lambda kind, raw_id: session.album(raw_id)
+                if kind == "album"
+                else session.playlist(raw_id)
+            )
+        }
         self._objs = {"album": {}, "playlist": {"pl1": playlist} if cached else {}}
-        self._browse_lock = _Lock()
         self._artist_groups: dict = {}
         self._artist_lock = Lock()
         self._scan_pool = _InlinePool()

@@ -24,7 +24,7 @@ import pytest
 from tidalapi.media import Track
 
 from waves import download as download_module
-from waves.download import Download, _waves_item_id, _waves_owned_ids
+from waves.download import Download, StreamInfo, _waves_item_id, _waves_owned_ids
 
 SOURCE_ID = "t-1"
 IDENTITY_ID = "identity-9"
@@ -76,7 +76,7 @@ def _make_download(tmp_path: pathlib.Path, skip_existing: bool, cls: type[Downlo
     dl.event_run = threading.Event()
     dl.event_run.set()
 
-    def _download(media, stream_manifest, path_file, event_stop=None):
+    def _download(media, stream_info, path_file, event_stop=None):
         # Today's build files the download under the identity id.
         path_file.write_bytes(b"id-" + _waves_item_id(media).encode())
 
@@ -203,10 +203,8 @@ class TestTheLiveDownloadPathPassesEveryOwnedId:
         ok, path = dl._perform_actual_download(
             media=member,
             path_media_dst=destination,
-            stream_manifest=MagicMock(),
-            do_flac_extract=False,
+            stream_info=StreamInfo(),
             is_parent_album=False,
-            media_stream=None,
         )
 
         assert ok is True
@@ -225,10 +223,8 @@ class TestTheLiveDownloadPathPassesEveryOwnedId:
         ok, path = dl._perform_actual_download(
             media=member,
             path_media_dst=destination,
-            stream_manifest=MagicMock(),
-            do_flac_extract=False,
+            stream_info=StreamInfo(),
             is_parent_album=False,
-            media_stream=None,
         )
 
         assert ok is True

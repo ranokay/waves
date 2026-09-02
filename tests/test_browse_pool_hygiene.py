@@ -173,7 +173,8 @@ class _SearchStub:
 def _run_search(monkeypatch, n_artists: int):
     stub = _SearchStub()
     artists = [SimpleNamespace(id=f"a{i}", name=f"Artist {i}") for i in range(n_artists)]
-    monkeypatch.setattr(backend, "search_results_all", lambda session, needle, **kw: {"artists": artists})
+    # The search fetch rides the Provider seam (ticket #20).
+    stub.providers = {"tidal": SimpleNamespace(search=lambda needle: {"artists": artists})}
     monkeypatch.setattr(backend, "_artist_popularity", lambda artist: 50)
     stub.search("needle")
     return stub

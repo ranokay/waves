@@ -276,16 +276,17 @@ def test_the_extension_always_survives(monkeypatch):
 # F-40: the redactor learns a credential when it is minted, not once at login.
 # --------------------------------------------------------------------------- #
 def test_a_token_persist_tells_the_listener():
+    # The event carries no session object (the UI collects the credential
+    # facts through its provider, ticket #22); it only says "now".
     from waves.config import Tidal
 
     tidal = Tidal.__new__(Tidal)
-    seen: list[object] = []
-    tidal.on_session_credentials = seen.append
-    tidal.session = object()
+    seen: list[str] = []
+    tidal.on_session_credentials = lambda: seen.append("noted")
 
     tidal._note_session_credentials()
 
-    assert seen == [tidal.session]
+    assert seen == ["noted"]
 
 
 def test_no_listener_is_not_an_error():
@@ -333,11 +334,12 @@ def test_the_bridge_installs_itself_as_the_listener():
     assert "on_session_credentials = self._register_session_secrets" in source
 
 
-def test_the_registrar_takes_a_session_it_is_handed():
-    """The hook passes the session; the login path passes nothing and the
-    bridge reads its own. Both must work."""
+def test_the_registrar_pulls_the_facts_through_the_provider():
+    """The registrar takes no session argument at all: the credential facts
+    come from the provider, and both the login path and the config layer's
+    credential event call it the same no-arg way."""
     import inspect
 
     from waves.waves_ui.backend import WavesBridge
 
-    assert "session=None" in str(inspect.signature(WavesBridge._register_session_secrets))
+    assert list(inspect.signature(WavesBridge._register_session_secrets).parameters) == ["self"]

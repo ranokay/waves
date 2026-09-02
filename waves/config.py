@@ -512,7 +512,10 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         """Tell the listener (if any) that this session's credentials are new.
 
         Best-effort in every direction: a listener that raises must never take
-        a login or a quality switch down with it.
+        a login or a quality switch down with it. The listener collects the
+        facts itself through its provider (it owns the redactor mapping); the
+        event carries no session object, so the UI never needs to reach past
+        its seam to read one.
         """
         sink = getattr(self, "on_session_credentials", None)
 
@@ -520,7 +523,7 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
             return
 
         with contextlib.suppress(Exception):
-            sink(self.session)
+            sink()
 
     def token_persist(self) -> None:
         self.set_option("token_type", self.session.token_type)

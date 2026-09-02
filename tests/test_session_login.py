@@ -19,15 +19,32 @@ raised there too, so the busy spinner never cleared and the app went on showing
 signed out over credentials the exchange had already saved. Restarting signed in
 cleanly (the boot path above guards the same call), which made the hang look
 random.
+
+Since the Provider seam contract (ticket #22) both slots ask the provider for
+the login work; the stand-ins answer through a recording fake and carry no
+TIDAL object at all.
 """
 
 from __future__ import annotations
 
-import types
-
 from conftest import _InlinePool, _Signal
 
 from waves.waves_ui.backend import WavesBridge
+
+
+class _FakeLoginProvider:
+    """The login surface of the provider, canned."""
+
+    def __init__(self, *, resume_ok: bool = True, resume_raises: bool = False):
+        self.resume_calls = 0
+        self._resume_ok = resume_ok
+        self._resume_raises = resume_raises
+
+    def login_resume(self) -> bool:
+        self.resume_calls += 1
+        if self._resume_raises:
+            raise ConnectionError("black-holed network")
+        return self._resume_ok
 
 
 class _LoginStub:
@@ -43,13 +60,9 @@ class _LoginStub:
         self._prefetch_called = False
         self.sessionResolvedChanged = _Signal()
         self.threadpool = _InlinePool()
-
-        def _login_token():
-            if login_raises:
-                raise ConnectionError("black-holed network")
-            return login_ok
-
-        self.tidal = types.SimpleNamespace(login_token=_login_token)
+        self.providers = {
+            "tidal": _FakeLoginProvider(resume_ok=login_ok, resume_raises=login_raises)
+        }
 
     def _set_status(self, msg: str) -> None:
         self._statuses.append(msg)
@@ -115,8 +128,8 @@ def test_login_failure_resolves_as_not_signed_in():
 
 
 def test_login_exception_resolves_as_not_signed_in():
-    # login_token raising (e.g. a transient network error) must not strand the
-    # overlay either: it resolves as not-signed-in.
+    # login_resume raising (e.g. a transient network error) must not strand
+    # the overlay either: it resolves as not-signed-in.
     stub = _LoginStub(login_ok=False, login_raises=True)
 
     _run(stub)
@@ -130,6 +143,21 @@ def test_login_exception_resolves_as_not_signed_in():
 # --------------------------------------------------------------------------- #
 # completeLogin: the pasted-URL path, which had no guard of its own.
 # --------------------------------------------------------------------------- #
+class _FakePkceProvider:
+    """The PKCE half of the provider, canned."""
+
+    def __init__(self, *, finalize_ok: bool = True, exchange_raises: bool = False):
+        self.exchange_calls: list[str] = []
+        self._finalize_ok = finalize_ok
+        self._exchange_raises = exchange_raises
+
+    def login_complete(self, redirect_url: str) -> bool:
+        self.exchange_calls.append(redirect_url)
+        if self._exchange_raises:
+            raise ConnectionError("black-holed network")
+        return self._finalize_ok
+
+
 class _PkceStub:
     """Stand-in carrying exactly what ``completeLogin`` reads and writes."""
 
@@ -142,19 +170,9 @@ class _PkceStub:
         self._init_download_called = False
         self._prefetch_called = False
         self.threadpool = _InlinePool()
-
-        def _get_auth_token(url):
-            if exchange_raises:
-                raise ConnectionError("black-holed network")
-            return {"access_token": "t"}
-
-        self.tidal = types.SimpleNamespace(
-            session=types.SimpleNamespace(
-                pkce_get_auth_token=_get_auth_token,
-                process_auth_token=lambda token, is_pkce_token=False: None,
-            ),
-            login_finalize=lambda: finalize_ok,
-        )
+        self.providers = {
+            "tidal": _FakePkceProvider(finalize_ok=finalize_ok, exchange_raises=exchange_raises)
+        }
 
     def _set_busy(self, value: bool) -> None:
         self._busy.append(value)

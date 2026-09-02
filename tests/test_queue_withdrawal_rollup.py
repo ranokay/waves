@@ -408,6 +408,8 @@ def _download_stub(existing_status="queued", existing_quality="LOSSLESS"):
     s._merge_plans = {}
     s._pending_qids = deque()
     s._pump_queue = lambda: None
+    # The queue row's expected tier reads the provider (ticket #22).
+    s.providers = {"tidal": SimpleNamespace(advertised_tier=lambda obj: None)}
     s._download = _bind(s, "_download")
     return s
 

@@ -16,7 +16,6 @@ from __future__ import annotations
 import contextlib
 import copy
 import dataclasses
-import functools
 import json
 import logging
 import os
@@ -43,19 +42,12 @@ from tidalapi.media import AudioMode, Quality, Track, Video
 from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
 
-from waves.progress import Progress
-
-try:
-    # Ordered favourites (My Tidal sort). Absent on older tidalapi, in which
-    # case sorting silently degrades to the default (date-added) API order.
-    from tidalapi.types import AlbumOrder, ArtistOrder, ItemOrder, OrderDirection, VideoOrder
-except Exception:  # pragma: no cover - depends on installed tidalapi version
-    AlbumOrder = ArtistOrder = ItemOrder = OrderDirection = VideoOrder = None
-
 import waves.download as _waves_download
-from waves.config import Settings, Tidal, harden_api_session
+from waves.config import Settings, Tidal
 from waves.constants import (
+    CTX_TIDAL,
     DEFAULT_ILLEGAL_MAP,
+    LIBRARY_PAGE,
     CoverDimensions,
     DownsampleTarget,
     InitialKey,
@@ -65,7 +57,7 @@ from waves.constants import (
 )
 from waves.download import COLLECTION_GAUGE, SEGMENT_GAUGE, Download
 from waves.helper.exceptions import DownloadIncomplete
-from waves.helper.folders import FOLDER_PATH_TOKEN, apply_folder_path, walk_playlist_tree
+from waves.helper.folders import FOLDER_PATH_TOKEN, apply_folder_path
 from waves.helper.path import (
     ILLEGAL_FILENAME_CHARS,
     format_path_media,
@@ -75,15 +67,10 @@ from waves.helper.path import (
     safe_filename_replacement_map,
 )
 from waves.helper.tidal import (
-    get_tidal_media_id,
-    get_tidal_media_type,
-    instantiate_media,
     name_builder_album_artist,
     name_builder_artist,
     name_builder_title,
     quality_audio_highest,
-    search_results_all,
-    user_media_lists,
 )
 from waves.library_index import (
     POLL_GAUGE,
@@ -100,6 +87,8 @@ from waves.model.downloader import TrackStreamInfo
 from waves.model.gui_data import ProgressBars
 from waves.ownership import OwnershipStore, quality_rank
 from waves.poolgauge import PoolGauge
+from waves.progress import Progress
+from waves.providers import AudioType, Provider, RefusalKind, TidalProvider, tier_from_tidal
 from waves.waves_ui import proc
 from waves.waves_ui.session import WavesTidal
 from waves.worker import Worker
@@ -948,8 +937,9 @@ def _enum_options(key: str, members) -> list:
 # at a time (with a network offset) and QML renders the rows lazily in a
 # virtualised ListView, prefetching the next page before the user hits the
 # bottom, so even a multi-thousand-item library loads smoothly and never builds
-# thousands of delegates at once.
-_LIBRARY_PAGE = 100
+# thousands of delegates at once. One size with the provider's favorites id
+# sweep, which pages the same windows (waves.constants.LIBRARY_PAGE).
+_LIBRARY_PAGE = LIBRARY_PAGE
 
 # Page size for an artist's videos (see _all_artist_videos). The artist page
 # asks for one window of 50 to fill its VIDEOS shelf; a download pages through
@@ -978,25 +968,6 @@ _LEGACY_FORMAT_VIDEOS = (
     "Videos/{artist_name} - {track_title}{track_explicit}",
     "Videos/{artist_name}/{video_year_optional}{track_title}{track_explicit}",
 )
-
-# My Tidal sort: map the order keys QML sends to per-category tidalapi enums.
-# Direction is applied separately. Built only when the enums are importable;
-# an empty map means "no server-side sort" (older tidalapi) and every category
-# falls back to the default date-added order.
-if OrderDirection is not None:
-    _LIB_ORDER = {
-        "albums": {
-            "date": AlbumOrder.DateAdded,
-            "name": AlbumOrder.Name,
-            "release": AlbumOrder.ReleaseDate,
-            "artist": AlbumOrder.Artist,
-        },
-        "artists": {"date": ArtistOrder.DateAdded, "name": ArtistOrder.Name},
-        "tracks": {"date": ItemOrder.Date, "name": ItemOrder.Name, "artist": ItemOrder.Artist},
-        "videos": {"date": VideoOrder.DateAdded, "name": VideoOrder.Name, "artist": VideoOrder.Artist},
-    }
-else:  # pragma: no cover - older tidalapi
-    _LIB_ORDER = {}
 
 
 def _pretty(key: str) -> str:
@@ -1449,7 +1420,7 @@ class _TrackedDownload(Download):
         with self._outcome_lock:
             self.unavailable_count += 1
 
-    def _get_track_stream_info(self, media):
+    def _get_track_stream_info(self, media, tier=None, audio_type=None):
         """Capture the delivered stream's quality as a side effect, without
         touching download.py. The engine calls this (tracks only, only when a
         stream is actually fetched) inside super().item(); stashing the real
@@ -1533,14 +1504,14 @@ class _TrackedDownload(Download):
         ownership gate ranks a copy on the scale it was delivered on."""
         return _delivers_atmos(media, bool(self.settings.data.download_dolby_atmos))
 
-    def _get_media_urls(self, media, stream_manifest=None):
+    def _get_media_urls(self, media, stream_info=None):
         """Capture that a video is really being fetched, as a side effect. Videos
         never pass through _get_track_stream_info, so without this the completion
         event carries no quality and the sink cannot tell a real video write from
         an existing-file skip (and would record nothing). The engine only asks for
         URLs when it is about to download, so a stash here means a real fetch. The
         tier stays None: TIDAL reports no delivered quality for videos."""
-        urls = super()._get_media_urls(media, stream_manifest=stream_manifest)
+        urls = super()._get_media_urls(media, stream_info)
         mid = getattr(media, "id", None)
         if urls and mid is not None and isinstance(media, Video):
             with self._delivered_lock:
@@ -1830,7 +1801,7 @@ class _TrackedDownload(Download):
             # The catalog's advertised ceiling for this track, so a ledger row
             # first seen here (no fetched list, no merge seed) still states an
             # honest prediction while it runs.
-            "expected": _quality_label(media) if isinstance(media, Track) else "",
+            "expected": _quality_label(media, self.provider) if isinstance(media, Track) else "",
         }
         relay.track_event.emit({**base, "status": "running"})
         # Which row the engine's _note_progress_task hook should file this
@@ -1877,7 +1848,7 @@ class _TrackedDownload(Download):
         return ok, path
 
 
-def _seed_merge_registry(merge_plan) -> dict[str, dict]:
+def _seed_merge_registry(merge_plan, provider) -> dict[str, dict]:
     """Pending queue-drawer rows for a merge plan (empty for a plain collection,
     which fills in as tracks start). Rows are keyed by the IDENTITY edition's
     track id: that is the id the drawer's album fetch and every track event
@@ -1893,7 +1864,7 @@ def _seed_merge_registry(merge_plan) -> dict[str, dict]:
             "num": int(tnum or tnum_i),
             "vol": int(vnum or 1),
             "duration": _fmt_duration(getattr(src, "duration", 0)),
-            "expected": _quality_label(src),
+            "expected": _quality_label(src, provider),
             "status": "pending",
             "pct": 0.0,
         }
@@ -2010,6 +1981,30 @@ def _video_image(video, width: int, height: int) -> str:
         return video.image(width, height) or ""
     except Exception:
         return ""
+
+
+def _search_bucket_for(obj) -> str | None:
+    """Which search-payload bucket a seam-resolved object belongs to.
+
+    The Provider seam resolves a pasted link to the engine object it names
+    (``Provider.open_url``); the bridge builds the page payload from it, and
+    the bucket is read off the object itself (the engine's own class -- the
+    same classes the ``_*_dict`` builders already branch on). None means
+    "cannot show this".
+    """
+    if isinstance(obj, Album):
+        return "albums"
+    if isinstance(obj, Track):
+        return "tracks"
+    if isinstance(obj, Video):
+        return "videos"
+    if isinstance(obj, Playlist):
+        return "playlists"
+    if isinstance(obj, Mix):
+        return "mixes"
+    if isinstance(obj, Artist):
+        return "artists"
+    return None
 
 
 def _artist_roles(artist) -> str:
@@ -2159,7 +2154,7 @@ def _delivered_rollup(reg: dict) -> tuple[str, list[dict]]:
     return "", [{"q": tier, "n": counts[tier]} for tier in order]
 
 
-def _quality_label(obj) -> str:
+def _quality_label(obj, provider) -> str:
     # An Atmos-only release or track has no stereo tier to state: TIDAL reports
     # one (LOSSLESS, usually), but it is the tier the container would carry if
     # there were a stereo stream, and there is not. The pill says what the row
@@ -2168,10 +2163,14 @@ def _quality_label(obj) -> str:
         return ATMOS_WORD
     # Prefer the true highest available quality (from media_metadata_tags),
     # since audio_quality alone reports LOSSLESS even when hi-res is available.
+    # That read is the provider's advertised tier (the same helper body, behind
+    # the seam); the audio_quality fallback below is this function's own, for
+    # the objects that carry no tier tags at all.
     name = ""
     try:
-        if hasattr(obj, "media_metadata_tags"):
-            name = getattr(quality_audio_highest(obj), "name", "")
+        tier = provider.advertised_tier(obj)
+        if tier is not None:
+            name = str(tier.value)
     except Exception:
         name = ""
     if not name:
@@ -2372,39 +2371,6 @@ def _is_compilation_release(album) -> bool:
     if getattr(artist, "id", None) in _VARIOUS_ARTISTS_IDS:
         return True
     return bool(_VARIOUS_ARTISTS_RE.search(getattr(artist, "name", "") or ""))
-
-
-# --- Album-artist metadata cleaning (keep only the primary artist) -------------
-# The album-artist METADATA tag is written from ``get_album_artists`` and ONLY
-# there (download.py:1524). Folder paths use a different binding
-# (``name_builder_album_artist``), so wrapping this one symbol affects the tag
-# alone. The module flag starts False (upstream behavior) until the pref is
-# read; the pref itself defaults on for new installs. Plex (and some other
-# libraries) mis-read a multi-value album-artist field, so the option collapses
-# it to just the primary artist.
-_orig_get_album_artists = _waves_download.get_album_artists
-_clean_album_artist_tag = False
-
-
-def _clean_album_artists(names: list) -> list:
-    """Reduce an album-artist list to only the primary (first) artist."""
-    return [names[0]] if names else names
-
-
-def _set_clean_album_artist(enabled: bool) -> None:
-    """Toggle whether the album-artist metadata tag is collapsed to the primary."""
-    global _clean_album_artist_tag
-    _clean_album_artist_tag = bool(enabled)
-
-
-def _album_artists_for_metadata(media):
-    """Album-artist values written to the file's metadata tag (wraps the upstream
-    helper; honours the opt-in 'clean_album_artist' setting)."""
-    names = _orig_get_album_artists(media)
-    return _clean_album_artists(names) if _clean_album_artist_tag else names
-
-
-_waves_download.get_album_artists = _album_artists_for_metadata
 
 
 _VERSION_TOKEN_RE = re.compile(r"[\[(]\s*(explicit|clean|e)\s*[\])]", re.IGNORECASE)
@@ -2671,15 +2637,27 @@ class _JobSpec:
     Worker, about 19 KB apiece, with the 500 ms track poll walking every one
     of them. A backlog of thousands paid for all of that before a byte moved.
     The spec is the handful of arguments that job is built from, and
-    _pump_queue builds the job itself only when the pool is free."""
+    _pump_queue builds the job itself only when the pool is free.
 
-    obj: object
-    type_media: str
+    The catalog object is NOT among them: the job names what it wants as
+    (provider_id, kind, namespaced id) and _start_job resolves it through
+    that provider's get_object when its turn comes, so a backlog costs no
+    live engine objects. ``media_id`` stays the queue row's key (and the
+    button state's), unchanged by the namespace.
+    """
+
+    provider_id: str
+    kind: str
+    object_id: str
     name: str
     file_template: str
     collection: bool
     media_id: str
     merge_plan: list | None
+
+    def raw_object_id(self) -> str:
+        """The id inside the namespace, as the provider's get_object wants it."""
+        return self.object_id.partition(":")[2]
 
 
 def _norm_track_title(name: str) -> str:
@@ -3343,6 +3321,12 @@ class WavesBridge(LibraryMixin, QObject):
         # sign-in: the config layer calls this back on each token persist and on
         # each forced refresh (an Atmos switch or restore is one).
         self.tidal.on_session_credentials = self._register_session_secrets
+        # The Provider seam (spec §4): every catalog read the bridge makes
+        # dispatches through a provider keyed by its id, so a second service
+        # plugs in beside TIDAL without the bridge ever learning its shape.
+        # TIDAL delegates to the engine bodies unchanged; the download engine
+        # registers its stream resolver on it when the pipeline routes.
+        self.providers: dict[str, Provider] = {CTX_TIDAL: TidalProvider(self.tidal)}
         # Quick metadata/UI work (search, album tracks, artist pages) runs on
         # one pool; downloads run on a separate pool so a long album download
         # can never starve the UI of threads.
@@ -3356,8 +3340,8 @@ class WavesBridge(LibraryMixin, QObject):
         # their OWN single-thread pool so that queueing SEVERAL artists at once
         # scans them one-after-another instead of concurrently. The scans drive
         # the shared, not-thread-safe tidalapi session and mutate shared caches;
-        # running them in parallel raced on that shared state (the app already
-        # serialises browse-page parsing behind ``_browse_lock`` and stream
+        # running them in parallel raced on that shared state (the provider
+        # serialises browse-page parsing behind its own lock and stream
         # fetches behind ``stream_lock`` for the same reason). Serialising here
         # makes "add many artists" behave exactly like adding them one at a time
         # (the case users report as working) with no cap on how many can queue.
@@ -3514,16 +3498,14 @@ class WavesBridge(LibraryMixin, QObject):
         self._artist_pop_cache: dict[str, tuple[float, int]] = {}
         # Browse (TIDAL editorial pages): the landing payload plus every page
         # drilled into so far, cached for the session. `_browse_loading` de-dupes
-        # in-flight loads (keys: "root" or the page's api path); `_browse_lock`
-        # serializes page fetches, each runs on a private tidalapi Page because
-        # the shared session.page parser mutates itself on every parse and is
-        # not safe to use from concurrent workers.
+        # in-flight loads (keys: "root" or the page's api path). The reads
+        # themselves ride the provider, whose own lock serializes the shared
+        # session.page parser.
         self._browse_root_cache: dict | None = None
         self._browse_pages: dict[str, dict] = {}
         self._browse_loading: set[str] = set()
         self._browse_gen = 0  # bumped on logout so in-flight loads can't cache
         self._browse_reval_ts = 0.0  # monotonic time of the last completed landing fetch
-        self._browse_lock = Lock()
         # Hover prefetch of an item page (prefetchBrowseItem): the ONE key in
         # flight (a second hover while it runs is dropped, never queued),
         # whether a real open claimed it mid-flight (the worker then finishes
@@ -3978,7 +3960,6 @@ class WavesBridge(LibraryMixin, QObject):
         self._boot_library_scan_timer.setInterval(_BOOT_LIBRARY_SCAN_FAILSAFE_MS)
         self._boot_library_scan_timer.timeout.connect(self._start_boot_library_scan)
         self._boot_library_scan_timer.start()
-        _set_clean_album_artist(self._waves_pref_bool("clean_album_artist"))
         # Now that the pref is known, raise diagnostics to verbose if asked
         # (starts the freeze watchdog + perf sampler; GUI thread required).
         diagnostics.set_verbose(self._waves_pref_bool("verbose_diagnostics"))
@@ -4118,7 +4099,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self._register_session_secrets()
             self.loggedInChanged.emit()
 
-    def _register_session_secrets(self, session=None) -> None:
+    def _register_session_secrets(self) -> None:
         """Teach the log redactor this session's secrets the moment they exist.
 
         Every value registered here is literal-replaced out of every log line
@@ -4127,27 +4108,29 @@ class WavesBridge(LibraryMixin, QObject):
         Registering the same value twice is a no-op.
 
         Really at each login AND each refresh, which is why the config layer
-        calls it too (Tidal.on_session_credentials). Sign-in alone was not
+        signals it too (Tidal.on_session_credentials). Sign-in alone was not
         enough: tidalapi renews the access pass by itself after about a day,
         and every Atmos switch and restore forces a renewal of its own, so
         after one Atmos album the live token was one the redactor had never
         been told about and only the labelled-pattern net still covered it.
+
+        The credential facts come from the provider; this side owns only the
+        redactor's tag vocabulary. A failed read is logged and dropped: this
+        runs on every credential mint, and must never take a login or a
+        quality switch down with it.
         """
         try:
-            session = session or getattr(self.tidal, "session", None)
-            for attr, tag in (
+            facts = self.providers[CTX_TIDAL].credential_facts()
+            for key, tag in (
                 ("access_token", "‹token›"),
                 ("refresh_token", "‹token›"),
                 ("session_id", "‹session›"),
+                ("account_id", "‹account›"),
+                ("username", "‹email›"),
             ):
-                val = getattr(session, attr, None)
+                val = facts.get(key)
                 if val:
-                    diagnostics.register_secret(str(val), tag)
-            user = getattr(session, "user", None)
-            for attr, tag in (("id", "‹account›"), ("username", "‹email›")):
-                val = getattr(user, attr, None)
-                if val:
-                    diagnostics.register_secret(str(val), tag)
+                    diagnostics.register_secret(val, tag)
         except Exception:
             logger.debug("could not register session secrets", exc_info=True)
 
@@ -4247,6 +4230,10 @@ class WavesBridge(LibraryMixin, QObject):
             progress=Progress(),
             event_abort=self._event_abort,
             event_run=self._event_run,
+            # The bridge's own provider instance: the engine registers its
+            # stream resolver on THE provider every dispatch reads, never a
+            # private second one (spec §4.1 composition).
+            provider=self.providers[CTX_TIDAL],
         )
         self._warn_if_ffmpeg_missing(self._dl)
 
@@ -4265,7 +4252,7 @@ class WavesBridge(LibraryMixin, QObject):
             ok = False
             try:
                 try:
-                    ok = bool(self.tidal.login_token())
+                    ok = bool(self.providers[CTX_TIDAL].login_resume())
                 except Exception:
                     logger.exception("Cached token login failed")
                     ok = False
@@ -4325,7 +4312,7 @@ class WavesBridge(LibraryMixin, QObject):
             # never said), for the presence matcher's duration witness; the
             # UI's readable form stays a per-view concern.
             "duration_sec": int(getattr(album, "duration", 0) or 0),
-            "quality": _quality_label(album),
+            "quality": _quality_label(album, self.providers[CTX_TIDAL]),
             "popularity": _popularity(album),
             "explicit": bool(getattr(album, "explicit", False)),
             "added": _date_added(album),
@@ -4350,7 +4337,7 @@ class WavesBridge(LibraryMixin, QObject):
             "duration": _fmt_duration(getattr(track, "duration", 0)),
             # And in raw seconds, for the presence matcher's duration witness.
             "duration_sec": int(getattr(track, "duration", 0) or 0),
-            "quality": _quality_label(track),
+            "quality": _quality_label(track, self.providers[CTX_TIDAL]),
             "popularity": _popularity(track),
             "explicit": bool(getattr(track, "explicit", False)),
             "added": _date_added(track),
@@ -4440,7 +4427,7 @@ class WavesBridge(LibraryMixin, QObject):
         artist = self._objs["artist"].get(artist_id)
         if artist is None:
             try:
-                artist = self.tidal.session.artist(int(artist_id))
+                artist = self.providers[CTX_TIDAL].get_object(MediaType.ARTIST.value, artist_id)
             except Exception:
                 logger.exception("Could not fetch artist %s", artist_id)
                 return None
@@ -4449,42 +4436,13 @@ class WavesBridge(LibraryMixin, QObject):
 
     # ----- auth slots ----------------------------------------------------
 
-    def _reset_tidal_session(self) -> None:
-        """Recreate the underlying tidalapi session after a sign-out.
-
-        The engine's ``Tidal.logout()`` deletes the session object outright (a CLI
-        assumption, the process exits right after logging out). The GUI is
-        long-running and lets the user sign back in, so we rebuild a clean
-        session, mirroring ``Tidal.__init__``, and reapply the configured
-        quality. Without this, a sign-out leaves ``self.tidal`` with no
-        ``session`` and the next login, or any session call, raises
-        ``AttributeError``.
-        """
-        import tidalapi
-
-        self.tidal.session = tidalapi.Session(tidalapi.Config(item_limit=10000))
-        # The rebuilt session is a fresh requests.Session too, so it needs the
-        # catalog retry/timeout policy re-mounted or every call after a
-        # sign-out goes back to being a single un-retried attempt.
-        harden_api_session(self.tidal.session)
-        self.tidal.original_client_id = self.tidal.session.config.client_id
-        self.tidal.original_client_secret = self.tidal.session.config.client_secret
-        # Both pairs, the same four the constructor captures: the Atmos swap
-        # moves the PKCE pair too, and these are what it restores to.
-        self.tidal.original_client_id_pkce = self.tidal.session.config.client_id_pkce
-        self.tidal.original_client_secret_pkce = self.tidal.session.config.client_secret_pkce
-        self.tidal.is_atmos_session = False
-        self.tidal.settings_apply()
-
     @Slot()
     def beginLogin(self) -> None:
         def work() -> None:
             try:
-                # A prior sign-out tears the session down; rebuild it so a fresh
-                # PKCE login can start.
-                if getattr(self.tidal, "session", None) is None:
-                    self._reset_tidal_session()
-                url = self.tidal.session.pkce_login_url()
+                # The provider owns the flow entry (and rebuilds the session a
+                # prior sign-out tore down, so a fresh PKCE login can start).
+                url = self.providers[CTX_TIDAL].login_begin()
             except Exception:
                 logger.exception("Could not obtain login URL")
                 self._set_status("Could not start login")
@@ -4514,9 +4472,7 @@ class WavesBridge(LibraryMixin, QObject):
             ok = False
             try:
                 try:
-                    token = self.tidal.session.pkce_get_auth_token(redirect_url)
-                    self.tidal.session.process_auth_token(token, is_pkce_token=True)
-                    ok = bool(self.tidal.login_finalize())
+                    ok = bool(self.providers[CTX_TIDAL].login_complete(redirect_url))
                 except Exception:
                     logger.exception("Login finalize failed")
                     ok = False
@@ -4558,10 +4514,11 @@ class WavesBridge(LibraryMixin, QObject):
         # them up on whichever account signs in next.
         self.stopAll()
         try:
-            self.tidal.logout()
-            # the engine's logout() deletes the session object; restore a fresh one
-            # so the user can sign back in without restarting the app.
-            self._reset_tidal_session()
+            self.providers[CTX_TIDAL].logout()
+            # the engine's logout() deletes the session object; the provider
+            # rebuilds a fresh one so the user can sign back in without
+            # restarting the app.
+            self.providers[CTX_TIDAL].reset_session()
         except Exception:
             logger.exception("Logout failed")
         # Flip the flag FIRST: _save_page_cache gates on it, so a worker
@@ -4645,7 +4602,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _cache_user_id(self) -> str:
         try:
-            return str(getattr(self.tidal.session.user, "id", "") or "")
+            return str(self.providers[CTX_TIDAL].account_id() or "")
         except Exception:
             return ""
 
@@ -4764,9 +4721,11 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             try:
-                media_type = get_tidal_media_type(url)
-                media_id = get_tidal_media_id(url)
-                media = instantiate_media(self.tidal.session, media_type, media_id)
+                # The seam resolves the URL to the engine object it names; None
+                # covers every "cannot show this" case (not this provider's
+                # grammar, a gone item, a failed lookup) exactly as the old
+                # three-call chain's exceptions did.
+                media = self.providers[CTX_TIDAL].open_url(url)
             except Exception:
                 logger.exception("Could not open link")
                 if gen == self._search_gen:
@@ -4775,6 +4734,12 @@ class WavesBridge(LibraryMixin, QObject):
                 return
             if gen != self._search_gen:
                 return  # a newer search/link superseded this one
+            kind = _search_bucket_for(media)
+            if kind is None:
+                if gen == self._search_gen:
+                    self._set_status("Could not open that link")
+                    self._set_busy(False)
+                return
             try:
                 payload = {
                     "artists": [],
@@ -4785,17 +4750,17 @@ class WavesBridge(LibraryMixin, QObject):
                     "mixes": [],
                     "top": None,
                 }
-                if media_type == MediaType.ALBUM:
+                if kind == "albums":
                     payload["albums"] = [self._album_dict(media)]
-                elif media_type == MediaType.TRACK:
+                elif kind == "tracks":
                     payload["tracks"] = [self._track_dict(media)]
-                elif media_type == MediaType.VIDEO:
+                elif kind == "videos":
                     payload["videos"] = [self._video_dict(media)]
-                elif media_type == MediaType.PLAYLIST:
+                elif kind == "playlists":
                     payload["playlists"] = [self._playlist_dict(media)]
-                elif media_type == MediaType.MIX:
+                elif kind == "mixes":
                     payload["mixes"] = [self._mix_dict(media)]
-                elif media_type == MediaType.ARTIST:
+                elif kind == "artists":
                     key = str(getattr(media, "id", id(media)))
                     self._remember("artist", key, media)
                     payload["artists"] = [
@@ -4868,7 +4833,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # One page covers every slice this payload keeps (the deepest
                 # is tracks at [:80] of the page's 300); the pager's serial
                 # follow-up round-trips only ever fetched rows discarded here.
-                results = search_results_all(self.tidal.session, needle, single_page=True)
+                results = self.providers[CTX_TIDAL].search(needle)
             except Exception:
                 logger.exception("Search failed")
                 results = {}
@@ -5120,10 +5085,10 @@ class WavesBridge(LibraryMixin, QObject):
                 # A new search clears every _objs bucket while expanded album
                 # rows outlive it; a silent return here would leave the row on
                 # "Loading tracks…" forever (albumTracksLoaded is the only
-                # writer of the QML track cache). Re-fetch by id instead, the
-                # same fallback the download entry points use.
+                # writer of the QML track cache). Re-resolve by id through the
+                # seam, the same fallback the download entry points use.
                 try:
-                    obj = self.tidal.session.album(int(album_id))
+                    obj = self.providers[CTX_TIDAL].get_object(MediaType.ALBUM.value, album_id)
                     self._remember("album", album_id, obj)
                 except Exception:
                     logger.exception("Could not re-fetch album %s for its tracks", album_id)
@@ -5174,8 +5139,9 @@ class WavesBridge(LibraryMixin, QObject):
             if obj is None:
                 # Same _objs-eviction fallback as loadAlbumTracks: a new
                 # search clears the buckets while expanded rows outlive it.
+                # Re-resolved through the seam, as the album page does.
                 try:
-                    obj = self.tidal.session.playlist(playlist_id)
+                    obj = self.providers[CTX_TIDAL].get_object(MediaType.PLAYLIST.value, playlist_id)
                     self._remember("playlist", playlist_id, obj)
                 except Exception:
                     logger.exception("Could not re-fetch playlist %s for its tracks", playlist_id)
@@ -5352,48 +5318,24 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _favorite_ids(self, kind: str) -> set:
         """The user's favourite album or track ids (``kind`` = "albums"|"tracks"),
-        paginated and cached behind a short TTL (a long-running app must pick
-        up favourites added elsewhere without a restart); cleared on logout."""
+        cached behind a short TTL (a long-running app must pick up favourites
+        added elsewhere without a restart); cleared on logout. The pagination
+        itself is the provider's ``favorite_ids``; failures serve what we have
+        but never cache it: a stale set beats a fresh partial one, and a
+        partial set stamped fresh behind the 10-minute TTL reads as "you have
+        nothing by this artist" on every library-scoped page until it
+        expires. With no cached entry the partial set the provider gathered
+        before the failure is what the badges get."""
         entry = self._fav_ids.get(kind)
         if entry is not None and time.monotonic() - entry[0] < self._FAV_IDS_TTL:
             return entry[1]
-        ids: set[str] = set()
         try:
-            favorites = self.tidal.session.user.favorites
-            method = getattr(favorites, kind)
-            # A limit-N window can return FEWER than N rows (tidalapi drops
-            # unavailable items inside the window), so "done" must come from
-            # the total count, same as _library_page; a short window alone
-            # would silently truncate the whole favourites set.
-            try:
-                total = int(getattr(favorites, f"get_{kind}_count")())
-            except Exception:
-                total = None  # no count available: fall back to the short-window stop
-            offset = 0
-            while True:
-                try:
-                    batch = method(limit=_LIBRARY_PAGE, offset=offset) or []
-                    paged = True
-                except TypeError:
-                    batch = method() or []  # older tidalapi: one unpaged call
-                    paged = False
-                for o in batch:
-                    ids.add(str(getattr(o, "id", "")))
-                offset += _LIBRARY_PAGE
-                if not paged:
-                    break
-                if total is not None:
-                    if offset >= total or not batch:  # empty guards a lying count
-                        break
-                elif len(batch) < _LIBRARY_PAGE:
-                    break
-        except Exception:
+            ids = self.providers[CTX_TIDAL].favorite_ids(kind)
+        except Exception as exc:
             logger.exception("Could not load favourite %s ids", kind)
-            # Serve what we have but never cache it: a stale set beats an empty
-            # one, and a partial set stamped fresh behind the 10-minute TTL
-            # reads as "you have nothing by this artist" on every
-            # library-scoped page until it expires.
-            return entry[1] if entry is not None else ids
+            if entry is not None:
+                return entry[1]
+            return getattr(exc, "ids", None) or set()
         self._fav_ids[kind] = (time.monotonic(), ids)
         return ids
 
@@ -5492,18 +5434,6 @@ class WavesBridge(LibraryMixin, QObject):
             "popularity": -1,
         }
 
-    def _lib_order_kwargs(self, category: str, order_spec) -> dict:
-        """tidalapi favourites kwargs for a My Tidal sort, or ``{}`` for the
-        default order (or an older tidalapi without ordered favourites)."""
-        if OrderDirection is None or not order_spec:
-            return {}
-        order_key, direction = order_spec
-        enum = _LIB_ORDER.get(category, {}).get(order_key)
-        if enum is None:
-            return {}
-        direction_enum = OrderDirection.Ascending if direction == "asc" else OrderDirection.Descending
-        return {"order": enum, "order_direction": direction_enum}
-
     def _sort_local_library(self, items: list, order_spec) -> list:
         """Sort the locally-paged categories (playlists/mixes). Sorts on string
         keys (lower-cased name, or ISO added date) so a missing date never
@@ -5555,7 +5485,7 @@ class WavesBridge(LibraryMixin, QObject):
             and (not walk or entry[2] is not None)
         ):
             return entry[1], entry[2]
-        fresh = user_media_lists(self.tidal.session)
+        fresh = self.providers[CTX_TIDAL].user_collections()
         if not walk:
             with self._media_lists_lock:
                 tree = self._folder_tree
@@ -5567,7 +5497,7 @@ class WavesBridge(LibraryMixin, QObject):
         # for accounts without folders.
         root_folders = [p for p in fresh.get("playlists", []) if not hasattr(p, "num_tracks")]
         t0 = devlog.clock()
-        tree = walk_playlist_tree(self.tidal.session, root_folders=root_folders)
+        tree = self.providers[CTX_TIDAL].folder_tree(root_folders=root_folders)
         if tree.nodes:
             devlog.done(
                 "library",
@@ -5663,10 +5593,10 @@ class WavesBridge(LibraryMixin, QObject):
           the requested ``limit`` each page (the windows are disjoint).
         - A ``limit``-N request can return *fewer* than N rows because tidalapi
           drops unavailable items within the window, so "more" must be derived
-          from the total ``get_*_count``, not the returned length.
+          from the total ``get_*_count``, not the returned length (the provider
+          owns that verdict now).
         Playlists and mixes come back as one list, paged and sorted locally
         against the cached sweep (see :meth:`_media_lists`)."""
-        session = self.tidal.session
         # order_override lets a caller force a specific order (e.g. Home's date-desc
         # previews) without touching the category's own persistent sort. Otherwise
         # use the category's chosen sort; when none is set, apply date-added
@@ -5703,33 +5633,22 @@ class WavesBridge(LibraryMixin, QObject):
             full = self._sort_local_library(full, order_spec)
             page = full[offset : offset + limit]
             return [self._mix_dict(m) for m in page], offset + limit < len(full)
-        # (favourites method, total-count method, row builder)
+        # (favourites kind, row builder) -- the seam call names the kind
         specs = {
-            "tracks": ("tracks", "get_tracks_count", self._track_dict),
-            "albums": ("albums", "get_albums_count", self._album_dict),
-            "artists": ("artists", "get_artists_count", self._fav_artist_dict),
-            "videos": ("videos", "get_videos_count", self._video_dict),
+            "tracks": ("tracks", self._track_dict),
+            "albums": ("albums", self._album_dict),
+            "artists": ("artists", self._fav_artist_dict),
+            "videos": ("videos", self._video_dict),
         }
         spec = specs.get(category)
         if spec is None:
             return [], False
-        method_name, count_name, builder = spec
-        favorites = session.user.favorites
-        method = getattr(favorites, method_name)
-        order_kwargs = self._lib_order_kwargs(category, order_spec)
-        try:
-            raw = method(limit=limit, offset=offset, **order_kwargs) or []
-        except TypeError:
-            # Older tidalapi: drop the order kwargs, then the limit/offset kwargs.
-            try:
-                raw = method(limit=limit, offset=offset) or []
-            except TypeError:
-                raw = (method() or [])[offset : offset + limit]
-        try:
-            more = offset + limit < int(getattr(favorites, count_name)())
-        except Exception:
-            # No count available: keep paging until a window comes back empty.
-            more = len(raw) > 0
+        method_name, builder = spec
+        # One window of the user's favorites through the seam: the provider
+        # maps the neutral order spec onto its engine's order enums and owns
+        # the count-based "more" verdict (a short window alone would silently
+        # truncate the set).
+        raw, more = self.providers[CTX_TIDAL].favorites_page(method_name, offset, limit, order_spec)
         return [builder(o) for o in raw], more
 
     def _lib_status(self, category: str, count: int, more: bool) -> str:
@@ -6098,53 +6017,12 @@ class WavesBridge(LibraryMixin, QObject):
         return rows
 
     def _browse_fetch(self, title: str, api_path: str):
-        """Fetch one TIDAL editorial page on a private Page instance (the
-        shared ``session.page`` parser mutates itself on every parse and is
-        not safe under concurrent workers); the lock serializes our fetches.
-
-        Row parsing is a tolerant re-do of tidalapi's ``Page.parse``: upstream
-        raises NotImplementedError on the first module type it doesn't know,
-        so one new TIDAL module would otherwise turn the whole page (and on
-        Explore, the whole Browse landing) into an error state. Here an
-        unparseable row is dropped and logged; the rest of the page lives."""
-        # Fetch OUTSIDE the lock. Only the parser needs serializing; the request
-        # does not, and tidalapi passes no timeout anywhere (its session is a
-        # bare requests.Session). Holding this process-wide, non-reentrant lock
-        # across an untimed request meant one wedged peer (the ACK-then-silence
-        # shape: a hung upstream, a load balancer, an intercepting middlebox)
-        # blocked every other acquirer indefinitely, including
-        # _refetch_for_download, and four blocked workers saturate the shared UI
-        # pool, taking search and artist pages down with Browse.
-        page = tidal_page.Page(self.tidal.session, title)
-        json_obj = page.request.request("GET", api_path, params={"deviceType": "BROWSER"}).json()
-        with self._browse_lock:
-            if "rows" not in json_obj:
-                # V2 home-feed shape, Browse never requests it, but degrade
-                # to the stock parser rather than misreading the payload.
-                return page.parse(json_obj)
-            page.title = str(json_obj.get("title") or "") or title
-            categories = []
-            for row in json_obj.get("rows") or []:
-                try:
-                    modules = row.get("modules") or []
-                    if modules:
-                        cat = page.page_category.parse(modules[0])
-                        # Stash the module's raw paging handle on the parsed
-                        # category: dataApiPath + totals let a row load further
-                        # pages later (endless scroll), tidalapi's own objects
-                        # drop this information.
-                        pl = modules[0].get("pagedList") or {}
-                        cat._waves_pl = {
-                            "data": str(pl.get("dataApiPath") or ""),
-                            "total": int(pl.get("totalNumberOfItems") or 0),
-                            "n": len(pl.get("items") or []),
-                            "modType": str(modules[0].get("type") or ""),
-                        }
-                        categories.append(cat)
-                except Exception:
-                    logger.debug("Skipped an unparseable browse module", exc_info=True)
-            page.categories = categories
-            return page
+        """Fetch one TIDAL editorial page through the provider: the read and
+        its parse (the tolerant per-row re-do of tidalapi's ``Page.parse``,
+        the shared-parser serialization, and the raw paging handle each
+        parsed category carries) all live behind the seam now. The bridge
+        renders the parsed categories the page comes back with."""
+        return self.providers[CTX_TIDAL].browse_page(title, api_path)
 
     @staticmethod
     def _chips_from_explore(explore) -> tuple[dict, dict]:
@@ -6191,26 +6069,8 @@ class WavesBridge(LibraryMixin, QObject):
         ``home/...`` paths the v1 page drill-in cannot open, so every row
         ships without a ``more`` link (or paging handle) rather than with a
         headline that drills into an error page."""
-        with self._browse_lock:
-            session = self.tidal.session
-            json_obj = session.request.request(
-                "GET",
-                "home/feed/static",
-                base_url=session.config.api_v2_location,
-                params={"deviceType": "BROWSER", "locale": session.locale, "platform": "WEB"},
-            ).json()
-            # A private parser instance for the same reason as _browse_fetch:
-            # the shared session.page mutates itself on every parse.
-            parser = tidal_page.PageCategoryV2(session)
-            page = tidal_page.Page(session, "Home")
-            categories = []
-            for item in json_obj.get("items") or []:
-                try:
-                    categories.append(parser.parse_item(item))
-                except Exception:
-                    logger.debug("Skipped an unparseable home module", exc_info=True)
-            page.categories = categories
-            rows = self._page_rows(page)
+        page = self.providers[CTX_TIDAL].browse_home()
+        rows = self._page_rows(page)
         for r in rows:
             r["more"] = ""
             r.pop("data", None)
@@ -6418,25 +6278,19 @@ class WavesBridge(LibraryMixin, QObject):
             t0 = devlog.clock()
             payload = {"key": page_key, "data": data_path, "items": [], "offset": offset, "more": False, "error": True}
             try:
-                with self._browse_lock:
-                    page = tidal_page.Page(self.tidal.session, title)
-                    j = page.request.request(
-                        "GET",
-                        data_path,
-                        params={"deviceType": "BROWSER", "locale": "en_US", "offset": offset, "limit": 50},
-                    ).json()
-                    raw = j.get("items") or []
-                    cat = page.page_category.parse({"type": mod_type, "title": title, "pagedList": {"items": raw}})
-                cards = [c for c in (self._browse_card(o) for o in cat.items or [] if o is not None) if c is not None]
-                total = int(j.get("totalNumberOfItems") or 0)
-                new_off = offset + len(raw)
+                window = self.providers[CTX_TIDAL].browse_window(title, data_path, mod_type, offset)
+                cards = [
+                    c for c in (self._browse_card(o) for o in window.category.items or [] if o is not None)
+                    if c is not None
+                ]
+                new_off = offset + window.n
                 payload = {
                     "key": page_key,
                     "data": data_path,
                     "items": cards,
                     "reqOffset": offset,
                     "offset": new_off,
-                    "more": bool(raw) and new_off < total,
+                    "more": bool(window.n) and new_off < window.total,
                     "error": False,
                 }
             except Exception:
@@ -6651,14 +6505,7 @@ class WavesBridge(LibraryMixin, QObject):
         any failure, the callers own the error payload and the emits."""
         obj = self._objs[kind].get(media_id)
         if obj is None:
-            session = self.tidal.session
-            if kind == "playlist":
-                obj = session.playlist(media_id)
-            elif kind == "album":
-                obj = session.album(int(media_id))
-            else:
-                with self._browse_lock:  # Mix construction parses via the shared session.page
-                    obj = session.mix(media_id)
+            obj = self.providers[CTX_TIDAL].get_object(kind, media_id)
             self._remember(kind, media_id, obj)
         desc = ""
         artist_id = ""
@@ -6666,8 +6513,7 @@ class WavesBridge(LibraryMixin, QObject):
         album_year = ""
         album_quality = ""
         if kind == "mix":
-            with self._browse_lock:  # lazy Mix.items() also parses a page
-                raw = obj.items() or []
+            raw = self.providers[CTX_TIDAL].collection_items(obj, include_videos=True)
             tracks = [t for t in raw if isinstance(t, Track | Video)]
             subtitle = str(getattr(obj, "sub_title", "") or "Mix")
         elif kind == "playlist":
@@ -6685,7 +6531,7 @@ class WavesBridge(LibraryMixin, QObject):
         elif kind == "album":
             album_artist = name_builder_album_artist(obj)
             album_year = _year(obj)
-            album_quality = _quality_label(obj)  # TIDAL's best tier, static album metadata
+            album_quality = _quality_label(obj, self.providers[CTX_TIDAL])  # TIDAL's best tier, static album metadata
             subtitle = album_artist + (f"  ·  {album_year}" if album_year else "")
             artist_id = _artist_id(obj)
         # "N tracks · 2 hr 14 min", fills the header's stats line.
@@ -6698,7 +6544,7 @@ class WavesBridge(LibraryMixin, QObject):
             # instead of the single (misleading) album-level tier.
             tiers: dict[str, int] = {}
             for t in tracks:
-                tq = _quality_label(t)
+                tq = _quality_label(t, self.providers[CTX_TIDAL])
                 if tq:
                     tiers[tq] = tiers.get(tq, 0) + 1
             if len(tiers) > 1:
@@ -6706,7 +6552,7 @@ class WavesBridge(LibraryMixin, QObject):
                 mix = sorted(tiers.items(), key=lambda kv: order.get(kv[0], 9))
                 stats += "  ·  " + " / ".join(f"{n}× {tq}" for tq, n in mix)
             else:
-                q = _quality_label(obj)
+                q = _quality_label(obj, self.providers[CTX_TIDAL])
                 if q:
                     stats += f"  ·  {q}"
         # Videos keep their type through the row dicts ("kind": "video")
@@ -8247,8 +8093,7 @@ class WavesBridge(LibraryMixin, QObject):
                     if kind == "playlist":
                         tracks, _complete = _all_playlist_items(obj)
                     elif kind == "mix":
-                        with self._browse_lock:  # lazy Mix.items() also parses a page
-                            raw = obj.items() or []
+                        raw = self.providers[CTX_TIDAL].collection_items(obj, include_videos=True)
                         tracks = [t for t in raw if isinstance(t, Track | Video)]
                     else:
                         tracks = obj.tracks() or []
@@ -8264,7 +8109,7 @@ class WavesBridge(LibraryMixin, QObject):
                         "duration": _fmt_duration(getattr(tr, "duration", 0)),
                         # The catalog's advertised ceiling, for the tier the
                         # cell predicts before the file lands (see tierFloor).
-                        "expected": _quality_label(tr) if isinstance(tr, Track) else "",
+                        "expected": _quality_label(tr, self.providers[CTX_TIDAL]) if isinstance(tr, Track) else "",
                     }
                 )
             self._queueTracksFetched.emit(qid, out)
@@ -9340,6 +9185,15 @@ class WavesBridge(LibraryMixin, QObject):
             progress_gui=progress_gui,
             event_abort=event_abort or self._event_abort,
             event_run=self._event_run,
+            # The engine resolves streams, facts and refusals through the
+            # provider (spec §4.1 composition); the registration of this job's
+            # stream resolver happens in Download.__init__.
+            provider=self.providers["tidal"],
+            # The 'Clean album-artist tag' pref lives in waves.json, bridge
+            # territory; the rule lives in the engine beside the tag write it
+            # shapes. The live probe means a settings change applies to this
+            # job's later tracks without a restart.
+            album_artist_tag_clean=lambda: self._waves_pref_bool("clean_album_artist"),
             track_signals=signals,
             ownership_of=self._ownership.ownership_of,
             # Both the skip/upgrade decision and the fetch follow the job's
@@ -10041,6 +9895,7 @@ class WavesBridge(LibraryMixin, QObject):
         collection: bool,
         media_id: str,
         merge_plan: list | None = None,
+        provider_id: str = CTX_TIDAL,
     ) -> None:
         if not self._logged_in:
             self._set_status("Sign in before downloading")
@@ -10098,7 +9953,7 @@ class WavesBridge(LibraryMixin, QObject):
         # their track total; a single track/video counts as one.
         artist = _primary_artist_name(obj)
         tracks = len(merge_plan) if merge_plan is not None else (_track_count(obj) if collection else 1)
-        expected = "" if type_media == "video" else _quality_label(obj)
+        expected = "" if type_media == "video" else _quality_label(obj, self.providers[CTX_TIDAL])
         qid = self._enqueue(
             name, type_media, media_id, file_template, collection, artist, tracks, _image(obj, 160), expected
         )
@@ -10112,7 +9967,7 @@ class WavesBridge(LibraryMixin, QObject):
         if collection or merge_plan is not None:
             # Seed the per-track registry. A merge plan knows its exact track
             # list up front; a plain collection fills in as tracks start.
-            self._job_tracks[qid] = _seed_merge_registry(merge_plan)
+            self._job_tracks[qid] = _seed_merge_registry(merge_plan, self.providers[CTX_TIDAL])
             if merge_plan is not None:
                 # A plain collection learns its membership in _track_lifecycle,
                 # on first sight of each track. A merge pre-seeds every row here,
@@ -10125,9 +9980,20 @@ class WavesBridge(LibraryMixin, QObject):
                 except Exception:
                     logger.debug("Could not record merge collection membership", exc_info=True)
         # The job itself is built when its turn comes (see _JobSpec): until
-        # then the row costs its dict and these seven fields.
+        # then the row costs its dict, the live object the row dressing reads,
+        # and the spec's name for the object -- who serves it, what it is, and
+        # the namespaced id it resolves from at dispatch.
         self._job_objs[qid] = obj
-        self._job_specs[qid] = _JobSpec(obj, type_media, name, file_template, collection, media_id, merge_plan)
+        self._job_specs[qid] = _JobSpec(
+            provider_id=provider_id,
+            kind=type_media,
+            object_id=f"{provider_id}:{media_id}",
+            name=name,
+            file_template=file_template,
+            collection=collection,
+            media_id=media_id,
+            merge_plan=merge_plan,
+        )
         self._pending_qids.append(qid)
         self._pump_queue()
 
@@ -10167,13 +10033,20 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _start_job(self, qid: int, spec: _JobSpec) -> None:
         """Build a queued row's download and hand it to the pool."""
-        obj, type_media, name = spec.obj, spec.type_media, spec.name
+        type_media, name = spec.kind, spec.name
         file_template, collection, media_id, merge_plan = (
             spec.file_template,
             spec.collection,
             spec.media_id,
             spec.merge_plan,
         )
+        # The job's object arrives at dispatch, not at the click: the spec
+        # names it as (provider, kind, namespaced id) and body() resolves it
+        # through that provider's get_object, on the job's own worker thread.
+        # The resolved object lands in this one-slot hand-off so the claim
+        # gate's album binding can read the same object it would have held
+        # under the old queue-time shape.
+        resolved: list = [None]
         # Per-job abort event so this one download can be cancelled on its own
         # (the shared _event_abort would stop every concurrent download).
         job_abort = Event()
@@ -10192,8 +10065,16 @@ class WavesBridge(LibraryMixin, QObject):
         if collection and self._job_library_skip(qid) and media_id not in self._library_claim_overrides:
             # An album job names its own release, and it is the only place the
             # release YEAR is reliably spelled out; a playlist or mix carries
-            # tracks from many, so those let each track name its own.
-            library_claim = functools.partial(self._library_claim_media, album=obj if type_media == "album" else None)
+            # tracks from many, so those let each track name its own. The
+            # album is the dispatch-resolved one (read once body() has it).
+            if type_media == "album":
+
+                def _claim_with_job_album(media, _resolved=resolved):
+                    return self._library_claim_media(media, album=_resolved[0])
+
+                library_claim = _claim_with_job_album
+            else:
+                library_claim = self._library_claim_media
         dl = self._build_download(
             signals,
             event_abort=job_abort,
@@ -10239,6 +10120,31 @@ class WavesBridge(LibraryMixin, QObject):
             if job_abort.is_set():
                 stopped_before_it_started()
                 return
+            # The job's first catalog act: resolve the object the spec named,
+            # through the provider it named, on this worker thread. A refusal
+            # here is the row's verdict, worded like the track-level one; any
+            # other failure is a plain failed row.
+            try:
+                obj = self.providers[spec.provider_id].get_object(spec.kind, spec.raw_object_id())
+            except Exception as exc:
+                if job_abort.is_set():
+                    stopped_before_it_started()
+                    return
+                reason = ""
+                if isinstance(exc, DownloadIncomplete):
+                    reason = str(exc)
+                else:
+                    verdict = self.providers[spec.provider_id].classify_refusal(exc)
+                    if verdict.kind is RefusalKind.UNAVAILABLE:
+                        reason = verdict.message or "not available anymore"
+                logger.exception("Could not resolve the download target for %s", diagnostics.content(name))
+                self.downloadState.emit(media_id, "failed")
+                self._set_queue_status(qid, "failed", reason)
+                self._bump_download_groups(media_id, None, "failed")
+                self._set_status(f"Failed {name}{': ' + reason if reason else ''}")
+                devlog.done("download", f"FAILED {type_media} id={media_id}", 0.0)
+                return
+            resolved[0] = obj
             # Reachability probe of the download folder, here on the worker so
             # the click stays instant (a write probe against a stale network
             # mount costs seconds). On a dead mount: dialog + held retry, and
@@ -10753,11 +10659,11 @@ class WavesBridge(LibraryMixin, QObject):
         ~30s taste (_PREVIEW_TASTE_SECONDS) and is lab-only today. At LOW/AAC
         a whole track is a couple of MB, so the remux is ~1s.
 
-        The stream fetch holds ``stream_lock`` and restores the session's
-        configured quality in ``finally`` (``restore_normal_session`` early-returns
-        without touching quality in normal mode, per config.py), so a concurrent
-        or subsequent download is never silently downgraded. The slower ffmpeg
-        fetch/remux runs *outside* the lock.
+        The stream resolution itself rides the provider (``resolve_preview``):
+        the session lock, the normalisation, the LOW-tier pin and its restore
+        are fenced TIDAL business behind the seam, so a concurrent or
+        subsequent download is never silently downgraded. The slower ffmpeg
+        fetch/remux runs *outside* any of it.
         """
         clip_key = (str(getattr(track, "id", "") or ""), whole)
         clip = self._preview_clips.get(clip_key)
@@ -10770,25 +10676,26 @@ class WavesBridge(LibraryMixin, QObject):
         ffmpeg = self._preview_ffmpeg_bin()
         if not ffmpeg:
             raise RuntimeError("preview: ffmpeg unavailable")  # noqa: TRY003
-        with devlog.span("preview", "stream resolve"), self.tidal.stream_lock:
-            try:
-                if not self.tidal.restore_normal_session():
-                    raise RuntimeError("preview: could not normalise session")  # noqa: TRY003
-                self.tidal.session.audio_quality = Quality.low_96k
-                stream = track.get_stream()
-                manifest = stream.get_stream_manifest()
-                if manifest.is_encrypted:
-                    # Waves does not process encrypted streams, so there is
-                    # nothing here to preview.
-                    raise RuntimeError("preview: encrypted stream is not previewable")  # noqa: TRY003
-                # BTS (a single https file) is directly seekable; hand it straight
-                # to ffmpeg too so every path yields a uniform local clip.
-                hls = None if stream.is_bts else manifest.get_hls()
-                src = manifest.get_urls()[0] if stream.is_bts else None
-            finally:
-                # Canonical resting quality, NOT restore_normal_session(), which
-                # leaves quality untouched in normal mode (config.py).
-                self.tidal.session.audio_quality = Quality(self.settings.data.quality_audio)
+        with devlog.span("preview", "stream resolve"):
+            info = self.providers[CTX_TIDAL].resolve_preview(track)
+        if info.encrypted:
+            # Waves does not process encrypted streams, so there is
+            # nothing here to preview.
+            raise RuntimeError("preview: encrypted stream is not previewable")  # noqa: TRY003
+        if not info.single_file and not info.hls_url:
+            # The all-default StreamInfo is "could not resolve": the session
+            # could not be normalised (or the provider has no preview).
+            raise RuntimeError("preview: could not resolve a preview stream")  # noqa: TRY003
+        # BTS (a single https file) is directly seekable; hand it straight
+        # to ffmpeg too so every path yields a uniform local clip.
+        if info.single_file:
+            if not info.urls:
+                raise RuntimeError("preview: the stream resolved to nothing")  # noqa: TRY003
+            src = info.urls[0]
+            hls = None
+        else:
+            src = None
+            hls = info.hls_url
         with devlog.span("preview", "fetch and remux", whole=whole):
             out_path = self._remux_preview(ffmpeg, src, hls, whole)
         self._remember_preview_clip(clip_key, out_path)
@@ -11118,8 +11025,8 @@ class WavesBridge(LibraryMixin, QObject):
             primary = artist.split(",")[0].strip().lower()
             if not q or not primary:
                 return "", ""
-            res = self.tidal.session.search(f"{q} {primary}"[:99], models=[Track], limit=10)
-            for tr in res.get("tracks") or []:
+            res = self.providers[CTX_TIDAL].search_tracks(f"{q} {primary}"[:99], limit=10)
+            for tr in res or []:
                 tt = str(getattr(tr, "name", "") or "").lower()
                 ta = name_builder_artist(tr).lower()
                 if q.lower() in tt and primary in ta:
@@ -11159,7 +11066,7 @@ class WavesBridge(LibraryMixin, QObject):
             try:
                 obj = self._objs["video"].get(video_id)
                 if obj is None:
-                    obj = self.tidal.session.video(int(video_id))
+                    obj = self.providers[CTX_TIDAL].get_object("video", video_id)
                     self._remember("video", video_id, obj)
                 payload["title"] = name_builder_title(obj)
                 payload["artist"] = name_builder_artist(obj)
@@ -11223,7 +11130,7 @@ class WavesBridge(LibraryMixin, QObject):
             try:
                 obj = self._objs["video"].get(video_id)
                 if obj is None:
-                    obj = self.tidal.session.video(int(video_id))
+                    obj = self.providers[CTX_TIDAL].get_object("video", video_id)
                     self._remember("video", video_id, obj)
                 url = str(obj.get_url() or "")
                 if url:
@@ -11332,18 +11239,10 @@ class WavesBridge(LibraryMixin, QObject):
             try:
                 obj = self._objs[kind].get(media_id)
                 if obj is None:
-                    session = self.tidal.session
-                    if kind == "playlist":
-                        obj = session.playlist(media_id)
-                    elif kind == "album":
-                        obj = session.album(int(media_id))
-                    else:
-                        with self._browse_lock:  # Mix construction parses via the shared session.page
-                            obj = session.mix(media_id)
+                    obj = self.providers[CTX_TIDAL].get_object(kind, media_id)
                     self._remember(kind, media_id, obj)
                 if kind == "mix":
-                    with self._browse_lock:  # lazy Mix.items() also parses a page
-                        raw = obj.items() or []
+                    raw = self.providers[CTX_TIDAL].collection_items(obj, include_videos=True)
                     tracks = [t for t in raw if isinstance(t, Track)]
                 else:
                     tracks = list(obj.tracks(limit=50) or [])
@@ -11383,21 +11282,7 @@ class WavesBridge(LibraryMixin, QObject):
         def work() -> None:
             obj = None
             try:
-                session = self.tidal.session
-                fetch = {
-                    "album": lambda: session.album(int(media_id)),
-                    "track": lambda: session.track(int(media_id)),
-                    "video": lambda: session.video(int(media_id)),
-                    "playlist": lambda: session.playlist(media_id),
-                    "mix": lambda: session.mix(media_id),
-                }.get(bucket)
-                if fetch is not None:
-                    # Under the browse lock: session.mix() parses through the
-                    # SHARED session.page instance (the same non-thread-safe
-                    # parser _browse_fetch guards against); the other fetchers
-                    # don't need it but holding it uniformly is harmless.
-                    with self._browse_lock:
-                        obj = fetch()
+                obj = self.providers[CTX_TIDAL].get_object(bucket, media_id)
             except Exception:
                 logger.exception("Could not re-fetch %s %s for download", bucket, media_id)
             if gen != self._browse_gen:
@@ -11745,19 +11630,11 @@ class WavesBridge(LibraryMixin, QObject):
         data_path = str(pl.get("data") or "")
         mod_type = str(pl.get("modType") or "")
         while offset < total and gen == self._browse_gen:
-            with self._browse_lock:
-                page = tidal_page.Page(self.tidal.session, "category")
-                j = page.request.request(
-                    "GET",
-                    data_path,
-                    params={"deviceType": "BROWSER", "locale": "en_US", "offset": offset, "limit": 50},
-                ).json()
-                raw = j.get("items") or []
-                cat = page.page_category.parse({"type": mod_type, "title": "", "pagedList": {"items": raw}})
-            if not raw:
+            window = self.providers[CTX_TIDAL].browse_window("", data_path, mod_type, offset)
+            if not window.n:
                 break
-            out.extend(o for o in cat.items or [] if isinstance(o, Playlist))
-            offset += len(raw)
+            out.extend(o for o in window.category.items or [] if isinstance(o, Playlist))
+            offset += window.n  # the RAW page length: the offset may not rewind
         return out
 
     # Editorial categories are curated, not live, but the app runs for weeks:
@@ -12418,8 +12295,7 @@ class WavesBridge(LibraryMixin, QObject):
         def fetch_album(album_id: str):
             obj = self._objs["album"].get(album_id)
             if obj is None:
-                with self._browse_lock:
-                    obj = self.tidal.session.album(int(album_id))
+                obj = self.providers[CTX_TIDAL].get_object("album", album_id)
                 self._remember("album", album_id, obj)
             return obj
 
@@ -12434,8 +12310,7 @@ class WavesBridge(LibraryMixin, QObject):
             playlist = self._objs["playlist"].get(playlist_id)
             if playlist is None:
                 try:
-                    with self._browse_lock:
-                        playlist = self.tidal.session.playlist(playlist_id)
+                    playlist = self.providers[CTX_TIDAL].get_object("playlist", playlist_id)
                     self._remember("playlist", playlist_id, playlist)
                 except Exception:
                     logger.exception("Could not fetch the playlist for a full-albums download")
@@ -13387,17 +13262,7 @@ class WavesBridge(LibraryMixin, QObject):
         def work() -> None:
             obj = None
             try:
-                session = self.tidal.session
-                fetch = {
-                    "album": lambda: session.album(int(media_id)),
-                    "track": lambda: session.track(int(media_id)),
-                    "video": lambda: session.video(int(media_id)),
-                    "playlist": lambda: session.playlist(media_id),
-                    "mix": lambda: session.mix(media_id),
-                }.get(bucket)
-                if fetch is not None:
-                    with self._browse_lock:  # see _refetch_for_download
-                        obj = fetch()
+                obj = self.providers[CTX_TIDAL].get_object(bucket, media_id)
             except Exception:
                 logger.exception("Could not re-fetch %s %s for retry", bucket, media_id)
             if gen != self._browse_gen:
@@ -14122,6 +13987,18 @@ class WavesBridge(LibraryMixin, QObject):
         self._tpl_tokens_cache = result
         return result
 
+    def _reapply_quality(self, quality) -> None:
+        """Re-apply the audio quality setting to the live session.
+
+        Streams are requested at the SESSION's audio quality, and that was
+        only set at startup; without this, a quality change would not reach a
+        download until the app restarted. The ask rides the seam
+        (``apply_quality``): the provider writes the tier it maps the Waves
+        rung to, and the Atmos session guard inside ``settings_apply`` holds
+        the write off while an Atmos-credential session is active.
+        """
+        self.providers[CTX_TIDAL].apply_quality(tier_from_tidal(quality), AudioType.STEREO)
+
     @Slot("QVariant")
     def applySettings(self, values) -> None:
         """Apply only the changed keys from the settings page, then persist."""
@@ -14195,9 +14072,9 @@ class WavesBridge(LibraryMixin, QObject):
             # Streams are requested at the SESSION's audio quality (the UI never
             # passes a per-download quality), and that was only set at startup.
             # Re-apply it now so the next download honours the new choice without
-            # a restart. settings_apply skips the write while an Atmos-credential
-            # session is active; restore_normal_session re-reads the setting then.
-            self.tidal.settings_apply()
+            # a restart. The write skips while an Atmos-credential session is
+            # active; restore_normal_session re-reads the setting then.
+            self._reapply_quality(values["quality_audio"])
             # Deliberately NOT retargeting the queue: every row holds the
             # quality it was queued at (askQuality) and its job asks for that
             # quality when its turn comes, so a change here cannot alter work
@@ -14234,8 +14111,6 @@ class WavesBridge(LibraryMixin, QObject):
             # so the injected value can never reach disk (see
             # _submit_settings_write).
             self._submit_settings_write()
-        # Keep the album-artist metadata filter in sync with its pref.
-        _set_clean_album_artist(self._waves_pref_bool("clean_album_artist"))
         # The bulk-download confirm is read through a notifying property, and
         # this is the only other way (besides the dialog's own "Don't ask
         # again") for it to change: without the emit, turning it back on in

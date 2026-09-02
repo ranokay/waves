@@ -24,7 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 from tidalapi.media import Track
 
-from waves.download import Download
+from waves.download import Download, StreamInfo
 
 
 @pytest.fixture(autouse=True)
@@ -66,12 +66,15 @@ def _make_download(tmp_path: pathlib.Path, skip_existing: bool, cls: type[Downlo
     dl.event_run = threading.Event()
     dl.event_run.set()
 
-    def _download(media, stream_manifest, path_file, event_stop=None):
+    def _download(media, stream_info, path_file, event_stop=None):
         path_file.write_bytes(b"id-" + str(media.id).encode())
 
         return True, path_file
 
     dl._download = _download
+    # The old None media_stream kept the tag step inert; these tests are about
+    # the claim, so the tag step stays out of the way.
+    dl._handle_metadata_and_extras = lambda *a, **k: None
 
     return dl
 
@@ -102,10 +105,8 @@ def _run_pair(dl: Download, destination: pathlib.Path, track_ids: tuple[int, int
         results[track_id] = dl._perform_actual_download(
             media=_track(track_id),
             path_media_dst=destination,
-            stream_manifest=MagicMock(),
-            do_flac_extract=False,
+            stream_info=StreamInfo(),
             is_parent_album=False,
-            media_stream=None,
         )
 
     threads = [threading.Thread(target=_run, args=(track_id,)) for track_id in track_ids]
@@ -141,10 +142,8 @@ def _run_batches(dl: Download, destination: pathlib.Path, batches: list[tuple[in
             results[track_id] = dl._perform_actual_download(
                 media=_track(track_id),
                 path_media_dst=destination,
-                stream_manifest=MagicMock(),
-                do_flac_extract=False,
+                stream_info=StreamInfo(),
                 is_parent_album=False,
-                media_stream=None,
             )
 
         threads = [threading.Thread(target=_run, args=(track_id,)) for track_id in batch]
@@ -183,10 +182,8 @@ class TestOverwriteModeStillKeepsBothTracks:
         ok, path = dl._perform_actual_download(
             media=_track(111),
             path_media_dst=destination,
-            stream_manifest=MagicMock(),
-            do_flac_extract=False,
+            stream_info=StreamInfo(),
             is_parent_album=False,
-            media_stream=None,
         )
 
         assert ok is True
@@ -288,10 +285,8 @@ class TestOverwriteModeKeepsTracksItAlreadyWrote:
         ok, path = dl._perform_actual_download(
             media=_track(2),
             path_media_dst=tmp_path / "I Feel You.flac",
-            stream_manifest=MagicMock(),
-            do_flac_extract=False,
+            stream_info=StreamInfo(),
             is_parent_album=False,
-            media_stream=None,
         )
 
         assert ok is True
@@ -348,10 +343,8 @@ class TestAQualityUpgradeKeepsItsSiblings:
             results[track_id] = dl._perform_actual_download(
                 media=_track(track_id),
                 path_media_dst=destination,
-                stream_manifest=MagicMock(),
-                do_flac_extract=False,
+                stream_info=StreamInfo(),
                 is_parent_album=False,
-                media_stream=None,
             )
 
         threads = [
@@ -397,10 +390,8 @@ class TestAQualityUpgradeKeepsItsSiblings:
             results[track_id] = dl._perform_actual_download(
                 media=_track(track_id),
                 path_media_dst=tmp_path / "Song.flac",
-                stream_manifest=MagicMock(),
-                do_flac_extract=False,
+                stream_info=StreamInfo(),
                 is_parent_album=False,
-                media_stream=None,
             )
 
         threads = [threading.Thread(target=_run, args=(track_id,)) for track_id in (111, 222)]

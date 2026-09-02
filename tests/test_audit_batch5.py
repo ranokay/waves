@@ -67,7 +67,15 @@ class _AlbumTracksStub:
         self.albumTracksLoaded = _Signal()
         self.collectionMembershipChanged = _Signal()
         self._ownership = SimpleNamespace(record_members_replace=lambda *a: None)
-        self.tidal = SimpleNamespace(session=SimpleNamespace(album=session_album))
+        # The re-fetch rides the Provider seam (ticket #20): the fake answers
+        # get_object the way the session fallback used to.
+        self.providers = {
+            "tidal": SimpleNamespace(
+                get_object=lambda kind, raw_id: session_album(raw_id)
+                if session_album is not None
+                else None
+            )
+        }
 
     def _remember(self, bucket, key, obj):
         self._objs.setdefault(bucket, {})[key] = obj
@@ -175,13 +183,20 @@ class _RetryStub:
         self._refetch_inflight = set()
         self._logged_in = True
         self._browse_gen = 1
-        self._browse_lock = Lock()
         self._queue_lock = Lock()
         self._merge_plans = {}
         self.threadpool = _InlinePool()
         self.statuses: list = []
         self.downloads: list = []
-        self.tidal = SimpleNamespace(session=SimpleNamespace(track=session_track))
+        # The retry refetch resolves through the provider (ticket #22): the
+        # canned get_object answers with the session_track stand-in's object.
+        self.providers = {
+            "tidal": SimpleNamespace(
+                get_object=lambda kind, raw_id: session_track(raw_id)
+                if session_track is not None
+                else (_ for _ in ()).throw(OSError("gone"))
+            )
+        }
         # The GUI hop, inlined: emit dispatches straight to the handler.
         self._queueRetryRefetched = SimpleNamespace(emit=lambda *a: self._on_queue_retry_refetched(*a))
         arm_queue(self)

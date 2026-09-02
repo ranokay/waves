@@ -35,7 +35,8 @@ def get_album_artist_objects(media: Track | Album) -> [Artist]:
     a tag nor the ids written beside them can carry an artist the other's filter
     excluded. The two are not positionally aligned, though: the ids drop an
     id-less stub, and the name tag can be collapsed to the primary by a user
-    setting (see waves_ui/backend.py). Never pair them by index.
+    setting (the engine's tag writer applies it; see waves/download.py). Never
+    pair them by index.
     """
     artists_tmp: [Artist] = []
     # A playlist can carry a track whose album block never arrived, so the
@@ -64,8 +65,9 @@ def get_album_artist_ids(media: Track | Album) -> [str]:
     Ids only, so an id-less stub artist is dropped rather than written as an
     empty value. That makes this a set of identities, not a positional mirror
     of the name tag: the album-artist NAME tag can be collapsed to the primary
-    by a user setting (see waves_ui/backend.py), and identity should not shrink
-    because a display preference did.
+    by a user setting (the engine's tag writer applies it; see
+    waves/download.py), and identity should not shrink because a display
+    preference did.
     """
     return [str(artist.id) for artist in get_album_artist_objects(media) if getattr(artist, "id", None)]
 

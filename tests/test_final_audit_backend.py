@@ -166,6 +166,7 @@ class _JobStub:
     def __init__(self, *, press: str, merge_plan=None) -> None:
         self._press = press
         self._logged_in = True
+        self.providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: SimpleNamespace(id=raw_id))}
         self._job_aborts: dict = {}
         self._job_signals: dict = {}
         self._job_dls: dict = {}
@@ -246,10 +247,9 @@ def _drive(stub: _JobStub, *, merge_plan=None) -> _JobStub:
     from waves.waves_ui import backend
     from waves.waves_ui.backend import _JobSpec
 
-    media = SimpleNamespace(
-        id="m1", name="Album", artist=SimpleNamespace(name="Artist"), artists=[], audio_quality=None, duration=200
-    )
-    spec = _JobSpec(media, "album", "Album", "{title}", True, "m1", merge_plan)
+    # The job resolves its object through the stub provider at dispatch; the
+    # spec carries the name, not the object.
+    spec = _JobSpec("tidal", "album", "tidal:m1", "Album", "{title}", True, "m1", merge_plan)
     with patch.object(backend, "_ProgressSignals", lambda *a, **k: object()):
         WavesBridge._start_job(stub, 1, spec)
     return stub
