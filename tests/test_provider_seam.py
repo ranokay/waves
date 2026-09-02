@@ -263,9 +263,7 @@ class TestCatalog:
         playlist, folder, mix = Mock(name="pl"), Mock(name="folder"), Mock(name="mix")
         favorites = tidal.session.user.favorites
         favorites.playlists_paginated.return_value = [playlist]
-        favorites.playlist_folders.side_effect = lambda limit, offset, parent_folder_id: (
-            [folder] if offset == 0 else []
-        )
+        favorites.playlist_folders.side_effect = lambda limit, offset, parent_folder_id: [folder] if offset == 0 else []
         category = Mock()
         category.items = [mix]
         tidal.session.mixes.return_value.categories = [category]
@@ -409,7 +407,7 @@ class TestFavoritesPages:
         provider, _ = _provider()
         first = [Mock(id=str(i)) for i in range(100)]
         favorites = Mock()
-        favorites.tracks.side_effect = lambda limit, offset: ([] if offset else first)
+        favorites.tracks.side_effect = lambda limit, offset: [] if offset else first
         favorites.get_tracks_count.side_effect = RuntimeError("no count")
         provider._tidal.session.user.favorites = favorites
 
@@ -434,9 +432,28 @@ class TestFavoritesPages:
 
         assert provider.favorite_ids("albums") == {"7"}
 
+    def test_favorite_ids_carry_the_partial_set_when_pagination_fails(self):
+        # Two windows land, then the network dies: the failure carries the
+        # ids already collected, so the bridge can serve what was gathered
+        # (the old path's exact rule) instead of blanking the badges.
+        from waves.providers.base import FavoritesUnavailable
+
+        provider, _ = _provider()
+        first = [Mock(id=str(i)) for i in range(100)]
+        favorites = Mock()
+        favorites.tracks.side_effect = lambda limit, offset: RuntimeError("network died") if offset else first
+        favorites.get_tracks_count.return_value = 500
+        provider._tidal.session.user.favorites = favorites
+
+        with pytest.raises(FavoritesUnavailable) as excinfo:
+            provider.favorite_ids("tracks")
+
+        assert len(excinfo.value.ids) == 100
+
     def test_favorite_ids_let_failures_propagate(self):
         # The bridge keeps its serve-stale semantics; the provider must raise,
-        # not swallow a partial set as fresh (the old path's rule).
+        # not swallow a partial set as fresh (the old path's rule). A session
+        # missing entirely fails before any window, so nothing partial exists.
         provider, _ = _provider()
         provider._tidal.session.user.favorites = None
         with pytest.raises(AttributeError):

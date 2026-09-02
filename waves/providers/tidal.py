@@ -22,7 +22,7 @@ from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvai
 from tidalapi.media import AudioMode
 
 from waves.config import Tidal
-from waves.constants import ATMOS_REQUEST_QUALITY, CTX_TIDAL, MediaType
+from waves.constants import ATMOS_REQUEST_QUALITY, CTX_TIDAL, LIBRARY_PAGE, MediaType
 from waves.download import _artist_ids, _tidal_refuses_asset, _waves_item_id
 from waves.helper.tidal import (
     get_album_artist_ids,
@@ -38,6 +38,7 @@ from waves.helper.tidal import (
 from waves.providers.base import (
     AudioType,
     Capability,
+    FavoritesUnavailable,
     Provider,
     QualityTier,
     Refusal,
@@ -57,10 +58,6 @@ _TIDAL_QUALITY_BY_TIER: dict[QualityTier, tidalapi.Quality] = {
 }
 
 _ATMOS_MODE: str = str(AudioMode.dolby_atmos.value)
-
-# The favorites id-set window (the bridge's _LIBRARY_PAGE): one API page of
-# the user's favorites per request while collecting ids.
-_FAVORITES_WINDOW: int = 100
 
 # My Tidal sort: the order keys the UI speaks, mapped onto the per-category
 # tidalapi order enums (moved here from the bridge so the mapping rides the
@@ -222,14 +219,25 @@ class TidalProvider(Provider):
     def user_collections(self) -> dict:
         return user_media_lists(self._tidal.session)
 
+    def _favorites_parts(self, kind: str) -> tuple:
+        """The favorites accessor for ``kind`` plus its total-count answer
+        (``None`` when the engine offers no count) -- the shared front of
+        both favorites reads."""
+        favorites = self._tidal.session.user.favorites
+        method = getattr(favorites, kind)
+        try:
+            total = int(getattr(favorites, f"get_{kind}_count")())
+        except Exception:
+            total = None  # no count available: fall back to the short-window stop
+        return method, total
+
     def favorites_page(
         self, kind: str, offset: int, limit: int, order: tuple[str, str] | None = None
     ) -> tuple[list, bool]:
         # One window of the user's favorites, verbatim the bridge's ladder:
         # the order kwargs first, dropped for older tidalapi, then the
         # limit/offset kwargs, then one unpaged call sliced locally.
-        favorites = self._tidal.session.user.favorites
-        method = getattr(favorites, kind)
+        method, total = self._favorites_parts(kind)
         order_kwargs = _favorites_order_kwargs(kind, order)
         try:
             raw = method(limit=limit, offset=offset, **order_kwargs) or []
@@ -242,47 +250,45 @@ class TidalProvider(Provider):
         # unavailable items inside the window), so "more" must come from the
         # total count, not the returned length; without a count, keep paging
         # until a window comes back empty.
-        try:
-            more = offset + limit < int(getattr(favorites, f"get_{kind}_count")())
-        except Exception:
-            more = len(raw) > 0
+        more = offset + limit < total if total is not None else len(raw) > 0
         return list(raw), more
 
     def favorite_ids(self, kind: str) -> set[str]:
         """The user's favourite ids of ``kind``, paged to exhaustion.
 
-        The window size is the engine's own 100-row page (the bridge's
-        ``_LIBRARY_PAGE``), and "done" comes from the total count where one
-        exists -- a short window alone would silently truncate the set for
-        the same reason it would in :meth:`favorites_page`. Failures
-        propagate: the bridge decides what a partial set is worth (it serves
-        its last good one and caches nothing).
+        The window is the engine's own 100-row favorites page
+        (:data:`waves.constants.LIBRARY_PAGE`, the My Tidal page size -- one
+        size so the id sweep and the paged windows can never drift apart),
+        and "done" comes from the total count where one exists -- a short
+        window alone would silently truncate the set for the same reason it
+        would in :meth:`favorites_page`. A failure raises
+        :class:`FavoritesUnavailable` carrying the ids collected so far; the
+        bridge decides what a partial set is worth (it serves the stale one
+        when it has it and caches nothing).
         """
-        favorites = self._tidal.session.user.favorites
-        method = getattr(favorites, kind)
-        try:
-            total = int(getattr(favorites, f"get_{kind}_count")())
-        except Exception:
-            total = None  # no count available: fall back to the short-window stop
+        method, total = self._favorites_parts(kind)
         ids: set[str] = set()
         offset = 0
-        while True:
-            try:
-                batch = method(limit=_FAVORITES_WINDOW, offset=offset) or []
-                paged = True
-            except TypeError:
-                batch = method() or []  # older tidalapi: one unpaged call
-                paged = False
-            for obj in batch:
-                ids.add(str(getattr(obj, "id", "")))
-            offset += _FAVORITES_WINDOW
-            if not paged:
-                break
-            if total is not None:
-                if offset >= total or not batch:  # empty guards a lying count
+        try:
+            while True:
+                try:
+                    batch = method(limit=LIBRARY_PAGE, offset=offset) or []
+                    paged = True
+                except TypeError:
+                    batch = method() or []  # older tidalapi: one unpaged call
+                    paged = False
+                for obj in batch:
+                    ids.add(str(getattr(obj, "id", "")))
+                offset += LIBRARY_PAGE
+                if not paged:
                     break
-            elif len(batch) < _FAVORITES_WINDOW:
-                break
+                if total is not None:
+                    if offset >= total or not batch:  # empty guards a lying count
+                        break
+                elif len(batch) < LIBRARY_PAGE:
+                    break
+        except Exception as exc:
+            raise FavoritesUnavailable(ids) from exc
         return ids
 
     # ----- quality

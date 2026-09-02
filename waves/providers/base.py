@@ -161,6 +161,20 @@ class Refusal:
     message: str = ""
 
 
+class FavoritesUnavailable(Exception):
+    """A favorite-id read failed partway; ``ids`` carries what was collected.
+
+    The bridge serves the partial set (or its stale cache) but never caches
+    it, so the caller's badges read as much truth as the failed read gathered
+    -- exactly the old path's rule: a partial set stamped fresh would read as
+    "you have nothing by this artist" until the TTL expired.
+    """
+
+    def __init__(self, ids: set[str]):
+        super().__init__("favourite pagination failed")
+        self.ids = ids
+
+
 @dataclass
 class StreamInfo:
     """What a provider's stream resolution hands the download pipeline:
@@ -291,7 +305,12 @@ class Provider(ABC):
         """Every id in the signed-in user's favorites of ``kind``, paged to
         exhaustion, as plain strings. The bridge filters catalog rows against
         these, so the ids are the engine's own (bare, not namespaced) -- the
-        same spelling a row's ``id`` field carries."""
+        same spelling a row's ``id`` field carries.
+
+        A failure raises :class:`FavoritesUnavailable` carrying the ids
+        collected before it; it must never raise a bare error and lose them,
+        and must never swallow the failure and serve a partial set as fresh.
+        """
 
     # ----- quality -- what the Chooser presents
 

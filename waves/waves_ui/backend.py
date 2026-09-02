@@ -47,6 +47,7 @@ from waves.config import Settings, Tidal, harden_api_session
 from waves.constants import (
     CTX_TIDAL,
     DEFAULT_ILLEGAL_MAP,
+    LIBRARY_PAGE,
     CoverDimensions,
     DownsampleTarget,
     InitialKey,
@@ -936,8 +937,9 @@ def _enum_options(key: str, members) -> list:
 # at a time (with a network offset) and QML renders the rows lazily in a
 # virtualised ListView, prefetching the next page before the user hits the
 # bottom, so even a multi-thousand-item library loads smoothly and never builds
-# thousands of delegates at once.
-_LIBRARY_PAGE = 100
+# thousands of delegates at once. One size with the provider's favorites id
+# sweep, which pages the same windows (waves.constants.LIBRARY_PAGE).
+_LIBRARY_PAGE = LIBRARY_PAGE
 
 # Page size for an artist's videos (see _all_artist_videos). The artist page
 # asks for one window of 50 to fill its VIDEOS shelf; a download pages through
@@ -1981,7 +1983,7 @@ def _video_image(video, width: int, height: int) -> str:
         return ""
 
 
-def _open_kind(obj) -> str | None:
+def _search_bucket_for(obj) -> str | None:
     """Which search-payload bucket a seam-resolved object belongs to.
 
     The Provider seam resolves a pasted link to the engine object it names
@@ -3353,7 +3355,7 @@ class WavesBridge(LibraryMixin, QObject):
         # plugs in beside TIDAL without the bridge ever learning its shape.
         # TIDAL delegates to the engine bodies unchanged; the download engine
         # registers its stream resolver on it when the pipeline routes.
-        self.providers: dict[str, Provider] = {"tidal": TidalProvider(self.tidal)}
+        self.providers: dict[str, Provider] = {CTX_TIDAL: TidalProvider(self.tidal)}
         # Quick metadata/UI work (search, album tracks, artist pages) runs on
         # one pool; downloads run on a separate pool so a long album download
         # can never starve the UI of threads.
@@ -4788,7 +4790,7 @@ class WavesBridge(LibraryMixin, QObject):
                 return
             if gen != self._search_gen:
                 return  # a newer search/link superseded this one
-            kind = _open_kind(media)
+            kind = _search_bucket_for(media)
             if kind is None:
                 if gen == self._search_gen:
                     self._set_status("Could not open that link")
@@ -5375,17 +5377,21 @@ class WavesBridge(LibraryMixin, QObject):
         cached behind a short TTL (a long-running app must pick up favourites
         added elsewhere without a restart); cleared on logout. The pagination
         itself is the provider's ``favorite_ids``; failures serve what we have
-        but never cache it: a stale set beats an empty one, and a partial set
-        stamped fresh behind the 10-minute TTL reads as "you have nothing by
-        this artist" on every library-scoped page until it expires."""
+        but never cache it: a stale set beats a fresh partial one, and a
+        partial set stamped fresh behind the 10-minute TTL reads as "you have
+        nothing by this artist" on every library-scoped page until it
+        expires. With no cached entry the partial set the provider gathered
+        before the failure is what the badges get."""
         entry = self._fav_ids.get(kind)
         if entry is not None and time.monotonic() - entry[0] < self._FAV_IDS_TTL:
             return entry[1]
         try:
             ids = self.providers[CTX_TIDAL].favorite_ids(kind)
-        except Exception:
+        except Exception as exc:
             logger.exception("Could not load favourite %s ids", kind)
-            return entry[1] if entry is not None else set()
+            if entry is not None:
+                return entry[1]
+            return getattr(exc, "ids", None) or set()
         self._fav_ids[kind] = (time.monotonic(), ids)
         return ids
 

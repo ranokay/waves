@@ -4,6 +4,9 @@ from enum import StrEnum
 from tidalapi import Quality
 
 CTX_TIDAL: str = "tidal"
+# One page of the signed-in user's favorites (My Tidal windows and the
+# favorite-id sweep share the window, so a page size change moves both).
+LIBRARY_PAGE: int = 100
 REQUESTS_TIMEOUT_SEC: int = 45
 EXTENSION_LYRICS: str = ".lrc"
 UNIQUIFY_THRESHOLD: int = 99

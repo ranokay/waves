@@ -511,13 +511,24 @@ def test_the_favorite_id_set_reads_the_provider_and_caches():
     assert provider.calls == [("favorite_ids", "albums")]  # second read: the TTL cache
 
 
-def test_a_failed_favorite_id_read_serves_stale_and_caches_nothing():
+def test_a_failed_favorite_id_read_serves_stale_or_the_partial_set():
     provider = _provider(favorite_ids=RuntimeError("rate limited"))
     stub = SimpleNamespace(providers={"tidal": provider}, _fav_ids={"albums": (0.0, {"old"})}, _FAV_IDS_TTL=600.0)
 
     assert WavesBridge._favorite_ids(stub, "albums") == {"old"}
     assert stub._fav_ids["albums"] == (0.0, {"old"})  # not re-stamped
 
+    # With nothing cached, the partial set the provider gathered before the
+    # failure is what the badges get (the old path's rule), never a blank.
+    from waves.providers.base import FavoritesUnavailable
+
+    partial = FavoritesUnavailable({"half"})
+    stub = SimpleNamespace(providers={"tidal": provider}, _fav_ids={}, _FAV_IDS_TTL=600.0)
+    provider._answers["favorite_ids"] = partial
+    assert WavesBridge._favorite_ids(stub, "albums") == {"half"}
+
+    # A failure that carries no partial set at all reads as empty.
+    provider._answers["favorite_ids"] = RuntimeError("no ids gathered")
     empty = SimpleNamespace(providers={"tidal": provider}, _fav_ids={}, _FAV_IDS_TTL=600.0)
     assert WavesBridge._favorite_ids(empty, "albums") == set()
 
@@ -526,15 +537,9 @@ def test_a_failed_favorite_id_read_serves_stale_and_caches_nothing():
 # the wiring
 # --------------------------------------------------------------------------- #
 def test_the_bridge_builds_its_provider_map_in_init():
-    # The seam lives on the instance, keyed by provider id, built around the
-    # session wrapper it delegates to (pinned at the source: constructing a
-    # real bridge here would drag the whole config stack in).
+    # The seam lives on the instance, keyed by the provider-id constant (the
+    # same key every lookup reads), built around the session wrapper it
+    # delegates to (pinned at the source: constructing a real bridge here
+    # would drag the whole config stack in).
     source = __import__("inspect").getsource(WavesBridge.__init__)
-    assert 'self.providers: dict[str, Provider] = {"tidal": TidalProvider(self.tidal)}' in source
-
-
-def test_the_seam_import_lands_on_the_bridge():
-    # The routing tests above stub providers; this pins that the real module
-    # actually names the seam's types the wiring needs.
-    assert backend.Provider is not None
-    assert backend.TidalProvider is not None
+    assert "self.providers: dict[str, Provider] = {CTX_TIDAL: TidalProvider(self.tidal)}" in source
