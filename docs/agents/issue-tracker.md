@@ -11,7 +11,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
-Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+**This repo is a fork — pin every `gh` call to it**: `--repo ranokay/waves` (or `GH_REPO=ranokay/waves`). Left to infer the repo from the remotes, `gh` resolves to the upstream parent (`iamprivacy/Waves`, the `upstream` remote) and the call silently targets the wrong repository — PR creation then fails with "No commits between develop and …" against a branch that does not exist there (seen on issue #23's PR). The parent is the right target only for `/sync-upstream`'s reads.
 
 ## Pull requests as a triage surface
 
