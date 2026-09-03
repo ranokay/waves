@@ -21,6 +21,8 @@ from mutagen.id3 import (
     WOAS,
 )
 
+from waves.ids import DEFAULT_PROVIDER, namespaced_id
+
 
 def _rg_missing(value) -> bool:
     """True when a ReplayGain value was never actually measured.
@@ -81,6 +83,15 @@ ITEM_ID_TAG = "WAVES_TIDAL_ID"
 ARTIST_ID_TAG = "WAVES_TIDAL_ARTIST_ID"
 ALBUM_ARTIST_ID_TAG = "WAVES_TIDAL_ALBUM_ARTIST_ID"
 
+# §8.1 of the provider spec: the generic tag family both providers write going
+# forward, beside the legacy WAVES_TIDAL_* tags. Same three questions as the
+# legacy trio, answered in the one format every provider shares -- the
+# namespaced id (waves.ids) -- so an Apple file can carry its identity in the
+# same atoms.
+GENERIC_ITEM_ID_TAG = "WAVES_ITEM_ID"
+GENERIC_ARTIST_IDS_TAG = "WAVES_ARTIST_IDS"
+GENERIC_ALBUM_ARTIST_ID_TAG = "WAVES_ALBUM_ARTIST_ID"
+
 
 def _legacy_id(value) -> str:
     """A namespaced id in the legacy tag's bare spelling.
@@ -96,6 +107,23 @@ def _legacy_id(value) -> str:
     if not raw or not provider_id:
         return text
     return raw
+
+
+def _bare_legacy_id(value: str) -> str:
+    """A generic tag's id in the spelling the engine's comparisons speak.
+
+    The legacy tags carry tidal ids bare, and every gate that asks a file
+    "are you mine?" compares against that bare spelling -- so a tidal
+    namespace is read back off, and a new file answers exactly as an old one
+    does. A FOREIGN namespace stays prefixed: it can never equal a bare tidal
+    id, which is what keeps another provider's file from being claimed,
+    skipped or replaced as this provider's own copy (§4.2: owning on TIDAL
+    never satisfies another provider's gate).
+    """
+    provider_id, sep, raw = value.partition(":")
+    if not sep or not provider_id or not raw:
+        return value
+    return raw if provider_id == DEFAULT_PROVIDER else value
 
 
 def read_custom_ids(path_file: str | pathlib.Path, tag: str) -> list[str]:
@@ -138,14 +166,24 @@ def read_custom_ids(path_file: str | pathlib.Path, tag: str) -> list[str]:
 
 
 def read_item_id(path_file: str | pathlib.Path) -> str:
-    """The TIDAL item id a file was downloaded as, or "" when untagged.
+    """The item id a file was downloaded as, or "" when untagged.
 
-    Files from releases before this tag existed (or raw .ts videos, which have
-    no tag atoms) return "": callers must treat that as "identity unknown",
-    never as "different item".
+    Generic-first, legacy-fallback (§8.1): the WAVES_ITEM_ID tag is the one
+    both providers write now, and it wins when present; a file from before
+    this family existed answers through its legacy WAVES_TIDAL_ID tag, so
+    every library already on disk stays recognized. Either way a tidal file
+    answers with its bare id -- the spelling the engine's own-copy and
+    skip gates compare against -- while a file saved by another provider
+    answers under its namespaced id, which can never equal a bare tidal id.
+
+    Files from releases before any id tag existed (or raw .ts videos, which
+    have no tag atoms) return "": callers must treat that as "identity
+    unknown", never as "different item".
     """
-    ids = read_custom_ids(path_file, ITEM_ID_TAG)
-    return ids[0] if ids else ""
+    ids = read_custom_ids(path_file, GENERIC_ITEM_ID_TAG)
+    if not ids:
+        ids = read_custom_ids(path_file, ITEM_ID_TAG)
+    return _bare_legacy_id(ids[0]) if ids else ""
 
 
 class Metadata:
@@ -249,6 +287,13 @@ class Metadata:
         self.item_id = _legacy_id(item_id)
         self.artist_ids = [_legacy_id(a) for a in artist_ids or []]
         self.album_artist_ids = [_legacy_id(a) for a in album_artist_ids or []]
+        # The generic family (§8.1) rides the SAME ids in the namespaced
+        # spelling, written beside the legacy tags: one identity, two formats,
+        # so an existing library keeps its legacy readers while every new file
+        # also answers in the format both providers share.
+        self.namespaced_item_id = namespaced_id(item_id)
+        self.namespaced_artist_ids = [namespaced_id(a) for a in artist_ids or []]
+        self.namespaced_album_artist_ids = [namespaced_id(a) for a in album_artist_ids or []]
 
     def _cover(self) -> bool:
         result: bool = False
@@ -353,10 +398,15 @@ class Metadata:
         self.m.tags["INITIALKEY"] = self.initial_key
         self.m.tags["RELEASETYPE"] = self.release_type
         self.m.tags[ITEM_ID_TAG] = self.item_id
+        self.m.tags[GENERIC_ITEM_ID_TAG] = self.namespaced_item_id
         if self.artist_ids:
             self.m.tags[ARTIST_ID_TAG] = self.artist_ids
         if self.album_artist_ids:
             self.m.tags[ALBUM_ARTIST_ID_TAG] = self.album_artist_ids
+        if self.namespaced_artist_ids:
+            self.m.tags[GENERIC_ARTIST_IDS_TAG] = self.namespaced_artist_ids
+        if self.namespaced_album_artist_ids:
+            self.m.tags[GENERIC_ALBUM_ARTIST_ID_TAG] = self.namespaced_album_artist_ids
 
         if self.replay_gain_write:
             for key, text in self._rg_pairs():
@@ -388,10 +438,16 @@ class Metadata:
         self.m.tags.add(TXXX(encoding=3, desc="MusicBrainz Album Type", text=self.release_type))
         if self.item_id:
             self.m.tags.add(TXXX(encoding=3, desc=ITEM_ID_TAG, text=self.item_id))
+        if self.namespaced_item_id:
+            self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ITEM_ID_TAG, text=self.namespaced_item_id))
         if self.artist_ids:
             self.m.tags.add(TXXX(encoding=3, desc=ARTIST_ID_TAG, text=self.artist_ids))
         if self.album_artist_ids:
             self.m.tags.add(TXXX(encoding=3, desc=ALBUM_ARTIST_ID_TAG, text=self.album_artist_ids))
+        if self.namespaced_artist_ids:
+            self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ARTIST_IDS_TAG, text=self.namespaced_artist_ids))
+        if self.namespaced_album_artist_ids:
+            self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ALBUM_ARTIST_ID_TAG, text=self.namespaced_album_artist_ids))
 
         if self.replay_gain_write:
             for key, text in self._rg_pairs():
@@ -421,6 +477,8 @@ class Metadata:
         self.m.tags["----:com.apple.iTunes:MusicBrainz Album Type"] = self.release_type.encode("utf-8")
         if self.item_id:
             self.m.tags[f"----:com.apple.iTunes:{ITEM_ID_TAG}"] = self.item_id.encode("utf-8")
+        if self.namespaced_item_id:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_ITEM_ID_TAG}"] = self.namespaced_item_id.encode("utf-8")
         self._set_mp4_artist_ids()
 
         if self.replay_gain_write:
@@ -444,6 +502,8 @@ class Metadata:
         self.m.tags["stik"] = [6]
         if self.item_id:
             self.m.tags[f"----:com.apple.iTunes:{ITEM_ID_TAG}"] = self.item_id.encode("utf-8")
+        if self.namespaced_item_id:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_ITEM_ID_TAG}"] = self.namespaced_item_id.encode("utf-8")
         self._set_mp4_artist_ids()
 
     def _set_mp4_artist_ids(self):
@@ -454,6 +514,14 @@ class Metadata:
         if self.album_artist_ids:
             self.m.tags[f"----:com.apple.iTunes:{ALBUM_ARTIST_ID_TAG}"] = [
                 i.encode("utf-8") for i in self.album_artist_ids
+            ]
+        if self.namespaced_artist_ids:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_ARTIST_IDS_TAG}"] = [
+                i.encode("utf-8") for i in self.namespaced_artist_ids
+            ]
+        if self.namespaced_album_artist_ids:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_ALBUM_ARTIST_ID_TAG}"] = [
+                i.encode("utf-8") for i in self.namespaced_album_artist_ids
             ]
 
     @staticmethod
