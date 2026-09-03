@@ -93,7 +93,8 @@ def test_upsert_same_path_updates_in_place(tmp_path):
     store.record("123", path, "HIGH")
     store.record("123", path, "HI_RES_LOSSLESS")  # re-download to the same path
     con = sqlite3.connect(str(tmp_path / "ownership.sqlite3"))
-    (count,) = con.execute("SELECT COUNT(*) FROM downloads WHERE track_id='123'").fetchone()
+    # Rows are stored namespaced (§4.2): the bare id the caller passed reads as tidal.
+    (count,) = con.execute("SELECT COUNT(*) FROM downloads WHERE track_id='tidal:123'").fetchone()
     con.close()
     assert count == 1, "same (track_id, path) must update, not append"
     assert store.ownership_of("123")["quality_tier"] == "HI_RES_LOSSLESS"
@@ -106,7 +107,7 @@ def test_different_paths_append_rows(tmp_path):
     store.record("123", a, "LOSSLESS")
     store.record("123", b, "LOSSLESS")
     con = sqlite3.connect(str(tmp_path / "ownership.sqlite3"))
-    (count,) = con.execute("SELECT COUNT(*) FROM downloads WHERE track_id='123'").fetchone()
+    (count,) = con.execute("SELECT COUNT(*) FROM downloads WHERE track_id='tidal:123'").fetchone()
     con.close()
     assert count == 2
 

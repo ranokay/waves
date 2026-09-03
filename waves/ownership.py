@@ -1,14 +1,16 @@
 """Local record of what has actually been downloaded, so Waves can answer "do
-you already have this track, and at what quality" from reality rather than from
-a history log.
+you already have this track, and at what quality" from reality rather than
+from a download ledger.
 
-The rule this store lives by: it DESCRIBES what was downloaded (the actual final
-on-disk path and the delivered quality, keyed by the exact TIDAL track id); it
-never DECIDES ownership on its own. Ownership is answered live, by re-checking
-whether a recorded path still exists on disk right now, so a file the user
-deleted and wants again is offered for re-download with no "clear history" step.
-A history table that just says "downloaded before" would lie the moment a file
-is deleted; re-checking the filesystem every time is what keeps it honest.
+The rule this store lives by: it DESCRIBES what was downloaded (the actual
+final on-disk path and the delivered quality, keyed by the track's namespaced
+id, "tidal:123" -- a bare id reads as tidal, the spelling every pre-namespace
+caller used); it never DECIDES ownership on its own. Ownership is answered
+live, by re-checking whether a recorded path still exists on disk right now,
+so a file the user deleted and wants again is offered for re-download with no
+clearing step. A ledger that just says "downloaded before" would lie the
+moment a file is deleted; re-checking the filesystem every time is what keeps
+it honest.
 
 Pure standard library (sqlite3), with no Qt and no tidalapi import, so it unit
 tests without the GUI stack and never couples the download engine to the UI.
@@ -21,6 +23,8 @@ import os
 import sqlite3
 import time
 from threading import Lock
+
+from waves.ids import namespaced_id
 
 # Delivered-quality tiers, lowest to highest, keyed by the TIDAL tier string
 # (tidalapi Quality values: LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS). A caller
@@ -128,6 +132,7 @@ class OwnershipStore:
                        PRIMARY KEY (collection_id, track_id)
                    )""")
             self._ensure_columns()
+            self._backfill_namespaced_ids()
             self._conn.commit()
 
     def _ensure_columns(self) -> None:
@@ -167,6 +172,29 @@ class OwnershipStore:
                     raise
                 logger.debug("ownership: %s was added by another copy of Waves", name)
 
+    def _backfill_namespaced_ids(self) -> None:
+        """Rewrite the bare ids older builds wrote into the namespaced spelling
+        (§4.2: existing rows become ``tidal:``). Runs once per open, before any
+        new write can land a bare id of its own. Caller holds the lock.
+
+        One row each, none lost, none duplicated: a bare row maps 1:1 onto its
+        namespaced self. The one way the rewrite can meet an existing
+        namespaced twin on the same (track_id, path) key is a library that went
+        back to an older Waves and returned -- both rows then describe the same
+        copy on the same path, and the store cannot keep two rows under one
+        key. The bare row replaces the twin exactly the way record()'s upsert
+        settles a re-record of a known path: one row per copy, whichever
+        record was written into the bare spelling last.
+
+        Collection-membership rows are a collection-scoped ledger, not
+        ownership rows; they stay as written, and their consumers re-namespace
+        on read.
+        """
+        self._conn.execute(
+            "UPDATE OR REPLACE downloads SET track_id = 'tidal:' || track_id"
+            " WHERE instr(track_id, ':') = 0 AND track_id <> ''"
+        )
+
     def record(
         self,
         track_id: str,
@@ -183,6 +211,10 @@ class OwnershipStore:
         degraded: bool = False,
     ) -> int:
         """Record that ``track_id`` was written to ``path`` at ``quality_tier``.
+
+        The row is keyed by the id in the store's namespaced spelling (a bare
+        id reads as tidal, §4.2), so the same copy recorded through either
+        spelling upserts onto one row.
 
         Upserts on (track_id, path): re-recording the same file updates its
         quality and timestamp in place; a different path for the same track adds
@@ -201,6 +233,9 @@ class OwnershipStore:
                 write, so the caller can report which attempt this was.
         """
         tier = (quality_tier or "").upper() or None
+        # One spelling on the row, whoever calls: a bare id is tidal's (the
+        # spec's legacy rule), so the store's key can never fork per caller.
+        track_id = namespaced_id(track_id)
         row = (
             str(track_id),
             str(path),
@@ -319,10 +354,16 @@ class OwnershipStore:
         """Best surviving copy of ``track_id`` that still exists on disk right now,
         or None if no recorded path survives (a wanted-again deleted file).
 
+        The question is asked in the store's namespaced spelling: a bare id
+        reads as tidal (every pre-namespace caller), a namespaced id only ever
+        matches rows of its own provider, so one provider's ownership never
+        answers another provider's gate.
+
         Rows are considered highest delivered quality first, then most recent, and
         the first whose path passes a live existence check wins. The deleted-path
         row is skipped, not removed, so re-creating the file makes it own again.
         """
+        tid = namespaced_id(track_id)
         with self._lock:
             if user_id is None:
                 rows = self._conn.execute(
@@ -331,7 +372,7 @@ class OwnershipStore:
                               degraded_tries
                        FROM downloads WHERE track_id = ?
                        ORDER BY quality_rank DESC, recorded_at DESC""",
-                    (str(track_id),),
+                    (tid,),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
@@ -340,7 +381,7 @@ class OwnershipStore:
                               degraded_tries
                        FROM downloads WHERE track_id = ? AND user_id = ?
                        ORDER BY quality_rank DESC, recorded_at DESC""",
-                    (str(track_id), str(user_id)),
+                    (tid, str(user_id)),
                 ).fetchall()
         # Existence check is intentionally OUTSIDE the lock: it can stat the disk,
         # and a read must never hold up a worker-thread write behind it. A
