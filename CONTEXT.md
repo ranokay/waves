@@ -21,7 +21,7 @@ Which mix of a track is being saved: stereo or Dolby Atmos.
 _Avoid_: mix, format, mode
 
 **Audio quality**:
-The fidelity tier a download is fetched at (e.g. AAC 256, Lossless, Hi-Res Lossless).
+The fidelity tier a download is fetched at, stated on Waves' own four-rung ladder (LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS), serialized as the ladder's tier strings. Audio type is orthogonal to it. Each provider maps its engine's codecs onto the rungs (e.g. AAC 320 → HIGH, ALAC 24/192 → HI_RES_LOSSLESS).
 _Avoid_: bitrate, resolution
 
 **Version**:

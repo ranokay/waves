@@ -11,22 +11,20 @@ this package's base. An eager re-export here would make that import order a
 cycle; a lazy one keeps every direction working.
 """
 
+from waves.constants import QualityTier, quality_rank, tier_from_word
 from waves.providers.base import (
     AudioType,
     BrowseWindow,
     Capability,
     FavoritesUnavailable,
     Provider,
-    QualityTier,
     Refusal,
     RefusalKind,
     StreamInfo,
-    quality_rank,
 )
 
 _LAZY = {
     "TidalProvider": ("waves.providers.tidal", "TidalProvider"),
-    "tier_from_tidal": ("waves.providers.tidal", "tier_from_tidal"),
 }
 
 
@@ -56,5 +54,5 @@ __all__ = [
     "StreamInfo",
     "TidalProvider",
     "quality_rank",
-    "tier_from_tidal",
+    "tier_from_word",
 ]

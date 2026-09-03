@@ -41,7 +41,7 @@ from types import SimpleNamespace
 
 from tidalapi.media import AudioMode, Quality, Track
 
-from waves.constants import ATMOS_REQUEST_QUALITY
+from waves.config import ATMOS_REQUEST_QUALITY
 from waves.download import Download
 from waves.ownership import OwnershipStore, quality_rank
 from waves.waves_ui import backend
@@ -114,7 +114,7 @@ def _bridge(store, *, quality, atmos_on):
     b._own_pool = _InlinePool()
     b._announce_ownership = lambda tid: None
     b._downloads_running = lambda: False
-    b.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=quality, download_dolby_atmos=atmos_on))
+    b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=quality.value, download_dolby_atmos=atmos_on))
     for name in (
         "ownershipOf",
         "_would_refetch_atmos",
@@ -350,7 +350,7 @@ def _predictor(store, *, quality, atmos_on):
     b._merge_plans = {}
     b._objs = {"album": {}}
     b._queue_index = {}
-    b.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=quality, download_dolby_atmos=atmos_on))
+    b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=quality.value, download_dolby_atmos=atmos_on))
     b._library_claim_media = lambda media, album=None: False
     for name in ("_predict_skips", "_target_quality_rank", "_job_quality", "_job_library_skip", "_queue_item"):
         setattr(b, name, getattr(WavesBridge, name).__get__(b, WavesBridge))

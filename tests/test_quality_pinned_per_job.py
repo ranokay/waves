@@ -44,7 +44,8 @@ from types import SimpleNamespace
 import pytest
 from tidalapi.media import AudioMode, Quality
 
-from waves.constants import ATMOS_REQUEST_QUALITY
+from waves.config import ATMOS_REQUEST_QUALITY, tidal_quality_for_tier
+from waves.constants import QualityTier
 from waves.waves_ui import backend
 
 
@@ -93,7 +94,7 @@ def _call_with_parent_recording(dl, media, seen):
 
 def test_the_fetch_uses_the_jobs_quality_and_the_session_is_left_as_found():
     session = _Session(Quality.low_320k)
-    dl = _tracked(Quality.hi_res_lossless, session)
+    dl = _tracked(QualityTier.HI_RES_LOSSLESS, session)
     seen: list = []
     _call_with_parent_recording(dl, SimpleNamespace(id="1", audio_modes=[]), seen)
     assert seen == [Quality.hi_res_lossless], "the stream was not asked for at the job's quality"
@@ -125,7 +126,7 @@ class _SwitchingTidal:
         self.session = session
         self.is_atmos_session = False
         self.restores = 0
-        self.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=setting_quality.value))
+        self.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=setting_quality))
 
     def switch_to_atmos_session(self) -> bool:
         if self.is_atmos_session:
@@ -138,7 +139,7 @@ class _SwitchingTidal:
         self.restores += 1
         if not self.is_atmos_session and not force:
             return True
-        self.session.audio_quality = Quality(self.settings.data.quality_audio)
+        self.session.audio_quality = tidal_quality_for_tier(QualityTier(self.settings.data.tidal_quality_audio))
         self.is_atmos_session = False
         return True
 
@@ -147,7 +148,7 @@ _ATMOS = SimpleNamespace(id="a", audio_modes=[AudioMode.dolby_atmos.value])
 _STEREO = SimpleNamespace(id="s", audio_modes=[])
 
 
-def _run(pinned, session, media_list, *, setting=Quality.hi_res_lossless, dl_out=None):
+def _run(pinned, session, media_list, *, setting="HI_RES_LOSSLESS", dl_out=None):
     """Drive the override over a RUN of tracks, with a parent that performs the
     engine's own session switch (download.py) inside the call the way the real
     one does. Reports the quality each fetch was actually asked at; the built
@@ -192,7 +193,7 @@ def test_an_atmos_track_keeps_the_engines_own_session_handling():
     after the override returns, with the pin having restored nothing."""
     session = _Session(Quality.hi_res_lossless)
     built: list = []
-    asked = _run(Quality.low_320k, session, [_ATMOS], dl_out=built)
+    asked = _run(QualityTier.HIGH, session, [_ATMOS], dl_out=built)
     assert asked == [ATMOS_REQUEST_QUALITY], "the pin overrode an Atmos fetch"
     assert session.audio_quality == ATMOS_REQUEST_QUALITY, "the pin put the job's tier back over the Atmos session"
     assert built[0].tidal.restores == 0, "an Atmos fetch is the engine's business, the pin restores nothing"
@@ -204,13 +205,13 @@ def test_every_atmos_track_in_a_run_is_asked_for_at_the_atmos_quality():
     putting the job's own tier back would leave the Atmos session asking for
     stereo for the rest of the job."""
     session = _Session(Quality.hi_res_lossless)
-    asked = _run(Quality.hi_res_lossless, session, [_ATMOS, _ATMOS, _ATMOS])
+    asked = _run(QualityTier.HI_RES_LOSSLESS, session, [_ATMOS, _ATMOS, _ATMOS])
     assert asked == [ATMOS_REQUEST_QUALITY] * 3, asked
 
 
 def test_an_atmos_fetch_leaves_the_session_at_the_atmos_quality():
     session = _Session(Quality.hi_res_lossless)
-    _run(Quality.hi_res_lossless, session, [_ATMOS])
+    _run(QualityTier.HI_RES_LOSSLESS, session, [_ATMOS])
     assert session.audio_quality == ATMOS_REQUEST_QUALITY
 
 
@@ -218,7 +219,7 @@ def test_a_run_that_mixes_atmos_and_stereo_asks_each_at_its_own_quality():
     """And the stereo track's restore is what decides the tier it puts back,
     so the Atmos quality never leaks onto a rebuilt normal session."""
     session = _Session(Quality.hi_res_lossless)
-    asked = _run(Quality.hi_res_lossless, session, [_ATMOS, _STEREO, _ATMOS])
+    asked = _run(QualityTier.HI_RES_LOSSLESS, session, [_ATMOS, _STEREO, _ATMOS])
     assert asked == [ATMOS_REQUEST_QUALITY, Quality.hi_res_lossless, ATMOS_REQUEST_QUALITY], asked
 
 
@@ -231,13 +232,13 @@ def test_the_row_records_the_setting_it_was_queued_at():
     stub._qdirty_added = []  # _enqueue marks the new row for the delta flush
     stub._emit_queue = lambda: None
     stub._target_tier = lambda: "HI-RES"
-    stub.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=Quality.hi_res_lossless))
+    stub.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio="HI_RES_LOSSLESS"))
     stub._queued_quality_value = backend.WavesBridge._queued_quality_value.__get__(stub, type(stub))
     # The other value a row pins at birth, tested on its own in
     # tests/test_queue_row_pins_the_library_skip.py.
     stub._library_bulk_skip_on = lambda: True
     qid = backend.WavesBridge._enqueue.__get__(stub, type(stub))("Album", "album")
-    assert stub._queue[0]["askQuality"] == Quality.hi_res_lossless.value
+    assert stub._queue[0]["askQuality"] == "HI_RES_LOSSLESS"
     assert stub._queue[0]["qid"] == qid
 
 
@@ -269,10 +270,10 @@ def test_the_runner_hands_its_rows_quality_to_the_download():
 
 
 def test_the_skip_rank_follows_the_jobs_quality_not_the_setting():
-    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace(quality_audio=Quality.low_320k)))
+    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace(tidal_quality_audio="HIGH")))
     rank = backend.WavesBridge._target_quality_rank.__get__(stub, type(stub))
-    assert rank() == rank(Quality.low_320k)
-    assert rank(Quality.hi_res_lossless) > rank(), "a job queued higher must still count as an upgrade"
+    assert rank() == rank("HIGH")
+    assert rank("HI_RES_LOSSLESS") > rank(), "a job queued higher must still count as an upgrade"
 
 
 # --------------------------------------------------------------------------- #
@@ -288,7 +289,7 @@ class _FlakyRestoreTidal:
     def __init__(self, session, setting_quality, relogin_script):
         self.session = session
         self.is_atmos_session = True  # an Atmos track just went through
-        self.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=setting_quality.value))
+        self.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=setting_quality))
         self._script = list(relogin_script)
         self.restores = 0
 
@@ -299,7 +300,7 @@ class _FlakyRestoreTidal:
         self.restores += 1
         if not self.is_atmos_session and not force:
             return True
-        self.session.audio_quality = Quality(self.settings.data.quality_audio)
+        self.session.audio_quality = tidal_quality_for_tier(QualityTier(self.settings.data.tidal_quality_audio))
         if not (self._script.pop(0) if self._script else True):
             return False
         self.is_atmos_session = False
@@ -337,7 +338,7 @@ def _fetch(dl, media):
 
 
 def test_a_stereo_track_after_atmos_is_fetched_at_the_pin_when_the_restore_works():
-    dl, media, asked = _stereo_after_atmos(Quality.hi_res_lossless, Quality.low_320k, [True])
+    dl, media, asked = _stereo_after_atmos(QualityTier.HI_RES_LOSSLESS, "HIGH", [True])
     info = _fetch(dl, media)
     assert asked == [Quality.hi_res_lossless]
     assert info.media_stream is not None
@@ -350,7 +351,7 @@ def test_a_failed_restore_never_fetches_at_the_live_setting_over_the_pin():
     engine's restore wrote HIGH over it, and the track was fetched and written
     at HIGH with the ledger agreeing with itself: precisely the harm the pin
     exists to prevent, and silent."""
-    dl, media, asked = _stereo_after_atmos(Quality.hi_res_lossless, Quality.low_320k, [False, True])
+    dl, media, asked = _stereo_after_atmos(QualityTier.HI_RES_LOSSLESS, "HIGH", [False, True])
     info = _fetch(dl, media)
     assert Quality.low_320k not in asked, "the pin was defeated: the track was fetched at today's setting"
     assert asked == [], "a stream was fetched at all after a failed restore"
@@ -361,7 +362,7 @@ def test_a_failed_restore_is_answered_the_way_the_engine_answers_it():
     """The engine returns an empty TrackStreamInfo when its own restore fails
     (download.py); the override answers the same shape, so item() counts a
     failed track a retry picks up, not a crash and not a phantom write."""
-    dl, media, _ = _stereo_after_atmos(Quality.hi_res_lossless, Quality.low_320k, [False, False])
+    dl, media, _ = _stereo_after_atmos(QualityTier.HI_RES_LOSSLESS, "HIGH", [False, False])
     info = _fetch(dl, media)
     fields = (info.stream_manifest, info.file_extension, info.requires_flac_extraction, info.media_stream)
     assert fields == (None, "", False, None)
@@ -371,7 +372,7 @@ def test_a_failed_restore_is_answered_the_way_the_engine_answers_it():
 def test_a_failed_restore_leaves_the_session_for_the_next_track_to_recover():
     """The next stereo track's restore is a fresh attempt: nothing here holds
     the session in a state that makes recovery impossible."""
-    dl, media, asked = _stereo_after_atmos(Quality.hi_res_lossless, Quality.low_320k, [False, True])
+    dl, media, asked = _stereo_after_atmos(QualityTier.HI_RES_LOSSLESS, "HIGH", [False, True])
     first = _fetch(dl, media)
     second = _fetch(dl, media)
     assert first.media_stream is None

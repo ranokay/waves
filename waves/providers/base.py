@@ -89,29 +89,13 @@ from typing import NamedTuple
 # already-resolved object (an album's .tracks(), an artist's .get_albums())
 # are the bridge's page-building policy, not session reaches -- they move
 # behind the interface when the dict builders do.
-
-# The one delivered-quality ladder, lowest to highest. Its strings are the
-# keys of the ownership store's QUALITY_RANK scale (and, as it happens,
-# tidalapi's own tier values): a caller asks "is a better tier available than
-# what is on disk" with a plain integer comparison. Bit depth and sample rate
-# are deliberately not used for ranking.
-
-
-class QualityTier(StrEnum):
-    """A rung on Waves' own quality ladder, provider-independent."""
-
-    LOW = "LOW"
-    HIGH = "HIGH"
-    LOSSLESS = "LOSSLESS"
-    HI_RES_LOSSLESS = "HI_RES_LOSSLESS"
-
-
-def quality_rank(tier: QualityTier | str) -> int:
-    """The integer rank of a tier on the shared ladder (LOW = 0)."""
-    return TIER_RANK[str(getattr(tier, "value", tier))]
-
-
-TIER_RANK: dict[str, int] = {tier.value: rank for rank, tier in enumerate(QualityTier)}
+# The one delivered-quality ladder, lowest to highest, is Waves' own
+# (LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS) and lives in waves.constants
+# (issue #24): shared vocabulary spoken by the model layer, the ownership
+# store and the bridge -- none of which may import a provider package. This
+# interface speaks it in its signatures; implementations and callers import
+# the ladder (and its rank/fold helpers) from waves.constants directly.
+from waves.constants import QualityTier
 
 
 class AudioType(StrEnum):
@@ -351,9 +335,7 @@ class Provider(ABC):
         the provider has no such feed."""
 
     @abstractmethod
-    def browse_window(
-        self, title: str, data_path: str, mod_type: str, offset: int, limit: int = 50
-    ) -> BrowseWindow:
+    def browse_window(self, title: str, data_path: str, mod_type: str, offset: int, limit: int = 50) -> BrowseWindow:
         """One paged window of an editorial category: the parsed category,
         the RAW item count the window returned (the paging arithmetic's
         input -- a parse may drop items, the offset may not rewind), and the

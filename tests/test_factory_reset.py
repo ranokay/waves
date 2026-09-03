@@ -40,7 +40,7 @@ def _values_stub():
         {
             "group": "G",
             "fields": [
-                {"key": "quality_audio"},
+                {"key": "tidal_quality_audio"},
                 {"key": "video_download"},
                 {"key": "explicit_mode"},
                 {
@@ -70,7 +70,7 @@ def _values_stub():
 def test_factory_defaults_cover_schema_keys_in_apply_shape():
     values = _bind(_values_stub(), "_factory_default_values")()
     # Engine enum arrives by NAME (what applySettings indexes _ENUM_BY_FIELD with).
-    assert isinstance(values["quality_audio"], str)
+    assert isinstance(values["tidal_quality_audio"], str)
     # First-run override wins over the stock dataclass default.
     assert values["video_download"] is _FIRST_RUN_OVERRIDES["video_download"]
     # Waves pref comes from the waves.json defaults.

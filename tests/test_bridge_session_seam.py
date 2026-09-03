@@ -435,7 +435,7 @@ class TestTheQualityReapply:
         provider = _FakeProvider(apply_quality=None)
         stub = _AuthStub(provider)
 
-        WavesBridge._reapply_quality.__get__(stub, type(stub))(Quality.hi_res_lossless)
+        WavesBridge._reapply_provider_quality.__get__(stub, type(stub))("tidal", Quality.hi_res_lossless)
 
         assert provider.calls == [("apply_quality", QualityTier.HI_RES_LOSSLESS, AudioType.STEREO)]
 

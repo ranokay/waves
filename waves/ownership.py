@@ -24,17 +24,18 @@ import sqlite3
 import time
 from threading import Lock
 
+from waves.constants import quality_rank
 from waves.ids import namespaced_id
 
-# Delivered-quality tiers, lowest to highest, keyed by the TIDAL tier string
-# (tidalapi Quality values: LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS). A caller
-# can ask "is a better tier available than what is on disk" with a plain integer
-# comparison, and the DB can ORDER BY the stored rank. Bit depth and sample rate
-# are deliberately NOT used for ranking: TIDAL omits them for some tiers (they
-# default to 16 / 44100), so the tier string is the only trustworthy signal.
+# The delivered-quality ladder is Waves' own (waves.constants.QualityTier,
+# issue #24): LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS, ranked 0..3 by the
+# shared quality_rank (imported here; the store's rank column and the
+# ORDER BYs run the same scale the bridge and the settings rank with). A
+# caller asks "is a better tier available than what is on disk" with a plain
+# integer comparison. Bit depth and sample rate are deliberately NOT used for
+# ranking: TIDAL omits them for some tiers (they default to 16 / 44100), so
+# the tier string is the only trustworthy signal.
 logger = logging.getLogger("waves.ownership")
-
-QUALITY_RANK = {"LOW": 0, "HIGH": 1, "LOSSLESS": 2, "HI_RES_LOSSLESS": 3}
 
 
 def _nonempty_file(path: str) -> bool:
@@ -78,12 +79,6 @@ _ADDED_COLUMNS = (
     # at or above the ceiling, so a master TIDAL really does fix is taken.
     ("degraded_tries", "INTEGER NOT NULL DEFAULT 0"),
 )
-
-
-def quality_rank(tier: str | None) -> int:
-    """Rank of a delivered-quality tier string. Unknown or missing ranks below
-    every real tier (-1), so it never wins a "best surviving copy" comparison."""
-    return QUALITY_RANK.get((tier or "").upper(), -1)
 
 
 class OwnershipStore:

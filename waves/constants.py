@@ -1,9 +1,8 @@
 import base64
 from enum import StrEnum
 
-from tidalapi import Quality
-
 CTX_TIDAL: str = "tidal"
+CTX_APPLE: str = "apple"
 # One page of the signed-in user's favorites (My Tidal windows and the
 # favorite-id sweep share the window, so a page size change moves both).
 LIBRARY_PAGE: int = 100
@@ -73,7 +72,74 @@ ATMOS_CLIENT_ID = base64.b64decode(ATMOS_ID_B64).decode("utf-8")
 # Empty on purpose: this client authenticates without a private secret (tidalapi
 # then sends the public id in the secret's place). Nothing sensitive is shipped.
 ATMOS_CLIENT_SECRET = ""
-ATMOS_REQUEST_QUALITY = Quality.low_320k
+
+
+class QualityTier(StrEnum):
+    """A rung on Waves' own quality ladder, provider-independent (spec §4.3:
+    one quality model). Every shared path -- the queue's pinned quality, the
+    ownership rank scale, session quality apply, the per-provider settings --
+    speaks this enum; each provider maps its engine's codecs onto it at its
+    own boundary (TIDAL: ``config.tidal_quality_for_tier``). Audio type
+    (stereo/Atmos, ``providers.base.AudioType``) stays orthogonal: never a
+    rung on this ladder."""
+
+    LOW = "LOW"
+    HIGH = "HIGH"
+    LOSSLESS = "LOSSLESS"
+    HI_RES_LOSSLESS = "HI_RES_LOSSLESS"
+
+
+# The ladder as plain integers (LOW = 0), so a caller asks "is a better tier
+# available than what is on disk" with an integer comparison and the ownership
+# DB can ORDER BY the stored rank. Bit depth and sample rate are deliberately
+# not used for ranking: TIDAL omits them for some tiers (they default to
+# 16 / 44100), so the tier string is the only trustworthy signal.
+TIER_RANK: dict[str, int] = {tier.value: rank for rank, tier in enumerate(QualityTier)}
+
+
+def quality_rank(tier: QualityTier | str | None) -> int:
+    """The integer rank of a tier on the shared ladder (LOW = 0).
+
+    Unknown, empty or missing ranks below every real tier (-1), so an
+    unreadable value never wins a "best surviving copy" comparison."""
+    return TIER_RANK.get(str(getattr(tier, "value", tier) or "").upper(), -1)
+
+
+def tier_from_word(word: str | None) -> QualityTier | None:
+    """Fold any quality spelling a shared path can be handed onto the ladder.
+
+    Accepts the enum's own values ("HIGH"), its member names ("low_320k" --
+    the same strings TIDAL's wire values and legacy rows carry), and the UI's
+    tier words ("HI-RES"). "DEFAULT" and anything unreadable fold to None:
+    every caller decides its own fallback, exactly as the old per-site parse
+    points did."""
+    raw = str(word or "").strip().upper()
+    if not raw:
+        return None
+    try:
+        return QualityTier(raw)
+    except ValueError:
+        pass
+    # Compact form ("HI-RES", "HI RES", "HIRES" -> "HIRES"): the UI words are
+    # the enum values with the underscores dropped.
+    compact = raw.replace("-", "").replace("_", "").replace(" ", "")
+    for tier in QualityTier:
+        if tier.value.replace("_", "") == compact:
+            return tier
+    # TIDAL spells its stereo tiers with the bitrate (LOW_96K / LOW_320K).
+    if "320" in raw:
+        return QualityTier.HIGH
+    if "96" in raw:
+        return QualityTier.LOW
+    for needle, tier in (
+        ("HIRES", QualityTier.HI_RES_LOSSLESS),
+        ("LOSSLESS", QualityTier.LOSSLESS),
+        ("HIGH", QualityTier.HIGH),
+        ("LOW", QualityTier.LOW),
+    ):
+        if needle in compact:
+            return tier
+    return None
 
 
 class QualityVideo(StrEnum):

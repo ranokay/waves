@@ -53,12 +53,12 @@ def _bind(stub, *names) -> None:
         setattr(stub, name, getattr(backend.WavesBridge, name).__get__(stub))
 
 
-def _bridge(setting=Quality.high_lossless):
+def _bridge(setting="LOSSLESS"):
     """A bare bridge with the real override + queue methods bound on."""
     b = SimpleNamespace()
     b._quality_overrides = {}
     b._objs = {"track": {}, "album": {}}
-    b.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=setting))
+    b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=setting))
     b.qualityOverridesChanged = _Emit()
     b.qualityChoiceChanged = _Emit()
     b.ownershipChanged = _Emit()
@@ -148,37 +148,37 @@ def test_the_store_takes_the_four_tiers_and_default_and_nothing_else():
 def test_an_items_own_choice_is_what_a_download_asks_for():
     b = _bridge()
     b.setQualityOverride("t1", "HIGH")
-    assert b._ask_quality_for(_track(), "track", "t1") == (Quality.low_320k.value, "HIGH")
+    assert b._ask_quality_for(_track(), "track", "t1") == ("HIGH", "HIGH")
 
 
 def test_a_track_inherits_its_albums_choice():
     b = _bridge()
     b.setQualityOverride("a1", "LOW")
-    assert b._ask_quality_for(_track(), "track", "t1") == (Quality.low_96k.value, "LOW")
+    assert b._ask_quality_for(_track(), "track", "t1") == ("LOW", "LOW")
     # Its own choice wins over the album's.
     b.setQualityOverride("t1", "HI-RES")
-    assert b._ask_quality_for(_track(), "track", "t1") == (Quality.hi_res_lossless.value, "HI-RES")
+    assert b._ask_quality_for(_track(), "track", "t1") == ("HI_RES_LOSSLESS", "HI-RES")
     # A track from another album is untouched.
-    assert b._ask_quality_for(_track("t9", "a9"), "track", "t9") == (Quality.high_lossless.value, "LOSSLESS")
+    assert b._ask_quality_for(_track("t9", "a9"), "track", "t9") == ("LOSSLESS", "LOSSLESS")
 
 
 def test_default_pins_the_setting_on_a_track_under_an_album_that_chose():
-    b = _bridge(setting=Quality.hi_res_lossless)
+    b = _bridge(setting="HI_RES_LOSSLESS")
     b.setQualityOverride("a1", "HIGH")
     b.setQualityOverride("t1", "DEFAULT")
-    assert b._ask_quality_for(_track(), "track", "t1") == (Quality.hi_res_lossless.value, "HI-RES")
+    assert b._ask_quality_for(_track(), "track", "t1") == ("HI_RES_LOSSLESS", "HI-RES")
 
 
 def test_without_a_choice_the_setting_answers_exactly_as_before():
-    b = _bridge(setting=Quality.low_320k)
-    assert b._ask_quality_for(_track(), "track", "t1") == (Quality.low_320k.value, "HIGH")
-    assert b._ask_quality_for(SimpleNamespace(id="a1"), "album", "a1") == (Quality.low_320k.value, "HIGH")
+    b = _bridge(setting="HIGH")
+    assert b._ask_quality_for(_track(), "track", "t1") == ("HIGH", "HIGH")
+    assert b._ask_quality_for(SimpleNamespace(id="a1"), "album", "a1") == ("HIGH", "HIGH")
 
 
 def test_a_bare_stub_without_the_store_falls_through_to_the_setting():
     b = _bridge()
     del b._quality_overrides
-    assert b._ask_quality_for(_track(), "track", "t1") == (Quality.high_lossless.value, "LOSSLESS")
+    assert b._ask_quality_for(_track(), "track", "t1") == ("LOSSLESS", "LOSSLESS")
     assert b.qualityOverrideOf("t1") == ""
     assert b.qualityOverridesChanged.calls == []
 
@@ -187,8 +187,8 @@ def test_a_bare_stub_without_the_store_falls_through_to_the_setting():
 
 
 def test_enqueue_writes_the_ask_it_is_handed_and_the_setting_otherwise():
-    b = _bridge(setting=Quality.high_lossless)
-    qid = b._enqueue("Song", "track", "t1", ask_quality=Quality.low_96k.value, ask_tier="LOW")
+    b = _bridge(setting="LOSSLESS")
+    qid = b._enqueue("Song", "track", "t1", ask_quality="LOW", ask_tier="LOW")
     row = b._queue_index[qid]
     assert (row["askQuality"], row["quality"]) == ("LOW", "LOW")
     qid2 = b._enqueue("Song", "track", "t2")
@@ -267,7 +267,7 @@ def test_a_held_download_asks_at_the_choice_standing_when_it_is_released():
 
 
 def test_the_currency_check_targets_the_choice_so_a_lower_copy_offers_an_upgrade():
-    b = _bridge(setting=Quality.high_lossless)
+    b = _bridge(setting="LOSSLESS")
     assert b._override_target_rank("t1") == quality_rank(Quality.high_lossless.value)
     b.setQualityOverride("t1", "HI-RES")
     assert b._override_target_rank("t1") == quality_rank(Quality.hi_res_lossless.value)
@@ -306,7 +306,7 @@ def test_the_download_reads_the_choice_after_every_gate_and_writes_it_on_the_row
 def test_a_retry_keeps_the_tier_its_row_asked_at():
     """RETRY re-enters _download; the retried row's own ask rides along, so
     a choice or setting that moved since does not retarget it."""
-    b = _bridge(setting=Quality.high_lossless)
+    b = _bridge(setting="LOSSLESS")
     b.setQualityOverride("t1", "LOW")
     b._download(_track(), "track", "Song", "{tmpl}", False, "t1", keep_ask=("HIGH", "HIGH"))
     assert (b._queue[-1]["askQuality"], b._queue[-1]["quality"]) == ("HIGH", "HIGH")

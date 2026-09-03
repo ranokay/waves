@@ -26,8 +26,8 @@ from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvai
 from tidalapi.media import AudioMode, Track
 from tidalapi.mix import Mix
 
-from waves.config import Tidal, harden_api_session
-from waves.constants import ATMOS_REQUEST_QUALITY, CTX_TIDAL, LIBRARY_PAGE, MediaType
+from waves.config import ATMOS_REQUEST_QUALITY, Tidal, harden_api_session, session_quality_from_word
+from waves.constants import CTX_TIDAL, LIBRARY_PAGE, MediaType, QualityTier, quality_rank, tier_from_word
 from waves.download import _artist_ids, _tidal_refuses_asset, _waves_item_id
 from waves.helper.folders import walk_playlist_tree
 from waves.helper.tidal import (
@@ -47,24 +47,13 @@ from waves.providers.base import (
     Capability,
     FavoritesUnavailable,
     Provider,
-    QualityTier,
     Refusal,
     RefusalKind,
     StreamInfo,
-    quality_rank,
 )
 from waves.waves_ui.manifest import overgenerated_tail_urls
 
 logger = logging.getLogger("waves.providers.tidal")
-
-# The Waves tier each TIDAL request rides: the rungs the UI's own spec lines
-# name (LOW = AAC 96, HIGH = AAC 320, then lossless and hi-res lossless).
-_TIDAL_QUALITY_BY_TIER: dict[QualityTier, tidalapi.Quality] = {
-    QualityTier.LOW: tidalapi.Quality.low_96k,
-    QualityTier.HIGH: tidalapi.Quality.low_320k,
-    QualityTier.LOSSLESS: tidalapi.Quality.high_lossless,
-    QualityTier.HI_RES_LOSSLESS: tidalapi.Quality.hi_res_lossless,
-}
 
 _ATMOS_MODE: str = str(AudioMode.dolby_atmos.value)
 
@@ -116,29 +105,6 @@ def _tidal_id(raw) -> str:
     ids everywhere new), empty staying empty."""
     raw = str(raw or "")
     return f"{CTX_TIDAL}:{raw}" if raw else ""
-
-
-def tier_from_tidal(quality: tidalapi.Quality | str) -> QualityTier:
-    """A TIDAL quality spelling onto the Waves ladder.
-
-    tidalapi 0.8's tier values are already the ladder's strings; the fall
-    through handles the legacy spellings a delivered stream can carry
-    (``low_320k`` etc.), folded exactly the way the backend's tier words fold
-    them, so a row's badge and its rank can never disagree.
-    """
-    name = str(getattr(quality, "value", quality))
-    try:
-        return QualityTier(name)
-    except ValueError:
-        pass
-    lowered = name.lower()
-    if "hi_res" in lowered or "hires" in lowered:
-        return QualityTier.HI_RES_LOSSLESS
-    if "lossless" in lowered:
-        return QualityTier.LOSSLESS
-    if "320" in lowered or lowered == "high":
-        return QualityTier.HIGH
-    return QualityTier.LOW
 
 
 class TidalProvider(Provider):
@@ -276,10 +242,12 @@ class TidalProvider(Provider):
     def apply_quality(self, tier: QualityTier, audio_type: AudioType) -> None:
         # The session carries only the stereo tier, written exactly the way
         # settings_apply writes it (guard included: while the Atmos swap owns
-        # the session, the stereo tier is held off it). TIDAL's Atmos delivery
-        # is a per-stream decision inside the fenced swap machinery, never a
-        # session property this call could set.
-        self._tidal.settings.data.quality_audio = _TIDAL_QUALITY_BY_TIER[tier]
+        # the session, the stereo tier is held off it). The provider stores
+        # the Waves rung as its tier string on the engine's settings; the
+        # engine maps it onto its own codec vocabulary (spec §4.3). TIDAL's
+        # Atmos delivery is a per-stream decision inside the fenced swap
+        # machinery, never a session property this call could set.
+        self._tidal.settings.data.tidal_quality_audio = str(tier.value)
         self._tidal.settings_apply()
 
     # ----- catalog read
@@ -512,11 +480,10 @@ class TidalProvider(Provider):
             return None
         if quality is None:
             # No answer at all (no tags, no fallback quality): unknown stays
-            # unknown. The fold below turns an unrecognized spelling into the
-            # ladder's bottom rung -- that is its documented job for a REAL
-            # spelling -- but a missing quality must not read as LOW.
+            # unknown. The shared fold below answers None for an unrecognized
+            # spelling too, so a catalog oddity can never read as a real rung.
             return None
-        return tier_from_tidal(quality)
+        return tier_from_word(quality)
 
     def advertised_deliveries(self, obj) -> list[tuple[QualityTier, AudioType]]:
         modes = getattr(obj, "audio_modes", None) or []
@@ -529,7 +496,7 @@ class TidalProvider(Provider):
         if _ATMOS_MODE in {str(mode) for mode in modes}:
             # Atmos rides ONE fixed request tier the quality setting cannot
             # raise; the UI words an Atmos delivery ATMOS, never a rung.
-            deliveries.append((tier_from_tidal(ATMOS_REQUEST_QUALITY), AudioType.ATMOS))
+            deliveries.append((tier_from_word(ATMOS_REQUEST_QUALITY), AudioType.ATMOS))
         return deliveries
 
     def advertised_ceiling(self, obj) -> int | None:
@@ -651,7 +618,9 @@ class TidalProvider(Provider):
                 # Canonical resting quality, NOT restore_normal_session(),
                 # which leaves quality untouched in normal mode (config.py).
                 with contextlib.suppress(Exception):
-                    self._tidal.session.audio_quality = tidalapi.Quality(self._tidal.settings.data.quality_audio)
+                    quality = session_quality_from_word(self._tidal.settings.data.tidal_quality_audio)
+                    if quality is not None:
+                        self._tidal.session.audio_quality = quality
 
     @staticmethod
     def _hls_url(manifest) -> str:

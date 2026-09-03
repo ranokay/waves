@@ -92,7 +92,7 @@ def test_a_setting_change_leaves_every_queued_row_alone():
 
     assert not hasattr(backend.WavesBridge, "_retarget_unfinished_rows")
     src = inspect.getsource(backend.WavesBridge.applySettings)
-    block = src[src.index('if "quality_audio" in values:') :]
+    block = src[src.index('if "tidal_quality_audio" in values:') :]
     assert "retarget" not in block.replace("NOT retarget", ""), block[:400]
     # Not by name. A retarget written inline, whatever it were called, would
     # have to reach the queue store or the per-track registry, or republish
@@ -244,7 +244,7 @@ def _run_scenario() -> int:
     # Read from the setting, a retarget after the change below would floor
     # HIGH against LOSSLESS and move the pill to HIGH, which is what the
     # assertions after the change exist to catch.
-    bridge.applySettings({"quality_audio": "hi_res_lossless"})
+    bridge.applySettings({"tidal_quality_audio": "HI_RES_LOSSLESS"})
     settle(120)
     if bridge._target_tier() != "HI-RES":
         print(f"the setting did not take: target reads {bridge._target_tier()!r}", file=sys.stderr)
@@ -293,7 +293,7 @@ def _run_scenario() -> int:
     # The setting drops to HIGH while the job is queued. Nothing in the
     # drawer may move: this row was queued at the old quality and will be
     # fetched at it (see test_quality_pinned_per_job.py).
-    bridge.applySettings({"quality_audio": "low_320k"})
+    bridge.applySettings({"tidal_quality_audio": "HIGH"})
     settle(300)
     if bridge._target_tier() != "HIGH":
         print(f"the setting change did not take: target reads {bridge._target_tier()!r}", file=sys.stderr)
