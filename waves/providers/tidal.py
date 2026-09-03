@@ -26,7 +26,7 @@ from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvai
 from tidalapi.media import AudioMode, Track
 from tidalapi.mix import Mix
 
-from waves.config import ATMOS_REQUEST_QUALITY, Tidal, harden_api_session, tidal_quality_for_tier
+from waves.config import ATMOS_REQUEST_QUALITY, Tidal, harden_api_session, session_quality_from_word
 from waves.constants import CTX_TIDAL, LIBRARY_PAGE, MediaType, QualityTier, quality_rank, tier_from_word
 from waves.download import _artist_ids, _tidal_refuses_asset, _waves_item_id
 from waves.helper.folders import walk_playlist_tree
@@ -617,12 +617,10 @@ class TidalProvider(Provider):
             finally:
                 # Canonical resting quality, NOT restore_normal_session(),
                 # which leaves quality untouched in normal mode (config.py).
-                # The settings hold Waves tier strings; the engine maps the
-                # rung onto its own codec vocabulary (issue #24).
                 with contextlib.suppress(Exception):
-                    tier = tier_from_word(self._tidal.settings.data.tidal_quality_audio)
-                    if tier is not None:
-                        self._tidal.session.audio_quality = tidal_quality_for_tier(tier)
+                    quality = session_quality_from_word(self._tidal.settings.data.tidal_quality_audio)
+                    if quality is not None:
+                        self._tidal.session.audio_quality = quality
 
     @staticmethod
     def _hls_url(manifest) -> str:

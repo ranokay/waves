@@ -67,6 +67,7 @@ def _apply_stub():
     stub.providers = {"tidal": SimpleNamespace(apply_quality=fake_apply_quality)}
     stub._apply_quality_calls = calls
     stub._reapply_quality = WavesBridge._reapply_quality.__get__(stub, _Stub)
+    stub._reapply_provider_quality = WavesBridge._reapply_provider_quality.__get__(stub, _Stub)
     return stub
 
 

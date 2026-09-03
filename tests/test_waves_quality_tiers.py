@@ -261,10 +261,16 @@ def test_the_tidal_choice_round_trips_tier_strings():
 
 
 def test_the_apple_choice_exists_with_honest_labels():
+    # The shared ladder drives the options; Apple's labels name its own
+    # codecs and start at HIGH (Apple has no LOW rung), so LOW has no mapped
+    # label and would fall back to the raw name.
     options = _enum_options("apple_quality_audio", QualityTier)
-    values = [o["value"] for o in options]
-    assert "LOW" in values or "LOW" not in values  # the ladder itself is shared
-    assert options[0]["label"]
+    assert [o["value"] for o in options] == ["LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS"]
+    by_value = {o["value"]: o["label"] for o in options}
+    assert by_value["HIGH"] == "High (AAC 256)"
+    assert by_value["LOSSLESS"] == "Lossless (ALAC 16-bit)"
+    assert by_value["HI_RES_LOSSLESS"] == "Max · Hi-Res (ALAC 24-bit)"
+    assert by_value["LOW"] == "LOW"
 
 
 # ---- per-provider side effects ----------------------------------------------------

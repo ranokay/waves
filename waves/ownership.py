@@ -24,20 +24,18 @@ import sqlite3
 import time
 from threading import Lock
 
-from waves.constants import TIER_RANK, quality_rank
+from waves.constants import quality_rank
 from waves.ids import namespaced_id
 
 # The delivered-quality ladder is Waves' own (waves.constants.QualityTier,
 # issue #24): LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS, ranked 0..3 by the
-# shared quality_rank. A caller asks "is a better tier available than what is
-# on disk" with a plain integer comparison, and the DB can ORDER BY the stored
-# rank. Bit depth and sample rate are deliberately NOT used for ranking: TIDAL
-# omits them for some tiers (they default to 16 / 44100), so the tier string is
-# the only trustworthy signal. The scale is re-exported under its historical
-# name for the modules that rank through this store.
+# shared quality_rank (imported here; the store's rank column and the
+# ORDER BYs run the same scale the bridge and the settings rank with). A
+# caller asks "is a better tier available than what is on disk" with a plain
+# integer comparison. Bit depth and sample rate are deliberately NOT used for
+# ranking: TIDAL omits them for some tiers (they default to 16 / 44100), so
+# the tier string is the only trustworthy signal.
 logger = logging.getLogger("waves.ownership")
-
-QUALITY_RANK = TIER_RANK
 
 
 def _nonempty_file(path: str) -> bool:

@@ -52,6 +52,18 @@ def tidal_quality_for_tier(tier: QualityTier) -> tidalapi.Quality:
     return _TIDAL_QUALITY_BY_TIER[QualityTier(tier)]
 
 
+def session_quality_from_word(word: str | None) -> tidalapi.Quality | None:
+    """A settings word onto the session's quality, or None when unreadable.
+
+    THE gather point for "read the user's tier and write it onto the session":
+    the fold onto the ladder (any spelling a config or a caller can carry) and
+    the engine's codec map in one call, with one policy -- an unreadable value
+    answers None and the caller writes nothing, so the session keeps the tier
+    it already carries rather than a corrupt setting crashing it."""
+    tier = tier_from_word(word)
+    return tidal_quality_for_tier(tier) if tier is not None else None
+
+
 # Windows answers os.replace with a sharing violation (WinError 32) while ANY
 # other process holds the target open: an antivirus scanning the file, a backup
 # tool syncing Roaming, or a second app instance. Those locks are usually gone
@@ -517,11 +529,10 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         if not self.is_atmos_session:
             # The settings carry Waves tier strings; the engine maps the rung
             # onto its own codec vocabulary (spec §4.3). An unreadable value
-            # writes nothing: the session keeps the tier it already carries
-            # rather than the write crashing the caller.
-            tier = tier_from_word(getattr(self.settings.data, "tidal_quality_audio", ""))
-            if tier is not None:
-                self.session.audio_quality = tidal_quality_for_tier(tier)
+            # writes nothing: the session keeps the tier it already carries.
+            quality = session_quality_from_word(getattr(self.settings.data, "tidal_quality_audio", ""))
+            if quality is not None:
+                self.session.audio_quality = quality
         self.session.video_quality = tidalapi.VideoQuality.high
 
         return True
@@ -692,9 +703,9 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         # at all and the session kept the tier from before it.
         self.is_atmos_session = False
         # Explicitly restore audio quality to user's configured setting
-        tier = tier_from_word(getattr(self.settings.data, "tidal_quality_audio", ""))
-        if tier is not None:
-            self.session.audio_quality = tidal_quality_for_tier(tier)
+        quality = session_quality_from_word(getattr(self.settings.data, "tidal_quality_audio", ""))
+        if quality is not None:
+            self.session.audio_quality = quality
 
         # Re-authenticate under the original client.
         if not self._reauthenticate_current_client():

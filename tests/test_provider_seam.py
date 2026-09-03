@@ -24,7 +24,7 @@ from tidalapi.mix import Mix
 from tidalapi.session import Session
 
 from waves.constants import MediaType
-from waves.ownership import QUALITY_RANK
+from waves.constants import TIER_RANK as QUALITY_RANK
 from waves.providers import (
     AudioType,
     Capability,

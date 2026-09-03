@@ -49,7 +49,6 @@ from waves.constants import (
     CTX_TIDAL,
     DEFAULT_ILLEGAL_MAP,
     LIBRARY_PAGE,
-    TIER_RANK,
     CoverDimensions,
     DownsampleTarget,
     InitialKey,
@@ -2398,7 +2397,6 @@ def _is_compilation_release(album) -> bool:
 
 
 _VERSION_TOKEN_RE = re.compile(r"[\[(]\s*(explicit|clean|e)\s*[\])]", re.IGNORECASE)
-_QUALITY_RANK = {"hi_res_lossless": 4, "high_lossless": 3, "low_320k": 2, "low_96k": 1}
 
 
 def _norm_title(title: str) -> str:
@@ -9163,8 +9161,11 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _max_quality_rank(self) -> int:
         """Rank of the user's configured maximum audio quality (the cap that
-        search results are filtered down to)."""
-        return TIER_RANK.get(str(self.settings.data.tidal_quality_audio or ""), 3)
+        search results are filtered down to). The setting folds through the
+        shared ladder like every other read (issue #24); an unreadable value
+        caps at nothing (HI-RES), never at the bottom."""
+        tier = tier_from_word(str(self.settings.data.tidal_quality_audio or ""))
+        return quality_rank(tier) if tier is not None else 3
 
     def _merge_rank_fn(self):
         """Rank function for merge planning: a recording's advertised tier,
@@ -14273,24 +14274,20 @@ class WavesBridge(LibraryMixin, QObject):
         return result
 
     def _reapply_quality(self, quality) -> None:
-        """Re-apply a provider's audio-quality setting to its live session.
+        """Re-apply the TIDAL audio-quality setting to the live session.
 
         Streams are requested at the SESSION's audio quality, and that was
         only set at startup; without this, a quality change would not reach a
         download until the app restarted. The ask rides the seam
         (``apply_quality``): the provider writes the rung it maps its engine's
         codec to, and the Atmos session guard inside ``settings_apply`` holds
-        the write off while an Atmos-credential session is active. Per-provider
-        (issue #24): TIDAL's setting reaches TIDAL's session; an unknown rung
-        applies nothing.
+        the write off while an Atmos-credential session is active.
         """
-        provider = self.providers.get(CTX_TIDAL)
-        tier = tier_from_word(quality)
-        if provider is not None and tier is not None:
-            provider.apply_quality(tier, AudioType.STEREO)
+        self._reapply_provider_quality(CTX_TIDAL, quality)
 
     def _reapply_provider_quality(self, context: str, quality) -> None:
-        """Apply a provider's own quality setting to that provider alone."""
+        """Apply a provider's own quality setting to that provider alone
+        (issue #24). An unknown rung applies nothing."""
         provider = self.providers.get(context)
         tier = tier_from_word(quality)
         if provider is not None and tier is not None:

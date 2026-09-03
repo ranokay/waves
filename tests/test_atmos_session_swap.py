@@ -169,7 +169,7 @@ def test_a_real_atmos_copy_settles_instead_of_re_fetching_forever():
     target the user can pick. The gate has to answer on the audio_mode, not the
     tier, or every save re-fetches the identical Atmos file. Pinned because the
     whole point of restoring delivery is undone if the copy never settles."""
-    from waves.ownership import QUALITY_RANK
+    from waves.constants import TIER_RANK as QUALITY_RANK
     from waves.waves_ui.backend import _copy_is_current, _delivers_atmos
 
     atmos_only = types.SimpleNamespace(audio_modes=["DOLBY_ATMOS"])
