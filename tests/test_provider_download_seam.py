@@ -562,6 +562,8 @@ class TestJobSpecDispatch:
         stub._set_status = lambda msg: None
         stub._job_library_skip = lambda qid: skip
         stub._job_quality = lambda qid: None
+        stub._queue_item = lambda qid: stub._queue_index.get(qid)
+        stub._row_ask = lambda qid: None
         stub._build_download = _build_download
         stub._release_job_signals = lambda qid: stub._job_signals.pop(qid, None)
         stub._gate_reachability = lambda retry, media_id: True
