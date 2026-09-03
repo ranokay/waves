@@ -33,7 +33,7 @@ from waves.providers import (
     StreamInfo,
     TidalProvider,
     quality_rank,
-    tier_from_tidal,
+    tier_from_word,
 )
 
 
@@ -604,7 +604,7 @@ class TestQuality:
         for tier in QualityTier:
             assert quality_rank(tier) == QUALITY_RANK[tier.value]
 
-    def test_tier_from_tidal_aligns_with_the_backend_tier_words(self):
+    def test_tier_from_word_aligns_with_the_backend_tier_words(self):
         # The backend folds a delivered tier into the one word the UI shows;
         # the Waves rung must fold the same way or a row's badge lies.
         from waves.waves_ui.backend import _tier_word
@@ -616,7 +616,7 @@ class TestQuality:
             QualityTier.HI_RES_LOSSLESS: "HI-RES",
         }
         for quality in Quality:
-            tier = tier_from_tidal(quality)
+            tier = tier_from_word(quality)
             assert word_by_tier[tier] == _tier_word(quality.value), quality
 
     def test_advertised_tier_reads_the_metadata_tags(self):
@@ -655,7 +655,7 @@ class TestQuality:
             track = Mock(spec=Track)
             track.media_metadata_tags = tags
             track.audio_quality = audio_quality
-            assert provider.advertised_tier(track) is tier_from_tidal(quality_audio_highest(track))
+            assert provider.advertised_tier(track) is tier_from_word(quality_audio_highest(track))
 
     def test_advertised_ceiling_matches_the_backend_gate_input(self):
         # The backend's upgrade gate caps on exactly this answer; the numbers
@@ -1244,7 +1244,7 @@ class TestPreviewContract:
         # The resolve pins LOW for its own fetch and restores the configured
         # tier in finally -- the guarantee the bridge's comment documents.
         provider, tidal, track = self._resolved()
-        tidal.settings.data.quality_audio = Quality.high_lossless
+        tidal.settings.data.tidal_quality_audio = "LOSSLESS"
 
         provider.resolve_preview(track)
 

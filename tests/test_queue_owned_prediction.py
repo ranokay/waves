@@ -76,7 +76,7 @@ def _bridge(*, recs=None, claim=None, quality=Quality.hi_res_lossless, atmos=Fal
     b._merge_plans = {}
     b._objs = {"album": {}}
     b._queue_index = {}
-    b.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=quality, download_dolby_atmos=atmos))
+    b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=quality.value, download_dolby_atmos=atmos))
     # Not something the prediction may read: the bulk-skip pref is consulted
     # once, when the row is queued, and the prediction reads what the row kept
     # (see _job_library_skip). Wired to fail the test so a reader that went back

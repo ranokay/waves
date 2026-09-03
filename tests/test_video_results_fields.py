@@ -78,7 +78,7 @@ def _vid(title, dur, explicit=False, quality="MP4_1080P"):
 def _dedup_bridge(mode="explicit"):
     b = WavesBridge.__new__(WavesBridge)
     b._waves_prefs = {"explicit_mode": mode}
-    b.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=SimpleNamespace(name="")))
+    b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=""))
     return b
 
 

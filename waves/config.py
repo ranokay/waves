@@ -19,8 +19,9 @@ from urllib3.exceptions import InvalidHeader
 from waves.constants import (
     ATMOS_CLIENT_ID,
     ATMOS_CLIENT_SECRET,
-    ATMOS_REQUEST_QUALITY,
     REQUESTS_TIMEOUT_SEC,
+    QualityTier,
+    tier_from_word,
 )
 from waves.helper.decorator import SingletonMeta
 from waves.helper.path import path_config_base, path_file_settings, path_file_token
@@ -28,6 +29,28 @@ from waves.model.cfg import Settings as ModelSettings
 from waves.model.cfg import Token as ModelToken
 
 logger = logging.getLogger("waves.config")
+
+# The Atmos session pins the shared session to this one tier: TIDAL serves
+# Atmos only through a fixed request tier, whatever the audio quality settings
+# say (the stereo ladder never governs an Atmos fetch).
+ATMOS_REQUEST_QUALITY = tidalapi.Quality.low_320k
+
+# The engine's codec map (spec §4.3: each provider maps its engine's codecs
+# onto the Waves ladder): each rung onto the tidalapi Quality the session
+# asks for. The engine owns the mapping -- ``providers.tidal`` imports it
+# from here, because that module imports this one (never the reverse).
+_TIDAL_QUALITY_BY_TIER: dict[QualityTier, tidalapi.Quality] = {
+    QualityTier.LOW: tidalapi.Quality.low_96k,
+    QualityTier.HIGH: tidalapi.Quality.low_320k,
+    QualityTier.LOSSLESS: tidalapi.Quality.high_lossless,
+    QualityTier.HI_RES_LOSSLESS: tidalapi.Quality.hi_res_lossless,
+}
+
+
+def tidal_quality_for_tier(tier: QualityTier) -> tidalapi.Quality:
+    """The tidalapi Quality the engine asks its session for at a Waves rung."""
+    return _TIDAL_QUALITY_BY_TIER[QualityTier(tier)]
+
 
 # Windows answers os.replace with a sharing violation (WinError 32) while ANY
 # other process holds the target open: an antivirus scanning the file, a backup
@@ -186,6 +209,29 @@ def _migrate_settings(data: ModelSettings) -> bool:
     overrides a choice the user makes afterwards.
     """
     changed = False
+
+    # quality_audio split into the per-provider settings (issue #24, spec
+    # §9.2), stored as Waves tier strings. The legacy field is a
+    # migration-only carrier (never serialized): when a pre-split config
+    # handed it a value, fold that value onto the ladder into
+    # tidal_quality_audio -- identical meaning, since tidalapi's serialized
+    # tier values already are the ladder's words (low_320k serialized as
+    # "HIGH", the word the UI shows) -- then null it, so the key leaves
+    # settings.json on the next save and the migration is one-time by
+    # construction. The fold also carries the member-name spellings a
+    # hand-edited config may hold, and apple_quality_audio starts at its own
+    # default (Apple has no LOW rung); nothing else moves.
+    if data.quality_audio is not None:
+        tier = tier_from_word(data.quality_audio)
+        if tier is not None:
+            data.tidal_quality_audio = tier.value
+        else:
+            logger.warning(
+                "Settings carried an unreadable audio quality %r; the TIDAL default stands",
+                data.quality_audio,
+            )
+        data.quality_audio = None
+        changed = True
 
     # ReplayGain became on-by-default. Configs created before that carry an
     # explicit False that is really just the old default, so switch them on once.
@@ -469,7 +515,13 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
             self.settings = settings
 
         if not self.is_atmos_session:
-            self.session.audio_quality = tidalapi.Quality(self.settings.data.quality_audio)
+            # The settings carry Waves tier strings; the engine maps the rung
+            # onto its own codec vocabulary (spec §4.3). An unreadable value
+            # writes nothing: the session keeps the tier it already carries
+            # rather than the write crashing the caller.
+            tier = tier_from_word(getattr(self.settings.data, "tidal_quality_audio", ""))
+            if tier is not None:
+                self.session.audio_quality = tidal_quality_for_tier(tier)
         self.session.video_quality = tidalapi.VideoQuality.high
 
         return True
@@ -640,7 +692,9 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         # at all and the session kept the tier from before it.
         self.is_atmos_session = False
         # Explicitly restore audio quality to user's configured setting
-        self.session.audio_quality = tidalapi.Quality(self.settings.data.quality_audio)
+        tier = tier_from_word(getattr(self.settings.data, "tidal_quality_audio", ""))
+        if tier is not None:
+            self.session.audio_quality = tidal_quality_for_tier(tier)
 
         # Re-authenticate under the original client.
         if not self._reauthenticate_current_client():

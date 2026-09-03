@@ -34,7 +34,6 @@ from unittest.mock import patch
 
 import pytest
 from _dispatch_stub import arm_dispatch
-from tidalapi.media import Quality
 
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
@@ -101,7 +100,7 @@ class _Stub:
         self._ownership = SimpleNamespace(ownership_of=lambda tid: None)
         self.settings = SimpleNamespace(
             data=SimpleNamespace(
-                quality_audio=Quality.high_lossless,
+                tidal_quality_audio="LOSSLESS",
                 download_dolby_atmos=False,
                 download_base_path="/tmp/waves-out",
                 download_delay=False,
@@ -243,7 +242,8 @@ def test_the_setting_is_pinned_the_same_way_the_audio_quality_is():
     stub = _Stub(_Live(True))
     qid = _queue_album(stub)
     row = stub._queue_index[qid]
-    assert row["askQuality"] == Quality.high_lossless.value
+        # The row pins the Waves tier string (issue #24).
+    assert row["askQuality"] == "LOSSLESS"
     assert row["askLibrarySkip"] is True
 
 

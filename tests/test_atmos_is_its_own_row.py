@@ -76,7 +76,7 @@ def _track(tid, title, modes, *, quality=Quality.high_lossless):
 
 def _bridge():
     b = backend.WavesBridge.__new__(backend.WavesBridge)
-    b.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=Quality.hi_res_lossless))
+    b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio="HI_RES_LOSSLESS"))
     b._waves_prefs = {"explicit_mode": "explicit"}
     for name in ("_album_key", "_track_key", "_max_quality_rank", "_dedup_albums", "_dedup_tracks"):
         setattr(b, name, getattr(backend.WavesBridge, name).__get__(b, backend.WavesBridge))

@@ -18,8 +18,7 @@ import types
 
 import tidalapi
 
-from waves.config import Tidal
-from waves.constants import ATMOS_CLIENT_ID, ATMOS_CLIENT_SECRET, ATMOS_REQUEST_QUALITY
+from waves.config import ATMOS_CLIENT_ID, ATMOS_CLIENT_SECRET, ATMOS_REQUEST_QUALITY, Tidal
 
 # Dummy fixture values, not real credentials (bandit S105).
 _ORIG_ID = "orig-plain-id"
@@ -60,7 +59,7 @@ def _make(*, login_ok: bool = True, refresh_ok: bool = True) -> Tidal:
     stub.original_client_id_pkce = _ORIG_ID_PKCE
     stub.original_client_secret_pkce = _ORIG_SECRET_PKCE
     stub.settings = types.SimpleNamespace(
-        data=types.SimpleNamespace(quality_audio=tidalapi.Quality.high_lossless.value)
+        data=types.SimpleNamespace(tidal_quality_audio="LOSSLESS")
     )
     stub._login_calls: list[bool] = []
 
@@ -103,7 +102,7 @@ def test_a_settings_save_mid_switch_cannot_take_the_atmos_tier_back():
     def _refresh(refresh_token: str) -> bool:
         # The Settings SAVE lands here, mid-switch.
         seen.append(t.is_atmos_session)
-        t.settings.data.quality_audio = tidalapi.Quality.hi_res_lossless.value
+        t.settings.data.tidal_quality_audio = "HI_RES_LOSSLESS"
         t.settings_apply()
         return True
 
@@ -122,7 +121,7 @@ def test_a_settings_save_mid_restore_still_reaches_the_session():
     t.switch_to_atmos_session()
 
     def _refresh(refresh_token: str) -> bool:
-        t.settings.data.quality_audio = tidalapi.Quality.hi_res_lossless.value
+        t.settings.data.tidal_quality_audio = "HI_RES_LOSSLESS"
         t.settings_apply()
         return True
 

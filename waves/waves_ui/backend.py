@@ -38,22 +38,27 @@ from PySide6.QtCore import Property, QEvent, QObject, Qt, QTimer, Signal, Slot
 from tidalapi import page as tidal_page
 from tidalapi.album import Album
 from tidalapi.artist import Artist, Role
-from tidalapi.media import AudioMode, Quality, Track, Video
+from tidalapi.media import AudioMode, Track, Video
 from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
 
 import waves.download as _waves_download
-from waves.config import Settings, Tidal
+from waves.config import Settings, Tidal, tidal_quality_for_tier
 from waves.constants import (
+    CTX_APPLE,
     CTX_TIDAL,
     DEFAULT_ILLEGAL_MAP,
     LIBRARY_PAGE,
+    TIER_RANK,
     CoverDimensions,
     DownsampleTarget,
     InitialKey,
     MediaType,
     MetadataTargetUPC,
+    QualityTier,
     QualityVideo,
+    quality_rank,
+    tier_from_word,
 )
 from waves.download import COLLECTION_GAUGE, SEGMENT_GAUGE, Download
 from waves.helper.exceptions import DownloadIncomplete
@@ -85,10 +90,10 @@ from waves.model.cfg import Settings as CfgSettings
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.downloader import TrackStreamInfo
 from waves.model.gui_data import ProgressBars
-from waves.ownership import OwnershipStore, quality_rank
+from waves.ownership import OwnershipStore
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress
-from waves.providers import AudioType, Provider, RefusalKind, TidalProvider, tier_from_tidal
+from waves.providers import AudioType, Provider, RefusalKind, TidalProvider
 from waves.waves_ui import proc
 from waves.waves_ui.session import WavesTidal
 from waves.worker import Worker
@@ -318,7 +323,8 @@ _FLAG_FIELDS = [
     "metadata_write_url",
 ]
 _CHOICE_FIELDS = [
-    ("quality_audio", Quality),
+    ("tidal_quality_audio", QualityTier),
+    ("apple_quality_audio", QualityTier),
     ("quality_video", QualityVideo),
     ("metadata_cover_dimension", CoverDimensions),
     # Advanced
@@ -844,7 +850,8 @@ def _build_template_sample():
 _FIELD_LABELS = {
     # Downloads
     "download_base_path": "Download folder",
-    "quality_audio": "Audio quality",
+    "tidal_quality_audio": "Audio quality",
+    "apple_quality_audio": "Audio quality (Apple)",
     "quality_video": "Video quality",
     "downloads_concurrent_max": "Concurrent track downloads",
     "download_dolby_atmos": "Download Dolby Atmos",
@@ -892,11 +899,19 @@ _FIELD_LABELS = {
 # Human labels for enum dropdown values, keyed by field then by enum member
 # name (the stored value). Unmapped members fall back to the raw name.
 _ENUM_LABELS = {
-    "quality_audio": {
-        "low_96k": "Low (96 kbps)",
-        "low_320k": "High (320 kbps)",
-        "high_lossless": "Lossless (16-bit)",
-        "hi_res_lossless": "Max · Hi-Res (24-bit)",
+    # Per-provider audio quality (issue #24): the Waves rungs, each provider
+    # stating them in its own codecs. TIDAL keeps the wording it always had;
+    # Apple has no LOW rung (AAC 256 starts at HIGH), so its list starts there.
+    "tidal_quality_audio": {
+        "LOW": "Low (96 kbps)",
+        "HIGH": "High (320 kbps)",
+        "LOSSLESS": "Lossless (16-bit)",
+        "HI_RES_LOSSLESS": "Max · Hi-Res (24-bit)",
+    },
+    "apple_quality_audio": {
+        "HIGH": "High (AAC 256)",
+        "LOSSLESS": "Lossless (ALAC 16-bit)",
+        "HI_RES_LOSSLESS": "Max · Hi-Res (ALAC 24-bit)",
     },
     "quality_video": {"P360": "360p", "P480": "480p", "P720": "720p", "P1080": "1080p"},
     "metadata_cover_dimension": {
@@ -1256,11 +1271,11 @@ class _TrackedDownload(Download):
         # raising the quality setting re-fetches, a plain re-click does not.
         self._ownership_of = ownership_of
         self._target_rank = int(target_rank)
-        # The audio quality this job was queued at. A download asks the SHARED
-        # session for its stream, so without this a quality change in Settings
-        # would silently retarget work already queued or in flight; a job now
-        # finishes at the quality the user started it with, and the new choice
-        # applies to what they queue next.
+        # The Waves rung this job was queued at (issue #24). A download asks
+        # the SHARED session for its stream, so without this a quality change
+        # in Settings would silently retarget work already queued or in
+        # flight; a job now finishes at the quality the user started it with,
+        # and the new choice applies to what they queue next.
         self._pinned_quality = pinned_quality
         # The library scan's bulk claim gate (library_bulk_skip): a callable
         # answering "does the user's library already claim this track?" from
@@ -1468,7 +1483,9 @@ class _TrackedDownload(Download):
                         logger.info("Could not leave the Atmos session; not fetching this track at an unpinned quality")
                         return TrackStreamInfo(None, "", False, None)
                     prev = self.session.audio_quality
-                    self.session.audio_quality = pinned
+                    # The job pins a Waves rung (issue #24); the engine maps
+                    # the rung onto the codec vocabulary its session asks at.
+                    self.session.audio_quality = tidal_quality_for_tier(pinned)
             except Exception:
                 logger.debug("Could not pin this job's audio quality", exc_info=True)
                 prev = None
@@ -2085,22 +2102,11 @@ def _date_added(obj) -> str:
         return str(dt)
 
 
-# The UI's tier words back to the engine's Quality, the inverse of _tier_word
-# for the four stereo tiers a download can be asked at. "DEFAULT" is the one
-# non-tier a per-item quality choice can hold: it pins the Settings tier on a
-# track whose album carries a different choice (see _ask_quality_for).
-_QUALITY_BY_TIER = {
-    "HI-RES": Quality.hi_res_lossless,
-    "LOSSLESS": Quality.high_lossless,
-    "HIGH": Quality.low_320k,
-    "LOW": Quality.low_96k,
-}
+# A per-item quality choice can also hold "DEFAULT": the one non-tier that
+# pins the Settings tier on a track whose album carries a different choice
+# (see _ask_quality_for). Every real spelling a choice, row or setting can
+# carry folds onto the Waves ladder through tier_from_word (waves.constants).
 _OVERRIDE_DEFAULT = "DEFAULT"
-
-
-def _quality_for_tier(word: str):
-    """The Quality a UI tier word asks for, or None for anything else."""
-    return _QUALITY_BY_TIER.get(str(word or "").strip().upper())
 
 
 def _tier_word(name: str) -> str:
@@ -2414,17 +2420,18 @@ def _clean_bio(text: str) -> str:
 
 
 def _quality_rank(obj) -> int:
-    """Audio rank of a release OR a single recording, 0 when genuinely unknown.
+    """Audio rank of a release OR a single recording, -1 when genuinely unknown.
 
     The ``audio_quality`` fallback matters for TRACKS: tidalapi only fills a
     track's ``media_metadata_tags`` when the track is ``available``, leaving the
     class default of None on anything TIDAL flags ``allowStreaming=false``, so
     quality_audio_highest raises and a perfectly good hi-res recording scored 0.
     An album is not gated that way, which is why this never showed before ranking
-    moved to the recording. Rank 0 has to mean "the lowest tier", never "the tier
-    could not be read": the merge treats a low rank as an invitation to borrow
-    from another edition, and Waves settles availability at stream time anyway
-    (see download.py, allow_streaming is deliberately not trusted)."""
+    moved to the recording. The rank is the shared ladder's (TIER_RANK, LOW = 0);
+    unknown lands below every real rung (-1), because the merge treats a low
+    rank as an invitation to borrow from another edition, and Waves settles
+    availability at stream time anyway (see download.py, allow_streaming is
+    deliberately not trusted)."""
     name = ""
     try:
         name = getattr(quality_audio_highest(obj), "name", "")
@@ -2432,16 +2439,14 @@ def _quality_rank(obj) -> int:
         name = ""
     if not name:
         aq = getattr(obj, "audio_quality", None)
-        # _QUALITY_RANK is keyed by the enum NAME, so a raw wire VALUE
-        # ("LOSSLESS") has to go through Quality() to become one.
-        name = getattr(aq, "name", "")
-        if not name and aq:
-            with contextlib.suppress(Exception):
-                name = Quality(aq).name
-    return _QUALITY_RANK.get(name, 0)
+        name = str(getattr(aq, "value", aq) or "")
+    # One fold for every spelling the catalog can carry (member name, wire
+    # value, UI word) onto the Waves rung the whole app ranks by.
+    tier = tier_from_word(name)
+    return quality_rank(tier) if tier is not None else -1
 
 
-def _dedup_versions(items, key_fn, mode: str, max_rank: int = 4) -> list:
+def _dedup_versions(items, key_fn, mode: str, max_rank: int = 3) -> list:
     """Collapse duplicate editions of the same album/track down to one row.
 
     Items are grouped by ``key_fn`` (title + artist), then within each group we
@@ -7450,13 +7455,12 @@ class WavesBridge(LibraryMixin, QObject):
                 self.downloadVideo(str(key))
 
     def _queued_quality_value(self) -> str:
-        """The audio-quality setting as the plain tier string the Quality enum
-        carries, for the row to hold. Best-effort like _target_tier: an
-        unreadable setting means the job pins nothing and asks at whatever the
-        session already carries, rather than failing to queue."""
+        """The audio-quality setting as the plain Waves tier string it stores,
+        for the row to hold. Best-effort like _target_tier: an unreadable
+        setting means the job pins nothing and asks at whatever the session
+        already carries, rather than failing to queue."""
         try:
-            q = self.settings.data.quality_audio
-            return str(getattr(q, "value", q) or "")
+            return str(self.settings.data.tidal_quality_audio or "")
         except Exception:
             logger.debug("Could not read the audio quality to pin on the row", exc_info=True)
             return ""
@@ -7501,7 +7505,7 @@ class WavesBridge(LibraryMixin, QObject):
             if store.pop(mid, None) is None:
                 return
             logger.info("Quality choice cleared on one item")
-        elif word == _OVERRIDE_DEFAULT or _quality_for_tier(word) is not None:
+        elif word == _OVERRIDE_DEFAULT or tier_from_word(word) is not None:
             if store.get(mid) == word:
                 return
             store[mid] = word
@@ -7574,13 +7578,14 @@ class WavesBridge(LibraryMixin, QObject):
     def _ask_quality_for(self, obj, type_media: str, media_id: str) -> tuple[str, str]:
         """What a download queued now asks for: (askQuality value, tier word).
         Without a choice it is the Settings tier, exactly as before; DEFAULT is
-        that same answer made explicit on one item."""
+        that same answer made explicit on one item. The value is the Waves
+        tier string the row pins (issue #24)."""
         key = self._quality_override_key(obj, type_media, media_id)
         word = (getattr(self, "_quality_overrides", None) or {}).get(key, "") if key else ""
-        quality = _quality_for_tier(word)
-        if quality is None:
+        tier = tier_from_word(word)
+        if tier is None:
             return self._queued_quality_value(), self._target_tier()
-        return str(quality.value), _tier_word(quality.name)
+        return str(tier.value), _tier_word(tier.value)
 
     def _override_target_rank(self, track_id: str) -> int:
         """The rank a download of this track would target right now: its own
@@ -7593,8 +7598,8 @@ class WavesBridge(LibraryMixin, QObject):
         tid = str(track_id or "")
         obj = self._objs["track"].get(tid) if hasattr(self, "_objs") else None
         key = self._quality_override_key(obj, "track", tid)
-        quality = _quality_for_tier(store.get(key, "")) if key else None
-        return self._target_quality_rank(quality) if quality is not None else self._target_quality_rank()
+        tier = tier_from_word(store.get(key, "")) if key else None
+        return self._target_quality_rank(tier) if tier is not None else self._target_quality_rank()
 
     def _row_ask(self, qid: int) -> tuple | None:
         """The (askQuality, tier word) a queue row was created with, for a
@@ -7605,18 +7610,20 @@ class WavesBridge(LibraryMixin, QObject):
         return (ask, str(row.get("quality") or "")) if ask else None
 
     def _job_quality(self, qid: int):
-        """The audio quality a queue row was created at, as a Quality, or None
-        when the row is gone or its value is no longer a tier this build
-        knows (then the session's own quality stands)."""
+        """The audio quality a queue row was created at, as a Waves rung, or
+        None when the row is gone or its value is no longer a tier this build
+        knows (then the session's own quality stands). The row's askQuality
+        parses through the Waves enum (issue #24): the tier strings new rows
+        pin, and the tidalapi spellings rows queued before the split carried,
+        fold onto the same ladder."""
         row = self._queue_item(qid)
         raw = (row or {}).get("askQuality") or ""
         if not raw:
             return None
-        try:
-            return Quality(raw)
-        except Exception:
-            logger.debug("Queue row carries an unknown audio quality", exc_info=True)
-            return None
+        tier = tier_from_word(raw)
+        if tier is None:
+            logger.debug("Queue row carries an unknown audio quality")
+        return tier
 
     def _job_library_skip(self, qid: int) -> bool:
         """Whether the library scan's tag claim may skip tracks for this queue
@@ -7637,7 +7644,7 @@ class WavesBridge(LibraryMixin, QObject):
         Best-effort: an unreadable setting means the row states no target
         rather than the download failing to queue."""
         try:
-            return _tier_word(getattr(Quality(self.settings.data.quality_audio), "name", ""))
+            return _tier_word(str(self.settings.data.tidal_quality_audio or ""))
         except Exception:
             logger.debug("Could not read the target audio quality", exc_info=True)
             return ""
@@ -7657,8 +7664,8 @@ class WavesBridge(LibraryMixin, QObject):
         ask_tier: str | None = None,
     ) -> int:
         # A per-item quality choice arrives as both halves of the ask (the
-        # Quality value the job pins, the word the drawer states); without one
-        # both come from the setting as they always have.
+        # Waves tier string the job pins, the word the drawer states); without
+        # one both come from the setting as they always have.
         if ask_quality is None or ask_tier is None:
             ask_quality, ask_tier = self._queued_quality_value(), self._target_tier()
         self._queue_seq += 1
@@ -7693,7 +7700,7 @@ class WavesBridge(LibraryMixin, QObject):
             # The audio quality this job is queued at, held for its whole
             # life: a change in Settings retargets nothing that is already
             # queued or running, it applies to what is queued from then on.
-            # Stored as the plain tier string the Quality enum carries so the
+            # Stored as the plain Waves tier string (issue #24) so the
             # row stays a QML-friendly dict.
             "askQuality": ask_quality,
             # Whether the library scan's tag claim may skip tracks for this job,
@@ -8048,12 +8055,13 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _target_quality_rank(self, quality=None) -> int:
         """Rank of the audio quality this run targets, for "already have
-        equal-or-better". The Quality enum's value is the TIDAL tier string
-        ownership.py ranks. A job passes the quality it was queued at; the
-        current setting is the default (a button asking "would this download
-        upgrade what I have?" is asking about a download queued now)."""
-        q = self.settings.data.quality_audio if quality is None else quality
-        return quality_rank(getattr(q, "value", q))
+        equal-or-better". The rank is the Waves ladder's (TIER_RANK, LOW = 0),
+        the one scale ownership.py ranks with. A job passes the rung it was
+        queued at; the current setting is the default (a button asking "would
+        this download upgrade what I have?" is asking about a download queued
+        now)."""
+        q = self.settings.data.tidal_quality_audio if quality is None else quality
+        return quality_rank(str(getattr(q, "value", q) or ""))
 
     def _own_refresh(self, tid: str) -> None:
         """Worker-thread cache refresh: the store query plus the disk stat run
@@ -8385,7 +8393,7 @@ class WavesBridge(LibraryMixin, QObject):
         with the bulk-skip pref on, and which carries no DOWNLOAD ANYWAY
         override, exactly as the engine wires it.
 
-        Quality and the claim gate are both the JOB's, not today's settings: a
+        The tier and the claim gate are both the JOB's, not today's settings: a
         row queued at HI-RES keeps asking for HI-RES however Settings moves
         afterwards, and the claim gate is pinned the same way (see
         _job_library_skip), so a prediction read off the live settings would
@@ -9156,7 +9164,7 @@ class WavesBridge(LibraryMixin, QObject):
     def _max_quality_rank(self) -> int:
         """Rank of the user's configured maximum audio quality (the cap that
         search results are filtered down to)."""
-        return _QUALITY_RANK.get(getattr(self.settings.data.quality_audio, "name", ""), 4)
+        return TIER_RANK.get(str(self.settings.data.tidal_quality_audio or ""), 3)
 
     def _merge_rank_fn(self):
         """Rank function for merge planning: a recording's advertised tier,
@@ -14036,7 +14044,7 @@ class WavesBridge(LibraryMixin, QObject):
                 "desc": "Where your music is saved and how good it sounds.",
                 "fields": [
                     "download_base_path",
-                    "quality_audio",
+                    "tidal_quality_audio",
                     "quality_video",
                     "downloads_concurrent_max",
                     "download_dolby_atmos",
@@ -14265,16 +14273,28 @@ class WavesBridge(LibraryMixin, QObject):
         return result
 
     def _reapply_quality(self, quality) -> None:
-        """Re-apply the audio quality setting to the live session.
+        """Re-apply a provider's audio-quality setting to its live session.
 
         Streams are requested at the SESSION's audio quality, and that was
         only set at startup; without this, a quality change would not reach a
         download until the app restarted. The ask rides the seam
-        (``apply_quality``): the provider writes the tier it maps the Waves
-        rung to, and the Atmos session guard inside ``settings_apply`` holds
-        the write off while an Atmos-credential session is active.
+        (``apply_quality``): the provider writes the rung it maps its engine's
+        codec to, and the Atmos session guard inside ``settings_apply`` holds
+        the write off while an Atmos-credential session is active. Per-provider
+        (issue #24): TIDAL's setting reaches TIDAL's session; an unknown rung
+        applies nothing.
         """
-        self.providers[CTX_TIDAL].apply_quality(tier_from_tidal(quality), AudioType.STEREO)
+        provider = self.providers.get(CTX_TIDAL)
+        tier = tier_from_word(quality)
+        if provider is not None and tier is not None:
+            provider.apply_quality(tier, AudioType.STEREO)
+
+    def _reapply_provider_quality(self, context: str, quality) -> None:
+        """Apply a provider's own quality setting to that provider alone."""
+        provider = self.providers.get(context)
+        tier = tier_from_word(quality)
+        if provider is not None and tier is not None:
+            provider.apply_quality(tier, AudioType.STEREO)
 
     @Slot("QVariant")
     def applySettings(self, values) -> None:
@@ -14343,8 +14363,11 @@ class WavesBridge(LibraryMixin, QObject):
         # A new audio quality changes which owned copies still count as current
         # (up_to_date is computed against it). Empty id = broadcast: every
         # DOWNLOADED button re-asks ownershipOf, no per-track invalidation needed
-        # because the cache stores raw records, not verdicts.
-        if "quality_audio" in values:
+        # because the cache stores raw records, not verdicts. Each provider's
+        # setting applies to that provider alone (issue #24): TIDAL's carries
+        # the ownership refresh (its copies are the library today), Apple's
+        # reaches the Apple session when that provider is registered.
+        if "tidal_quality_audio" in values:
             self.ownershipChanged.emit("")
             # The DEFAULT mark in every badge's quality menu follows the setting.
             self.targetTierChanged.emit()
@@ -14353,11 +14376,15 @@ class WavesBridge(LibraryMixin, QObject):
             # Re-apply it now so the next download honours the new choice without
             # a restart. The write skips while an Atmos-credential session is
             # active; restore_normal_session re-reads the setting then.
-            self._reapply_quality(values["quality_audio"])
+            self._reapply_quality(values["tidal_quality_audio"])
             # Deliberately NOT retargeting the queue: every row holds the
             # quality it was queued at (askQuality) and its job asks for that
             # quality when its turn comes, so a change here cannot alter work
             # already queued or in flight. It applies to what is queued next.
+        if "apple_quality_audio" in values:
+            # No Apple copies exist to refresh and no queue row pins an Apple
+            # tier yet; the side effect is the provider session's alone.
+            self._reapply_provider_quality(CTX_APPLE, values["apple_quality_audio"])
         # Under the same lock _save_settings holds, for the same reason. This
         # region does the restores explicitly instead of going through the
         # helper, but the values it restores are the ones the helper borrows and

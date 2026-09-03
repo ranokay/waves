@@ -120,7 +120,7 @@ class _OwnBridge:
         def emit(self, *a):
             pass
 
-    def __init__(self, tmp_path, quality_audio: str):
+    def __init__(self, tmp_path, tidal_quality_audio: str):
         self._ownership = OwnershipStore(str(tmp_path / "ownership.sqlite3"))
         self._own_cache: dict = {}
         self._own_pending: set = set()
@@ -133,7 +133,7 @@ class _OwnBridge:
         self._own_pool = self._Pool()
         self._ownAnnounceArm = self._Sig()
         self._downloads_running = lambda: False
-        self.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=quality_audio, download_dolby_atmos=False))
+        self.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=tidal_quality_audio, download_dolby_atmos=False))
         for name in (
             "ownershipOf",
             "_would_refetch_atmos",
@@ -161,15 +161,15 @@ def _surviving_file(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "quality_audio, up_to_date",
+    "tidal_quality_audio, up_to_date",
     [("HI_RES_LOSSLESS", False), ("LOW", True)],
 )
-def test_ownership_of_reports_a_low_copy_against_the_current_setting(tmp_path, quality_audio, up_to_date):
+def test_ownership_of_reports_a_low_copy_against_the_current_setting(tmp_path, tidal_quality_audio, up_to_date):
     # The button's own verdict (ownershipOf.up_to_date) must agree with the
     # download gate: a LOW copy under a HI_RES setting offers an upgrade; the
     # same copy under a LOW setting is current.
     f = _surviving_file(tmp_path)
-    bridge = _OwnBridge(tmp_path, quality_audio)
+    bridge = _OwnBridge(tmp_path, tidal_quality_audio)
     bridge._ownership.record("42", str(f), "LOW")
     info = bridge.own("42")
     assert info["owned"] is True

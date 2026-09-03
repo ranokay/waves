@@ -82,7 +82,7 @@ def _bridge_capped_at(quality):
     """A WavesBridge whose settings pin the audio quality at ``quality``, built
     without Qt or network so the real _merge_rank_fn can be exercised."""
     bridge = WavesBridge.__new__(WavesBridge)
-    bridge.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=quality))
+    bridge.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=getattr(quality, "value", quality)))
     return bridge
 
 
@@ -511,11 +511,11 @@ def test_an_upgrade_above_the_user_cap_does_not_merge():
         [_Track("d-a", "A", 200), _Track("d-b", "B", 200), _Track("d-c", "C", 200)],
         rank=3,
     )
-    capped = _bridge_capped_at(Quality.high_lossless)._merge_rank_fn()
+    capped = _bridge_capped_at("LOSSLESS")._merge_rank_fn()
     assert _build_merge_plan([standard, deluxe], _recs_of, capped) == (None, None, "no_upgrade")
     # Sanity: with the cap raised to HI-RES, the very same group, through the
     # very same production rank function, DOES merge (both shared songs borrowed).
-    uncapped = _bridge_capped_at(Quality.hi_res_lossless)._merge_rank_fn()
+    uncapped = _bridge_capped_at("HI_RES_LOSSLESS")._merge_rank_fn()
     identity, plan, reason = _build_merge_plan([standard, deluxe], _recs_of, uncapped)
     assert reason == "" and identity is deluxe
     assert [entry.src.id for entry in plan] == ["s-a", "s-b", "d-c"]
@@ -523,7 +523,7 @@ def test_an_upgrade_above_the_user_cap_does_not_merge():
     # could not read the tier it would answer a constant for every recording, and
     # the capped decline above would be true for the wrong reason. Pin the one
     # recording the whole decision turns on, on both sides of the clamp.
-    assert (capped(standard.recs[0].obj), uncapped(standard.recs[0].obj)) == (3, 4)
+    assert (capped(standard.recs[0].obj), uncapped(standard.recs[0].obj)) == (2, 3)
 
 
 # ---- a track whose title normalises away is still a track -------------------

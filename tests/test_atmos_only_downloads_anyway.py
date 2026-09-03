@@ -31,7 +31,7 @@ from types import SimpleNamespace
 
 from tidalapi.media import AudioMode, Quality, Track
 
-from waves.constants import ATMOS_REQUEST_QUALITY
+from waves.config import ATMOS_REQUEST_QUALITY
 from waves.download import Download
 from waves.ownership import OwnershipStore, quality_rank
 from waves.waves_ui import backend

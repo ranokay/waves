@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 
-from dataclasses_json import dataclass_json
-from tidalapi import Quality
+from dataclasses_json import config, dataclass_json
 
 from waves.constants import CoverDimensions, DownsampleTarget, InitialKey, MetadataTargetUPC, QualityVideo
 
@@ -47,7 +46,14 @@ class Settings:
     # URLs are identity (host, maybe user): internal only, never shown in the
     # settings UI, registered as diagnostics secrets on load and on record.
     network_mount_origins: dict[str, str] = field(default_factory=dict)
-    quality_audio: Quality = Quality.low_320k
+    # The audio-quality settings, one per provider (issue #24, spec §9.2),
+    # each stored as a Waves tier string (waves.constants.QualityTier values:
+    # "LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS") -- never an engine enum.
+    # TIDAL's default keeps the exact meaning the old single setting's default
+    # carried (LOW_320K was the tier the UI calls HIGH). Apple has no LOW rung
+    # (AAC 256 starts at HIGH), so its default is the honest ALAC baseline.
+    tidal_quality_audio: str = "HIGH"
+    apple_quality_audio: str = "LOSSLESS"
     quality_video: QualityVideo = QualityVideo.P480
     download_dolby_atmos: bool = False
     # Artist > Album > Track, the shape a music library (and Plex) expects.
@@ -159,6 +165,13 @@ class Settings:
     api_rate_limit_batch_size: int = 20  # Songs to download before pausing to stay under TIDAL's rate limit
     api_rate_limit_delay_sec: float = 3.0  # Length of that pause, in seconds
     initial_key_format: InitialKey = InitialKey.ALPHANUMERIC
+    # Legacy carrier for the one migration that split quality_audio into the
+    # per-provider settings above (issue #24). from_json reads the old key from
+    # a pre-split config; _migrate_settings folds its value into
+    # tidal_quality_audio and nulls it. The field is excluded from every
+    # serialization, so the key leaves settings.json on the first save and the
+    # migration is one-time by construction (nothing left to read).
+    quality_audio: str | None = field(default=None, metadata=config(exclude=lambda v: True))
 
 
 @dataclass_json
@@ -188,10 +201,13 @@ class HelpSettings:
     multi_thread: str = "Download several tracks in parallel."
     download_delay: str = "Activate randomized download delay to mimic human behaviour."
     download_base_path: str = "Where to store the downloaded media."
-    quality_audio: str = (
-        'Desired audio download quality: "LOW" (96kbps), "HIGH" (320kbps), '
-        '"LOSSLESS" (16 Bit, 44,1 kHz), '
-        '"HI_RES_LOSSLESS" (up to 24 Bit, 192 kHz)'
+    tidal_quality_audio: str = (
+        'TIDAL audio download quality as a Waves tier string: "LOW" (96kbps), "HIGH" (320kbps), '
+        '"LOSSLESS" (16 Bit, 44,1 kHz), "HI_RES_LOSSLESS" (up to 24 Bit, 192 kHz)'
+    )
+    apple_quality_audio: str = (
+        'Apple Music audio download quality as a Waves tier string: "HIGH" (AAC 256, Apple has no '
+        'LOW), "LOSSLESS" (ALAC 16 Bit, 44,1 kHz), "HI_RES_LOSSLESS" (ALAC up to 24 Bit, 192 kHz)'
     )
     quality_video: str = 'Desired video download quality: "360", "480", "720", "1080"'
     download_dolby_atmos: str = "Download Dolby Atmos audio streams if available."
@@ -212,9 +228,7 @@ class HelpSettings:
         "Path to FFmpeg binary file (executable). Only necessary if FFmpeg is not set in $PATH. Mandatory for Windows: "
         "The directory of `ffmpeg.exe` must be set in %PATH%."
     )
-    metadata_cover_dimension: str = (
-        "The square dimensions of the cover image embedded into the track. Possible values: 80, 160, 320, 640, 1280, origin."
-    )
+    metadata_cover_dimension: str = "The square dimensions of the cover image embedded into the track. Possible values: 80, 160, 320, 640, 1280, origin."
     metadata_cover_file_dimension: str = (
         "Size of the saved 'cover.jpg'. 'Same as embedded' matches the embedded cover size; "
         "otherwise pick an independent size (80, 160, 320, 640, 1280, origin)."
@@ -231,7 +245,7 @@ class HelpSettings:
         "left untouched. Useful for capping HI_RES_LOSSLESS downloads at a saner archive size."
     )
     downsample_target: str = (
-        "Downsample target when downsample_enabled is true: " "'16_48' (16 bit / 48 kHz) or '24_48' (24 bit / 48 kHz)."
+        "Downsample target when downsample_enabled is true: '16_48' (16 bit / 48 kHz) or '24_48' (24 bit / 48 kHz)."
     )
     downloads_simultaneous_per_track_max: str = (
         "Maximum number of simultaneous chunk downloads per track (capped at 10, the connection pool size)."
@@ -267,12 +281,8 @@ class HelpSettings:
         "' · ' for ':' keeps 'Rarities Edition · Live' readable. Characters left "
         "alone follow the general stand-in."
     )
-    metadata_target_upc: str = (
-        "Select the target metadata tag ('UPC', 'BARCODE', 'EAN') where to write the UPC information to. Default: 'UPC'."
-    )
-    api_rate_limit_batch_size: str = (
-        "How many songs to download before pausing, so a long playlist does not ask TIDAL too much at once. 0 never pauses."
-    )
+    metadata_target_upc: str = "Select the target metadata tag ('UPC', 'BARCODE', 'EAN') where to write the UPC information to. Default: 'UPC'."
+    api_rate_limit_batch_size: str = "How many songs to download before pausing, so a long playlist does not ask TIDAL too much at once. 0 never pauses."
     api_rate_limit_delay_sec: str = "How long that pause lasts, in seconds. 0 never pauses."
     initial_key_format: str = "Format for Initial Key metadata tag: 'alphanumeric' (default) or 'classic'."
 

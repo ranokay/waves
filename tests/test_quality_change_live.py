@@ -4,7 +4,7 @@ Streams are requested at the SESSION's audio quality (the Waves UI never
 passes a per-download quality), and historically that was only written at
 startup, so a settings change kept downloading at the old quality until the
 app was restarted. applySettings must re-apply settings to the tidal session
-whenever quality_audio changes -- through the provider's ``apply_quality``
+whenever the audio quality changes -- through the provider's ``apply_quality``
 (the seam, ticket #22), which writes the tier it maps the Waves rung to and
 then runs the same settings_apply body.
 
@@ -31,7 +31,7 @@ def _apply_stub():
     stub = _Stub()
     stub._waves_prefs = {}
     stub.settings = SimpleNamespace(
-        data=SimpleNamespace(quality_audio="LOW_320K", ffmpeg_source="system", downloads_concurrent_max=3),
+        data=SimpleNamespace(tidal_quality_audio="HIGH", ffmpeg_source="system", downloads_concurrent_max=3),
         save=lambda: None,
     )
     stub._ffmpeg_flag_prefs = {}
@@ -62,7 +62,7 @@ def _apply_stub():
 
     def fake_apply_quality(tier, audio_type):
         calls.append((str(tier), str(audio_type)))
-        stub.settings.data.quality_audio = str(tier.value)
+        stub.settings.data.tidal_quality_audio = str(tier.value)
 
     stub.providers = {"tidal": SimpleNamespace(apply_quality=fake_apply_quality)}
     stub._apply_quality_calls = calls
@@ -74,13 +74,13 @@ def _apply(stub, values):
     WavesBridge.applySettings.__get__(stub, type(stub))(values)
 
 
-def test_quality_audio_change_reapplies_session_settings():
+def test_tidal_quality_change_reapplies_session_settings():
     stub = _apply_stub()
-    _apply(stub, {"quality_audio": "hi_res_lossless"})
+    _apply(stub, {"tidal_quality_audio": "HI_RES_LOSSLESS"})
     assert stub._apply_quality_calls == [("HI_RES_LOSSLESS", "stereo")], (
         "quality change never reached the provider's apply_quality"
     )
-    assert stub.settings.data.quality_audio == "HI_RES_LOSSLESS"
+    assert stub.settings.data.tidal_quality_audio == "HI_RES_LOSSLESS"
 
 
 def test_unrelated_save_leaves_session_untouched():

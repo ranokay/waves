@@ -391,13 +391,13 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     settle(400)
 
     # The DEFAULT mark follows the setting live.
-    bridge.settings.data.quality_audio = backend.Quality.low_96k if default != "LOW" else backend.Quality.low_320k
+    bridge.settings.data.tidal_quality_audio = "LOW" if default != "LOW" else "HIGH"
     bridge.targetTierChanged.emit()
     settle()
     check(
         q("root.targetTier") == ("LOW" if default != "LOW" else "HIGH"), "the DEFAULT mark did not follow the setting"
     )
-    bridge.settings.data.quality_audio = backend.Quality(
+    bridge.settings.data.tidal_quality_audio = (
         default and {"HI-RES": "HI_RES_LOSSLESS", "LOSSLESS": "LOSSLESS", "HIGH": "HIGH", "LOW": "LOW"}[default]
     )
     bridge.targetTierChanged.emit()

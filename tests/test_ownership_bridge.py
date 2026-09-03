@@ -51,7 +51,7 @@ class _BridgeStub:
     """Bare stand-in for WavesBridge carrying only what the ownership sink and
     query touch, with the real bridge methods bound on and a real store."""
 
-    def __init__(self, tmp_path, quality_audio="LOSSLESS", atmos=False):
+    def __init__(self, tmp_path, tidal_quality_audio="LOSSLESS", atmos=False):
         self._job_tracks: dict = {1: {}}
         self._job_signals: dict = {}
         self.queueTrackState = _Signal()
@@ -84,7 +84,7 @@ class _BridgeStub:
         self._emit_queue = lambda: None
         self.settings = SimpleNamespace(
             data=SimpleNamespace(
-                quality_audio=quality_audio,
+                tidal_quality_audio=tidal_quality_audio,
                 download_base_path="",
                 symlink_to_track=False,
                 download_dolby_atmos=atmos,
@@ -481,7 +481,7 @@ def test_deleted_file_reads_as_not_owned(tmp_path):
 
 
 def test_owned_copy_below_target_quality_is_not_up_to_date(tmp_path):
-    stub = _BridgeStub(tmp_path, quality_audio="HI_RES_LOSSLESS")
+    stub = _BridgeStub(tmp_path, tidal_quality_audio="HI_RES_LOSSLESS")
     f = _make_file(tmp_path)
     stub._track_lifecycle(1, {"id": "42", "status": "done", "path": str(f), "quality": {"tier": "LOSSLESS"}})
     info = stub.ownershipOf("42")
@@ -490,14 +490,14 @@ def test_owned_copy_below_target_quality_is_not_up_to_date(tmp_path):
 
 
 def test_owned_copy_at_target_quality_is_up_to_date(tmp_path):
-    stub = _BridgeStub(tmp_path, quality_audio="LOSSLESS")
+    stub = _BridgeStub(tmp_path, tidal_quality_audio="LOSSLESS")
     f = _make_file(tmp_path)
     stub._track_lifecycle(1, {"id": "42", "status": "done", "path": str(f), "quality": {"tier": "HI_RES_LOSSLESS"}})
     assert stub.ownershipOf("42")["up_to_date"] is True, "equal-or-better must read as current"
 
 
 def test_tierless_video_record_is_always_up_to_date(tmp_path):
-    stub = _BridgeStub(tmp_path, quality_audio="HI_RES_LOSSLESS")
+    stub = _BridgeStub(tmp_path, tidal_quality_audio="HI_RES_LOSSLESS")
     f = _make_file(tmp_path, "clip.mp4")
     stub._track_lifecycle(1, {"id": "7", "status": "done", "path": str(f), "quality": {"tier": None}})
     info = stub.ownershipOf("7")
