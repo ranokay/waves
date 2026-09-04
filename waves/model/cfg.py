@@ -54,11 +54,9 @@ class Settings:
     # (AAC 256 starts at HIGH), so its default is the honest ALAC baseline.
     tidal_quality_audio: str = "HIGH"
     apple_quality_audio: str = "LOSSLESS"
-    # Apple Music ships as a user-enabled component (spec ground rule 3):
-    # off by default, opt-in from the Providers area. Nothing else reads it
-    # yet — the search group, chooser entry and download routing turn on
-    # with the Apple rollout — so today the switch records the user's
-    # choice and drives the Apple section's status light, nothing more.
+    # Apple Music ships as a user-enabled provider (spec ground rule 3), off
+    # by default and opt-in from Settings. Search reads this now. Setup,
+    # Chooser and download routing join it in their own rollout slices.
     apple_enabled: bool = False
     quality_video: QualityVideo = QualityVideo.P480
     download_dolby_atmos: bool = False
@@ -240,7 +238,9 @@ class HelpSettings:
         "Path to FFmpeg binary file (executable). Only necessary if FFmpeg is not set in $PATH. Mandatory for Windows: "
         "The directory of `ffmpeg.exe` must be set in %PATH%."
     )
-    metadata_cover_dimension: str = "The square dimensions of the cover image embedded into the track. Possible values: 80, 160, 320, 640, 1280, origin."
+    metadata_cover_dimension: str = (
+        "The square dimensions of the cover image embedded into the track. Possible values: 80, 160, 320, 640, 1280, origin."
+    )
     metadata_cover_file_dimension: str = (
         "Size of the saved 'cover.jpg'. 'Same as embedded' matches the embedded cover size; "
         "otherwise pick an independent size (80, 160, 320, 640, 1280, origin)."
@@ -293,8 +293,12 @@ class HelpSettings:
         "' · ' for ':' keeps 'Rarities Edition · Live' readable. Characters left "
         "alone follow the general stand-in."
     )
-    metadata_target_upc: str = "Select the target metadata tag ('UPC', 'BARCODE', 'EAN') where to write the UPC information to. Default: 'UPC'."
-    api_rate_limit_batch_size: str = "How many songs to download before pausing, so a long playlist does not ask TIDAL too much at once. 0 never pauses."
+    metadata_target_upc: str = (
+        "Select the target metadata tag ('UPC', 'BARCODE', 'EAN') where to write the UPC information to. Default: 'UPC'."
+    )
+    api_rate_limit_batch_size: str = (
+        "How many songs to download before pausing, so a long playlist does not ask TIDAL too much at once. 0 never pauses."
+    )
     api_rate_limit_delay_sec: str = "How long that pause lasts, in seconds. 0 never pauses."
     initial_key_format: str = "Format for Initial Key metadata tag: 'alphanumeric' (default) or 'classic'."
 
