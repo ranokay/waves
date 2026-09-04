@@ -2351,6 +2351,24 @@ Item {
                                                     visible: statusCol.hasSwitch
                                                     Layout.alignment: Qt.AlignVCenter
                                                     implicitWidth: swRow.width; implicitHeight: swRow.height
+                                                    activeFocusOnTab: true
+                                                    Accessible.role: Accessible.CheckBox
+                                                    Accessible.name: modelData.label
+                                                    Accessible.checkable: true
+                                                    Accessible.checked: statusCol.switchOn
+                                                    Accessible.onPressAction: swItem.toggle()
+                                                    function toggle() {
+                                                        page.setv(modelData.enabled_key, !statusCol.switchOn)
+                                                    }
+                                                    Keys.onPressed: function(event) {
+                                                        if (!event.isAutoRepeat
+                                                                && (event.key === Qt.Key_Space
+                                                                    || event.key === Qt.Key_Return
+                                                                    || event.key === Qt.Key_Enter)) {
+                                                            swItem.toggle()
+                                                            event.accepted = true
+                                                        }
+                                                    }
                                                     Row {
                                                         id: swRow
                                                         spacing: 10
@@ -2362,9 +2380,14 @@ Item {
                                                             font.pixelSize: 14; font.weight: Font.Medium
                                                         }
                                                     }
+                                                    Rectangle {
+                                                        anchors.fill: parent; anchors.margins: -4
+                                                        radius: 6; color: "transparent"
+                                                        border.color: swItem.activeFocus ? page.accent : "transparent"
+                                                    }
                                                     MouseArea {
                                                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                        onClicked: page.setv(modelData.enabled_key, !statusCol.switchOn)
+                                                        onClicked: swItem.toggle()
                                                     }
                                                 }
                                                 Text {

@@ -285,6 +285,11 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     assert '"apple_status"' in qml
     # The schema snapshots TIDAL's session, so login/logout must rebuild it.
     assert "onLoggedInChanged" in qml
+    # The Apple switch is reachable without a pointer.
+    assert "activeFocusOnTab: true" in qml
+    assert "Accessible.role: Accessible.CheckBox" in qml
+    assert "Keys.onPressed" in qml
+    assert "!event.isAutoRepeat" in qml
     # Both provider sections have glyphs of their own.
     assert '"providers_tidal"' in qml and '"providers_apple"' in qml
 
