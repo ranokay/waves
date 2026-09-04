@@ -41,6 +41,7 @@ Waves is a from‑scratch, native desktop app for macOS, Windows, and Linux (Int
 - Point Waves at your existing music library and see what you already own, badged right in the search results (new, experimental).
 - Write Plex‑friendly tags (ReplayGain volume leveling included), and choose the explicit or clean version.
 - Set up FFmpeg with one click, and optionally update Waves from inside the app.
+- Keep provider-specific settings together. Apple Music is listed there but cannot search or download yet; its switch only saves your choice until support ships.
 - Run native on macOS, Windows, and Linux, at quality up to HiRes Lossless and Dolby Atmos.
 
 ---

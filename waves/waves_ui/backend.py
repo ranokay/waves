@@ -14145,7 +14145,9 @@ class WavesBridge(LibraryMixin, QObject):
                 # discoverable and the light shows what is (not) set up.
                 "group": "Providers · Apple Music",
                 "id": "providers_apple",
-                "desc": "The second provider, off until you turn it on. Its search, setup and downloads arrive with the Apple Music rollout.",
+                "desc": (
+                    "The second provider, off until you turn it on. Its search, setup and downloads arrive with the Apple Music rollout."
+                ),
                 "fields": [
                     "provider_apple_status",
                     "apple_quality_audio",
@@ -14176,7 +14178,9 @@ class WavesBridge(LibraryMixin, QObject):
             {
                 "group": "File organization",
                 "id": "files",
-                "desc": "Folder layout, file-name templates and how multiple artists are joined. The templates are shared by every enabled provider.",
+                "desc": (
+                    "Folder layout, file-name templates and how multiple artists are joined. The templates are shared by every enabled provider."
+                ),
                 "fields": [
                     "format_track",
                     "format_album",
@@ -14256,7 +14260,10 @@ class WavesBridge(LibraryMixin, QObject):
                 "group": "Diagnostics",
                 "id": "diagnostics",
                 "card": "diagnostics",
-                "desc": "Help fix bugs with a shareable report. Personal details are always removed.",
+                "desc": (
+                    "Help fix bugs with a shareable report covering every enabled provider. "
+                    "Personal details are always removed."
+                ),
                 "fields": ["verbose_diagnostics", "diagnostics_redact_content"],
             },
             {

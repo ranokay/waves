@@ -52,6 +52,7 @@ def _schema_stub(apple_enabled: bool = False, logged_in: bool = False):
     """A bridge stub with just enough state for settingsSchema(): a fresh
     defaults-only config (never the machine's own), the given Apple switch
     and TIDAL session state."""
+
     class _Cfg:
         data = ModelSettings()
         help = HelpSettings()
@@ -260,6 +261,7 @@ def test_shared_help_text_names_both_providers():
     assert "every enabled provider" in help_settings.lyrics_embed
     assert "every enabled provider" in help_settings.lyrics_file
     assert "every enabled provider" in help_settings.lyrics_prefer_lrclib
+    assert "every enabled provider" in _schema()["diagnostics"]["desc"]
 
 
 def test_the_playlist_template_help_no_longers_claims_tidals_tree():
@@ -281,6 +283,8 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     # holds a value.
     assert "onAppleStatusChanged" in qml
     assert '"apple_status"' in qml
+    # The schema snapshots TIDAL's session, so login/logout must rebuild it.
+    assert "onLoggedInChanged" in qml
     # Both provider sections have glyphs of their own.
     assert '"providers_tidal"' in qml and '"providers_apple"' in qml
 

@@ -513,6 +513,10 @@ Item {
     // the shared FfmpegManager, `page.ff`.)
     Connections {
         target: waves
+        function onLoggedInChanged() {
+            if (page.active && !page.dirty) page.refreshSchema()
+            else page.needsRefresh = true
+        }
         function onSettingsPersistedExternally() {
             // The backend persisted schema-backed settings without the Save
             // button ("Don't ask again", the player's quality menu, the
@@ -2354,6 +2358,7 @@ Item {
                                                         Text {
                                                             anchors.verticalCenter: parent.verticalCenter
                                                             text: modelData.label; color: page.textHi
+                                                            textFormat: Text.PlainText
                                                             font.pixelSize: 14; font.weight: Font.Medium
                                                         }
                                                     }
@@ -2365,6 +2370,7 @@ Item {
                                                 Text {
                                                     visible: !statusCol.hasSwitch
                                                     text: modelData.label; color: page.textHi
+                                                    textFormat: Text.PlainText
                                                     font.pixelSize: 14; font.weight: Font.Medium
                                                     Layout.alignment: Qt.AlignVCenter
                                                 }
@@ -2380,12 +2386,14 @@ Item {
                                                     Text {
                                                         anchors.verticalCenter: parent.verticalCenter
                                                         text: statusCol.word; color: page.textLo; font.pixelSize: 12
+                                                        textFormat: Text.PlainText
                                                     }
                                                 }
                                             }
                                             Text {
                                                 visible: modelData.help !== ""; width: parent.width
                                                 text: modelData.help; color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                textFormat: Text.PlainText
                                             }
                                             Flow {
                                                 visible: modelData.actions !== undefined && modelData.actions.length > 0
@@ -2408,6 +2416,7 @@ Item {
                                                             id: actTxt
                                                             anchors.centerIn: parent
                                                             text: actPill.modelData.label.toUpperCase()
+                                                            textFormat: Text.PlainText
                                                             color: page.textDim; font.pixelSize: 12
                                                             font.family: page.uiFont; font.bold: true; font.letterSpacing: page.btnTrack
                                                         }
