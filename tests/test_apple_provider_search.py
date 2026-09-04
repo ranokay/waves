@@ -6,9 +6,11 @@ from waves.providers.apple import AppleProvider
 class _Catalog:
     def __init__(self):
         self.terms: list[str] = []
+        self.types: list[str] = []
 
-    async def get_search_results(self, term: str) -> dict:
+    async def get_search_results(self, term: str, types: str) -> dict:
         self.terms.append(term)
+        self.types.append(types)
         return {
             "results": {
                 "artists": {
@@ -93,7 +95,8 @@ class _Catalog:
 
 
 def test_search_converts_the_public_catalog_to_waves_rows_without_account_setup():
-    provider = AppleProvider(catalog=_Catalog())
+    catalog = _Catalog()
+    provider = AppleProvider(catalog=catalog)
 
     result = provider.search("aphex twin")
 
@@ -147,21 +150,7 @@ def test_search_converts_the_public_catalog_to_waves_rows_without_account_setup(
                 "added": "",
             }
         ],
-        "videos": [
-            {
-                "id": "apple:video-1",
-                "title": "T69 Collapse",
-                "artist": "Aphex Twin",
-                "artists": [{"id": "apple:artist-1", "name": "Aphex Twin", "roles": []}],
-                "art": "https://img/video/160x107bb.jpg",
-                "art_big": "https://img/video/750x500bb.jpg",
-                "duration": "5:10",
-                "explicit": False,
-                "added": "",
-                "date": "2018-08-07",
-                "quality": "4K",
-            }
-        ],
+        "videos": [],
         "playlists": [
             {
                 "id": "apple:playlist-1",
@@ -179,6 +168,7 @@ def test_search_converts_the_public_catalog_to_waves_rows_without_account_setup(
         "mixes": [],
         "top": None,
     }
+    assert catalog.types == ["songs,albums,playlists,artists"]
 
 
 def test_catalog_client_is_created_lazily_without_account_or_runtime_arguments():

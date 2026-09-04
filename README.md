@@ -31,7 +31,7 @@ Waves is a from‑scratch, native desktop app for macOS, Windows, and Linux (Int
 
 ## What Waves can do
 
-- Search all of TIDAL from a single bar, or paste a link to open a release instantly.
+- Search TIDAL and, when enabled, Apple Music from one bar. Pasted TIDAL links still open releases directly.
 - Browse artist and album pages rich with cover art, quality badges, and dates you can sort and filter.
 - Preview a full track (or an artist's top song) right inside the app before you save it.
 - Save a track, an album, a playlist, a mix, a music video, or an artist's whole discography for offline listening, in one click.
@@ -41,7 +41,7 @@ Waves is a from‑scratch, native desktop app for macOS, Windows, and Linux (Int
 - Point Waves at your existing music library and see what you already own, badged right in the search results (new, experimental).
 - Write Plex‑friendly tags (ReplayGain volume leveling included), and choose the explicit or clean version.
 - Set up FFmpeg with one click, and optionally update Waves from inside the app.
-- Keep provider-specific settings together. Apple Music is listed there but cannot search or download yet; its switch only saves your choice until support ships.
+- Keep provider-specific settings together. Apple Music search works without account setup; downloads are not available yet.
 - Run native on macOS, Windows, and Linux, at quality up to HiRes Lossless and Dolby Atmos.
 
 ---

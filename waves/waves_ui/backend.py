@@ -92,7 +92,7 @@ from waves.model.gui_data import ProgressBars
 from waves.ownership import OwnershipStore
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress
-from waves.providers import AppleProvider, AudioType, Provider, RefusalKind, TidalProvider
+from waves.providers import AppleProvider, AudioType, Capability, Provider, RefusalKind, TidalProvider
 from waves.waves_ui import proc
 from waves.waves_ui.session import WavesTidal
 from waves.worker import Worker
@@ -4868,10 +4868,8 @@ class WavesBridge(LibraryMixin, QObject):
         # newer one's results (or re-fire its busy/status) once it finally returns.
         self._search_gen += 1
         gen = self._search_gen
-        apple_enabled = bool(
-            getattr(getattr(getattr(self, "settings", None), "data", None), "apple_enabled", False)
-            and CTX_APPLE in self.providers
-        )
+        settings = getattr(self, "settings", None)
+        apple_enabled = bool(settings is not None and settings.data.apple_enabled and CTX_APPLE in self.providers)
         cache_key = f"{'apple' if apple_enabled else 'tidal'}:{needle.lower()}"
         hit = self._search_cache.get(cache_key)
         if hit is not None and time.monotonic() - hit[0] < self._SEARCH_TTL:
@@ -4898,7 +4896,13 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             t0 = devlog.clock()
-            provider_ids = [CTX_TIDAL, *([CTX_APPLE] if apple_enabled else [])]
+            enabled_ids = {CTX_TIDAL, *([CTX_APPLE] if apple_enabled else [])}
+            provider_ids = [
+                provider_id
+                for provider_id, provider in self.providers.items()
+                if provider_id in enabled_ids
+                and (not hasattr(provider, "capabilities") or Capability.SEARCH in provider.capabilities)
+            ]
 
             def fetch(provider_id: str) -> tuple[str, dict, Exception | None]:
                 try:
@@ -14545,6 +14549,9 @@ class WavesBridge(LibraryMixin, QObject):
         if "apple_enabled" in values and bool(getattr(data, "apple_enabled", False)) != apple_enabled_before:
             # Search reads the saved switch on its next request. The live
             # settings page also needs the status light refreshed now.
+            self._search_gen += 1
+            self._search_cache.clear()
+            self._set_busy(False)
             self.appleStatusChanged.emit()
         # Under the same lock _save_settings holds, for the same reason. This
         # region does the restores explicitly instead of going through the

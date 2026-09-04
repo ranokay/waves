@@ -115,8 +115,12 @@ def _scenario() -> int:
         and q("appleAlbumsModel.count") == 1
     )
 
-    q("_searchSeq = _navSeq")
-    bridge.searchResults.emit(_payload(grouped=False))
+    q("searchAlbumsExpanded = false; appleSearchAlbumsExpanded = false")
+    q('toggleAppleSearchSection("albums")')
+    expansion_ok = not q("searchAlbumsExpanded") and q("appleSearchAlbumsExpanded")
+
+    bridge.settings.data.apple_enabled = False
+    bridge.appleStatusChanged.emit()
     settle(500)
     tidal_only_ok = (
         not q("tidalGroupHead.visible")
@@ -124,7 +128,7 @@ def _scenario() -> int:
         and q("albumsModel.count") == 1
         and q("appleAlbumsModel.count") == 0
     )
-    return 0 if grouped_ok and tidal_only_ok else 1
+    return 0 if grouped_ok and expansion_ok and tidal_only_ok else 1
 
 
 def test_enabled_apple_search_renders_provider_groups_and_disabled_apple_keeps_the_old_page():

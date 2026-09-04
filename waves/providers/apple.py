@@ -39,7 +39,6 @@ class AppleProvider(Provider):
             "artist": {},
             "album": {},
             "track": {},
-            "video": {},
             "playlist": {},
         }
 
@@ -52,7 +51,7 @@ class AppleProvider(Provider):
     async def _search(self, needle: str) -> dict:
         if self._catalog is None:
             self._catalog = await self._catalog_factory()
-        return await self._catalog.get_search_results(needle)
+        return await self._catalog.get_search_results(needle, types="songs,albums,playlists,artists")
 
     @staticmethod
     async def _create_catalog():
@@ -65,6 +64,7 @@ class AppleProvider(Provider):
         return await apple_music.AppleMusicApi.create()
 
     def search(self, needle: str) -> dict:
+        """Return Apple's public catalog matches as complete Waves row dictionaries."""
         try:
             response = self._run(self._search(needle))
             results = response.get("results") or {}
@@ -78,7 +78,7 @@ class AppleProvider(Provider):
                 "artists": [self._artist_row(item) for item in artist_resources],
                 "albums": [self._album_row(item, artist_ids) for item in self._resources(results, "albums")],
                 "tracks": [self._track_row(item, artist_ids) for item in self._resources(results, "songs")],
-                "videos": [self._video_row(item, artist_ids) for item in self._resources(results, "music-videos")],
+                "videos": [],
                 "playlists": [self._playlist_row(item) for item in self._resources(results, "playlists")],
                 "mixes": [],
                 "top": None,
@@ -231,25 +231,6 @@ class AppleProvider(Provider):
             "popularity": -1,
             "explicit": attrs.get("contentRating") == "explicit",
             "added": "",
-        }
-
-    def _video_row(self, item: dict, artist_ids: dict[str, str]) -> dict:
-        attrs = self._attributes(item)
-        _artist_id, artists = self._artist_credit(item, attrs, artist_ids)
-        seconds = self._seconds(attrs)
-        traits = {str(trait).upper() for trait in attrs.get("videoTraits") or []}
-        return {
-            "id": self._remember("video", item),
-            "title": str(attrs.get("name") or ""),
-            "artist": str(attrs.get("artistName") or ""),
-            "artists": artists,
-            "art": self._art(attrs, 160, 107),
-            "art_big": self._art(attrs, 750, 500),
-            "duration": self._duration(seconds),
-            "explicit": attrs.get("contentRating") == "explicit",
-            "added": "",
-            "date": self._date(attrs),
-            "quality": "4K" if "4K" in traits else ("HD" if "HD" in traits else ""),
         }
 
     def _playlist_row(self, item: dict) -> dict:

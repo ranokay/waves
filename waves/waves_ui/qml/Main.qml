@@ -329,8 +329,7 @@ ApplicationWindow {
                                         || tracksModel.count > 0 || videosModel.count > 0
                                         || playlistsModel.count > 0 || mixesModel.count > 0
                                         || appleArtistsModel.count > 0 || appleAlbumsModel.count > 0
-                                        || appleTracksModel.count > 0 || appleVideosModel.count > 0
-                                        || applePlaylistsModel.count > 0 || appleMixesModel.count > 0
+                                        || appleTracksModel.count > 0 || applePlaylistsModel.count > 0
                                         || searchTop !== null
     // ---- Search results / artist page / My Tidal ------------------------
     // Result rows live in the *Model ListModels (declared further down) and
@@ -346,14 +345,13 @@ ApplicationWindow {
     property var videosRaw: []            // same, for videosModel
     property var appleAlbumsRaw: []
     property var appleTracksRaw: []
-    property var appleVideosRaw: []
     // True only when the backend emitted the optional Apple group. With Apple
     // disabled the old TIDAL-only page keeps its exact structure and headings.
     property bool appleSearchGrouped: false
     readonly property int tidalSearchCount: artistsModel.count + albumsModel.count + tracksModel.count
                                                     + videosModel.count + playlistsModel.count + mixesModel.count
     readonly property int appleSearchCount: appleArtistsModel.count + appleAlbumsModel.count + appleTracksModel.count
-                                                    + appleVideosModel.count + applePlaylistsModel.count + appleMixesModel.count
+                                                    + applePlaylistsModel.count
     // TIDAL's best match for the search (a row dict tagged with its kind:
     // album, track, video or playlist), or null. Pinned above every section
     // of the mixed All view; the item still sits in its own section below.
@@ -738,6 +736,18 @@ ApplicationWindow {
         else if (which === "playlists") v = searchPlaylistsExpanded = !searchPlaylistsExpanded
         else v = searchMixesExpanded = !searchMixesExpanded
         waves.setWavesPref("search_sec_" + which + "_expanded", v)
+    }
+    property bool appleSearchArtistsExpanded: waves.wavesPref("apple_search_sec_artists_expanded") === true
+    property bool appleSearchAlbumsExpanded: waves.wavesPref("apple_search_sec_albums_expanded") === true
+    property bool appleSearchTracksExpanded: waves.wavesPref("apple_search_sec_tracks_expanded") === true
+    property bool appleSearchPlaylistsExpanded: waves.wavesPref("apple_search_sec_playlists_expanded") === true
+    function toggleAppleSearchSection(which) {
+        var v
+        if (which === "artists") v = appleSearchArtistsExpanded = !appleSearchArtistsExpanded
+        else if (which === "albums") v = appleSearchAlbumsExpanded = !appleSearchAlbumsExpanded
+        else if (which === "tracks") v = appleSearchTracksExpanded = !appleSearchTracksExpanded
+        else v = appleSearchPlaylistsExpanded = !appleSearchPlaylistsExpanded
+        waves.setWavesPref("apple_search_sec_" + which + "_expanded", v)
     }
     // A per-section cap for the mixed All view: the section's first 5 rows, or
     // everything once it is expanded; a specific section filter is never capped.
@@ -10875,9 +10885,7 @@ ApplicationWindow {
     ListModel { id: appleArtistsModel }
     ListModel { id: appleAlbumsModel }
     ListModel { id: appleTracksModel }
-    ListModel { id: appleVideosModel }
     ListModel { id: applePlaylistsModel }
-    ListModel { id: appleMixesModel }
     ListModel { id: queueModel }
     ListModel { id: artistAlbumsModel }
     ListModel { id: artistVideosModel }
@@ -10941,6 +10949,16 @@ ApplicationWindow {
 
     function appendPlain(model, arr) { if (arr) for (var i = 0; i < arr.length; ++i) model.append(arr[i]) }
     function fill(model, arr) { model.clear(); appendPlain(model, arr) }
+    function clearAppleSearch() {
+        appleSearchGrouped = false
+        appleAlbumsRaw = []
+        appleTracksRaw = []
+        appleArtistsModel.clear()
+        appleAlbumsModel.clear()
+        appleTracksModel.clear()
+        applePlaylistsModel.clear()
+        if (searchBuilding) _searchBuildStart(0)
+    }
 
     // In-place reconcile for the download queue: update existing rows by qid,
     // append new ones, drop removed, then partition into grouped order. Keeping
@@ -11416,6 +11434,9 @@ ApplicationWindow {
 
     Connections {
         target: waves
+        function onAppleStatusChanged() {
+            if (waves.appleStatus().state === "off") root.clearAppleSearch()
+        }
         function onLibraryLoaded(cat, items, more) {
             root.libCatHasMore[cat] = more
             // A load for a category the user already left still lands in that
@@ -11755,8 +11776,7 @@ ApplicationWindow {
                                  + (r.tracks || []).length + (r.videos || []).length
                                  + (r.playlists || []).length + (r.mixes || []).length
                                  + (apple ? (apple.artists || []).length + (apple.albums || []).length
-                                          + (apple.tracks || []).length + (apple.videos || []).length
-                                          + (apple.playlists || []).length + (apple.mixes || []).length : 0)
+                                          + (apple.tracks || []).length + (apple.playlists || []).length : 0)
                                  + (r.top ? 1 : 0))
             // The pinned row reads its clickable artists from the same side
             // map the section rows fill (appendMedia); the same item lands
@@ -11772,12 +11792,10 @@ ApplicationWindow {
             root.fill(appleArtistsModel, apple ? apple.artists : [])
             root.appleAlbumsRaw = apple ? (apple.albums || []) : []
             root.appleTracksRaw = apple ? (apple.tracks || []) : []
-            root.appleVideosRaw = apple ? (apple.videos || []) : []
             root.applySort()
             root.fill(playlistsModel, r.playlists)
             root.fill(mixesModel, r.mixes)
             root.fill(applePlaylistsModel, apple ? apple.playlists : [])
-            root.fill(appleMixesModel, apple ? apple.mixes : [])
         }
         // Assign a NEW object so the `var` property fires a change notification
         // (mutating + reassigning the same reference does not update bindings).
@@ -13306,7 +13324,7 @@ ApplicationWindow {
                     Repeater {
                         model: appleArtistsModel
                         delegate: Loader {
-                            visible: root.searchRowVisible("artists", appleArtistsModel.count, index, root.searchArtistsExpanded)
+                            visible: root.searchRowVisible("artists", appleArtistsModel.count, index, root.appleSearchArtistsExpanded)
                             width: appleArtistFlow.cardW
                             height: item ? item.implicitHeight : width + 142
                             asynchronous: root.searchBuilding
@@ -13319,10 +13337,11 @@ ApplicationWindow {
                         }
                     }
                 }
-                SearchSectionMore {
-                    section: "artists"; sectionTop: appleArtistsHead
-                    count: appleArtistsModel.count; expanded: root.searchArtistsExpanded
+                ShowAllLabel {
+                    sectionTop: appleArtistsHead; opacity: root.searchReveal
+                    count: appleArtistsModel.count; expanded: root.appleSearchArtistsExpanded
                     visible: root.appleSearchGrouped && root.filterType === "all" && appleArtistsModel.count > 5
+                    onToggled: root.toggleAppleSearchSection("artists")
                 }
 
                 SectionHeader {
@@ -13335,7 +13354,7 @@ ApplicationWindow {
                     model: appleAlbumsModel
                     delegate: Loader {
                         visible: root.appleSearchGrouped
-                                 && root.searchRowVisible("albums", appleAlbumsModel.count, index, root.searchAlbumsExpanded)
+                                 && root.searchRowVisible("albums", appleAlbumsModel.count, index, root.appleSearchAlbumsExpanded)
                         width: contentCol.width
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
@@ -13348,10 +13367,11 @@ ApplicationWindow {
                         }
                     }
                 }
-                SearchSectionMore {
-                    section: "albums"; sectionTop: appleAlbumsHead
-                    count: appleAlbumsModel.count; expanded: root.searchAlbumsExpanded
+                ShowAllLabel {
+                    sectionTop: appleAlbumsHead; opacity: root.searchReveal
+                    count: appleAlbumsModel.count; expanded: root.appleSearchAlbumsExpanded
                     visible: root.appleSearchGrouped && root.filterType === "all" && appleAlbumsModel.count > 5
+                    onToggled: root.toggleAppleSearchSection("albums")
                 }
 
                 SectionHeader {
@@ -13364,7 +13384,7 @@ ApplicationWindow {
                     model: appleTracksModel
                     delegate: Loader {
                         visible: root.appleSearchGrouped
-                                 && root.searchRowVisible("tracks", appleTracksModel.count, index, root.searchTracksExpanded)
+                                 && root.searchRowVisible("tracks", appleTracksModel.count, index, root.appleSearchTracksExpanded)
                         width: contentCol.width
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
@@ -13378,47 +13398,11 @@ ApplicationWindow {
                         }
                     }
                 }
-                SearchSectionMore {
-                    section: "tracks"; sectionTop: appleTracksHead
-                    count: appleTracksModel.count; expanded: root.searchTracksExpanded
+                ShowAllLabel {
+                    sectionTop: appleTracksHead; opacity: root.searchReveal
+                    count: appleTracksModel.count; expanded: root.appleSearchTracksExpanded
                     visible: root.appleSearchGrouped && root.filterType === "all" && appleTracksModel.count > 5
-                }
-
-                SectionHeader {
-                    id: appleVideosHead
-                    opacity: root.searchReveal
-                    visible: root.appleSearchGrouped && root.sectionVisible("videos", appleVideosModel.count)
-                    label: "VIDEOS"; count: appleVideosModel.count
-                }
-                Flow {
-                    id: appleVideoGrid
-                    visible: root.appleSearchGrouped && root.sectionVisible("videos", appleVideosModel.count)
-                    width: contentCol.width; spacing: 18
-                    readonly property int cols: Math.max(2, Math.floor(width / 320))
-                    readonly property real cellW: (width - (cols - 1) * spacing) / cols
-                    Repeater {
-                        model: appleVideosModel
-                        delegate: Loader {
-                            visible: root.searchRowVisible("videos", appleVideosModel.count, index, root.searchVideosExpanded)
-                            width: appleVideoGrid.cellW
-                            height: Math.round(appleVideoGrid.cellW * 9 / 16) + 54
-                            asynchronous: root.searchBuilding
-                            opacity: root.searchReveal
-                            enabled: false
-                            onLoaded: root._searchBuildTick()
-                            sourceComponent: VideoCell {
-                                width: appleVideoGrid.cellW
-                                vid: model.id; vcTitle: model.title; vcArtist: model.artist
-                                artUrl: model.art; artBigUrl: model.art_big || ""; vcDuration: model.duration
-                                vcExplicit: model.explicit === true; vcSpec: model.quality || ""; vcDate: model.date
-                            }
-                        }
-                    }
-                }
-                SearchSectionMore {
-                    section: "videos"; sectionTop: appleVideosHead
-                    count: appleVideosModel.count; expanded: root.searchVideosExpanded
-                    visible: root.appleSearchGrouped && root.filterType === "all" && appleVideosModel.count > 5
+                    onToggled: root.toggleAppleSearchSection("tracks")
                 }
 
                 SectionHeader {
@@ -13431,7 +13415,7 @@ ApplicationWindow {
                     model: applePlaylistsModel
                     delegate: Loader {
                         visible: root.appleSearchGrouped
-                                 && root.searchRowVisible("playlists", applePlaylistsModel.count, index, root.searchPlaylistsExpanded)
+                                 && root.searchRowVisible("playlists", applePlaylistsModel.count, index, root.appleSearchPlaylistsExpanded)
                         width: contentCol.width
                         height: item ? item.implicitHeight : 64
                         asynchronous: root.searchBuilding
@@ -13444,10 +13428,11 @@ ApplicationWindow {
                         }
                     }
                 }
-                SearchSectionMore {
-                    section: "playlists"; sectionTop: applePlaylistsHead
-                    count: applePlaylistsModel.count; expanded: root.searchPlaylistsExpanded
+                ShowAllLabel {
+                    sectionTop: applePlaylistsHead; opacity: root.searchReveal
+                    count: applePlaylistsModel.count; expanded: root.appleSearchPlaylistsExpanded
                     visible: root.appleSearchGrouped && root.filterType === "all" && applePlaylistsModel.count > 5
+                    onToggled: root.toggleAppleSearchSection("playlists")
                 }
             }
         }
@@ -14775,7 +14760,6 @@ ApplicationWindow {
         root.fillMedia(videosModel, ordered(root.videosRaw, false))
         root.fillMedia(appleAlbumsModel, ordered(root.appleAlbumsRaw, true))
         root.fillMedia(appleTracksModel, ordered(root.appleTracksRaw, true))
-        root.fillMedia(appleVideosModel, ordered(root.appleVideosRaw, false))
     }
 
     // ====================================================================

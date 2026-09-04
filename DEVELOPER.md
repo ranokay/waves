@@ -24,9 +24,8 @@ Ten minutes here saves an afternoon of reverse-engineering.
          ▼ imports, unchanged
    waves engine ──── Settings, Tidal (auth/session), Download
                      (streaming, FLAC extraction, tagging)
-                     providers/ ── the Provider seam: one fused interface
-                     every music provider plugs into (TIDAL first); each
-                     provider's engine bodies sit behind it unchanged
+                     providers/ ── the Provider seam: TIDAL and Apple catalog
+                     reads plug in here; each provider's engine stays behind it
 ```
 
 One process, one window, one bridge object. QML never talks to TIDAL and

@@ -13,37 +13,37 @@ feature.
 
 ## Session and status
 
-| Signal                                                                 | Fires when                                                                                              |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `loggedInChanged`                                                      | Login/logout completes (property `loggedIn`)                                                            |
-| `sessionResolvedChanged`                                               | The restored session finishes resolving (property `sessionResolved`)                                    |
-| `statusChanged`                                                        | The status-bar text changes                                                                             |
-| `busyChanged`                                                          | A blocking operation starts/ends                                                                        |
-| `loginUrlReady(url)`                                                   | The browser-login URL is ready to open                                                                  |
-| `backRequested`                                                        | The platform back gesture (macOS trackpad swipe) asks to navigate back                                  |
-| `motionBgChanged`                                                      | The motion-background preference flipped; Main.qml re-reads it                                          |
-| `confirmCategoryDlChanged`                                             | The "confirm DOWNLOAD ALL on a Browse category" preference flipped (property `confirmCategoryDl`)       |
-| `settingsPersistedExternally`                                          | Settings were saved by something other than the Settings page (a dialog, a recovery); the page re-reads |
-| `forwardRequested`                                                     | The mouse forward button asks to navigate forward (the back button fires `backRequested`)               |
-| `hoverMotionChanged` / `artHoverTiltChanged` / `videoHoverPeekChanged` | The matching motion preference flipped (`setWavesPref`); the surfaces re-read it                        |
-| `diagnosticsExported(path)`                                            | A diagnostics export finished (`""` = failed)                                                           |
-| `appleStatusChanged`                                                   | A save actually moved the `apple_enabled` switch (issue #25); Settings re-reads `appleStatus()`          |
+| Signal                                                                 | Fires when                                                                                                 |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `loggedInChanged`                                                      | Login/logout completes (property `loggedIn`)                                                               |
+| `sessionResolvedChanged`                                               | The restored session finishes resolving (property `sessionResolved`)                                       |
+| `statusChanged`                                                        | The status-bar text changes                                                                                |
+| `busyChanged`                                                          | A blocking operation starts/ends                                                                           |
+| `loginUrlReady(url)`                                                   | The browser-login URL is ready to open                                                                     |
+| `backRequested`                                                        | The platform back gesture (macOS trackpad swipe) asks to navigate back                                     |
+| `motionBgChanged`                                                      | The motion-background preference flipped; Main.qml re-reads it                                             |
+| `confirmCategoryDlChanged`                                             | The "confirm DOWNLOAD ALL on a Browse category" preference flipped (property `confirmCategoryDl`)          |
+| `settingsPersistedExternally`                                          | Settings were saved by something other than the Settings page (a dialog, a recovery); the page re-reads    |
+| `forwardRequested`                                                     | The mouse forward button asks to navigate forward (the back button fires `backRequested`)                  |
+| `hoverMotionChanged` / `artHoverTiltChanged` / `videoHoverPeekChanged` | The matching motion preference flipped (`setWavesPref`); the surfaces re-read it                           |
+| `diagnosticsExported(path)`                                            | A diagnostics export finished (`""` = failed)                                                              |
+| `appleStatusChanged`                                                   | A save moved `apple_enabled`; Settings re-reads `appleStatus()` and Main clears Apple search rows when off |
 
 ## Search, artist pages, library
 
-| Signal                                                     | Fires when                                                                                                        |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `searchResults(payload)`                                   | A search or pasted-link resolve finishes; payload holds per-kind lists of plain dicts                             |
-| `albumTracksLoaded(albumId, tracks)`                       | An album's ordered track list arrives (album expansion)                                                           |
-| `artistLoaded(payload)`                                    | An artist page (bio, discography, top tracks) is ready                                                            |
-| `artistMetaLoaded(artistId, popularity)`                   | Late-arriving artist metadata                                                                                     |
-| `playlistTracksLoaded(playlistId, tracks)`                 | A playlist's ordered track list arrives (playlist expansion); empty on failure                                    |
-| `artistLoadFailed(artistId)`                               | An artist page could not load and nothing is cached; clears the Back-restore latch so history recording continues |
-| `libraryLoaded(category, items, hasMore)`                  | First page of a My Tidal category (replace)                                                                       |
-| `libraryMore(category, items, hasMore)`                    | Next page (append, infinite scroll)                                                                               |
-| `homeLoaded(sections)`                                     | My Tidal's Home landing (Browse-shaped shelves, account-scoped)                                                   |
-| `playlistCategoryResolved(apiPath, title, count, firstId)` | A Browse playlist category's members are known, so DOWNLOAD ALL can confirm with a count                          |
-| `playlistFolderLoaded(folderId, rows, path)`               | A My Tidal playlist folder's contents arrive (issue #11); empty rows and path on failure                          |
+| Signal                                                     | Fires when                                                                                                              |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `searchResults(payload)`                                   | Search finishes; TIDAL rows use the top-level per-kind lists and enabled Apple search adds the same shape under `apple` |
+| `albumTracksLoaded(albumId, tracks)`                       | An album's ordered track list arrives (album expansion)                                                                 |
+| `artistLoaded(payload)`                                    | An artist page (bio, discography, top tracks) is ready                                                                  |
+| `artistMetaLoaded(artistId, popularity)`                   | Late-arriving artist metadata                                                                                           |
+| `playlistTracksLoaded(playlistId, tracks)`                 | A playlist's ordered track list arrives (playlist expansion); empty on failure                                          |
+| `artistLoadFailed(artistId)`                               | An artist page could not load and nothing is cached; clears the Back-restore latch so history recording continues       |
+| `libraryLoaded(category, items, hasMore)`                  | First page of a My Tidal category (replace)                                                                             |
+| `libraryMore(category, items, hasMore)`                    | Next page (append, infinite scroll)                                                                                     |
+| `homeLoaded(sections)`                                     | My Tidal's Home landing (Browse-shaped shelves, account-scoped)                                                         |
+| `playlistCategoryResolved(apiPath, title, count, firstId)` | A Browse playlist category's members are known, so DOWNLOAD ALL can confirm with a count                                |
+| `playlistFolderLoaded(folderId, rows, path)`               | A My Tidal playlist folder's contents arrive (issue #11); empty rows and path on failure                                |
 
 ## Browse (editorial pages)
 
