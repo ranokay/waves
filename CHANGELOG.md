@@ -22,6 +22,12 @@ A bullet that closes a reported issue names it in full and links to it:
 package managers), where a bare number is neither a link nor obviously an
 issue. A test enforces it.
 
+## Unreleased
+
+### ✨ Added
+
+- 🎛️ Settings has a Providers area: a TIDAL section holding your session state and its audio-quality default, and an Apple Music section that is always visible behind an enable switch (off by default) with a status light. Turning Apple on records your choice today; its search, setup and downloads arrive with the Apple Music rollout ([issue #25](https://github.com/ranokay/waves/issues/25)).
+
 ## 🗂️ v0.1.27 (2026-09-02)
 
 ### ✨ Added

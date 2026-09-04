@@ -27,6 +27,7 @@ feature.
 | `forwardRequested`                                                     | The mouse forward button asks to navigate forward (the back button fires `backRequested`)               |
 | `hoverMotionChanged` / `artHoverTiltChanged` / `videoHoverPeekChanged` | The matching motion preference flipped (`setWavesPref`); the surfaces re-read it                        |
 | `diagnosticsExported(path)`                                            | A diagnostics export finished (`""` = failed)                                                           |
+| `appleStatusChanged`                                                   | A save actually moved the `apple_enabled` switch (issue #25); Settings re-reads `appleStatus()`          |
 
 ## Search, artist pages, library
 

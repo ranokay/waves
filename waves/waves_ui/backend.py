@@ -316,6 +316,10 @@ _FLAG_FIELDS = [
     "mark_explicit",
     "use_primary_album_artist",
     "download_dolby_atmos",
+    # Providers area: the Apple component's enable switch (issue #25). It is
+    # never rendered as a flag tile: the Apple status row carries it as the
+    # section's master switch, so it only needs the persistence coercion.
+    "apple_enabled",
     # Advanced
     "downsample_enabled",
     "metadata_replay_gain",
@@ -945,6 +949,20 @@ def _enum_options(key: str, members) -> list:
         v = getattr(m, "name", m)
         out.append({"value": v, "label": labels.get(v, v)})
     return out
+
+
+def _apple_status(enabled: bool) -> dict:
+    """The Apple status light's ``{"state", "word"}`` for a given switch
+    state (issue #25, spec §9.2.3). One source for both the bridge slot (the
+    page's live mirror) and the schema's baked value, so the two can never
+    disagree. The light has four designed states — not set up / runtime
+    ready / signed in / needs attention — of which this slice can honestly
+    report the first two: ``off`` while the component is disabled,
+    ``not_set_up`` once enabled, because the managed runtime and its wizard
+    do not exist yet."""
+    if not enabled:
+        return {"state": "off", "word": "Off"}
+    return {"state": "not_set_up", "word": "Not set up"}
 
 
 # Batch size for "My Tidal" infinite scroll. Each category is fetched one page
@@ -3250,6 +3268,10 @@ class WavesBridge(LibraryMixin, QObject):
     previewMeta = Signal(str, str, str, str, str, str, str, str, "QVariant")
     # In-app FFmpeg manager (Settings → FFmpeg card).
     ffmpegStatusChanged = Signal()
+    # The Apple provider's status light (Settings → Providers · Apple Music).
+    # Emitted when a save actually moves the apple_enabled switch, so the
+    # page's live mirror re-reads appleStatus() without a schema rebuild.
+    appleStatusChanged = Signal()
     # A download was HELD because FFmpeg is missing: without it the files
     # would be degraded (no FLAC extraction, no video conversion, no track
     # length repair, so strict players can read 0:00). QML shows a blocking
@@ -13622,6 +13644,18 @@ class WavesBridge(LibraryMixin, QObject):
         return str(getattr(self._help, key, "") or "").replace(" — ", "; ")
 
     @Slot(result="QVariant")
+    def appleStatus(self) -> dict:
+        """The Apple provider's status-light state (spec §9.2.3), for the
+        settings page's live mirror: ``{"state", "word"}``. The light has four
+        designed states — not set up / runtime ready / signed in / needs
+        attention — of which this slice can honestly report the first two:
+        ``off`` while the component is disabled, ``not_set_up`` once enabled,
+        because the managed runtime and its wizard do not exist yet. The
+        schema bakes the same value at build time; the signal exists for the
+        flip the moment a save lands."""
+        return _apple_status(bool(getattr(getattr(self.settings, "data", None), "apple_enabled", False)))
+
+    @Slot(result="QVariant")
     def settingsSchema(self) -> list:
         """Settings for the QML page, arranged into task-based, collapsible
         sections rather than raw engine field types.
@@ -13633,6 +13667,12 @@ class WavesBridge(LibraryMixin, QObject):
         hard-coding key names in QML.
         """
         d = self.settings.data
+        # The Providers area's status rows (issue #25): live bridge state,
+        # read at build time — the TIDAL session, and the Apple component's
+        # light, through the same helper the appleStatus() slot serves the
+        # page's live mirror from, so the two can never disagree.
+        apple_status = _apple_status(bool(getattr(d, "apple_enabled", False)))
+        logged_in = bool(getattr(self, "_logged_in", False))
 
         def field(key: str, ftype: str, value, extra: dict | None = None) -> dict:
             out = {
@@ -13726,7 +13766,8 @@ class WavesBridge(LibraryMixin, QObject):
                     "label": "Music library",
                     "help": (
                         "Choose where your music library lives, then SAVE CHANGES to scan it. Waves matches "
-                        "your TIDAL browsing against it to badge what you already have. Scanning only ever "
+                        "what you browse against it to badge what you already have, no matter which "
+                        "provider saved the files. Scanning only ever "
                         "reads: it never writes, moves or renames anything it finds."
                     ),
                     "type": "library",
@@ -13930,6 +13971,52 @@ class WavesBridge(LibraryMixin, QObject):
                     "value": self._waves_prefs.get("ffmpeg_update_cadence", "daily"),
                     "options": _enum_options("update_cadence", ["launch", "daily"]),
                 },
+                {
+                    # Bridge-computed status row, not a pref (issue #25): the
+                    # TIDAL session the app is running on. Sign-in and
+                    # sign-out live on the landing page, so this row stages
+                    # no edit; it only reports, with the same state/word
+                    # vocabulary the Apple light below uses.
+                    "key": "provider_tidal_session",
+                    "label": "Session",
+                    "help": (
+                        "The TIDAL account Waves is working from. Signing in "
+                        "and out happen on the landing page; this row only "
+                        "reports the session."
+                    ),
+                    "type": "status",
+                    "value": "signed_in" if logged_in else "not_signed_in",
+                    "word": "Signed in" if logged_in else "Not signed in",
+                },
+                {
+                    # The Apple section's master switch, status light and
+                    # runtime-manage placeholders in one row (issue #25, spec
+                    # §9.2.3). apple_enabled rides as enabled_key: the switch
+                    # stages into editMap like any toggle and SAVE CHANGES
+                    # persists it, while enabled_key is what makes
+                    # _factory_default_values enumerate it for RESET ALL
+                    # SETTINGS. The actions are placeholders for the managed
+                    # runtime's update/remove, which ship with the Apple
+                    # rollout; they render inert on purpose. "live" names the
+                    # channel the page re-reads when a save moves the switch.
+                    "key": "provider_apple_status",
+                    "enabled_key": "apple_enabled",
+                    "switch_value": bool(getattr(d, "apple_enabled", False)),
+                    "live": "apple_status",
+                    "label": "Enable Apple Music",
+                    "help": (
+                        "Apple Music ships off by default. Turning it on records your "
+                        "choice and moves the status light; the runtime setup it should "
+                        "start, and the actions below, arrive with the Apple Music rollout."
+                    ),
+                    "type": "status",
+                    "value": apple_status["state"],
+                    "word": apple_status["word"],
+                    "actions": [
+                        {"label": "Update runtime"},
+                        {"label": "Remove runtime"},
+                    ],
+                },
             ]
         }
 
@@ -14040,12 +14127,38 @@ class WavesBridge(LibraryMixin, QObject):
 
         sections = [
             {
+                # The two-axis layout's first axis (spec §9.2): one section
+                # per provider for what differs. TIDAL is the only provider
+                # with a session today; Apple's section carries the optional
+                # component's switch, light and placeholders.
+                "group": "Providers · TIDAL",
+                "id": "providers_tidal",
+                "desc": "Your TIDAL session and the audio quality its downloads ask for.",
+                "fields": [
+                    "provider_tidal_session",
+                    "tidal_quality_audio",
+                ],
+            },
+            {
+                # Always visible, per the optional-component decision: the
+                # section renders while Apple is off, so the switch stays
+                # discoverable and the light shows what is (not) set up.
+                "group": "Providers · Apple Music",
+                "id": "providers_apple",
+                "desc": (
+                    "The second provider, off until you turn it on. Its search, setup and downloads arrive with the Apple Music rollout."
+                ),
+                "fields": [
+                    "provider_apple_status",
+                    "apple_quality_audio",
+                ],
+            },
+            {
                 "group": "Downloads",
                 "id": "downloads",
-                "desc": "Where your music is saved and how good it sounds.",
+                "desc": "Where your music is saved and how downloads run, for every enabled provider.",
                 "fields": [
                     "download_base_path",
-                    "tidal_quality_audio",
                     "quality_video",
                     "downloads_concurrent_max",
                     "download_dolby_atmos",
@@ -14065,7 +14178,9 @@ class WavesBridge(LibraryMixin, QObject):
             {
                 "group": "File organization",
                 "id": "files",
-                "desc": "Folder layout, file-name templates and how multiple artists are joined.",
+                "desc": (
+                    "Folder layout, file-name templates and how multiple artists are joined. The templates are shared by every enabled provider."
+                ),
                 "fields": [
                     "format_track",
                     "format_album",
@@ -14085,7 +14200,7 @@ class WavesBridge(LibraryMixin, QObject):
             {
                 "group": "Metadata & artwork",
                 "id": "metadata",
-                "desc": "Tags, cover art and lyrics written into your files.",
+                "desc": "Tags, cover art and lyrics written into your files, on every enabled provider.",
                 "fields": [
                     "metadata_cover_dimension",
                     "metadata_cover_embed",
@@ -14145,7 +14260,10 @@ class WavesBridge(LibraryMixin, QObject):
                 "group": "Diagnostics",
                 "id": "diagnostics",
                 "card": "diagnostics",
-                "desc": "Help fix bugs with a shareable report. Personal details are always removed.",
+                "desc": (
+                    "Help fix bugs with a shareable report covering every enabled provider. "
+                    "Personal details are always removed."
+                ),
                 "fields": ["verbose_diagnostics", "diagnostics_redact_content"],
             },
             {
@@ -14310,6 +14428,11 @@ class WavesBridge(LibraryMixin, QObject):
         # a presence test would sweep the library again on each one.
         lib_before = {k: self._waves_prefs.get(k) for k in ("library_enabled", "library_source", "library_folder")}
         dl_base_before = getattr(data, "download_base_path", None)
+        # The Apple status light follows the SAVED switch, so the same
+        # before/after comparison decides whether the page should re-read
+        # appleStatus(): every later save in one visit resubmits the switch
+        # unchanged, and resubmitting is not a flip.
+        apple_enabled_before = bool(getattr(data, "apple_enabled", False))
         for key, value in values.items():
             if key in self._waves_prefs:
                 self.setWavesPref(key, value)
@@ -14382,6 +14505,10 @@ class WavesBridge(LibraryMixin, QObject):
             # No Apple copies exist to refresh and no queue row pins an Apple
             # tier yet; the side effect is the provider session's alone.
             self._reapply_provider_quality(CTX_APPLE, values["apple_quality_audio"])
+        if "apple_enabled" in values and bool(getattr(data, "apple_enabled", False)) != apple_enabled_before:
+            # No Apple behavior sits behind the switch yet (issue #25): the
+            # light is the only thing a flip moves today.
+            self.appleStatusChanged.emit()
         # Under the same lock _save_settings holds, for the same reason. This
         # region does the restores explicitly instead of going through the
         # helper, but the values it restores are the ones the helper borrows and
