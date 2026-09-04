@@ -727,28 +727,18 @@ ApplicationWindow {
     property bool searchVideosExpanded: waves.wavesPref("search_sec_videos_expanded") === true
     property bool searchPlaylistsExpanded: waves.wavesPref("search_sec_playlists_expanded") === true
     property bool searchMixesExpanded: waves.wavesPref("search_sec_mixes_expanded") === true
-    function toggleSearchSection(which) {
-        var v
-        if (which === "artists") v = searchArtistsExpanded = !searchArtistsExpanded
-        else if (which === "albums") v = searchAlbumsExpanded = !searchAlbumsExpanded
-        else if (which === "tracks") v = searchTracksExpanded = !searchTracksExpanded
-        else if (which === "videos") v = searchVideosExpanded = !searchVideosExpanded
-        else if (which === "playlists") v = searchPlaylistsExpanded = !searchPlaylistsExpanded
-        else v = searchMixesExpanded = !searchMixesExpanded
-        waves.setWavesPref("search_sec_" + which + "_expanded", v)
-    }
     property bool appleSearchArtistsExpanded: waves.wavesPref("apple_search_sec_artists_expanded") === true
     property bool appleSearchAlbumsExpanded: waves.wavesPref("apple_search_sec_albums_expanded") === true
     property bool appleSearchTracksExpanded: waves.wavesPref("apple_search_sec_tracks_expanded") === true
     property bool appleSearchPlaylistsExpanded: waves.wavesPref("apple_search_sec_playlists_expanded") === true
-    function toggleAppleSearchSection(which) {
-        var v
-        if (which === "artists") v = appleSearchArtistsExpanded = !appleSearchArtistsExpanded
-        else if (which === "albums") v = appleSearchAlbumsExpanded = !appleSearchAlbumsExpanded
-        else if (which === "tracks") v = appleSearchTracksExpanded = !appleSearchTracksExpanded
-        else v = appleSearchPlaylistsExpanded = !appleSearchPlaylistsExpanded
-        waves.setWavesPref("apple_search_sec_" + which + "_expanded", v)
+    function toggleProviderSearchSection(which, apple) {
+        var title = which.charAt(0).toUpperCase() + which.slice(1)
+        var propertyName = (apple ? "appleSearch" : "search") + title + "Expanded"
+        root[propertyName] = !root[propertyName]
+        waves.setWavesPref((apple ? "apple_" : "") + "search_sec_" + which + "_expanded", root[propertyName])
     }
+    function toggleSearchSection(which) { toggleProviderSearchSection(which, false) }
+    function toggleAppleSearchSection(which) { toggleProviderSearchSection(which, true) }
     // A per-section cap for the mixed All view: the section's first 5 rows, or
     // everything once it is expanded; a specific section filter is never capped.
     function searchRowVisible(name, count, index, expanded) {
@@ -2319,6 +2309,7 @@ ApplicationWindow {
         _searchBuildStart(0)   // a mid-build blank must drop the veil with the cards
         artistsModel.clear(); albumsRaw = []; tracksRaw = []; videosRaw = []; searchTop = null; applySort()
         playlistsModel.clear(); mixesModel.clear()
+        clearAppleSearch()
         searchField.forceActiveFocus()
     }
     function loadLib(cat) {

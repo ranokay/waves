@@ -31,19 +31,19 @@ feature.
 
 ## Search, artist pages, library
 
-| Signal                                                     | Fires when                                                                                                              |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `searchResults(payload)`                                   | Search finishes; TIDAL rows use the top-level per-kind lists and enabled Apple search adds the same shape under `apple` |
-| `albumTracksLoaded(albumId, tracks)`                       | An album's ordered track list arrives (album expansion)                                                                 |
-| `artistLoaded(payload)`                                    | An artist page (bio, discography, top tracks) is ready                                                                  |
-| `artistMetaLoaded(artistId, popularity)`                   | Late-arriving artist metadata                                                                                           |
-| `playlistTracksLoaded(playlistId, tracks)`                 | A playlist's ordered track list arrives (playlist expansion); empty on failure                                          |
-| `artistLoadFailed(artistId)`                               | An artist page could not load and nothing is cached; clears the Back-restore latch so history recording continues       |
-| `libraryLoaded(category, items, hasMore)`                  | First page of a My Tidal category (replace)                                                                             |
-| `libraryMore(category, items, hasMore)`                    | Next page (append, infinite scroll)                                                                                     |
-| `homeLoaded(sections)`                                     | My Tidal's Home landing (Browse-shaped shelves, account-scoped)                                                         |
-| `playlistCategoryResolved(apiPath, title, count, firstId)` | A Browse playlist category's members are known, so DOWNLOAD ALL can confirm with a count                                |
-| `playlistFolderLoaded(folderId, rows, path)`               | A My Tidal playlist folder's contents arrive (issue #11); empty rows and path on failure                                |
+| Signal                                                     | Fires when                                                                                                                                     |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `searchResults(payload)`                                   | Search or a pasted TIDAL link finishes; TIDAL rows use the top-level per-kind lists and enabled Apple search adds the same shape under `apple` |
+| `albumTracksLoaded(albumId, tracks)`                       | An album's ordered track list arrives (album expansion)                                                                                        |
+| `artistLoaded(payload)`                                    | An artist page (bio, discography, top tracks) is ready                                                                                         |
+| `artistMetaLoaded(artistId, popularity)`                   | Late-arriving artist metadata                                                                                                                  |
+| `playlistTracksLoaded(playlistId, tracks)`                 | A playlist's ordered track list arrives (playlist expansion); empty on failure                                                                 |
+| `artistLoadFailed(artistId)`                               | An artist page could not load and nothing is cached; clears the Back-restore latch so history recording continues                              |
+| `libraryLoaded(category, items, hasMore)`                  | First page of a My Tidal category (replace)                                                                                                    |
+| `libraryMore(category, items, hasMore)`                    | Next page (append, infinite scroll)                                                                                                            |
+| `homeLoaded(sections)`                                     | My Tidal's Home landing (Browse-shaped shelves, account-scoped)                                                                                |
+| `playlistCategoryResolved(apiPath, title, count, firstId)` | A Browse playlist category's members are known, so DOWNLOAD ALL can confirm with a count                                                       |
+| `playlistFolderLoaded(folderId, rows, path)`               | A My Tidal playlist folder's contents arrive (issue #11); empty rows and path on failure                                                       |
 
 ## Browse (editorial pages)
 

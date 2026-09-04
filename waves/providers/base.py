@@ -25,11 +25,12 @@ from typing import NamedTuple
 #
 # Every provider serves the SAME plain dicts the QML consumes today; the
 # field names below are the contract, spelled exactly as the bridge's dict
-# builders write them. ``id`` is always the ENGINE's own id as a string (the
-# key the bridge remembers the live object under in its ``_objs`` buckets);
-# namespacing happens above this layer. A missing fact is "", 0, -1 or None
-# exactly as noted -- rows are never partial-keyed (a QML ListModel freezes
-# its roles on the first row appended).
+# builders write them. New-provider rows use namespaced ids such as
+# ``apple:123``. Existing TIDAL rows keep their shipped bare ids, which every
+# namespaced reader interprets as TIDAL. A provider keeps the engine's raw id
+# behind that row id for later lookup. A missing fact is "", 0, -1 or None as
+# noted; rows are never partial-keyed because a QML ListModel freezes its roles
+# on the first row appended.
 #
 # Result rows (search payload, library pages, artist pages, browse cards):
 #   artist row:   {id, name, art, roles, popularity}
