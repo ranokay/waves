@@ -54,6 +54,12 @@ class Settings:
     # (AAC 256 starts at HIGH), so its default is the honest ALAC baseline.
     tidal_quality_audio: str = "HIGH"
     apple_quality_audio: str = "LOSSLESS"
+    # Apple Music ships as a user-enabled component (spec ground rule 3):
+    # off by default, opt-in from the Providers area. Nothing else reads it
+    # yet — the search group, chooser entry and download routing turn on
+    # with the Apple rollout — so today the switch records the user's
+    # choice and drives the Apple section's status light, nothing more.
+    apple_enabled: bool = False
     quality_video: QualityVideo = QualityVideo.P480
     download_dolby_atmos: bool = False
     # Artist > Album > Track, the shape a music library (and Plex) expects.
@@ -184,16 +190,20 @@ class HelpSettings:
         "switch it back on here."
     )
     album_cover_save: str = "Save cover to album folder."
-    lyrics_embed: str = "Embed lyrics in audio file, if lyrics are available."
+    lyrics_embed: str = "Embed lyrics in audio file, if lyrics are available. Applies to every enabled provider."
     use_primary_album_artist: str = "Use only the primary album artist for folder paths instead of track artists."
-    lyrics_file: str = "Save lyrics next to the track: timed lyrics as a *.lrc file, untimed ones as *.txt."
+    lyrics_file: str = (
+        "Save lyrics next to the track: timed lyrics as a *.lrc file, untimed ones as "
+        "*.txt. Applies to every enabled provider."
+    )
     lyrics_file_synced_only: str = (
         "Only save a lyrics file when timed (synced) lyrics exist; untimed lyrics " "then produce no *.txt file."
     )
     lyrics_prefer_lrclib: str = (
         "Fetch lyrics from the community LRCLIB database first (the source behind LRCGet), "
-        "falling back to TIDAL's lyrics when it has no match. TIDAL's own lyrics are "
-        "machine-transcribed for many newer track IDs and often wrong."
+        "falling back to the provider's own lyrics when it has no match. TIDAL's own lyrics are "
+        "machine-transcribed for many newer track IDs and often wrong. Applies to every "
+        "enabled provider."
     )
     api_key_index: str = "Set the device API KEY."
     album_info_save: str = "Save album info to track?"
@@ -210,12 +220,14 @@ class HelpSettings:
         'LOW), "LOSSLESS" (ALAC 16 Bit, 44,1 kHz), "HI_RES_LOSSLESS" (ALAC up to 24 Bit, 192 kHz)'
     )
     quality_video: str = 'Desired video download quality: "360", "480", "720", "1080"'
-    download_dolby_atmos: str = "Download Dolby Atmos audio streams if available."
+    download_dolby_atmos: str = (
+        "Download Dolby Atmos audio streams if available, on every enabled provider that offers Atmos."
+    )
     # TODO: Describe possible variables.
     format_album: str = "Where to download albums and how to name the items."
     format_playlist: str = (
         "Where to download playlists and how to name the items. {folder_path} mirrors the "
-        "playlist's TIDAL folder tree (empty when the playlist is not in a folder)."
+        "playlist's folder tree on its provider (empty when the playlist is not in a folder)."
     )
     format_mix: str = "Where to download mixes and how to name the items."
     format_track: str = "Where to download tracks and how to name the items."

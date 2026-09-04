@@ -155,6 +155,19 @@ Item {
                                            && (libraryScanProgress || {}).phase === "read"
                                            && (libraryScanProgress || {}).total > 0
 
+    // ---- Apple provider status light ----
+    // The Providers · Apple Music section's status row bakes its state into
+    // the schema, but a save that flips the enable switch must move the
+    // light at once, not on the next page open. The bridge emits
+    // appleStatusChanged on a real flip; the mirror re-reads appleStatus()
+    // and the row prefers it while it holds a value (the channel name is
+    // declared in the schema as the field's "live").
+    property var appleStatusLive: null
+    Connections {
+        target: waves
+        function onAppleStatusChanged() { page.appleStatusLive = waves.appleStatus() }
+    }
+
     // ---- In-app updater state ----
     property var appUp: ({})             // last waves.appUpdateStatus()
     property string auState: ""          // install lifecycle: "" | downloading | done | failed | cancelled
@@ -452,6 +465,11 @@ Item {
     function iconPath(id) {
         switch (id) {
         case "downloads":   return "M8 2.5V9.3 M5.2 6.6 L8 9.4 L10.8 6.6 M3.4 12.6H12.6"
+        // Two tide lines for the TIDAL provider section; a beamed note for
+        // the Apple Music one (a plain "provider" glyph would say nothing
+        // about which service the card belongs to).
+        case "providers_tidal": return "M2.6 5.4A2.7 2.7 0 0 1 8 5.4A2.7 2.7 0 0 0 13.4 5.4 M2.6 10.6A2.7 2.7 0 0 1 8 10.6A2.7 2.7 0 0 0 13.4 10.6"
+        case "providers_apple": return "M6.7 12.1V4.3L11.9 3.4V11.1 M4.9 12.1A1.8 1.8 0 1 0 8.5 12.1A1.8 1.8 0 1 0 4.9 12.1Z M10.1 11.1A1.8 1.8 0 1 0 13.7 11.1A1.8 1.8 0 1 0 10.1 11.1Z"
         case "files":       return "M2.6 5.4H6.2L7.4 6.7H13.4V11.9H2.6Z"
         case "metadata":    return "M8.6 2.6H3.1V8L9 13.9L14.4 8.5Z M5.7 4.9A0.55 0.55 0 1 1 4.6 4.9A0.55 0.55 0 1 1 5.7 4.9Z"
         case "processing":  return "M5.2 5.2H10.8V10.8H5.2Z M6.7 5.2V3.6 M9.3 5.2V3.6 M6.7 10.8V12.4 M9.3 10.8V12.4 M5.2 6.7H3.6 M5.2 9.3H3.6 M10.8 6.7H12.4 M10.8 9.3H12.4"
@@ -2212,6 +2230,7 @@ Item {
                                         implicitHeight: modelData.type === "str" && modelData.inline !== true ? strCol.implicitHeight
                                                       : modelData.type === "cover_sizes" ? coverCol.implicitHeight
                                                       : modelData.type === "library" ? libraryLoader.implicitHeight
+                                                      : modelData.type === "status" ? statusCol.implicitHeight
                                                       : inlineRow.implicitHeight
 
                                         // Enum / int / float / short str: label + help on
@@ -2223,6 +2242,7 @@ Item {
                                             id: inlineRow
                                             visible: (modelData.type !== "str" || modelData.inline === true)
                                                      && modelData.type !== "cover_sizes" && modelData.type !== "library"
+                                                     && modelData.type !== "status"
                                             width: parent.width; spacing: 14
                                             ColumnLayout {
                                                 Layout.fillWidth: true; spacing: 2
@@ -2286,6 +2306,113 @@ Item {
                                                 step: modelData.step !== undefined ? modelData.step : 1
                                                 decimals: modelData.decimals !== undefined ? modelData.decimals : 0
                                                 onChanged: function(v){ page.setv(modelData.key, v) }
+                                            }
+                                        }
+
+                                        // Status rows (the Providers area's TIDAL session and
+                                        // Apple light): label and help on the left, a state
+                                        // dot and word on the right. The Apple row doubles as
+                                        // its section's master switch: the schema carries the
+                                        // enable toggle (enabled_key) the way the library
+                                        // composite does, plus the runtime-manage placeholders
+                                        // (actions), which render inert until the Apple rollout
+                                        // ships them. The light prefers the page's live mirror
+                                        // (refreshed on appleStatusChanged) over the value baked
+                                        // into the schema, so a save flips it at once.
+                                        Column {
+                                            id: statusCol
+                                            visible: modelData.type === "status"
+                                            width: parent.width; spacing: 8
+                                            readonly property var live: (modelData.live === "apple_status" && page.appleStatusLive) ? page.appleStatusLive : null
+                                            readonly property string stateKey: live ? String(live.state) : String(modelData.value || "")
+                                            readonly property string word: live ? String(live.word) : String(modelData.word || "")
+                                            readonly property bool hasSwitch: modelData.enabled_key !== undefined
+                                            readonly property bool switchOn: statusCol.hasSwitch
+                                                && (page.editMap[modelData.enabled_key] !== undefined
+                                                    ? page.editMap[modelData.enabled_key]
+                                                    : modelData.switch_value === true)
+                                            function dotColor(state) {
+                                                // The FFmpeg light's vocabulary: accent is healthy,
+                                                // gold says be aware, red says broken, and anything
+                                                // else (a switched-off component) goes quiet.
+                                                if (state === "signed_in" || state === "runtime_ready") return page.accent
+                                                if (state === "not_signed_in" || state === "not_set_up") return page.gold
+                                                if (state === "needs_attention") return page.red
+                                                return page.textDim
+                                            }
+                                            RowLayout {
+                                                width: parent.width; spacing: 10
+                                                Item {
+                                                    id: swItem
+                                                    visible: statusCol.hasSwitch
+                                                    Layout.alignment: Qt.AlignVCenter
+                                                    implicitWidth: swRow.width; implicitHeight: swRow.height
+                                                    Row {
+                                                        id: swRow
+                                                        spacing: 10
+                                                        SToggle { anchors.verticalCenter: parent.verticalCenter; checked: statusCol.switchOn }
+                                                        Text {
+                                                            anchors.verticalCenter: parent.verticalCenter
+                                                            text: modelData.label; color: page.textHi
+                                                            font.pixelSize: 14; font.weight: Font.Medium
+                                                        }
+                                                    }
+                                                    MouseArea {
+                                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                        onClicked: page.setv(modelData.enabled_key, !statusCol.switchOn)
+                                                    }
+                                                }
+                                                Text {
+                                                    visible: !statusCol.hasSwitch
+                                                    text: modelData.label; color: page.textHi
+                                                    font.pixelSize: 14; font.weight: Font.Medium
+                                                    Layout.alignment: Qt.AlignVCenter
+                                                }
+                                                Item { Layout.fillWidth: true }
+                                                Row {
+                                                    spacing: 6; Layout.alignment: Qt.AlignVCenter
+                                                    Rectangle {
+                                                        width: 8; height: 8; radius: 4
+                                                        anchors.verticalCenter: parent.verticalCenter
+                                                        color: statusCol.dotColor(statusCol.stateKey)
+                                                        Behavior on color { ColorAnimation { duration: 220 } }
+                                                    }
+                                                    Text {
+                                                        anchors.verticalCenter: parent.verticalCenter
+                                                        text: statusCol.word; color: page.textLo; font.pixelSize: 12
+                                                    }
+                                                }
+                                            }
+                                            Text {
+                                                visible: modelData.help !== ""; width: parent.width
+                                                text: modelData.help; color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
+                                            }
+                                            Flow {
+                                                visible: modelData.actions !== undefined && modelData.actions.length > 0
+                                                width: parent.width; spacing: 8
+                                                Repeater {
+                                                    model: modelData.actions !== undefined ? modelData.actions : []
+                                                    delegate: Rectangle {
+                                                        id: actPill
+                                                        required property var modelData
+                                                        width: actTxt.implicitWidth + page.btnPadH * 2
+                                                        height: actTxt.implicitHeight + page.btnPadV * 2
+                                                        radius: page.btnRad
+                                                        color: "transparent"; border.color: page.border1
+                                                        // A placeholder, not a promise of a click: faded
+                                                        // to the save button's disabled strength, with no
+                                                        // MouseArea at all, until the rollout ships the
+                                                        // actions behind them.
+                                                        opacity: 0.45
+                                                        Text {
+                                                            id: actTxt
+                                                            anchors.centerIn: parent
+                                                            text: actPill.modelData.label.toUpperCase()
+                                                            color: page.textDim; font.pixelSize: 12
+                                                            font.family: page.uiFont; font.bold: true; font.letterSpacing: page.btnTrack
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
 
