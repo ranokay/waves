@@ -92,7 +92,7 @@ from waves.model.gui_data import ProgressBars
 from waves.ownership import OwnershipStore
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress
-from waves.providers import AudioType, Provider, RefusalKind, TidalProvider
+from waves.providers import AppleProvider, AudioType, Capability, Provider, RefusalKind, TidalProvider
 from waves.waves_ui import proc
 from waves.waves_ui.session import WavesTidal
 from waves.worker import Worker
@@ -3380,7 +3380,10 @@ class WavesBridge(LibraryMixin, QObject):
         # plugs in beside TIDAL without the bridge ever learning its shape.
         # TIDAL delegates to the engine bodies unchanged; the download engine
         # registers its stream resolver on it when the pipeline routes.
-        self.providers: dict[str, Provider] = {CTX_TIDAL: TidalProvider(self.tidal)}
+        self.providers: dict[str, Provider] = {
+            CTX_TIDAL: TidalProvider(self.tidal),
+            CTX_APPLE: AppleProvider(),
+        }
         # Quick metadata/UI work (search, album tracks, artist pages) runs on
         # one pool; downloads run on a separate pool so a long album download
         # can never starve the UI of threads.
@@ -4865,7 +4868,9 @@ class WavesBridge(LibraryMixin, QObject):
         # newer one's results (or re-fire its busy/status) once it finally returns.
         self._search_gen += 1
         gen = self._search_gen
-        cache_key = needle.lower()
+        settings = getattr(self, "settings", None)
+        apple_enabled = bool(settings is not None and settings.data.apple_enabled and CTX_APPLE in self.providers)
+        cache_key = f"{'apple' if apple_enabled else 'tidal'}:{needle.lower()}"
         hit = self._search_cache.get(cache_key)
         if hit is not None and time.monotonic() - hit[0] < self._SEARCH_TTL:
             # An identical recent search: repaint from the cached payload, no
@@ -4891,14 +4896,35 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             t0 = devlog.clock()
-            try:
-                # One page covers every slice this payload keeps (the deepest
-                # is tracks at [:80] of the page's 300); the pager's serial
-                # follow-up round-trips only ever fetched rows discarded here.
-                results = self.providers[CTX_TIDAL].search(needle)
-            except Exception:
-                logger.exception("Search failed")
-                results = {}
+            enabled_ids = {CTX_TIDAL, *([CTX_APPLE] if apple_enabled else [])}
+            provider_ids = [
+                provider_id
+                for provider_id, provider in self.providers.items()
+                if provider_id in enabled_ids
+                and (not hasattr(provider, "capabilities") or Capability.SEARCH in provider.capabilities)
+            ]
+
+            def fetch(provider_id: str) -> tuple[str, dict, Exception | None]:
+                try:
+                    return provider_id, self.providers[provider_id].search(needle), None
+                except Exception as exc:
+                    logger.exception("%s search failed", getattr(self.providers[provider_id], "name", provider_id))
+                    return provider_id, {}, exc
+
+            if len(provider_ids) == 1:
+                _, results, error = fetch(CTX_TIDAL)
+                provider_results = {CTX_TIDAL: results}
+                provider_errors = {CTX_TIDAL: error} if error is not None else {}
+            else:
+                # TIDAL and Apple have independent clients. Waiting for one
+                # before starting the other doubles the search's network time.
+                with ThreadPoolExecutor(max_workers=len(provider_ids)) as pool:
+                    fetched = [
+                        future.result() for future in as_completed(pool.submit(fetch, pid) for pid in provider_ids)
+                    ]
+                provider_results = {provider_id: result for provider_id, result, _error in fetched}
+                provider_errors = {provider_id: error for provider_id, _result, error in fetched if error is not None}
+                results = provider_results.get(CTX_TIDAL, {})
             api = devlog.clock() - t0
             if gen != self._search_gen:
                 return  # a newer search superseded this one; drop its results
@@ -4957,11 +4983,23 @@ class WavesBridge(LibraryMixin, QObject):
                 # section. Not a result of its own, so never counted.
                 "top": top,
             }
+            if apple_enabled:
+                apple = provider_results.get(CTX_APPLE, {})
+                payload[CTX_APPLE] = {
+                    "artists": list(apple.get("artists") or []),
+                    "albums": list(apple.get("albums") or []),
+                    "tracks": list(apple.get("tracks") or []),
+                    "videos": list(apple.get("videos") or []),
+                    "playlists": list(apple.get("playlists") or []),
+                    "mixes": list(apple.get("mixes") or []),
+                    "top": apple.get("top"),
+                }
             self.searchResults.emit(payload)
             total = self._search_total(payload)
-            if total:  # an all-empty payload is more likely a failed fetch
+            if total and not provider_errors:  # failures retry instead of entering the short search cache
                 self._remember_search(cache_key, payload)
-            self._set_status(f"{total} results")
+            apple_error = provider_errors.get(CTX_APPLE)
+            self._set_status(str(apple_error) if apple_error is not None else f"{total} results")
             self._set_busy(False)
             elapsed = devlog.clock() - t0
             devlog.done(
@@ -5017,7 +5055,11 @@ class WavesBridge(LibraryMixin, QObject):
     @staticmethod
     def _search_total(payload: dict) -> int:
         """Result count for the status line: the per-type lists only."""
-        return sum(len(v) for v in payload.values() if isinstance(v, list))
+        total = sum(len(v) for v in payload.values() if isinstance(v, list))
+        apple = payload.get(CTX_APPLE)
+        if isinstance(apple, dict):
+            total += sum(len(v) for v in apple.values() if isinstance(v, list))
+        return total
 
     def _top_hit_dict(self, hit) -> dict | None:
         """The search reply's best match as a row dict tagged with its kind.
@@ -6342,7 +6384,8 @@ class WavesBridge(LibraryMixin, QObject):
             try:
                 window = self.providers[CTX_TIDAL].browse_window(title, data_path, mod_type, offset)
                 cards = [
-                    c for c in (self._browse_card(o) for o in window.category.items or [] if o is not None)
+                    c
+                    for c in (self._browse_card(o) for o in window.category.items or [] if o is not None)
                     if c is not None
                 ]
                 new_off = offset + window.n
@@ -14005,9 +14048,9 @@ class WavesBridge(LibraryMixin, QObject):
                     "live": "apple_status",
                     "label": "Enable Apple Music",
                     "help": (
-                        "Apple Music ships off by default. Turning it on records your "
-                        "choice and moves the status light; the runtime setup it should "
-                        "start, and the actions below, arrive with the Apple Music rollout."
+                        "Apple Music ships off by default. Turn it on to add Apple Music "
+                        "catalog results to search. Search needs no Apple account or runtime. "
+                        "The Not set up status applies to downloads, which arrive later."
                     ),
                     "type": "status",
                     "value": apple_status["state"],
@@ -14145,9 +14188,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # discoverable and the light shows what is (not) set up.
                 "group": "Providers · Apple Music",
                 "id": "providers_apple",
-                "desc": (
-                    "The second provider, off until you turn it on. Its search, setup and downloads arrive with the Apple Music rollout."
-                ),
+                "desc": "Turn on Apple Music catalog search here. Account setup and downloads arrive later.",
                 "fields": [
                     "provider_apple_status",
                     "apple_quality_audio",
@@ -14506,8 +14547,11 @@ class WavesBridge(LibraryMixin, QObject):
             # tier yet; the side effect is the provider session's alone.
             self._reapply_provider_quality(CTX_APPLE, values["apple_quality_audio"])
         if "apple_enabled" in values and bool(getattr(data, "apple_enabled", False)) != apple_enabled_before:
-            # No Apple behavior sits behind the switch yet (issue #25): the
-            # light is the only thing a flip moves today.
+            # Search reads the saved switch on its next request. The live
+            # settings page also needs the status light refreshed now.
+            self._search_gen += 1
+            self._search_cache.clear()
+            self._set_busy(False)
             self.appleStatusChanged.emit()
         # Under the same lock _save_settings holds, for the same reason. This
         # region does the restores explicitly instead of going through the

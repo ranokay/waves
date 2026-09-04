@@ -19,12 +19,13 @@ payload must equal exactly what the builders were handed to build.
 
 from __future__ import annotations
 
-from threading import Lock
+from threading import Barrier, Lock
 from types import SimpleNamespace
 
 from tidalapi.album import Album
 from tidalapi.artist import Artist
 
+from waves.providers.apple import AppleCatalogUnavailable
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
 
@@ -221,6 +222,91 @@ def test_a_failed_provider_search_degrades_to_an_empty_payload():
     (payload,) = stub.searchResults.emits
     assert payload["albums"] == [] and payload["tracks"] == []
     assert stub._search_cache == {}
+
+
+class _FanoutProvider(_FakeProvider):
+    def __init__(self, barrier: Barrier, result: dict):
+        super().__init__()
+        self._barrier = barrier
+        self._result = result
+
+    def search(self, needle):
+        self.calls.append(("search", needle))
+        self._barrier.wait(timeout=2)
+        return self._result
+
+
+def test_search_fans_out_over_enabled_providers_and_emits_separate_groups():
+    barrier = Barrier(2)
+    tidal = _FanoutProvider(barrier, {"albums": [object()], "top_hit": None})
+    apple_payload = {
+        "artists": [],
+        "albums": [],
+        "tracks": [{"id": "apple:song-1", "title": "Xtal"}],
+        "videos": [],
+        "playlists": [],
+        "mixes": [],
+        "top": None,
+    }
+    apple = _FanoutProvider(barrier, apple_payload)
+    stub = _SearchStub(tidal)
+    stub.providers["apple"] = apple
+    stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
+
+    stub.search("aphex twin")
+
+    assert tidal.calls == [("search", "aphex twin")]
+    assert apple.calls == [("search", "aphex twin")]
+    assert stub.searchResults.emits == [
+        {
+            "artists": [],
+            "albums": [{"id": "al1", "title": "A"}],
+            "tracks": [],
+            "videos": [],
+            "playlists": [],
+            "mixes": [],
+            "top": None,
+            "apple": apple_payload,
+        }
+    ]
+    assert stub.statuses[-1] == "2 results"
+
+
+def test_search_with_apple_disabled_keeps_the_tidal_payload_unchanged():
+    tidal = _provider(search={"albums": [object()], "top_hit": None})
+    apple = _provider(search=AssertionError("disabled Apple search ran"))
+    stub = _SearchStub(tidal)
+    stub.providers["apple"] = apple
+    stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=False))
+
+    stub.search("aphex twin")
+
+    assert apple.calls == []
+    assert stub.searchResults.emits == [
+        {
+            "artists": [],
+            "albums": [{"id": "al1", "title": "A"}],
+            "tracks": [],
+            "videos": [],
+            "playlists": [],
+            "mixes": [],
+            "top": None,
+        }
+    ]
+
+
+def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
+    tidal = _provider(search={"albums": [object()], "top_hit": None})
+    apple = _provider(search=AppleCatalogUnavailable())
+    stub = _SearchStub(tidal)
+    stub.providers["apple"] = apple
+    stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
+
+    stub.search("aphex twin")
+
+    assert stub.statuses[-1] == "Apple changed its web app. A Waves update is needed."
+    assert stub._search_cache == {}
+    assert stub.searchResults.emits[0]["apple"]["tracks"] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -542,4 +628,5 @@ def test_the_bridge_builds_its_provider_map_in_init():
     # delegates to (pinned at the source: constructing a real bridge here
     # would drag the whole config stack in).
     source = __import__("inspect").getsource(WavesBridge.__init__)
-    assert "self.providers: dict[str, Provider] = {CTX_TIDAL: TidalProvider(self.tidal)}" in source
+    assert "CTX_TIDAL: TidalProvider(self.tidal)" in source
+    assert "CTX_APPLE: AppleProvider()" in source

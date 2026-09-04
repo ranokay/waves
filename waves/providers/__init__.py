@@ -24,6 +24,7 @@ from waves.providers.base import (
 )
 
 _LAZY = {
+    "AppleProvider": ("waves.providers.apple", "AppleProvider"),
     "TidalProvider": ("waves.providers.tidal", "TidalProvider"),
 }
 
@@ -44,6 +45,7 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "AudioType",
+    "AppleProvider",
     "BrowseWindow",
     "Capability",
     "FavoritesUnavailable",
