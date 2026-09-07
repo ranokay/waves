@@ -13,6 +13,22 @@ _EXIT_NO_QT = 77
 _EXIT_PRECONDITION = 78
 
 
+def _video(media_id: str) -> dict:
+    return {
+        "id": media_id,
+        "title": "T69 Collapse",
+        "artist": "Aphex Twin",
+        "artists": [],
+        "art": "",
+        "art_big": "",
+        "duration": "5:10",
+        "explicit": False,
+        "added": "",
+        "date": "2018-08-07",
+        "quality": "1080p",
+    }
+
+
 def _album(media_id: str) -> dict:
     return {
         "id": media_id,
@@ -37,7 +53,7 @@ def _payload(grouped: bool) -> dict:
         "artists": [],
         "albums": [_album("tidal:1")],
         "tracks": [],
-        "videos": [],
+        "videos": [_video("tidal:2")],
         "playlists": [],
         "mixes": [],
         "top": None,
@@ -115,6 +131,22 @@ def _scenario() -> int:
         and q("appleAlbumsModel.count") == 1
     )
 
+    # Filtered views show a provider header only when that provider still has
+    # rows under the filter: albums keeps both, tracks has none anywhere, and
+    # videos belongs to TIDAL alone in this slice.
+    q('filterType = "albums"')
+    settle(50)
+    filter_ok = q("tidalGroupHead.visible") and q("appleGroupHead.visible")
+    q('filterType = "tracks"')
+    settle(50)
+    filter_ok = filter_ok and not q("tidalGroupHead.visible") and not q("appleGroupHead.visible")
+    q('filterType = "videos"')
+    settle(50)
+    filter_ok = filter_ok and q("tidalGroupHead.visible") and not q("appleGroupHead.visible")
+    q('filterType = "all"')
+    settle(50)
+    filter_ok = filter_ok and q("tidalGroupHead.visible") and q("appleGroupHead.visible")
+
     q("searchAlbumsExpanded = false; appleSearchAlbumsExpanded = false")
     q('toggleAppleSearchSection("albums")')
     expansion_ok = not q("searchAlbumsExpanded") and q("appleSearchAlbumsExpanded")
@@ -135,7 +167,7 @@ def _scenario() -> int:
         and q("albumsModel.count") == 1
         and q("appleAlbumsModel.count") == 0
     )
-    return 0 if grouped_ok and expansion_ok and blank_ok and tidal_only_ok else 1
+    return 0 if grouped_ok and filter_ok and expansion_ok and blank_ok and tidal_only_ok else 1
 
 
 def test_enabled_apple_search_renders_provider_groups_and_disabled_apple_keeps_the_old_page():

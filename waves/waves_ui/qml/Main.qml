@@ -739,6 +739,21 @@ ApplicationWindow {
     }
     function toggleSearchSection(which) { toggleProviderSearchSection(which, false) }
     function toggleAppleSearchSection(which) { toggleProviderSearchSection(which, true) }
+    // A provider header only makes sense while the active type filter can
+    // still show one of its rows. Apple offers no videos or mixes in this
+    // slice, so those filters never show its header.
+    function providerGroupVisible(apple) {
+        if (!appleSearchGrouped) return false
+        var models = apple ? ({ artists: appleArtistsModel, albums: appleAlbumsModel, tracks: appleTracksModel, playlists: applePlaylistsModel })
+                           : ({ artists: artistsModel, albums: albumsModel, tracks: tracksModel, videos: videosModel, playlists: playlistsModel, mixes: mixesModel })
+        if (filterType !== "all") {
+            var model = models[filterType]
+            return model !== undefined && model.count > 0
+        }
+        var total = 0
+        for (var name in models) total += models[name].count
+        return total > 0
+    }
     // A per-section cap for the mixed All view: the section's first 5 rows, or
     // everything once it is expanded; a specific section filter is never capped.
     function searchRowVisible(name, count, index, expanded) {
@@ -12974,7 +12989,7 @@ ApplicationWindow {
 
                 Item {
                     id: tidalGroupHead
-                    visible: root.appleSearchGrouped
+                    visible: root.providerGroupVisible(false)
                     width: parent.width; height: 42
                     Text {
                         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
@@ -13279,7 +13294,7 @@ ApplicationWindow {
 
                 Item {
                     id: appleGroupHead
-                    visible: root.appleSearchGrouped
+                    visible: root.providerGroupVisible(true)
                     width: parent.width; height: 50
                     Text {
                         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
