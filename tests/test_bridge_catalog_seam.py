@@ -117,6 +117,7 @@ class _SearchStub:
     search = WavesBridge.search
     _search_total = staticmethod(WavesBridge._search_total)
     _remember_search = WavesBridge._remember_search
+    _save_page_cache = lambda self: None
     _top_hit_dict = WavesBridge._top_hit_dict
     _SEARCH_CACHE_MAX = 20
     _SEARCH_TTL = 90.0
