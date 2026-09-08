@@ -5639,12 +5639,22 @@ class WavesBridge(LibraryMixin, QObject):
             self._set_status(cached.get("name") or "Artist")
             return
         claim = False
+        in_flight = False
         with self._prefetch_lock:
-            in_flight = artist_id in self._artist_loading
-            if in_flight and artist_id == self._artist_prefetch:
-                self._artist_prefetch_claimed = claim = True
-            elif not in_flight:
-                self._artist_loading.add(artist_id)
+            # Recheck the cache under the lock: a hover worker may have
+            # published the page after the read above but before its loading
+            # mark dropped. Without this the click starts a redundant build.
+            cached = self._artist_cache.get(artist_id)
+            if cached is None:
+                in_flight = artist_id in self._artist_loading
+                if in_flight and artist_id == self._artist_prefetch:
+                    self._artist_prefetch_claimed = claim = True
+                elif not in_flight:
+                    self._artist_loading.add(artist_id)
+        if cached is not None:
+            self.artistLoaded.emit(cached)
+            self._set_status(cached.get("name") or "Artist")
+            return
         if in_flight:
             if claim:
                 self._set_busy(True)
@@ -5694,13 +5704,18 @@ class WavesBridge(LibraryMixin, QObject):
                 return
             finally:
                 # Same claim breath as _start_artist_build's: free the hover
-                # slot and read the claim while the loading mark drops.
+                # slot and read the claim while the loading mark drops. Skipped
+                # when the generation moved (logout clears all of this state;
+                # a stale worker must not clear the next account's prefetch).
                 with self._prefetch_lock:
-                    self._artist_loading.discard(artist_id)
-                    claimed = silent and self._artist_prefetch == artist_id and self._artist_prefetch_claimed
-                    if self._artist_prefetch == artist_id:
-                        self._artist_prefetch = None
-                        self._artist_prefetch_claimed = False
+                    if gen == self._browse_gen:
+                        self._artist_loading.discard(artist_id)
+                        claimed = silent and self._artist_prefetch == artist_id and self._artist_prefetch_claimed
+                        if self._artist_prefetch == artist_id:
+                            self._artist_prefetch = None
+                            self._artist_prefetch_claimed = False
+                    else:
+                        claimed = False
                 quiet = silent and not claimed  # nobody is watching this build
                 if failed:
                     if quiet:

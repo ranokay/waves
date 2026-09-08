@@ -300,3 +300,51 @@ def test_apple_click_failure_reports_and_releases_the_load():
     assert stub.statuses == ["Loading artist…", "Could not open that artist"]
     assert stub.busy == [True, False]
     assert stub.artistLoadFailed.emits == ["apple:artist-1"]
+
+
+class _DeferredPool:
+    def __init__(self):
+        self.fns: list = []
+
+    def start(self, worker, priority: int = 0):
+        self.fns.append(worker.fn)
+
+
+def test_apple_click_serves_cache_even_with_a_stale_loading_mark():
+    stub = _prefetch_stub(providers={"apple": AppleProvider(catalog=_FailingArtistCatalog())})
+    stub._artist_cache["apple:artist-1"] = {"id": "apple:artist-1", "name": "Aphex Twin"}
+    stub._artist_loading.add("apple:artist-1")
+
+    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+
+    (payload,) = stub.artistLoaded.emits
+    assert payload["name"] == "Aphex Twin"
+    assert stub._artist_prefetch_claimed is False  # served, not claimed
+
+
+def test_apple_stale_worker_keeps_the_next_generations_prefetch():
+    pool = _DeferredPool()
+    stub = _prefetch_stub(threadpool=pool)
+    WavesBridge.prefetchArtist(stub, "apple:artist-1")
+    assert len(pool.fns) == 1
+
+    # Logout clears the markers and bumps the generation; the next account
+    # hovers the same artist before the old request finishes.
+    stub._browse_gen = 1
+    stub._artist_loading = set()
+    stub._artist_prefetch = None
+    stub._artist_cache = {}
+    WavesBridge.prefetchArtist(stub, "apple:artist-1")
+    assert len(pool.fns) == 2
+
+    pool.fns[0]()  # the stale worker lands: touches nothing new
+
+    assert stub._artist_loading == {"apple:artist-1"}
+    assert stub._artist_prefetch == "apple:artist-1"
+    assert stub._artist_cache == {}
+    assert stub.artistLoaded.emits == []
+
+    pool.fns[1]()  # the current worker warms the page quietly
+
+    assert stub._artist_cache["apple:artist-1"]["name"] == "Aphex Twin"
+    assert stub.artistLoaded.emits == []
