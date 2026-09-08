@@ -91,8 +91,9 @@ AUDIO_EXTS = frozenset(
 #
 # "Waves Quarantine" is the integrity gate's folder (issue #30, spec §6.3): a
 # quarantined file can never badge as IN LIBRARY, so the scan never descends
-# into it. Custom quarantine locations keep the exclusion by basename (see
-# register_quarantine_dir): the folder's NAME is what the walk judges.
+# into it. Custom quarantine locations keep the exclusion by full path (see
+# register_quarantine_dir): a basename match would prune every same-named
+# folder in every scan.
 _SKIP_DIR_NAMES = frozenset(
     {
         # Waves' own exports under the download root.
@@ -126,39 +127,59 @@ def _is_skipped_dir_name(name: str) -> bool:
     by name: a probe that indexes a folder the walk excludes creates a row no
     later listing can ever match, so the parent is flagged untrusted forever and
     a Synology's @eaDir arrives in the library as an owned album.
+
+    Custom quarantine locations are NOT judged here (a basename match would
+    prune every same-named folder in every scan): they are judged by full path
+    in _is_quarantine_path, which every site that has the path consults alongside.
     """
     if name.startswith("."):
         return True
-    if name in _SKIP_DIR_NAMES:
-        return True
-    return name in _EXTRA_SKIP_DIR_NAMES
+    return name in _SKIP_DIR_NAMES
 
 
-# Extra basenames a walk never descends into, beyond _SKIP_DIR_NAMES: the
-# integrity gate's custom quarantine location (issue #30). The default
-# "Waves Quarantine" is already in _SKIP_DIR_NAMES; a custom folder with a
-# different basename registers here so it stays scan-excluded too. Module-level
-# (not per-index) because the walk judges names, not roots, and every index in
-# the process must agree.
-_EXTRA_SKIP_DIR_NAMES: set[str] = set()
+# Extra quarantine folders a walk never descends into, by full normalized path
+# (issue #30): the integrity gate's custom quarantine location. The default
+# "Waves Quarantine" needs no registration (it is in _SKIP_DIR_NAMES by name).
+# Path-based on purpose: registering a basename would prune every directory
+# with a common name ("Music", "Albums") in every scan, silently removing
+# legitimate albums. Module-level because every index in the process must agree.
+_EXTRA_QUARANTINE_PATHS: set[str] = set()
+
+
+def _normalize_quarantine_path(path: str) -> str:
+    return os.path.normpath(os.path.expanduser(str(path or "").strip()))
 
 
 def register_quarantine_dir(path: str | None) -> None:
-    """Exclude a custom quarantine folder's basename from library walks.
+    """Exclude a custom quarantine folder (and everything under it) from walks.
 
-    Idempotent; empty/None registers nothing. The default name needs no
-    registration (it is in _SKIP_DIR_NAMES). Never raises: a scan exclusion
+    Idempotent; empty/None registers nothing. Never raises: a scan exclusion
     must not fail a download.
     """
     try:
         text = str(path or "").strip()
         if not text:
             return
-        base = os.path.basename(os.path.normpath(os.path.expanduser(text)))
-        if base and base not in (".", "..") and not base.startswith("."):
-            _EXTRA_SKIP_DIR_NAMES.add(base)
+        normalized = _normalize_quarantine_path(text)
+        base = os.path.basename(normalized)
+        if base and base not in (".", ".."):
+            _EXTRA_QUARANTINE_PATHS.add(normalized)
     except Exception:
         logger.debug("Could not register the quarantine dir for scan exclusion", exc_info=True)
+
+
+def _is_quarantine_path(path: str | None) -> bool:
+    """True when ``path`` is a registered quarantine folder or sits under one."""
+    try:
+        if not path or not _EXTRA_QUARANTINE_PATHS:
+            return False
+        normalized = _normalize_quarantine_path(path)
+        for quarantined in _EXTRA_QUARANTINE_PATHS:
+            if normalized == quarantined or normalized.startswith(quarantined.rstrip(os.sep) + os.sep):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _has_skipped_segment(path: str, root: str) -> bool:
@@ -168,7 +189,11 @@ def _has_skipped_segment(path: str, root: str) -> bool:
     well live inside a hidden folder, and its own spelling is the user's
     choice: this rule condemns what a probe reached past the root, nothing
     else. False for anything not under ``root``, and for the root itself.
+    A registered custom quarantine folder (or anything under it) is always
+    skipped, by full path rather than by basename.
     """
+    if _is_quarantine_path(path):
+        return True
     if not root or path == root:
         return False
     prefix = root.rstrip(os.sep) + os.sep
@@ -1193,7 +1218,11 @@ class LibraryIndex:
         absent, and a name is matched the way a filesystem compares it, not by
         its exact spelling. Names only; nothing is logged."""
         have = {_name_key(n) for n in self.child_names(parent)}
-        return all(_name_key(n) in have for n in names if not _is_skipped_dir_name(str(n)))
+        return all(
+            _name_key(n) in have
+            for n in names
+            if not _is_skipped_dir_name(str(n)) and not _is_quarantine_path(os.path.join(parent, str(n)))
+        )
 
     def unreliable_dirs(self) -> list[str]:
         """The folders whose last listing could not be trusted (see the
@@ -1341,6 +1370,11 @@ class LibraryIndex:
                         if not alive():
                             return hits
                         path = os.path.join(parent, spelling)
+                        if _is_quarantine_path(path):
+                            # A custom quarantine folder, judged by full path
+                            # (never by basename): the walk never descends into
+                            # it, so probing it would plant an unmatchable row.
+                            continue
                         try:
                             st = os.stat(path)
                         except OSError:
@@ -1758,7 +1792,7 @@ class LibraryIndex:
                     if name.startswith("."):
                         continue
                     if entry.is_dir(follow_symlinks=False):
-                        if _is_skipped_dir_name(name):  # dot names are gone above
+                        if _is_skipped_dir_name(name) or _is_quarantine_path(entry.path):  # dot names are gone above
                             continue
                         # A non-UTF-8 folder name cannot be stored in sqlite; skip it
                         # rather than let one bad name crash (and re-crash) the whole

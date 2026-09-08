@@ -319,6 +319,7 @@ def _settings(base: Path, **overrides):
         apple_integrity_retry_delay_sec=0,
         apple_quarantine_dir="",
         apple_quarantine_keep=True,
+        playlist_create=False,
     )
     for key, value in overrides.items():
         setattr(data, key, value)
@@ -413,12 +414,19 @@ def test_integrity_budget_sharpens_for_outbreak_era():
     assert integrity_retry_delay(SimpleNamespace(apple_integrity_retry_delay_sec=5.0)) == 5.0
 
 
-def test_library_scan_excludes_the_quarantine_folder():
+def test_library_scan_excludes_the_quarantine_folder(tmp_path):
     from waves import library_index
 
     assert library_index._is_skipped_dir_name("Waves Quarantine") is True
-    library_index.register_quarantine_dir("/lib/My Quarantine")
-    assert library_index._is_skipped_dir_name("My Quarantine") is True
+    # A custom location is excluded by full path, never by basename: a common
+    # basename must not prune legitimate same-named folders elsewhere.
+    custom = tmp_path / "somewhere" / "Music"
+    library_index.register_quarantine_dir(str(custom))
+    assert library_index._is_skipped_dir_name("Music") is False
+    assert library_index._is_quarantine_path(str(custom)) is True
+    assert library_index._is_quarantine_path(str(custom / "Aphex Twin" / "Xtal.m4a")) is True
+    assert library_index._is_quarantine_path(str(tmp_path / "lib" / "Music")) is False
+    assert library_index._has_skipped_segment(str(custom / "Xtal.m4a"), str(tmp_path / "lib")) is True
 
 
 def test_ownership_skiplist_is_per_version(tmp_path):
@@ -668,3 +676,87 @@ def test_retry_bypasses_the_skiplist_once_then_it_stands_again(tmp_path, monkeyp
     # Consumed: the next bulk run skips again unless a verified copy cleared it
     # (here the verified copy did clear it, so the mark is gone entirely).
     assert store.is_quarantined("apple:song-1", "stereo") is None
+
+
+@needs_ffmpeg
+def test_resolve_stage_integrity_failure_retries_and_marks_the_skiplist(tmp_path, monkeypatch):
+    """The engine's own decode check can raise from resolve_stream (no staged
+    file): the retry/quarantine path still applies, minus the quarantine bytes."""
+    from waves import apple_engine
+    from waves.apple_engine import AppleDownloadError
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    calls: list = []
+
+    class _RaisingProvider(_FakeProvider):
+        def resolve_stream(self, raw, tier, audio_type):
+            calls.append(audio_type)
+            raise AppleDownloadError("The Apple download failed its integrity check")
+
+    provider = _RaisingProvider([])
+    base = tmp_path / "lib"
+    store = _SkipStore()
+    stub = _bind(_stub(base, provider, _ownership_store=store))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        WavesBridge._run_apple_job(
+            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+        )
+
+    assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
+    assert len(calls) == 3
+    assert store.is_quarantined("apple:song-1", "stereo") is not None
+    assert not list((base / QUARANTINE_DIR_NAME).rglob("*.m4a"))
+
+
+@needs_ffmpeg
+def test_retry_bypass_covers_every_track_of_a_collection(tmp_path, monkeypatch):
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+
+    def _row(song_id, title):
+        row = _track_row(track_id=f"apple:{song_id}", title=title)
+        return row
+
+    def _res(song_id, title):
+        res = _song_resource(song_id)
+        res["attributes"]["name"] = title
+        return res
+
+    class _TwoTrackProvider(_FakeProvider):
+        def collection_items(self, obj, include_videos=True):
+            return [_row("song-1", "One"), _row("song-2", "Two")]
+
+        def get_object(self, kind, raw_id):
+            if kind == "track":
+                return _res(raw_id, "One" if raw_id == "song-1" else "Two")
+            return _album_resource()
+
+    good_files = []
+    for i in range(2):
+        good = tmp_path / f"good-{i}.m4a"
+        _tone(good)
+        good_files.append(good)
+    provider = _TwoTrackProvider(good_files)
+    base = tmp_path / "lib"
+    store = _SkipStore()
+    store.quarantine_add("apple:song-1", "stereo", "2025-06-23")
+    store.quarantine_add("apple:song-2", "stereo", "2025-06-23")
+    stub = _bind(_stub(base, provider, _ownership_store=store))
+    stub._apple_skiplist_bypass = {"apple:album-1"}
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _album_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert len(provider.fetched) == 2
