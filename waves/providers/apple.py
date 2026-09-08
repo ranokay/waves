@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from threading import Lock
 from urllib.parse import urlparse
 
@@ -25,10 +26,30 @@ class AppleCatalogUnavailable(RuntimeError):
         super().__init__("Apple changed its web app. A Waves update is needed.")
 
 
+logger = logging.getLogger("waves.providers.apple")
+
+
+def _song_query_id(query: str) -> str | None:
+    """The ``?i=<songId>`` song id off an album URL, if present."""
+    for chunk in query.split("&"):
+        if chunk.startswith("i=") and len(chunk) > 2:
+            return chunk[2:].split("/")[0]
+    return None
+
+
+def _catalog_path_id(type_seg: str, raw_id: str) -> tuple[str, str, None] | None:
+    """A catalog path's (kind, id) for the four linkable Apple kinds."""
+    kinds = {"album": "album", "artist": "artist", "playlist": "playlist", "song": "track", "songs": "track"}
+    kind = kinds.get(type_seg)
+    if kind is None or not raw_id:
+        return None
+    return (kind, raw_id, None)
+
+
 class AppleProvider(Provider):
     id = CTX_APPLE
     name = "Apple Music"
-    capabilities = frozenset({Capability.SEARCH, Capability.CATALOG})
+    capabilities = frozenset({Capability.SEARCH, Capability.CATALOG, Capability.OPEN_URL, Capability.PREVIEW})
 
     def __init__(self, catalog=None, catalog_factory=None) -> None:
         self._catalog = catalog
@@ -280,14 +301,207 @@ class AppleProvider(Provider):
         return None
 
     def open_url(self, url: str) -> object | None:
-        return None
+        """Resolve a pasted Apple Music share URL to its catalog resource.
+
+        Returns ``{"kind": ..., "item": ...}`` where kind is one of
+        "album" / "artist" / "playlist" / "track", or None when the URL is
+        not Apple's grammar or the item is gone. The bridge builds the page
+        payload from the resolved resource.
+        """
+        parsed = self.parse_apple_url(url)
+        if parsed is None:
+            return None
+        kind, raw_id, _song_id = parsed
+        try:
+            item = self.get_object(kind, raw_id)
+        except Exception:
+            return None
+        return {"kind": kind, "item": item}
+
+    @staticmethod
+    def parse_apple_url(url: str) -> tuple[str, str, str | None] | None:
+        """An Apple Music share URL into (kind, raw_id, song_id).
+
+        Kinds: "album" / "artist" / "playlist" / "track". A song link is an
+        album URL with a ``?i=<songId>`` query, so it answers ("track",
+        songId, None). Playlist ids travel as ``pl.<hash>``.
+        """
+        try:
+            parsed = urlparse(str(url or ""))
+        except Exception:
+            return None
+        if "apple.com" not in (parsed.hostname or ""):
+            return None
+        parts = [seg for seg in parsed.path.split("/") if seg]
+        if len(parts) < 3:
+            return None
+        song_id = _song_query_id(parsed.query or "")
+        if song_id:
+            return ("track", song_id, None)
+        return _catalog_path_id(parts[1].lower(), parts[-1])
 
     def get_object(self, kind: str, raw_id: str) -> object:
-        raw_id = str(raw_id).removeprefix(f"{CTX_APPLE}:")
-        return self._objects.get(kind, {})[raw_id]
+        raw_id = str(raw_id or "").removeprefix(f"{CTX_APPLE}:")
+        cached = self._objects.get(kind, {}).get(raw_id)
+        if cached is not None:
+            return cached
+        if kind == "album":
+            item = self._first_data(self._run(self._fetch_album(raw_id)))
+        elif kind == "artist":
+            item = self._first_data(self._run(self._fetch_artist(raw_id)))
+        elif kind == "playlist":
+            item = self._first_data(self._run(self._fetch_playlist(raw_id)))
+        elif kind == "track":
+            item = self._first_data(self._run(self._fetch_song(raw_id)))
+        else:
+            raise KeyError(kind)
+        if not isinstance(item, dict) or not item.get("id"):
+            raise KeyError(raw_id)
+        self._objects[kind][raw_id] = item
+        return item
+
+    async def _fetch_album(self, raw_id: str) -> dict:
+        if self._catalog is None:
+            self._catalog = await self._catalog_factory()
+        return await self._catalog.get_album(raw_id)
+
+    async def _fetch_artist(self, raw_id: str) -> dict:
+        if self._catalog is None:
+            self._catalog = await self._catalog_factory()
+        return await self._catalog.get_artist(raw_id)
+
+    async def _fetch_playlist(self, raw_id: str) -> dict:
+        if self._catalog is None:
+            self._catalog = await self._catalog_factory()
+        return await self._catalog.get_playlist(raw_id)
+
+    async def _fetch_song(self, raw_id: str) -> dict:
+        if self._catalog is None:
+            self._catalog = await self._catalog_factory()
+        return await self._catalog.get_song(raw_id)
+
+    @staticmethod
+    def _first_data(response: dict) -> dict:
+        data = (response or {}).get("data")
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return data[0]
+        if isinstance(data, dict):
+            return data
+        return {}
 
     def collection_items(self, obj, include_videos: bool = True) -> list:
-        raise NotImplementedError
+        """An album's or playlist's songs as Waves track row dicts.
+
+        The catalog resource already carries its tracks in
+        ``relationships.tracks.data``; entries without attributes are
+        re-fetched individually. Artists read through :meth:`artist_page`.
+        """
+        if isinstance(obj, dict) and obj.get("_apple_kind") == "artist":
+            page = self.artist_page(obj["item"])
+            return list(page.get("tracks") or [])
+        item = obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+        if not isinstance(item, dict):
+            return []
+        tracks = self._relationship_items(item, "tracks")
+        return self._track_rows(tracks)
+
+    def _track_rows(self, resources: list[dict]) -> list[dict]:
+        rows: list[dict] = []
+        for res in resources:
+            if not isinstance(res, dict) or not res.get("id"):
+                continue
+            if not self._attributes(res).get("name"):
+                try:
+                    res = self.get_object("track", str(res.get("id")))
+                except Exception:
+                    logger.debug("Skipping an Apple track refetch that failed", exc_info=True)
+                    continue
+                if not isinstance(res, dict):
+                    continue
+            rows.append(self._track_row(res, {}))
+        return rows
+
+    @classmethod
+    def _relationship_items(cls, item: dict, kind: str) -> list[dict]:
+        relationships = item.get("relationships") or {}
+        related = relationships.get(kind) or {}
+        data = related.get("data") or []
+        return [entry for entry in data if isinstance(entry, dict)]
+
+    def artist_page(self, artist_item: dict) -> dict:
+        """An artist's albums, singles and top tracks as Waves row dicts."""
+        attrs = self._attributes(artist_item)
+        albums: list[dict] = []
+        singles: list[dict] = []
+        tracks: list[dict] = []
+        artist_ids = {
+            str(attrs.get("name") or "").casefold(): self._id(artist_item.get("id")) if artist_item.get("id") else ""
+        }
+        relationships = artist_item.get("relationships") or {}
+        for key, rel in relationships.items():
+            if not isinstance(rel, dict):
+                continue
+            data = rel.get("data")
+            items = data if isinstance(data, list) else []
+            views = rel.get("views") if isinstance(rel.get("views"), dict) else None
+            if views:
+                for view_name, view in views.items():
+                    view_data = (view or {}).get("data") if isinstance(view, dict) else None
+                    if isinstance(view_data, list):
+                        self._sort_artist_resources(view_data, str(view_name), albums, singles, tracks, artist_ids)
+            self._sort_artist_resources(items, str(key), albums, singles, tracks, artist_ids)
+        views = artist_item.get("views") or {}
+        if isinstance(views, dict):
+            for view_name, view in views.items():
+                view_data = (view or {}).get("data") if isinstance(view, dict) else None
+                if isinstance(view_data, list):
+                    self._sort_artist_resources(view_data, str(view_name), albums, singles, tracks, artist_ids)
+        return {
+            "id": self._id(artist_item.get("id")),
+            "name": str(attrs.get("name") or ""),
+            "art": self._art(attrs, 320),
+            "bio": "",
+            "albums": albums,
+            "eps": singles,
+            "tracks": tracks,
+        }
+
+    def _sort_artist_resources(
+        self,
+        resources: list,
+        view_name: str,
+        albums: list[dict],
+        singles: list[dict],
+        tracks: list[dict],
+        artist_ids: dict[str, str],
+    ) -> None:
+        lowered = view_name.lower()
+        for res in resources:
+            if not isinstance(res, dict) or not res.get("id"):
+                continue
+            rtype = str(res.get("type") or "").lower()
+            if rtype == "songs" or (("top" in lowered or "song" in lowered) and rtype in ("", "songs")):
+                if rtype == "" and not self._attributes(res).get("albumName"):
+                    continue
+                tracks.append(self._track_row(res, artist_ids))
+            elif rtype in ("albums", ""):
+                row = self._album_row(res, artist_ids)
+                if "single" in lowered or "ep" in lowered:
+                    singles.append(row)
+                else:
+                    albums.append(row)
+
+    def row_for(self, kind: str, item: dict) -> dict:
+        """One catalog resource as the Waves row dict the pages render."""
+        if kind == "artist":
+            return self._artist_row(item)
+        if kind == "album":
+            return self._album_row(item, {})
+        if kind == "track":
+            return self._track_row(item, {})
+        if kind == "playlist":
+            return self._playlist_row(item)
+        raise KeyError(kind)
 
     def user_collections(self) -> dict | None:
         return None
@@ -327,11 +541,33 @@ class AppleProvider(Provider):
     def resolve_stream(self, track, tier: QualityTier, audio_type: AudioType) -> StreamInfo:
         raise NotImplementedError
 
+    def preview_url(self, track) -> str | None:
+        """The documented 30-second preview URL off a song resource.
+
+        No session, no wrapper, no setup: ``attributes.previews[0].url`` is a
+        plain AAC clip. None when Apple serves no preview for the song.
+        """
+        item = track["item"] if isinstance(track, dict) and "item" in track else track
+        attrs = self._attributes(item if isinstance(item, dict) else {})
+        previews = attrs.get("previews")
+        if isinstance(previews, list):
+            for entry in previews:
+                if isinstance(entry, dict) and entry.get("url"):
+                    return str(entry["url"])
+        return None
+
     def fetch_lyrics(self, track) -> tuple[str, str]:
         return "", ""
 
     def cover_url(self, obj, dimension: int) -> str:
-        return ""
+        """Best-effort cover URL at the requested square dimension."""
+        item = obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+        attrs = self._attributes(item if isinstance(item, dict) else {})
+        try:
+            dim = max(16, int(dimension))
+        except (TypeError, ValueError):
+            dim = 320
+        return self._art(attrs, dim)
 
     def track_facts(self, track) -> dict:
         return {}

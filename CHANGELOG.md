@@ -28,6 +28,8 @@ issue. A test enforces it.
 
 - 🎛️ Settings has a Providers area: a TIDAL section holding your session state and its audio-quality default, and an Apple Music section that is always visible behind an enable switch (off by default) with a status light. Turning Apple on records your choice today; its search, setup and downloads arrive with the Apple Music rollout ([issue #25](https://github.com/ranokay/waves/issues/25)).
 
+- 🍎 Apple Music results open full pages: albums, artists and playlists render with tracks and artwork, pasted Apple Music links resolve to the right page, and the preview button plays Apple's 30-second clip through the existing player ([issue #27](https://github.com/ranokay/waves/issues/27)).
+
 ## 🗂️ v0.1.28 (2026-09-07)
 
 ### ✨ Added

@@ -33,7 +33,7 @@ feature.
 
 | Signal                                                     | Fires when                                                                                                                                     |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `searchResults(payload)`                                   | Search or a pasted TIDAL link finishes; TIDAL rows use the top-level per-kind lists and enabled Apple search adds the same shape under `apple` |
+| `searchResults(payload)`                                   | Search or a pasted TIDAL/Apple Music link finishes; TIDAL rows use the top-level per-kind lists and enabled Apple search adds the same shape under `apple` |
 | `albumTracksLoaded(albumId, tracks)`                       | An album's ordered track list arrives (album expansion)                                                                                        |
 | `artistLoaded(payload)`                                    | An artist page (bio, discography, top tracks) is ready                                                                                         |
 | `artistMetaLoaded(artistId, popularity)`                   | Late-arriving artist metadata                                                                                                                  |
@@ -202,6 +202,8 @@ what the user clicked ("track", "artist", "album", "playlist", "mix");
 non-track kinds resolve to a concrete song, reported via `previewMeta`'s
 `trackId`, which is how every surface showing that song displays live
 state instead of offering a restart (see `pvActive` in Main.qml).
+TIDAL previews stream the full track; Apple previews play Apple's
+documented 30-second clip URL directly (no remux).
 
 ## FFmpeg manager and self-updater
 
