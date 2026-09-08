@@ -44,14 +44,40 @@ OUTBREAK_MONTH: int = 5
 _DATE_RE = re.compile(r"(19|20)\d{2}[-_/.]?(0[1-9]|1[0-2])(?:[-_/.]?\d{1,2})?")
 
 
+def _norm_dir(path: str | Path) -> str:
+    return os.path.normpath(os.path.expanduser(str(path or "")))
+
+
 def _same_dir(first: str | Path, second: str | Path) -> bool:
-    """Whether two directory paths name the same folder, on any platform."""
-    first_norm = os.path.normpath(os.path.expanduser(str(first or "")))
-    second_norm = os.path.normpath(os.path.expanduser(str(second or "")))
+    """Whether two directory paths name the same folder.
+
+    Platform-correct first (normcase folds case on Windows, is exact on
+    POSIX), then an identity check for aliases the spelling cannot show (a
+    symlink, a macOS case-insensitive volume): samefile needs both paths to
+    exist, so a missing path simply cannot prove aliasing.
+    """
+    first_norm, second_norm = _norm_dir(first), _norm_dir(second)
     if os.path.normcase(first_norm) == os.path.normcase(second_norm):
         return True
-    # macOS APFS is usually case-insensitive while normcase is a no-op there.
-    return first_norm.casefold() == second_norm.casefold()
+    try:
+        return os.path.samefile(first_norm, second_norm)
+    except OSError:
+        return False
+
+
+def _is_within(child: str | Path, parent: str | Path) -> bool:
+    """Whether ``child`` is ``parent`` itself or sits under it.
+
+    Lexical first (normcase folds case on Windows, is exact on POSIX, so a
+    case-only difference on Linux stays two different folders); samefile then
+    settles aliasing the spelling cannot show (symlinks, insensitive volumes)
+    wherever both paths exist.
+    """
+    child_norm, parent_norm = _norm_dir(child), _norm_dir(parent)
+    if _same_dir(child_norm, parent_norm):
+        return True
+    prefix = parent_norm.rstrip(os.sep) + os.sep
+    return os.path.normcase(child_norm).startswith(os.path.normcase(prefix))
 
 
 def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None = None) -> Path:
@@ -61,17 +87,18 @@ def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None 
     custom value is the full folder path (absolute, or ~/expanded). The folder
     is created on use, never here.
 
-    A custom path naming the download root itself falls back to the default:
-    quarantining into the library at the intended relative path would place a
-    corrupt file exactly where a verified copy belongs (and the scan exclusion
-    would then hide the whole library).
+    A custom path naming the download root itself, or an ancestor of it,
+    falls back to the default: quarantining into the library at the intended
+    relative path would place a corrupt file exactly where a verified copy
+    belongs, and registering an ancestor would exclude the whole library
+    from the scan.
     """
     base = Path(os.path.expanduser(str(download_base or "")))
     text = str(custom or "").strip()
     if text:
         candidate = Path(os.path.expanduser(text))
-        if _same_dir(candidate, base):
-            logger.warning("Apple quarantine folder is the download folder; using the default instead")
+        if _is_within(base, candidate):
+            logger.warning("Apple quarantine folder overlaps the download folder; using the default instead")
             return base / QUARANTINE_DIR_NAME
         return candidate
     return base / QUARANTINE_DIR_NAME

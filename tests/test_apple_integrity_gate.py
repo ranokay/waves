@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -402,6 +403,23 @@ def test_quarantine_dir_matching_the_download_root_falls_back(tmp_path):
     base = tmp_path / "lib"
     assert resolve_quarantine_dir(base, base) == base / QUARANTINE_DIR_NAME
     assert resolve_quarantine_dir(base, str(base) + "/") == base / QUARANTINE_DIR_NAME
+
+
+def test_quarantine_dir_above_the_download_root_falls_back(tmp_path):
+    base = tmp_path / "lib" / "Waves"
+    assert resolve_quarantine_dir(base, tmp_path) == base / QUARANTINE_DIR_NAME
+    assert resolve_quarantine_dir(base, tmp_path / "lib") == base / QUARANTINE_DIR_NAME
+
+
+def test_quarantine_dir_case_only_difference_stays_distinct(tmp_path):
+    # On a case-sensitive filesystem these are two different folders: the
+    # custom location stands, no silent fallback to the default.
+    base = tmp_path / "music"
+    base.mkdir()
+    custom = tmp_path / "MUSIC"
+    if os.path.exists(custom) and os.path.samefile(base, custom):
+        pytest.skip("case-insensitive volume: spellings alias by design")
+    assert resolve_quarantine_dir(base, custom) == custom
 
 
 def test_quarantine_dest_keeps_the_intended_name(tmp_path):

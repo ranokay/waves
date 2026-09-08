@@ -11770,7 +11770,9 @@ class WavesBridge(LibraryMixin, QObject):
             return
         if self._ffmpeg_gate_holds(
             media_id,
-            lambda: self._download_apple(type_media, row, collection_row, file_template, collection, media_id),
+            lambda: self._download_apple(
+                type_media, row, collection_row, file_template, collection, media_id, keep_ask=keep_ask
+            ),
         ):
             return
         if keep_ask is not None and keep_ask[0]:
@@ -12997,6 +12999,10 @@ class WavesBridge(LibraryMixin, QObject):
                 file_template,
                 collection,
                 media_id,
+                # A retried row replays as a retry (its skip-list bypass rides
+                # the spec flag); a fresh row replays fresh, so quarantined
+                # tracks skip again instead of fetching on a folder hiccup.
+                keep_ask=row_ask if getattr(spec, "is_retry", False) else None,
             ),
             media_id,
         ):
@@ -13048,7 +13054,13 @@ class WavesBridge(LibraryMixin, QObject):
                 self._set_status(f"Cancelled {name}")
             elif self._download_failed_with_folder(
                 lambda: self._download_apple(
-                    type_media, replay_row, replay_collection, file_template, collection, media_id
+                    type_media,
+                    replay_row,
+                    replay_collection,
+                    file_template,
+                    collection,
+                    media_id,
+                    keep_ask=row_ask if getattr(spec, "is_retry", False) else None,
                 ),
                 media_id,
                 qid,
