@@ -142,7 +142,7 @@ def test_every_keep_the_app_performs_itself_names_the_folder(tmp_path, monkeypat
     message overwrites a moment later. A Linux user could accumulate a kept
     copy of the whole install per update with nothing on screen ever telling
     them where their files went, or that they were still there at all."""
-    install_root, target = _install_with_user_files(tmp_path)
+    _install_root, target = _install_with_user_files(tmp_path)
     up = AppUpdater(tmp_path / "config", "1.0.0", repo="owner/Waves")
     staged = _staged_tree(tmp_path)
     monkeypatch.setattr(u.shutil, "move", _refuse_to_move(staged))
@@ -492,7 +492,7 @@ def test_the_apply_records_what_the_build_it_just_installed_ships(tmp_path, monk
     from whatever the user keeps in the install folder, and written only once
     the apply has returned. It describes the NEW version, so the update after
     this one is the first to read it."""
-    install_root, target = _install_with_user_files(tmp_path)
+    _install_root, target = _install_with_user_files(tmp_path)
     staged = _staged_tree(tmp_path)
     up = AppUpdater(tmp_path / "config", "1.0.0", repo="owner/Waves")
     up.os_key = "linux"

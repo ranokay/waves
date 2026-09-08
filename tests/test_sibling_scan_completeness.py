@@ -366,7 +366,9 @@ def test_an_unreadable_artist_never_claims_there_is_only_one_edition(credit, mak
     # everything into one handler, so without these two the same honest wording
     # would appear (and this test would still pass) if the work never reached
     # the scan at all.
-    assert session.calls == [str(c) for c in expected_calls], "the scan did not reach the session the way this path does"
+    assert session.calls == [
+        str(c) for c in expected_calls
+    ], "the scan did not reach the session the way this path does"
     assert failures, "the app gave up without writing down why"
     message, exc, traceback_text = failures[-1]
     assert "Edition scan failed" in message, message

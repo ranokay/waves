@@ -20,7 +20,10 @@ repos:
         exclude: ^assets/star-history/
 
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: "v0.1.12"
+    # Pinned to the ruff line the tree is linted against (pyproject selects
+    # modern rules like S/UP/RUF/TRY; an older hook stripped the noqa comments
+    # the selected rules require, failing every file that carries one).
+    rev: "v0.15.9"
     hooks:
       - id: ruff
 

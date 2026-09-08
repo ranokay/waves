@@ -58,9 +58,7 @@ def _make(*, login_ok: bool = True, refresh_ok: bool = True) -> Tidal:
     stub.original_client_secret = _ORIG_SECRET
     stub.original_client_id_pkce = _ORIG_ID_PKCE
     stub.original_client_secret_pkce = _ORIG_SECRET_PKCE
-    stub.settings = types.SimpleNamespace(
-        data=types.SimpleNamespace(tidal_quality_audio="LOSSLESS")
-    )
+    stub.settings = types.SimpleNamespace(data=types.SimpleNamespace(tidal_quality_audio="LOSSLESS"))
     stub._login_calls: list[bool] = []
 
     def _login_token(do_pkce: bool = True) -> bool:

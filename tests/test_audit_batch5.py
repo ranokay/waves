@@ -71,9 +71,7 @@ class _AlbumTracksStub:
         # get_object the way the session fallback used to.
         self.providers = {
             "tidal": SimpleNamespace(
-                get_object=lambda kind, raw_id: session_album(raw_id)
-                if session_album is not None
-                else None
+                get_object=lambda kind, raw_id: session_album(raw_id) if session_album is not None else None
             )
         }
 
@@ -192,9 +190,9 @@ class _RetryStub:
         # canned get_object answers with the session_track stand-in's object.
         self.providers = {
             "tidal": SimpleNamespace(
-                get_object=lambda kind, raw_id: session_track(raw_id)
-                if session_track is not None
-                else (_ for _ in ()).throw(OSError("gone"))
+                get_object=lambda kind, raw_id: (
+                    session_track(raw_id) if session_track is not None else (_ for _ in ()).throw(OSError("gone"))
+                )
             )
         }
         # The GUI hop, inlined: emit dispatches straight to the handler.

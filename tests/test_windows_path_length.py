@@ -5,10 +5,13 @@ did not fit, then joined the file name on without looking again. A folder that
 was comfortably valid plus a long track name therefore came back over the cap,
 and the download failed at the move after it had already finished.
 
-The numbers differ per platform (260 on Windows, 1024 on macOS and Linux) but
-the code is one path, so the repro is built at the running platform's own limit
-rather than by pretending to be another one: forcing a platform also forces its
-separators, which says nothing about the rule under test.
+The numbers differ per platform (259 on Windows, 1023 elsewhere) but
+the code is one path, so the repro is built against the engine's own cap
+(waves.helper.path.PATH_LENGTH_MAX) rather than by probing pathvalidate:
+pathvalidate's posix ceiling (4096) is far above the engine's, so a folder
+probed "just inside" pathvalidate's limit already exceeds the engine's and
+correctly loses a folder component instead of just a file name, which says
+nothing about the rule under test.
 """
 
 import pathlib
@@ -17,7 +20,7 @@ import pytest
 from pathvalidate import sanitize_filepath
 from pathvalidate.error import ValidationError
 
-from waves.helper.path import path_file_sanitize
+from waves.helper.path import PATH_LENGTH_MAX, _exceeds_path_cap, path_file_sanitize
 
 
 def _is_valid(path_file: pathlib.Path) -> bool:
@@ -29,18 +32,11 @@ def _is_valid(path_file: pathlib.Path) -> bool:
     return True
 
 
-def _path_cap() -> int:
-    """The running platform's cap, found by probing rather than hard-coded."""
-    length = 64
-    while length < 1 << 16:
-        if not _is_valid(pathlib.Path("/m") / ("a" * length)):
-            return length
-        length *= 2
-
-    raise AssertionError("no path length cap found")
-
-
-PATH_CAP = _path_cap()
+# The cap the download engine actually enforces (259 on Windows from
+# MAX_PATH, 1023 elsewhere so the terminating NUL is never the difference).
+# pathvalidate's own posix ceiling sits far above it, so probing pathvalidate
+# would build a folder the engine already shortens at the directory stage.
+PATH_CAP = PATH_LENGTH_MAX
 LONG_NAME = "a" * 200 + ".flac"
 
 
@@ -68,11 +64,13 @@ class TestTheWholePathIsRevalidated:
         candidate = FOLDER / LONG_NAME
 
         assert _is_valid(FOLDER), "the folder alone has to be valid, or the old check would have caught it"
-        assert not _is_valid(candidate), "the case under test has to be over the cap to begin with"
+        assert not _exceeds_path_cap(FOLDER), "the folder alone has to fit the engine cap too"
+        assert _exceeds_path_cap(candidate), "the case under test has to be over the engine cap to begin with"
 
         result = path_file_sanitize(candidate, adapt=True)
 
         assert _is_valid(result)
+        assert not _exceeds_path_cap(result)
 
     def test_the_file_keeps_its_extension_and_its_folder(self):
         result = path_file_sanitize(FOLDER / LONG_NAME, adapt=True)

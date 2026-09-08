@@ -116,8 +116,8 @@ def _run_scenario() -> int:
 
     def row(qid: int, status: str) -> str:
         return (
-            "{qid: %d, name: 'r%d', type: 'album', status: '%s', progress: 0, "
-            "media_id: 'm%d', template: '', collection: true, artist: '', tracks: 3, art: ''}" % (qid, qid, status, qid)
+            f"{{qid: {qid}, name: 'r{qid}', type: 'album', status: '{status}', progress: 0, "
+            f"media_id: 'm{qid}', template: '', collection: true, artist: '', tracks: 3, art: ''}}"
         )
 
     def index_agrees_with_the_model() -> bool:

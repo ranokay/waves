@@ -294,7 +294,7 @@ def _bind(stub):
 
 
 def _tone(path: Path):
-    subprocess.run(  # (fixed argv: a local tone fixture, no user input)
+    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
         [
             _ffmpeg(),
             "-y",
@@ -403,6 +403,7 @@ def test_gate_without_a_store_never_gates():
     )
 
 
+@needs_ffmpeg
 def test_atmos_toggle_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
     from waves import apple_engine
 

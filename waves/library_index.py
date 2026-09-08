@@ -572,7 +572,7 @@ def _read_album_tags(path: str) -> dict | None:
         # This is the one identity fact the FILE knows that no tag has to say:
         # summed over a folder it is close to a fingerprint of the release, so
         # the matcher can prove (or refute) an otherwise undated match.
-        "length": int(round(float(getattr(info, "length", 0) or 0))),
+        "length": round(float(getattr(info, "length", 0) or 0)),
     }
 
 
@@ -1069,7 +1069,7 @@ class LibraryIndex:
                 self.note_listing_reconciled(False)
             if self._untrusted_shape[0] or not self.last_scan_partial:
                 with self._lock:
-                    self._meta_set(_LISTING_SHAPE_KEY, "%d/%d" % self._untrusted_shape)
+                    self._meta_set(_LISTING_SHAPE_KEY, "{}/{}".format(*self._untrusted_shape))
                     self._conn.commit()
         count = self._count()
         logger.info(

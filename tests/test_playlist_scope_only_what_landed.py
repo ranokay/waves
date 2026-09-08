@@ -133,7 +133,7 @@ def test_the_playlist_is_still_written_where_a_track_did_land(tmp_path):
 def test_only_the_folder_this_run_filled_gets_a_playlist(tmp_path):
     """A collection can straddle two folders (a playlist download, a multi-disc
     album). Filling one says nothing about the other."""
-    folder_owned, tracks_owned, playlist_owned = _owned_album(tmp_path)
+    _folder_owned, tracks_owned, playlist_owned = _owned_album(tmp_path)
     folder_new = tmp_path / "Marina" / "[2012] Album Y"
     folder_new.mkdir(parents=True)
     landed = folder_new / "01. Song Three.flac"

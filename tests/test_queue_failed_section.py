@@ -112,9 +112,8 @@ def _run_scenario() -> int:
 
     def row(qid: int, status: str) -> str:
         return (
-            "{qid: %d, name: 'r%d', type: 'track', status: '%s', progress: 0, "
-            "media_id: 'm%d', template: '', collection: false, artist: '', tracks: 0, art: ''}"
-            % (qid, qid, status, qid)
+            f"{{qid: {qid}, name: 'r{qid}', type: 'track', status: '{status}', progress: 0, "
+            f"media_id: 'm{qid}', template: '', collection: false, artist: '', tracks: 0, art: ''}}"
         )
 
     # One row per state: the partition must land [failed, failed, stopped,

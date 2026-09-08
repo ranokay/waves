@@ -496,9 +496,9 @@ def test_apply_windows_tree_refuses_a_staged_tree_without_the_exe(tmp_path, monk
     """Field report: an update left the install folder empty. A staged tree with
     no executable (or an empty one, the antivirus having eaten it) must be
     refused before any helper is written, never mirrored over the live install."""
-    with pytest.raises(UpdaterError, match="no Waves.exe"):
+    with pytest.raises(UpdaterError, match=r"no Waves\.exe"):
         _tree_helper_script(tmp_path, monkeypatch, exe_bytes=None)
-    with pytest.raises(UpdaterError, match="no Waves.exe"):
+    with pytest.raises(UpdaterError, match=r"no Waves\.exe"):
         _tree_helper_script(tmp_path, monkeypatch, exe_bytes=b"")
     assert list((tmp_path / "updates").glob("apply_update_*.bat")) == []
 
@@ -510,7 +510,7 @@ def test_apply_windows_tree_helper_never_deletes_the_last_good_copy(tmp_path, mo
     old one-line `if ... & move & start & exit` chain bound the restore INTO the
     `if exist`, so a mirror that created no folder fell through to deleting the
     backup: that is the empty install folder seen in the field."""
-    _, install_root, target, new_tree, script = _tree_helper_script(tmp_path, monkeypatch)
+    _, _install_root, _target, _new_tree, script = _tree_helper_script(tmp_path, monkeypatch)
     lines = script.replace("\r\n", "\n").split("\n")
     # the staged tree is checked before the swap, the executable after it
     assert 'if not exist "%NEWTREE%" (echo nothing staged' in script
@@ -537,7 +537,7 @@ def test_apply_windows_tree_helper_reclaims_foreign_files_before_deleting_the_ba
     moves back every path the swapped-in install does not have (/XC /XN /XO
     leave only the missing ones), and a failure there keeps the backup folder
     instead of deleting it."""
-    _, install_root, target, _, script = _tree_helper_script(tmp_path, monkeypatch)
+    _, _install_root, _target, _, script = _tree_helper_script(tmp_path, monkeypatch)
     lines = script.replace("\r\n", "\n").split("\n")
 
     reclaim = next(i for i, ln in enumerate(lines) if ln.startswith('robocopy "%BACKUP%" "%INSTALL%"'))
@@ -624,7 +624,7 @@ def test_apply_windows_tree_lands_the_new_tree_on_the_install_volume_first(tmp_p
     mirror halfway and left the install broken with the only good copy stranded
     at .old, unrepaired. The copy now happens here, while the app still runs,
     so the helper does two same-volume renames and nothing else."""
-    _, install_root, target, new_tree, script = _tree_helper_script(tmp_path, monkeypatch)
+    _, install_root, _target, new_tree, script = _tree_helper_script(tmp_path, monkeypatch)
 
     staged_same_dev = install_root.with_name(install_root.name + ".new")
     assert staged_same_dev.is_dir()  # landed next to the install, before arming
@@ -767,7 +767,7 @@ def test_a_staged_swap_that_never_ran_is_re_armed_at_the_next_launch(tmp_path, m
     hours; a session that ends in a shutdown never wakes it at all. install()
     had already said "Updated, restart to finish", so the user quit, relaunched
     into the old version and was told nothing. The next launch re-arms it."""
-    up, install_root, target, _ = _staged_but_unapplied(tmp_path, monkeypatch)
+    up, install_root, _target, _ = _staged_but_unapplied(tmp_path, monkeypatch)
     spawned = {}
     monkeypatch.setattr(u.subprocess, "Popen", lambda cmd, **kw: spawned.update(cmd=cmd, kw=kw))
 

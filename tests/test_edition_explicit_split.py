@@ -259,7 +259,7 @@ def test_a_borrowed_track_never_crosses_the_divide():
         id(exp): [_rec(_t("e1"), "one", 200, "I1", True), _rec(_t("e2"), "two", 200, "I2", True)],
         id(cln): [_rec(_t("c1", 4), "one", 200, "I1", False), _rec(_t("c2", 4), "two", 200, "I2", False)],
     }
-    identity, plan, reason = _plan([exp, cln], recs, {"c1": 4, "c2": 4})
+    _identity, plan, reason = _plan([exp, cln], recs, {"c1": 4, "c2": 4})
     assert plan is None and reason == "not_superset", "a clean recording was borrowed into an explicit album"
 
 
@@ -413,14 +413,14 @@ def _disco(mode):
 
 
 def test_the_discography_merges_the_preferred_side():
-    std, deluxe, clean, plain, plans = _disco("explicit")
+    _std, deluxe, clean, plain, plans = _disco("explicit")
     assert len(plans) == 1, "the two explicit editions did not merge"
     assert plans[0][0] is deluxe
     assert clean not in plain, "an explicit preference still downloaded the clean twin"
 
 
 def test_the_discography_keeps_the_clean_side_when_both_are_asked_for():
-    std, deluxe, clean, plain, plans = _disco("both")
+    _std, deluxe, clean, plain, plans = _disco("both")
     assert len(plans) == 1 and plans[0][0] is deluxe
     assert clean in plain, "BOTH was asked for and the clean edition was dropped entirely"
 
