@@ -84,6 +84,30 @@ def test_unknown_tokens_render_empty():
     assert out == "Xtal  "
 
 
+def test_emptied_and_dot_segments_cannot_escape_the_library():
+    track = dict(_TRACK, artist="?", title="..")
+    out = format_apple_path("{artist_name}/{track_title}", track=track)
+
+    assert not out.startswith("/")
+    assert "/../" not in f"/{out}/"
+    assert ".." not in out.split("/")
+
+
+def test_collection_playlist_lists_landings_in_order(tmp_path):
+    from waves.apple_files import write_collection_playlist
+
+    first = tmp_path / "A" / "01.m4a"
+    second = tmp_path / "A" / "02.m4a"
+    first.parent.mkdir(parents=True)
+    first.touch()
+    second.touch()
+
+    write_collection_playlist([first, second], "Selected Ambient Works")
+
+    playlist = tmp_path / "A" / "_Selected Ambient Works.m3u8"
+    assert playlist.read_text().splitlines() == ["01.m4a", "02.m4a"]
+
+
 def test_explicit_marker_follows_the_shared_word():
     track = dict(_TRACK, explicit=True)
     out = format_apple_path("{track_title}{track_explicit}", track=track)

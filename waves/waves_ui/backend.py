@@ -11371,6 +11371,7 @@ class WavesBridge(LibraryMixin, QObject):
         num_volumes = max([int(row.get("vol") or 1) for row in rows] + [1])
         ok = fail = skipped = unavailable = 0
         failed_names: list[str] = []
+        landed: list = []
         for pos, row in enumerate(rows, start=1):
             if job_abort.is_set():
                 break
@@ -11456,6 +11457,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
                 continue
             ok += 1
+            landed.append(pathlib.Path(delivered["path"]))
             signals.track_event.emit(
                 {
                     "id": track_id,
@@ -11465,6 +11467,23 @@ class WavesBridge(LibraryMixin, QObject):
                 }
             )
             self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
+        if collection and landed and self.settings.data.playlist_create and not job_abort.is_set():
+            # The _Name.m3u8 the playlist_create setting promises, in landed
+            # order (mirrors the engine's playlist_populate scope).
+            from waves.apple_files import write_collection_playlist
+
+            header_title = ""
+            try:
+                header_title = str(provider.row_for(type_media, obj).get("title") or "")
+            except Exception:
+                logger.debug("Apple playlist title unreadable", exc_info=True)
+            data = self.settings.data
+            write_collection_playlist(
+                landed,
+                header_title or spec.name,
+                illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
+                illegal_map=getattr(data, "filename_illegal_map", None),
+            )
         if total == 1 and not collection:
             if ok or skipped:
                 return "" if ok else " (already downloaded)"
@@ -11721,10 +11740,18 @@ class WavesBridge(LibraryMixin, QObject):
             return "", ""
 
     def _apple_wants_cover(self, collection: bool) -> bool:
-        """Whether this job saves cover art at all."""
+        """Whether this job fetches cover art at all: embedded, or filed per
+        the engine's own cover.jpg rule (collections always qualify; a lone
+        track only with the single-track opt-in)."""
         data = self.settings.data
+        if data.metadata_cover_embed:
+            return True
         return bool(
-            data.metadata_cover_embed or data.cover_album_file or (not collection and data.cover_single_track_file)
+            Download._want_cover_file(
+                bool(data.cover_album_file),
+                bool(collection),
+                bool(getattr(data, "cover_single_track_file", False)),
+            )
         )
 
     def _apple_cover_bytes(self, provider, raw: dict) -> bytes | None:
@@ -11759,7 +11786,13 @@ class WavesBridge(LibraryMixin, QObject):
             )
             if text:
                 write_text_sidecar(dest.parent, dest.stem, suffix, text)
-        want_cover_file = bool(data.cover_album_file) or (not collection and bool(data.cover_single_track_file))
+        # Same gate as the fetch decision above: a lone track files its cover
+        # only with the single-track opt-in.
+        want_cover_file = Download._want_cover_file(
+            bool(data.cover_album_file),
+            bool(collection),
+            bool(getattr(data, "cover_single_track_file", False)),
+        )
         if want_cover_file and cover_data:
             write_cover_sidecar(dest.parent, cover_data)
 

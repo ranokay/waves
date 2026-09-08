@@ -673,6 +673,56 @@ def test_row_object_falls_back_to_the_provider_cache(tmp_path):
 
 
 @needs_ffmpeg
+def test_lone_track_files_no_cover_without_the_single_track_option(tmp_path, monkeypatch):
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert not (base / "Aphex Twin" / "cover.jpg").exists()
+
+
+@needs_ffmpeg
+def test_album_job_writes_the_promised_playlist_file(tmp_path, monkeypatch):
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    settings = _settings(base, playlist_create=True)
+    stub = _bind(_stub(base, provider))
+    stub.settings = settings
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _album_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    playlist = base / "Aphex Twin" / "_Selected Ambient Works 85-92.m3u8"
+    assert playlist.is_file()
+    assert playlist.read_text().splitlines() == ["Xtal.m4a"]
+
+
+@needs_ffmpeg
 def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     from waves import apple_engine
     from waves.providers.apple import AppleProvider as _RealProvider

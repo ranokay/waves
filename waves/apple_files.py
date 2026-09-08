@@ -13,13 +13,27 @@ files carry the generic WAVES_* family only, never the TIDAL legacy trio.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
 from pathlib import Path
 
-from waves.constants import FORMAT_TEMPLATE_EXPLICIT, METADATA_LOOKUP_UPC, MetadataTargetUPC
-from waves.helper.path import calculate_number_padding, sanitize_name_component
+from pathvalidate import sanitize_filename
+
+from waves.constants import (
+    FORMAT_TEMPLATE_EXPLICIT,
+    METADATA_LOOKUP_UPC,
+    PLAYLIST_EXTENSION,
+    PLAYLIST_PREFIX,
+    MetadataTargetUPC,
+)
+from waves.helper.path import (
+    _drop_empty_segments,
+    calculate_number_padding,
+    path_file_sanitize,
+    sanitize_name_component,
+)
 from waves.metadata import Metadata
 
 logger = logging.getLogger("waves.apple_files")
@@ -110,7 +124,10 @@ def format_apple_path(
             return ""
         return clean(values[token])
 
-    return re.sub(r"\{(.+?)\}", replace, template)
+    rendered = re.sub(r"\{(.+?)\}", replace, template)
+    # Same traversal safety as the shared engine: a token sanitizing to ""
+    # or ".." must not escape the library root (see _drop_empty_segments).
+    return _drop_empty_segments(rendered)
 
 
 def pick_destination(base_dir: str | Path, relative: str, extension: str) -> Path:
@@ -118,10 +135,20 @@ def pick_destination(base_dir: str | Path, relative: str, extension: str) -> Pat
 
     Mirrors the engine's "X_01" step-aside so two same-named tracks never
     share a name (issue #19's lesson), without consulting anything but disk.
+    The relative path must stay relative (format_apple_path drops empty and
+    dot segments); an absolute or empty one fails loudly instead of escaping
+    the library root.
     """
-    parent = Path(str(base_dir)).expanduser() / Path(relative).parent
+    if not str(relative or "").strip():
+        raise ValueError("Apple download rendered an empty relative path")  # noqa: TRY003
+    relative_path = Path(relative)
+    if relative_path.is_absolute():
+        logger.warning("path: Apple relative path escaped to absolute, stripping: %s", relative)
+        relative = str(relative).lstrip("/\\")
+        relative_path = Path(relative)
+    parent = Path(str(base_dir)).expanduser() / relative_path.parent
     parent.mkdir(parents=True, exist_ok=True)
-    stem = Path(relative).name
+    stem = relative_path.name
     candidate = parent / f"{stem}{extension}"
     index = 0
     while candidate.exists():
@@ -160,6 +187,43 @@ def write_cover_sidecar(directory: str | Path, image: bytes) -> Path | None:
         logger.debug("Could not write the Apple cover sidecar", exc_info=True)
         return None
     return target
+
+
+def write_collection_playlist(
+    landed: list[Path],
+    name: str,
+    illegal_replacement: str = "",
+    illegal_map: dict[str, str] | None = None,
+) -> None:
+    """The _Name.m3u8 the playlist_create setting promises, per directory.
+
+    Compact mirror of the engine's playlist_populate for Apple landings:
+    landed paths in collection order, one file per directory this run filled,
+    basenames as entries, written through a temp sibling and swapped in.
+    Best-effort throughout: a playlist file must never fail landed tracks.
+    """
+    if not landed:
+        return
+    ordered: dict[Path, list[Path]] = {}
+    for path in landed:
+        ordered.setdefault(path.parent, []).append(path)
+    for directory, paths in ordered.items():
+        playlist_name = sanitize_filename(
+            f"{PLAYLIST_PREFIX}{sanitize_name_component(name, illegal_replacement, illegal_map)}{PLAYLIST_EXTENSION}"
+        )
+        target = Path(path_file_sanitize(directory / playlist_name, adapt=True))
+        tmp = target.with_name(f"{target.name}.tmp")
+        try:
+            with tmp.open(mode="w", encoding="utf-8") as handle:
+                for path in paths:
+                    handle.write(path.name + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, target)
+        except OSError:
+            logger.debug("Could not write the Apple playlist file", exc_info=True)
+            with contextlib.suppress(OSError):
+                tmp.unlink()
 
 
 def tag_apple_file(

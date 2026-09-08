@@ -44,8 +44,8 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "AudioType",
     "AppleProvider",
+    "AudioType",
     "BrowseWindow",
     "Capability",
     "FavoritesUnavailable",
