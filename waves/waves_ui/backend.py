@@ -5680,6 +5680,14 @@ class WavesBridge(LibraryMixin, QObject):
                     "tracks": page.get("tracks") or [],
                     "editions_collapsed": False,
                 }
+                # Publish BEFORE the finally below releases the in-flight
+                # mark: a click landing between the release and a later
+                # publish would see neither a cached page nor an in-flight
+                # build and start a redundant request. An empty-everywhere
+                # page is more likely a transient failure than a real
+                # artist with no catalogue: never cached.
+                if gen == self._browse_gen and (payload["albums"] or payload["eps"] or payload["tracks"]):
+                    self._remember_artist_page(artist_id, payload)
             except Exception:
                 logger.exception("Could not load Apple artist %s", artist_id)
                 failed = True
@@ -5705,10 +5713,6 @@ class WavesBridge(LibraryMixin, QObject):
                 return
             if gen != self._browse_gen:
                 return  # logged out mid-fetch; the rows belong to the dead session
-            # An empty-everywhere page is more likely a transient failure
-            # than a real artist with no catalogue: show it, never cache it.
-            if payload["albums"] or payload["eps"] or payload["tracks"]:
-                self._remember_artist_page(artist_id, payload)
             if quiet:
                 # A page the user never opened is simply a cached page.
                 _prefetch_log.debug(
