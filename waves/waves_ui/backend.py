@@ -1249,6 +1249,33 @@ _DEGRADED_RETRY_MAX = 2
 _APPLE_THROTTLE_WAITS = (5.0, 20.0)
 
 
+def _apple_effective_version(provider, track_id: str, audio_type) -> str:
+    """The Version a fetch will actually verify as: Atmos only when asked AND
+    offered (issue #30, spec §6.4: each Version verifies independently).
+
+    An Atmos ask for a stereo-only track falls back to stereo (the provider's
+    instead-of rule), so gating and clearing on the asked version would file
+    the failure under Atmos while stereo runs keep refetching the same corrupt
+    source. A track that cannot be read keeps the asked version: it will fail
+    per-track below, never silently vanish. Module-level (not a method) so the
+    runner needs no extra seam and test stubs need no new binding.
+    """
+    try:
+        want_atmos = str(getattr(audio_type, "value", audio_type) or "").strip().lower() == "atmos"
+    except Exception:
+        want_atmos = False
+    if not want_atmos:
+        return "stereo"
+    try:
+        raw = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
+    except Exception:
+        return "atmos"
+    try:
+        return "atmos" if bool(provider.has_atmos(raw)) else "stereo"
+    except Exception:
+        return "atmos"
+
+
 def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int | None = None) -> bool:
     """Is the copy already on disk as good as what a download queued now would
     write, so that fetching it again would achieve nothing?
@@ -12076,9 +12103,19 @@ class WavesBridge(LibraryMixin, QObject):
             # single-track) also skip: otherwise the mark would be bypassable
             # by re-clicking and REDOWNLOAD would not be the way back.
             bypass = bool(force) or bool(getattr(spec, "is_retry", False))
+            # The Version the fetch will verify as (not the bare ask): an
+            # Atmos ask for a stereo-only track falls back, and its failure is
+            # filed under stereo. Computed for every track; the gate below and
+            # the success-clear both read it.
+            try:
+                check_version = _apple_effective_version(provider, track_id, audio_type)
+            except Exception:
+                check_version = job_version
+                logger.debug("Apple effective-version probe failed; gating on the ask", exc_info=True)
             if not bypass:
+                # Gate on the fetched Version (check_version above).
                 try:
-                    skip_mark = self._apple_skiplist_get(track_id, job_version)
+                    skip_mark = self._apple_skiplist_get(track_id, check_version)
                 except Exception:
                     skip_mark = None
                 if skip_mark is not None:
@@ -12170,10 +12207,10 @@ class WavesBridge(LibraryMixin, QObject):
             ok += 1
             landed.append(pathlib.Path(delivered["path"]))
             # A verified copy landing clears the skip-list (REDOWNLOAD's way
-            # back; also clears a stale mark when Apple re-encoded). Per-version:
-            # the Version this job fetched clears its own mark only.
+            # back; also clears a stale mark when Apple re-encoded). The
+            # fetched Version clears its own mark (check_version above).
             try:
-                self._apple_skiplist_clear(track_id, job_version)
+                self._apple_skiplist_clear(track_id, check_version)
             except Exception:
                 logger.debug("Could not clear the Apple skip-list", exc_info=True)
             signals.track_event.emit(
@@ -12500,12 +12537,14 @@ class WavesBridge(LibraryMixin, QObject):
                     budget = 1 if outbreak_seen else 2
                 if attempt >= budget:
                     # Persistent failure: quarantine (keep-by-default) plus the
-                    # provider-scoped skip-list. The version quarantines on its
-                    # own: a corrupt Atmos source never blocks stereo. A
-                    # resolve-stage failure never bound `atmos` (no delivered
-                    # word): fall back to the asked version, never to a guess.
-                    if locals().get("atmos", False):
-                        version = "atmos"
+                    # provider-scoped skip-list. Filed under the DELIVERED
+                    # Version: an Atmos ask for a stereo-only track falls back,
+                    # so its corrupt bytes belong to stereo (the effective
+                    # version the gate and the clear both read). Only a
+                    # resolve-stage failure, which never produced a delivered
+                    # word, falls back to the asked version.
+                    if info is not None:
+                        version = "atmos" if locals().get("atmos", False) else "stereo"
                     elif version_hint in ("stereo", "atmos"):
                         version = version_hint
                     else:
@@ -17521,8 +17560,15 @@ class WavesBridge(LibraryMixin, QObject):
         # A custom quarantine folder from a previous session already exists on
         # disk: register it now (startup runs here, settings saves re-enter
         # here) so the boot scan excludes it before any new failure occurs.
+        # Previously-used custom folders stay excluded too: changing the
+        # setting must not resurrect an old corrupt stash in the scan.
         try:
-            self._apple_quarantine_root()
+            root = self._apple_quarantine_root()
+            from waves import library_index as _lib_index
+            from waves.apple_integrity import remember_quarantine_dir
+
+            for known in remember_quarantine_dir(path_config_base(), root):
+                _lib_index.register_quarantine_dir(known)
         except Exception:
             logger.debug("Apple quarantine dir could not be registered", exc_info=True)
 

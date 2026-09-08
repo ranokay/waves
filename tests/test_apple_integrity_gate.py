@@ -1027,7 +1027,6 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
-    import tempfile
 
     from waves import apple_engine
 
@@ -1066,3 +1065,75 @@ def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
     assert store.is_quarantined("apple:song-1", "stereo") is None
     leftovers = [p for p in (tmp_path / "tmp").iterdir() if p.name.startswith("waves-apple-quarantine-")]
     assert leftovers == []
+
+
+def test_quarantine_sidecar_remembers_previous_roots(tmp_path):
+    from waves.apple_integrity import known_quarantine_dirs, remember_quarantine_dir
+
+    config = tmp_path / "config"
+    assert known_quarantine_dirs(config) == []
+    remember_quarantine_dir(config, str(tmp_path / "Q1"))
+    remember_quarantine_dir(config, str(tmp_path / "Q2"))
+    assert known_quarantine_dirs(config) == [str(tmp_path / "Q2"), str(tmp_path / "Q1")]
+    # Re-remembering moves to the front without duplicating.
+    remember_quarantine_dir(config, str(tmp_path / "Q1"))
+    assert known_quarantine_dirs(config) == [str(tmp_path / "Q1"), str(tmp_path / "Q2")]
+
+
+@needs_ffmpeg
+def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
+    """An Atmos ask for a stereo-only track falls back: the failure is filed
+    under stereo, so the next stereo run sees the mark instead of refetching."""
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    bad_files = []
+    for i in range(3):
+        bad = tmp_path / f"bad-{i}.m4a"
+        bad.write_bytes(b"not audio at all, just text padding " * 100)
+        bad_files.append(bad)
+    provider = _FakeProvider(bad_files)
+    base = tmp_path / "lib"
+    store = _SkipStore()
+    stub = _bind(_stub(base, provider, _ownership_store=store))
+    # The Atmos toggle is ON (a legacy single row asks Atmos); the track
+    # itself is stereo-only, so the delivery falls back to stereo.
+    stub.settings.data.download_dolby_atmos = True
+    orig_resolve = provider.resolve_stream
+
+    def _fallback_resolve(raw, tier, audio_type):
+        # Mirror AppleProvider._delivery_atmos: the delivered word names the
+        # actual fallback (stereo), never the ask.
+        info = orig_resolve(raw, tier, audio_type)
+        info.delivered["audio_type"] = "stereo"
+        return info
+
+    provider.resolve_stream = _fallback_resolve
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete):
+        WavesBridge._run_apple_job(
+            stub, 1, spec, _song_resource(atmos=False), signals=relay, job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert store.is_quarantined("apple:song-1", "stereo") is not None
+    assert store.is_quarantined("apple:song-1", "atmos") is None
+
+    # And the next stereo-asked run sees the stereo mark (no refetch): the
+    # gate reads the effective Version, not the Atmos ask.
+    provider2 = _FakeProvider([])
+    stub2 = _bind(_stub(base, provider2, _ownership_store=store))
+    stub2.settings.data.download_dolby_atmos = False
+    relay2 = _Relay()
+    spec2 = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    summary2 = WavesBridge._run_apple_job(
+        stub2, 1, spec2, _song_resource(atmos=False), signals=relay2, job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+    assert summary2 == " (already downloaded)"
+    assert provider2.fetched == []
+    assert any(ev.get("status") == "skipped" for ev in relay2.events)

@@ -15,6 +15,7 @@ failure words are, what counts as outbreak-era, and where quarantine files go.
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import os
 import re
@@ -105,6 +106,58 @@ def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None 
             return base / QUARANTINE_DIR_NAME
         return candidate
     return base / QUARANTINE_DIR_NAME
+
+
+# Previously-used custom quarantine folders, remembered so a changed setting
+# cannot resurrect an old corrupt stash in the scan (issue #30): the library
+# scan excludes every remembered root, not just the current one. A tiny JSON
+# sidecar beside the settings (not a setting itself: no UI, no migration,
+# just an exclusion list the bridge rewrites). Capped; newest first.
+_QUARANTINE_SIDECAR_NAME = "apple_quarantine_roots.json"
+_QUARANTINE_REMEMBERED_MAX = 10
+
+
+def _quarantine_sidecar(config_dir: str | Path) -> Path:
+    return Path(os.path.expanduser(str(config_dir or ""))) / _QUARANTINE_SIDECAR_NAME
+
+
+def known_quarantine_dirs(config_dir: str | Path) -> list[str]:
+    """Previously-used quarantine folders, newest first, or []. Never raises."""
+    try:
+        raw = json.loads(_quarantine_sidecar(config_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    known: list[str] = []
+    for entry in raw:
+        text = str(entry or "").strip()
+        if text and text not in known:
+            known.append(text)
+    return known[:_QUARANTINE_REMEMBERED_MAX]
+
+
+def remember_quarantine_dir(config_dir: str | Path, path: str | Path) -> list[str]:
+    """Remember a quarantine folder, returning the known list (newest first).
+
+    Best-effort throughout: a sidecar that cannot be written simply means an
+    old custom folder relies on its next use for registration. Never raises.
+    """
+    text = str(path or "").strip()
+    if not text:
+        return known_quarantine_dirs(config_dir)
+    known = [text, *(entry for entry in known_quarantine_dirs(config_dir) if entry != text)]
+    known = known[:_QUARANTINE_REMEMBERED_MAX]
+    try:
+        sidecar = _quarantine_sidecar(config_dir)
+        if str(sidecar.parent):
+            os.makedirs(sidecar.parent, exist_ok=True)
+        tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
+        tmp.write_text(json.dumps(known, indent=2), encoding="utf-8")
+        os.replace(tmp, sidecar)
+    except OSError:
+        logger.debug("Could not remember the Apple quarantine folder", exc_info=True)
+    return known
 
 
 def quarantine_dest(quarantine_root: str | Path, relative: str, extension: str = ".m4a") -> Path:
