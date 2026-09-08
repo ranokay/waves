@@ -170,9 +170,28 @@ class OwnershipStore:
                        recorded_at   INTEGER NOT NULL DEFAULT 0,
                        PRIMARY KEY (collection_id, track_id)
                    )""")
+            # Integrity skip-list (issue #30, spec §6.3): provider-scoped
+            # quarantined tracks. One row per (track, version): a corrupt Atmos
+            # source never blocks its stereo sibling, and vice versa. The
+            # namespaced track_id keeps it provider-scoped (apple:… never
+            # answers a tidal:… gate). encoded_date records the Encoded date
+            # the failed file carried, so a REDOWNLOAD that verifies after
+            # Apple re-encodes is detectable; quarantined_at is bookkeeping.
+            # Cleared only by an explicit REDOWNLOAD that lands verified or by
+            # the same track verifying on a later explicit ask — never by a
+            # background re-check (there is none).
+            self._conn.execute("""CREATE TABLE IF NOT EXISTS integrity_skip (
+                       track_id       TEXT    NOT NULL,
+                       audio_type     TEXT    NOT NULL DEFAULT '',
+                       encoded_date   TEXT,
+                       quarantined_at INTEGER NOT NULL DEFAULT 0,
+                       PRIMARY KEY (track_id, audio_type)
+                   )""")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_integrity_skip_track ON integrity_skip(track_id)")
             self._ensure_columns()
             self._backfill_namespaced_ids()
             self._backfill_audio_type()
+            self._backfill_integrity_skip_ids()
             self._conn.commit()
 
     def _ensure_columns(self) -> None:
@@ -249,6 +268,18 @@ class OwnershipStore:
         )
         self._conn.execute(
             "UPDATE downloads SET audio_type = 'stereo'" " WHERE audio_type IS NULL AND upper(audio_mode) = 'STEREO'"
+        )
+
+    def _backfill_integrity_skip_ids(self) -> None:
+        """Namespace bare skip-list ids the way downloads backfills them.
+
+        The skip-list is new with the integrity gate, so no released build
+        wrote bare ids into it; this guards only against a mid-rollout mix
+        (and keeps the one spelling rule in one place). Caller holds the lock.
+        """
+        self._conn.execute(
+            "UPDATE OR REPLACE integrity_skip SET track_id = 'tidal:' || track_id"
+            " WHERE instr(track_id, ':') = 0 AND track_id <> ''"
         )
 
     def record(
@@ -508,6 +539,82 @@ class OwnershipStore:
                 if len(names) >= max(1, int(limit)):
                     break
         return list(names)
+
+    # ----- Integrity skip-list (issue #30) ----------------------------------
+
+    @staticmethod
+    def _skip_audio_key(audio_type: str | None) -> str:
+        """The skip-list's per-version key: "stereo" / "atmos" / "" (legacy).
+
+        Empty means the legacy whole-track entry (a caller that cannot name a
+        version). Versioned lookups match their own key only, so a corrupt
+        Atmos source never blocks its stereo sibling.
+        """
+        text = str(audio_type or "").strip().lower()
+        return text if text in ("stereo", "atmos") else ""
+
+    def quarantine_add(self, track_id: str, audio_type: str | None = None, encoded_date: str | None = None) -> None:
+        """Mark a track's version as quarantined (bulk runs auto-skip it)."""
+        tid = namespaced_id(track_id)
+        key = self._skip_audio_key(audio_type)
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO integrity_skip (track_id, audio_type, encoded_date, quarantined_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(track_id, audio_type) DO UPDATE SET
+                       encoded_date = excluded.encoded_date,
+                       quarantined_at = excluded.quarantined_at""",
+                (tid, key, str(encoded_date or "") or None, int(time.time())),
+            )
+            self._conn.commit()
+
+    def quarantine_remove(self, track_id: str, audio_type: str | None = None) -> None:
+        """Clear a quarantine mark: a verified copy landed (REDOWNLOAD's way back).
+
+        A versioned clear removes only that version; a legacy (None) clear
+        removes every version of the track, so one verified copy cannot leave
+        a stale sibling mark behind.
+        """
+        tid = namespaced_id(track_id)
+        with self._lock:
+            if audio_type is None:
+                self._conn.execute("DELETE FROM integrity_skip WHERE track_id = ?", (tid,))
+            else:
+                self._conn.execute(
+                    "DELETE FROM integrity_skip WHERE track_id = ? AND audio_type = ?",
+                    (tid, self._skip_audio_key(audio_type)),
+                )
+            self._conn.commit()
+
+    def is_quarantined(self, track_id: str, audio_type: str | None = None) -> dict | None:
+        """A skip-list entry for a track's version, or None.
+
+        A versioned query matches its own key only (per-version quarantine).
+        A legacy (None) query matches any version of the track, so callers
+        that cannot name a version still see the mark.
+        """
+        tid = namespaced_id(track_id)
+        with self._lock:
+            if audio_type is None:
+                row = self._conn.execute(
+                    "SELECT track_id, audio_type, encoded_date, quarantined_at"
+                    " FROM integrity_skip WHERE track_id = ? LIMIT 1",
+                    (tid,),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT track_id, audio_type, encoded_date, quarantined_at"
+                    " FROM integrity_skip WHERE track_id = ? AND audio_type = ?",
+                    (tid, self._skip_audio_key(audio_type)),
+                ).fetchone()
+        if not row:
+            return None
+        return {
+            "track_id": row[0],
+            "audio_type": row[1] or None,
+            "encoded_date": row[2],
+            "quarantined_at": row[3],
+        }
 
     def close(self) -> None:
         with self._lock:

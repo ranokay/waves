@@ -66,6 +66,20 @@ class Settings:
     # binary Apple downloads fetch through. Empty means PATH; the wizard
     # provisions and pins it later.
     path_binary_nm3u8dlre: str = ""
+    # Integrity gate (issue #30, spec §6): always-on Apple verification knobs.
+    # Retries counts AUTOMATIC re-downloads after an integrity failure (2 means
+    # 3 attempts total); the outbreak pre-filter (Encoded date >= 2025-05)
+    # quarantines after 1 retry. Pacing between integrity retries.
+    apple_integrity_retries: int = 2
+    apple_integrity_retry_delay_sec: float = 5.0
+    # Quarantine: where persistently-bad Apple files land. Empty means the
+    # default "Waves Quarantine" folder inside the download folder; a set value
+    # is the full folder path. The folder is always excluded from the library
+    # scan, so a quarantined file never badges IN LIBRARY.
+    apple_quarantine_dir: str = ""
+    # Keep vs delete for quarantined files, default keep. Delete still marks
+    # the skip-list; it just keeps no bytes.
+    apple_quarantine_keep: bool = True
     quality_video: QualityVideo = QualityVideo.P480
     download_dolby_atmos: bool = False
     # Artist > Album > Track, the shape a music library (and Plex) expects.
@@ -239,6 +253,22 @@ class HelpSettings:
     path_binary_nm3u8dlre: str = (
         "Path to the N_m3u8DL-RE binary Apple downloads fetch through. Only necessary if it is not "
         "on $PATH; the setup wizard provisions it later."
+    )
+    apple_integrity_retries: str = (
+        "How many times an Apple track that fails its integrity check is automatically re-downloaded "
+        "before it is quarantined (2 means 3 attempts total). Outbreak-era files (Encoded date "
+        "2025-05 or later) quarantine after 1 retry. Verification proves ffmpeg-decodability, "
+        "not bit-perfect fidelity."
+    )
+    apple_integrity_retry_delay_sec: str = "How long to wait between Apple integrity retries, in seconds."
+    apple_quarantine_dir: str = (
+        "Where Apple tracks that fail their integrity check are kept. Empty uses the default "
+        "'Waves Quarantine' folder inside the download folder. The folder is excluded from the "
+        "library scan, so a quarantined file never badges IN LIBRARY."
+    )
+    apple_quarantine_keep: str = (
+        "Keep Apple tracks that fail their integrity check in the Quarantine folder (default on). "
+        "Off deletes them instead; the skip-list still marks them either way."
     )
     quality_video: str = 'Desired video download quality: "360", "480", "720", "1080"'
     download_dolby_atmos: str = (

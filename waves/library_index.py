@@ -88,6 +88,12 @@ AUDIO_EXTS = frozenset(
 # file, so a library of ~18k real folders walks as ~85k without this prune (the
 # extra dirs hold no audio, so "albums found" stayed correct while "checked"
 # ballooned and the walk pegged a core crawling phantom folders).
+#
+# "Waves Quarantine" is the integrity gate's folder (issue #30, spec §6.3): a
+# quarantined file can never badge as IN LIBRARY, so the scan never descends
+# into it. Custom quarantine locations keep the exclusion by full path (see
+# register_quarantine_dir): a basename match would prune every same-named
+# folder in every scan.
 _SKIP_DIR_NAMES = frozenset(
     {
         # Waves' own exports under the download root.
@@ -97,6 +103,7 @@ _SKIP_DIR_NAMES = frozenset(
         "Mixes",
         "Videos",
         "Video",
+        "Waves Quarantine",
         # NAS + OS metadata / thumbnail / recycle folders (dot-prefixed ones such
         # as .@__thumb, .Spotlight-V100, .Trashes are already skipped below).
         "@eaDir",  # Synology thumbnail/metadata, one under every folder
@@ -120,8 +127,116 @@ def _is_skipped_dir_name(name: str) -> bool:
     by name: a probe that indexes a folder the walk excludes creates a row no
     later listing can ever match, so the parent is flagged untrusted forever and
     a Synology's @eaDir arrives in the library as an owned album.
+
+    Custom quarantine locations are NOT judged here (a basename match would
+    prune every same-named folder in every scan): they are judged by full path
+    in _is_quarantine_path, which every site that has the path consults alongside.
     """
-    return name.startswith(".") or name in _SKIP_DIR_NAMES
+    if name.startswith("."):
+        return True
+    return name in _SKIP_DIR_NAMES
+
+
+# Extra quarantine folders a walk never descends into, by full normalized path
+# (issue #30): the integrity gate's custom quarantine location. The default
+# "Waves Quarantine" needs no registration (it is in _SKIP_DIR_NAMES by name).
+# Path-based on purpose: registering a basename would prune every directory
+# with a common name ("Music", "Albums") in every scan, silently removing
+# legitimate albums. Module-level because every index in the process must agree.
+_EXTRA_QUARANTINE_PATHS: set[str] = set()
+
+
+def _normalize_quarantine_path(path: str) -> str:
+    return os.path.normpath(os.path.expanduser(str(path or "").strip()))
+
+
+def _real_quarantine_path(path: str) -> str | None:
+    """The canonical spelling of a path, or None when it cannot be resolved."""
+    try:
+        return os.path.realpath(os.path.expanduser(str(path or "").strip()))
+    except Exception:
+        return None
+
+
+def register_quarantine_dir(path: str | None) -> None:
+    """Exclude a custom quarantine folder (and everything under it) from walks.
+
+    Idempotent; empty/None registers nothing. Both the as-configured spelling
+    and the canonical one are stored, so a scan reaching the folder through a
+    symlink (or the reverse) still matches without any per-directory cost at
+    walk time. Never raises: a scan exclusion must not fail a download.
+    """
+    try:
+        text = str(path or "").strip()
+        if not text:
+            return
+        normalized = _normalize_quarantine_path(text)
+        base = os.path.basename(normalized)
+        if base and base not in (".", ".."):
+            _EXTRA_QUARANTINE_PATHS.add(normalized)
+            real = _real_quarantine_path(text)
+            if real and os.path.normpath(real) != normalized:
+                _EXTRA_QUARANTINE_PATHS.add(os.path.normpath(real))
+    except Exception:
+        logger.debug("Could not register the quarantine dir for scan exclusion", exc_info=True)
+
+
+def _is_quarantine_path(path: str | None) -> bool:
+    """True when ``path`` is a registered quarantine folder or sits under one.
+
+    Exact first (the configured spellings, fast, correct on every
+    filesystem). A case-only mismatch then falls back to an on-disk identity
+    check: insensitive volumes alias spellings the bytes alone cannot tell
+    apart, while on a sensitive filesystem samefile refuses and two genuinely
+    different folders stay scanned. The fallback stats only on a
+    case-insensitive prefix hit, never on the walk's hot path. A symlinked
+    chain (scan root reached through a link) resolves once, gated on a
+    quarantine basename appearing in the candidate, for the same reason.
+    """
+    try:
+        if not path or not _EXTRA_QUARANTINE_PATHS:
+            return False
+        normalized = _normalize_quarantine_path(path)
+        for quarantined in _EXTRA_QUARANTINE_PATHS:
+            if normalized == quarantined or normalized.startswith(quarantined.rstrip(os.sep) + os.sep):
+                return True
+        folded = normalized.casefold()
+        for quarantined in _EXTRA_QUARANTINE_PATHS:
+            want = quarantined.casefold().rstrip(os.sep) + os.sep
+            if folded == quarantined.casefold() or folded.startswith(want):
+                # The spellings name one folder only if the disk says so: the
+                # compared prefix always exists (it is the walk's own path at
+                # or above a listed directory), the registered root may not.
+                try:
+                    if os.path.samefile(normalized[: len(quarantined)], quarantined):
+                        return True
+                except OSError:
+                    continue
+        try:
+            names = {seg.casefold() for seg in normalized.split(os.sep) if seg}
+            wanted: set[str] = set()
+            for quarantined in _EXTRA_QUARANTINE_PATHS:
+                wanted.update(seg.casefold() for seg in quarantined.split(os.sep) if seg)
+            if names.isdisjoint(wanted):
+                return False
+            real = os.path.realpath(normalized)
+        except Exception:
+            return False
+        for quarantined in _EXTRA_QUARANTINE_PATHS:
+            if real == quarantined or real.startswith(quarantined.rstrip(os.sep) + os.sep):
+                return True
+        folded_real = real.casefold()
+        for quarantined in _EXTRA_QUARANTINE_PATHS:
+            want = quarantined.casefold().rstrip(os.sep) + os.sep
+            if folded_real == quarantined.casefold() or folded_real.startswith(want):
+                try:
+                    if os.path.samefile(real[: len(quarantined)], quarantined):
+                        return True
+                except OSError:
+                    continue
+    except Exception:
+        return False
+    return False
 
 
 def _has_skipped_segment(path: str, root: str) -> bool:
@@ -131,7 +246,11 @@ def _has_skipped_segment(path: str, root: str) -> bool:
     well live inside a hidden folder, and its own spelling is the user's
     choice: this rule condemns what a probe reached past the root, nothing
     else. False for anything not under ``root``, and for the root itself.
+    A registered custom quarantine folder (or anything under it) is always
+    skipped, by full path rather than by basename.
     """
+    if _is_quarantine_path(path):
+        return True
     if not root or path == root:
         return False
     prefix = root.rstrip(os.sep) + os.sep
@@ -1156,7 +1275,11 @@ class LibraryIndex:
         absent, and a name is matched the way a filesystem compares it, not by
         its exact spelling. Names only; nothing is logged."""
         have = {_name_key(n) for n in self.child_names(parent)}
-        return all(_name_key(n) in have for n in names if not _is_skipped_dir_name(str(n)))
+        return all(
+            _name_key(n) in have
+            for n in names
+            if not _is_skipped_dir_name(str(n)) and not _is_quarantine_path(os.path.join(parent, str(n)))
+        )
 
     def unreliable_dirs(self) -> list[str]:
         """The folders whose last listing could not be trusted (see the
@@ -1304,6 +1427,11 @@ class LibraryIndex:
                         if not alive():
                             return hits
                         path = os.path.join(parent, spelling)
+                        if _is_quarantine_path(path):
+                            # A custom quarantine folder, judged by full path
+                            # (never by basename): the walk never descends into
+                            # it, so probing it would plant an unmatchable row.
+                            continue
                         try:
                             st = os.stat(path)
                         except OSError:
@@ -1447,6 +1575,12 @@ class LibraryIndex:
             nonlocal outstanding, pool_dead
             if pool_dead:
                 return
+            if path != root and _is_quarantine_path(path):
+                # A cached quarantine subtree (registered after it was
+                # indexed): never descend. The caller condemns it so the
+                # prune retires its rows this scan instead of restamping them.
+                condemned.append(path)
+                return
             try:
                 fut = pool.submit(probe, path, expected_mtime(path))
             except RuntimeError:
@@ -1528,6 +1662,12 @@ class LibraryIndex:
                     # frontier row its parent already wrote (stamped this gen) and is
                     # retried on the next scan.
                     row = known.get(path)
+                    if row is not None and path != root and _is_quarantine_path(path):
+                        # A cached quarantine dir on a transient error: keep
+                        # nothing, restamp nothing; the prune retires its rows.
+                        condemned.append(path)
+                        emit({"phase": "walk", "found": len(seen_albums), "checked": checked})
+                        continue
                     if row is not None:
                         old_mtime, listed, is_album, unreliable = row
                         writes.append((path, parent, old_mtime, listed, int(is_album), gen, unreliable))
@@ -1538,6 +1678,12 @@ class LibraryIndex:
                     emit({"phase": "walk", "found": len(seen_albums), "checked": checked})
                     continue
                 if res.get("unchanged"):
+                    if path != root and _is_quarantine_path(path):
+                        # A cached quarantine dir reusing its listing: restamp
+                        # nothing, descend nowhere; the prune retires its rows.
+                        condemned.append(path)
+                        emit({"phase": "walk", "found": len(seen_albums), "checked": checked})
+                        continue
                     _mtime, _listed, is_album, unreliable = known.get(path, (0.0, 0, 0, 0))
                     # The flag rides along unchanged: a reused listing is the
                     # stored one, trusted exactly as much as when it was stored.
@@ -1574,6 +1720,13 @@ class LibraryIndex:
                     for sd in res["subdirs"]:
                         fresh_by_key.setdefault(_name_key(os.path.basename(sd)), sd)
                     for child in children.get(path, ()):
+                        if _is_quarantine_path(child):
+                            # A cached quarantine child a fresh listing (which
+                            # filters it) no longer names: retire its subtree
+                            # now rather than verifying a folder the walk must
+                            # never descend into.
+                            condemned.append(child)
+                            continue
                         if child in fresh:
                             continue
                         twin = fresh_by_key.get(_name_key(os.path.basename(child)))
@@ -1721,7 +1874,7 @@ class LibraryIndex:
                     if name.startswith("."):
                         continue
                     if entry.is_dir(follow_symlinks=False):
-                        if _is_skipped_dir_name(name):  # dot names are gone above
+                        if _is_skipped_dir_name(name) or _is_quarantine_path(entry.path):  # dot names are gone above
                             continue
                         # A non-UTF-8 folder name cannot be stored in sqlite; skip it
                         # rather than let one bad name crash (and re-crash) the whole

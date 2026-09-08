@@ -36,6 +36,23 @@ class AppleDownloadError(Exception):
     """Fetching, decrypting or verifying one Apple song failed."""
 
 
+class AppleIntegrityError(AppleDownloadError):
+    """A staged Apple file failed verification (integrity gate, issue #30).
+
+    Carries the rejected bytes' location so the download runner can retry,
+    read the Encoded date and quarantine them: ``staged_path`` is the failed
+    file, ``workdir`` its temp tree (ownership transfers to the catcher, which
+    must remove it). Either may be empty when nothing was staged (a resolve
+    that never produced bytes): the retry and skip-list still apply, just
+    without bytes or a date.
+    """
+
+    def __init__(self, message: str, staged_path: str = "", workdir: str = "") -> None:
+        super().__init__(message)
+        self.staged_path = str(staged_path or "")
+        self.workdir = str(workdir or "")
+
+
 class AppleTrackUnavailable(Exception):
     """Apple knows the song but will not serve a stream for it."""
 
@@ -87,8 +104,12 @@ def decode_check(staged: str | Path, ffmpeg_path: str = "") -> None:
 
     A codec probe only reads stream metadata; the ffmpeg decode (~50 ms per
     the integrity research) actually walks the packets. Raises
-    AppleDownloadError on any decode error. Quarantine/retry policy stays
+    AppleIntegrityError on any decode error. Quarantine/retry policy stays
     the integrity ticket's scope; here a bad file fails its track.
+
+    Pass means silence: ffmpeg can print a recoverable packet error and still
+    exit 0 (the outbreak's malformed ALAC presents exactly so), so any
+    stderr under ``-v error`` fails the file, not just a nonzero exit.
     """
     ffmpeg = ffmpeg_path if ffmpeg_path and Path(ffmpeg_path).is_file() else (shutil.which("ffmpeg") or "")
     if not ffmpeg:
@@ -103,8 +124,10 @@ def decode_check(staged: str | Path, ffmpeg_path: str = "") -> None:
         )
     except Exception as exc:
         raise AppleDownloadError(f"Could not verify the Apple download: {exc}") from exc  # noqa: TRY003
-    if proc.returncode != 0:
-        raise AppleDownloadError("The Apple download failed its integrity check")  # noqa: TRY003
+    if proc.returncode != 0 or (proc.stderr or "").strip():
+        raise AppleIntegrityError(  # noqa: TRY003
+            "The Apple download failed its integrity check", staged_path=str(staged)
+        )
 
 
 def _require_binary(name: str, override: str = "") -> str:
@@ -118,6 +141,59 @@ def _require_binary(name: str, override: str = "") -> str:
         f"Apple downloads need {name}: set its path in Settings under Providers, Apple Music, "
         "or put it on PATH (the setup wizard provisions it later)."
     )
+
+
+def _verify_delivery(
+    *,
+    staged: Path,
+    song_id: str,
+    atmos: bool,
+    resolved_probe: str,
+    ffmpeg_path: str,
+) -> str:
+    """Fail-fast verification of one fetched delivery, inside the engine fetch.
+
+    A wrong delivery (an AAC file for an Atmos ask would otherwise be reported
+    as E-AC-3 downstream) and an undecodable file both raise
+    AppleIntegrityError carrying the staged path; the job runner verifies
+    again per track. Stereo accepts AAC (cookies tier) and ALAC (wrapper
+    tier). Returns the picked codec. The workdir is stamped by the caller.
+    """
+    probe = probe_audio_file(staged, resolved_probe)
+    picked = str(probe.get("codec") or "")
+    got = str(picked or "").lower().replace("-", "").replace("_", "")
+    if got not in (("eac3", "ec3", "ac4") if atmos else ("aac", "alac")):
+        want = "eac3" if atmos else "aac"
+        raise AppleIntegrityError(  # noqa: TRY003 (user-facing words by design)
+            f"Apple served {picked or 'an unknown codec'} for song {song_id}, expected {want}",
+            staged_path=str(staged),
+        )
+    decode_check(staged, ffmpeg_path)
+    return picked
+
+
+async def _fetch_song_staged(*, interface, song_downloader, song_id: str) -> tuple[Path, str]:
+    """The decrypted song file plus its stream-advertised codec, or a refusal.
+
+    Raises AppleTrackUnavailable-shaped AppleDownloadError when Apple knows
+    the song but will not serve a stream for it (kept out of the fail count
+    upstream); every other fetch problem raises AppleDownloadError.
+    """
+    medias = [media async for media in interface._get_song_media(song_id)]
+    media = medias[-1] if medias else None
+    if media is None or getattr(media, "error", None) is not None:
+        raise AppleDownloadError(  # noqa: TRY003 (user-facing words by design)
+            f"Apple would not serve song {song_id}: {getattr(media, 'error', 'unknown error')}"
+        )
+    if getattr(media, "partial", False) or getattr(media, "stream_info", None) is None:
+        raise AppleDownloadError(f"Apple served an incomplete stream for song {song_id}")  # noqa: TRY003
+    item = await song_downloader.get_download_item(media)
+    await song_downloader.download(item)
+    staged = Path(str(item.staged_path))
+    if not staged.is_file() or staged.stat().st_size == 0:
+        raise AppleDownloadError(f"Apple download produced no file for song {song_id}")  # noqa: TRY003
+    codec = str(getattr(getattr(media.stream_info, "audio_track", None), "codec", "") or "")
+    return staged, codec
 
 
 async def _download_song_async(
@@ -171,33 +247,26 @@ async def _download_song_async(
         )
         song_downloader = AppleMusicSongDownloader(base=base_downloader)
 
-        medias = [media async for media in interface._get_song_media(song_id)]
-        media = medias[-1] if medias else None
-        if media is None or getattr(media, "error", None) is not None:
-            raise AppleDownloadError(  # noqa: TRY003 (user-facing words by design)
-                f"Apple would not serve song {song_id}: {getattr(media, 'error', 'unknown error')}"
-            )
-        if getattr(media, "partial", False) or getattr(media, "stream_info", None) is None:
-            raise AppleDownloadError(f"Apple served an incomplete stream for song {song_id}")  # noqa: TRY003
-        item = await song_downloader.get_download_item(media)
-        await song_downloader.download(item)
-        staged = Path(str(item.staged_path))
-        if not staged.is_file() or staged.stat().st_size == 0:
-            raise AppleDownloadError(f"Apple download produced no file for song {song_id}")  # noqa: TRY003
-        picked = str(getattr(getattr(media.stream_info, "audio_track", None), "codec", "") or "")
+        staged, picked = await _fetch_song_staged(interface=interface, song_downloader=song_downloader, song_id=song_id)
         resolved_probe = ffprobe_for(ffmpeg_path)
         if resolved_probe:
-            # Fail fast on a wrong delivery (an AAC file for an Atmos ask
-            # would otherwise be reported as E-AC-3 downstream): the probe is
-            # best-effort here, the job runner verifies again per track.
-            probe = probe_audio_file(staged, resolved_probe)
-            picked = str(probe.get("codec") or picked)
-            want = "eac3" if atmos else "aac"
-            if picked.lower() != want:
-                raise AppleDownloadError(  # noqa: TRY003 (user-facing words by design)
-                    f"Apple served {picked or 'an unknown codec'} for song {song_id}, expected {want}"
+            # Fail fast on a wrong delivery; the job runner verifies again per
+            # track. The rejected bytes stay for the caller (retry, date read,
+            # quarantine): ownership of the workdir transfers outward.
+            try:
+                picked = _verify_delivery(
+                    staged=staged,
+                    song_id=str(song_id),
+                    atmos=atmos,
+                    resolved_probe=resolved_probe,
+                    ffmpeg_path=ffmpeg_path,
                 )
-            decode_check(staged, ffmpeg_path)
+            except AppleIntegrityError as integrity_exc:
+                if not integrity_exc.workdir:
+                    integrity_exc.workdir = str(workdir)
+                if not integrity_exc.staged_path:
+                    integrity_exc.staged_path = str(staged)
+                raise
         return AppleDelivery(staged_path=staged, workdir=Path(workdir), is_atmos=atmos, codec=picked)
     finally:
         close = getattr(getattr(api, "client", None), "aclose", None)
@@ -241,6 +310,11 @@ def download_song_file(
                 ffmpeg_path=ffmpeg,
             )
         )
+    except AppleIntegrityError:
+        # Verification rejected the delivery: the workdir (with the bad bytes)
+        # transfers to the caller for the Encoded-date read and quarantine.
+        # The caller owns cleanup from here.
+        raise
     except (AppleCredentialsError, AppleDownloadError):
         shutil.rmtree(workdir, ignore_errors=True)
         raise
@@ -258,7 +332,9 @@ def probe_audio_file(path: str | Path, ffprobe_path: str = "") -> dict:
     """ffprobe's reading of one audio file's first stream.
 
     Returns {"codec": ..., "sample_rate": ...} with "" unknowns. Raises
-    AppleDownloadError when ffprobe is missing or the file has no audio.
+    AppleDownloadError when ffprobe is missing; a file with no audio stream
+    raises AppleIntegrityError (a corrupt/truncated delivery, never an infra
+    failure).
     """
     ffprobe = _require_binary("ffprobe", ffprobe_path)
     try:
@@ -286,6 +362,8 @@ def probe_audio_file(path: str | Path, ffprobe_path: str = "") -> dict:
     except ValueError as exc:
         raise AppleDownloadError(f"Could not read the Apple download's probe output: {exc}") from exc  # noqa: TRY003
     if proc.returncode != 0 or not streams:
-        raise AppleDownloadError("The Apple download has no playable audio stream")  # noqa: TRY003
+        raise AppleIntegrityError(  # noqa: TRY003
+            "The Apple download has no playable audio stream", staged_path=str(path)
+        )
     stream = streams[0]
     return {"codec": str(stream.get("codec_name") or ""), "sample_rate": str(stream.get("sample_rate") or "")}

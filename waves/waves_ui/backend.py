@@ -44,7 +44,13 @@ from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
 
 import waves.download as _waves_download
-from waves.apple_engine import AppleCredentialsError, AppleTrackUnavailable, _AppleAborted, _AppleSkipped
+from waves.apple_engine import (
+    AppleCredentialsError,
+    AppleIntegrityError,
+    AppleTrackUnavailable,
+    _AppleAborted,
+    _AppleSkipped,
+)
 from waves.apple_files import (
     pick_destination,
     tag_apple_file,
@@ -333,6 +339,9 @@ _FLAG_FIELDS = [
     # never rendered as a flag tile: the Apple status row carries it as the
     # section's master switch, so it only needs the persistence coercion.
     "apple_enabled",
+    # Integrity gate (issue #30, spec §6): keep-vs-delete for quarantined
+    # files, default keep. The quarantine folder itself is a path field below.
+    "apple_quarantine_keep",
     # Advanced
     "downsample_enabled",
     "metadata_replay_gain",
@@ -354,9 +363,17 @@ _NUMBER_FIELDS = [
     # Advanced
     "downloads_simultaneous_per_track_max",
     "api_rate_limit_batch_size",
+    # Integrity gate (issue #30): automatic re-downloads after an integrity
+    # failure, tunable in Advanced. Default 2 (3 attempts total).
+    "apple_integrity_retries",
 ]
 # Second-scale floats (Advanced), rendered as a decimal stepper.
-_FLOAT_FIELDS = ["download_delay_sec_min", "download_delay_sec_max", "api_rate_limit_delay_sec"]
+_FLOAT_FIELDS = [
+    "download_delay_sec_min",
+    "download_delay_sec_max",
+    "api_rate_limit_delay_sec",
+    "apple_integrity_retry_delay_sec",
+]
 # Waves' opinionated defaults layered over the engine's stock dataclass defaults.
 # Applied once on a brand-new install (_apply_first_run_defaults) and restored
 # by the Advanced-settings "reset all settings" action, so the two always agree
@@ -680,12 +697,16 @@ _PATH_FIELDS = [
     # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
     # through; the wizard provisions it later.
     "path_binary_nm3u8dlre",
+    # Integrity gate (issue #30): quarantine folder override, browsed like a
+    # download folder. Empty means the default inside the download folder.
+    "apple_quarantine_dir",
 ]
 _BROWSE = {
     "download_base_path": "dir",
     "path_binary_ffmpeg": "file",
     "apple_cookies_path": "file",
     "path_binary_nm3u8dlre": "file",
+    "apple_quarantine_dir": "dir",
 }
 # String fields whose value is a character or two: they render as a compact
 # row with a small box on the right (the Track-number padding shape) instead
@@ -882,6 +903,10 @@ _FIELD_LABELS = {
     "apple_quality_audio": "Audio quality (Apple)",
     "apple_cookies_path": "Cookies file (Apple)",
     "path_binary_nm3u8dlre": "N_m3u8DL-RE binary path",
+    "apple_quarantine_dir": "Quarantine folder (Apple)",
+    "apple_quarantine_keep": "Keep quarantined files",
+    "apple_integrity_retries": "Integrity retries (Apple)",
+    "apple_integrity_retry_delay_sec": "Integrity retry delay (s)",
     "quality_video": "Video quality",
     "downloads_concurrent_max": "Concurrent track downloads",
     "download_dolby_atmos": "Download Dolby Atmos",
@@ -1222,6 +1247,33 @@ _DEGRADED_RETRY_MAX = 2
 # burst and hammers the throttle harder. Bounded and abort-aware; the
 # supervision slice owns pacing fields and the visible resume countdown.
 _APPLE_THROTTLE_WAITS = (5.0, 20.0)
+
+
+def _apple_effective_version(provider, track_id: str, audio_type) -> str:
+    """The Version a fetch will actually verify as: Atmos only when asked AND
+    offered (issue #30, spec §6.4: each Version verifies independently).
+
+    An Atmos ask for a stereo-only track falls back to stereo (the provider's
+    instead-of rule), so gating and clearing on the asked version would file
+    the failure under Atmos while stereo runs keep refetching the same corrupt
+    source. A track that cannot be read keeps the asked version: it will fail
+    per-track below, never silently vanish. Module-level (not a method) so the
+    runner needs no extra seam and test stubs need no new binding.
+    """
+    try:
+        want_atmos = str(getattr(audio_type, "value", audio_type) or "").strip().lower() == "atmos"
+    except Exception:
+        want_atmos = False
+    if not want_atmos:
+        return "stereo"
+    try:
+        raw = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
+    except Exception:
+        return "atmos"
+    try:
+        return "atmos" if bool(provider.has_atmos(raw)) else "stereo"
+    except Exception:
+        return "atmos"
 
 
 def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int | None = None) -> bool:
@@ -2926,6 +2978,14 @@ class _JobSpec:
     # tracks land to the normal path, no hole). Stereo/single rows ignore it.
     audio_type: str | None = None
     base_template: str = ""
+    # Explicit re-ask of a FAILED row (its RETRY button or RETRY ALL, which
+    # re-enters through _start_retry with the row's own ask). For Apple jobs
+    # this bypasses the integrity skip-list auto-skip (spec §6.4); ordinary
+    # clicks and bulk runs leave it False and skip quarantined tracks.
+    # Per-row, never shared: dual-Version rows carry their own flag, so no
+    # counting or releasing is needed and a dispatch that never runs a job
+    # leaks nothing (the flag dies with its spec).
+    is_retry: bool = False
 
     def raw_object_id(self) -> str:
         """The id inside the namespace, as the provider's get_object wants it."""
@@ -8793,6 +8853,19 @@ class WavesBridge(LibraryMixin, QObject):
             # the row was usually seeded as pending before the skip arrived.
             if ev.get("owned"):
                 row["owned"] = ev["owned"]
+            # Why a track failed (integrity quarantines carry the plain-words
+            # verdict); a retry clears it via the running reset below.
+            if ev.get("reason"):
+                row["reason"] = str(ev["reason"])
+            elif ev["status"] == "running" and "reason" in row:
+                row.pop("reason", None)
+            if ev.get("quarantined"):
+                row["quarantined"] = True
+            elif ev["status"] == "running":
+                # A restart clears a previous quarantine mark (like reason
+                # above): a retried track that delivers must not keep
+                # reporting itself quarantined to state readers.
+                row.pop("quarantined", None)
         # Finalize progress (post-download steps), a second axis next to the
         # stream pct. A stage event carries it; a plain "running" event is the
         # track (re)starting, which resets it so a retry does not open on a
@@ -9638,6 +9711,8 @@ class WavesBridge(LibraryMixin, QObject):
                         "quality": st.get("quality", ""),
                         "expected": entry.get("expected") or st.get("expected", ""),
                         "owned": st.get("owned", ""),
+                        "reason": st.get("reason", ""),
+                        "quarantined": bool(st.get("quarantined", False)),
                     }
                 )
         else:
@@ -9653,6 +9728,8 @@ class WavesBridge(LibraryMixin, QObject):
                         "quality": st.get("quality", ""),
                         "expected": st.get("expected", ""),
                         "owned": st.get("owned", ""),
+                        "reason": st.get("reason", ""),
+                        "quarantined": bool(st.get("quarantined", False)),
                     }
                 )
             for i, row in enumerate(rows, start=1):
@@ -11702,11 +11779,18 @@ class WavesBridge(LibraryMixin, QObject):
         collection: bool,
         media_id: str,
         keep_ask: tuple | None = None,
+        is_retry: bool = False,
     ) -> None:
         """Queue one Apple track or collection. The TIDAL _download's shape
         for the parts that are provider-blind (folder gate, ffmpeg gate,
         ask pinning, queue row, spec, pump); the Apple fetch happens at
-        dispatch, never here."""
+        dispatch, never here.
+
+        ``keep_ask`` pins the ask (a retry asks at its row's ask); ``is_retry``
+        marks an explicit re-ask of a FAILED row and rides the queued spec to
+        the skip-list gate. They travel separately so a deferred replay keeps
+        the row's pinned ask without promoting a fresh row into a retry.
+        """
         if not self._apple_cookies_ready():
             self._set_status("Apple downloads need a cookies export: set one in Settings under Providers, Apple Music")
             self.downloadState.emit(media_id, "")
@@ -11719,18 +11803,37 @@ class WavesBridge(LibraryMixin, QObject):
             self._stash_pending_download(
                 media_id,
                 lambda: self._download_apple(
-                    type_media, row, collection_row, file_template, collection, media_id, keep_ask=keep_ask
+                    type_media,
+                    row,
+                    collection_row,
+                    file_template,
+                    collection,
+                    media_id,
+                    keep_ask=keep_ask,
+                    is_retry=is_retry,
                 ),
             )
             return
         if self._ffmpeg_gate_holds(
             media_id,
-            lambda: self._download_apple(type_media, row, collection_row, file_template, collection, media_id),
+            lambda: self._download_apple(
+                type_media,
+                row,
+                collection_row,
+                file_template,
+                collection,
+                media_id,
+                keep_ask=keep_ask,
+                is_retry=is_retry,
+            ),
         ):
             return
         if keep_ask is not None and keep_ask[0]:
             # A retry asks at what its row asked, not at a setting that moved
             # since (the TIDAL keep_ask rule). It retries only its own Version.
+            # Whether this re-entry IS a retry rides is_retry (set by
+            # _start_retry); keep_ask alone only pins the ask, so a deferred
+            # replay of a fresh row keeps its ask without becoming a retry.
             ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] if len(keep_ask) > 1 else "" or _tier_word(keep_ask[0]))
             keep_ver = str(keep_ask[2] if len(keep_ask) > 2 else "" or "").strip().lower() or None
             keep_ver = keep_ver if keep_ver in ("stereo", "atmos") else None
@@ -11864,6 +11967,7 @@ class WavesBridge(LibraryMixin, QObject):
                 merge_plan=None,
                 audio_type=row_atype,
                 base_template=base_for_spec,
+                is_retry=is_retry,
             )
             self._pending_qids.append(qid)
         if not queued_any:
@@ -11921,6 +12025,17 @@ class WavesBridge(LibraryMixin, QObject):
             audio_type = AudioType.STEREO
         else:
             audio_type = self._apple_audio_type()
+        # The Version this job fetches as, for the per-version skip-list.
+        # Legacy single rows (None) resolve to the concrete fetch (stereo when
+        # the toggle is off, Atmos when on): an Atmos quarantine never skips a
+        # stereo fetch, and vice versa. Ownership keeps its own legacy
+        # whole-track query above; the skip-list is always per-version.
+        try:
+            job_version = str(getattr(audio_type, "value", audio_type) or "").strip().lower()
+        except Exception:
+            job_version = ""
+        if job_version not in ("stereo", "atmos"):
+            job_version = "stereo"
         ask_tier = self._job_quality(qid)
         requested_rank = self._apple_target_rank(ask_tier)
         ceiling_rank = quality_rank(QualityTier.HIGH)
@@ -11954,12 +12069,14 @@ class WavesBridge(LibraryMixin, QObject):
                     break
             if not atmos_capable:
                 # Withdraw: remove the queue row so the click leaves one row
-                # (stereo), not a done row with no files.
+                # (stereo), not a done row with no files. The bypass permit is
+                # released by the job body's finally, the one place that runs
+                # however this job ends, so one release covers every exit here.
                 self._remove_row(qid)
                 self._emit_queue()
                 return " (already downloaded)"
         num_volumes = max([int(row.get("vol") or 1) for row in rows] + [1])
-        ok = fail = skipped = unavailable = 0
+        ok = fail = skipped = unavailable = quarantined = 0
         failed_names: list[str] = []
         landed: list = []
         for pos, row in enumerate(rows, start=1):
@@ -12002,6 +12119,37 @@ class WavesBridge(LibraryMixin, QObject):
                 signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})
                 self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
                 continue
+            # Integrity skip-list (spec §6.3): bulk runs auto-skip quarantined
+            # tracks, shown plainly like IN LIBRARY rows. REDOWNLOAD (force)
+            # and an explicit RETRY (single or RETRY ALL, spec §6.4) are the
+            # re-asks that bypass it: the row's own spec carries is_retry, so
+            # each retried row (each Version of a dual pair included) bypasses
+            # on its own, nothing is counted or released, and a dispatch that
+            # never runs a job leaks nothing. Per-version: an Atmos quarantine
+            # never skips its stereo sibling. Fresh clicks (even
+            # single-track) also skip: otherwise the mark would be bypassable
+            # by re-clicking and REDOWNLOAD would not be the way back.
+            bypass = bool(force) or bool(getattr(spec, "is_retry", False))
+            # The Version the fetch will verify as (not the bare ask): an
+            # Atmos ask for a stereo-only track falls back, and its failure is
+            # filed under stereo. Computed for every track; the gate below and
+            # the success-clear both read it.
+            try:
+                check_version = _apple_effective_version(provider, track_id, audio_type)
+            except Exception:
+                check_version = job_version
+                logger.debug("Apple effective-version probe failed; gating on the ask", exc_info=True)
+            if not bypass:
+                # Gate on the fetched Version (check_version above).
+                try:
+                    skip_mark = self._apple_skiplist_get(track_id, check_version)
+                except Exception:
+                    skip_mark = None
+                if skip_mark is not None:
+                    skipped += 1
+                    signals.track_event.emit({"id": track_id, "status": "skipped", "quarantined": True})
+                    self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
+                    continue
             # An upgrade run overwrites the stale copy in place; without the
             # per-track verdict an upgrade would land beside it as a numbered
             # copy and the old file would stay behind.
@@ -12027,6 +12175,7 @@ class WavesBridge(LibraryMixin, QObject):
                             force=track_force,
                             owned_path=owned_path,
                             job_abort=job_abort,
+                            signals=signals,
                         )
                         break
                     except Exception as exc:
@@ -12059,7 +12208,24 @@ class WavesBridge(LibraryMixin, QObject):
             except Exception as exc:
                 fail += 1
                 failed_names.append(str(row.get("title") or track_id))
-                signals.track_event.emit({"id": track_id, "status": "failed"})
+                # Integrity quarantines end FAILED in plain words (spec §6.4);
+                # other failures keep the existing failed row without a reason.
+                try:
+                    is_integrity = self._is_integrity_failure(exc)
+                except Exception:
+                    is_integrity = False
+                if is_integrity:
+                    quarantined += 1
+                try:
+                    if is_integrity:
+                        from waves.apple_integrity import INTEGRITY_FAIL_MESSAGE as _IFM
+
+                        signals.track_event.emit({"id": track_id, "status": "failed", "reason": _IFM})
+                    else:
+                        signals.track_event.emit({"id": track_id, "status": "failed"})
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        signals.track_event.emit({"id": track_id, "status": "failed"})
                 logger.exception("Apple track failed for %s", diagnostics.content(track_id))
                 if isinstance(exc, AppleCredentialsError):
                     raise
@@ -12067,6 +12233,13 @@ class WavesBridge(LibraryMixin, QObject):
                 continue
             ok += 1
             landed.append(pathlib.Path(delivered["path"]))
+            # A verified copy landing clears the skip-list (REDOWNLOAD's way
+            # back; also clears a stale mark when Apple re-encoded). The
+            # fetched Version clears its own mark (check_version above).
+            try:
+                self._apple_skiplist_clear(track_id, check_version)
+            except Exception:
+                logger.debug("Could not clear the Apple skip-list", exc_info=True)
             signals.track_event.emit(
                 {
                     "id": track_id,
@@ -12093,14 +12266,28 @@ class WavesBridge(LibraryMixin, QObject):
                 illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
                 illegal_map=getattr(data, "filename_illegal_map", None),
             )
+        # Settlement: every exit below returns or raises through here, and the
+        # job body's finally releases this job's bypass permit exactly once.
+        # Releasing here as well would consume a sibling Version's permit on
+        # dual retries (two jobs, one media id, one permit each).
         if total == 1 and not collection:
             if ok or skipped:
                 return "" if ok else " (already downloaded)"
             if unavailable:
                 _raise_download_incomplete("not available on Apple Music anymore")
+            if quarantined:
+                from waves.apple_integrity import INTEGRITY_FAIL_MESSAGE as _IFM_SINGLE
+
+                _raise_download_incomplete(_IFM_SINGLE)
             _raise_download_incomplete("Apple download produced no file")
         short = fail + unavailable
         if short:
+            if quarantined and quarantined == fail and not unavailable:
+                # Every failure is a quarantine: the row's plain-words verdict.
+                from waves.apple_integrity import INTEGRITY_FAIL_MESSAGE as _IFM_ALL
+
+                done_word = f"{ok} of {total} tracks" if ok else f"0 of {total} tracks"
+                _raise_download_incomplete(f"{done_word} downloaded ({_IFM_ALL})")
             done_word = f"{ok} of {total} tracks" if ok else f"0 of {total} tracks"
             _raise_download_incomplete(f"{done_word} downloaded ({short} failed)")
         if skipped and not ok:
@@ -12179,14 +12366,31 @@ class WavesBridge(LibraryMixin, QObject):
         force: bool,
         owned_path: str | None,
         job_abort,
+        signals=None,
     ) -> dict:
         """Fetch, verify, place, tag and sidecar one Apple track.
+
+        Verification is always-on pre-swap (spec §6.1): the ffmpeg
+        decode-to-null check runs on the staged file during the finishing
+        phase, never a setting. Integrity failures retry automatically (2
+        re-downloads, 1 for outbreak-era Encoded date >= 2025-05, with brief
+        pacing); persistent failures land in Quarantine plus the skip-list and
+        raise with the plain-words verdict. Each Version verifies
+        independently; no conversion runs before verification passes; no
+        patching.
 
         Returns {"path", "quality"} for the done event. Raises
         AppleTrackUnavailable when Apple withholds the song and
         AppleDownloadError (or anything gamdl raises) otherwise.
         """
         from waves.apple_engine import AppleDownloadError, probe_audio_file
+        from waves.apple_integrity import (
+            INTEGRITY_FAIL_MESSAGE,
+            integrity_retries,
+            integrity_retry_delay,
+            is_outbreak_era,
+            parse_encoded_date,
+        )
 
         track_id = str(row.get("id"))
         raw_id = track_id.removeprefix(f"{CTX_APPLE}:")
@@ -12220,25 +12424,225 @@ class WavesBridge(LibraryMixin, QObject):
             raise _AppleSkipped()
         else:
             dest = pick_destination(base, relative, ".m4a")
-        try:
-            info = provider.resolve_stream(raw, tier_from_word(str(self.settings.data.apple_quality_audio)), audio_type)
-        except Exception as exc:
-            # A refusal is TIDAL-vocabulary for "gone": kept out of the fail
-            # count so one delisted track cannot fail its whole album.
-            if provider.classify_refusal(exc).kind is RefusalKind.UNAVAILABLE:
-                raise AppleTrackUnavailable(str(exc) or "not available on Apple Music") from exc
-            raise
-        try:
-            staged = pathlib.Path(str(info.local_file))
-            if not staged.is_file():
-                raise AppleDownloadError("Apple download produced no file")  # noqa: TRY003
-            atmos = str((info.delivered or {}).get("audio_type") or "") == str(AudioType.ATMOS)
-            self._apple_verify_staged(staged, expect_atmos=atmos)
-            if job_abort.is_set():
-                raise _AppleAborted()
-            self._apple_place_file(staged, dest)
-        finally:
-            provider.discard_delivery(str(info.local_file))
+        # The Version this fetch verifies as, for the per-version skip-list.
+        # resolve_stream decides Atmos from the raw + ask; the delivered word
+        # confirms it per attempt below.
+        version_hint = str(getattr(audio_type, "value", audio_type) or "").strip().lower() or None
+        if version_hint not in ("stereo", "atmos"):
+            version_hint = None
+        attempt = 0
+        last_encoded: str | None = None
+        last_staged: pathlib.Path | None = None
+        outbreak_seen = False
+
+        def _drop_hold() -> None:
+            """Delete the superseded retry hold, if any, and forget it."""
+            nonlocal last_staged
+            if last_staged is not None:
+                with contextlib.suppress(OSError):
+                    if "quarantine-" in str(last_staged.parent):
+                        shutil.rmtree(last_staged.parent, ignore_errors=True)
+                last_staged = None
+
+        while True:
+            info = None
+            try:
+                try:
+                    info = provider.resolve_stream(
+                        raw, tier_from_word(str(self.settings.data.apple_quality_audio)), audio_type
+                    )
+                except Exception as resolve_exc:
+                    # A refusal is TIDAL-vocabulary for "gone": kept out of the fail
+                    # count so one delisted track cannot fail its whole album.
+                    if provider.classify_refusal(resolve_exc).kind is RefusalKind.UNAVAILABLE:
+                        raise AppleTrackUnavailable(str(resolve_exc) or "not available on Apple Music") from resolve_exc
+                    # The engine verifies inside its own fetch (decode-to-null
+                    # before resolve_stream returns), so a corrupt delivery can
+                    # raise here with no staged file to hold: it still enters
+                    # the integrity retry/quarantine path below (without bytes
+                    # for the quarantine copy or the Encoded-date read).
+                    raise
+                staged = pathlib.Path(str(info.local_file))
+                if not staged.is_file():
+                    raise AppleDownloadError("Apple download produced no file")  # noqa: TRY003, TRY301
+                atmos = str((info.delivered or {}).get("audio_type") or "") == str(AudioType.ATMOS)
+                self._apple_verify_staged(staged, expect_atmos=atmos)
+                if job_abort.is_set():
+                    raise _AppleAborted()  # noqa: TRY301
+                self._apple_place_file(staged, dest)
+            except _AppleAborted:
+                if info is not None:
+                    try:
+                        provider.discard_delivery(str(info.local_file))
+                    except Exception:
+                        logger.debug("Could not discard the Apple staging area", exc_info=True)
+                _drop_hold()
+                raise
+            except Exception as exc:
+                # The staged bytes still exist here (discard runs below), so
+                # read the Encoded date and hold quarantine bytes FIRST: after
+                # discard the workdir is gone and both reads would miss. A
+                # resolve-stage integrity failure carries its rejected bytes on
+                # the exception itself (the engine transfers workdir ownership
+                # outward instead of deleting it); without them it still
+                # retries and marks the skip-list, just without bytes or a date.
+                failed_staged: pathlib.Path | None = None
+                preserved_workdir = ""
+                if info is not None:
+                    try:
+                        candidate = pathlib.Path(str(info.local_file))
+                        failed_staged = candidate if candidate.is_file() else None
+                    except Exception:
+                        failed_staged = None
+                else:
+                    try:
+                        exc_staged = str(getattr(exc, "staged_path", "") or "")
+                        preserved_workdir = str(getattr(exc, "workdir", "") or "")
+                        candidate = pathlib.Path(exc_staged)
+                        failed_staged = candidate if exc_staged and candidate.is_file() else None
+                    except Exception:
+                        failed_staged = None
+                try:
+                    _is_integrity = self._is_integrity_failure(exc)
+                except Exception:
+                    # Old test stubs without the gate: fall back to the wording
+                    # check so clean fixtures still pass unretried.
+                    _is_integrity = "integrity check" in str(exc or "").lower()
+                if not _is_integrity:
+                    if info is not None:
+                        try:
+                            provider.discard_delivery(str(info.local_file))
+                        except Exception:
+                            logger.debug("Could not discard the Apple staging area", exc_info=True)
+                    _drop_hold()
+                    raise
+                # Integrity failure: sharpen the budget on outbreak-era bytes.
+                # The Encoded date rides the failed file itself; unknown stays
+                # on the normal budget (never the sharpened one).
+                try:
+                    encoded_text = self._apple_staged_encoded_date(failed_staged) if failed_staged else None
+                except Exception:
+                    encoded_text = None
+                if encoded_text:
+                    last_encoded = encoded_text
+                with contextlib.suppress(Exception):
+                    outbreak_seen = outbreak_seen or is_outbreak_era(parse_encoded_date(encoded_text))
+                hold_path: pathlib.Path | None = None
+                if failed_staged is not None:
+                    try:
+                        import tempfile as _tmp
+
+                        hold = pathlib.Path(_tmp.mkdtemp(prefix="waves-apple-quarantine-")) / "failed.m4a"
+                        shutil.copyfile(failed_staged, hold)
+                        hold_path = hold
+                    except Exception:
+                        hold_path = None
+                if info is not None:
+                    try:
+                        provider.discard_delivery(str(info.local_file))
+                    except Exception:
+                        logger.debug("Could not discard the Apple staging area", exc_info=True)
+                if preserved_workdir:
+                    # The engine's rejected bytes were copied into the hold
+                    # above (or there was nothing to hold): either way the
+                    # preserved workdir is spent and must not leak.
+                    with contextlib.suppress(OSError):
+                        shutil.rmtree(preserved_workdir, ignore_errors=True)
+                if hold_path is not None:
+                    # A superseded hold is deleted with its temp dir: only the
+                    # latest failure's bytes are quarantined, the earlier
+                    # copies are retry debris, never keepsakes.
+                    previous = last_staged
+                    last_staged = hold_path
+                    if previous is not None and previous != hold_path:
+                        with contextlib.suppress(OSError):
+                            if "quarantine-" in str(previous.parent):
+                                shutil.rmtree(previous.parent, ignore_errors=True)
+                try:
+                    budget = integrity_retries(getattr(self.settings, "data", None), outbreak=outbreak_seen)
+                except Exception:
+                    budget = 1 if outbreak_seen else 2
+                if attempt >= budget:
+                    # Persistent failure: quarantine (keep-by-default) plus the
+                    # provider-scoped skip-list. Filed under the DELIVERED
+                    # Version: an Atmos ask for a stereo-only track falls back,
+                    # so its corrupt bytes belong to stereo (the effective
+                    # version the gate and the clear both read). A resolve-stage
+                    # failure never produced a delivered word, but the effective
+                    # Version is still knowable (asked AND offered); only a
+                    # probe that fails too falls back to the ask.
+                    if info is not None:
+                        version = "atmos" if locals().get("atmos", False) else "stereo"
+                    else:
+                        try:
+                            version = _apple_effective_version(provider, track_id, audio_type)
+                        except Exception:
+                            version = ""
+                        if version not in ("stereo", "atmos"):
+                            if version_hint in ("stereo", "atmos"):
+                                version = version_hint
+                            else:
+                                try:
+                                    version = str(getattr(audio_type, "value", audio_type) or "").strip().lower()
+                                except Exception:
+                                    version = ""
+                                version = version if version in ("stereo", "atmos") else "stereo"
+                    if last_staged is not None and last_staged.is_file():
+                        try:
+                            self._apple_quarantine_file(
+                                last_staged, relative=relative, track_id=track_id, audio_type=version
+                            )
+                        except Exception:
+                            logger.debug("Could not quarantine the Apple file", exc_info=True)
+                        _drop_hold()
+                    try:
+                        self._apple_skiplist_add(track_id, version, last_encoded)
+                    except Exception:
+                        logger.debug("Could not mark the Apple skip-list", exc_info=True)
+                    raise AppleDownloadError(INTEGRITY_FAIL_MESSAGE) from exc
+                attempt += 1
+                # Mid-run integrity retry keeps the row's progress (the caller
+                # ticks per settled track, so nothing moves) with a brief note.
+                try:
+                    if signals is not None:
+                        signals.track_event.emit({"id": track_id, "status": "running"})
+                except Exception:
+                    logger.debug("Could not emit the Apple integrity-retry event", exc_info=True)
+                with contextlib.suppress(Exception):
+                    self._set_status(f"Retrying {row.get('title') or track_id} (integrity)…")
+                logger.warning(
+                    "Apple integrity check failed for %s (attempt %s); retrying",
+                    diagnostics.content(track_id),
+                    attempt + 1,
+                )
+                try:
+                    delay = integrity_retry_delay(getattr(self.settings, "data", None))
+                except Exception:
+                    delay = 5.0
+                try:
+                    sleep_ok = self._apple_sleep_abortable(delay, job_abort) if delay > 0 else True
+                except Exception:
+                    # Old test stubs without the sleep helper: pacing is
+                    # best-effort in tests (they stub delay to 0 anyway).
+                    with contextlib.suppress(Exception):
+                        import time as _time
+
+                        _time.sleep(0)
+                    sleep_ok = not job_abort.is_set()
+                if delay > 0 and not sleep_ok:
+                    _drop_hold()
+                    raise _AppleAborted() from exc
+                if job_abort.is_set():
+                    _drop_hold()
+                    raise _AppleAborted() from exc
+                continue
+            else:
+                try:
+                    provider.discard_delivery(str(info.local_file))
+                except Exception:
+                    logger.debug("Could not discard the Apple staging area", exc_info=True)
+                _drop_hold()
+                break
         lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts)
         cover_data = self._apple_cover_bytes(provider, raw) if self._apple_wants_cover(collection) else None
         if not tag_apple_file(
@@ -12305,22 +12709,197 @@ class WavesBridge(LibraryMixin, QObject):
             raise
 
     def _apple_verify_staged(self, staged: pathlib.Path, *, expect_atmos: bool) -> None:
-        """Codec check on the decrypted file: AAC stereo, E-AC-3 Atmos.
+        """Pre-swap verification of one Apple delivery (issue #30, spec §6.1).
 
-        No ffprobe anywhere means trust (its absence already fails louder
-        paths); a wrong codec fails the track, never the job.
+        Always-on structural behavior, never a setting; TIDAL downloads never
+        reach here. Two checks on the staged file, before it is swapped into
+        the library: the codec must be the asked family (stereo: AAC or ALAC;
+        Atmos: E-AC-3), and the whole file must ffmpeg-decode cleanly (the
+        decode-to-null check, ~50 ms, no network). Either failure raises
+        AppleDownloadError with the integrity wording, so the retry policy
+        and quarantine treat both identically. No conversion runs before this
+        passes; there is no patching in v1.
+
+        No ffprobe/ffmpeg anywhere means trust (their absence already fails
+        louder paths via the ffmpeg gate); a wrong codec or a decode error
+        fails the track, never the job.
         """
-        from waves.apple_engine import AppleDownloadError, probe_audio_file
+        from waves.apple_engine import AppleIntegrityError, decode_check, probe_audio_file
 
         ffprobe = self._apple_probe()
-        if not ffprobe:
-            logger.debug("Apple verify skipped (no ffprobe): %s", staged)
+        if ffprobe:
+            probe = probe_audio_file(staged, ffprobe)
+            codec = str(probe.get("codec") or "").lower().replace("-", "").replace("_", "")
+            # Stereo is AAC today (cookies tier) and ALAC once the wrapper
+            # unlocks it; Atmos is E-AC-3 (AC-4 accepted as the same family).
+            # Normalized (hyphens/underscores dropped): "e-ac-3" -> "eac3".
+            if expect_atmos:
+                if codec not in ("eac3", "ec3", "ac4"):
+                    raise AppleIntegrityError(  # noqa: TRY003
+                        f"Apple served {codec or 'an unknown codec'}, expected eac3", staged_path=str(staged)
+                    )
+            elif codec not in ("aac", "alac"):
+                raise AppleIntegrityError(  # noqa: TRY003
+                    f"Apple served {codec or 'an unknown codec'}, expected aac", staged_path=str(staged)
+                )
+        else:
+            logger.debug("Apple codec check skipped (no ffprobe): %s", staged)
+        # The decode-to-null gate: the only check that catches the outbreak's
+        # malformed ALAC packets (missing TYPE_END terminators). decode_check
+        # skips itself when ffmpeg is absent; its AppleDownloadError already
+        # carries the integrity wording.
+        provider = self.providers.get(CTX_APPLE)
+        ffmpeg = str(getattr(provider, "ffmpeg_path", "") or "")
+        if not ffmpeg:
+            try:
+                ffmpeg = str(getattr(self.settings.data, "path_binary_ffmpeg", "") or "")
+            except Exception:
+                ffmpeg = ""
+        try:
+            decode_check(staged, ffmpeg)
+        except Exception as exc:
+            from waves.apple_engine import AppleDownloadError as _ADE
+
+            if isinstance(exc, _ADE):
+                raise
+            raise _ADE(f"Could not verify the Apple download: {exc}") from exc  # noqa: TRY003
+
+    # ----- Apple integrity gate (issue #30, spec §6) -------------------------
+
+    def _apple_quarantine_root(self) -> pathlib.Path:
+        """The quarantine folder: custom override or the default inside the
+        download folder. Created on use, never here. A custom location
+        registers its full path for scan exclusion (basename matching would
+        prune legitimate same-named folders)."""
+        from waves.apple_integrity import resolve_quarantine_dir
+
+        try:
+            base = str(getattr(self.settings.data, "download_base_path", "") or "")
+        except Exception:
+            base = ""
+        try:
+            custom = str(getattr(self.settings.data, "apple_quarantine_dir", "") or "")
+        except Exception:
+            custom = ""
+        root = resolve_quarantine_dir(base, custom or None)
+        if custom:
+            try:
+                from waves import library_index as _lib_index
+
+                _lib_index.register_quarantine_dir(str(root))
+            except Exception:
+                logger.debug("Could not register the quarantine dir for scan exclusion", exc_info=True)
+        return root
+
+    def _apple_quarantine_keep(self) -> bool:
+        """Keep vs delete for quarantined files, default keep."""
+        try:
+            return bool(getattr(self.settings.data, "apple_quarantine_keep", True))
+        except Exception:
+            return True
+
+    @staticmethod
+    def _is_integrity_failure(exc: BaseException) -> bool:
+        """Whether an Apple failure is an integrity verdict (retry + quarantine).
+
+        Explicit first: AppleIntegrityError is the verifier's own verdict
+        (decode failures, wrong codecs, files with no audio stream). The
+        wording fallback covers the same verdicts built as plain
+        AppleDownloadErrors (older callers, test doubles); transport,
+        credential and refusal failures match neither and keep their existing
+        handling.
+        """
+        if isinstance(exc, AppleIntegrityError):
+            return True
+        text = str(exc or "").lower()
+        return (
+            "integrity check" in text
+            or "expected aac" in text
+            or "expected eac3" in text
+            or "no playable audio stream" in text
+        )
+
+    def _apple_skiplist_get(self, track_id: str, audio_type: str | None):
+        """A skip-list entry for a track's version, or None (no store = none)."""
+        store = getattr(self, "_ownership", None)
+        if store is None or not hasattr(store, "is_quarantined"):
+            return None
+        try:
+            want = str(audio_type or "").strip().lower() or None
+            if want not in ("stereo", "atmos", None):
+                want = None
+            return store.is_quarantined(str(track_id), want)
+        except Exception:
+            logger.debug("Apple skip-list lookup failed; not gating", exc_info=True)
+            return None
+
+    def _apple_skiplist_add(self, track_id: str, audio_type: str | None, encoded_date: str | None = None) -> None:
+        """Mark a track's version as quarantined (bulk runs auto-skip it)."""
+        store = getattr(self, "_ownership", None)
+        if store is None or not hasattr(store, "quarantine_add"):
             return
-        probe = probe_audio_file(staged, ffprobe)
-        codec = str(probe.get("codec") or "").lower()
-        want = "eac3" if expect_atmos else "aac"
-        if codec != want:
-            raise AppleDownloadError(f"Apple served {codec or 'an unknown codec'}, expected {want}")  # noqa: TRY003
+        try:
+            store.quarantine_add(str(track_id), audio_type, encoded_date)
+        except Exception:
+            logger.debug("Could not mark the Apple skip-list", exc_info=True)
+
+    def _apple_skiplist_clear(self, track_id: str, audio_type: str | None = None) -> None:
+        """Clear a quarantine mark: a verified copy landed (REDOWNLOAD's way back)."""
+        store = getattr(self, "_ownership", None)
+        if store is None or not hasattr(store, "quarantine_remove"):
+            return
+        try:
+            # A versioned clear removes only that version; the deliver path
+            # passes its own version, so a fixed Atmos copy never leaves a
+            # stale stereo mark (or vice versa).
+            store.quarantine_remove(str(track_id), audio_type)
+        except Exception:
+            logger.debug("Could not clear the Apple skip-list", exc_info=True)
+
+    def _apple_quarantine_file(
+        self, staged: pathlib.Path, *, relative: str, track_id: str, audio_type: str | None = None
+    ) -> pathlib.Path | None:
+        """Keep a persistently-bad staged file in Quarantine, or None.
+
+        Honors the keep-vs-delete toggle (delete keeps no bytes but still
+        marks the skip-list via the caller). Files keep their intended names
+        under the quarantine root, so a later verified copy replaces them by
+        name. Never raises: quarantine must not fail a download that already
+        failed.
+        """
+        if not self._apple_quarantine_keep():
+            return None
+        try:
+            from waves.apple_integrity import quarantine_dest
+        except Exception:
+            return None
+        try:
+            root = self._apple_quarantine_root()
+            dest = quarantine_dest(root, relative, ".m4a")
+            shutil.copyfile(staged, dest)
+        except Exception:
+            logger.debug("Could not quarantine the Apple file for %s", track_id, exc_info=True)
+            return None
+        else:
+            # A quarantined file was never swapped in, so ownership stays
+            # honest by construction: nothing is owned that isn't on disk.
+            return dest
+
+    def _apple_staged_encoded_date(self, staged: pathlib.Path) -> str | None:
+        """A staged file's Encoded date as "YYYY-MM-DD", or None when unknown."""
+        try:
+            from waves.apple_integrity import encoded_date_of
+        except Exception:
+            return None
+        try:
+            ffprobe = self._apple_probe()
+        except Exception:
+            ffprobe = ""
+        try:
+            parsed = encoded_date_of(staged, ffprobe)
+        except Exception:
+            return None
+        return parsed.isoformat() if parsed is not None else None
 
     def _apple_lyrics(self, provider, row: dict, facts: dict) -> tuple[str, str]:
         """LRCLIB-first lyrics for one Apple track, or ("", "").
@@ -12488,6 +13067,12 @@ class WavesBridge(LibraryMixin, QObject):
                 file_template,
                 collection,
                 media_id,
+                # The replay keeps the row's pinned ask either way, but only a
+                # retried row replays as a retry (its skip-list bypass rides
+                # the spec flag); a fresh row replays fresh, so quarantined
+                # tracks skip again instead of fetching on a folder hiccup.
+                keep_ask=row_ask,
+                is_retry=bool(getattr(spec, "is_retry", False)),
             ),
             media_id,
         ):
@@ -12539,7 +13124,14 @@ class WavesBridge(LibraryMixin, QObject):
                 self._set_status(f"Cancelled {name}")
             elif self._download_failed_with_folder(
                 lambda: self._download_apple(
-                    type_media, replay_row, replay_collection, file_template, collection, media_id
+                    type_media,
+                    replay_row,
+                    replay_collection,
+                    file_template,
+                    collection,
+                    media_id,
+                    keep_ask=row_ask,
+                    is_retry=bool(getattr(spec, "is_retry", False)),
                 ),
                 media_id,
                 qid,
@@ -16007,7 +16599,9 @@ class WavesBridge(LibraryMixin, QObject):
         if str(item.get("media_id") or "").startswith(f"{CTX_APPLE}:"):
             # Apple rows keep row dicts, never engine objects: re-enter the
             # Apple entry at the row's own ask, bypassing the TIDAL _download
-            # below (which would build a TIDAL spec for an Apple id).
+            # below (which would build a TIDAL spec for an Apple id). The
+            # explicit is_retry marks this re-entry a retry, and the queued
+            # spec carries that flag to the skip-list gate (spec §6.4).
             self._download_apple(
                 item["type"],
                 obj,
@@ -16020,6 +16614,7 @@ class WavesBridge(LibraryMixin, QObject):
                     str(item.get("quality") or ""),
                     str(item.get("audioType") or "") or None,
                 ),
+                is_retry=True,
             )
             return
         plan = self._merge_plans.get(item["media_id"]) if item["type"] == "album" else None
@@ -16706,6 +17301,8 @@ class WavesBridge(LibraryMixin, QObject):
                     "apple_quality_audio",
                     "apple_cookies_path",
                     "path_binary_nm3u8dlre",
+                    "apple_quarantine_dir",
+                    "apple_quarantine_keep",
                 ],
             },
             {
@@ -16840,6 +17437,8 @@ class WavesBridge(LibraryMixin, QObject):
                     "initial_key_format",
                     "api_rate_limit_batch_size",
                     "api_rate_limit_delay_sec",
+                    "apple_integrity_retries",
+                    "apple_integrity_retry_delay_sec",
                     "downsample_enabled",
                     "metadata_replay_gain",
                     "metadata_write_url",
@@ -16996,6 +17595,20 @@ class WavesBridge(LibraryMixin, QObject):
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
         provider.nm3u8dlre_path = str(getattr(data, "path_binary_nm3u8dlre", "") or "")
+        # A custom quarantine folder from a previous session already exists on
+        # disk: register it now (startup runs here, settings saves re-enter
+        # here) so the boot scan excludes it before any new failure occurs.
+        # Previously-used custom folders stay excluded too: changing the
+        # setting must not resurrect an old corrupt stash in the scan.
+        try:
+            root = self._apple_quarantine_root()
+            from waves import library_index as _lib_index
+            from waves.apple_integrity import remember_quarantine_dir
+
+            for known in remember_quarantine_dir(path_config_base(), root):
+                _lib_index.register_quarantine_dir(known)
+        except Exception:
+            logger.warning("Apple quarantine dirs could not be registered for scan exclusion")
 
     def _apple_cookies_ready(self) -> bool:
         """Whether an Apple download can start: a cookies file is set."""
@@ -17097,8 +17710,14 @@ class WavesBridge(LibraryMixin, QObject):
             # No Apple copies exist to refresh and no queue row pins an Apple
             # tier yet; the side effect is the provider session's alone.
             self._reapply_provider_quality(CTX_APPLE, values["apple_quality_audio"])
-        if "apple_cookies_path" in values or "path_binary_ffmpeg" in values or "path_binary_nm3u8dlre" in values:
-            # The cookies-tier paths the Apple provider resolves against.
+        if (
+            "apple_cookies_path" in values
+            or "path_binary_ffmpeg" in values
+            or "path_binary_nm3u8dlre" in values
+            or "apple_quarantine_dir" in values
+        ):
+            # The cookies-tier paths the Apple provider resolves against (the
+            # quarantine dir re-registers its scan exclusion here as well).
             self._configure_apple_provider()
         if "apple_enabled" in values and bool(getattr(data, "apple_enabled", False)) != apple_enabled_before:
             # Search reads the saved switch on its next request. The live
