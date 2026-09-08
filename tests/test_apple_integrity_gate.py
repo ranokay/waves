@@ -833,3 +833,82 @@ def test_success_after_a_retry_leaves_no_hold_dirs(tmp_path, monkeypatch):
     assert len(provider.fetched) == 2
     leftovers = [p for p in (tmp_path / "tmp").iterdir() if p.name.startswith("waves-apple-quarantine-")]
     assert leftovers == []
+
+
+@needs_ffmpeg
+def test_engine_rejected_bytes_are_quarantined_with_their_date(tmp_path, monkeypatch):
+    """An integrity failure raised from resolve_stream carries the rejected
+    bytes on the exception (the engine transfers workdir ownership outward):
+    they are quarantined with their Encoded date, and the workdir is removed."""
+    from waves import apple_engine
+    from waves.apple_engine import AppleIntegrityError
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    workdir = tmp_path / "engine-workdir"
+    workdir.mkdir()
+    bad = workdir / "staged.m4a"
+    bad.write_bytes(b"not audio at all, just text padding " * 100)
+
+    calls: list = []
+
+    class _EngineRejectingProvider(_FakeProvider):
+        def resolve_stream(self, raw, tier, audio_type):
+            calls.append(audio_type)
+            if len(calls) < 3:
+                raise AppleIntegrityError(
+                    "The Apple download failed its integrity check",
+                    staged_path=str(bad),
+                    workdir=str(workdir),
+                )
+            return _FakeProvider.resolve_stream(self, raw, tier, audio_type)
+
+    good = tmp_path / "good.m4a"
+    _tone(good)
+    provider = _EngineRejectingProvider([good])
+    base = tmp_path / "lib"
+    store = _SkipStore()
+    stub = _bind(_stub(base, provider, _ownership_store=store))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert len(calls) == 3
+    assert not workdir.exists()
+    assert (base / "Aphex Twin" / "Xtal.m4a").is_file()
+
+
+@needs_ffmpeg
+def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
+    from waves import apple_engine
+    from waves.apple_engine import AppleDownloadError
+
+    def _no_audio(path, ffprobe_path=""):
+        raise AppleDownloadError("The Apple download has no playable audio stream")
+
+    monkeypatch.setattr(apple_engine, "probe_audio_file", _no_audio)
+    bad_files = []
+    for i in range(3):
+        bad = tmp_path / f"bad-{i}.m4a"
+        bad.write_bytes(b"not audio at all, just text padding " * 100)
+        bad_files.append(bad)
+    provider = _FakeProvider(bad_files)
+    base = tmp_path / "lib"
+    store = _SkipStore()
+    stub = _bind(_stub(base, provider, _ownership_store=store))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        WavesBridge._run_apple_job(
+            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+        )
+
+    assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
+    assert len(provider.fetched) == 3
+    assert store.is_quarantined("apple:song-1", "stereo") is not None

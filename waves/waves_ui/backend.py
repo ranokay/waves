@@ -44,7 +44,13 @@ from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
 
 import waves.download as _waves_download
-from waves.apple_engine import AppleCredentialsError, AppleTrackUnavailable, _AppleAborted, _AppleSkipped
+from waves.apple_engine import (
+    AppleCredentialsError,
+    AppleIntegrityError,
+    AppleTrackUnavailable,
+    _AppleAborted,
+    _AppleSkipped,
+)
 from waves.apple_files import (
     pick_destination,
     tag_apple_file,
@@ -12416,14 +12422,24 @@ class WavesBridge(LibraryMixin, QObject):
                 # The staged bytes still exist here (discard runs below), so
                 # read the Encoded date and hold quarantine bytes FIRST: after
                 # discard the workdir is gone and both reads would miss. A
-                # resolve-stage integrity failure has no staged file (the
-                # engine cleaned its workdir): it still retries and marks the
-                # skip-list, just without bytes or a date.
+                # resolve-stage integrity failure carries its rejected bytes on
+                # the exception itself (the engine transfers workdir ownership
+                # outward instead of deleting it); without them it still
+                # retries and marks the skip-list, just without bytes or a date.
                 failed_staged: pathlib.Path | None = None
+                preserved_workdir = ""
                 if info is not None:
                     try:
                         candidate = pathlib.Path(str(info.local_file))
                         failed_staged = candidate if candidate.is_file() else None
+                    except Exception:
+                        failed_staged = None
+                else:
+                    try:
+                        exc_staged = str(getattr(exc, "staged_path", "") or "")
+                        preserved_workdir = str(getattr(exc, "workdir", "") or "")
+                        candidate = pathlib.Path(exc_staged)
+                        failed_staged = candidate if exc_staged and candidate.is_file() else None
                     except Exception:
                         failed_staged = None
                 try:
@@ -12465,6 +12481,12 @@ class WavesBridge(LibraryMixin, QObject):
                         provider.discard_delivery(str(info.local_file))
                     except Exception:
                         logger.debug("Could not discard the Apple staging area", exc_info=True)
+                if preserved_workdir:
+                    # The engine's rejected bytes were copied into the hold
+                    # above (or there was nothing to hold): either way the
+                    # preserved workdir is spent and must not leak.
+                    with contextlib.suppress(OSError):
+                        shutil.rmtree(preserved_workdir, ignore_errors=True)
                 if hold_path is not None:
                     # A superseded hold is deleted with its temp dir: only the
                     # latest failure's bytes are quarantined, the earlier
@@ -12540,8 +12562,18 @@ class WavesBridge(LibraryMixin, QObject):
                         _time.sleep(0)
                     sleep_ok = not job_abort.is_set()
                 if delay > 0 and not sleep_ok:
+                    if last_staged is not None:
+                        with contextlib.suppress(OSError):
+                            if "quarantine-" in str(last_staged.parent):
+                                shutil.rmtree(last_staged.parent, ignore_errors=True)
+                        last_staged = None
                     raise _AppleAborted() from exc
                 if job_abort.is_set():
+                    if last_staged is not None:
+                        with contextlib.suppress(OSError):
+                            if "quarantine-" in str(last_staged.parent):
+                                shutil.rmtree(last_staged.parent, ignore_errors=True)
+                        last_staged = None
                     raise _AppleAborted() from exc
                 continue
             else:
@@ -12639,7 +12671,7 @@ class WavesBridge(LibraryMixin, QObject):
         louder paths via the ffmpeg gate); a wrong codec or a decode error
         fails the track, never the job.
         """
-        from waves.apple_engine import AppleDownloadError, decode_check, probe_audio_file
+        from waves.apple_engine import AppleIntegrityError, decode_check, probe_audio_file
 
         ffprobe = self._apple_probe()
         if ffprobe:
@@ -12650,11 +12682,13 @@ class WavesBridge(LibraryMixin, QObject):
             # Normalized (hyphens/underscores dropped): "e-ac-3" -> "eac3".
             if expect_atmos:
                 if codec not in ("eac3", "ec3", "ac4"):
-                    raise AppleDownloadError(  # noqa: TRY003
-                        f"Apple served {codec or 'an unknown codec'}, expected eac3"
+                    raise AppleIntegrityError(  # noqa: TRY003
+                        f"Apple served {codec or 'an unknown codec'}, expected eac3", staged_path=str(staged)
                     )
             elif codec not in ("aac", "alac"):
-                raise AppleDownloadError(f"Apple served {codec or 'an unknown codec'}, expected aac")  # noqa: TRY003
+                raise AppleIntegrityError(  # noqa: TRY003
+                    f"Apple served {codec or 'an unknown codec'}, expected aac", staged_path=str(staged)
+                )
         else:
             logger.debug("Apple codec check skipped (no ffprobe): %s", staged)
         # The decode-to-null gate: the only check that catches the outbreak's
@@ -12675,14 +12709,15 @@ class WavesBridge(LibraryMixin, QObject):
 
             if isinstance(exc, _ADE):
                 raise
-            raise AppleDownloadError(f"Could not verify the Apple download: {exc}") from exc  # noqa: TRY003
+            raise _ADE(f"Could not verify the Apple download: {exc}") from exc  # noqa: TRY003
 
     # ----- Apple integrity gate (issue #30, spec §6) -------------------------
 
     def _apple_quarantine_root(self) -> pathlib.Path:
         """The quarantine folder: custom override or the default inside the
-        download folder. Created on use, never here. Registered for scan
-        exclusion so a custom basename stays excluded too."""
+        download folder. Created on use, never here. A custom location
+        registers its full path for scan exclusion (basename matching would
+        prune legitimate same-named folders)."""
         from waves.apple_integrity import resolve_quarantine_dir
 
         try:
@@ -12714,12 +12749,22 @@ class WavesBridge(LibraryMixin, QObject):
     def _is_integrity_failure(exc: BaseException) -> bool:
         """Whether an Apple failure is an integrity verdict (retry + quarantine).
 
-        Codec mismatches and decode failures both carry the integrity wording;
-        transport, credential and refusal failures do not and keep their
-        existing handling.
+        Explicit first: AppleIntegrityError is the verifier's own verdict
+        (decode failures, wrong codecs, files with no audio stream). The
+        wording fallback covers the same verdicts built as plain
+        AppleDownloadErrors (older callers, test doubles); transport,
+        credential and refusal failures match neither and keep their existing
+        handling.
         """
+        if isinstance(exc, AppleIntegrityError):
+            return True
         text = str(exc or "").lower()
-        return "integrity check" in text or "expected aac" in text or "expected eac3" in text
+        return (
+            "integrity check" in text
+            or "expected aac" in text
+            or "expected eac3" in text
+            or "no playable audio stream" in text
+        )
 
     def _apple_skiplist_get(self, track_id: str, audio_type: str | None):
         """A skip-list entry for a track's version, or None (no store = none)."""
@@ -17504,6 +17549,13 @@ class WavesBridge(LibraryMixin, QObject):
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
         provider.nm3u8dlre_path = str(getattr(data, "path_binary_nm3u8dlre", "") or "")
+        # A custom quarantine folder from a previous session already exists on
+        # disk: register it now (startup runs here, settings saves re-enter
+        # here) so the boot scan excludes it before any new failure occurs.
+        try:
+            self._apple_quarantine_root()
+        except Exception:
+            logger.debug("Apple quarantine dir could not be registered", exc_info=True)
 
     def _apple_cookies_ready(self) -> bool:
         """Whether an Apple download can start: a cookies file is set."""
@@ -17605,8 +17657,14 @@ class WavesBridge(LibraryMixin, QObject):
             # No Apple copies exist to refresh and no queue row pins an Apple
             # tier yet; the side effect is the provider session's alone.
             self._reapply_provider_quality(CTX_APPLE, values["apple_quality_audio"])
-        if "apple_cookies_path" in values or "path_binary_ffmpeg" in values or "path_binary_nm3u8dlre" in values:
-            # The cookies-tier paths the Apple provider resolves against.
+        if (
+            "apple_cookies_path" in values
+            or "path_binary_ffmpeg" in values
+            or "path_binary_nm3u8dlre" in values
+            or "apple_quarantine_dir" in values
+        ):
+            # The cookies-tier paths the Apple provider resolves against (the
+            # quarantine dir re-registers its scan exclusion here as well).
             self._configure_apple_provider()
         if "apple_enabled" in values and bool(getattr(data, "apple_enabled", False)) != apple_enabled_before:
             # Search reads the saved switch on its next request. The live
