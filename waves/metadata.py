@@ -252,6 +252,7 @@ class Metadata:
         item_id: str = "",
         artist_ids: [str] = None,
         album_artist_ids: [str] = None,
+        legacy_ids: bool = True,
     ):
         self.path_file = path_file
         self.title = title
@@ -284,9 +285,17 @@ class Metadata:
         self.release_type = release_type
         self.is_video = is_video
         # The seam's ids arrive namespaced; the legacy tags carry bare ids.
+        # Apple files set legacy_ids=False: the legacy trio predates the
+        # namespace and stripping an "apple:456" id into WAVES_TIDAL_ID would
+        # mislabel the file, so those files carry the generic family only.
+        self.legacy_ids = legacy_ids
         self.item_id = _legacy_id(item_id)
         self.artist_ids = [_legacy_id(a) for a in artist_ids or []]
         self.album_artist_ids = [_legacy_id(a) for a in album_artist_ids or []]
+        if not legacy_ids:
+            self.item_id = ""
+            self.artist_ids = []
+            self.album_artist_ids = []
         # The generic family (§8.1) rides the SAME ids in the namespaced
         # spelling, written beside the legacy tags: one identity, two formats,
         # so an existing library keeps its legacy readers while every new file

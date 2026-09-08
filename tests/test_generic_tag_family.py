@@ -276,3 +276,25 @@ def test_a_foreign_provider_never_reads_as_a_bare_tidal_id(tmp_path, stub, name)
         answer = read_item_id(tmp_path / name)
     assert answer == "apple:123"
     assert answer != _ITEM
+
+
+def test_an_apple_file_carries_the_generic_family_without_legacy_tags(tmp_path):
+    """Apple files set legacy_ids=False: the legacy trio predates the
+    namespace, so a stripped "apple:456" in WAVES_TIDAL_ID would mislabel the
+    file. Generic-only, on every container."""
+    mp4 = _write(
+        _mp4_stub(),
+        tmp_path,
+        "t.m4a",
+        title="T",
+        artists=["Aphex Twin"],
+        albumartist=["Aphex Twin"],
+        item_id="apple:456",
+        artist_ids=["apple:artist-1"],
+        album_artist_ids=["apple:artist-1"],
+        legacy_ids=False,
+    )
+    assert mp4.tags[f"----:com.apple.iTunes:{GENERIC_ITEM_ID_TAG}"] == b"apple:456"
+    assert f"----:com.apple.iTunes:{ITEM_ID_TAG}" not in mp4.tags
+    assert f"----:com.apple.iTunes:{ARTIST_ID_TAG}" not in mp4.tags
+    assert f"----:com.apple.iTunes:{ALBUM_ARTIST_ID_TAG}" not in mp4.tags

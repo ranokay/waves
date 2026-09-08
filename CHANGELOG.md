@@ -30,6 +30,8 @@ issue. A test enforces it.
 
 - 🍎 Apple Music results open full pages: albums, artists and playlists render with tracks and artwork, pasted Apple Music links resolve to the right page, and the preview button plays Apple's 30-second clip through the existing player ([issue #27](https://github.com/ranokay/waves/issues/27)).
 
+- 🍎 Apple Music downloads land in the cookies tier: with a cookies export set in Settings under Providers, Apple Music, one click downloads an Apple album, playlist or song in AAC 256 (Dolby Atmos where the Atmos toggle asks and the track carries it) through the normal queue, ownership and library machinery ([issue #28](https://github.com/ranokay/waves/issues/28)).
+
 ## 🗂️ v0.1.28 (2026-09-07)
 
 ### ✨ Added
