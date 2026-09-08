@@ -171,3 +171,86 @@ def test_cover_url_uses_the_documented_template():
 
     assert provider.cover_url(_album_resource(), 500) == "https://img/album/500x500bb.jpg"
     assert provider.cover_url({}, 500) == ""
+
+
+def _search_summary_catalog():
+    """A catalog whose search answers are summaries and whose fetches are full."""
+
+    class _SearchCatalog(_Catalog):
+        async def get_search_results(self, term, types):
+            return {
+                "results": {
+                    "artists": {
+                        "data": [
+                            {
+                                "id": "artist-1",
+                                "attributes": {
+                                    "name": "Aphex Twin",
+                                    "artwork": {"url": "https://img/{w}x{h}bb.jpg"},
+                                },
+                            }
+                        ]
+                    },
+                    "albums": {
+                        "data": [
+                            {
+                                "id": "album-1",
+                                "attributes": {
+                                    "name": "Selected Ambient Works 85-92",
+                                    "artistName": "Aphex Twin",
+                                    "artwork": {"url": "https://img/album/{w}x{h}bb.jpg"},
+                                    "releaseDate": "1992-02-12",
+                                },
+                            }
+                        ]
+                    },
+                    "songs": {"data": [_song_resource()]},
+                    "playlists": {"data": []},
+                }
+            }
+
+    return _SearchCatalog(album=_album_resource(), song=_song_resource(), artist=_full_artist_resource())
+
+
+def _full_artist_resource():
+    return {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
+        "relationships": {
+            "albums": {"data": [_album_resource()]},
+            "top-songs": {"data": [_song_resource()]},
+        },
+    }
+
+
+def test_get_object_refetches_a_search_summary_album_before_building_pages():
+    provider = AppleProvider(catalog=_search_summary_catalog())
+    provider.search("aphex")
+
+    assert provider._catalog.calls == []
+    album = provider.get_object("album", "apple:album-1")
+
+    assert provider._catalog.calls == [("album", "album-1")]
+    assert album["relationships"]["tracks"]["data"][0]["id"] == "song-1"
+    assert provider.get_object("album", "album-1") is album
+    assert provider._catalog.calls == [("album", "album-1")]
+
+
+def test_get_object_reuses_a_named_search_track_without_refetching():
+    provider = AppleProvider(catalog=_search_summary_catalog())
+    provider.search("aphex")
+
+    track = provider.get_object("track", "apple:song-1")
+
+    assert track["id"] == "song-1"
+    assert provider._catalog.calls == []
+
+
+def test_get_object_refetches_a_search_summary_artist_before_building_pages():
+    provider = AppleProvider(catalog=_search_summary_catalog())
+    provider.search("aphex")
+
+    provider.get_object("artist", "apple:artist-1")
+
+    assert ("artist", "artist-1") in provider._catalog.calls
