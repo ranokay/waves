@@ -254,3 +254,13 @@ def test_get_object_refetches_a_search_summary_artist_before_building_pages():
     provider.get_object("artist", "apple:artist-1")
 
     assert ("artist", "artist-1") in provider._catalog.calls
+
+
+def test_a_later_search_summary_invalidates_a_fetched_album():
+    provider = AppleProvider(catalog=_search_summary_catalog())
+    provider.get_object("album", "album-1")
+    provider.search("aphex")
+
+    provider.get_object("album", "apple:album-1")
+
+    assert provider._catalog.calls == [("album", "album-1"), ("album", "album-1")]

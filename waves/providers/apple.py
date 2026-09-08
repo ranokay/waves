@@ -200,6 +200,11 @@ class AppleProvider(Provider):
         raw_id = str(item.get("id") or "")
         if raw_id:
             self._objects[kind][raw_id] = item
+            # A row builder storing a summary invalidates a fetched object:
+            # without this a fetch, then a search for the same item, then a
+            # page build would serve the summary (no tracks, no views) as
+            # canonical. Completeness is re-proven structurally on next read.
+            self._complete.discard((kind, raw_id))
         return self._id(raw_id)
 
     def _artist_row(self, item: dict) -> dict:
