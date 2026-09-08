@@ -132,6 +132,11 @@ class AppleProvider(Provider):
         return attrs if isinstance(attrs, dict) else {}
 
     @staticmethod
+    def _unwrap(obj):
+        """A catalog resource out of its {"kind", "item"} open_url wrapper."""
+        return obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+
+    @staticmethod
     def _id(raw) -> str:
         raw = str(raw or "")
         return f"{CTX_APPLE}:{raw}" if raw else ""
@@ -465,7 +470,7 @@ class AppleProvider(Provider):
         Search summaries name the collection but omit it; the download slots
         refetch those on a worker instead of queueing an empty job.
         """
-        item = obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+        item = self._unwrap(obj)
         return bool(isinstance(item, dict) and self._relationship_items(item, "tracks"))
 
     def collection_items(self, obj, include_videos: bool = True) -> list:
@@ -478,7 +483,7 @@ class AppleProvider(Provider):
         if isinstance(obj, dict) and obj.get("_apple_kind") == "artist":
             page = self.artist_page(obj["item"])
             return list(page.get("tracks") or [])
-        item = obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+        item = self._unwrap(obj)
         if not isinstance(item, dict):
             return []
         tracks = self._relationship_items(item, "tracks")
@@ -622,7 +627,7 @@ class AppleProvider(Provider):
 
     def advertised_deliveries(self, obj) -> list[tuple[QualityTier, AudioType]]:
         deliveries = [(QualityTier.HIGH, AudioType.STEREO)]
-        item = obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+        item = self._unwrap(obj)
         if isinstance(item, dict) and self._has_atmos(item):
             deliveries.append((QualityTier.HIGH, AudioType.ATMOS))
         return deliveries
@@ -644,14 +649,14 @@ class AppleProvider(Provider):
 
     def has_atmos(self, item) -> bool:
         """Whether a song resource carries a Dolby Atmos variant."""
-        unwrapped = item["item"] if isinstance(item, dict) and "item" in item else item
+        unwrapped = self._unwrap(item)
         return isinstance(unwrapped, dict) and self._has_atmos(unwrapped)
 
     def _delivery_atmos(self, track, audio_type: AudioType | None) -> bool:
         """Instead-of semantics (issue #28): the toggle's Atmos replaces
         stereo for tracks that carry it, and tracks without it fall back to
         stereo so no album is left with a hole."""
-        item = track["item"] if isinstance(track, dict) and "item" in track else track
+        item = self._unwrap(track)
         if not isinstance(item, dict):
             return False
         return audio_type == AudioType.ATMOS and self._has_atmos(item)
@@ -669,7 +674,7 @@ class AppleProvider(Provider):
         """
         from waves.apple_engine import download_song_file
 
-        item = track["item"] if isinstance(track, dict) and "item" in track else track
+        item = self._unwrap(track)
         if not isinstance(item, dict) or not item.get("id"):
             raise KeyError(str(getattr(track, "id", track)))
         atmos = self._delivery_atmos(item, audio_type)
@@ -719,7 +724,7 @@ class AppleProvider(Provider):
         No session, no wrapper, no setup: ``attributes.previews[0].url`` is a
         plain AAC clip. None when Apple serves no preview for the song.
         """
-        item = track["item"] if isinstance(track, dict) and "item" in track else track
+        item = self._unwrap(track)
         attrs = self._attributes(item if isinstance(item, dict) else {})
         previews = attrs.get("previews")
         if isinstance(previews, list):
@@ -733,7 +738,7 @@ class AppleProvider(Provider):
 
     def cover_url(self, obj, dimension: int) -> str:
         """Best-effort cover URL at the requested square dimension."""
-        item = obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+        item = self._unwrap(obj)
         attrs = self._attributes(item if isinstance(item, dict) else {})
         try:
             dim = max(16, int(dimension))
@@ -750,7 +755,7 @@ class AppleProvider(Provider):
         album job fetched it first); a bare track read never spends a catalog
         call on it, so UPC and track totals may be "" where TIDAL fills them.
         """
-        item = track["item"] if isinstance(track, dict) and "item" in track else track
+        item = self._unwrap(track)
         attrs = self._attributes(item if isinstance(item, dict) else {})
         raw_id = str((item or {}).get("id") or "") if isinstance(item, dict) else ""
         artist_ids = self._track_artist_ids(item if isinstance(item, dict) else {}, attrs)
