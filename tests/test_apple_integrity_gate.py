@@ -374,8 +374,6 @@ def _bind(stub):
         "_apple_skiplist_get",
         "_apple_skiplist_add",
         "_apple_skiplist_clear",
-        "_arm_apple_bypass",
-        "_release_apple_bypass",
         "_apple_quarantine_file",
         "_apple_staged_encoded_date",
         "_run_apple_job",
@@ -398,6 +396,12 @@ def test_quarantine_dir_defaults_inside_the_download_folder(tmp_path):
 def test_quarantine_dir_custom_override_is_the_full_path(tmp_path):
     custom = tmp_path / "elsewhere" / "Q"
     assert resolve_quarantine_dir(tmp_path / "lib", custom) == custom
+
+
+def test_quarantine_dir_matching_the_download_root_falls_back(tmp_path):
+    base = tmp_path / "lib"
+    assert resolve_quarantine_dir(base, base) == base / QUARANTINE_DIR_NAME
+    assert resolve_quarantine_dir(base, str(base) + "/") == base / QUARANTINE_DIR_NAME
 
 
 def test_quarantine_dest_keeps_the_intended_name(tmp_path):
@@ -670,7 +674,9 @@ def test_stereo_verification_accepts_alac_for_the_wrapper_tier(tmp_path, monkeyp
 
 
 @needs_ffmpeg
-def test_retry_bypasses_the_skiplist_once_then_it_stands_again(tmp_path, monkeypatch):
+def test_retry_spec_bypasses_the_skiplist(tmp_path, monkeypatch):
+    """A retried row carries is_retry on its spec and bypasses the auto-skip;
+    a fresh click afterwards skips again (REDOWNLOAD stays the way back)."""
     from waves import apple_engine
 
     monkeypatch.setattr(
@@ -683,9 +689,8 @@ def test_retry_bypasses_the_skiplist_once_then_it_stands_again(tmp_path, monkeyp
     store = _SkipStore()
     store.quarantine_add("apple:song-1", "stereo", "2025-06-23")
     stub = _bind(_stub(base, provider, _ownership_store=store))
-    stub._apple_skiplist_bypass = {"apple:song-1"}
     relay = _Relay()
-    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1", is_retry=True)
 
     summary = WavesBridge._run_apple_job(
         stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
@@ -693,8 +698,8 @@ def test_retry_bypasses_the_skiplist_once_then_it_stands_again(tmp_path, monkeyp
 
     assert summary == ""
     assert len(provider.fetched) == 1
-    # Consumed: the next bulk run skips again unless a verified copy cleared it
-    # (here the verified copy did clear it, so the mark is gone entirely).
+    # The verified copy cleared the mark, so the suite's other half (a fresh
+    # spec skipping a live mark) is covered by the bulk auto-skip test.
     assert store.is_quarantined("apple:song-1", "stereo") is None
 
 
@@ -776,9 +781,8 @@ def test_retry_bypass_covers_every_track_of_a_collection(tmp_path, monkeypatch):
     store.quarantine_add("apple:song-1", "stereo", "2025-06-23")
     store.quarantine_add("apple:song-2", "stereo", "2025-06-23")
     stub = _bind(_stub(base, provider, _ownership_store=store))
-    stub._apple_skiplist_bypass = {"apple:album-1"}
     relay = _Relay()
-    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1", is_retry=True)
 
     summary = WavesBridge._run_apple_job(
         stub, 1, spec, _album_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
@@ -952,8 +956,9 @@ def test_custom_quarantine_cached_rows_retire_on_rescan(tmp_path):
 
 @needs_ffmpeg
 def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
-    """Two failed rows sharing one media_id arm two permits; each Version job
-    consumes its own, so the second job retries instead of auto-skipping."""
+    """Two failed rows sharing one media_id each carry is_retry on their own
+    spec, so both Version jobs bypass on their own with nothing counted,
+    released, or leaked (the Codex dual-RETRY ALL case)."""
     from waves import apple_engine
 
     # The staged fixture's name decides the probed codec, so each Version
@@ -977,29 +982,20 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
     good_atmos = tmp_path / "good-atmos.m4a"
     _tone(good_atmos)
 
-    # One shared bridge-side counter armed twice (stereo + Atmos RETRY ALL):
-    # each Version job consumes one permit. A bare set would be consumed by
-    # the first job and starve the second (the Codex dual-RETRY ALL case).
-    shared_bypass: dict = {"apple:song-1": 2}
-
     def _run_shared(version, fixture):
         provider = _FakeProvider([fixture])
         if version == "atmos":
             provider.has_atmos = lambda item: True
         stub = _bind(_stub(base, provider, _ownership_store=store))
-        stub._apple_skiplist_bypass = shared_bypass
         # Dual rows land through different templates (the Atmos subfolder),
         # so the sibling's file is not an owned collision.
         template = "{artist_name}/{track_title}" if version == "stereo" else "{artist_name}/Dolby Atmos/{track_title}"
-        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1", audio_type=version)
-        try:
-            summary = WavesBridge._run_apple_job(
-                stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template=template
-            )
-        finally:
-            # Production releases one permit per job in _apple_job_body's
-            # finally; the direct call here mirrors exactly one release.
-            stub._release_apple_bypass("apple:song-1")
+        spec = SimpleNamespace(
+            kind="track", collection=False, media_id="apple:song-1", audio_type=version, is_retry=True
+        )
+        summary = WavesBridge._run_apple_job(
+            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template=template
+        )
         return summary, provider
 
     summary_st, provider_st = _run_shared("stereo", good_stereo)
@@ -1009,5 +1005,3 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
     assert len(provider_st.fetched) == 1 and len(provider_at.fetched) == 1
     assert store.is_quarantined("apple:song-1", "stereo") is None
     assert store.is_quarantined("apple:song-1", "atmos") is None
-    # Both permits consumed, none left standing for the next bulk run.
-    assert shared_bypass == {}

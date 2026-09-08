@@ -2951,6 +2951,14 @@ class _JobSpec:
     # tracks land to the normal path, no hole). Stereo/single rows ignore it.
     audio_type: str | None = None
     base_template: str = ""
+    # Explicit re-ask of a FAILED row (its RETRY button or RETRY ALL, which
+    # re-enters through _start_retry with the row's own ask). For Apple jobs
+    # this bypasses the integrity skip-list auto-skip (spec §6.4); ordinary
+    # clicks and bulk runs leave it False and skip quarantined tracks.
+    # Per-row, never shared: dual-Version rows carry their own flag, so no
+    # counting or releasing is needed and a dispatch that never runs a job
+    # leaks nothing (the flag dies with its spec).
+    is_retry: bool = False
 
     def raw_object_id(self) -> str:
         """The id inside the namespace, as the provider's get_object wants it."""
@@ -4172,13 +4180,6 @@ class WavesBridge(LibraryMixin, QObject):
         # down, tracks overwrite in place). Session-long like the claim
         # overrides, so a retry of a forced job stays forced.
         self._redownload_overrides: set[str] = set()
-        # Media ids whose Apple skip-list mark a retry explicitly re-asks
-        # (issue #30, spec §6.4: FAILED rows are covered by RETRY ALL). Counted
-        # per arming, not per id: dual-Version rows share one media_id, so one
-        # RETRY ALL arms twice (stereo + Atmos) and each Version job consumes
-        # one permit when it settles. A bare set from an older stub still
-        # reads (presence) and releases (discard); only the counter arms twice.
-        self._apple_skiplist_bypass: dict[str, int] = {}
         # Per-item audio quality choices made on a row's quality badge (issue
         # #36): media id -> UI tier word ("HI-RES", "LOSSLESS", "HIGH", "LOW")
         # or "DEFAULT". A choice stands on its item until that item is given
@@ -11778,10 +11779,12 @@ class WavesBridge(LibraryMixin, QObject):
             ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] if len(keep_ask) > 1 else "" or _tier_word(keep_ask[0]))
             keep_ver = str(keep_ask[2] if len(keep_ask) > 2 else "" or "").strip().lower() or None
             keep_ver = keep_ver if keep_ver in ("stereo", "atmos") else None
+            is_retry = True
         else:
             ask = str(self.settings.data.apple_quality_audio or "HIGH")
             ask_tier = _tier_word(ask)
             keep_ver = None
+            is_retry = False
         provider = self.providers.get(CTX_APPLE)
         # Dual-download Versions (§5.1-5.2): toggle on means alongside where a
         # track carries Atmos; toggle off stays single stereo rows. A retry
@@ -11908,6 +11911,7 @@ class WavesBridge(LibraryMixin, QObject):
                 merge_plan=None,
                 audio_type=row_atype,
                 base_template=base_for_spec,
+                is_retry=is_retry,
             )
             self._pending_qids.append(qid)
         if not queued_any:
@@ -11976,15 +11980,6 @@ class WavesBridge(LibraryMixin, QObject):
             job_version = ""
         if job_version not in ("stereo", "atmos"):
             job_version = "stereo"
-        # Test stubs bind a subset of methods; the helpers below are no-ops
-        # there so clean-fixture tests exercise the happy path unretried.
-        for _helper, _fallback in (
-            ("_release_apple_bypass", lambda *a, **k: None),
-            ("_apple_skiplist_clear", lambda *a, **k: None),
-        ):
-            if getattr(self, _helper, None) is None:
-                with contextlib.suppress(Exception):
-                    setattr(self, _helper, _fallback.__get__(self, type(self)))
         ask_tier = self._job_quality(qid)
         requested_rank = self._apple_target_rank(ask_tier)
         ceiling_rank = quality_rank(QualityTier.HIGH)
@@ -12071,25 +12066,15 @@ class WavesBridge(LibraryMixin, QObject):
             # Integrity skip-list (spec §6.3): bulk runs auto-skip quarantined
             # tracks, shown plainly like IN LIBRARY rows. REDOWNLOAD (force)
             # and an explicit RETRY (single or RETRY ALL, spec §6.4) are the
-            # re-asks that bypass it for the whole job. Per-version: an Atmos
-            # quarantine never skips its stereo sibling. Fresh clicks (even
+            # re-asks that bypass it: the row's own spec carries is_retry, so
+            # each retried row (each Version of a dual pair included) bypasses
+            # on its own, nothing is counted or released, and a dispatch that
+            # never runs a job leaks nothing. Per-version: an Atmos quarantine
+            # never skips its stereo sibling. Fresh clicks (even
             # single-track) also skip: otherwise the mark would be bypassable
             # by re-clicking and REDOWNLOAD would not be the way back.
-            #
-            # Job-scoped on purpose: the bypass names the collection's media_id
-            # once (see _start_retry), and every track of the job reads it. A
-            # per-track consume would let only the first track through and
-            # leave later quarantined tracks skipped instead of retried. It is
-            # released exactly once by the job body's finally, however the job
-            # ends, so the next bulk run skips again unless a verified copy
-            # cleared the mark.
-            bypass = False
-            if not force:
-                try:
-                    bypass = media_id in getattr(self, "_apple_skiplist_bypass", set())
-                except Exception:
-                    bypass = False
-            if not force and not bypass:
+            bypass = bool(force) or bool(getattr(spec, "is_retry", False))
+            if not bypass:
                 try:
                     skip_mark = self._apple_skiplist_get(track_id, job_version)
                 except Exception:
@@ -12801,42 +12786,6 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Could not clear the Apple skip-list", exc_info=True)
 
-    def _release_apple_bypass(self, media_id: str | None) -> None:
-        """Release one permit of a job's retry bypass, however it ended.
-
-        Idempotent: a counter goes down by one (deleted at zero) so each
-        Version job of a dual retry consumes its own arming; a bare set
-        discards. A re-quarantined retry leaves no standing bypass either
-        way, so the next bulk run skips again.
-        """
-        if not media_id:
-            return
-        try:
-            bypass = getattr(self, "_apple_skiplist_bypass", None)
-            if isinstance(bypass, dict):
-                left = int(bypass.get(str(media_id), 0)) - 1
-                if left > 0:
-                    bypass[str(media_id)] = left
-                else:
-                    bypass.pop(str(media_id), None)
-            elif bypass is not None:
-                bypass.discard(str(media_id))
-        except Exception:
-            logger.debug("Could not release the Apple retry bypass", exc_info=True)
-
-    def _arm_apple_bypass(self, media_id: str | None) -> None:
-        """Arm one retry permit for a media id (see _release_apple_bypass)."""
-        if not media_id:
-            return
-        try:
-            bypass = getattr(self, "_apple_skiplist_bypass", None)
-            if isinstance(bypass, dict):
-                bypass[str(media_id)] = int(bypass.get(str(media_id), 0)) + 1
-            elif bypass is not None:
-                bypass.add(str(media_id))
-        except Exception:
-            logger.debug("Could not arm the Apple retry bypass", exc_info=True)
-
     def _apple_quarantine_file(
         self, staged: pathlib.Path, *, relative: str, track_id: str, audio_type: str | None = None
     ) -> pathlib.Path | None:
@@ -13119,13 +13068,6 @@ class WavesBridge(LibraryMixin, QObject):
             self._job_aborts.pop(qid, None)
             self._release_job_signals(qid)
             self._job_dls.pop(qid, None)
-            # The retry bypass is job-scoped: release it however the job ended
-            # (done, failed, cancelled, credentials error) so the next bulk run
-            # skips again unless a verified copy cleared the mark.
-            try:
-                self._release_apple_bypass(media_id)
-            except Exception:
-                logger.debug("Could not release the Apple retry bypass", exc_info=True)
 
     def _pump_queue(self) -> None:
         """Start the next queued row's download if nothing is running.
@@ -16574,15 +16516,9 @@ class WavesBridge(LibraryMixin, QObject):
         if str(item.get("media_id") or "").startswith(f"{CTX_APPLE}:"):
             # Apple rows keep row dicts, never engine objects: re-enter the
             # Apple entry at the row's own ask, bypassing the TIDAL _download
-            # below (which would build a TIDAL spec for an Apple id). A retry
-            # is an explicit re-ask of a FAILED row (spec §6.4: covered by
-            # RETRY ALL), so it arms a bypass permit for the skip-list
-            # auto-skip; a still-bad source re-quarantines and the mark stands
-            # again. Each Version arms its own permit (dual rows share one id).
-            try:
-                self._arm_apple_bypass(str(item.get("media_id") or ""))
-            except Exception:
-                logger.debug("Could not arm the Apple retry bypass", exc_info=True)
+            # below (which would build a TIDAL spec for an Apple id). The
+            # keep_ask marks this re-entry a retry, and the queued spec
+            # carries that flag to the skip-list gate (spec §6.4).
             self._download_apple(
                 item["type"],
                 obj,

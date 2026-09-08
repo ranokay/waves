@@ -44,17 +44,37 @@ OUTBREAK_MONTH: int = 5
 _DATE_RE = re.compile(r"(19|20)\d{2}[-_/.]?(0[1-9]|1[0-2])(?:[-_/.]?\d{1,2})?")
 
 
+def _same_dir(first: str | Path, second: str | Path) -> bool:
+    """Whether two directory paths name the same folder, on any platform."""
+    first_norm = os.path.normpath(os.path.expanduser(str(first or "")))
+    second_norm = os.path.normpath(os.path.expanduser(str(second or "")))
+    if os.path.normcase(first_norm) == os.path.normcase(second_norm):
+        return True
+    # macOS APFS is usually case-insensitive while normcase is a no-op there.
+    return first_norm.casefold() == second_norm.casefold()
+
+
 def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None = None) -> Path:
     """Where quarantined Apple files land.
 
     Empty custom means the default: <download_base>/Waves Quarantine. A set
     custom value is the full folder path (absolute, or ~/expanded). The folder
     is created on use, never here.
+
+    A custom path naming the download root itself falls back to the default:
+    quarantining into the library at the intended relative path would place a
+    corrupt file exactly where a verified copy belongs (and the scan exclusion
+    would then hide the whole library).
     """
+    base = Path(os.path.expanduser(str(download_base or "")))
     text = str(custom or "").strip()
     if text:
-        return Path(os.path.expanduser(text))
-    return Path(os.path.expanduser(str(download_base or ""))) / QUARANTINE_DIR_NAME
+        candidate = Path(os.path.expanduser(text))
+        if _same_dir(candidate, base):
+            logger.warning("Apple quarantine folder is the download folder; using the default instead")
+            return base / QUARANTINE_DIR_NAME
+        return candidate
+    return base / QUARANTINE_DIR_NAME
 
 
 def quarantine_dest(quarantine_root: str | Path, relative: str, extension: str = ".m4a") -> Path:
