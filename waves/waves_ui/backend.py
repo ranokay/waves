@@ -5694,13 +5694,14 @@ class WavesBridge(LibraryMixin, QObject):
                         self._artist_prefetch = None
                         self._artist_prefetch_claimed = False
                 quiet = silent and not claimed  # nobody is watching this build
-                if failed and not quiet and gen == self._browse_gen:
-                    self._set_status("Could not open that artist")
-                    self._set_busy(False)
-                    self.artistLoadFailed.emit(artist_id)
+                if failed:
+                    if quiet:
+                        _prefetch_log.debug("prefetch Apple artist %s failed", artist_id)
+                    elif gen == self._browse_gen:
+                        self._set_status("Could not open that artist")
+                        self._set_busy(False)
+                        self.artistLoadFailed.emit(artist_id)
             if failed:
-                if quiet:
-                    _prefetch_log.debug("prefetch Apple artist %s failed", artist_id)
                 return
             if gen != self._browse_gen:
                 return  # logged out mid-fetch; the rows belong to the dead session

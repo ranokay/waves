@@ -273,3 +273,30 @@ def test_apple_click_after_a_prefetch_serves_the_warmed_cache():
     (payload,) = stub.artistLoaded.emits
     assert payload["name"] == "Aphex Twin"
     assert stub.statuses[-1] == "Aphex Twin"
+
+
+class _FailingArtistCatalog:
+    async def get_artist(self, artist_id):
+        raise RuntimeError("network died")
+
+
+def test_apple_silent_prefetch_failure_stays_silent():
+    stub = _prefetch_stub(providers={"apple": AppleProvider(catalog=_FailingArtistCatalog())})
+
+    WavesBridge.prefetchArtist(stub, "apple:artist-1")
+
+    assert stub.artistLoaded.emits == []
+    assert stub.statuses == [] and stub.busy == []
+    assert stub._artist_cache == {}
+    assert stub._artist_loading == set() and stub._artist_prefetch is None
+
+
+def test_apple_click_failure_reports_and_releases_the_load():
+    stub = _prefetch_stub(providers={"apple": AppleProvider(catalog=_FailingArtistCatalog())})
+
+    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+
+    assert stub.artistLoaded.emits == []
+    assert stub.statuses == ["Loading artist…", "Could not open that artist"]
+    assert stub.busy == [True, False]
+    assert stub.artistLoadFailed.emits == ["apple:artist-1"]
