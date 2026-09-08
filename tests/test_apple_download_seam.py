@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -147,3 +148,57 @@ def test_missing_binaries_name_the_settings_field(tmp_path, monkeypatch):
 
     with pytest.raises(engine.AppleDownloadError, match="N_m3u8DL-RE"):
         engine.download_song_file(song_id="song-1", atmos=False, cookies_path=str(cookies))
+
+
+def test_ffprobe_prefers_the_ffmpeg_sibling(tmp_path, monkeypatch):
+    import waves.apple_engine as engine
+
+    ffmpeg = tmp_path / "bin" / "ffmpeg"
+    ffmpeg.parent.mkdir()
+    ffmpeg.write_bytes(b"x")
+    sibling = tmp_path / "bin" / "ffprobe"
+    sibling.write_bytes(b"x")
+    monkeypatch.setattr(engine.shutil, "which", lambda name: None)
+
+    assert engine.ffprobe_for(str(ffmpeg)) == str(sibling)
+    assert engine.ffprobe_for(str(tmp_path / "nowhere" / "ffmpeg")) == ""
+
+
+needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+
+
+def _ffmpeg() -> str:
+    path = shutil.which("ffmpeg")
+    assert path is not None  # guarded by needs_ffmpeg
+    return path
+
+
+@needs_ffmpeg
+def test_decode_check_accepts_clean_audio_and_rejects_garbage(tmp_path):
+    import subprocess
+
+    import waves.apple_engine as engine
+
+    good = tmp_path / "good.m4a"
+    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
+        [
+            _ffmpeg(),
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-c:a",
+            "aac",
+            str(good),
+        ],
+        check=True,
+    )
+    engine.decode_check(good)
+
+    bad = tmp_path / "bad.m4a"
+    bad.write_bytes(b"not audio at all, just text padding " * 100)
+    with pytest.raises(engine.AppleDownloadError):
+        engine.decode_check(bad)

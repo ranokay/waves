@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -64,6 +65,46 @@ def _require_cookies(cookies_path: str) -> str:
             "Apple downloads need a cookies export: set one in Settings under Providers, Apple Music."
         )
     return path
+
+
+def ffprobe_for(ffmpeg_path: str = "") -> str:
+    """An ffprobe binary to use: beside the resolved ffmpeg first (the
+    manager installs both; neither is on PATH then), else PATH, else "".
+
+    Managed-ffmpeg users have no ffprobe on PATH, so PATH-only lookup would
+    silently disable every verification for exactly the users who installed
+    ffmpeg the supported way.
+    """
+    if ffmpeg_path:
+        sibling = Path(ffmpeg_path).parent / ("ffprobe.exe" if os.name == "nt" else "ffprobe")
+        if sibling.is_file():
+            return str(sibling)
+    return shutil.which("ffprobe") or ""
+
+
+def decode_check(staged: str | Path, ffmpeg_path: str = "") -> None:
+    """Decode the whole staged file, rejecting corrupt/truncated payloads.
+
+    A codec probe only reads stream metadata; the ffmpeg decode (~50 ms per
+    the integrity research) actually walks the packets. Raises
+    AppleDownloadError on any decode error. Quarantine/retry policy stays
+    the integrity ticket's scope; here a bad file fails its track.
+    """
+    ffmpeg = ffmpeg_path if ffmpeg_path and Path(ffmpeg_path).is_file() else (shutil.which("ffmpeg") or "")
+    if not ffmpeg:
+        logger.debug("Apple decode check skipped (no ffmpeg)")
+        return
+    try:
+        proc = subprocess.run(  # noqa: S603 (resolved binary, fixed argv)
+            [ffmpeg, "-v", "error", "-i", str(staged), "-f", "null", "-"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except Exception as exc:
+        raise AppleDownloadError(f"Could not verify the Apple download: {exc}") from exc  # noqa: TRY003
+    if proc.returncode != 0:
+        raise AppleDownloadError("The Apple download failed its integrity check")  # noqa: TRY003
 
 
 def _require_binary(name: str, override: str = "") -> str:
@@ -144,17 +185,19 @@ async def _download_song_async(
         if not staged.is_file() or staged.stat().st_size == 0:
             raise AppleDownloadError(f"Apple download produced no file for song {song_id}")  # noqa: TRY003
         picked = str(getattr(getattr(media.stream_info, "audio_track", None), "codec", "") or "")
-        if shutil.which("ffprobe"):
+        resolved_probe = ffprobe_for(ffmpeg_path)
+        if resolved_probe:
             # Fail fast on a wrong delivery (an AAC file for an Atmos ask
             # would otherwise be reported as E-AC-3 downstream): the probe is
             # best-effort here, the job runner verifies again per track.
-            probe = probe_audio_file(staged)
+            probe = probe_audio_file(staged, resolved_probe)
             picked = str(probe.get("codec") or picked)
             want = "eac3" if atmos else "aac"
             if picked.lower() != want:
                 raise AppleDownloadError(  # noqa: TRY003 (user-facing words by design)
                     f"Apple served {picked or 'an unknown codec'} for song {song_id}, expected {want}"
                 )
+            decode_check(staged, ffmpeg_path)
         return AppleDelivery(staged_path=staged, workdir=Path(workdir), is_atmos=atmos, codec=picked)
     finally:
         close = getattr(getattr(api, "client", None), "aclose", None)

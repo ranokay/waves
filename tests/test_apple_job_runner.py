@@ -280,6 +280,8 @@ def _bind(stub):
         "_apple_track_relative",
         "_apple_deliver_track",
         "_apple_verify_staged",
+        "_apple_probe",
+        "_apple_place_file",
         "_apple_lyrics",
         "_apple_wants_cover",
         "_apple_cover_bytes",
@@ -381,17 +383,24 @@ def test_gate_force_and_miss():
     provider = _FakeProvider()
     stub = _bind(_stub(Path("/tmp"), provider))
 
-    assert (
-        WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), True) == "force"
+    assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), True) == (
+        "force",
+        None,
     )
-    assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), False) is None
+    assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), False) == (
+        None,
+        None,
+    )
 
 
 def test_gate_without_a_store_never_gates():
     provider = _FakeProvider()
     stub = _bind(_stub(Path("/tmp"), provider, _ownership=None))
 
-    assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), False) is None
+    assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), False) == (
+        None,
+        None,
+    )
 
 
 def test_atmos_toggle_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
@@ -661,3 +670,92 @@ def test_row_object_falls_back_to_the_provider_cache(tmp_path):
     row = stub._row_object({"qid": 9, "type": "album", "media_id": "apple:album-1"})
 
     assert row["id"] == "apple:album-1"
+
+
+@needs_ffmpeg
+def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
+    from waves import apple_engine
+    from waves.providers.apple import AppleProvider as _RealProvider
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    calls = []
+
+    def flaky_resolve(raw, tier, audio_type):
+        calls.append(audio_type)
+        if len(calls) == 1:
+            raise RuntimeError("HTTP 429 too many requests")
+        return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+
+    provider.resolve_stream = flaky_resolve
+    provider.classify_refusal = lambda exc: _RealProvider.classify_refusal(provider, exc)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_sleep_abortable = lambda *a: True
+    stub.statuses = []
+    stub._set_status = stub.statuses.append
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert len(calls) == 2
+    assert next(ev for ev in relay.events if ev.get("status") == "done")
+
+
+@needs_ffmpeg
+def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    sibling = base / "Aphex Twin" / "Xtal.m4a"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"sibling-audio")
+    owned = base / "Aphex Twin" / "Xtal_01.m4a"
+    owned.write_bytes(b"stale-copy")
+    rec = {
+        "path": str(owned),
+        "quality_rank": quality_rank(QualityTier.LOW),
+        "requested_rank": quality_rank(QualityTier.LOW),
+        "ceiling_rank": quality_rank(QualityTier.HIGH),
+        "audio_mode": "STEREO",
+    }
+    stub = _bind(_stub(base, provider, _ownership=SimpleNamespace(ownership_of=lambda tid: rec)))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert sibling.read_bytes() == b"sibling-audio"
+    assert owned.stat().st_size != len(b"stale-copy")
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(owned)
+
+
+def test_place_file_leaves_no_partials(tmp_path):
+    stub = _bind(_stub(tmp_path, _FakeProvider()))
+    src = tmp_path / "src.m4a"
+    src.write_bytes(b"audio")
+    dest = tmp_path / "lib" / "Xtal.m4a"
+    dest.parent.mkdir(parents=True)
+
+    WavesBridge._apple_place_file(stub, src, dest)
+
+    assert dest.read_bytes() == b"audio"
+    assert list(tmp_path.rglob("*.part-*")) == []

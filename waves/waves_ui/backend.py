@@ -1169,6 +1169,12 @@ def _record_names_a_broken_copy(rec: dict | None) -> bool:
 # extra fetch, not one on every click for the rest of the install's life.
 _DEGRADED_RETRY_MAX = 2
 
+# License-exchange 429 backoff inside one Apple track: without it an album
+# that crosses Apple's undocumented threshold fails every remaining row in a
+# burst and hammers the throttle harder. Bounded and abort-aware; the
+# supervision slice owns pacing fields and the visible resume countdown.
+_APPLE_THROTTLE_WAITS = (5.0, 20.0)
+
 
 def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int | None = None) -> bool:
     """Is the copy already on disk as good as what a download queued now would
@@ -11380,7 +11386,7 @@ class WavesBridge(LibraryMixin, QObject):
                     "expected": "ATMOS" if self._apple_wants_atmos() else "HIGH",
                 }
             )
-            verdict = self._apple_gate_track(provider, track_id, requested_rank, force)
+            verdict, gate_rec = self._apple_gate_track(provider, track_id, requested_rank, force)
             if verdict == "skip":
                 skipped += 1
                 signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})
@@ -11390,23 +11396,43 @@ class WavesBridge(LibraryMixin, QObject):
             # per-track verdict an upgrade would land beside it as a numbered
             # copy and the old file would stay behind.
             track_force = force or verdict == "force"
+            owned_path = str((gate_rec or {}).get("path") or "") or None
+            attempts = 0
             try:
-                delivered = self._apple_deliver_track(
-                    provider,
-                    row,
-                    header,
-                    type_media=type_media,
-                    file_template=file_template,
-                    collection=collection,
-                    list_pos=pos,
-                    list_total=total,
-                    num_volumes=num_volumes,
-                    audio_type=audio_type,
-                    requested_rank=requested_rank,
-                    ceiling_rank=ceiling_rank,
-                    force=track_force,
-                    job_abort=job_abort,
-                )
+                while True:
+                    try:
+                        delivered = self._apple_deliver_track(
+                            provider,
+                            row,
+                            header,
+                            type_media=type_media,
+                            file_template=file_template,
+                            collection=collection,
+                            list_pos=pos,
+                            list_total=total,
+                            num_volumes=num_volumes,
+                            audio_type=audio_type,
+                            requested_rank=requested_rank,
+                            ceiling_rank=ceiling_rank,
+                            force=track_force,
+                            owned_path=owned_path,
+                            job_abort=job_abort,
+                        )
+                        break
+                    except Exception as exc:
+                        throttled = provider.classify_refusal(exc).kind is RefusalKind.THROTTLED and attempts < len(
+                            _APPLE_THROTTLE_WAITS
+                        )
+                        if not throttled:
+                            raise
+                        wait = _APPLE_THROTTLE_WAITS[attempts]
+                        attempts += 1
+                        logger.warning(
+                            "Apple rate-limited this job; retrying %s in %ss", diagnostics.content(track_id), wait
+                        )
+                        self._set_status(f"Apple is rate-limiting; retrying in {int(wait)}s…")
+                        if not self._apple_sleep_abortable(wait, job_abort):
+                            raise _AppleAborted() from exc
             except AppleTrackUnavailable as exc:
                 unavailable += 1
                 signals.track_event.emit({"id": track_id, "status": "unavailable"})
@@ -11457,6 +11483,17 @@ class WavesBridge(LibraryMixin, QObject):
         """Stepwise row progress: one tick per settled track."""
         pct = min(100.0, (pos / total) * 100.0) if total else 100.0
         (signals.list_item if collection else signals.item).emit(pct)
+
+    def _apple_sleep_abortable(self, seconds: float, job_abort) -> bool:
+        """Sleep in slices so STOP lands promptly; False when aborted."""
+        deadline = time.monotonic() + float(seconds)
+        while True:
+            if job_abort.is_set():
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(0.2, remaining))
 
     def _apple_track_relative(
         self,
@@ -11512,6 +11549,7 @@ class WavesBridge(LibraryMixin, QObject):
         requested_rank: int,
         ceiling_rank: int,
         force: bool,
+        owned_path: str | None,
         job_abort,
     ) -> dict:
         """Fetch, verify, place, tag and sidecar one Apple track.
@@ -11544,7 +11582,12 @@ class WavesBridge(LibraryMixin, QObject):
         exact = base / f"{relative}.m4a"
         exact.parent.mkdir(parents=True, exist_ok=True)
         if force:
-            dest = exact
+            # Overwrite the copy THIS track owns, not the template path: two
+            # distinct tracks can render to one relative name (the second owns
+            # the _01 suffixed file), and the template path would overwrite
+            # the sibling's audio while its record goes stale.
+            dest = pathlib.Path(owned_path) if owned_path else exact
+            dest.parent.mkdir(parents=True, exist_ok=True)
         elif self.settings.data.skip_existing and exact.exists():
             raise _AppleSkipped()
         else:
@@ -11565,9 +11608,7 @@ class WavesBridge(LibraryMixin, QObject):
             self._apple_verify_staged(staged, expect_atmos=atmos)
             if job_abort.is_set():
                 raise _AppleAborted()
-            if force and dest.exists():
-                dest.unlink()
-            shutil.move(str(staged), str(dest))
+            self._apple_place_file(staged, dest)
         finally:
             provider.discard_delivery(str(info.local_file))
         lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts)
@@ -11601,21 +11642,52 @@ class WavesBridge(LibraryMixin, QObject):
             },
         }
 
+    def _apple_probe(self) -> str:
+        """An ffprobe binary for Apple verification: beside the resolved
+        ffmpeg first (managed installs), else PATH, else "" (trust)."""
+        from waves.apple_engine import ffprobe_for
+
+        provider = self.providers.get(CTX_APPLE)
+        ffmpeg = str(getattr(provider, "ffmpeg_path", "") or "")
+        try:
+            return ffprobe_for(ffmpeg)
+        except Exception:
+            logger.debug("Apple ffprobe resolution failed", exc_info=True)
+            return ""
+
+    def _apple_place_file(self, staged: pathlib.Path, dest: pathlib.Path) -> None:
+        """Land one staged file on its final path, atomically.
+
+        Staging lives on another filesystem (system temp vs library, typically
+        a network share), so a direct move copies into the final name and a
+        mid-copy failure (full disk, dropped share) leaves a partial .m4a
+        that skip_existing would then treat as complete. Copy beside the
+        target and rename over it instead: readers never see a half file, and
+        forced overwrites never delete the good copy before its replacement
+        is whole.
+        """
+        tmp = dest.with_name(f"{dest.name}.part-{uuid4().hex[:8]}")
+        try:
+            shutil.copyfile(staged, tmp)
+            os.replace(tmp, dest)
+        except Exception:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
+
     def _apple_verify_staged(self, staged: pathlib.Path, *, expect_atmos: bool) -> None:
         """Codec check on the decrypted file: AAC stereo, E-AC-3 Atmos.
 
-        ffprobe missing means trust (its absence already fails louder paths);
-        a wrong codec fails the track, never the job.
+        No ffprobe anywhere means trust (its absence already fails louder
+        paths); a wrong codec fails the track, never the job.
         """
         from waves.apple_engine import AppleDownloadError, probe_audio_file
 
-        try:
-            probe = probe_audio_file(staged)
-        except AppleDownloadError as exc:
-            if "ffprobe" in str(exc).lower():
-                logger.debug("Apple verify skipped (no ffprobe): %s", staged)
-                return
-            raise
+        ffprobe = self._apple_probe()
+        if not ffprobe:
+            logger.debug("Apple verify skipped (no ffprobe): %s", staged)
+            return
+        probe = probe_audio_file(staged, ffprobe)
         codec = str(probe.get("codec") or "").lower()
         want = "eac3" if expect_atmos else "aac"
         if codec != want:
@@ -11691,29 +11763,32 @@ class WavesBridge(LibraryMixin, QObject):
         if want_cover_file and cover_data:
             write_cover_sidecar(dest.parent, cover_data)
 
-    def _apple_gate_track(self, provider, track_id: str, requested_rank: int, force: bool) -> str | None:
-        """'skip' when an owned copy is current, 'force' when owned but stale,
-        None when nothing is owned. The ownership verdicts, ranked on the
-        cookies tier's ceiling, so a HIGH copy settles whatever was asked."""
+    def _apple_gate_track(
+        self, provider, track_id: str, requested_rank: int, force: bool
+    ) -> tuple[str | None, dict | None]:
+        """Ownership verdict plus the record it was read from: 'skip' when an
+        owned copy is current, 'force' when owned but stale, (None, None)
+        when nothing is owned. Ranked on the cookies tier's ceiling, so a
+        HIGH copy settles whatever was asked."""
         if force:
-            return "force"
+            return "force", None
         store = getattr(self, "_ownership", None)
         if store is None:
-            return None
+            return None, None
         try:
             rec = store.ownership_of(str(track_id))
         except Exception:
             logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
-            return None
+            return None, None
         if not rec or _record_names_a_broken_copy(rec):
-            return None
+            return None, None
         try:
             raw = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
             wants = self._apple_wants_atmos() and bool(provider.has_atmos(raw))
         except Exception:
             wants = False
         current = _copy_is_current(rec, requested_rank, wants, provider.advertised_ceiling(None))
-        return "skip" if current else "force"
+        return ("skip", rec) if current else ("force", rec)
 
     def _apple_job_body(self, qid, spec, obj, *, signals, job_abort, row_ask, name) -> None:
         """An Apple job's worker body: probe, run, settle. Mirrors the TIDAL
