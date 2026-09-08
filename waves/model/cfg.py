@@ -58,6 +58,10 @@ class Settings:
     # by default and opt-in from Settings. Search reads this now. Setup,
     # Chooser and download routing join it in their own rollout slices.
     apple_enabled: bool = False
+    # Cookies-tier scaffolding (issue #28; superseded by the setup-wizard
+    # ticket): path to a Netscape-format cookies export from a logged-in
+    # music.apple.com session. Unlocks AAC 256 + Atmos downloads, no runtime.
+    apple_cookies_path: str = ""
     quality_video: QualityVideo = QualityVideo.P480
     download_dolby_atmos: bool = False
     # Artist > Album > Track, the shape a music library (and Plex) expects.
@@ -216,6 +220,11 @@ class HelpSettings:
     apple_quality_audio: str = (
         'Apple Music audio download quality as a Waves tier string: "HIGH" (AAC 256, Apple has no '
         'LOW), "LOSSLESS" (ALAC 16 Bit, 44,1 kHz), "HI_RES_LOSSLESS" (ALAC up to 24 Bit, 192 kHz)'
+    )
+    apple_cookies_path: str = (
+        "Path to a cookies export (Netscape format) from a logged-in music.apple.com browser session. "
+        "Unlocks Apple AAC 256 and Atmos downloads without any other setup; the setup wizard replaces "
+        "this with a managed sign-in later."
     )
     quality_video: str = 'Desired video download quality: "360", "480", "720", "1080"'
     download_dolby_atmos: str = (

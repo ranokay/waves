@@ -209,6 +209,11 @@ class StreamInfo:
     # non-BTS streams): the preview pipeline reads it, the download pipeline
     # does not. Empty when the delivery is not HLS.
     hls_url: str = ""
+    # A decrypted file already on local disk (Apple's cookies tier: the
+    # engine fetches and decrypts through gamdl, which no segment pipeline
+    # can replay). The pipeline stages this file instead of fetching ``urls``;
+    # empty on providers whose deliveries are fetched as streams.
+    local_file: str = ""
 
 
 class Provider(ABC):

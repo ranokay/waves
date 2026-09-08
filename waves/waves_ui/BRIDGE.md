@@ -113,6 +113,13 @@ shape as their Failed counterparts. `downloadPlaylistAlbums(playlistId)`
 (issue #4) resolves the source album of every track on a playlist, dedupes
 them, and enqueues the set under one `albums:` rollup id.
 
+Apple downloads (cookies tier) speak the same queue protocol: one row per
+album/playlist/track, per-track `queueTrackState` events with delivered
+quality words, and ownership recorded from the same done events. The bytes
+arrive file-level (gamdl fetch plus local decrypt, verified by codec probe)
+instead of through the TIDAL segment engine, and a missing cookies export
+fails the click with a status message before anything queues.
+
 ## Local library presence (the "in your library" badge)
 
 The scan family lives in `bridge_library.py` (`LibraryMixin`, mixed into

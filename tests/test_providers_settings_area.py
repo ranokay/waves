@@ -101,7 +101,7 @@ def test_the_tidals_quality_default_no_longer_sits_under_downloads():
 def test_the_apple_section_holds_the_switch_row_and_the_quality():
     sections = _schema()
     apple = _keys(sections["providers_apple"])
-    assert apple == ["provider_apple_status", "apple_quality_audio"]
+    assert apple == ["provider_apple_status", "apple_quality_audio", "apple_cookies_path"]
     status = sections["providers_apple"]["fields"][0]
     # The switch rides the status row (the section's master control), never
     # the flag-tile grid, and the factory-reset walk still finds it.

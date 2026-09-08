@@ -44,6 +44,13 @@ from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
 
 import waves.download as _waves_download
+from waves.apple_engine import AppleCredentialsError, AppleTrackUnavailable, _AppleAborted, _AppleSkipped
+from waves.apple_files import (
+    pick_destination,
+    tag_apple_file,
+    write_cover_sidecar,
+    write_text_sidecar,
+)
 from waves.config import Settings, Tidal, tidal_quality_for_tier
 from waves.constants import (
     CTX_APPLE,
@@ -666,8 +673,11 @@ _PATH_FIELDS = [
     # card normally manages the binary; an explicit path here wins over the
     # managed copy (see _resolve_ffmpeg).
     "path_binary_ffmpeg",
+    # Cookies-tier scaffolding (issue #28): a Netscape cookies export that
+    # unlocks Apple downloads, browsed like the FFmpeg override above.
+    "apple_cookies_path",
 ]
-_BROWSE = {"download_base_path": "dir", "path_binary_ffmpeg": "file"}
+_BROWSE = {"download_base_path": "dir", "path_binary_ffmpeg": "file", "apple_cookies_path": "file"}
 # String fields whose value is a character or two: they render as a compact
 # row with a small box on the right (the Track-number padding shape) instead
 # of a full-width text box under the help.
@@ -861,6 +871,7 @@ _FIELD_LABELS = {
     "download_base_path": "Download folder",
     "tidal_quality_audio": "Audio quality",
     "apple_quality_audio": "Audio quality (Apple)",
+    "apple_cookies_path": "Cookies file (Apple)",
     "quality_video": "Video quality",
     "downloads_concurrent_max": "Concurrent track downloads",
     "download_dolby_atmos": "Download Dolby Atmos",
@@ -3487,6 +3498,7 @@ class WavesBridge(LibraryMixin, QObject):
             CTX_TIDAL: TidalProvider(self.tidal),
             CTX_APPLE: AppleProvider(),
         }
+        self._configure_apple_provider()
         # Quick metadata/UI work (search, album tracks, artist pages) runs on
         # one pool; downloads run on a separate pool so a long album download
         # can never starve the UI of threads.
@@ -11134,6 +11146,633 @@ class WavesBridge(LibraryMixin, QObject):
         self._pending_qids.append(qid)
         self._pump_queue()
 
+    # ----- Apple downloads (cookies tier) ----------------------------------
+    # One click downloads an Apple album/playlist/track end-to-end through
+    # gamdl's fetch+decrypt, then rides the normal queue rows, per-track
+    # lifecycle events, ownership store and library scan. The TIDAL segment
+    # engine (Download.item) never sees these jobs: its pipeline is
+    # tidalapi-shaped throughout, so the Apple job runner below drives the
+    # same signals with the same event shapes instead.
+
+    def _download_apple_track(self, track_id: str) -> None:
+        provider = self.providers.get(CTX_APPLE)
+        raw = provider.cached("track", track_id) if provider is not None else None
+        if raw is None:
+            self._refetch_apple_for_download("track", track_id)
+            return
+        row = provider.row_for("track", raw)
+        self._download_apple("track", row, None, self.settings.data.format_track, False, track_id)
+
+    def _download_apple_collection(self, kind: str, media_id: str) -> None:
+        provider = self.providers.get(CTX_APPLE)
+        raw = provider.cached(kind, media_id) if provider is not None else None
+        if raw is None or not provider.collection_has_tracks(raw):
+            # Search summaries name the collection but carry no tracks; fetch
+            # the full resource on a worker, then re-dispatch through the slot
+            # (the TIDAL _objs dance, without _objs).
+            self._refetch_apple_for_download(kind, media_id)
+            return
+        row = provider.row_for(kind, raw)
+        template = self.settings.data.format_playlist if kind == "playlist" else self.settings.data.format_album
+        self._download_apple(kind, row, row, template, True, media_id)
+
+    def _refetch_apple_for_download(self, bucket: str, media_id: str) -> None:
+        """Fetch an Apple resource off the GUI thread, then re-dispatch.
+
+        Mirrors _refetch_for_download without _objs and without the TIDAL
+        sign-in gate: the provider's own cache is the registry, and Apple
+        needs cookies, not a TIDAL session.
+        """
+        key = (bucket, media_id)
+        if key in self._refetch_inflight:
+            return
+        self._refetch_inflight.add(key)
+        gen = self._browse_gen
+        self.downloadState.emit(media_id, "preparing")
+        self._set_status("Fetching item…")
+
+        def work() -> None:
+            obj = None
+            try:
+                provider = self.providers.get(CTX_APPLE)
+                if provider is not None:
+                    obj = provider.get_object(bucket, str(media_id).removeprefix(f"{CTX_APPLE}:"))
+            except Exception:
+                logger.exception("Could not re-fetch Apple %s %s for download", bucket, media_id)
+            if gen != self._browse_gen:
+                self._refetch_inflight.discard(key)
+                self.downloadState.emit(media_id, "")
+                return
+            if obj is None:
+                self._refetch_inflight.discard(key)
+                self.downloadState.emit(media_id, "failed")
+                self._set_status("That item is no longer available")
+                self._bump_download_groups(media_id, None, "failed")
+                return
+            self._mediaRefetched.emit(bucket, media_id)
+
+        self.threadpool.start(Worker(work))
+
+    def _download_apple(
+        self,
+        type_media: str,
+        row: dict,
+        collection_row: dict | None,
+        file_template: str,
+        collection: bool,
+        media_id: str,
+    ) -> None:
+        """Queue one Apple track or collection. The TIDAL _download's shape
+        for the parts that are provider-blind (folder gate, ffmpeg gate,
+        ask pinning, queue row, spec, pump); the Apple fetch happens at
+        dispatch, never here."""
+        if not self._apple_cookies_ready():
+            self._set_status("Apple downloads need a cookies export: set one in Settings under Providers, Apple Music")
+            self.downloadState.emit(media_id, "")
+            return
+        gate = self._download_gate()
+        if gate == "block":
+            self.downloadState.emit(media_id, "")
+            return
+        if gate == "nudge":
+            self._stash_pending_download(
+                media_id,
+                lambda: self._download_apple(type_media, row, collection_row, file_template, collection, media_id),
+            )
+            return
+        if self._ffmpeg_gate_holds(
+            media_id,
+            lambda: self._download_apple(type_media, row, collection_row, file_template, collection, media_id),
+        ):
+            return
+        ask = str(self.settings.data.apple_quality_audio or "HIGH")
+        ask_tier = _tier_word(ask)
+        # What the cookies tier can serve, stated from queue time like the
+        # TIDAL ceiling: HIGH stereo, ATMOS when the toggle says so.
+        expected = "ATMOS" if self._apple_wants_atmos() else "HIGH"
+        name = str(row.get("title") or "Apple download")
+        artist = str((collection_row or row).get("artist") or row.get("artist") or "")
+        art = str((collection_row or row).get("art") or "")
+        qid = self._enqueue(
+            name,
+            type_media,
+            media_id,
+            file_template,
+            collection,
+            artist,
+            1 if not collection else int((collection_row or {}).get("tracks") or 0),
+            art,
+            expected,
+            ask_quality=ask,
+            ask_tier=ask_tier,
+        )
+        self.downloadState.emit(media_id, "queued")
+        self._job_specs[qid] = _JobSpec(
+            provider_id=CTX_APPLE,
+            kind=type_media,
+            object_id=f"{CTX_APPLE}:{str(media_id).removeprefix(f'{CTX_APPLE}:')}",
+            name=name,
+            file_template=file_template,
+            collection=collection,
+            media_id=media_id,
+            merge_plan=None,
+        )
+        self._pending_qids.append(qid)
+        self._pump_queue()
+
+    def _apple_wants_atmos(self) -> bool:
+        """The instead-of Atmos toggle, read live per job like the engine's."""
+        return bool(self.settings.data.download_dolby_atmos)
+
+    def _apple_audio_type(self):
+        return AudioType.ATMOS if self._apple_wants_atmos() else AudioType.STEREO
+
+    def _apple_target_rank(self, pinned=None) -> int:
+        """Rank of the audio quality an Apple run targets: the row's pinned
+        rung, else the Apple setting. Mirrors _target_quality_rank, which
+        reads the TIDAL side."""
+        q = self.settings.data.apple_quality_audio if pinned is None else pinned
+        return quality_rank(str(getattr(q, "value", q) or ""))
+
+    def _run_apple_job(self, qid, spec, obj, *, signals, job_abort, file_template) -> str:
+        """Download one Apple track or collection, emitting the shared
+        lifecycle events so queue rows, delivered words, ownership and badges
+        behave exactly like TIDAL jobs.
+
+        Returns "" on a clean run; raises DownloadIncomplete naming the
+        shortfall when tracks failed (the settlement's row reason), like the
+        collection path it mirrors. Sequential per track: gamdl's stack runs
+        one song at a time, and serial fetches stay under Apple's
+        undocumented license-exchange rate limit.
+        """
+
+        provider = self.providers[CTX_APPLE]
+        type_media, collection, media_id = spec.kind, spec.collection, spec.media_id
+        audio_type = self._apple_audio_type()
+        ask_tier = self._job_quality(qid)
+        requested_rank = self._apple_target_rank(ask_tier)
+        ceiling_rank = quality_rank(QualityTier.HIGH)
+        force = media_id in self._redownload_overrides
+        if collection:
+            header = provider.row_for(type_media, obj)
+            rows = provider.collection_items(obj)
+        else:
+            header = None
+            rows = [provider.row_for("track", obj)]
+        rows = [row for row in rows if isinstance(row, dict) and row.get("id")]
+        total = len(rows)
+        if not total:
+            _raise_download_incomplete("Apple served an empty track list")
+        num_volumes = max([int(row.get("vol") or 1) for row in rows] + [1])
+        ok = fail = skipped = unavailable = 0
+        failed_names: list[str] = []
+        for pos, row in enumerate(rows, start=1):
+            if job_abort.is_set():
+                break
+            track_id = str(row.get("id"))
+            signals.track_event.emit(
+                {
+                    "id": track_id,
+                    "title": str(row.get("title") or ""),
+                    "num": int(row.get("num") or pos),
+                    "vol": int(row.get("vol") or 1),
+                    "duration": str(row.get("duration") or ""),
+                    "status": "running",
+                    "expected": "ATMOS" if self._apple_wants_atmos() else "HIGH",
+                }
+            )
+            verdict = self._apple_gate_track(provider, track_id, requested_rank, force)
+            if verdict == "skip":
+                skipped += 1
+                signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})
+                self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
+                continue
+            try:
+                delivered = self._apple_deliver_track(
+                    provider,
+                    row,
+                    header,
+                    type_media=type_media,
+                    file_template=file_template,
+                    collection=collection,
+                    list_pos=pos,
+                    list_total=total,
+                    num_volumes=num_volumes,
+                    audio_type=audio_type,
+                    requested_rank=requested_rank,
+                    ceiling_rank=ceiling_rank,
+                    force=force,
+                    job_abort=job_abort,
+                )
+            except AppleTrackUnavailable as exc:
+                unavailable += 1
+                signals.track_event.emit({"id": track_id, "status": "unavailable"})
+                logger.info("Apple track unavailable: %s", exc)
+                self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
+                continue
+            except _AppleSkipped:
+                skipped += 1
+                signals.track_event.emit({"id": track_id, "status": "skipped"})
+                self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
+                continue
+            except _AppleAborted:
+                break
+            except Exception as exc:
+                fail += 1
+                failed_names.append(str(row.get("title") or track_id))
+                signals.track_event.emit({"id": track_id, "status": "failed"})
+                logger.exception("Apple track failed for %s", diagnostics.content(track_id))
+                if isinstance(exc, AppleCredentialsError):
+                    raise
+                self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
+                continue
+            ok += 1
+            signals.track_event.emit(
+                {
+                    "id": track_id,
+                    "status": "done",
+                    "path": delivered["path"],
+                    "quality": delivered["quality"],
+                }
+            )
+            self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
+        if total == 1 and not collection:
+            if ok or skipped:
+                return "" if ok else " (already downloaded)"
+            if unavailable:
+                _raise_download_incomplete("not available on Apple Music anymore")
+            _raise_download_incomplete("Apple download produced no file")
+        short = fail + unavailable
+        if short:
+            done_word = f"{ok} of {total} tracks" if ok else f"0 of {total} tracks"
+            _raise_download_incomplete(f"{done_word} downloaded ({short} failed)")
+        if skipped and not ok:
+            return " (already downloaded)"
+        return ""
+
+    def _apple_emit_progress(self, signals, collection: bool, pos: int, total: int, media_id: str, qid: int) -> None:
+        """Stepwise row progress: one tick per settled track."""
+        pct = min(100.0, (pos / total) * 100.0) if total else 100.0
+        (signals.list_item if collection else signals.item).emit(pct)
+
+    def _apple_track_relative(
+        self,
+        provider,
+        row: dict,
+        header: dict | None,
+        type_media: str,
+        file_template: str,
+        list_pos: int,
+        list_total: int,
+        num_volumes: int,
+        facts_isrc: str = "",
+    ) -> str:
+        """One Apple track's template path, without base dir or extension."""
+        from waves.apple_files import format_apple_path as _format
+
+        data = self.settings.data
+        if type_media == "playlist":
+            album = None
+            playlist = header
+        else:
+            album = header
+            playlist = None
+        return _format(
+            file_template,
+            track=row,
+            album=album,
+            playlist=playlist,
+            list_pos=list_pos if type_media == "playlist" else 0,
+            list_total=list_total if type_media == "playlist" else 0,
+            num_volumes=num_volumes,
+            isrc=facts_isrc,
+            pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
+            delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
+            delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
+            illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
+            illegal_map=getattr(data, "filename_illegal_map", None),
+        )
+
+    def _apple_deliver_track(
+        self,
+        provider,
+        row: dict,
+        header: dict | None,
+        *,
+        type_media: str,
+        file_template: str,
+        collection: bool,
+        list_pos: int,
+        list_total: int,
+        num_volumes: int,
+        audio_type,
+        requested_rank: int,
+        ceiling_rank: int,
+        force: bool,
+        job_abort,
+    ) -> dict:
+        """Fetch, verify, place, tag and sidecar one Apple track.
+
+        Returns {"path", "quality"} for the done event. Raises
+        AppleTrackUnavailable when Apple withholds the song and
+        AppleDownloadError (or anything gamdl raises) otherwise.
+        """
+        from waves.apple_engine import AppleDownloadError, probe_audio_file
+
+        track_id = str(row.get("id"))
+        raw_id = track_id.removeprefix(f"{CTX_APPLE}:")
+        raw = provider.get_object("track", raw_id)
+        facts = provider.track_facts(raw)
+        relative = self._apple_track_relative(
+            provider,
+            row,
+            header,
+            type_media,
+            file_template,
+            list_pos,
+            list_total,
+            num_volumes,
+            facts_isrc=str(facts.get("isrc") or ""),
+        )
+        base = pathlib.Path(str(self.settings.data.download_base_path)).expanduser()
+        if force:
+            dest = base / f"{relative}.m4a"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            dest = pick_destination(base, relative, ".m4a")
+        if not force and self.settings.data.skip_existing and dest.exists():
+            raise _AppleSkipped()
+        try:
+            info = provider.resolve_stream(raw, tier_from_word(str(self.settings.data.apple_quality_audio)), audio_type)
+        except Exception as exc:
+            # A refusal is TIDAL-vocabulary for "gone": kept out of the fail
+            # count so one delisted track cannot fail its whole album.
+            if provider.classify_refusal(exc).kind is RefusalKind.UNAVAILABLE:
+                raise AppleTrackUnavailable(str(exc) or "not available on Apple Music") from exc
+            raise
+        try:
+            staged = pathlib.Path(str(info.local_file))
+            if not staged.is_file():
+                raise AppleDownloadError("Apple download produced no file")  # noqa: TRY003
+            atmos = str((info.delivered or {}).get("audio_type") or "") == str(AudioType.ATMOS)
+            self._apple_verify_staged(staged, expect_atmos=atmos)
+            if job_abort.is_set():
+                raise _AppleAborted()
+            if force and dest.exists():
+                dest.unlink()
+            shutil.move(str(staged), str(dest))
+        finally:
+            provider.discard_delivery(str(info.local_file))
+        lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts)
+        cover_data = self._apple_cover_bytes(provider, raw) if self._apple_wants_cover(collection) else None
+        if not tag_apple_file(
+            dest,
+            title=str(row.get("title") or ""),
+            facts=facts,
+            lyrics_synced=lyrics_synced,
+            lyrics_unsynced=lyrics_unsynced,
+            cover_data=cover_data if self.settings.data.metadata_cover_embed else None,
+            mark_explicit=bool(self.settings.data.mark_explicit),
+            metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
+        ):
+            logger.debug("Apple tagging reported failure for %s", diagnostics.content(track_id))
+        self._apple_write_sidecars(dest, lyrics_synced, lyrics_unsynced, cover_data, collection)
+        try:
+            rate = (probe_audio_file(dest) or {}).get("sample_rate") or None
+        except Exception:
+            rate = None
+        return {
+            "path": str(dest),
+            "quality": {
+                "tier": QualityTier.HIGH.value,
+                "audio_mode": "DOLBY_ATMOS" if atmos else "STEREO",
+                "bit_depth": None,
+                "sample_rate": int(rate) if str(rate or "").isdigit() else None,
+                "codecs": str(info.codecs or ""),
+                "requested_rank": int(requested_rank),
+                "ceiling_rank": int(ceiling_rank),
+            },
+        }
+
+    def _apple_verify_staged(self, staged: pathlib.Path, *, expect_atmos: bool) -> None:
+        """Codec check on the decrypted file: AAC stereo, E-AC-3 Atmos.
+
+        ffprobe missing means trust (its absence already fails louder paths);
+        a wrong codec fails the track, never the job.
+        """
+        from waves.apple_engine import AppleDownloadError, probe_audio_file
+
+        try:
+            probe = probe_audio_file(staged)
+        except AppleDownloadError as exc:
+            if "ffprobe" in str(exc).lower():
+                logger.debug("Apple verify skipped (no ffprobe): %s", staged)
+                return
+            raise
+        codec = str(probe.get("codec") or "").lower()
+        want = "eac3" if expect_atmos else "aac"
+        if codec != want:
+            raise AppleDownloadError(f"Apple served {codec or 'an unknown codec'}, expected {want}")  # noqa: TRY003
+
+    def _apple_lyrics(self, provider, row: dict, facts: dict) -> tuple[str, str]:
+        """LRCLIB-first lyrics for one Apple track, or ("", "").
+
+        Apple's native TTML lyrics are the lyrics-ticket slice's work; the
+        shared LRCLIB lookup takes plain strings, so the cookies tier honors
+        the embed/sidecar toggles through it from day one.
+        """
+        from waves.lyrics import fetch_lrclib_lyrics
+
+        data = self.settings.data
+        if not (data.lyrics_embed or data.lyrics_file):
+            return "", ""
+        if not getattr(data, "lyrics_prefer_lrclib", True):
+            return "", ""
+        try:
+            session = _waves_download.pooled_session()
+            return fetch_lrclib_lyrics(
+                session,
+                artist=str(row.get("artist") or ""),
+                title=str(row.get("title") or ""),
+                album=str(row.get("album") or ""),
+                duration=int(row.get("duration_sec") or 0),
+            )
+        except Exception:
+            logger.debug("Apple LRCLIB lookup failed", exc_info=True)
+            return "", ""
+
+    def _apple_wants_cover(self, collection: bool) -> bool:
+        """Whether this job saves cover art at all."""
+        data = self.settings.data
+        return bool(
+            data.metadata_cover_embed or data.cover_album_file or (not collection and data.cover_single_track_file)
+        )
+
+    def _apple_cover_bytes(self, provider, raw: dict) -> bytes | None:
+        """The collection cover at the embedded size, or None."""
+        dimension = self.settings.data.metadata_cover_dimension
+        try:
+            size = 1280 if str(getattr(dimension, "value", dimension)) == "origin" else int(dimension)
+        except (TypeError, ValueError):
+            size = 320
+        url = provider.cover_url(raw, size)
+        if not url:
+            return None
+        try:
+            response = _waves_download.pooled_session().get(url, timeout=30)
+            response.raise_for_status()
+        except Exception:
+            logger.debug("Apple cover fetch failed", exc_info=True)
+            return None
+        else:
+            return response.content or None
+
+    def _apple_write_sidecars(
+        self, dest: pathlib.Path, lyrics_synced: str, lyrics_unsynced: str, cover_data: bytes | None, collection: bool
+    ) -> None:
+        """Lyrics and cover sidecars per the shared toggles."""
+        from waves.lyrics import lyrics_file_choice
+
+        data = self.settings.data
+        if data.lyrics_file and (lyrics_synced or lyrics_unsynced):
+            text, suffix = lyrics_file_choice(
+                lyrics_synced, lyrics_unsynced, getattr(data, "lyrics_file_synced_only", False)
+            )
+            if text:
+                write_text_sidecar(dest.parent, dest.stem, suffix, text)
+        want_cover_file = bool(data.cover_album_file) or (not collection and bool(data.cover_single_track_file))
+        if want_cover_file and cover_data:
+            write_cover_sidecar(dest.parent, cover_data)
+
+    def _apple_gate_track(self, provider, track_id: str, requested_rank: int, force: bool) -> str | None:
+        """'skip' when an owned copy is current, 'force' when owned but stale,
+        None when nothing is owned. The ownership verdicts, ranked on the
+        cookies tier's ceiling, so a HIGH copy settles whatever was asked."""
+        if force:
+            return "force"
+        get_ownership = getattr(self, "_ownership_of", None)
+        if get_ownership is None:
+            return None
+        try:
+            rec = get_ownership(str(track_id))
+        except Exception:
+            logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
+            return None
+        if not rec or _record_names_a_broken_copy(rec):
+            return None
+        try:
+            raw = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
+            wants = self._apple_wants_atmos() and bool(provider.has_atmos(raw))
+        except Exception:
+            wants = False
+        current = _copy_is_current(rec, requested_rank, wants, provider.advertised_ceiling(None))
+        return "skip" if current else "force"
+
+    def _apple_job_body(self, qid, spec, obj, *, signals, job_abort, row_ask, name) -> None:
+        """An Apple job's worker body: probe, run, settle. Mirrors the TIDAL
+        body's three outcomes (cancelled / done / failed) without its engine."""
+        from waves.apple_engine import AppleCredentialsError
+
+        type_media, file_template, collection, media_id = (
+            spec.kind,
+            spec.file_template,
+            spec.collection,
+            spec.media_id,
+        )
+        provider = self.providers.get(CTX_APPLE)
+        try:
+            replay_row = provider.row_for(type_media, obj) if provider is not None else {}
+        except Exception:
+            replay_row = {}
+        replay_collection = replay_row if collection else None
+        if job_abort.is_set():
+            self._set_queue_status(qid, "cancelled")
+            self.downloadState.emit(media_id, "")
+            self._bump_download_groups(media_id, None, "failed")
+            self._job_aborts.pop(qid, None)
+            self._release_job_signals(qid)
+            self._job_dls.pop(qid, None)
+            return
+        if not self._gate_reachability(
+            lambda: self._download_apple(
+                type_media,
+                replay_row,
+                replay_collection,
+                file_template,
+                collection,
+                media_id,
+            ),
+            media_id,
+        ):
+            self.downloadState.emit(media_id, "")
+            self._job_aborts.pop(qid, None)
+            self._release_job_signals(qid)
+            self._job_dls.pop(qid, None)
+            self._remove_row(qid)
+            self._emit_queue()
+            return
+        if job_abort.is_set():
+            self._set_queue_status(qid, "cancelled")
+            self.downloadState.emit(media_id, "")
+            self._bump_download_groups(media_id, None, "failed")
+            self._job_aborts.pop(qid, None)
+            self._release_job_signals(qid)
+            self._job_dls.pop(qid, None)
+            return
+        self._set_queue_status(qid, "running")
+        self.downloadProgress.emit(media_id, 0.0)
+        self.downloadState.emit(media_id, "running")
+        self._set_status(f"Downloading {name}…")
+        devlog.event("download", "start", type=type_media, id=media_id, qid=qid)
+        t0 = devlog.clock()
+        try:
+            summary = self._run_apple_job(
+                qid, spec, obj, signals=signals, job_abort=job_abort, file_template=file_template
+            )
+            if job_abort.is_set():
+                self.downloadState.emit(media_id, "")
+                self._set_queue_status(qid, "cancelled")
+                self._bump_download_groups(media_id, None, "failed")
+                self._set_status(f"Cancelled {name}")
+            else:
+                self._redownload_overrides.discard(media_id)
+                self._library_claim_overrides.discard(media_id)
+                self.downloadProgress.emit(media_id, 100.0)
+                self._set_queue_progress(qid, 100.0)
+                self.downloadState.emit(media_id, "done")
+                self._set_queue_status(qid, "done")
+                self._bump_download_groups(media_id, 100.0, "done")
+                self._set_status(f"Finished {name}{summary}")
+                devlog.done("download", f"done {type_media} id={media_id}", devlog.clock() - t0)
+        except Exception as exc:
+            if job_abort.is_set():
+                self.downloadState.emit(media_id, "")
+                self._set_queue_status(qid, "cancelled")
+                self._bump_download_groups(media_id, None, "failed")
+                self._set_status(f"Cancelled {name}")
+            elif self._download_failed_with_folder(
+                lambda: self._download_apple(
+                    type_media, replay_row, replay_collection, file_template, collection, media_id
+                ),
+                media_id,
+                qid,
+                name,
+                job_abort,
+            ):
+                pass
+            else:
+                logger.exception("Apple download failed for %s", diagnostics.content(name))
+                reason = str(exc) if isinstance(exc, (DownloadIncomplete, AppleCredentialsError)) else ""
+                self.downloadState.emit(media_id, "failed")
+                self._set_queue_status(qid, "failed", reason)
+                self._bump_download_groups(media_id, None, "failed")
+                self._set_status(f"Failed {name}{': ' + reason if reason else ''}")
+                devlog.done("download", f"FAILED {type_media} id={media_id}", devlog.clock() - t0)
+        finally:
+            self._job_aborts.pop(qid, None)
+            self._release_job_signals(qid)
+            self._job_dls.pop(qid, None)
+
     def _pump_queue(self) -> None:
         """Start the next queued row's download if nothing is running.
 
@@ -11212,14 +11851,21 @@ class WavesBridge(LibraryMixin, QObject):
                 library_claim = _claim_with_job_album
             else:
                 library_claim = self._library_claim_media
-        dl = self._build_download(
-            signals,
-            event_abort=job_abort,
-            library_claim=library_claim,
-            force_redownload=media_id in self._redownload_overrides,
-            pinned_quality=self._job_quality(qid),
-        )
-        if collection or merge_plan is not None:
+        # Apple jobs never build the TIDAL segment engine: the runner below
+        # drives the same signals with file-level deliveries, and building a
+        # Download here would touch the TIDAL session (absent when signed
+        # out, which Apple downloads must not require).
+        is_apple = spec.provider_id == CTX_APPLE
+        dl = None
+        if not is_apple:
+            dl = self._build_download(
+                signals,
+                event_abort=job_abort,
+                library_claim=library_claim,
+                force_redownload=media_id in self._redownload_overrides,
+                pinned_quality=self._job_quality(qid),
+            )
+        if (collection or merge_plan is not None) and not is_apple:
             self._job_tracks.setdefault(qid, {})
             self._job_dls[qid] = dl
             if not self._track_poll.isActive():
@@ -11230,9 +11876,11 @@ class WavesBridge(LibraryMixin, QObject):
                 body()
             finally:
                 # The job's segment executor dies with the job, or its worker
-                # threads would pile up across queue rows.
-                with contextlib.suppress(Exception):
-                    dl.close_segment_pool()
+                # threads would pile up across queue rows. Apple jobs build no
+                # engine, so there is nothing to close for them.
+                if dl is not None:
+                    with contextlib.suppress(Exception):
+                        dl.close_segment_pool()
                 # Whatever happened above, the slot is free: the next queued
                 # row starts from the GUI thread.
                 self._jobFinished.emit(qid)
@@ -11287,6 +11935,20 @@ class WavesBridge(LibraryMixin, QObject):
                 devlog.done("download", f"FAILED {type_media} id={media_id}", 0.0)
                 return
             resolved[0] = obj
+            if is_apple:
+                # File-level Apple delivery on this same worker: the shared
+                # settlement below is TIDAL-engine shaped (dl counters), so
+                # the Apple runner settles its own rows and returns.
+                self._apple_job_body(
+                    qid,
+                    spec,
+                    obj,
+                    signals=signals,
+                    job_abort=job_abort,
+                    row_ask=row_ask,
+                    name=name,
+                )
+                return
             # Reachability probe of the download folder, here on the worker so
             # the click stays instant (a write probe against a stale network
             # mount costs seconds). On a dead mount: dialog + held retry, and
@@ -11361,7 +12023,9 @@ class WavesBridge(LibraryMixin, QObject):
             # volume; this job's Download snapshotted path_base at
             # construction, so follow the healed setting or every track fails
             # against the old mount while the gate keeps saying all is well.
-            dl.path_base = self.settings.data.download_base_path
+            # Apple jobs build no engine, so there is no snapshot to follow.
+            if dl is not None:
+                dl.path_base = self.settings.data.download_base_path
             # STOP can land while the gate is probing, and the probe is the
             # slow part of starting a job: seconds against a stale network
             # mount, which then remounts and probes again. stopAll had already
@@ -12587,6 +13251,9 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadTrack(self, track_id: str) -> None:
+        if str(track_id).startswith(f"{CTX_APPLE}:"):
+            self._download_apple_track(str(track_id))
+            return
         obj = self._objs["track"].get(track_id)
         if obj is None:
             self._refetch_for_download("track", track_id)
@@ -12595,6 +13262,9 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadAlbum(self, album_id: str) -> None:
+        if str(album_id).startswith(f"{CTX_APPLE}:"):
+            self._download_apple_collection("album", str(album_id))
+            return
         obj = self._objs["album"].get(album_id)
         if obj is None:
             self._refetch_for_download("album", album_id)
@@ -12780,6 +13450,9 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadPlaylist(self, playlist_id: str) -> None:
+        if str(playlist_id).startswith(f"{CTX_APPLE}:"):
+            self._download_apple_collection("playlist", str(playlist_id))
+            return
         obj = self._objs["playlist"].get(playlist_id)
         if obj is None:
             self._refetch_for_download("playlist", playlist_id)
@@ -13078,6 +13751,9 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadMix(self, mix_id: str) -> None:
+        if str(mix_id).startswith(f"{CTX_APPLE}:"):
+            self._set_status("Apple mixes are not part of the cookies tier")
+            return
         obj = self._objs["mix"].get(mix_id)
         if obj is None:
             self._refetch_for_download("mix", mix_id)
@@ -13165,6 +13841,9 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(str)
     def downloadArtist(self, artist_id: str) -> None:
         """Queue every album of an artist for download."""
+        if str(artist_id).startswith(f"{CTX_APPLE}:"):
+            self._set_status("Apple artist downloads arrive with the full Apple rollout")
+            return
         if self._dl is None:
             return
         # Bail before the (network-heavy) discography scan if there's nowhere to
@@ -15141,10 +15820,11 @@ class WavesBridge(LibraryMixin, QObject):
                 # discoverable and the light shows what is (not) set up.
                 "group": "Providers · Apple Music",
                 "id": "providers_apple",
-                "desc": "Turn on Apple Music catalog search here. Account setup and downloads arrive later.",
+                "desc": "Turn on Apple Music catalog search here. AAC 256 and Atmos downloads need a cookies export below; full setup arrives later.",
                 "fields": [
                     "provider_apple_status",
                     "apple_quality_audio",
+                    "apple_cookies_path",
                 ],
             },
             {
@@ -15406,6 +16086,27 @@ class WavesBridge(LibraryMixin, QObject):
         if provider is not None and tier is not None:
             provider.apply_quality(tier, AudioType.STEREO)
 
+    def _configure_apple_provider(self) -> None:
+        """Point the Apple provider at the cookies-tier configuration.
+
+        The provider itself never reads Settings (it owns no prefs); the
+        bridge writes the paths here whenever settings save and once at
+        startup, and resolve_stream reads them at fetch time.
+        """
+        provider = self.providers.get(CTX_APPLE)
+        if provider is None:
+            return
+        data = getattr(self.settings, "data", None)
+        provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
+        provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
+        provider.nm3u8dlre_path = ""
+
+    def _apple_cookies_ready(self) -> bool:
+        """Whether an Apple download can start: a cookies file is set."""
+        provider = self.providers.get(CTX_APPLE)
+        path = str(getattr(provider, "cookies_path", "") or "")
+        return bool(path) and pathlib.Path(path).expanduser().is_file()
+
     @Slot("QVariant")
     def applySettings(self, values) -> None:
         """Apply only the changed keys from the settings page, then persist."""
@@ -15500,6 +16201,9 @@ class WavesBridge(LibraryMixin, QObject):
             # No Apple copies exist to refresh and no queue row pins an Apple
             # tier yet; the side effect is the provider session's alone.
             self._reapply_provider_quality(CTX_APPLE, values["apple_quality_audio"])
+        if "apple_cookies_path" in values or "path_binary_ffmpeg" in values:
+            # The cookies-tier paths the Apple provider resolves against.
+            self._configure_apple_provider()
         if "apple_enabled" in values and bool(getattr(data, "apple_enabled", False)) != apple_enabled_before:
             # Search reads the saved switch on its next request. The live
             # settings page also needs the status light refreshed now.
