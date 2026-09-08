@@ -298,7 +298,7 @@ def test_the_download_reads_the_choice_after_every_gate_and_writes_it_on_the_row
     gates = src.index("_ffmpeg_gate_holds")
     ask = src.index("_ask_quality_for(obj, type_media, media_id)")
     assert gates < ask, "the choice is read before a gate that may hold the download"
-    assert "ask_quality=ask" in src and "ask_tier=ask_tier" in src
+    assert "ask_quality=ask" in src and ("ask_tier=ask_tier" in src or "ask_tier=row_tier_word" in src)
     assert "_consume_quality_override" not in src, "a download spends the choice again"
     assert not hasattr(backend.WavesBridge, "_consume_quality_override"), "the spending helper came back"
 

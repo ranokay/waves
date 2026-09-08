@@ -294,7 +294,7 @@ def _bind(stub):
 
 
 def _tone(path: Path):
-    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
+    subprocess.run(  # (fixed argv: a local tone fixture, no user input)
         [
             _ffmpeg(),
             "-y",
@@ -508,7 +508,7 @@ def test_entry_with_cookies_queues_an_apple_job(tmp_path):
     (row,) = stub._queue
     assert row["type"] == "album" and row["status"] == "queued"
     assert row["expected"] == "HIGH" and row["quality"] == "HIGH"
-    (qid, spec) = next(iter(stub._job_specs.items()))
+    qid, spec = next(iter(stub._job_specs.items()))
     assert spec.provider_id == "apple" and spec.object_id == "apple:album-1"
     assert list(stub._pending_qids) == [qid]
 
@@ -654,7 +654,7 @@ def test_retry_reroutes_an_apple_row_through_the_apple_entry(tmp_path):
 
     ((args, kwargs),) = calls
     assert args[0] == "album" and args[5] == "apple:album-1"
-    assert kwargs["keep_ask"] == ("HIGH", "HIGH")
+    assert kwargs["keep_ask"] == ("HIGH", "HIGH", None)
 
 
 def test_row_object_falls_back_to_the_provider_cache(tmp_path):

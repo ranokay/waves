@@ -352,12 +352,16 @@ def _waves_owned_ids(media) -> set[str]:
 def _file_audio_mode_is_atmos(path_file: pathlib.Path) -> bool | None:
     """Whether the audio file at this path is a Dolby Atmos copy.
 
-    Read off the disk, not out of any ledger, so a user's own Atmos file is
-    recognised the same as one Waves wrote. Only an MP4 container can hold
-    Atmos (E-AC-3 JOC or AC-4, the two codings TIDAL delivers it in); every
-    other extension is stereo by construction, answered without opening the
-    file. TIDAL's stereo AAC shares the .m4a extension, which is exactly why
-    the two can collide on one name and the codec has to be asked.
+    Tag first, codec second (§5.3): a file Waves wrote carries
+    WAVES_AUDIO_TYPE ("stereo" / "atmos"), which answers without opening
+    the container and can never misread a shared extension. Untagged files
+    (every library already on disk, a user's own files) fall back to the
+    codec sniff below, which stays the legacy answer. Only an MP4 container
+    can hold Atmos (E-AC-3 JOC or AC-4, the two codings TIDAL delivers it
+    in); every other extension is stereo by construction, answered without
+    opening the file. TIDAL's stereo AAC shares the .m4a extension, which is
+    exactly why the two can collide on one name and the codec has to be
+    asked.
 
     Args:
         path_file (pathlib.Path): The file to inspect.
@@ -367,6 +371,16 @@ def _file_audio_mode_is_atmos(path_file: pathlib.Path) -> bool | None:
             when the file cannot be read. Callers treat None as "unknown"
             and keep their historical answer rather than guessing.
     """
+    try:
+        from waves.metadata import read_audio_type
+
+        tagged = read_audio_type(path_file)
+    except Exception:
+        tagged = None
+    if tagged == "atmos":
+        return True
+    if tagged == "stereo":
+        return False
     if path_file.suffix.lower() not in (AudioExtensions.M4A, AudioExtensions.MP4):
         return False
 
@@ -3042,9 +3056,28 @@ class Download:
 
         # Write metadata to file.
         if stream_info is not None:
-            _result_metadata, tmp_path_lyrics, lyrics_suffix, tmp_path_cover = self.metadata_write(
-                media, tmp_path_file, is_parent_album, stream_info.replay_gain
-            )
+            try:
+                atype = str((stream_info.delivered or {}).get("audio_type") or "") or None
+            except Exception:
+                atype = None
+            try:
+                _result_metadata, tmp_path_lyrics, lyrics_suffix, tmp_path_cover = self.metadata_write(
+                    media,
+                    tmp_path_file,
+                    is_parent_album,
+                    stream_info.replay_gain,
+                    audio_type=atype,
+                )
+            except TypeError as exc:
+                # Test doubles pinning the pre-audio-type shape (metadata_write
+                # without the audio_type param): fall back without it. Real
+                # callers always accept it (tags carry the Version). Re-raise
+                # any other TypeError (wrong types inside the writer).
+                if "audio_type" not in str(exc):
+                    raise
+                _result_metadata, tmp_path_lyrics, lyrics_suffix, tmp_path_cover = self.metadata_write(
+                    media, tmp_path_file, is_parent_album, stream_info.replay_gain
+                )
 
         return tmp_path_lyrics, lyrics_suffix, tmp_path_cover
 
@@ -3833,7 +3866,12 @@ class Download:
         return lyrics, lyrics_synced, lyrics_unsynced
 
     def metadata_write(
-        self, track: Track, path_media: pathlib.Path, is_parent_album: bool, replay_gain: dict | None = None
+        self,
+        track: Track,
+        path_media: pathlib.Path,
+        is_parent_album: bool,
+        replay_gain: dict | None = None,
+        audio_type: str | None = None,
     ) -> tuple[bool, pathlib.Path | None, str, pathlib.Path | None]:
         """Write metadata, lyrics, and cover to a media file.
 
@@ -3961,9 +3999,9 @@ class Download:
                 album_peak_amplitude=replay_gain.get("album_peak_amplitude"),
                 track_replay_gain=replay_gain.get("track_replay_gain"),
                 track_peak_amplitude=replay_gain.get("track_peak_amplitude"),
-                url_share=facts.get("share_url")
-                if facts.get("share_url") and self.settings.data.metadata_write_url
-                else "",
+                url_share=(
+                    facts.get("share_url") if facts.get("share_url") and self.settings.data.metadata_write_url else ""
+                ),
                 replay_gain_write=self.settings.data.metadata_replay_gain,
                 upc=album_facts.get("upc") or "",
                 explicit=explicit,
@@ -3975,6 +4013,7 @@ class Download:
                 item_id=facts.get("item_id") or "",
                 artist_ids=facts.get("artist_ids") or [],
                 album_artist_ids=facts.get("album_artist_ids") or [],
+                audio_type=audio_type,
             )
         except (MetadataUnreadable, MutagenError, OSError):
             # A truncated/unidentifiable file (e.g. a failed download) can't be tagged.

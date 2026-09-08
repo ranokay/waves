@@ -83,6 +83,12 @@ class Settings:
         "{artist_name}/[{album_year}] {album_title}{album_explicit}/{track_volume_num_optional}"
         "{album_track_num}. {artist_name} - {track_title}{track_explicit}"
     )
+    # Where Dolby Atmos Versions land (§5.4, issue #29): a folder fragment
+    # rendered with the same tokens as the file templates, inserted between
+    # the stereo file's folder and its name. Default "Dolby Atmos" gives the
+    # Plex-friendly separate-subfolder layout zero-config; blank places Atmos
+    # alongside stereo, where collisions fall to the numbered-copy machinery.
+    format_atmos: str = "Dolby Atmos"
     # Videos keep their own top-level pool (Plex and friends do not model
     # music videos inside a music library's artist folders), organized per
     # artist with the release year leading the file name so a plain file
@@ -246,6 +252,10 @@ class HelpSettings:
     )
     format_mix: str = "Where to download mixes and how to name the items."
     format_track: str = "Where to download tracks and how to name the items."
+    format_atmos: str = (
+        "Where Dolby Atmos versions land: a subfolder under the stereo file's folder "
+        "(default Dolby Atmos). Blank places Atmos alongside stereo."
+    )
     format_video: str = "Where to download videos and how to name the items."
     video_convert_mp4: str = (
         "Videos are downloaded as MPEG Transport Stream (TS) files. With this option each video "

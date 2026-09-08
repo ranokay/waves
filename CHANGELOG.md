@@ -32,6 +32,10 @@ issue. A test enforces it.
 
 - 🍎 Apple Music downloads land in the cookies tier: with a cookies export set in Settings under Providers, Apple Music, one click downloads an Apple album, playlist or song in AAC 256 (Dolby Atmos where the Atmos toggle asks and the track carries it) through the normal queue, ownership and library machinery ([issue #28](https://github.com/ranokay/waves/issues/28)).
 
+### 🔧 Changed
+
+- 🔊 With "Download Dolby Atmos" on, one click now saves both the stereo and Dolby Atmos versions as separate queue rows (the Atmos row is badged ATMOS and lands in the new "Dolby Atmos files" subfolder by default, blank places it alongside), each with its own ownership, progress, cancel and retry, and the button settles only when every enabled version is owned; Atmos-only tracks still fetch Atmos alone, and every file now carries a WAVES_AUDIO_TYPE tag so recognition never sniffs codecs ([issue #29](https://github.com/ranokay/waves/issues/29)).
+
 ## 🗂️ v0.1.28 (2026-09-07)
 
 ### ✨ Added
