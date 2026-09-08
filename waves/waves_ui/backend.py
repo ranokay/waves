@@ -12018,11 +12018,11 @@ class WavesBridge(LibraryMixin, QObject):
                     break
             if not atmos_capable:
                 # Withdraw: remove the queue row so the click leaves one row
-                # (stereo), not a done row with no files.
+                # (stereo), not a done row with no files. The bypass permit is
+                # released by the job body's finally, the one place that runs
+                # however this job ends, so one release covers every exit here.
                 self._remove_row(qid)
                 self._emit_queue()
-                with contextlib.suppress(Exception):
-                    self._release_apple_bypass(media_id)
                 return " (already downloaded)"
         num_volumes = max([int(row.get("vol") or 1) for row in rows] + [1])
         ok = fail = skipped = unavailable = quarantined = 0
@@ -12080,8 +12080,9 @@ class WavesBridge(LibraryMixin, QObject):
             # once (see _start_retry), and every track of the job reads it. A
             # per-track consume would let only the first track through and
             # leave later quarantined tracks skipped instead of retried. It is
-            # released when the job settles (after the loop below), so the next
-            # bulk run skips again unless a verified copy cleared the mark.
+            # released exactly once by the job body's finally, however the job
+            # ends, so the next bulk run skips again unless a verified copy
+            # cleared the mark.
             bypass = False
             if not force:
                 try:
@@ -12214,19 +12215,19 @@ class WavesBridge(LibraryMixin, QObject):
                 illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
                 illegal_map=getattr(data, "filename_illegal_map", None),
             )
+        # Settlement: every exit below returns or raises through here, and the
+        # job body's finally releases this job's bypass permit exactly once.
+        # Releasing here as well would consume a sibling Version's permit on
+        # dual retries (two jobs, one media id, one permit each).
         if total == 1 and not collection:
             if ok or skipped:
-                self._release_apple_bypass(media_id)
                 return "" if ok else " (already downloaded)"
             if unavailable:
-                self._release_apple_bypass(media_id)
                 _raise_download_incomplete("not available on Apple Music anymore")
             if quarantined:
                 from waves.apple_integrity import INTEGRITY_FAIL_MESSAGE as _IFM_SINGLE
 
-                self._release_apple_bypass(media_id)
                 _raise_download_incomplete(_IFM_SINGLE)
-            self._release_apple_bypass(media_id)
             _raise_download_incomplete("Apple download produced no file")
         short = fail + unavailable
         if short:
@@ -12235,15 +12236,11 @@ class WavesBridge(LibraryMixin, QObject):
                 from waves.apple_integrity import INTEGRITY_FAIL_MESSAGE as _IFM_ALL
 
                 done_word = f"{ok} of {total} tracks" if ok else f"0 of {total} tracks"
-                self._release_apple_bypass(media_id)
                 _raise_download_incomplete(f"{done_word} downloaded ({_IFM_ALL})")
             done_word = f"{ok} of {total} tracks" if ok else f"0 of {total} tracks"
-            self._release_apple_bypass(media_id)
             _raise_download_incomplete(f"{done_word} downloaded ({short} failed)")
         if skipped and not ok:
-            self._release_apple_bypass(media_id)
             return " (already downloaded)"
-        self._release_apple_bypass(media_id)
         return ""
 
     def _apple_emit_progress(self, signals, collection: bool, pos: int, total: int, media_id: str, qid: int) -> None:

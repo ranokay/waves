@@ -992,9 +992,14 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
         # so the sibling's file is not an owned collision.
         template = "{artist_name}/{track_title}" if version == "stereo" else "{artist_name}/Dolby Atmos/{track_title}"
         spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1", audio_type=version)
-        summary = WavesBridge._run_apple_job(
-            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template=template
-        )
+        try:
+            summary = WavesBridge._run_apple_job(
+                stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template=template
+            )
+        finally:
+            # Production releases one permit per job in _apple_job_body's
+            # finally; the direct call here mirrors exactly one release.
+            stub._release_apple_bypass("apple:song-1")
         return summary, provider
 
     summary_st, provider_st = _run_shared("stereo", good_stereo)
