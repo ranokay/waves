@@ -667,6 +667,7 @@ _PATH_FIELDS = [
     "format_album",
     "format_playlist",
     "format_mix",
+    "format_atmos",
     "filename_delimiter_artist",
     "filename_delimiter_album_artist",
     # Surfaced under Advanced as a power-user override. The Settings "FFmpeg"
@@ -893,6 +894,7 @@ _FIELD_LABELS = {
     "format_playlist": "Playlist path & name",
     "format_video": "Video path & name",
     "format_mix": "Mix path & name",
+    "format_atmos": "Dolby Atmos files",
     "album_track_num_pad_min": "Track-number padding",
     "filename_delimiter_artist": "Artist separator",
     "filename_delimiter_album_artist": "Album-artist separator",
@@ -1117,12 +1119,58 @@ def _atmos_only(obj) -> bool:
     return bool(modes and all(str(m) == _ATMOS_MODE for m in modes))
 
 
+def _has_atmos(media) -> bool:
+    """Does this TIDAL track offer Dolby Atmos at all (dual or Atmos-only)?"""
+    modes = getattr(media, "audio_modes", None) or []
+    return bool(_ATMOS_MODE in [str(m) for m in modes])
+
+
+def _offers_both(media) -> bool:
+    """A track with a real choice: Atmos plus stereo on the same id.
+
+    The dual-download pair exists only here (and for Apple tracks with an
+    Atmos variant): one click queues both Versions. Atmos-only tracks fetch
+    Atmos alone; stereo-only tracks fetch stereo alone.
+    """
+    return bool(_has_atmos(media) and not _atmos_only(media))
+
+
+def atmos_file_template(base_template: str, atmos_fragment: str | None) -> str:
+    """An Atmos Version's file template: the stereo template with the Atmos
+    folder fragment inserted before the file name (§5.4).
+
+    Blank fragment places alongside stereo (same template); collisions fall
+    to the numbered-copy machinery. Non-blank inserts as a subfolder, tokens
+    intact for the normal renderer, so "{album_path}/Dolby Atmos" is the
+    default zero-config Plex layout.
+    """
+    base = str(base_template or "")
+    frag = str(atmos_fragment or "").strip()
+    if not frag:
+        return base
+    # Strip a single trailing slash from the fragment so "Dolby Atmos/" does
+    # not double-separate; inner slashes stay as a multi-level subpath.
+    frag = frag.rstrip("/\\").strip()
+    if not frag:
+        return base
+    if "/" not in base and "\\" not in base:
+        return f"{frag}/{base}" if base else frag
+    # Split on the last separator, whichever style the template uses.
+    idx = max(base.rfind("/"), base.rfind("\\"))
+    sep = base[idx]
+    return f"{base[:idx]}{sep}{frag}{sep}{base[idx + 1 :]}"
+
+
 def _record_is_atmos(rec) -> bool:
     """Was the copy on disk delivered as Dolby Atmos? The store keeps the
-    delivered audio_mode beside the tier (ownership.py), and it is the only
+    delivered audio type beside the tier (ownership.py), and it is the only
     thing that says which scale that tier was measured on. A row written before
     the column existed reads as stereo, which costs one re-download and then
-    settles."""
+    settles. Prefers the explicit audio_type (stereo/atmos); falls back to
+    the legacy audio_mode for rows from before the type column."""
+    atype = str((rec or {}).get("audio_type") or "").strip().lower()
+    if atype in ("atmos", "stereo"):
+        return atype == "atmos"
     return str((rec or {}).get("audio_mode") or "").upper() == _ATMOS_MODE.upper()
 
 
@@ -1302,6 +1350,8 @@ class _TrackedDownload(Download):
         pinned_quality=None,
         library_claim=None,
         force_redownload: bool = False,
+        audio_type: str | None = None,
+        base_template: str | None = None,
         **kwargs,
     ) -> None:
         # Per-thread override for skip_existing, set up BEFORE super().__init__,
@@ -1339,6 +1389,25 @@ class _TrackedDownload(Download):
         # names, so every pre-fetch gate stands down and each track overwrites
         # its old copy in place (the same force the upgrade path uses).
         self._force_redownload = bool(force_redownload)
+        # Dual-download Version (§5.2): None for legacy single rows (toggle
+        # off, byte-identical), "stereo" / "atmos" for the two rows of a pair.
+        # Stereo rows fetch stereo (skipping Atmos-only tracks when dual, so
+        # the Atmos row covers them); Atmos rows fetch Atmos (skipping
+        # stereo-only tracks), placing dual Versions through the Atmos
+        # subfolder and Atmos-only tracks to the normal path (no hole).
+        at = str(audio_type or "").strip().lower() or None
+        self._audio_type = at if at in ("stereo", "atmos") else None
+        # The stereo template for Atmos-only fallback (Atmos rows place
+        # Atmos-only tracks to the normal path, not the subfolder). None for
+        # stereo/single rows, which never need it.
+        self._base_template = str(base_template or "") or None
+        # Empty-dual detection (§5.2): an Atmos row that never meets a track
+        # offering Atmos (all stereo-only), or a stereo row that never meets
+        # a track offering stereo (all Atmos-only), has no work — it withdraws
+        # instead of settling done with no files. Set in item(), read after
+        # items() in the job body.
+        self._saw_atmos = False
+        self._saw_stereo = False
         # Per-track outcome tallies. The engine returns ok=False WITHOUT raising
         # when a stream URL can't be fetched (e.g. an unentitled free account
         # whose playback requests are rejected), so the job worker cannot tell
@@ -1525,6 +1594,23 @@ class _TrackedDownload(Download):
         quality with nothing to say so."""
         prev = None
         pinned = getattr(self, "_pinned_quality", None)
+        # Dual-download stereo rows fetch stereo even though the toggle is on:
+        # the engine decides the session from the live setting, so hold it off
+        # for this fetch (serialised by the stream lock, restored after). Atmos
+        # rows need no override: toggle-on already takes the Atmos session for
+        # dual-mode tracks, and Atmos-only tracks take it via the engine's own
+        # "nothing else to fetch" clause.
+        atmos_flag_held = False
+        prev_atmos_flag = None
+        if getattr(self, "_audio_type", None) == "stereo":
+            try:
+                prev_atmos_flag = bool(getattr(self.settings.data, "download_dolby_atmos", False))
+                if prev_atmos_flag:
+                    self.settings.data.download_dolby_atmos = False
+                    atmos_flag_held = True
+            except Exception:
+                logger.debug("Could not hold the Atmos toggle off for a stereo fetch", exc_info=True)
+                atmos_flag_held = False
         if pinned is not None:
             try:
                 if not self._wants_atmos(media):
@@ -1544,6 +1630,9 @@ class _TrackedDownload(Download):
             if prev is not None:
                 with contextlib.suppress(Exception):
                     self.session.audio_quality = prev
+            if atmos_flag_held:
+                with contextlib.suppress(Exception):
+                    self.settings.data.download_dolby_atmos = prev_atmos_flag
         mid = getattr(media, "id", None)
         if mid is not None and getattr(info, "media_stream", None) is not None:
             quality = _stream_quality(info)
@@ -1567,8 +1656,20 @@ class _TrackedDownload(Download):
     def _wants_atmos(self, media) -> bool:
         """The engine's own Atmos condition, mirrored so the pin can leave an
         Atmos fetch alone (it carries its own session and quality), and so the
-        ownership gate ranks a copy on the scale it was delivered on."""
-        return _delivers_atmos(media, bool(self.settings.data.download_dolby_atmos))
+        ownership gate ranks a copy on the scale it was delivered on.
+
+        Dual-download rows pin their Version: stereo rows never want Atmos
+        (Atmos-only tracks skip instead, the Atmos row covers them); Atmos
+        rows want Atmos whenever the track offers it. Legacy single rows
+        (audio_type None, toggle off) keep the engine's own condition,
+        including its "nothing else to fetch" clause.
+        """
+        at = getattr(self, "_audio_type", None)
+        if at == "stereo":
+            return False
+        if at == "atmos":
+            return bool(_has_atmos(media))
+        return _delivers_atmos(media, bool(getattr(self.settings.data, "download_dolby_atmos", False)))
 
     def _get_media_urls(self, media, stream_info=None):
         """Capture that a video is really being fetched, as a side effect. Videos
@@ -1620,8 +1721,24 @@ class _TrackedDownload(Download):
         media_id = identity_id or getattr(media, "id", None)
         if media_id is None:
             return None, None
+        # Per-version gates (§5.3): dual rows ask for the Version they fetch,
+        # so owning stereo leaves the Atmos half fetching and vice versa.
+        # Legacy single rows keep the whole-track query (toggle-off,
+        # byte-identical).
+        want_type = getattr(self, "_audio_type", None)
         try:
-            rec = self._ownership_of(str(media_id))
+            if want_type in ("stereo", "atmos"):
+                rec = self._ownership_of(str(media_id), audio_type=want_type)
+            else:
+                rec = self._ownership_of(str(media_id))
+        except TypeError:
+            # Older OwnershipStore without the audio_type filter (tests
+            # pinning the legacy shape): fall back to the whole-track query.
+            try:
+                rec = self._ownership_of(str(media_id))
+            except Exception:
+                logger.debug("Ownership lookup failed; not gating", exc_info=True)
+                return None, None
         except Exception:
             logger.debug("Ownership lookup failed; not gating", exc_info=True)
             return None, None
@@ -1715,11 +1832,26 @@ class _TrackedDownload(Download):
             return "force", {}
         verdict, rec = self._ownership_decision(media, file_template, placement)
         if verdict == "skip":
+            # Dual rows state their own Version's word (ATMOS for Atmos rows,
+            # never the tier the fixed request rode at); legacy rows keep the
+            # delivered word.
+            if getattr(self, "_audio_type", None) == "atmos":
+                tier_word = ATMOS_WORD
+            else:
+                tier_word = _delivered_word((rec or {}).get("quality_tier"), (rec or {}).get("audio_mode"))
             return "skip", {
                 "kind": "own",
-                "tier": _delivered_word((rec or {}).get("quality_tier"), (rec or {}).get("audio_mode")),
+                "tier": tier_word,
             }
-        if verdict is None and self._library_claim is not None and getattr(media, "waves_identity_id", None) is None:
+        # Dual-download rows never consult the version-blind library claim (a
+        # stereo file does not satisfy an Atmos row, and vice versa); legacy
+        # single rows keep it (toggle-off, byte-identical).
+        if (
+            verdict is None
+            and getattr(self, "_audio_type", None) is None
+            and self._library_claim is not None
+            and getattr(media, "waves_identity_id", None) is None
+        ):
             try:
                 claim = self._library_claim(media)
             except Exception:
@@ -1833,19 +1965,59 @@ class _TrackedDownload(Download):
         relay.track_event.emit(event)
 
     def item(self, *args, media=None, event_stop=None, **kwargs):
+        # Dual-download per-version short-circuits (§5.2-5.3), before any
+        # stream is fetched: a stereo row has no stereo to fetch for an
+        # Atmos-only track (the Atmos row covers it); an Atmos row has no
+        # Atmos to fetch for a stereo-only track. Both count as skipped (work
+        # the pair covers elsewhere), never as failures, so an album of mixed
+        # tracks completes. Legacy single rows (audio_type None) keep today's
+        # behavior: Atmos-only tracks fetch via the Atmos session (no hole).
+        # _saw_* start False in __init__; rows built via __new__ in tests gain
+        # them here on first sight (plain attribute sets, never raising).
+        _at = getattr(self, "_audio_type", None)
+        if media is not None and getattr(media, "id", None) is not None:
+            try:
+                has_at = bool(_has_atmos(media))
+                only_at = bool(_atmos_only(media))
+            except Exception:
+                has_at = False
+                only_at = False
+            if _at == "atmos" and has_at:
+                self._saw_atmos = True
+            if _at == "stereo" and not only_at:
+                self._saw_stereo = True
+            # Legacy single rows see everything (no flags needed for them).
+            if _at is None:
+                if has_at:
+                    self._saw_atmos = True
+                if not only_at:
+                    self._saw_stereo = True
+        if _at == "stereo" and media is not None and _atmos_only(media):
+            return self._emit_skip(media, None)
+        if _at == "atmos" and media is not None and not _has_atmos(media):
+            return self._emit_skip(media, None)
+        # Atmos-only tracks in an Atmos row land to the normal path (the base
+        # template), not the subfolder: there is no stereo twin to sit beside,
+        # and the subfolder would leave a hole in the album. Dual Versions of
+        # the same track land stereo beside the Atmos subfolder.
+        use_kwargs = kwargs
+        _base_tpl = getattr(self, "_base_template", None)
+        if _at == "atmos" and media is not None and _atmos_only(media) and _base_tpl:
+            use_kwargs = dict(kwargs)
+            use_kwargs["file_template"] = _base_tpl
         # Ownership gate first, before any stream is fetched: an item owned at
         # equal-or-better quality is skipped without a network round-trip; an
         # upgrade run forces the path skip off so the engine overwrites the old
         # copy in place.
-        placement = {k: kwargs[k] for k in ("quality_audio", "list_position", "list_total") if k in kwargs}
-        verdict, detail = self._claim_decision(media, kwargs.get("file_template"), placement)
+        placement = {k: use_kwargs[k] for k in ("quality_audio", "list_position", "list_total") if k in use_kwargs}
+        verdict, detail = self._claim_decision(media, use_kwargs.get("file_template"), placement)
         if verdict == "skip":
             return self._emit_skip(media, detail)
         force = self._force_download() if verdict == "force" else contextlib.nullcontext()
         relay = self._track_signals
         if relay is None or media is None or getattr(media, "id", None) is None:
             with force:
-                ok, path = super().item(*args, media=media, event_stop=event_stop, **kwargs)
+                ok, path = super().item(*args, media=media, event_stop=event_stop, **use_kwargs)
             # The refusal mark is drained either way so it cannot leak onto
             # this thread's next track: a refusal is TIDAL saying the item is
             # gone, neither a success nor a failure of ours.
@@ -1855,6 +2027,13 @@ class _TrackedDownload(Download):
             else:
                 self._note_outcome(ok)
             return ok, path
+        # An Atmos row fetching Atmos states ATMOS while it runs (the tier it
+        # would carry as stereo never applies); stereo rows and legacy rows
+        # keep the catalog's word.
+        if getattr(self, "_audio_type", None) == "atmos" and isinstance(media, Track) and _has_atmos(media):
+            expected_word = ATMOS_WORD
+        else:
+            expected_word = _quality_label(media, self.provider) if isinstance(media, Track) else ""
         base = {
             # A merge-plan member reports under its identity id: the queue row,
             # the ownership record and the membership list all live under the
@@ -1867,7 +2046,7 @@ class _TrackedDownload(Download):
             # The catalog's advertised ceiling for this track, so a ledger row
             # first seen here (no fetched list, no merge seed) still states an
             # honest prediction while it runs.
-            "expected": _quality_label(media, self.provider) if isinstance(media, Track) else "",
+            "expected": expected_word,
         }
         relay.track_event.emit({**base, "status": "running"})
         # Which row the engine's _note_progress_task hook should file this
@@ -1876,7 +2055,7 @@ class _TrackedDownload(Download):
         self._tls.row_key = base["id"]
         try:
             with force:
-                ok, path = super().item(*args, media=media, event_stop=event_stop, **kwargs)
+                ok, path = super().item(*args, media=media, event_stop=event_stop, **use_kwargs)
         except Exception:
             with self._delivered_lock:
                 self._delivered.pop(self._delivered_key(media), None)
@@ -2740,6 +2919,13 @@ class _JobSpec:
     collection: bool
     media_id: str
     merge_plan: list | None
+    # Dual-download Version (§5.2): None for legacy single rows (toggle off),
+    # "stereo" / "atmos" for the two rows of a pair. The Atmos row's files
+    # land through file_template (base with the Atmos subfolder pre-inserted);
+    # base_template is the stereo template for Atmos-only fallback (Atmos-only
+    # tracks land to the normal path, no hole). Stereo/single rows ignore it.
+    audio_type: str | None = None
+    base_template: str = ""
 
     def raw_object_id(self) -> str:
         """The id inside the namespace, as the provider's get_object wants it."""
@@ -8337,12 +8523,15 @@ class WavesBridge(LibraryMixin, QObject):
         return self._target_quality_rank(tier) if tier is not None else self._target_quality_rank()
 
     def _row_ask(self, qid: int) -> tuple | None:
-        """The (askQuality, tier word) a queue row was created with, for a
-        retry of that row to ask at again; None when the row is gone or
-        never carried an ask."""
+        """The (askQuality, tier word, audioType) a queue row was created with,
+        for a retry of that row to ask at again; None when the row is gone or
+        never carried an ask. The audioType pins dual-download retries to the
+        same Version (each row carries its own retry)."""
         row = self._queue_item(qid) or {}
         ask = str(row.get("askQuality") or "")
-        return (ask, str(row.get("quality") or "")) if ask else None
+        if not ask:
+            return None
+        return (ask, str(row.get("quality") or ""), str(row.get("audioType") or "") or None)
 
     def _job_quality(self, qid: int):
         """The audio quality a queue row was created at, as a Waves rung, or
@@ -8374,6 +8563,14 @@ class WavesBridge(LibraryMixin, QObject):
         queue claims nothing."""
         return bool((self._queue_item(qid) or {}).get("askLibrarySkip"))
 
+    def _job_audio_type(self, qid: int) -> str | None:
+        """Which Version a queue row downloads (§5.2): "stereo" / "atmos" for
+        dual-download rows, None for legacy single rows (toggle off). Pinned
+        at enqueue like askQuality, so a settings flip retargets nothing
+        already queued."""
+        raw = str((self._queue_item(qid) or {}).get("audioType") or "").strip().lower()
+        return raw if raw in ("stereo", "atmos") else None
+
     def _target_tier(self) -> str:
         """The tier the audio-quality setting asks for, as the UI's one word.
         Best-effort: an unreadable setting means the row states no target
@@ -8397,12 +8594,20 @@ class WavesBridge(LibraryMixin, QObject):
         expected: str = "",
         ask_quality: str | None = None,
         ask_tier: str | None = None,
+        audio_type: str | None = None,
     ) -> int:
         # A per-item quality choice arrives as both halves of the ask (the
         # Waves tier string the job pins, the word the drawer states); without
         # one both come from the setting as they always have.
         if ask_quality is None or ask_tier is None:
             ask_quality, ask_tier = self._queued_quality_value(), self._target_tier()
+        # Which Version this row downloads (§5.2): None keeps the legacy
+        # single-row shape (toggle off, byte-identical); "stereo" / "atmos"
+        # mark the two rows of a dual-download pair. Seeded so the drawer's
+        # model fixes the role from the first row it is handed.
+        atype = str(audio_type or "").strip().lower() or None
+        if atype not in (None, "stereo", "atmos"):
+            atype = None
         self._queue_seq += 1
         qid = self._queue_seq
         row = {
@@ -8462,6 +8667,11 @@ class WavesBridge(LibraryMixin, QObject):
             # into a nested model): stringifying in Python per CHANGE beats
             # JSON.stringify in QML per row per reconcile pass.
             "mixJson": "[]",
+            # Dual-download Version (§5.2): None for legacy single rows,
+            # "stereo" / "atmos" for the two rows of a pair. The Atmos row is
+            # badged ATMOS from its expected/quality words; both rows carry
+            # their own progress, cancel, retry and file link via their qids.
+            "audioType": atype or "",
         }
         with self._queue_lock:
             self._queue.append(row)
@@ -8719,6 +8929,7 @@ class WavesBridge(LibraryMixin, QObject):
                 "quality_tier": tier,
                 "quality_rank": delivered,
                 "audio_mode": quality.get("audio_mode"),
+                "audio_type": "atmos" if _record_is_atmos({"audio_mode": quality.get("audio_mode")}) else "stereo",
                 "bit_depth": quality.get("bit_depth"),
                 "sample_rate": quality.get("sample_rate"),
                 "codecs": quality.get("codecs"),
@@ -8727,7 +8938,17 @@ class WavesBridge(LibraryMixin, QObject):
                 "degraded_tries": tries,
             }
             with self._own_lock:
-                self._own_cache[str(ev.get("id"))] = (time.monotonic(), rec)
+                tid_done = str(ev.get("id"))
+                self._own_cache[tid_done] = (time.monotonic(), rec)
+                # Assert the Version's own key too, so dual buttons flip the
+                # instant their half lands (no stat, no TTL wait). The whole
+                # above reconciles to the best surviving copy on the next
+                # refresh; the Versions below are exact.
+                try:
+                    vkey = "atmos" if _record_is_atmos(rec) else "stereo"
+                    self._own_cache[f"{tid_done}|{vkey}"] = (time.monotonic(), rec)
+                except Exception:
+                    logger.debug("Could not assert the versioned ownership cache", exc_info=True)
                 self._evict_own_cache_locked()
             self.ownershipChanged.emit(str(ev.get("id")))
             # Cross to the GUI thread (queued): when the library IS the download
@@ -8786,7 +9007,14 @@ class WavesBridge(LibraryMixin, QObject):
     def _evict_own_cache_locked(self) -> None:
         """Bound _own_cache; caller holds _own_lock."""
         while len(self._own_cache) > self._OWN_CACHE_MAX:
-            del self._own_cache[next(iter(self._own_cache))]
+            oldest = next(iter(self._own_cache))
+            del self._own_cache[oldest]
+            # Versioned dual keys piggyback on the base: dropping the base
+            # drops its Versions too, so a stale Atmos half cannot outlive
+            # the whole it was refreshed with.
+            if not oldest.endswith("|stereo") and not oldest.endswith("|atmos"):
+                self._own_cache.pop(f"{oldest}|stereo", None)
+                self._own_cache.pop(f"{oldest}|atmos", None)
 
     def _target_quality_rank(self, quality=None) -> int:
         """Rank of the audio quality this run targets, for "already have
@@ -8807,9 +9035,41 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Ownership refresh failed", exc_info=True)
             rec = None
+        # Dual-download per-version recs (§5.3): when the button needs both
+        # Versions, refresh both alongside the whole (worker, disk allowed).
+        # Versioned keys (tid+"|stereo"/"|atmos") piggyback on the base's
+        # pending/TTL/announce: no separate pending, the base's refresh
+        # refreshes all three and announces the base when any changed.
+        rec_st = rec_at = None
+        want_versions = False
+        try:
+            want_versions = self._dual_button_need(tid) == "both"
+        except Exception:
+            want_versions = False
+        if want_versions:
+            try:
+                rec_st = self._ownership.ownership_of(tid, audio_type="stereo")
+            except TypeError:
+                rec_st = None
+            except Exception:
+                logger.debug("Dual stereo refresh failed", exc_info=True)
+                rec_st = None
+            try:
+                rec_at = self._ownership.ownership_of(tid, audio_type="atmos")
+            except TypeError:
+                rec_at = None
+            except Exception:
+                logger.debug("Dual Atmos refresh failed", exc_info=True)
+                rec_at = None
+        now = time.monotonic()
         with self._own_lock:
             prev = self._own_cache.get(tid)
-            self._own_cache[tid] = (time.monotonic(), rec)
+            self._own_cache[tid] = (now, rec)
+            prev_st = self._own_cache.get(f"{tid}|stereo")
+            prev_at = self._own_cache.get(f"{tid}|atmos")
+            if want_versions:
+                self._own_cache[f"{tid}|stereo"] = (now, rec_st)
+                self._own_cache[f"{tid}|atmos"] = (now, rec_at)
             self._evict_own_cache_locked()
             self._own_pending.discard(tid)
         # The FIRST answer always announces itself, even "not owned": a cold
@@ -8817,7 +9077,10 @@ class WavesBridge(LibraryMixin, QObject):
         # roll animation on it needs this nudge to arm, whatever the answer.
         # Batched (ownershipChangedBatch): see the signal for why per-id emits
         # from here were a GUI-thread flood at launch.
-        if prev is None or prev[1] != rec:
+        changed = prev is None or prev[1] != rec
+        if want_versions:
+            changed = changed or (prev_st is None or prev_st[1] != rec_st) or (prev_at is None or prev_at[1] != rec_at)
+        if changed:
             self._announce_ownership(tid)
 
     @Slot(str, result="QVariant")
@@ -8829,7 +9092,14 @@ class WavesBridge(LibraryMixin, QObject):
         re-asks once the truth lands. up_to_date says whether the copy matches
         the CURRENT audio quality setting (computed per call, so a quality change
         re-evaluates instantly); tier-less records (videos) are always current.
-        Returns {owned, up_to_date, path, quality_tier, ...} or {owned: False}."""
+        Returns {owned, up_to_date, path, quality_tier, ...} or {owned: False}.
+
+        Dual-download (§5.3): with the Atmos toggle on and a track offering
+        both Versions, the button settles only when every enabled Version is
+        owned — stereo alone still reads DOWNLOAD. Atmos-only tracks fetch
+        Atmos alone; stereo-only tracks settle on stereo. Unknown tracks
+        (object evicted) keep the legacy whole-track answer.
+        """
         tid = str(track_id)
         now = time.monotonic()
         ttl = self._OWN_TTL_BUSY if self._downloads_running() else self._OWN_TTL
@@ -8848,10 +9118,106 @@ class WavesBridge(LibraryMixin, QObject):
             # from DOWNLOAD to DOWNLOADED when the real answer lands a beat
             # later. A stale-but-known answer stays unmarked on purpose.
             return {"owned": False, "pending": True} if hit is None else {"owned": False}
+        # Dual-download button coverage (§5.3): when toggle on and the track
+        # offers both, require both Versions — cache-only (versioned keys
+        # refreshed alongside the whole on the worker, never disk here).
+        try:
+            dual_need = self._dual_button_need(tid)
+        except Exception:
+            dual_need = None
+        if dual_need == "both":
+            with self._own_lock:
+                vst = self._own_cache.get(f"{tid}|stereo")
+                vat = self._own_cache.get(f"{tid}|atmos")
+            # Either half missing or stale → refresh the base (which refreshes
+            # both) and hold the roll animation until the truth lands, like a
+            # cold whole-track query. Stale-but-known whole answers stay
+            # unmarked on purpose; versioned halves have no separate pending:
+            # the base's pending covers both.
+            st_fresh = vst is not None and now - vst[0] < ttl
+            at_fresh = vat is not None and now - vat[0] < ttl
+            if not st_fresh or not at_fresh:
+                # Triggered by the whole's need above when cold; when the whole
+                # is fresh but a half is missing/stale (evicted, or refreshed
+                # before dual was enabled), re-arm the base refresh here.
+                with self._own_lock:
+                    rearm = tid not in self._own_pending
+                    if rearm:
+                        self._own_pending.add(tid)
+                if rearm:
+                    self._own_pool.start(Worker(lambda: self._own_refresh(tid)))
+                # Cold halves read as pending (roll animation); stale halves
+                # fall back to the whole-track verdict below until the refresh
+                # lands (no visible flip from DOWNLOADED to DOWNLOAD on stale).
+                if vst is None or vat is None:
+                    return {"owned": False, "pending": True} if hit is None else {"owned": False}
+            else:
+                rec_st = vst[1] if vst else None
+                rec_at = vat[1] if vat else None
+                # Owned only when every enabled Version survives on disk now
+                # (the versioned queries already re-checked the disk on the
+                # worker; None means no surviving copy of that Version).
+                if not rec_st or not rec_at:
+                    # Which half is missing decides what the button shows: the
+                    # surviving half's rec (stereo preferred, it names the
+                    # tier), marked out-of-date (DOWNLOAD until both land).
+                    show = rec_st if rec_st else rec_at
+                    if show:
+                        return {**show, "up_to_date": False}
+                    return {"owned": False}
+                # Both survive: current only when each Version is current on
+                # its own scale (stereo vs target, Atmos via its fixed tier).
+                # The button shows the stereo half's facts (the tier), settled.
+                st_cur = _copy_is_current(rec_st, self._override_target_rank(tid), False, None)
+                at_cur = _copy_is_current(rec_at, self._override_target_rank(tid), True, None)
+                return {**rec_st, "up_to_date": bool(st_cur and at_cur)}
         return {
             **rec,
             "up_to_date": _copy_is_current(rec, self._override_target_rank(tid), self._would_refetch_atmos(rec)),
         }
+
+    def _dual_button_need(self, tid: str) -> str | None:
+        """Which Versions a button must hold for ``tid``: "both" (dual,
+        toggle on, track offers stereo+Atmos), else None (legacy whole-track).
+
+        Cache-only, never network: TIDAL via _objs, Apple via provider cache.
+        Unknown objects answer None (legacy), so evicted rows never flip to
+        DOWNLOAD for stereo-only tracks they cannot judge.
+        """
+        try:
+            atmos_on = bool(getattr(self.settings.data, "download_dolby_atmos", False))
+        except Exception:
+            return None
+        if not atmos_on:
+            return None
+        t = str(tid or "")
+        if t.startswith(f"{CTX_APPLE}:"):
+            provider = self.providers.get(CTX_APPLE)
+            if provider is None:
+                return None
+            try:
+                raw = provider.cached("track", t)
+            except Exception:
+                return None
+            if not isinstance(raw, dict):
+                return None
+            try:
+                return "both" if bool(provider.has_atmos(raw)) else None
+            except Exception:
+                return None
+        # TIDAL: bare ids in _objs (namespaced reads as tidal for the store,
+        # but _objs keys are the media ids the entry points used).
+        objs = getattr(self, "_objs", {}).get("track", {}) if hasattr(self, "_objs") else {}
+        obj = objs.get(t)
+        if obj is None:
+            bare = t.removeprefix(f"{CTX_TIDAL}:") if t.startswith(f"{CTX_TIDAL}:") else t
+            obj = objs.get(bare)
+        if obj is None:
+            return None
+        try:
+            return "both" if bool(_offers_both(obj)) else None
+        except Exception:
+            return None
 
     def _would_refetch_atmos(self, rec) -> bool:
         """Whether a download queued now would fetch Dolby Atmos for the track
@@ -8862,7 +9228,7 @@ class WavesBridge(LibraryMixin, QObject):
         only answer _copy_is_current acts on is the one where the copy on disk
         IS Atmos, and such a copy is itself proof that the track offers Atmos.
         The setting supplies the rest."""
-        return bool(_record_is_atmos(rec) and self.settings.data.download_dolby_atmos)
+        return bool(_record_is_atmos(rec) and getattr(self.settings.data, "download_dolby_atmos", False))
 
     @Slot(str, result="QVariant")
     def collectionMemberIds(self, collection_id: str):
@@ -9144,9 +9510,25 @@ class WavesBridge(LibraryMixin, QObject):
         if media_id in self._redownload_overrides or media_id in self._merge_plans:
             return marks
         target = self._target_quality_rank(self._job_quality(qid))
-        atmos_on = bool(self.settings.data.download_dolby_atmos)
+        atmos_on = bool(getattr(self.settings.data, "download_dolby_atmos", False))
+        # Dual-download rows predict only their own Version (§5.2-5.3, worker
+        # thread, no network beyond the ownership store): stereo rows skip
+        # Atmos-only tracks (the Atmos row covers them), Atmos rows skip
+        # stereo-only tracks, and neither consults the version-blind library
+        # claim (a stereo file does not satisfy an Atmos row). Legacy single
+        # rows keep today's whole-track + claim prediction (toggle-off,
+        # byte-identical).
+        row_atype = (
+            str(item.get("audioType") or (self._job_audio_type(qid) if hasattr(self, "_job_audio_type") else "") or "")
+            .strip()
+            .lower()
+            or None
+        )
+        if row_atype not in ("stereo", "atmos"):
+            row_atype = None
         claim_on = (
-            bool(item.get("collection"))
+            row_atype is None
+            and bool(item.get("collection"))
             and self._job_library_skip(qid)
             and media_id not in self._library_claim_overrides
         )
@@ -9157,21 +9539,40 @@ class WavesBridge(LibraryMixin, QObject):
             tid = str(getattr(tr, "id", "") or "")
             if not tid:
                 continue
+            if row_atype == "stereo" and _atmos_only(tr):
+                continue
+            if row_atype == "atmos" and not _has_atmos(tr):
+                continue
             try:
-                rec = self._ownership.ownership_of(tid)
+                if row_atype in ("stereo", "atmos"):
+                    try:
+                        rec = self._ownership.ownership_of(tid, audio_type=row_atype)
+                    except TypeError:
+                        rec = self._ownership.ownership_of(tid)
+                else:
+                    rec = self._ownership.ownership_of(tid)
             except Exception:
                 logger.debug("Ownership lookup failed while reading a queued row", exc_info=True)
                 continue
             if rec:
-                # _delivers_atmos carries the engine's own "nothing else to
-                # fetch" clause, so an owned Atmos-only copy predicts a skip
-                # whatever the setting says, the same answer the gate gives:
-                # the drawer must not promise an upgrade the run will not
-                # perform.
-                if _copy_is_current(rec, target, _delivers_atmos(tr, atmos_on), _advertised_ceiling(tr)):
+                if row_atype == "stereo":
+                    cur = _copy_is_current(rec, target, False, _advertised_ceiling(tr))
+                    tier_word = _delivered_word(rec.get("quality_tier"), rec.get("audio_mode"))
+                elif row_atype == "atmos":
+                    cur = _copy_is_current(rec, target, True, _advertised_ceiling(tr))
+                    tier_word = ATMOS_WORD
+                else:
+                    # _delivers_atmos carries the engine's own "nothing else to
+                    # fetch" clause, so an owned Atmos-only copy predicts a skip
+                    # whatever the setting says, the same answer the gate gives:
+                    # the drawer must not promise an upgrade the run will not
+                    # perform.
+                    cur = _copy_is_current(rec, target, _delivers_atmos(tr, atmos_on), _advertised_ceiling(tr))
+                    tier_word = _delivered_word(rec.get("quality_tier"), rec.get("audio_mode"))
+                if cur:
                     marks[tid] = {
                         "kind": "own",
-                        "tier": _delivered_word(rec.get("quality_tier"), rec.get("audio_mode")),
+                        "tier": tier_word,
                     }
                 # Owned below what this job would actually deliver is an
                 # upgrade, not a skip, and an owned record also stops the claim
@@ -10308,6 +10709,8 @@ class WavesBridge(LibraryMixin, QObject):
         library_claim=None,
         force_redownload: bool = False,
         pinned_quality=None,
+        audio_type: str | None = None,
+        base_template: str | None = None,
     ) -> Download:
         self._resolve_ffmpeg()
         progress_gui = ProgressBars(
@@ -10343,6 +10746,8 @@ class WavesBridge(LibraryMixin, QObject):
             pinned_quality=pinned_quality,
             library_claim=library_claim,
             force_redownload=force_redownload,
+            audio_type=audio_type,
+            base_template=base_template,
         )
         self._warn_if_ffmpeg_missing(dl)
         return dl
@@ -11088,80 +11493,137 @@ class WavesBridge(LibraryMixin, QObject):
         # another tier (livetest report: download a song at a chosen tier and
         # its badge fell straight back to the catalog's word).
         if keep_ask is not None and keep_ask[0]:
-            ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] or _tier_word(keep_ask[0]))
+            ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] if len(keep_ask) > 1 else "" or _tier_word(keep_ask[0]))
+            # A retry is of THIS row: it keeps the Version the row asked at,
+            # not a fresh dual pair (each row carries its own retry).
+            keep_ver = str(keep_ask[2] if len(keep_ask) > 2 else "" or "").strip().lower() or None
+            keep_ver = keep_ver if keep_ver in ("stereo", "atmos") else None
         else:
             ask, ask_tier = self._ask_quality_for(obj, type_media, media_id)
-        if media_id:
-            with self._queue_lock:
-                dup = any(
-                    it.get("media_id") == media_id
-                    and it.get("type") == type_media
-                    and it.get("status") in ("queued", "running")
-                    and it.get("template") == file_template
-                    and it.get("askQuality") == ask
-                    for it in self._queue
-                )
-            if dup:
-                # Acknowledge the click the same way a fresh row would: the
-                # work it asked for is already on its way, at this very tier.
-                self.downloadState.emit(media_id, "queued")
-                return
+            keep_ver = None
+        # Dual-download Versions (§5.1-5.2): toggle on means alongside (two
+        # rows, two files) where a real choice exists; toggle off stays
+        # byte-identical single rows. Merges and videos never dual (v1). A
+        # retry (keep_ask) re-queues only its own Version. Test stubs without
+        # settings read as toggle-off (single legacy, existing behavior).
+        versions: list[str | None]
+        try:
+            _atmos_on = bool(
+                getattr(getattr(self, "settings", None), "data", None)
+                and getattr(self.settings.data, "download_dolby_atmos", False)
+            )
+        except Exception:
+            _atmos_on = False
+        if keep_ver is not None:
+            versions = [keep_ver]
+        elif merge_plan is not None or type_media == "video" or not _atmos_on:
+            versions = [None]
+        elif type_media in ("track", "album"):
+            versions = ["stereo", "atmos"] if _offers_both(obj) else [None]
+        elif type_media in ("playlist", "mix"):
+            # Prevalence needs the track list (network); enqueue the pair and
+            # let each row skip what it cannot fetch (stereo skips Atmos-only,
+            # Atmos skips stereo-only). An all-one-side playlist withdraws its
+            # empty row at dispatch (see _start_job's empty-dual guard).
+            versions = ["stereo", "atmos"]
+        else:
+            versions = [None]
+        try:
+            atmos_fragment = str(getattr(self.settings.data, "format_atmos", "Dolby Atmos") or "")
+        except Exception:
+            atmos_fragment = "Dolby Atmos"
         # Artist + total track count for the queue row label. Collections report
         # their track total; a single track/video counts as one.
         artist = _primary_artist_name(obj)
         tracks = len(merge_plan) if merge_plan is not None else (_track_count(obj) if collection else 1)
-        expected = "" if type_media == "video" else _quality_label(obj, self.providers[CTX_TIDAL])
-        qid = self._enqueue(
-            name,
-            type_media,
-            media_id,
-            file_template,
-            collection,
-            artist,
-            tracks,
-            _image(obj, 160),
-            expected,
-            ask_quality=ask,
-            ask_tier=ask_tier,
-        )
-        # Acknowledge the click on the button itself, immediately: behind a
-        # saturated pool a worker may not pick this job up for minutes, and a
-        # queue row alone (one number in the header) reads as "nothing
-        # happened". The worker flips it to "running"; every bail-out path
-        # below emits "" or "failed", so a withdrawn row can't strand a button
-        # in the queued state.
+        base_expected = "" if type_media == "video" else _quality_label(obj, self.providers[CTX_TIDAL])
+        queued_any = False
+        for ver in versions:
+            row_atype = ver
+            row_template = file_template
+            row_expected = base_expected
+            row_tier_word = ask_tier
+            base_for_spec = ""
+            if ver == "atmos":
+                row_template = atmos_file_template(file_template, atmos_fragment)
+                row_expected = ATMOS_WORD
+                row_tier_word = ATMOS_WORD
+                base_for_spec = file_template
+            if media_id:
+                with self._queue_lock:
+                    dup = any(
+                        it.get("media_id") == media_id
+                        and it.get("type") == type_media
+                        and it.get("status") in ("queued", "running")
+                        and it.get("template") == row_template
+                        and it.get("askQuality") == ask
+                        and str(it.get("audioType") or "") == (row_atype or "")
+                        for it in self._queue
+                    )
+                if dup:
+                    continue
+            qid = self._enqueue(
+                name,
+                type_media,
+                media_id,
+                row_template,
+                collection,
+                artist,
+                tracks,
+                _image(obj, 160),
+                row_expected,
+                ask_quality=ask,
+                ask_tier=row_tier_word,
+                audio_type=row_atype,
+            )
+            queued_any = True
+            # Acknowledge the click on the button itself, immediately: behind a
+            # saturated pool a worker may not pick this job up for minutes, and a
+            # queue row alone (one number in the header) reads as "nothing
+            # happened". The worker flips it to "running"; every bail-out path
+            # below emits "" or "failed", so a withdrawn row can't strand a button
+            # in the queued state.
+            # (Emitted once per click below, not per row: two rows same button
+            # would flash queued twice.)
+            if collection or merge_plan is not None:
+                # Seed the per-track registry. A merge plan knows its exact track
+                # list up front; a plain collection fills in as tracks start.
+                self._job_tracks[qid] = _seed_merge_registry(merge_plan, self.providers[CTX_TIDAL])
+                if merge_plan is not None:
+                    # A plain collection learns its membership in _track_lifecycle,
+                    # on first sight of each track. A merge pre-seeds every row here,
+                    # so that branch never runs and the merged album recorded no
+                    # members at all: after a restart a fully-downloaded album read
+                    # as "not downloaded" until something else loaded its track list.
+                    try:
+                        self._ownership.record_members_add(media_id, list(self._job_tracks[qid]))
+                        self.collectionMembershipChanged.emit(media_id)
+                    except Exception:
+                        logger.debug("Could not record merge collection membership", exc_info=True)
+            # The job itself is built when its turn comes (see _JobSpec): until
+            # then the row costs its dict, the live object the row dressing reads,
+            # and the spec's name for the object -- who serves it, what it is, and
+            # the namespaced id it resolves from at dispatch.
+            self._job_objs[qid] = obj
+            self._job_specs[qid] = _JobSpec(
+                provider_id=provider_id,
+                kind=type_media,
+                object_id=f"{provider_id}:{media_id}",
+                name=name,
+                file_template=row_template,
+                collection=collection,
+                media_id=media_id,
+                merge_plan=merge_plan,
+                audio_type=row_atype,
+                base_template=base_for_spec,
+            )
+            self._pending_qids.append(qid)
+        if not queued_any:
+            # Every Version already queued/running: acknowledge like a fresh row
+            # would (the work asked for is already on its way).
+            self.downloadState.emit(media_id, "queued")
+            return
         self.downloadState.emit(media_id, "queued")
-        if collection or merge_plan is not None:
-            # Seed the per-track registry. A merge plan knows its exact track
-            # list up front; a plain collection fills in as tracks start.
-            self._job_tracks[qid] = _seed_merge_registry(merge_plan, self.providers[CTX_TIDAL])
-            if merge_plan is not None:
-                # A plain collection learns its membership in _track_lifecycle,
-                # on first sight of each track. A merge pre-seeds every row here,
-                # so that branch never runs and the merged album recorded no
-                # members at all: after a restart a fully-downloaded album read
-                # as "not downloaded" until something else loaded its track list.
-                try:
-                    self._ownership.record_members_add(media_id, list(self._job_tracks[qid]))
-                    self.collectionMembershipChanged.emit(media_id)
-                except Exception:
-                    logger.debug("Could not record merge collection membership", exc_info=True)
-        # The job itself is built when its turn comes (see _JobSpec): until
-        # then the row costs its dict, the live object the row dressing reads,
-        # and the spec's name for the object -- who serves it, what it is, and
-        # the namespaced id it resolves from at dispatch.
-        self._job_objs[qid] = obj
-        self._job_specs[qid] = _JobSpec(
-            provider_id=provider_id,
-            kind=type_media,
-            object_id=f"{provider_id}:{media_id}",
-            name=name,
-            file_template=file_template,
-            collection=collection,
-            media_id=media_id,
-            merge_plan=merge_plan,
-        )
-        self._pending_qids.append(qid)
         self._pump_queue()
 
     # ----- Apple downloads (cookies tier) ----------------------------------
@@ -11268,66 +11730,151 @@ class WavesBridge(LibraryMixin, QObject):
             return
         if keep_ask is not None and keep_ask[0]:
             # A retry asks at what its row asked, not at a setting that moved
-            # since (the TIDAL keep_ask rule).
-            ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] or _tier_word(keep_ask[0]))
+            # since (the TIDAL keep_ask rule). It retries only its own Version.
+            ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] if len(keep_ask) > 1 else "" or _tier_word(keep_ask[0]))
+            keep_ver = str(keep_ask[2] if len(keep_ask) > 2 else "" or "").strip().lower() or None
+            keep_ver = keep_ver if keep_ver in ("stereo", "atmos") else None
         else:
             ask = str(self.settings.data.apple_quality_audio or "HIGH")
             ask_tier = _tier_word(ask)
-        # A re-clicked row overlapping a queued or running one is pure
-        # duplication (the TIDAL _download guard, issue #32): a different
-        # pinned quality is an upgrade request and keeps its own row.
-        if media_id:
-            with self._queue_lock:
-                dup = any(
-                    it.get("media_id") == media_id
-                    and it.get("type") == type_media
-                    and it.get("status") in ("queued", "running")
-                    and it.get("template") == file_template
-                    and it.get("askQuality") == ask
-                    for it in self._queue
-                )
-            if dup:
-                self.downloadState.emit(media_id, "queued")
-                return
-        # What the cookies tier can serve, stated from queue time like the
-        # TIDAL ceiling: HIGH stereo, ATMOS when the toggle says so.
-        expected = "ATMOS" if self._apple_wants_atmos() else "HIGH"
+            keep_ver = None
+        provider = self.providers.get(CTX_APPLE)
+        # Dual-download Versions (§5.1-5.2): toggle on means alongside where a
+        # track carries Atmos; toggle off stays single stereo rows. A retry
+        # re-queues only its own Version.
+        versions: list[str | None]
+        if keep_ver is not None:
+            versions = [keep_ver]
+        elif not self._apple_wants_atmos():
+            versions = [None]
+        else:
+            versions = [None]
+            try:
+                if provider is not None:
+                    if not collection and type_media == "track":
+                        raw = provider.cached("track", media_id)
+                        if raw is None:
+                            # Unknown prevalence (no cache): dual, dispatch
+                            # withdraws the Atmos row when the fetch shows no
+                            # Atmos variant.
+                            versions = ["stereo", "atmos"]
+                        elif bool(provider.has_atmos(raw)):
+                            versions = ["stereo", "atmos"]
+                    elif collection and type_media in ("album", "playlist"):
+                        raw = provider.cached(type_media, media_id)
+                        if raw is None:
+                            versions = ["stereo", "atmos"]
+                        else:
+                            try:
+                                rel = (raw.get("relationships") or {}).get("tracks") or {}
+                                data = rel.get("data") or []
+                                has_any = False
+                                unknown = False
+                                for entry in data:
+                                    if not isinstance(entry, dict):
+                                        continue
+                                    try:
+                                        if provider.has_atmos(entry):
+                                            has_any = True
+                                            break
+                                    except Exception:
+                                        logger.debug("Could not probe an Apple track for Atmos", exc_info=True)
+                                        continue
+                                    # No attributes to judge by: unknown, not
+                                    # proof of stereo-only (dispatch fetches).
+                                    attrs = entry.get("attributes") or {}
+                                    if not isinstance(attrs, dict) or not attrs.get("name"):
+                                        unknown = True
+                                if has_any or unknown or not data:
+                                    # Unknown or empty track list: dual, the
+                                    # Atmos row withdraws at dispatch when its
+                                    # fetch shows nothing to fetch.
+                                    versions = ["stereo", "atmos"]
+                            except Exception:
+                                logger.debug("Could not probe Apple Atmos prevalence", exc_info=True)
+                                versions = ["stereo", "atmos"]
+            except Exception:
+                logger.debug("Could not decide Apple dual versions; single row", exc_info=True)
+                versions = [None]
+        try:
+            atmos_fragment = str(getattr(self.settings.data, "format_atmos", "Dolby Atmos") or "")
+        except Exception:
+            atmos_fragment = "Dolby Atmos"
         name = str(row.get("title") or "Apple download")
         artist = str((collection_row or row).get("artist") or row.get("artist") or "")
         art = str((collection_row or row).get("art") or "")
-        qid = self._enqueue(
-            name,
-            type_media,
-            media_id,
-            file_template,
-            collection,
-            artist,
-            1 if not collection else int((collection_row or {}).get("tracks") or 0),
-            art,
-            expected,
-            ask_quality=ask,
-            ask_tier=ask_tier,
-        )
+        track_total = 1 if not collection else int((collection_row or {}).get("tracks") or 0)
+        queued_any = False
+        for ver in versions:
+            row_atype = ver
+            row_template = file_template
+            row_expected = "ATMOS" if (ver == "atmos" or (ver is None and self._apple_wants_atmos())) else "HIGH"
+            row_tier_word = ask_tier
+            base_for_spec = ""
+            if ver == "atmos":
+                row_template = atmos_file_template(file_template, atmos_fragment)
+                row_expected = "ATMOS"
+                row_tier_word = ATMOS_WORD
+                base_for_spec = file_template
+            elif ver == "stereo":
+                row_expected = "HIGH"
+            # A re-clicked row overlapping a queued or running one is pure
+            # duplication (the TIDAL _download guard, issue #32): a different
+            # pinned quality is an upgrade request and keeps its own row. Each
+            # Version guards on its own audioType, so stereo+Atmos coexist.
+            if media_id:
+                with self._queue_lock:
+                    dup = any(
+                        it.get("media_id") == media_id
+                        and it.get("type") == type_media
+                        and it.get("status") in ("queued", "running")
+                        and it.get("template") == row_template
+                        and it.get("askQuality") == ask
+                        and str(it.get("audioType") or "") == (row_atype or "")
+                        for it in self._queue
+                    )
+                if dup:
+                    continue
+            qid = self._enqueue(
+                name,
+                type_media,
+                media_id,
+                row_template,
+                collection,
+                artist,
+                track_total,
+                art,
+                row_expected,
+                ask_quality=ask,
+                ask_tier=row_tier_word,
+                audio_type=row_atype,
+            )
+            queued_any = True
+            # The row's kept object for retries: Apple rows never enter _objs,
+            # so the retry path reads them back from here (see _row_object).
+            self._job_objs[qid] = row
+            self._job_specs[qid] = _JobSpec(
+                provider_id=CTX_APPLE,
+                kind=type_media,
+                object_id=f"{CTX_APPLE}:{str(media_id).removeprefix(f'{CTX_APPLE}:')}",
+                name=name,
+                file_template=row_template,
+                collection=collection,
+                media_id=media_id,
+                merge_plan=None,
+                audio_type=row_atype,
+                base_template=base_for_spec,
+            )
+            self._pending_qids.append(qid)
+        if not queued_any:
+            self.downloadState.emit(media_id, "queued")
+            return
         self.downloadState.emit(media_id, "queued")
-        # The row's kept object for retries: Apple rows never enter _objs,
-        # so the retry path reads them back from here (see _row_object).
-        self._job_objs[qid] = row
-        self._job_specs[qid] = _JobSpec(
-            provider_id=CTX_APPLE,
-            kind=type_media,
-            object_id=f"{CTX_APPLE}:{str(media_id).removeprefix(f'{CTX_APPLE}:')}",
-            name=name,
-            file_template=file_template,
-            collection=collection,
-            media_id=media_id,
-            merge_plan=None,
-        )
-        self._pending_qids.append(qid)
         self._pump_queue()
 
     def _apple_wants_atmos(self) -> bool:
         """The instead-of Atmos toggle, read live per job like the engine's."""
-        return bool(self.settings.data.download_dolby_atmos)
+        return bool(getattr(self.settings.data, "download_dolby_atmos", False))
 
     def _apple_audio_type(self):
         return AudioType.ATMOS if self._apple_wants_atmos() else AudioType.STEREO
@@ -11353,7 +11900,27 @@ class WavesBridge(LibraryMixin, QObject):
 
         provider = self.providers[CTX_APPLE]
         type_media, collection, media_id = spec.kind, spec.collection, spec.media_id
-        audio_type = self._apple_audio_type()
+        # Dual-download Version (§5.2): explicit stereo/atmos rows pin their
+        # Version; legacy single rows (None, toggle off) keep today's
+        # instead-of behavior (ATMOS when toggled, else stereo).
+        job_atype = (
+            str(
+                getattr(spec, "audio_type", None)
+                or (self._job_audio_type(qid) if hasattr(self, "_job_audio_type") else "")
+                or ""
+            )
+            .strip()
+            .lower()
+            or None
+        )
+        if job_atype not in ("stereo", "atmos"):
+            job_atype = None
+        if job_atype == "atmos":
+            audio_type = AudioType.ATMOS
+        elif job_atype == "stereo":
+            audio_type = AudioType.STEREO
+        else:
+            audio_type = self._apple_audio_type()
         ask_tier = self._job_quality(qid)
         requested_rank = self._apple_target_rank(ask_tier)
         ceiling_rank = quality_rank(QualityTier.HIGH)
@@ -11368,6 +11935,29 @@ class WavesBridge(LibraryMixin, QObject):
         total = len(rows)
         if not total:
             _raise_download_incomplete("Apple served an empty track list")
+        # Empty-dual withdrawal (§5.2): an Atmos row with nothing to fetch
+        # (all tracks stereo-only) leaves no row, not a done row with no
+        # files. Runs on the worker (may fetch track raws), never the GUI.
+        if job_atype == "atmos":
+            atmos_capable = 0
+            for row in rows:
+                try:
+                    raw = provider.get_object("track", str(row.get("id")).removeprefix(f"{CTX_APPLE}:"))
+                    if bool(provider.has_atmos(raw)):
+                        atmos_capable += 1
+                        break
+                except Exception:
+                    # A track that cannot be read cannot prove it has no
+                    # Atmos: keep the row (it will fail/skip per-track below,
+                    # never silently vanish).
+                    atmos_capable += 1
+                    break
+            if not atmos_capable:
+                # Withdraw: remove the queue row so the click leaves one row
+                # (stereo), not a done row with no files.
+                self._remove_row(qid)
+                self._emit_queue()
+                return " (already downloaded)"
         num_volumes = max([int(row.get("vol") or 1) for row in rows] + [1])
         ok = fail = skipped = unavailable = 0
         failed_names: list[str] = []
@@ -11376,6 +11966,21 @@ class WavesBridge(LibraryMixin, QObject):
             if job_abort.is_set():
                 break
             track_id = str(row.get("id"))
+            # Atmos rows skip stereo-only tracks (no Atmos to fetch); stereo
+            # rows fetch stereo for every track (every Apple song has stereo).
+            # Legacy single rows keep today's behavior (fetch what the toggle
+            # names, falling back to stereo).
+            if job_atype == "atmos":
+                try:
+                    raw_probe = provider.get_object("track", track_id.removeprefix(f"{CTX_APPLE}:"))
+                    has_at = bool(provider.has_atmos(raw_probe))
+                except Exception:
+                    has_at = True
+                if not has_at:
+                    skipped += 1
+                    signals.track_event.emit({"id": track_id, "status": "skipped"})
+                    self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
+                    continue
             signals.track_event.emit(
                 {
                     "id": track_id,
@@ -11384,10 +11989,14 @@ class WavesBridge(LibraryMixin, QObject):
                     "vol": int(row.get("vol") or 1),
                     "duration": str(row.get("duration") or ""),
                     "status": "running",
-                    "expected": "ATMOS" if self._apple_wants_atmos() else "HIGH",
+                    "expected": (
+                        "ATMOS"
+                        if (job_atype == "atmos" or (job_atype is None and self._apple_wants_atmos()))
+                        else "HIGH"
+                    ),
                 }
             )
-            verdict, gate_rec = self._apple_gate_track(provider, track_id, requested_rank, force)
+            verdict, gate_rec = self._apple_gate_track(provider, track_id, requested_rank, force, audio_type=job_atype)
             if verdict == "skip":
                 skipped += 1
                 signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})
@@ -11641,6 +12250,7 @@ class WavesBridge(LibraryMixin, QObject):
             cover_data=cover_data if self.settings.data.metadata_cover_embed else None,
             mark_explicit=bool(self.settings.data.mark_explicit),
             metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
+            audio_type="atmos" if atmos else "stereo",
         ):
             logger.debug("Apple tagging reported failure for %s", diagnostics.content(track_id))
         self._apple_write_sidecars(dest, lyrics_synced, lyrics_unsynced, cover_data, collection)
@@ -11797,29 +12407,51 @@ class WavesBridge(LibraryMixin, QObject):
             write_cover_sidecar(dest.parent, cover_data)
 
     def _apple_gate_track(
-        self, provider, track_id: str, requested_rank: int, force: bool
+        self, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
     ) -> tuple[str | None, dict | None]:
         """Ownership verdict plus the record it was read from: 'skip' when an
         owned copy is current, 'force' when owned but stale, (None, None)
         when nothing is owned. Ranked on the cookies tier's ceiling, so a
-        HIGH copy settles whatever was asked."""
+        HIGH copy settles whatever was asked.
+
+        Dual-download rows (§5.3) ask per Version (audio_type stereo/atmos),
+        so owning stereo leaves the Atmos half fetching and vice versa.
+        Legacy single rows (None) keep today's whole-track query.
+        """
         if force:
             return "force", None
         store = getattr(self, "_ownership", None)
         if store is None:
             return None, None
+        want_type = str(audio_type or "").strip().lower() or None
+        if want_type not in ("stereo", "atmos"):
+            want_type = None
         try:
-            rec = store.ownership_of(str(track_id))
+            if want_type in ("stereo", "atmos"):
+                rec = store.ownership_of(str(track_id), audio_type=want_type)
+            else:
+                rec = store.ownership_of(str(track_id))
+        except TypeError:
+            try:
+                rec = store.ownership_of(str(track_id))
+            except Exception:
+                logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
+                return None, None
         except Exception:
             logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
             return None, None
         if not rec or _record_names_a_broken_copy(rec):
             return None, None
-        try:
-            raw = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
-            wants = self._apple_wants_atmos() and bool(provider.has_atmos(raw))
-        except Exception:
+        if want_type == "stereo":
             wants = False
+        elif want_type == "atmos":
+            wants = True
+        else:
+            try:
+                raw = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
+                wants = self._apple_wants_atmos() and bool(provider.has_atmos(raw))
+            except Exception:
+                wants = False
         current = _copy_is_current(rec, requested_rank, wants, provider.advertised_ceiling(None))
         return ("skip", rec) if current else ("force", rec)
 
@@ -12019,6 +12651,8 @@ class WavesBridge(LibraryMixin, QObject):
                 library_claim=library_claim,
                 force_redownload=media_id in self._redownload_overrides,
                 pinned_quality=self._job_quality(qid),
+                audio_type=getattr(spec, "audio_type", None),
+                base_template=getattr(spec, "base_template", None) or None,
             )
         if (collection or merge_plan is not None) and not is_apple:
             self._job_tracks.setdefault(qid, {})
@@ -12215,6 +12849,19 @@ class WavesBridge(LibraryMixin, QObject):
                         media=obj,
                         download_delay=bool(self.settings.data.download_delay),
                     )
+                    # Empty-dual withdrawal (§5.2): a dual row that met no
+                    # track offering its Version has no work — it leaves no
+                    # row, not a done row with no files. Single rows (None)
+                    # never withdraw (toggle-off, byte-identical).
+                    if not job_abort.is_set() and (spec.audio_type or "") in ("stereo", "atmos"):
+                        saw = bool(dl._saw_atmos) if spec.audio_type == "atmos" else bool(dl._saw_stereo)
+                        if not saw:
+                            self._job_aborts.pop(qid, None)
+                            self._release_job_signals(qid)
+                            self._job_dls.pop(qid, None)
+                            self._remove_row(qid)
+                            self._emit_queue()
+                            return
                     # A collection reports success or failure per track without
                     # raising, so judge the outcome from the counters and surface
                     # any shortfall (see _collection_incomplete_reason). A single
@@ -12242,6 +12889,17 @@ class WavesBridge(LibraryMixin, QObject):
                         media=obj,
                         download_delay=bool(self.settings.data.download_delay),
                     )
+                    # Empty-dual withdrawal for single tracks (a dual row whose
+                    # one track offers nothing of its Version): no row, not done.
+                    if not job_abort.is_set() and (spec.audio_type or "") in ("stereo", "atmos"):
+                        saw = bool(dl._saw_atmos) if spec.audio_type == "atmos" else bool(dl._saw_stereo)
+                        if not saw:
+                            self._job_aborts.pop(qid, None)
+                            self._release_job_signals(qid)
+                            self._job_dls.pop(qid, None)
+                            self._remove_row(qid)
+                            self._emit_queue()
+                            return
                     if not ok and not job_abort.is_set():
                         # A track the user asked for by name still has to report
                         # that it produced nothing, but it may as well say why:
@@ -14051,7 +14709,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self.downloadState.emit(artist_id, "")
                 self._set_status("Could not load the full discography, try again")
                 return
-            if not self.settings.data.download_dolby_atmos:
+            if not bool(getattr(self.settings.data, "download_dolby_atmos", False)):
                 # The setting decides which of a release's two rows a bulk
                 # sweep downloads; see _drop_spatial_editions.
                 albums, guest, left_out = _drop_spatial_editions(albums, guest)
@@ -14462,7 +15120,7 @@ class WavesBridge(LibraryMixin, QObject):
             stop_check()
             # From here the sweep is the discography's, minus guest tracks
             # and videos; see downloadArtist for the why of each step.
-            if not self.settings.data.download_dolby_atmos:
+            if not bool(getattr(self.settings.data, "download_dolby_atmos", False)):
                 albums, _guest, left_out = _drop_spatial_editions(albums, [])
                 if left_out:
                     devlog.event("playlist_albums", atmos_editions_left_out=left_out)
@@ -15357,7 +16015,11 @@ class WavesBridge(LibraryMixin, QObject):
                 item["template"],
                 item["collection"],
                 item["media_id"],
-                keep_ask=(str(item.get("askQuality") or ""), str(item.get("quality") or "")),
+                keep_ask=(
+                    str(item.get("askQuality") or ""),
+                    str(item.get("quality") or ""),
+                    str(item.get("audioType") or "") or None,
+                ),
             )
             return
         plan = self._merge_plans.get(item["media_id"]) if item["type"] == "album" else None
@@ -15369,8 +16031,13 @@ class WavesBridge(LibraryMixin, QObject):
             item["collection"],
             item["media_id"],
             merge_plan=plan,
-            # A retry is of THIS row: it keeps the tier the row asked at.
-            keep_ask=(str(item.get("askQuality") or ""), str(item.get("quality") or "")),
+            # A retry is of THIS row: it keeps the tier the row asked at, and
+            # the Version (each dual row carries its own retry).
+            keep_ask=(
+                str(item.get("askQuality") or ""),
+                str(item.get("quality") or ""),
+                str(item.get("audioType") or "") or None,
+            ),
         )
 
     @Slot(int)
@@ -16031,7 +16698,9 @@ class WavesBridge(LibraryMixin, QObject):
                 # discoverable and the light shows what is (not) set up.
                 "group": "Providers · Apple Music",
                 "id": "providers_apple",
-                "desc": "Turn on Apple Music catalog search here. AAC 256 and Atmos downloads need a cookies export below; full setup arrives later.",
+                "desc": (
+                    "Turn on Apple Music catalog search here. AAC 256 and Atmos downloads need a cookies export below; full setup arrives later."
+                ),
                 "fields": [
                     "provider_apple_status",
                     "apple_quality_audio",
@@ -16073,6 +16742,7 @@ class WavesBridge(LibraryMixin, QObject):
                     "format_playlist",
                     "format_video",
                     "format_mix",
+                    "format_atmos",
                     "album_track_num_pad_min",
                     "filename_illegal_replacement",
                     "filename_illegal_map",
@@ -16229,6 +16899,10 @@ class WavesBridge(LibraryMixin, QObject):
                 out = format_path_media(template, trk, pad, **kw) + ".flac"
             elif kind == "album":
                 out = format_path_media(format_path_media(template, alb, **kw), trk, pad, **kw) + ".flac"
+            elif kind == "atmos":
+                # Folder fragment, not a full path: render against the sample
+                # track so tokens preview, blank stays blank (alongside).
+                out = format_path_media(template, trk, pad, **kw) if str(template or "").strip() else ""
             elif kind == "playlist":
                 # {folder_path} is resolved before the formatter (its slashes
                 # must survive); the preview mirrors that with the sample path.

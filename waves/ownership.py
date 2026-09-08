@@ -46,6 +46,43 @@ def _nonempty_file(path: str) -> bool:
         return False
 
 
+def normalize_audio_type(audio_type: str | None = None, audio_mode: str | None = None) -> str | None:
+    """One spelling for a copy's audio type: "stereo" / "atmos" / None.
+
+    Prefers the explicit audio_type (the seam's AudioType words, what
+    WAVES_AUDIO_TYPE tags carry). Falls back to the legacy audio_mode
+    (TIDAL's "STEREO" / "DOLBY_ATMOS"). None means unknown: a row from
+    before either column, which reads as stereo everywhere it matters.
+    """
+    text = str(audio_type or "").strip().lower()
+    if text in ("stereo", "atmos"):
+        return text
+    mode = str(audio_mode or "").strip().upper()
+    if mode == "DOLBY_ATMOS":
+        return "atmos"
+    if mode == "STEREO":
+        return "stereo"
+    return None
+
+
+def _matches_audio_type(row_type: str | None, row_mode: str | None, want: str | None) -> bool:
+    """Whether a row's copy answers a per-version query for ``want``.
+
+    None wants everything (the legacy whole-track query). "atmos" wants
+    only Atmos copies; "stereo" wants stereo copies plus unknown legacy
+    rows (which read as stereo, one re-download then settled).
+    """
+    if want is None:
+        return True
+    want = str(want or "").strip().lower()
+    got = normalize_audio_type(row_type, row_mode)
+    if want == "atmos":
+        return got == "atmos"
+    if want == "stereo":
+        return got in ("stereo", None)
+    return True
+
+
 # Columns beyond the primary key, with the type used to ADD them to an older DB.
 # CREATE TABLE below carries the full schema; this list only drives the
 # forward-compatible ALTER guard, so every entry must be nullable or defaulted
@@ -54,6 +91,12 @@ _ADDED_COLUMNS = (
     ("quality_tier", "TEXT"),
     ("quality_rank", "INTEGER NOT NULL DEFAULT -1"),
     ("audio_mode", "TEXT"),
+    # Explicit audio type (§5.3, issue #29): "stereo" / "atmos" in the seam's
+    # AudioType spelling. audio_mode stays for backward compat (TIDAL's
+    # "STEREO" / "DOLBY_ATMOS"); audio_type is what per-version gates filter
+    # on, and what WAVES_AUDIO_TYPE tags carry on disk. Null means unknown
+    # (a row from before the column): reads as stereo, like a missing mode.
+    ("audio_type", "TEXT"),
     ("bit_depth", "INTEGER"),
     ("sample_rate", "INTEGER"),
     ("codecs", "TEXT"),
@@ -109,6 +152,7 @@ class OwnershipStore:
                        quality_tier TEXT,
                        quality_rank INTEGER NOT NULL DEFAULT -1,
                        audio_mode   TEXT,
+                       audio_type   TEXT,
                        bit_depth    INTEGER,
                        sample_rate  INTEGER,
                        codecs       TEXT,
@@ -128,6 +172,7 @@ class OwnershipStore:
                    )""")
             self._ensure_columns()
             self._backfill_namespaced_ids()
+            self._backfill_audio_type()
             self._conn.commit()
 
     def _ensure_columns(self) -> None:
@@ -190,6 +235,22 @@ class OwnershipStore:
             " WHERE instr(track_id, ':') = 0 AND track_id <> ''"
         )
 
+    def _backfill_audio_type(self) -> None:
+        """Fill audio_type from audio_mode where the type column is still null.
+
+        Runs once per open, before any new write. Rows with an explicit type
+        keep it; rows with only a mode gain the type that mode names; rows
+        with neither stay null (unknown, reads as stereo). Caller holds the
+        lock.
+        """
+        self._conn.execute(
+            "UPDATE downloads SET audio_type = 'atmos'"
+            " WHERE audio_type IS NULL AND upper(audio_mode) = 'DOLBY_ATMOS'"
+        )
+        self._conn.execute(
+            "UPDATE downloads SET audio_type = 'stereo'" " WHERE audio_type IS NULL AND upper(audio_mode) = 'STEREO'"
+        )
+
     def record(
         self,
         track_id: str,
@@ -197,6 +258,7 @@ class OwnershipStore:
         quality_tier: str | None = None,
         *,
         audio_mode: str | None = None,
+        audio_type: str | None = None,
         bit_depth: int | None = None,
         sample_rate: int | None = None,
         codecs: str | None = None,
@@ -231,12 +293,16 @@ class OwnershipStore:
         # One spelling on the row, whoever calls: a bare id is tidal's (the
         # spec's legacy rule), so the store's key can never fork per caller.
         track_id = namespaced_id(track_id)
+        # Explicit type wins; a mode-only caller still lands typed via the
+        # fallback, so every new row carries what per-version gates filter on.
+        atype = normalize_audio_type(audio_type, audio_mode)
         row = (
             str(track_id),
             str(path),
             tier,
             quality_rank(tier),
             audio_mode,
+            atype,
             bit_depth,
             sample_rate,
             codecs,
@@ -249,14 +315,15 @@ class OwnershipStore:
         with self._lock:
             self._conn.execute(
                 """INSERT INTO downloads
-                       (track_id, path, quality_tier, quality_rank, audio_mode,
+                       (track_id, path, quality_tier, quality_rank, audio_mode, audio_type,
                         bit_depth, sample_rate, codecs, user_id, recorded_at,
                         requested_rank, ceiling_rank, degraded_tries)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(track_id, path) DO UPDATE SET
                        quality_tier = excluded.quality_tier,
                        quality_rank = excluded.quality_rank,
                        audio_mode   = excluded.audio_mode,
+                       audio_type   = excluded.audio_type,
                        bit_depth    = excluded.bit_depth,
                        sample_rate  = excluded.sample_rate,
                        codecs       = excluded.codecs,
@@ -345,7 +412,7 @@ class OwnershipStore:
             return None
         return [r[0] for r in rows]
 
-    def ownership_of(self, track_id: str, *, user_id: str | None = None) -> dict | None:
+    def ownership_of(self, track_id: str, *, user_id: str | None = None, audio_type: str | None = None) -> dict | None:
         """Best surviving copy of ``track_id`` that still exists on disk right now,
         or None if no recorded path survives (a wanted-again deleted file).
 
@@ -354,15 +421,24 @@ class OwnershipStore:
         matches rows of its own provider, so one provider's ownership never
         answers another provider's gate.
 
+        ``audio_type`` ("stereo" / "atmos") narrows to one Version (§5.3):
+        per-version gates ask for the version they would fetch, so owning
+        stereo leaves the Atmos half fetching and vice versa. None keeps the
+        legacy whole-track answer (highest quality first), which is what the
+        toggle-off path and every caller that cannot name a version still get.
+
         Rows are considered highest delivered quality first, then most recent, and
         the first whose path passes a live existence check wins. The deleted-path
         row is skipped, not removed, so re-creating the file makes it own again.
         """
+        want = str(audio_type or "").strip().lower() or None
+        if want not in (None, "stereo", "atmos"):
+            want = None
         tid = namespaced_id(track_id)
         with self._lock:
             if user_id is None:
                 rows = self._conn.execute(
-                    """SELECT path, quality_tier, quality_rank, audio_mode, bit_depth,
+                    """SELECT path, quality_tier, quality_rank, audio_mode, audio_type, bit_depth,
                               sample_rate, codecs, recorded_at, requested_rank, ceiling_rank,
                               degraded_tries
                        FROM downloads WHERE track_id = ?
@@ -371,7 +447,7 @@ class OwnershipStore:
                 ).fetchall()
             else:
                 rows = self._conn.execute(
-                    """SELECT path, quality_tier, quality_rank, audio_mode, bit_depth,
+                    """SELECT path, quality_tier, quality_rank, audio_mode, audio_type, bit_depth,
                               sample_rate, codecs, recorded_at, requested_rank, ceiling_rank,
                               degraded_tries
                        FROM downloads WHERE track_id = ? AND user_id = ?
@@ -382,7 +458,9 @@ class OwnershipStore:
         # and a read must never hold up a worker-thread write behind it. A
         # zero-byte survivor is a truncation artifact, not a copy: skip it (not
         # removed, like a deleted path) so the track reads as wanted again.
-        for path, tier, rank, mode, depth, rate, codecs, recorded_at, requested, ceiling, degraded in rows:
+        for path, tier, rank, mode, atype, depth, rate, codecs, recorded_at, requested, ceiling, degraded in rows:
+            if want is not None and not _matches_audio_type(atype, mode, want):
+                continue
             if path and _nonempty_file(path):
                 return {
                     "owned": True,
@@ -390,6 +468,7 @@ class OwnershipStore:
                     "quality_tier": tier,
                     "quality_rank": rank,
                     "audio_mode": mode,
+                    "audio_type": normalize_audio_type(atype, mode),
                     "bit_depth": depth,
                     "sample_rate": rate,
                     "codecs": codecs,

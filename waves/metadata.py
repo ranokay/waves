@@ -92,6 +92,14 @@ GENERIC_ITEM_ID_TAG = "WAVES_ITEM_ID"
 GENERIC_ARTIST_IDS_TAG = "WAVES_ARTIST_IDS"
 GENERIC_ALBUM_ARTIST_ID_TAG = "WAVES_ALBUM_ARTIST_ID"
 
+# §5.3 / §8.1 (issue #29): which Version a file is -- "stereo" / "atmos" in
+# the seam's AudioType spelling. Recognition reads this tag first and only
+# falls back to the codec sniff for files from before it existed, so a file
+# is never misread because its container shares an extension.
+GENERIC_AUDIO_TYPE_TAG = "WAVES_AUDIO_TYPE"
+AUDIO_TYPE_STEREO = "stereo"
+AUDIO_TYPE_ATMOS = "atmos"
+
 
 def _legacy_id(value) -> str:
     """A namespaced id in the legacy tag's bare spelling.
@@ -186,6 +194,28 @@ def read_item_id(path_file: str | pathlib.Path) -> str:
     return _bare_legacy_id(ids[0]) if ids else ""
 
 
+def normalize_audio_type_tag(value: str | None) -> str | None:
+    """One spelling for a WAVES_AUDIO_TYPE tag value, or None when untagged."""
+    text = str(value or "").strip().lower()
+    if text in (AUDIO_TYPE_STEREO, AUDIO_TYPE_ATMOS):
+        return text
+    return None
+
+
+def read_audio_type(path_file: str | pathlib.Path) -> str | None:
+    """The Version a file was downloaded as ("stereo" / "atmos"), or None.
+
+    Generic tag first (§5.3): what both providers write now, so recognition
+    never sniffs codecs for a file Waves wrote. Untagged files (every library
+    already on disk, a user's own files) answer None and callers fall back
+    to the codec sniff, which stays the legacy answer, never the source.
+    """
+    ids = read_custom_ids(path_file, GENERIC_AUDIO_TYPE_TAG)
+    if not ids:
+        return None
+    return normalize_audio_type_tag(ids[0])
+
+
 class Metadata:
     path_file: str | pathlib.Path
     title: str
@@ -253,6 +283,7 @@ class Metadata:
         artist_ids: [str] = None,
         album_artist_ids: [str] = None,
         legacy_ids: bool = True,
+        audio_type: str | None = None,
     ):
         self.path_file = path_file
         self.title = title
@@ -303,6 +334,9 @@ class Metadata:
         self.namespaced_item_id = namespaced_id(item_id)
         self.namespaced_artist_ids = [namespaced_id(a) for a in artist_ids or []]
         self.namespaced_album_artist_ids = [namespaced_id(a) for a in album_artist_ids or []]
+        # Which Version this file is (§5.3): written on every audio file so
+        # recognition never sniffs codecs. Videos carry no audio type.
+        self.audio_type = normalize_audio_type_tag(audio_type)
 
     def _cover(self) -> bool:
         result: bool = False
@@ -408,6 +442,8 @@ class Metadata:
         self.m.tags["RELEASETYPE"] = self.release_type
         self.m.tags[ITEM_ID_TAG] = self.item_id
         self.m.tags[GENERIC_ITEM_ID_TAG] = self.namespaced_item_id
+        if self.audio_type:
+            self.m.tags[GENERIC_AUDIO_TYPE_TAG] = self.audio_type
         if self.artist_ids:
             self.m.tags[ARTIST_ID_TAG] = self.artist_ids
         if self.album_artist_ids:
@@ -445,10 +481,22 @@ class Metadata:
         self.m.tags.add(TBPM(encoding=3, text=str(self.bpm if self.bpm > 0 else "")))
         self.m.tags.add(TKEY(encoding=3, text=self.initial_key))
         self.m.tags.add(TXXX(encoding=3, desc="MusicBrainz Album Type", text=self.release_type))
+        self._set_mp3_ids()
+
+        if self.replay_gain_write:
+            for key, text in self._rg_pairs():
+                self.m.tags.add(TXXX(encoding=3, desc=key, text=text))
+
+    def _set_mp3_ids(self):
+        # Shared id-tag block (legacy + generic families plus the audio-type
+        # Version): split from set_mp3 so the writer stays under the branch
+        # budget, mirroring _set_mp4_artist_ids below.
         if self.item_id:
             self.m.tags.add(TXXX(encoding=3, desc=ITEM_ID_TAG, text=self.item_id))
         if self.namespaced_item_id:
             self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ITEM_ID_TAG, text=self.namespaced_item_id))
+        if self.audio_type:
+            self.m.tags.add(TXXX(encoding=3, desc=GENERIC_AUDIO_TYPE_TAG, text=self.audio_type))
         if self.artist_ids:
             self.m.tags.add(TXXX(encoding=3, desc=ARTIST_ID_TAG, text=self.artist_ids))
         if self.album_artist_ids:
@@ -457,10 +505,6 @@ class Metadata:
             self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ARTIST_IDS_TAG, text=self.namespaced_artist_ids))
         if self.namespaced_album_artist_ids:
             self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ALBUM_ARTIST_ID_TAG, text=self.namespaced_album_artist_ids))
-
-        if self.replay_gain_write:
-            for key, text in self._rg_pairs():
-                self.m.tags.add(TXXX(encoding=3, desc=key, text=text))
 
     def set_mp4(self):
         self.m.tags["\xa9nam"] = self.title
@@ -488,6 +532,8 @@ class Metadata:
             self.m.tags[f"----:com.apple.iTunes:{ITEM_ID_TAG}"] = self.item_id.encode("utf-8")
         if self.namespaced_item_id:
             self.m.tags[f"----:com.apple.iTunes:{GENERIC_ITEM_ID_TAG}"] = self.namespaced_item_id.encode("utf-8")
+        if self.audio_type:
+            self.m.tags[f"----:com.apple.iTunes:{GENERIC_AUDIO_TYPE_TAG}"] = self.audio_type.encode("utf-8")
         self._set_mp4_artist_ids()
 
         if self.replay_gain_write:
