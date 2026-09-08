@@ -74,7 +74,8 @@ def _require_binary(name: str, override: str = "") -> str:
     if found:
         return found
     raise AppleDownloadError(  # noqa: TRY003 (user-facing words by design)
-        f"Apple downloads need {name} installed (the setup wizard provisions it later; for now it must be on PATH)."
+        f"Apple downloads need {name}: set its path in Settings under Providers, Apple Music, "
+        "or put it on PATH (the setup wizard provisions it later)."
     )
 
 

@@ -62,6 +62,10 @@ class Settings:
     # ticket): path to a Netscape-format cookies export from a logged-in
     # music.apple.com session. Unlocks AAC 256 + Atmos downloads, no runtime.
     apple_cookies_path: str = ""
+    # Same scaffolding shape as the FFmpeg override below: the N_m3u8DL-RE
+    # binary Apple downloads fetch through. Empty means PATH; the wizard
+    # provisions and pins it later.
+    path_binary_nm3u8dlre: str = ""
     quality_video: QualityVideo = QualityVideo.P480
     download_dolby_atmos: bool = False
     # Artist > Album > Track, the shape a music library (and Plex) expects.
@@ -225,6 +229,10 @@ class HelpSettings:
         "Path to a cookies export (Netscape format) from a logged-in music.apple.com browser session. "
         "Unlocks Apple AAC 256 and Atmos downloads without any other setup; the setup wizard replaces "
         "this with a managed sign-in later."
+    )
+    path_binary_nm3u8dlre: str = (
+        "Path to the N_m3u8DL-RE binary Apple downloads fetch through. Only necessary if it is not "
+        "on $PATH; the setup wizard provisions it later."
     )
     quality_video: str = 'Desired video download quality: "360", "480", "720", "1080"'
     download_dolby_atmos: str = (

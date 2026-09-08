@@ -257,7 +257,7 @@ def _stub(base: Path, provider, **overrides):
     stub = SimpleNamespace(
         settings=_settings(base),
         providers={CTX_APPLE: provider},
-        _ownership_of=None,
+        _ownership=SimpleNamespace(ownership_of=lambda tid: None),
         _redownload_overrides=set(),
         _queue_index={1: {"askQuality": "HIGH", "quality": "HIGH"}},
         downloadState=_Signal(),
@@ -364,7 +364,7 @@ def test_owned_track_skips_without_fetching(tmp_path, monkeypatch):
         "ceiling_rank": quality_rank(QualityTier.HIGH),
         "audio_mode": "STEREO",
     }
-    stub = _bind(_stub(base, provider, _ownership_of=lambda tid: rec))
+    stub = _bind(_stub(base, provider, _ownership=SimpleNamespace(ownership_of=lambda tid: rec)))
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
@@ -384,6 +384,13 @@ def test_gate_force_and_miss():
     assert (
         WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), True) == "force"
     )
+    assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), False) is None
+
+
+def test_gate_without_a_store_never_gates():
+    provider = _FakeProvider()
+    stub = _bind(_stub(Path("/tmp"), provider, _ownership=None))
+
     assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), False) is None
 
 

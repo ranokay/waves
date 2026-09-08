@@ -676,8 +676,16 @@ _PATH_FIELDS = [
     # Cookies-tier scaffolding (issue #28): a Netscape cookies export that
     # unlocks Apple downloads, browsed like the FFmpeg override above.
     "apple_cookies_path",
+    # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
+    # through; the wizard provisions it later.
+    "path_binary_nm3u8dlre",
 ]
-_BROWSE = {"download_base_path": "dir", "path_binary_ffmpeg": "file", "apple_cookies_path": "file"}
+_BROWSE = {
+    "download_base_path": "dir",
+    "path_binary_ffmpeg": "file",
+    "apple_cookies_path": "file",
+    "path_binary_nm3u8dlre": "file",
+}
 # String fields whose value is a character or two: they render as a compact
 # row with a small box on the right (the Track-number padding shape) instead
 # of a full-width text box under the help.
@@ -872,6 +880,7 @@ _FIELD_LABELS = {
     "tidal_quality_audio": "Audio quality",
     "apple_quality_audio": "Audio quality (Apple)",
     "apple_cookies_path": "Cookies file (Apple)",
+    "path_binary_nm3u8dlre": "N_m3u8DL-RE binary path",
     "quality_video": "Video quality",
     "downloads_concurrent_max": "Concurrent track downloads",
     "download_dolby_atmos": "Download Dolby Atmos",
@@ -3498,7 +3507,7 @@ class WavesBridge(LibraryMixin, QObject):
             CTX_TIDAL: TidalProvider(self.tidal),
             CTX_APPLE: AppleProvider(),
         }
-        self._configure_apple_provider()
+        # Configured below once the FFmpeg manager exists (_configure_apple_provider).
         # Quick metadata/UI work (search, album tracks, artist pages) runs on
         # one pool; downloads run on a separate pool so a long album download
         # can never starve the UI of threads.
@@ -3592,6 +3601,9 @@ class WavesBridge(LibraryMixin, QObject):
         # the on-disk value up front is what keeps them from being misread as a
         # user choice. Updated on save in applySettings.
         self._ffmpeg_user_path = (self.settings.data.path_binary_ffmpeg or "").strip()
+        # The Apple provider reads the resolved FFmpeg path, so this runs
+        # after the manager above exists.
+        self._configure_apple_provider()
         # _save_settings swaps a sanitised copy of settings.data in for the
         # length of one write. Saves come from the GUI thread, from download
         # workers and from the keep-warm daemon, so the swap is serialised.
@@ -11495,13 +11507,17 @@ class WavesBridge(LibraryMixin, QObject):
             facts_isrc=str(facts.get("isrc") or ""),
         )
         base = pathlib.Path(str(self.settings.data.download_base_path)).expanduser()
+        # The skip check reads the REQUESTED destination: pick_destination
+        # loops until it finds a free name, so asking it first would make the
+        # exists check below permanently false and duplicate owned files.
+        exact = base / f"{relative}.m4a"
+        exact.parent.mkdir(parents=True, exist_ok=True)
         if force:
-            dest = base / f"{relative}.m4a"
-            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest = exact
+        elif self.settings.data.skip_existing and exact.exists():
+            raise _AppleSkipped()
         else:
             dest = pick_destination(base, relative, ".m4a")
-        if not force and self.settings.data.skip_existing and dest.exists():
-            raise _AppleSkipped()
         try:
             info = provider.resolve_stream(raw, tier_from_word(str(self.settings.data.apple_quality_audio)), audio_type)
         except Exception as exc:
@@ -11650,11 +11666,11 @@ class WavesBridge(LibraryMixin, QObject):
         cookies tier's ceiling, so a HIGH copy settles whatever was asked."""
         if force:
             return "force"
-        get_ownership = getattr(self, "_ownership_of", None)
-        if get_ownership is None:
+        store = getattr(self, "_ownership", None)
+        if store is None:
             return None
         try:
-            rec = get_ownership(str(track_id))
+            rec = store.ownership_of(str(track_id))
         except Exception:
             logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
             return None
@@ -15825,6 +15841,7 @@ class WavesBridge(LibraryMixin, QObject):
                     "provider_apple_status",
                     "apple_quality_audio",
                     "apple_cookies_path",
+                    "path_binary_nm3u8dlre",
                 ],
             },
             {
@@ -16091,15 +16108,25 @@ class WavesBridge(LibraryMixin, QObject):
 
         The provider itself never reads Settings (it owns no prefs); the
         bridge writes the paths here whenever settings save and once at
-        startup, and resolve_stream reads them at fetch time.
+        startup, and resolve_stream reads them at fetch time. The FFmpeg
+        path is the RESOLVED one (explicit override, else the managed copy
+        _resolve_ffmpeg injects in memory): the persisted setting alone is
+        "" on the normal managed path, which would fail the gate that the
+        manager itself just passed.
         """
         provider = self.providers.get(CTX_APPLE)
         if provider is None:
             return
+        resolve = getattr(self, "_resolve_ffmpeg", None)
+        if resolve is not None:
+            try:
+                resolve()
+            except Exception:
+                logger.debug("Apple provider could not resolve ffmpeg", exc_info=True)
         data = getattr(self.settings, "data", None)
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
-        provider.nm3u8dlre_path = ""
+        provider.nm3u8dlre_path = str(getattr(data, "path_binary_nm3u8dlre", "") or "")
 
     def _apple_cookies_ready(self) -> bool:
         """Whether an Apple download can start: a cookies file is set."""
@@ -16201,7 +16228,7 @@ class WavesBridge(LibraryMixin, QObject):
             # No Apple copies exist to refresh and no queue row pins an Apple
             # tier yet; the side effect is the provider session's alone.
             self._reapply_provider_quality(CTX_APPLE, values["apple_quality_audio"])
-        if "apple_cookies_path" in values or "path_binary_ffmpeg" in values:
+        if "apple_cookies_path" in values or "path_binary_ffmpeg" in values or "path_binary_nm3u8dlre" in values:
             # The cookies-tier paths the Apple provider resolves against.
             self._configure_apple_provider()
         if "apple_enabled" in values and bool(getattr(data, "apple_enabled", False)) != apple_enabled_before:
