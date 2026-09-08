@@ -1137,3 +1137,56 @@ def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
     assert summary2 == " (already downloaded)"
     assert provider2.fetched == []
     assert any(ev.get("status") == "skipped" for ev in relay2.events)
+
+
+def test_quarantine_sidecar_keeps_every_root(tmp_path):
+    from waves.apple_integrity import known_quarantine_dirs, remember_quarantine_dir
+
+    config = tmp_path / "config"
+    for i in range(12):
+        remember_quarantine_dir(config, str(tmp_path / f"Q{i}"))
+    assert len(known_quarantine_dirs(config)) == 12
+
+
+@needs_ffmpeg
+def test_resolve_stage_failure_files_under_effective_version(tmp_path, monkeypatch):
+    """An engine-raised integrity failure (no StreamInfo) still files under
+    the effective Version: an Atmos ask for a stereo-only track lands under
+    stereo, with its preserved bytes quarantined."""
+    from waves import apple_engine
+    from waves.apple_engine import AppleIntegrityError
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    workdir = tmp_path / "engine-workdir"
+    workdir.mkdir()
+    bad = workdir / "staged.m4a"
+    bad.write_bytes(b"not audio at all, just text padding " * 100)
+
+    class _EngineRejectingProvider(_FakeProvider):
+        def resolve_stream(self, raw, tier, audio_type):
+            raise AppleIntegrityError(
+                "The Apple download failed its integrity check",
+                staged_path=str(bad),
+                workdir=str(workdir),
+            )
+
+    provider = _EngineRejectingProvider([])
+    base = tmp_path / "lib"
+    store = _SkipStore()
+    stub = _bind(_stub(base, provider, _ownership_store=store))
+    stub.settings.data.download_dolby_atmos = True
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        WavesBridge._run_apple_job(
+            stub, 1, spec, _song_resource(atmos=False), signals=relay, job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
+    assert store.is_quarantined("apple:song-1", "stereo") is not None
+    assert store.is_quarantined("apple:song-1", "atmos") is None
+    assert list((base / QUARANTINE_DIR_NAME).rglob("*.m4a")) != []

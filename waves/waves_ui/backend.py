@@ -12540,19 +12540,26 @@ class WavesBridge(LibraryMixin, QObject):
                     # provider-scoped skip-list. Filed under the DELIVERED
                     # Version: an Atmos ask for a stereo-only track falls back,
                     # so its corrupt bytes belong to stereo (the effective
-                    # version the gate and the clear both read). Only a
-                    # resolve-stage failure, which never produced a delivered
-                    # word, falls back to the asked version.
+                    # version the gate and the clear both read). A resolve-stage
+                    # failure never produced a delivered word, but the effective
+                    # Version is still knowable (asked AND offered); only a
+                    # probe that fails too falls back to the ask.
                     if info is not None:
                         version = "atmos" if locals().get("atmos", False) else "stereo"
-                    elif version_hint in ("stereo", "atmos"):
-                        version = version_hint
                     else:
                         try:
-                            version = str(getattr(audio_type, "value", audio_type) or "").strip().lower()
+                            version = _apple_effective_version(provider, track_id, audio_type)
                         except Exception:
                             version = ""
-                        version = version if version in ("stereo", "atmos") else "stereo"
+                        if version not in ("stereo", "atmos"):
+                            if version_hint in ("stereo", "atmos"):
+                                version = version_hint
+                            else:
+                                try:
+                                    version = str(getattr(audio_type, "value", audio_type) or "").strip().lower()
+                                except Exception:
+                                    version = ""
+                                version = version if version in ("stereo", "atmos") else "stereo"
                     if last_staged is not None and last_staged.is_file():
                         try:
                             self._apple_quarantine_file(

@@ -112,9 +112,10 @@ def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None 
 # cannot resurrect an old corrupt stash in the scan (issue #30): the library
 # scan excludes every remembered root, not just the current one. A tiny JSON
 # sidecar beside the settings (not a setting itself: no UI, no migration,
-# just an exclusion list the bridge rewrites). Capped; newest first.
+# just an exclusion list the bridge rewrites). Uncapped on purpose: evicting
+# the oldest root would re-expose a folder that may still hold quarantined
+# files, and entries are short strings written only when settings save.
 _QUARANTINE_SIDECAR_NAME = "apple_quarantine_roots.json"
-_QUARANTINE_REMEMBERED_MAX = 10
 
 
 def _quarantine_sidecar(config_dir: str | Path) -> Path:
@@ -134,7 +135,7 @@ def known_quarantine_dirs(config_dir: str | Path) -> list[str]:
         text = str(entry or "").strip()
         if text and text not in known:
             known.append(text)
-    return known[:_QUARANTINE_REMEMBERED_MAX]
+    return known
 
 
 def remember_quarantine_dir(config_dir: str | Path, path: str | Path) -> list[str]:
@@ -147,7 +148,6 @@ def remember_quarantine_dir(config_dir: str | Path, path: str | Path) -> list[st
     if not text:
         return known_quarantine_dirs(config_dir)
     known = [text, *(entry for entry in known_quarantine_dirs(config_dir) if entry != text)]
-    known = known[:_QUARANTINE_REMEMBERED_MAX]
     try:
         sidecar = _quarantine_sidecar(config_dir)
         if str(sidecar.parent):
