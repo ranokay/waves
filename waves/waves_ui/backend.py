@@ -5819,6 +5819,10 @@ class WavesBridge(LibraryMixin, QObject):
             if self._artist_cache.get(artist_id) is not None:
                 return
             with self._prefetch_lock:
+                # Recheck under the lock, as the click path does: another
+                # worker may have warmed the page since the read above.
+                if self._artist_cache.get(artist_id) is not None:
+                    return
                 if artist_id in self._artist_loading or self._artist_prefetch is not None:
                     return
                 self._artist_prefetch = artist_id

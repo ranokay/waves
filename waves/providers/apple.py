@@ -198,12 +198,12 @@ class AppleProvider(Provider):
 
     def _remember(self, kind: str, item: dict) -> str:
         raw_id = str(item.get("id") or "")
-        if raw_id:
+        # Only a DIFFERENT object invalidates completeness: rendering the
+        # fetched object itself (row_for on a get_object result) passes the
+        # identical dict back and must preserve its marker, or a legitimately
+        # empty collection refetches on every read.
+        if raw_id and self._objects[kind].get(raw_id) is not item:
             self._objects[kind][raw_id] = item
-            # A row builder storing a summary invalidates a fetched object:
-            # without this a fetch, then a search for the same item, then a
-            # page build would serve the summary (no tracks, no views) as
-            # canonical. Completeness is re-proven structurally on next read.
             self._complete.discard((kind, raw_id))
         return self._id(raw_id)
 

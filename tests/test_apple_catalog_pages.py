@@ -264,3 +264,31 @@ def test_a_later_search_summary_invalidates_a_fetched_album():
     provider.get_object("album", "apple:album-1")
 
     assert provider._catalog.calls == [("album", "album-1"), ("album", "album-1")]
+
+
+def test_rendering_a_fetched_empty_album_preserves_completeness():
+    empty_album = {
+        "id": "album-9",
+        "type": "albums",
+        "attributes": {
+            "name": "Silence",
+            "artistName": "Aphex Twin",
+            "artwork": {"url": "https://img/album/{w}x{h}bb.jpg"},
+            "releaseDate": "1992-02-12",
+        },
+    }
+
+    class _EmptyCatalog:
+        def __init__(self):
+            self.calls: list = []
+
+        async def get_album(self, album_id):
+            self.calls.append(("album", album_id))
+            return {"data": [empty_album]}
+
+    provider = AppleProvider(catalog=_EmptyCatalog())
+    fetched = provider.get_object("album", "album-9")
+    provider.row_for("album", fetched)
+
+    assert provider.get_object("album", "apple:album-9") is fetched
+    assert provider._catalog.calls == [("album", "album-9")]
