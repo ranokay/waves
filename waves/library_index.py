@@ -188,8 +188,10 @@ def _is_quarantine_path(path: str | None) -> bool:
     filesystem). A case-only mismatch then falls back to an on-disk identity
     check: insensitive volumes alias spellings the bytes alone cannot tell
     apart, while on a sensitive filesystem samefile refuses and two genuinely
-    different folders stay unscanned. The fallback stats only on a
-    case-insensitive prefix hit, never on the walk's hot path.
+    different folders stay scanned. The fallback stats only on a
+    case-insensitive prefix hit, never on the walk's hot path. A symlinked
+    chain (scan root reached through a link) resolves once, gated on a
+    quarantine basename appearing in the candidate, for the same reason.
     """
     try:
         if not path or not _EXTRA_QUARANTINE_PATHS:
@@ -207,6 +209,28 @@ def _is_quarantine_path(path: str | None) -> bool:
                 # or above a listed directory), the registered root may not.
                 try:
                     if os.path.samefile(normalized[: len(quarantined)], quarantined):
+                        return True
+                except OSError:
+                    continue
+        try:
+            names = {seg.casefold() for seg in normalized.split(os.sep) if seg}
+            wanted: set[str] = set()
+            for quarantined in _EXTRA_QUARANTINE_PATHS:
+                wanted.update(seg.casefold() for seg in quarantined.split(os.sep) if seg)
+            if names.isdisjoint(wanted):
+                return False
+            real = os.path.realpath(normalized)
+        except Exception:
+            return False
+        for quarantined in _EXTRA_QUARANTINE_PATHS:
+            if real == quarantined or real.startswith(quarantined.rstrip(os.sep) + os.sep):
+                return True
+        folded_real = real.casefold()
+        for quarantined in _EXTRA_QUARANTINE_PATHS:
+            want = quarantined.casefold().rstrip(os.sep) + os.sep
+            if folded_real == quarantined.casefold() or folded_real.startswith(want):
+                try:
+                    if os.path.samefile(real[: len(quarantined)], quarantined):
                         return True
                 except OSError:
                     continue

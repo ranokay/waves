@@ -8861,6 +8861,11 @@ class WavesBridge(LibraryMixin, QObject):
                 row.pop("reason", None)
             if ev.get("quarantined"):
                 row["quarantined"] = True
+            elif ev["status"] == "running":
+                # A restart clears a previous quarantine mark (like reason
+                # above): a retried track that delivers must not keep
+                # reporting itself quarantined to state readers.
+                row.pop("quarantined", None)
         # Finalize progress (post-download steps), a second axis next to the
         # stream pct. A stage event carries it; a plain "running" event is the
         # track (re)starting, which resets it so a retry does not open on a
@@ -11774,11 +11779,18 @@ class WavesBridge(LibraryMixin, QObject):
         collection: bool,
         media_id: str,
         keep_ask: tuple | None = None,
+        is_retry: bool = False,
     ) -> None:
         """Queue one Apple track or collection. The TIDAL _download's shape
         for the parts that are provider-blind (folder gate, ffmpeg gate,
         ask pinning, queue row, spec, pump); the Apple fetch happens at
-        dispatch, never here."""
+        dispatch, never here.
+
+        ``keep_ask`` pins the ask (a retry asks at its row's ask); ``is_retry``
+        marks an explicit re-ask of a FAILED row and rides the queued spec to
+        the skip-list gate. They travel separately so a deferred replay keeps
+        the row's pinned ask without promoting a fresh row into a retry.
+        """
         if not self._apple_cookies_ready():
             self._set_status("Apple downloads need a cookies export: set one in Settings under Providers, Apple Music")
             self.downloadState.emit(media_id, "")
@@ -11791,29 +11803,44 @@ class WavesBridge(LibraryMixin, QObject):
             self._stash_pending_download(
                 media_id,
                 lambda: self._download_apple(
-                    type_media, row, collection_row, file_template, collection, media_id, keep_ask=keep_ask
+                    type_media,
+                    row,
+                    collection_row,
+                    file_template,
+                    collection,
+                    media_id,
+                    keep_ask=keep_ask,
+                    is_retry=is_retry,
                 ),
             )
             return
         if self._ffmpeg_gate_holds(
             media_id,
             lambda: self._download_apple(
-                type_media, row, collection_row, file_template, collection, media_id, keep_ask=keep_ask
+                type_media,
+                row,
+                collection_row,
+                file_template,
+                collection,
+                media_id,
+                keep_ask=keep_ask,
+                is_retry=is_retry,
             ),
         ):
             return
         if keep_ask is not None and keep_ask[0]:
             # A retry asks at what its row asked, not at a setting that moved
             # since (the TIDAL keep_ask rule). It retries only its own Version.
+            # Whether this re-entry IS a retry rides is_retry (set by
+            # _start_retry); keep_ask alone only pins the ask, so a deferred
+            # replay of a fresh row keeps its ask without becoming a retry.
             ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] if len(keep_ask) > 1 else "" or _tier_word(keep_ask[0]))
             keep_ver = str(keep_ask[2] if len(keep_ask) > 2 else "" or "").strip().lower() or None
             keep_ver = keep_ver if keep_ver in ("stereo", "atmos") else None
-            is_retry = True
         else:
             ask = str(self.settings.data.apple_quality_audio or "HIGH")
             ask_tier = _tier_word(ask)
             keep_ver = None
-            is_retry = False
         provider = self.providers.get(CTX_APPLE)
         # Dual-download Versions (§5.1-5.2): toggle on means alongside where a
         # track carries Atmos; toggle off stays single stereo rows. A retry
@@ -13040,10 +13067,12 @@ class WavesBridge(LibraryMixin, QObject):
                 file_template,
                 collection,
                 media_id,
-                # A retried row replays as a retry (its skip-list bypass rides
+                # The replay keeps the row's pinned ask either way, but only a
+                # retried row replays as a retry (its skip-list bypass rides
                 # the spec flag); a fresh row replays fresh, so quarantined
                 # tracks skip again instead of fetching on a folder hiccup.
-                keep_ask=row_ask if getattr(spec, "is_retry", False) else None,
+                keep_ask=row_ask,
+                is_retry=bool(getattr(spec, "is_retry", False)),
             ),
             media_id,
         ):
@@ -13101,7 +13130,8 @@ class WavesBridge(LibraryMixin, QObject):
                     file_template,
                     collection,
                     media_id,
-                    keep_ask=row_ask if getattr(spec, "is_retry", False) else None,
+                    keep_ask=row_ask,
+                    is_retry=bool(getattr(spec, "is_retry", False)),
                 ),
                 media_id,
                 qid,
@@ -16570,8 +16600,8 @@ class WavesBridge(LibraryMixin, QObject):
             # Apple rows keep row dicts, never engine objects: re-enter the
             # Apple entry at the row's own ask, bypassing the TIDAL _download
             # below (which would build a TIDAL spec for an Apple id). The
-            # keep_ask marks this re-entry a retry, and the queued spec
-            # carries that flag to the skip-list gate (spec §6.4).
+            # explicit is_retry marks this re-entry a retry, and the queued
+            # spec carries that flag to the skip-list gate (spec §6.4).
             self._download_apple(
                 item["type"],
                 obj,
@@ -16584,6 +16614,7 @@ class WavesBridge(LibraryMixin, QObject):
                     str(item.get("quality") or ""),
                     str(item.get("audioType") or "") or None,
                 ),
+                is_retry=True,
             )
             return
         plan = self._merge_plans.get(item["media_id"]) if item["type"] == "album" else None
@@ -17577,7 +17608,7 @@ class WavesBridge(LibraryMixin, QObject):
             for known in remember_quarantine_dir(path_config_base(), root):
                 _lib_index.register_quarantine_dir(known)
         except Exception:
-            logger.debug("Apple quarantine dir could not be registered", exc_info=True)
+            logger.warning("Apple quarantine dirs could not be registered for scan exclusion")
 
     def _apple_cookies_ready(self) -> bool:
         """Whether an Apple download can start: a cookies file is set."""

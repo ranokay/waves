@@ -480,6 +480,7 @@ def test_ownership_skiplist_is_per_version(tmp_path):
 @needs_ffmpeg
 def test_corrupt_staged_file_fails_verification(tmp_path, monkeypatch):
     from waves import apple_engine
+    from waves.apple_engine import AppleIntegrityError
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -490,7 +491,7 @@ def test_corrupt_staged_file_fails_verification(tmp_path, monkeypatch):
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
 
-    with pytest.raises(apple_engine.AppleDownloadError):
+    with pytest.raises(AppleIntegrityError):
         WavesBridge._apple_verify_staged(stub, bad, expect_atmos=False)
 
 
@@ -673,8 +674,9 @@ def test_corrupt_atmos_never_blocks_its_stereo_sibling(tmp_path, monkeypatch):
     assert (base / "Aphex Twin" / "Xtal.m4a").is_file()
 
 
-@needs_ffmpeg
 def test_stereo_verification_accepts_alac_for_the_wrapper_tier(tmp_path, monkeypatch):
+    """Runs everywhere: both engine functions are stubbed and the probe path
+    is forced, so the aac/alac acceptance check is exercised with no ffmpeg."""
     from waves import apple_engine
 
     monkeypatch.setattr(
@@ -686,6 +688,7 @@ def test_stereo_verification_accepts_alac_for_the_wrapper_tier(tmp_path, monkeyp
     provider = _FakeProvider([good])
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
+    stub._apple_probe = lambda: "/fake/ffprobe"
 
     # Must not raise: ALAC stereo is a valid delivery, not a codec mismatch.
     WavesBridge._apple_verify_staged(stub, good, expect_atmos=False)
@@ -910,10 +913,10 @@ def test_engine_rejected_bytes_are_quarantined_with_their_date(tmp_path, monkeyp
 @needs_ffmpeg
 def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
     from waves import apple_engine
-    from waves.apple_engine import AppleDownloadError
+    from waves.apple_engine import AppleIntegrityError
 
     def _no_audio(path, ffprobe_path=""):
-        raise AppleDownloadError("The Apple download has no playable audio stream")
+        raise AppleIntegrityError("The Apple download has no playable audio stream", staged_path=str(path))
 
     monkeypatch.setattr(apple_engine, "probe_audio_file", _no_audio)
     bad_files = []
@@ -1190,3 +1193,44 @@ def test_resolve_stage_failure_files_under_effective_version(tmp_path, monkeypat
     assert store.is_quarantined("apple:song-1", "stereo") is not None
     assert store.is_quarantined("apple:song-1", "atmos") is None
     assert list((base / QUARANTINE_DIR_NAME).rglob("*.m4a")) != []
+
+
+def test_quarantine_excluded_through_symlinked_root(tmp_path):
+    """A scan reaching the library through a symlink still excludes a
+    quarantine registered under the real root spelling (and only it)."""
+    import os
+
+    from waves import library_index
+    from waves.library_index import LibraryIndex
+
+    real = os.path.join(str(tmp_path), "real")
+    album = os.path.join(real, "Aphex Twin", "[1992] SAW")
+    os.makedirs(album, exist_ok=True)
+    open(os.path.join(album, "01.flac"), "w").close()
+    custom = os.path.join(real, "Holding Bay")
+    os.makedirs(custom, exist_ok=True)
+    open(os.path.join(custom, "bad.m4a"), "w").close()
+    link = os.path.join(str(tmp_path), "link")
+    try:
+        os.symlink(real, link)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    tags = {
+        album: {"album": "SAW", "artist": "Aphex Twin", "date": "1992"},
+        custom: {"album": "Holding Bay", "artist": "Nobody", "date": "2025"},
+    }
+
+    def read_tags(path):
+        # Tags keyed canonically: resolve the symlinked walk spelling first.
+        return tags.get(os.path.realpath(os.path.dirname(path)))
+
+    # Registered under the real spelling; scanned through the link spelling.
+    library_index.register_quarantine_dir(custom)
+    idx = LibraryIndex(str(tmp_path / "link.sqlite3"), read_tags=read_tags)
+    try:
+        assert idx.refresh(link) == 1
+        albums = list(idx.iter_albums())
+        assert len(albums) == 1
+        assert "Holding Bay" not in str(albums)
+    finally:
+        idx.close()

@@ -156,7 +156,10 @@ def remember_quarantine_dir(config_dir: str | Path, path: str | Path) -> list[st
         tmp.write_text(json.dumps(known, indent=2), encoding="utf-8")
         os.replace(tmp, sidecar)
     except OSError:
-        logger.debug("Could not remember the Apple quarantine folder", exc_info=True)
+        # A previous custom folder then relies on its next use for
+        # registration; worth surfacing, since an unregistered old stash can
+        # be scanned back into the library.
+        logger.warning("Could not remember the Apple quarantine folder")
     return known
 
 
