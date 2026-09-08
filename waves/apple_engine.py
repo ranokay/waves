@@ -190,10 +190,13 @@ async def _download_song_async(
             # Fail fast on a wrong delivery (an AAC file for an Atmos ask
             # would otherwise be reported as E-AC-3 downstream): the probe is
             # best-effort here, the job runner verifies again per track.
+            # Stereo accepts AAC (cookies tier) and ALAC (wrapper tier).
             probe = probe_audio_file(staged, resolved_probe)
             picked = str(probe.get("codec") or picked)
-            want = "eac3" if atmos else "aac"
-            if picked.lower() != want:
+            got = str(picked or "").lower().replace("-", "").replace("_", "")
+            ok_delivery = got in ("eac3", "ec3", "ac4", "ac3") if atmos else got in ("aac", "alac")
+            if not ok_delivery:
+                want = "eac3" if atmos else "aac"
                 raise AppleDownloadError(  # noqa: TRY003 (user-facing words by design)
                     f"Apple served {picked or 'an unknown codec'} for song {song_id}, expected {want}"
                 )

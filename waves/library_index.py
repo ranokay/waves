@@ -88,6 +88,11 @@ AUDIO_EXTS = frozenset(
 # file, so a library of ~18k real folders walks as ~85k without this prune (the
 # extra dirs hold no audio, so "albums found" stayed correct while "checked"
 # ballooned and the walk pegged a core crawling phantom folders).
+#
+# "Waves Quarantine" is the integrity gate's folder (issue #30, spec §6.3): a
+# quarantined file can never badge as IN LIBRARY, so the scan never descends
+# into it. Custom quarantine locations keep the exclusion by basename (see
+# register_quarantine_dir): the folder's NAME is what the walk judges.
 _SKIP_DIR_NAMES = frozenset(
     {
         # Waves' own exports under the download root.
@@ -97,6 +102,7 @@ _SKIP_DIR_NAMES = frozenset(
         "Mixes",
         "Videos",
         "Video",
+        "Waves Quarantine",
         # NAS + OS metadata / thumbnail / recycle folders (dot-prefixed ones such
         # as .@__thumb, .Spotlight-V100, .Trashes are already skipped below).
         "@eaDir",  # Synology thumbnail/metadata, one under every folder
@@ -121,7 +127,38 @@ def _is_skipped_dir_name(name: str) -> bool:
     later listing can ever match, so the parent is flagged untrusted forever and
     a Synology's @eaDir arrives in the library as an owned album.
     """
-    return name.startswith(".") or name in _SKIP_DIR_NAMES
+    if name.startswith("."):
+        return True
+    if name in _SKIP_DIR_NAMES:
+        return True
+    return name in _EXTRA_SKIP_DIR_NAMES
+
+
+# Extra basenames a walk never descends into, beyond _SKIP_DIR_NAMES: the
+# integrity gate's custom quarantine location (issue #30). The default
+# "Waves Quarantine" is already in _SKIP_DIR_NAMES; a custom folder with a
+# different basename registers here so it stays scan-excluded too. Module-level
+# (not per-index) because the walk judges names, not roots, and every index in
+# the process must agree.
+_EXTRA_SKIP_DIR_NAMES: set[str] = set()
+
+
+def register_quarantine_dir(path: str | None) -> None:
+    """Exclude a custom quarantine folder's basename from library walks.
+
+    Idempotent; empty/None registers nothing. The default name needs no
+    registration (it is in _SKIP_DIR_NAMES). Never raises: a scan exclusion
+    must not fail a download.
+    """
+    try:
+        text = str(path or "").strip()
+        if not text:
+            return
+        base = os.path.basename(os.path.normpath(os.path.expanduser(text)))
+        if base and base not in (".", "..") and not base.startswith("."):
+            _EXTRA_SKIP_DIR_NAMES.add(base)
+    except Exception:
+        logger.debug("Could not register the quarantine dir for scan exclusion", exc_info=True)
 
 
 def _has_skipped_segment(path: str, root: str) -> bool:
