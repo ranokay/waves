@@ -1161,20 +1161,6 @@ def atmos_file_template(base_template: str, atmos_fragment: str | None) -> str:
     return f"{base[:idx]}{sep}{frag}{sep}{base[idx + 1 :]}"
 
 
-def _dual_wanted(media, atmos_on: bool, *, apple_has_atmos: bool | None = None) -> bool:
-    """Whether toggle-on means two Versions for this track.
-
-    TIDAL: same-id dual (has both, not Atmos-only). Apple: the provider says
-    the song carries an Atmos variant (apple_has_atmos). Off always means
-    one Version (today's behavior, byte-identical).
-    """
-    if not atmos_on:
-        return False
-    if apple_has_atmos is not None:
-        return bool(apple_has_atmos)
-    return _offers_both(media)
-
-
 def _record_is_atmos(rec) -> bool:
     """Was the copy on disk delivered as Dolby Atmos? The store keeps the
     delivered audio type beside the tier (ownership.py), and it is the only
@@ -2939,7 +2925,6 @@ class _JobSpec:
     # base_template is the stereo template for Atmos-only fallback (Atmos-only
     # tracks land to the normal path, no hole). Stereo/single rows ignore it.
     audio_type: str | None = None
-    atmos_template: str = ""
     base_template: str = ""
 
     def raw_object_id(self) -> str:
@@ -11630,7 +11615,6 @@ class WavesBridge(LibraryMixin, QObject):
                 media_id=media_id,
                 merge_plan=merge_plan,
                 audio_type=row_atype,
-                atmos_template=atmos_fragment,
                 base_template=base_for_spec,
             )
             self._pending_qids.append(qid)
@@ -11879,7 +11863,6 @@ class WavesBridge(LibraryMixin, QObject):
                 media_id=media_id,
                 merge_plan=None,
                 audio_type=row_atype,
-                atmos_template=atmos_fragment,
                 base_template=base_for_spec,
             )
             self._pending_qids.append(qid)
