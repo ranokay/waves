@@ -1518,6 +1518,12 @@ class LibraryIndex:
             nonlocal outstanding, pool_dead
             if pool_dead:
                 return
+            if path != root and _is_quarantine_path(path):
+                # A cached quarantine subtree (registered after it was
+                # indexed): never descend. The caller condemns it so the
+                # prune retires its rows this scan instead of restamping them.
+                condemned.append(path)
+                return
             try:
                 fut = pool.submit(probe, path, expected_mtime(path))
             except RuntimeError:
@@ -1599,6 +1605,12 @@ class LibraryIndex:
                     # frontier row its parent already wrote (stamped this gen) and is
                     # retried on the next scan.
                     row = known.get(path)
+                    if row is not None and path != root and _is_quarantine_path(path):
+                        # A cached quarantine dir on a transient error: keep
+                        # nothing, restamp nothing; the prune retires its rows.
+                        condemned.append(path)
+                        emit({"phase": "walk", "found": len(seen_albums), "checked": checked})
+                        continue
                     if row is not None:
                         old_mtime, listed, is_album, unreliable = row
                         writes.append((path, parent, old_mtime, listed, int(is_album), gen, unreliable))
@@ -1609,6 +1621,12 @@ class LibraryIndex:
                     emit({"phase": "walk", "found": len(seen_albums), "checked": checked})
                     continue
                 if res.get("unchanged"):
+                    if path != root and _is_quarantine_path(path):
+                        # A cached quarantine dir reusing its listing: restamp
+                        # nothing, descend nowhere; the prune retires its rows.
+                        condemned.append(path)
+                        emit({"phase": "walk", "found": len(seen_albums), "checked": checked})
+                        continue
                     _mtime, _listed, is_album, unreliable = known.get(path, (0.0, 0, 0, 0))
                     # The flag rides along unchanged: a reused listing is the
                     # stored one, trusted exactly as much as when it was stored.
@@ -1645,6 +1663,13 @@ class LibraryIndex:
                     for sd in res["subdirs"]:
                         fresh_by_key.setdefault(_name_key(os.path.basename(sd)), sd)
                     for child in children.get(path, ()):
+                        if _is_quarantine_path(child):
+                            # A cached quarantine child a fresh listing (which
+                            # filters it) no longer names: retire its subtree
+                            # now rather than verifying a folder the walk must
+                            # never descend into.
+                            condemned.append(child)
+                            continue
                         if child in fresh:
                             continue
                         twin = fresh_by_key.get(_name_key(os.path.basename(child)))

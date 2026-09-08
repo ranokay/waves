@@ -104,8 +104,12 @@ def decode_check(staged: str | Path, ffmpeg_path: str = "") -> None:
 
     A codec probe only reads stream metadata; the ffmpeg decode (~50 ms per
     the integrity research) actually walks the packets. Raises
-    AppleDownloadError on any decode error. Quarantine/retry policy stays
+    AppleIntegrityError on any decode error. Quarantine/retry policy stays
     the integrity ticket's scope; here a bad file fails its track.
+
+    Pass means silence: ffmpeg can print a recoverable packet error and still
+    exit 0 (the outbreak's malformed ALAC presents exactly so), so any
+    stderr under ``-v error`` fails the file, not just a nonzero exit.
     """
     ffmpeg = ffmpeg_path if ffmpeg_path and Path(ffmpeg_path).is_file() else (shutil.which("ffmpeg") or "")
     if not ffmpeg:
@@ -120,7 +124,7 @@ def decode_check(staged: str | Path, ffmpeg_path: str = "") -> None:
         )
     except Exception as exc:
         raise AppleDownloadError(f"Could not verify the Apple download: {exc}") from exc  # noqa: TRY003
-    if proc.returncode != 0:
+    if proc.returncode != 0 or (proc.stderr or "").strip():
         raise AppleIntegrityError(  # noqa: TRY003
             "The Apple download failed its integrity check", staged_path=str(staged)
         )

@@ -374,6 +374,8 @@ def _bind(stub):
         "_apple_skiplist_get",
         "_apple_skiplist_add",
         "_apple_skiplist_clear",
+        "_arm_apple_bypass",
+        "_release_apple_bypass",
         "_apple_quarantine_file",
         "_apple_staged_encoded_date",
         "_run_apple_job",
@@ -912,3 +914,95 @@ def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
     assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
     assert len(provider.fetched) == 3
     assert store.is_quarantined("apple:song-1", "stereo") is not None
+
+
+def test_custom_quarantine_cached_rows_retire_on_rescan(tmp_path):
+    import os
+
+    from waves import library_index
+    from waves.library_index import LibraryIndex
+
+    lib = os.path.join(str(tmp_path), "lib")
+    album = os.path.join(lib, "Aphex Twin", "[1992] SAW")
+    os.makedirs(album, exist_ok=True)
+    open(os.path.join(album, "01.flac"), "w").close()
+    custom = os.path.join(lib, "Holding Bay")
+    os.makedirs(custom, exist_ok=True)
+    open(os.path.join(custom, "bad.m4a"), "w").close()
+    tags = {
+        album: {"album": "SAW", "artist": "Aphex Twin", "date": "1992"},
+        custom: {"album": "Holding Bay", "artist": "Nobody", "date": "2025"},
+    }
+
+    def read_tags(path):
+        return tags.get(os.path.dirname(path))
+
+    idx = LibraryIndex(str(tmp_path / "lib.sqlite3"), read_tags=read_tags)
+    try:
+        assert idx.refresh(lib) == 2
+        # Registering the custom folder retires its cached subtree on the
+        # next scan (warm, unchanged mtimes): no re-list, no badge.
+        library_index.register_quarantine_dir(custom)
+        assert idx.refresh(lib) == 1
+        assert [a["id"] for a in idx.iter_albums()] != []
+        assert all("Holding Bay" not in str(a.get("id", "")) for a in idx.iter_albums())
+    finally:
+        idx.close()
+
+
+@needs_ffmpeg
+def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
+    """Two failed rows sharing one media_id arm two permits; each Version job
+    consumes its own, so the second job retries instead of auto-skipping."""
+    from waves import apple_engine
+
+    # The staged fixture's name decides the probed codec, so each Version
+    # verifies against the family it asked for (a real run probes real bytes).
+    monkeypatch.setattr(
+        apple_engine,
+        "probe_audio_file",
+        lambda path, ffprobe_path="": {
+            "codec": "eac3" if "atmos" in str(path) else "aac",
+            "sample_rate": "48000" if "atmos" in str(path) else "44100",
+        },
+    )
+    store = _SkipStore()
+    store.quarantine_add("apple:song-1", "stereo", "2025-06-23")
+    store.quarantine_add("apple:song-1", "atmos", "2025-06-23")
+    base = tmp_path / "lib"
+    relay = _Relay()
+
+    good_stereo = tmp_path / "good-stereo.m4a"
+    _tone(good_stereo)
+    good_atmos = tmp_path / "good-atmos.m4a"
+    _tone(good_atmos)
+
+    # One shared bridge-side counter armed twice (stereo + Atmos RETRY ALL):
+    # each Version job consumes one permit. A bare set would be consumed by
+    # the first job and starve the second (the Codex dual-RETRY ALL case).
+    shared_bypass: dict = {"apple:song-1": 2}
+
+    def _run_shared(version, fixture):
+        provider = _FakeProvider([fixture])
+        if version == "atmos":
+            provider.has_atmos = lambda item: True
+        stub = _bind(_stub(base, provider, _ownership_store=store))
+        stub._apple_skiplist_bypass = shared_bypass
+        # Dual rows land through different templates (the Atmos subfolder),
+        # so the sibling's file is not an owned collision.
+        template = "{artist_name}/{track_title}" if version == "stereo" else "{artist_name}/Dolby Atmos/{track_title}"
+        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1", audio_type=version)
+        summary = WavesBridge._run_apple_job(
+            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template=template
+        )
+        return summary, provider
+
+    summary_st, provider_st = _run_shared("stereo", good_stereo)
+    summary_at, provider_at = _run_shared("atmos", good_atmos)
+
+    assert summary_st == "" and summary_at == ""
+    assert len(provider_st.fetched) == 1 and len(provider_at.fetched) == 1
+    assert store.is_quarantined("apple:song-1", "stereo") is None
+    assert store.is_quarantined("apple:song-1", "atmos") is None
+    # Both permits consumed, none left standing for the next bulk run.
+    assert shared_bypass == {}

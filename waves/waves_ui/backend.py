@@ -4173,11 +4173,12 @@ class WavesBridge(LibraryMixin, QObject):
         # overrides, so a retry of a forced job stays forced.
         self._redownload_overrides: set[str] = set()
         # Media ids whose Apple skip-list mark a retry explicitly re-asks
-        # (issue #30, spec §6.4: FAILED rows are covered by RETRY ALL). A
-        # retry bypasses the bulk auto-skip once, then the mark stands again
-        # for the next bulk run unless a verified copy cleared it. Consumed on
-        # use, so a re-quarantined retry does not leave a standing bypass.
-        self._apple_skiplist_bypass: set[str] = set()
+        # (issue #30, spec §6.4: FAILED rows are covered by RETRY ALL). Counted
+        # per arming, not per id: dual-Version rows share one media_id, so one
+        # RETRY ALL arms twice (stereo + Atmos) and each Version job consumes
+        # one permit when it settles. A bare set from an older stub still
+        # reads (presence) and releases (discard); only the counter arms twice.
+        self._apple_skiplist_bypass: dict[str, int] = {}
         # Per-item audio quality choices made on a row's quality badge (issue
         # #36): media id -> UI tier word ("HI-RES", "LOSSLESS", "HIGH", "LOW")
         # or "DEFAULT". A choice stands on its item until that item is given
@@ -12804,13 +12805,40 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Could not clear the Apple skip-list", exc_info=True)
 
     def _release_apple_bypass(self, media_id: str | None) -> None:
-        """Release a job's retry bypass, however it ended. Idempotent."""
+        """Release one permit of a job's retry bypass, however it ended.
+
+        Idempotent: a counter goes down by one (deleted at zero) so each
+        Version job of a dual retry consumes its own arming; a bare set
+        discards. A re-quarantined retry leaves no standing bypass either
+        way, so the next bulk run skips again.
+        """
         if not media_id:
             return
         try:
-            getattr(self, "_apple_skiplist_bypass", set()).discard(str(media_id))
+            bypass = getattr(self, "_apple_skiplist_bypass", None)
+            if isinstance(bypass, dict):
+                left = int(bypass.get(str(media_id), 0)) - 1
+                if left > 0:
+                    bypass[str(media_id)] = left
+                else:
+                    bypass.pop(str(media_id), None)
+            elif bypass is not None:
+                bypass.discard(str(media_id))
         except Exception:
             logger.debug("Could not release the Apple retry bypass", exc_info=True)
+
+    def _arm_apple_bypass(self, media_id: str | None) -> None:
+        """Arm one retry permit for a media id (see _release_apple_bypass)."""
+        if not media_id:
+            return
+        try:
+            bypass = getattr(self, "_apple_skiplist_bypass", None)
+            if isinstance(bypass, dict):
+                bypass[str(media_id)] = int(bypass.get(str(media_id), 0)) + 1
+            elif bypass is not None:
+                bypass.add(str(media_id))
+        except Exception:
+            logger.debug("Could not arm the Apple retry bypass", exc_info=True)
 
     def _apple_quarantine_file(
         self, staged: pathlib.Path, *, relative: str, track_id: str, audio_type: str | None = None
@@ -16551,10 +16579,11 @@ class WavesBridge(LibraryMixin, QObject):
             # Apple entry at the row's own ask, bypassing the TIDAL _download
             # below (which would build a TIDAL spec for an Apple id). A retry
             # is an explicit re-ask of a FAILED row (spec §6.4: covered by
-            # RETRY ALL), so it bypasses the skip-list auto-skip once; a
-            # still-bad source re-quarantines and the mark stands again.
+            # RETRY ALL), so it arms a bypass permit for the skip-list
+            # auto-skip; a still-bad source re-quarantines and the mark stands
+            # again. Each Version arms its own permit (dual rows share one id).
             try:
-                self._apple_skiplist_bypass.add(str(item.get("media_id") or ""))
+                self._arm_apple_bypass(str(item.get("media_id") or ""))
             except Exception:
                 logger.debug("Could not arm the Apple retry bypass", exc_info=True)
             self._download_apple(
