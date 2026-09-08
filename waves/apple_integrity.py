@@ -180,7 +180,9 @@ def _creation_candidates(payload: dict) -> list[str]:
                     candidates.append(str(tags[key]))
         for stream in payload.get("streams") or []:
             tags = (stream or {}).get("tags") or {}
-            if isinstance(tags, dict) and any(tags.get(key) for key in ("creation_time", "creationdate", "encoded_date")):
+            if isinstance(tags, dict) and any(
+                tags.get(key) for key in ("creation_time", "creationdate", "encoded_date")
+            ):
                 for key in ("creation_time", "creationdate", "encoded_date"):
                     if tags.get(key):
                         candidates.append(str(tags[key]))
@@ -206,7 +208,7 @@ def _mutagen_encoded_date(path: Path) -> datetime.date | None:
         values = tags.get(key)
         if not values:
             continue
-        items = list(values) if isinstance(values, (list, tuple)) else [values]
+        items = list(values) if isinstance(values, list | tuple) else [values]
         for item in items:
             if isinstance(item, bytes):
                 try:

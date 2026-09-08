@@ -553,9 +553,7 @@ class OwnershipStore:
         text = str(audio_type or "").strip().lower()
         return text if text in ("stereo", "atmos") else ""
 
-    def quarantine_add(
-        self, track_id: str, audio_type: str | None = None, encoded_date: str | None = None
-    ) -> None:
+    def quarantine_add(self, track_id: str, audio_type: str | None = None, encoded_date: str | None = None) -> None:
         """Mark a track's version as quarantined (bulk runs auto-skip it)."""
         tid = namespaced_id(track_id)
         key = self._skip_audio_key(audio_type)

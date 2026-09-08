@@ -224,7 +224,13 @@ class _FakeProvider:
             "track_num": 1,
             "release_date": "1992-02-12",
             "release_type": "",
-            "album": {"name": "Selected Ambient Works 85-92", "num_tracks": 1, "num_volumes": None, "upc": "", "type": ""},
+            "album": {
+                "name": "Selected Ambient Works 85-92",
+                "num_tracks": 1,
+                "num_volumes": None,
+                "upc": "",
+                "type": "",
+            },
         }
 
     def cover_url(self, obj, dimension):
@@ -399,7 +405,7 @@ def test_quarantine_dest_keeps_the_intended_name(tmp_path):
 
 def test_encoded_date_parses_creation_time_and_bare_dates():
     assert parse_encoded_date("2025-06-23T04:06:21Z").isoformat() == "2025-06-23"
-    assert parse_encoded_date("2025-05") .isoformat() == "2025-05-01"
+    assert parse_encoded_date("2025-05").isoformat() == "2025-05-01"
     assert parse_encoded_date("garbage") is None
     assert is_outbreak_era("2025-06-23") is True
     assert is_outbreak_era("2025-05-01") is True
@@ -486,7 +492,13 @@ def test_known_bad_fixture_quarantines_and_fails_in_plain_words(tmp_path, monkey
 
     with pytest.raises(DownloadIncomplete) as excinfo:
         WavesBridge._run_apple_job(
-            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
         )
 
     assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
@@ -522,7 +534,13 @@ def test_outbreak_era_file_quarantines_after_one_retry(tmp_path, monkeypatch):
 
     with pytest.raises(DownloadIncomplete):
         WavesBridge._run_apple_job(
-            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
         )
 
     assert len(provider.fetched) == 2
@@ -704,7 +722,13 @@ def test_resolve_stage_integrity_failure_retries_and_marks_the_skiplist(tmp_path
 
     with pytest.raises(DownloadIncomplete) as excinfo:
         WavesBridge._run_apple_job(
-            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
         )
 
     assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)

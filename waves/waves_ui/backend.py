@@ -12161,9 +12161,7 @@ class WavesBridge(LibraryMixin, QObject):
                     if is_integrity:
                         from waves.apple_integrity import INTEGRITY_FAIL_MESSAGE as _IFM
 
-                        signals.track_event.emit(
-                            {"id": track_id, "status": "failed", "reason": _IFM}
-                        )
+                        signals.track_event.emit({"id": track_id, "status": "failed", "reason": _IFM})
                     else:
                         signals.track_event.emit({"id": track_id, "status": "failed"})
                 except Exception:
@@ -12392,9 +12390,7 @@ class WavesBridge(LibraryMixin, QObject):
                     # A refusal is TIDAL-vocabulary for "gone": kept out of the fail
                     # count so one delisted track cannot fail its whole album.
                     if provider.classify_refusal(resolve_exc).kind is RefusalKind.UNAVAILABLE:
-                        raise AppleTrackUnavailable(
-                            str(resolve_exc) or "not available on Apple Music"
-                        ) from resolve_exc
+                        raise AppleTrackUnavailable(str(resolve_exc) or "not available on Apple Music") from resolve_exc
                     # The engine verifies inside its own fetch (decode-to-null
                     # before resolve_stream returns), so a corrupt delivery can
                     # raise here with no staged file to hold: it still enters
@@ -12646,7 +12642,9 @@ class WavesBridge(LibraryMixin, QObject):
             # Normalized (hyphens/underscores dropped): "e-ac-3" -> "eac3".
             if expect_atmos:
                 if codec not in ("eac3", "ec3", "ac4", "ac3"):
-                    raise AppleDownloadError(f"Apple served {codec or 'an unknown codec'}, expected eac3")  # noqa: TRY003
+                    raise AppleDownloadError(  # noqa: TRY003
+                        f"Apple served {codec or 'an unknown codec'}, expected eac3"
+                    )
             elif codec not in ("aac", "alac"):
                 raise AppleDownloadError(f"Apple served {codec or 'an unknown codec'}, expected aac")  # noqa: TRY003
         else:
