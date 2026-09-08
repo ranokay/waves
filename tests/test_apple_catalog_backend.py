@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Lock
 from types import SimpleNamespace
 
 from waves.providers.apple import AppleProvider
@@ -191,18 +192,7 @@ def test_apple_artist_page_loads_albums_and_top_tracks():
             "top-songs": {"data": [_song()]},
         },
     }
-    stub = SimpleNamespace(
-        providers={"apple": _apple_provider(artist=artist, song=_song())},
-        threadpool=_InlinePool(),
-        _artist_cache={},
-        _browse_gen=0,
-        artistLoaded=_Signal(),
-        statuses=[],
-        busy=[],
-    )
-    stub._set_status = stub.statuses.append
-    stub._set_busy = lambda on: stub.busy.append(bool(on))
-    stub._remember_artist_page = lambda aid, payload: stub._artist_cache.__setitem__(aid, payload)
+    stub = _prefetch_stub(providers={"apple": _apple_provider(artist=artist, song=_song())})
 
     WavesBridge._load_apple_artist(stub, "apple:artist-1")
 
@@ -210,3 +200,151 @@ def test_apple_artist_page_loads_albums_and_top_tracks():
     assert payload["name"] == "Aphex Twin"
     assert [a["id"] for a in payload["albums"]] == ["apple:album-1"]
     assert [t["id"] for t in payload["tracks"]] == ["apple:song-1"]
+
+
+def _apple_artist_catalog():
+    artist = {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
+        "relationships": {
+            "albums": {"data": []},
+            "top-songs": {"data": [_song()]},
+        },
+    }
+    return _Catalog(artist=artist, song=_song())
+
+
+def _prefetch_stub(**overrides):
+    stub = SimpleNamespace(
+        _logged_in=True,
+        providers={"apple": AppleProvider(catalog=_apple_artist_catalog())},
+        threadpool=_InlinePool(),
+        _artist_cache={},
+        _artist_loading=set(),
+        _artist_prefetch=None,
+        _artist_prefetch_claimed=False,
+        _prefetch_lock=Lock(),
+        _browse_gen=0,
+        artistLoaded=_Signal(),
+        artistLoadFailed=_Signal(),
+        statuses=[],
+        busy=[],
+    )
+    stub._set_status = stub.statuses.append
+    stub._set_busy = lambda on: stub.busy.append(bool(on))
+    stub._remember_artist_page = lambda aid, payload: stub._artist_cache.__setitem__(aid, payload)
+    stub._start_apple_artist_build = lambda *a, **k: WavesBridge._start_apple_artist_build(stub, *a, **k)
+    for key, value in overrides.items():
+        setattr(stub, key, value)
+    return stub
+
+
+def test_apple_hover_prefetch_warms_the_page_silently():
+    stub = _prefetch_stub()
+
+    WavesBridge.prefetchArtist(stub, "apple:artist-1")
+
+    assert stub.artistLoaded.emits == []
+    assert stub.busy == [] and stub.statuses == []
+    assert stub._artist_cache["apple:artist-1"]["name"] == "Aphex Twin"
+    assert stub._artist_loading == set() and stub._artist_prefetch is None
+
+
+def test_apple_click_claims_an_in_flight_hover_prefetch():
+    stub = _prefetch_stub(
+        _artist_loading={"apple:artist-1"},
+        _artist_prefetch="apple:artist-1",
+    )
+
+    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+
+    assert stub._artist_prefetch_claimed is True
+    assert stub.busy == [True] and stub.statuses == ["Loading artist…"]
+    assert stub.artistLoaded.emits == []  # the worker finishes as the click
+
+
+def test_apple_click_after_a_prefetch_serves_the_warmed_cache():
+    stub = _prefetch_stub()
+    WavesBridge.prefetchArtist(stub, "apple:artist-1")
+
+    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+
+    (payload,) = stub.artistLoaded.emits
+    assert payload["name"] == "Aphex Twin"
+    assert stub.statuses[-1] == "Aphex Twin"
+
+
+class _FailingArtistCatalog:
+    async def get_artist(self, artist_id):
+        raise RuntimeError("network died")
+
+
+def test_apple_silent_prefetch_failure_stays_silent():
+    stub = _prefetch_stub(providers={"apple": AppleProvider(catalog=_FailingArtistCatalog())})
+
+    WavesBridge.prefetchArtist(stub, "apple:artist-1")
+
+    assert stub.artistLoaded.emits == []
+    assert stub.statuses == [] and stub.busy == []
+    assert stub._artist_cache == {}
+    assert stub._artist_loading == set() and stub._artist_prefetch is None
+
+
+def test_apple_click_failure_reports_and_releases_the_load():
+    stub = _prefetch_stub(providers={"apple": AppleProvider(catalog=_FailingArtistCatalog())})
+
+    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+
+    assert stub.artistLoaded.emits == []
+    assert stub.statuses == ["Loading artist…", "Could not open that artist"]
+    assert stub.busy == [True, False]
+    assert stub.artistLoadFailed.emits == ["apple:artist-1"]
+
+
+class _DeferredPool:
+    def __init__(self):
+        self.fns: list = []
+
+    def start(self, worker, priority: int = 0):
+        self.fns.append(worker.fn)
+
+
+def test_apple_click_serves_cache_even_with_a_stale_loading_mark():
+    stub = _prefetch_stub(providers={"apple": AppleProvider(catalog=_FailingArtistCatalog())})
+    stub._artist_cache["apple:artist-1"] = {"id": "apple:artist-1", "name": "Aphex Twin"}
+    stub._artist_loading.add("apple:artist-1")
+
+    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+
+    (payload,) = stub.artistLoaded.emits
+    assert payload["name"] == "Aphex Twin"
+    assert stub._artist_prefetch_claimed is False  # served, not claimed
+
+
+def test_apple_stale_worker_keeps_the_next_generations_prefetch():
+    pool = _DeferredPool()
+    stub = _prefetch_stub(threadpool=pool)
+    WavesBridge.prefetchArtist(stub, "apple:artist-1")
+    assert len(pool.fns) == 1
+
+    # Logout clears the markers and bumps the generation; the next account
+    # hovers the same artist before the old request finishes.
+    stub._browse_gen = 1
+    stub._artist_loading = set()
+    stub._artist_prefetch = None
+    stub._artist_cache = {}
+    WavesBridge.prefetchArtist(stub, "apple:artist-1")
+    assert len(pool.fns) == 2
+
+    pool.fns[0]()  # the stale worker lands: touches nothing new
+
+    assert stub._artist_loading == {"apple:artist-1"}
+    assert stub._artist_prefetch == "apple:artist-1"
+    assert stub._artist_cache == {}
+    assert stub.artistLoaded.emits == []
+
+    pool.fns[1]()  # the current worker warms the page quietly
+
+    assert stub._artist_cache["apple:artist-1"]["name"] == "Aphex Twin"
+    assert stub.artistLoaded.emits == []

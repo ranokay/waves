@@ -62,6 +62,11 @@ class AppleProvider(Provider):
             "track": {},
             "playlist": {},
         }
+        # Ids fetched through get_object (the canonical endpoints, carrying
+        # track lists and artist views). Search summaries share _objects but
+        # are never complete: a search album has no tracks, a search artist
+        # no views, so page builders must not reuse them (see _is_complete).
+        self._complete: set[tuple[str, str]] = set()
 
     def _run(self, awaitable):
         with self._loop_lock:
@@ -193,8 +198,13 @@ class AppleProvider(Provider):
 
     def _remember(self, kind: str, item: dict) -> str:
         raw_id = str(item.get("id") or "")
-        if raw_id:
+        # Only a DIFFERENT object invalidates completeness: rendering the
+        # fetched object itself (row_for on a get_object result) passes the
+        # identical dict back and must preserve its marker, or a legitimately
+        # empty collection refetches on every read.
+        if raw_id and self._objects[kind].get(raw_id) is not item:
             self._objects[kind][raw_id] = item
+            self._complete.discard((kind, raw_id))
         return self._id(raw_id)
 
     def _artist_row(self, item: dict) -> dict:
@@ -343,7 +353,7 @@ class AppleProvider(Provider):
     def get_object(self, kind: str, raw_id: str) -> object:
         raw_id = str(raw_id or "").removeprefix(f"{CTX_APPLE}:")
         cached = self._objects.get(kind, {}).get(raw_id)
-        if cached is not None:
+        if cached is not None and ((kind, raw_id) in self._complete or self._is_complete(kind, cached)):
             return cached
         if kind == "album":
             item = self._first_data(self._run(self._fetch_album(raw_id)))
@@ -358,7 +368,48 @@ class AppleProvider(Provider):
         if not isinstance(item, dict) or not item.get("id"):
             raise KeyError(raw_id)
         self._objects[kind][raw_id] = item
+        self._complete.add((kind, raw_id))
         return item
+
+    @staticmethod
+    def _has_view_data(views: object) -> bool:
+        """Whether a JSON:API views map holds any rows."""
+        if not isinstance(views, dict):
+            return False
+        for view in views.values():
+            view_data = (view or {}).get("data") if isinstance(view, dict) else None
+            if isinstance(view_data, list) and view_data:
+                return True
+        return False
+
+    @classmethod
+    def _is_complete(cls, kind: str, item: dict) -> bool:
+        """Whether a cached resource carries what the page builders need.
+
+        Search summaries name the item but omit the collections: albums and
+        playlists without their track lists, artists without albums or top
+        songs. Tracks are complete when named (previews ride the attributes).
+        Fetched objects bypass this via _complete, so a genuinely empty
+        collection does not refetch on every read.
+        """
+        if not isinstance(item, dict):
+            return False
+        if kind == "track":
+            return bool(cls._attributes(item).get("name"))
+        if kind in ("album", "playlist"):
+            return bool(cls._relationship_items(item, "tracks"))
+        if kind == "artist":
+            relationships = item.get("relationships") or {}
+            for rel in relationships.values():
+                if not isinstance(rel, dict):
+                    continue
+                data = rel.get("data")
+                if isinstance(data, list) and data:
+                    return True
+                if cls._has_view_data(rel.get("views")):
+                    return True
+            return cls._has_view_data(item.get("views"))
+        return False
 
     async def _fetch_album(self, raw_id: str) -> dict:
         if self._catalog is None:
@@ -423,6 +474,10 @@ class AppleProvider(Provider):
 
     @classmethod
     def _relationship_items(cls, item: dict, kind: str) -> list[dict]:
+        # One window only: a playlist longer than the fetch window carries a
+        # `next` continuation that v1 does not follow (no seam exists for
+        # arbitrary continuation URLs; the fetch asks for 300 tracks, which
+        # covers the realistic range, and albums are complete by definition).
         relationships = item.get("relationships") or {}
         related = relationships.get(kind) or {}
         data = related.get("data") or []

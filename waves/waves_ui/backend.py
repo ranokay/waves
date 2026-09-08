@@ -5629,45 +5629,122 @@ class WavesBridge(LibraryMixin, QObject):
         """An Apple artist page: albums, singles and top tracks, no bio.
 
         Apple's catalog serves no biography; the page renders the art header
-        plus the three row sections. Cached per session like TIDAL pages.
+        plus the three row sections. Cached per session like TIDAL pages, and
+        a hover prefetch in flight is claimed exactly as loadArtist claims
+        the TIDAL one (see prefetchArtist).
         """
         cached = self._artist_cache.get(artist_id)
         if cached is not None:
             self.artistLoaded.emit(cached)
             self._set_status(cached.get("name") or "Artist")
             return
-        self._set_busy(True)
-        self._set_status("Loading artist…")
-        gen = self._browse_gen
+        claim = False
+        in_flight = False
+        with self._prefetch_lock:
+            # Recheck the cache under the lock: a hover worker may have
+            # published the page after the read above but before its loading
+            # mark dropped. Without this the click starts a redundant build.
+            cached = self._artist_cache.get(artist_id)
+            if cached is None:
+                in_flight = artist_id in self._artist_loading
+                if in_flight and artist_id == self._artist_prefetch:
+                    self._artist_prefetch_claimed = claim = True
+                elif not in_flight:
+                    self._artist_loading.add(artist_id)
+        if cached is not None:
+            self.artistLoaded.emit(cached)
+            self._set_status(cached.get("name") or "Artist")
+            return
+        if in_flight:
+            if claim:
+                self._set_busy(True)
+                self._set_status("Loading artist…")
+            return
+        self._start_apple_artist_build(artist_id, silent=False)
+
+    def _start_apple_artist_build(self, artist_id: str, *, silent: bool) -> None:
+        """The Apple artist page worker behind _load_apple_artist (a click)
+        and the prefetchArtist Apple branch (a hover). ``artist_id`` is
+        already in ``_artist_loading``; the worker takes it out. A silent
+        build that a click claims mid-flight finishes as the click."""
+        gen = self._browse_gen  # account generation, bumped on logout
+        if not silent:
+            self._set_busy(True)
+            self._set_status("Loading artist…")
 
         def work() -> None:
+            t0 = devlog.clock()
+            failed = False
             try:
                 provider = self.providers[CTX_APPLE]
                 raw_id = str(artist_id).removeprefix(f"{CTX_APPLE}:")
                 artist = provider.get_object("artist", raw_id)
                 page = provider.artist_page(artist)
+                payload = {
+                    "id": artist_id,
+                    "name": page.get("name") or "Artist",
+                    "art": page.get("art") or "",
+                    "bio": "",
+                    "albums": page.get("albums") or [],
+                    "eps": page.get("eps") or [],
+                    "tracks": page.get("tracks") or [],
+                    "editions_collapsed": False,
+                }
+                # Publish BEFORE the finally below releases the in-flight
+                # mark: a click landing between the release and a later
+                # publish would see neither a cached page nor an in-flight
+                # build and start a redundant request. An empty-everywhere
+                # page is more likely a transient failure than a real
+                # artist with no catalogue: never cached.
+                if gen == self._browse_gen and (payload["albums"] or payload["eps"] or payload["tracks"]):
+                    self._remember_artist_page(artist_id, payload)
             except Exception:
                 logger.exception("Could not load Apple artist %s", artist_id)
-                if gen == self._browse_gen:
-                    self._set_status("Could not open that artist")
-                    self._set_busy(False)
+                failed = True
+                return
+            finally:
+                # Same claim breath as _start_artist_build's: free the hover
+                # slot and read the claim while the loading mark drops. Skipped
+                # when the generation moved (logout clears all of this state;
+                # a stale worker must not clear the next account's prefetch).
+                with self._prefetch_lock:
+                    if gen == self._browse_gen:
+                        self._artist_loading.discard(artist_id)
+                        claimed = silent and self._artist_prefetch == artist_id and self._artist_prefetch_claimed
+                        if self._artist_prefetch == artist_id:
+                            self._artist_prefetch = None
+                            self._artist_prefetch_claimed = False
+                    else:
+                        claimed = False
+                quiet = silent and not claimed  # nobody is watching this build
+                if failed:
+                    if quiet:
+                        _prefetch_log.debug("prefetch Apple artist %s failed", artist_id)
+                    elif gen == self._browse_gen:
+                        self._set_status("Could not open that artist")
+                        self._set_busy(False)
+                        self.artistLoadFailed.emit(artist_id)
+            if failed:
                 return
             if gen != self._browse_gen:
+                return  # logged out mid-fetch; the rows belong to the dead session
+            if quiet:
+                # A page the user never opened is simply a cached page.
+                _prefetch_log.debug(
+                    "prefetch Apple artist %s done in %s", artist_id, devlog.fmt_dur(devlog.clock() - t0)
+                )
                 return
-            payload = {
-                "id": artist_id,
-                "name": page.get("name") or "Artist",
-                "art": page.get("art") or "",
-                "bio": "",
-                "albums": page.get("albums") or [],
-                "eps": page.get("eps") or [],
-                "tracks": page.get("tracks") or [],
-                "editions_collapsed": False,
-            }
-            self._remember_artist_page(artist_id, payload)
             self.artistLoaded.emit(payload)
             self._set_status(payload["name"])
             self._set_busy(False)
+            devlog.done(
+                "artist",
+                f"id={artist_id}",
+                devlog.clock() - t0,
+                albums=len(payload["albums"]),
+                eps=len(payload["eps"]),
+                tracks=len(payload["tracks"]),
+            )
 
         self.threadpool.start(Worker(work))
 
@@ -5733,6 +5810,26 @@ class WavesBridge(LibraryMixin, QObject):
         same-titled editions (a track fetch each, cached per session)."""
         artist_id = str(artist_id or "")
         if not self._logged_in or not artist_id:
+            return
+        if artist_id.startswith(f"{CTX_APPLE}:"):
+            # Apple hover: warm the Apple page silently so the click that
+            # usually follows paints from the cache. Without this branch the
+            # hover fell into the TIDAL build below and spent a TIDAL lookup
+            # on an Apple id, warming nothing.
+            if self._artist_cache.get(artist_id) is not None:
+                return
+            with self._prefetch_lock:
+                # Recheck under the lock, as the click path does: another
+                # worker may have warmed the page since the read above.
+                if self._artist_cache.get(artist_id) is not None:
+                    return
+                if artist_id in self._artist_loading or self._artist_prefetch is not None:
+                    return
+                self._artist_prefetch = artist_id
+                self._artist_prefetch_claimed = False
+                self._artist_loading.add(artist_id)
+            _prefetch_log.debug("prefetch Apple artist %s", artist_id)
+            self._start_apple_artist_build(artist_id, silent=True)
             return
         collapse = self._artist_page_collapses_editions()
         cached = self._artist_cache.get(artist_id)
