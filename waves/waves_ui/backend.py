@@ -4945,8 +4945,51 @@ class WavesBridge(LibraryMixin, QObject):
 
     # ----- search --------------------------------------------------------
 
+    def _apple_link_payload(self, resolved: object) -> dict | None:
+        """A resolved Apple link as a search payload with one Apple row.
+
+        The Apple group carries the row; the TIDAL buckets stay empty so the
+        page shows exactly the linked item.
+        """
+        if not isinstance(resolved, dict):
+            return None
+        kind = resolved.get("kind")
+        item = resolved.get("item")
+        if not isinstance(item, dict) or not kind:
+            return None
+        provider = self.providers[CTX_APPLE]
+        empty_apple = {
+            "artists": [],
+            "albums": [],
+            "tracks": [],
+            "videos": [],
+            "playlists": [],
+            "mixes": [],
+            "top": None,
+        }
+        if kind == "artist":
+            empty_apple["artists"] = [provider.row_for("artist", item)]
+        elif kind == "album":
+            empty_apple["albums"] = [provider.row_for("album", item)]
+        elif kind == "track":
+            empty_apple["tracks"] = [provider.row_for("track", item)]
+        elif kind == "playlist":
+            empty_apple["playlists"] = [provider.row_for("playlist", item)]
+        else:
+            return None
+        return {
+            "artists": [],
+            "albums": [],
+            "tracks": [],
+            "videos": [],
+            "playlists": [],
+            "mixes": [],
+            "top": None,
+            CTX_APPLE: empty_apple,
+        }
+
     def _open_url(self, url: str) -> None:
-        """Resolve a pasted TIDAL share URL into a single result."""
+        """Resolve a pasted TIDAL or Apple Music share URL into a single result."""
         self._search_gen += 1
         gen = self._search_gen
         self._set_busy(True)
@@ -4960,8 +5003,37 @@ class WavesBridge(LibraryMixin, QObject):
                 # The seam resolves the URL to the engine object it names; None
                 # covers every "cannot show this" case (not this provider's
                 # grammar, a gone item, a failed lookup) exactly as the old
-                # three-call chain's exceptions did.
+                # three-call chain's exceptions did. TIDAL first, Apple second.
                 media = self.providers[CTX_TIDAL].open_url(url)
+                apple_resolved = None
+                if media is None and CTX_APPLE in self.providers:
+                    try:
+                        apple_resolved = self.providers[CTX_APPLE].open_url(url)
+                    except Exception:
+                        logger.exception("Could not open Apple link")
+                        apple_resolved = None
+                if apple_resolved is not None:
+                    if gen != self._search_gen:
+                        return  # a newer search/link superseded this one
+                    try:
+                        payload = self._apple_link_payload(apple_resolved)
+                    except Exception:
+                        logger.exception("Apple link payload build failed")
+                        if gen == self._search_gen:
+                            self._set_status("Could not open that link")
+                            self._set_busy(False)
+                        return
+                    if payload is None:
+                        if gen == self._search_gen:
+                            self._set_status("Could not open that link")
+                            self._set_busy(False)
+                        return
+                    if gen != self._search_gen:
+                        return  # superseded while building the payload
+                    self.searchResults.emit(payload)
+                    self._set_status("Opened link")
+                    self._set_busy(False)
+                    return
             except Exception:
                 logger.exception("Could not open link")
                 if gen == self._search_gen:
@@ -5032,7 +5104,7 @@ class WavesBridge(LibraryMixin, QObject):
         if not self._logged_in:
             self._set_status("Sign in to search")
             return
-        if "tidal.com" in needle or needle.startswith("http"):
+        if "tidal.com" in needle or "music.apple.com" in needle or needle.startswith("http"):
             self._open_url(needle)
             return
         # Bump the search generation so a slower earlier search can't overwrite a
@@ -5389,6 +5461,10 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             t0 = devlog.clock()
+            if str(album_id).startswith(f"{CTX_APPLE}:"):
+                finish(self._apple_album_expansion_rows(str(album_id)))
+                devlog.done("album", f"tracks id={album_id}", devlog.clock() - t0)
+                return
             obj = album
             if obj is None:
                 # A new search clears every _objs bucket while expanded album
@@ -5429,6 +5505,32 @@ class WavesBridge(LibraryMixin, QObject):
 
         self.threadpool.start(Worker(work))
 
+    def _apple_album_expansion_rows(self, album_id: str) -> list:
+        """An Apple album's tracks as album-expansion rows."""
+        try:
+            provider = self.providers[CTX_APPLE]
+            raw_id = str(album_id).removeprefix(f"{CTX_APPLE}:")
+            album = provider.get_object("album", raw_id)
+            rows = provider.collection_items(album)
+        except Exception:
+            logger.exception("Could not load Apple album tracks %s", album_id)
+            return []
+        out = []
+        for i, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            out.append(
+                {
+                    "id": str(row.get("id") or ""),
+                    "num": int(row.get("num") or i),
+                    "title": str(row.get("title") or ""),
+                    "duration": str(row.get("duration") or ""),
+                    "popularity": int(row.get("popularity") if row.get("popularity") is not None else -1),
+                    "explicit": bool(row.get("explicit", False)),
+                }
+            )
+        return out
+
     @Slot(str)
     def loadPlaylistTracks(self, playlist_id: str) -> None:
         """Row list for a search playlist's inline expand (PlaylistBlock),
@@ -5444,6 +5546,12 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             t0 = devlog.clock()
+            if str(playlist_id).startswith(f"{CTX_APPLE}:"):
+                rows = self._apple_playlist_expansion_rows(str(playlist_id))
+                if gen == self._browse_gen:
+                    self.playlistTracksLoaded.emit(playlist_id, rows)
+                    devlog.done("playlist", f"tracks id={playlist_id}", devlog.clock() - t0, n=len(rows))
+                return
             obj = pl
             if obj is None:
                 # Same _objs-eviction fallback as loadAlbumTracks: a new
@@ -5489,6 +5597,80 @@ class WavesBridge(LibraryMixin, QObject):
 
         self.threadpool.start(Worker(work))
 
+    def _apple_playlist_expansion_rows(self, playlist_id: str) -> list:
+        """An Apple playlist's tracks as playlist-expansion rows."""
+        try:
+            provider = self.providers[CTX_APPLE]
+            raw_id = str(playlist_id).removeprefix(f"{CTX_APPLE}:")
+            playlist = provider.get_object("playlist", raw_id)
+            rows = provider.collection_items(playlist)
+        except Exception:
+            logger.exception("Could not load Apple playlist tracks %s", playlist_id)
+            return []
+        out = []
+        for i, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            out.append(
+                {
+                    "id": str(row.get("id") or ""),
+                    "kind": "track",
+                    "num": i,
+                    "title": str(row.get("title") or ""),
+                    "artist": str(row.get("artist") or ""),
+                    "duration": str(row.get("duration") or ""),
+                    "popularity": int(row.get("popularity") if row.get("popularity") is not None else -1),
+                    "explicit": bool(row.get("explicit", False)),
+                }
+            )
+        return out
+
+    def _load_apple_artist(self, artist_id: str) -> None:
+        """An Apple artist page: albums, singles and top tracks, no bio.
+
+        Apple's catalog serves no biography; the page renders the art header
+        plus the three row sections. Cached per session like TIDAL pages.
+        """
+        cached = self._artist_cache.get(artist_id)
+        if cached is not None:
+            self.artistLoaded.emit(cached)
+            self._set_status(cached.get("name") or "Artist")
+            return
+        self._set_busy(True)
+        self._set_status("Loading artist…")
+        gen = self._browse_gen
+
+        def work() -> None:
+            try:
+                provider = self.providers[CTX_APPLE]
+                raw_id = str(artist_id).removeprefix(f"{CTX_APPLE}:")
+                artist = provider.get_object("artist", raw_id)
+                page = provider.artist_page(artist)
+            except Exception:
+                logger.exception("Could not load Apple artist %s", artist_id)
+                if gen == self._browse_gen:
+                    self._set_status("Could not open that artist")
+                    self._set_busy(False)
+                return
+            if gen != self._browse_gen:
+                return
+            payload = {
+                "id": artist_id,
+                "name": page.get("name") or "Artist",
+                "art": page.get("art") or "",
+                "bio": "",
+                "albums": page.get("albums") or [],
+                "eps": page.get("eps") or [],
+                "tracks": page.get("tracks") or [],
+                "editions_collapsed": False,
+            }
+            self._remember_artist_page(artist_id, payload)
+            self.artistLoaded.emit(payload)
+            self._set_status(payload["name"])
+            self._set_busy(False)
+
+        self.threadpool.start(Worker(work))
+
     @Slot(str)
     def loadArtist(self, artist_id: str) -> None:
         """Build a rich artist page: bio, albums, EPs/singles, top tracks.
@@ -5499,6 +5681,9 @@ class WavesBridge(LibraryMixin, QObject):
         the QML updates it in place, only if something actually changed
         (e.g. a new album released since the page was cached)."""
         artist_id = str(artist_id or "")
+        if artist_id.startswith(f"{CTX_APPLE}:"):
+            self._load_apple_artist(artist_id)
+            return
         cached = self._artist_cache.get(artist_id)
         collapse = self._artist_page_collapses_editions()
         # A page cached under the other edition rule is not served: shown
@@ -6900,11 +7085,74 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Could not record collection membership", exc_info=True)
 
+    def _build_apple_browse_item(self, kind: str, media_id: str, key: str, *, record: bool = True) -> dict:
+        """An Apple album/playlist page from catalog rows, same payload shape."""
+        provider = self.providers[CTX_APPLE]
+        raw_id = str(media_id).removeprefix(f"{CTX_APPLE}:")
+        resource = provider.get_object(kind, raw_id)
+        header_row = provider.row_for(kind, resource)
+        track_rows = provider.collection_items(resource)
+        items = []
+        for i, row in enumerate(track_rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            item = dict(row)
+            item["num"] = int(row.get("num") or i)
+            item["kind"] = "track"
+            items.append(item)
+        total = sum(int(row.get("duration_sec") or 0) for row in items)
+        dur = f"{total // 3600} hr {total % 3600 // 60} min" if total >= 3600 else f"{total // 60} min"
+        n_label = f"{len(items)} track" + ("s" if len(items) != 1 else "")
+        stats = f"{n_label}  ·  {dur}"
+        quality = str(header_row.get("quality") or "")
+        if quality:
+            stats += f"  ·  {quality}"
+        title = str(header_row.get("title") or "")
+        if kind == "album":
+            album_artist = str(header_row.get("artist") or "")
+            album_year = str(header_row.get("year") or "")
+            subtitle = album_artist + (f"  ·  {album_year}" if album_year else "")
+            desc = ""
+            artist_id = str(header_row.get("artist_id") or "")
+        else:
+            album_artist = ""
+            album_year = ""
+            creator = str(header_row.get("creator") or "")
+            subtitle = f"By {creator}" if creator else ""
+            desc = ""
+            artist_id = ""
+        payload = {
+            "key": key,
+            "title": title,
+            "header": {
+                "kind": kind,
+                "id": media_id,
+                "title": title,
+                "subtitle": subtitle,
+                "desc": desc,
+                "stats": stats,
+                "artist_id": artist_id,
+                "artist": album_artist,
+                "year": album_year,
+                "num_tracks": len(items),
+                "duration_sec": total if kind == "album" else 0,
+                "quality": quality,
+                "art": str(header_row.get("art") or ""),
+            },
+            "sections": [{"rowKind": "tracks", "title": n_label if items else "Tracks", "items": items}],
+            "error": False,
+        }
+        if record:
+            self._record_page_members(payload)
+        return payload
+
     def _build_browse_item(self, kind: str, media_id: str, key: str, *, record: bool = True) -> dict:
         """Build one playlist / mix / album page payload (the art header plus
         its full track list), fetching the object when the session cache has
         let it go. Shared by openBrowseItem and the hover prefetch; raises on
         any failure, the callers own the error payload and the emits."""
+        if str(media_id).startswith(f"{CTX_APPLE}:") and kind in ("album", "playlist"):
+            return self._build_apple_browse_item(kind, str(media_id), key, record=record)
         obj = self._objs[kind].get(media_id)
         if obj is None:
             obj = self.providers[CTX_TIDAL].get_object(kind, media_id)
@@ -11971,10 +12219,48 @@ class WavesBridge(LibraryMixin, QObject):
             _artists_list(track),
         )
 
+    def _emit_apple_preview_meta(self, kind: str, ident: str, row: dict, artist_id: str | None = None) -> None:
+        """The 'now previewing' label off an Apple row dict."""
+        artists = row.get("artists") if isinstance(row.get("artists"), list) else []
+        self.previewMeta.emit(
+            kind,
+            ident,
+            str(row.get("title") or ""),
+            str(row.get("artist") or ""),
+            str(row.get("art") or ""),
+            artist_id if artist_id is not None else str(row.get("artist_id") or ""),
+            str(row.get("album_id") or ""),
+            str(row.get("id") or ""),
+            artists,
+        )
+
     @Slot(str)
     def previewTrack(self, track_id: str) -> None:
         """Stream a single track. Resolves the URL off the GUI thread and hands
         it to QML via previewReady; the shared MediaPlayer does the rest."""
+        if str(track_id).startswith(f"{CTX_APPLE}:"):
+            self.previewState.emit("track", track_id, "loading")
+
+            def apple_work() -> None:
+                try:
+                    provider = self.providers[CTX_APPLE]
+                    raw_id = str(track_id).removeprefix(f"{CTX_APPLE}:")
+                    track = provider.get_object("track", raw_id)
+                    row = provider.row_for("track", track)
+                    self._emit_apple_preview_meta("track", track_id, row)
+                    url = provider.preview_url(track)
+                except Exception:
+                    _preview_log.exception("Preview failed for track %s", track_id)
+                    self.previewState.emit("track", track_id, "error")
+                    return
+                if not url:
+                    # Apple serves no 30-second clip for this song.
+                    self.previewState.emit("track", track_id, "error")
+                    return
+                self.previewReady.emit("track", track_id, url)
+
+            self.threadpool.start(Worker(apple_work))
+            return
         track = self._objs["track"].get(track_id)
         if track is None:
             self.previewState.emit("track", track_id, "")
@@ -11998,6 +12284,44 @@ class WavesBridge(LibraryMixin, QObject):
     def previewArtist(self, artist_id: str) -> None:
         """Stream an artist's top track. The preview stays addressed to the
         artist id so the artwork overlay lights up while the song plays."""
+        if str(artist_id).startswith(f"{CTX_APPLE}:"):
+            self.previewState.emit("artist", artist_id, "loading")
+
+            def apple_work() -> None:
+                try:
+                    provider = self.providers[CTX_APPLE]
+                    raw_id = str(artist_id).removeprefix(f"{CTX_APPLE}:")
+                    artist = provider.get_object("artist", raw_id)
+                    page = provider.artist_page(artist)
+                    top = None
+                    top_row = None
+                    for row in page.get("tracks") or []:
+                        if not isinstance(row, dict):
+                            continue
+                        try:
+                            track = provider.get_object("track", str(row.get("id") or "").removeprefix(f"{CTX_APPLE}:"))
+                        except Exception:
+                            _preview_log.debug("Skipping an Apple top-track refetch that failed", exc_info=True)
+                            continue
+                        if provider.preview_url(track):
+                            top = track
+                            top_row = row
+                            break
+                    if top is None or top_row is None:
+                        self.previewState.emit("artist", artist_id, "error")
+                        return
+                    self._emit_apple_preview_meta("artist", artist_id, top_row, artist_id=artist_id)
+                    url = provider.preview_url(top)
+                    if not url:
+                        self.previewState.emit("artist", artist_id, "error")
+                        return
+                    self.previewReady.emit("artist", artist_id, url)
+                except Exception:
+                    _preview_log.exception("Preview failed for artist %s", artist_id)
+                    self.previewState.emit("artist", artist_id, "error")
+
+            self.threadpool.start(Worker(apple_work))
+            return
         self.previewState.emit("artist", artist_id, "loading")
 
         def work() -> None:
@@ -12038,6 +12362,41 @@ class WavesBridge(LibraryMixin, QObject):
         kind = str(kind or "")
         media_id = str(media_id or "")
         if kind not in ("album", "playlist", "mix") or not self._logged_in:
+            return
+        if media_id.startswith(f"{CTX_APPLE}:") and kind in ("album", "playlist"):
+            self.previewState.emit(kind, media_id, "loading")
+
+            def apple_work() -> None:
+                try:
+                    provider = self.providers[CTX_APPLE]
+                    raw_id = media_id.removeprefix(f"{CTX_APPLE}:")
+                    resource = provider.get_object(kind, raw_id)
+                    rows = provider.collection_items(resource)
+                    pick_row = None
+                    pick_url = None
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        try:
+                            track = provider.get_object("track", str(row.get("id") or "").removeprefix(f"{CTX_APPLE}:"))
+                        except Exception:
+                            _preview_log.debug("Skipping an Apple collection-track refetch that failed", exc_info=True)
+                            continue
+                        url = provider.preview_url(track)
+                        if url:
+                            pick_row = row
+                            pick_url = url
+                            break
+                    if pick_row is None or pick_url is None:
+                        self.previewState.emit(kind, media_id, "error")
+                        return
+                    self._emit_apple_preview_meta(kind, media_id, pick_row)
+                    self.previewReady.emit(kind, media_id, pick_url)
+                except Exception:
+                    _preview_log.exception("Preview failed for %s %s", kind, media_id)
+                    self.previewState.emit(kind, media_id, "error")
+
+            self.threadpool.start(Worker(apple_work))
             return
         self.previewState.emit(kind, media_id, "loading")
 

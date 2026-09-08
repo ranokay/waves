@@ -13701,8 +13701,8 @@ ApplicationWindow {
                     }
                 }
 
-                // Apple catalog rows are display-only in this slice. Issue 27
-                // routes page opens and previews; issue 28 routes downloads.
+                // Apple catalog rows open full pages and preview 30-second clips
+                // like TIDAL rows; downloads ride the setup wizard (issue 28).
                 SectionHeader {
                     id: appleArtistsHead
                     opacity: root.searchReveal
@@ -13723,7 +13723,6 @@ ApplicationWindow {
                             height: item ? item.implicitHeight : width + 142
                             asynchronous: root.searchBuilding
                             opacity: root.searchReveal
-                            enabled: false
                             onLoaded: root._searchBuildTick()
                             sourceComponent: ArtistSearchCard {
                                 aArt: model.art; aName: model.name; aPop: model.popularity; aId: model.id
@@ -13752,7 +13751,6 @@ ApplicationWindow {
                         width: contentCol.width
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
-                        enabled: false
                         onLoaded: root._searchBuildTick()
                         sourceComponent: AlbumBlock {
                             albumId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
@@ -13782,7 +13780,6 @@ ApplicationWindow {
                         width: contentCol.width
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
-                        enabled: false
                         onLoaded: root._searchBuildTick()
                         sourceComponent: TrackRow {
                             tId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
@@ -13814,7 +13811,6 @@ ApplicationWindow {
                         height: item ? item.implicitHeight : 64
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
-                        enabled: false
                         onLoaded: root._searchBuildTick()
                         sourceComponent: PlaylistBlock {
                             plId: model.id; title: model.title; creator: model.creator || ""
