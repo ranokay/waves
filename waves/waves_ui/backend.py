@@ -12370,6 +12370,16 @@ class WavesBridge(LibraryMixin, QObject):
         last_encoded: str | None = None
         last_staged: pathlib.Path | None = None
         outbreak_seen = False
+
+        def _drop_hold() -> None:
+            """Delete the superseded retry hold, if any, and forget it."""
+            nonlocal last_staged
+            if last_staged is not None:
+                with contextlib.suppress(OSError):
+                    if "quarantine-" in str(last_staged.parent):
+                        shutil.rmtree(last_staged.parent, ignore_errors=True)
+                last_staged = None
+
         while True:
             info = None
             try:
@@ -12402,6 +12412,7 @@ class WavesBridge(LibraryMixin, QObject):
                         provider.discard_delivery(str(info.local_file))
                     except Exception:
                         logger.debug("Could not discard the Apple staging area", exc_info=True)
+                _drop_hold()
                 raise
             except Exception as exc:
                 # The staged bytes still exist here (discard runs below), so
@@ -12439,6 +12450,7 @@ class WavesBridge(LibraryMixin, QObject):
                             provider.discard_delivery(str(info.local_file))
                         except Exception:
                             logger.debug("Could not discard the Apple staging area", exc_info=True)
+                    _drop_hold()
                     raise
                 # Integrity failure: sharpen the budget on outbreak-era bytes.
                 # The Encoded date rides the failed file itself; unknown stays
@@ -12509,9 +12521,7 @@ class WavesBridge(LibraryMixin, QObject):
                             )
                         except Exception:
                             logger.debug("Could not quarantine the Apple file", exc_info=True)
-                        with contextlib.suppress(OSError):
-                            if "quarantine-" in str(last_staged.parent):
-                                shutil.rmtree(last_staged.parent, ignore_errors=True)
+                        _drop_hold()
                     try:
                         self._apple_skiplist_add(track_id, version, last_encoded)
                     except Exception:
@@ -12547,18 +12557,10 @@ class WavesBridge(LibraryMixin, QObject):
                         _time.sleep(0)
                     sleep_ok = not job_abort.is_set()
                 if delay > 0 and not sleep_ok:
-                    if last_staged is not None:
-                        with contextlib.suppress(OSError):
-                            if "quarantine-" in str(last_staged.parent):
-                                shutil.rmtree(last_staged.parent, ignore_errors=True)
-                        last_staged = None
+                    _drop_hold()
                     raise _AppleAborted() from exc
                 if job_abort.is_set():
-                    if last_staged is not None:
-                        with contextlib.suppress(OSError):
-                            if "quarantine-" in str(last_staged.parent):
-                                shutil.rmtree(last_staged.parent, ignore_errors=True)
-                        last_staged = None
+                    _drop_hold()
                     raise _AppleAborted() from exc
                 continue
             else:
@@ -12566,14 +12568,7 @@ class WavesBridge(LibraryMixin, QObject):
                     provider.discard_delivery(str(info.local_file))
                 except Exception:
                     logger.debug("Could not discard the Apple staging area", exc_info=True)
-                # A retry that finally verifies leaves its earlier hold behind:
-                # only the last failure's bytes were ever quarantined, so the
-                # superseded copy is debris, never a keepsake.
-                if last_staged is not None:
-                    with contextlib.suppress(OSError):
-                        if "quarantine-" in str(last_staged.parent):
-                            shutil.rmtree(last_staged.parent, ignore_errors=True)
-                    last_staged = None
+                _drop_hold()
                 break
         lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts)
         cover_data = self._apple_cover_bytes(provider, raw) if self._apple_wants_cover(collection) else None

@@ -45,7 +45,10 @@ _DATE_RE = re.compile(r"(19|20)\d{2}[-_/.]?(0[1-9]|1[0-2])(?:[-_/.]?\d{1,2})?")
 
 
 def _norm_dir(path: str | Path) -> str:
-    return os.path.normpath(os.path.expanduser(str(path or "")))
+    # realpath so a symlinked download root and a real quarantine ancestor
+    # compare canonically; harmless for not-yet-created folders (existing
+    # parents resolve, the rest appends lexically).
+    return os.path.normpath(os.path.realpath(os.path.expanduser(str(path or ""))))
 
 
 def _same_dir(first: str | Path, second: str | Path) -> bool:
@@ -249,9 +252,11 @@ def _mutagen_encoded_date(path: Path) -> datetime.date | None:
         "----:com.apple.iTunes:Encoded Date",
         "----:com.apple.iTunes:encoded_date",
         "----:com.apple.iTunes:creation_time",
-        "\xa9day",
-        "trkn",
     ):
+        # Deliberately NOT ©day (and never track-number atoms): Waves writes
+        # ©day itself from the album's release date, so a post-outbreak
+        # release with an unknown encode date would misread as outbreak-era
+        # and lose most of its retry budget. Unknown stays unknown.
         values = tags.get(key)
         if not values:
             continue

@@ -150,11 +150,21 @@ def _normalize_quarantine_path(path: str) -> str:
     return os.path.normpath(os.path.expanduser(str(path or "").strip()))
 
 
+def _real_quarantine_path(path: str) -> str | None:
+    """The canonical spelling of a path, or None when it cannot be resolved."""
+    try:
+        return os.path.realpath(os.path.expanduser(str(path or "").strip()))
+    except Exception:
+        return None
+
+
 def register_quarantine_dir(path: str | None) -> None:
     """Exclude a custom quarantine folder (and everything under it) from walks.
 
-    Idempotent; empty/None registers nothing. Never raises: a scan exclusion
-    must not fail a download.
+    Idempotent; empty/None registers nothing. Both the as-configured spelling
+    and the canonical one are stored, so a scan reaching the folder through a
+    symlink (or the reverse) still matches without any per-directory cost at
+    walk time. Never raises: a scan exclusion must not fail a download.
     """
     try:
         text = str(path or "").strip()
@@ -164,12 +174,23 @@ def register_quarantine_dir(path: str | None) -> None:
         base = os.path.basename(normalized)
         if base and base not in (".", ".."):
             _EXTRA_QUARANTINE_PATHS.add(normalized)
+            real = _real_quarantine_path(text)
+            if real and os.path.normpath(real) != normalized:
+                _EXTRA_QUARANTINE_PATHS.add(os.path.normpath(real))
     except Exception:
         logger.debug("Could not register the quarantine dir for scan exclusion", exc_info=True)
 
 
 def _is_quarantine_path(path: str | None) -> bool:
-    """True when ``path`` is a registered quarantine folder or sits under one."""
+    """True when ``path`` is a registered quarantine folder or sits under one.
+
+    Exact first (the configured spellings, fast, correct on every
+    filesystem). A case-only mismatch then falls back to an on-disk identity
+    check: insensitive volumes alias spellings the bytes alone cannot tell
+    apart, while on a sensitive filesystem samefile refuses and two genuinely
+    different folders stay unscanned. The fallback stats only on a
+    case-insensitive prefix hit, never on the walk's hot path.
+    """
     try:
         if not path or not _EXTRA_QUARANTINE_PATHS:
             return False
@@ -177,6 +198,18 @@ def _is_quarantine_path(path: str | None) -> bool:
         for quarantined in _EXTRA_QUARANTINE_PATHS:
             if normalized == quarantined or normalized.startswith(quarantined.rstrip(os.sep) + os.sep):
                 return True
+        folded = normalized.casefold()
+        for quarantined in _EXTRA_QUARANTINE_PATHS:
+            want = quarantined.casefold().rstrip(os.sep) + os.sep
+            if folded == quarantined.casefold() or folded.startswith(want):
+                # The spellings name one folder only if the disk says so: the
+                # compared prefix always exists (it is the walk's own path at
+                # or above a listed directory), the registered root may not.
+                try:
+                    if os.path.samefile(normalized[: len(quarantined)], quarantined):
+                        return True
+                except OSError:
+                    continue
     except Exception:
         return False
     return False

@@ -1023,3 +1023,46 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
     assert len(provider_st.fetched) == 1 and len(provider_at.fetched) == 1
     assert store.is_quarantined("apple:song-1", "stereo") is None
     assert store.is_quarantined("apple:song-1", "atmos") is None
+
+
+@needs_ffmpeg
+def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
+    import tempfile
+
+    from waves import apple_engine
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    bad = tmp_path / "bad.m4a"
+    bad.write_bytes(b"not audio at all, just text padding " * 100)
+
+    calls: list = []
+
+    class _FlakyProvider(_FakeProvider):
+        def resolve_stream(self, raw, tier, audio_type):
+            calls.append(audio_type)
+            if len(calls) == 1:
+                return _FakeProvider.resolve_stream(self, raw, tier, audio_type)
+            raise RuntimeError("network died")
+
+    provider = _FlakyProvider([bad])
+    base = tmp_path / "lib"
+    store = _SkipStore()
+    stub = _bind(_stub(base, provider, _ownership_store=store))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete):
+        WavesBridge._run_apple_job(
+            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+        )
+
+    # An ordinary failure: no quarantine wording, no skip-list mark, and the
+    # earlier integrity hold was dropped instead of leaking into temp.
+    assert len(calls) == 2
+    assert store.is_quarantined("apple:song-1", "stereo") is None
+    leftovers = [p for p in (tmp_path / "tmp").iterdir() if p.name.startswith("waves-apple-quarantine-")]
+    assert leftovers == []
