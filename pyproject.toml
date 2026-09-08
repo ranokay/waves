@@ -33,6 +33,7 @@ mutagen = "^1.47.0"
 dataclasses-json = "^0.6.7"
 pathvalidate = "^3.3.1"
 m3u8 = "^6.0.0"
+gamdl = "~3.8.5"
 # Exact pin. PySide6 6.10.0 through 6.11.1 ship macOS binding libraries built
 # for macOS 15 despite their macosx_13_0 wheel tag, so on macOS this version
 # really requires Sequoia (dyld kills the app on anything older, issue #14).
@@ -187,6 +188,7 @@ ignore = [
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
 "tests/test_library_bridge.py" = ["S603"]
+"tests/test_apple_search_groups_qml.py" = ["S603"]
 "tests/test_nav_seq_and_history_guards.py" = ["S603", "C901"]
 "tests/test_folder_badge_and_crumb_labels.py" = ["S603", "C901"]
 "tests/test_hover_swell_fade.py" = ["S603", "C901"]

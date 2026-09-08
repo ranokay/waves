@@ -192,9 +192,12 @@ def _apply_stub(apple_enabled: bool = False):
     stub.confirmCategoryDlChanged = _signal()
     stub.librarySourceChanged = _signal()
     stub.appleStatusChanged = _signal()
+    stub._search_gen = 0
+    stub._search_cache = {}
     stub.dl_pool = SimpleNamespace(setMaxThreadCount=lambda n: None)
     stub._logged_in = False
     stub._set_status = lambda text: None
+    stub._set_busy = lambda value: None
     stub.providers = {"tidal": SimpleNamespace(apply_quality=lambda *a: None)}
     stub._reapply_quality = WavesBridge._reapply_quality.__get__(stub, _Stub)
     stub._reapply_provider_quality = WavesBridge._reapply_provider_quality.__get__(stub, _Stub)

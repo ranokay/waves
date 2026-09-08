@@ -25,11 +25,12 @@ from typing import NamedTuple
 #
 # Every provider serves the SAME plain dicts the QML consumes today; the
 # field names below are the contract, spelled exactly as the bridge's dict
-# builders write them. ``id`` is always the ENGINE's own id as a string (the
-# key the bridge remembers the live object under in its ``_objs`` buckets);
-# namespacing happens above this layer. A missing fact is "", 0, -1 or None
-# exactly as noted -- rows are never partial-keyed (a QML ListModel freezes
-# its roles on the first row appended).
+# builders write them. New-provider rows use namespaced ids such as
+# ``apple:123``. Existing TIDAL rows keep their shipped bare ids, which every
+# namespaced reader interprets as TIDAL. A provider keeps the engine's raw id
+# behind that row id for later lookup. A missing fact is "", 0, -1 or None as
+# noted; rows are never partial-keyed because a QML ListModel freezes its roles
+# on the first row appended.
 #
 # Result rows (search payload, library pages, artist pages, browse cards):
 #   artist row:   {id, name, art, roles, popularity}
@@ -82,13 +83,13 @@ from typing import NamedTuple
 #     sections: [{rowKind: "cards"|"tracks", title, target, items: [row]}]
 #     items additionally tagged with their row kind ("album"/"track").
 #
-# Until the dict builders move into the providers (the second provider's
-# arrival), the bridge builds these rows FROM the engine objects the reads
-# below return: the reads are the seam, the builders are the rendering, and
-# the schema above is what both must agree on. Object-method calls on an
-# already-resolved object (an album's .tracks(), an artist's .get_albums())
-# are the bridge's page-building policy, not session reaches -- they move
-# behind the interface when the dict builders do.
+# Apple builds these rows inside its provider. TIDAL still hands its existing
+# engine objects to the bridge's legacy builders so its shipped search behavior
+# stays unchanged. Neither form crosses into QML until it matches the schema
+# above. Object-method calls on an already-resolved object (an album's
+# .tracks(), an artist's .get_albums()) are the bridge's page-building policy,
+# not session reaches; they move behind the interface when those pages become
+# provider-routed.
 # The one delivered-quality ladder, lowest to highest, is Waves' own
 # (LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS) and lives in waves.constants
 # (issue #24): shared vocabulary spoken by the model layer, the ownership
@@ -281,10 +282,13 @@ class Provider(ABC):
 
     @abstractmethod
     def search(self, needle: str) -> dict:
-        """Search the catalog; returns the provider's share of the search
-        payload (per-type buckets of engine objects plus ``top_hit``), which
-        the bridge caps and renders. Needs no user setup beyond the
-        provider's own session rules."""
+        """Search the catalog and return this provider's per-type buckets.
+
+        Providers that own their row translation return the complete search
+        payload defined above. TIDAL keeps returning engine objects plus
+        ``top_hit`` for the bridge's existing renderer. Needs no user setup
+        beyond the provider's own session rules.
+        """
 
     @abstractmethod
     def open_url(self, url: str) -> object | None:
