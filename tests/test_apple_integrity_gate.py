@@ -784,3 +784,52 @@ def test_retry_bypass_covers_every_track_of_a_collection(tmp_path, monkeypatch):
 
     assert summary == ""
     assert len(provider.fetched) == 2
+
+
+@needs_ffmpeg
+def test_atmos_rejects_plain_ac3(tmp_path, monkeypatch):
+    from waves import apple_engine
+    from waves.apple_engine import AppleDownloadError
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "ac3", "sample_rate": "48000"}
+    )
+    monkeypatch.setattr(apple_engine, "decode_check", lambda staged, ffmpeg_path="": None)
+    bad = tmp_path / "ac3.m4a"
+    bad.write_bytes(b"fake-ac3-bytes")
+    provider = _FakeProvider([bad])
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+
+    with pytest.raises(AppleDownloadError):
+        WavesBridge._apple_verify_staged(stub, bad, expect_atmos=True)
+
+
+@needs_ffmpeg
+def test_success_after_a_retry_leaves_no_hold_dirs(tmp_path, monkeypatch):
+
+    from waves import apple_engine
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    bad = tmp_path / "bad.m4a"
+    bad.write_bytes(b"not audio at all, just text padding " * 100)
+    good = tmp_path / "good.m4a"
+    _tone(good)
+    provider = _FakeProvider([bad, good])
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert len(provider.fetched) == 2
+    leftovers = [p for p in (tmp_path / "tmp").iterdir() if p.name.startswith("waves-apple-quarantine-")]
+    assert leftovers == []

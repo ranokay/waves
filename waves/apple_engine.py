@@ -194,7 +194,7 @@ async def _download_song_async(
             probe = probe_audio_file(staged, resolved_probe)
             picked = str(probe.get("codec") or picked)
             got = str(picked or "").lower().replace("-", "").replace("_", "")
-            ok_delivery = got in ("eac3", "ec3", "ac4", "ac3") if atmos else got in ("aac", "alac")
+            ok_delivery = got in ("eac3", "ec3", "ac4") if atmos else got in ("aac", "alac")
             if not ok_delivery:
                 want = "eac3" if atmos else "aac"
                 raise AppleDownloadError(  # noqa: TRY003 (user-facing words by design)

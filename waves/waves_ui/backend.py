@@ -12549,6 +12549,14 @@ class WavesBridge(LibraryMixin, QObject):
                     provider.discard_delivery(str(info.local_file))
                 except Exception:
                     logger.debug("Could not discard the Apple staging area", exc_info=True)
+                # A retry that finally verifies leaves its earlier hold behind:
+                # only the last failure's bytes were ever quarantined, so the
+                # superseded copy is debris, never a keepsake.
+                if last_staged is not None:
+                    with contextlib.suppress(OSError):
+                        if "quarantine-" in str(last_staged.parent):
+                            shutil.rmtree(last_staged.parent, ignore_errors=True)
+                    last_staged = None
                 break
         lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts)
         cover_data = self._apple_cover_bytes(provider, raw) if self._apple_wants_cover(collection) else None
@@ -12641,7 +12649,7 @@ class WavesBridge(LibraryMixin, QObject):
             # unlocks it; Atmos is E-AC-3 (AC-4 accepted as the same family).
             # Normalized (hyphens/underscores dropped): "e-ac-3" -> "eac3".
             if expect_atmos:
-                if codec not in ("eac3", "ec3", "ac4", "ac3"):
+                if codec not in ("eac3", "ec3", "ac4"):
                     raise AppleDownloadError(  # noqa: TRY003
                         f"Apple served {codec or 'an unknown codec'}, expected eac3"
                     )
