@@ -72,6 +72,17 @@ def test_track_facts_follow_the_seam_schema_namespaced():
     assert facts["album"]["name"] == "Selected Ambient Works 85-92"
 
 
+def test_track_facts_name_only_the_first_of_several_credits():
+    provider = AppleProvider(catalog=None)
+    resource = _song_resource()
+    resource["relationships"] = {"artists": {"data": [{"id": "artist-1"}, {"id": "artist-2"}]}}
+
+    facts = provider.track_facts(resource)
+
+    assert facts["artist_ids"] == ["apple:artist-1", "apple:artist-2"]
+    assert facts["artists"] == [("apple:artist-1", "Aphex Twin"), ("apple:artist-2", "")]
+
+
 def test_classify_refusal_sorts_credentials_throttle_and_gone():
     provider = AppleProvider(catalog=None)
 
@@ -125,3 +136,14 @@ def test_resolve_stream_without_cookies_raises_before_touching_gamdl():
 
     with pytest.raises(AppleCredentialsError):
         provider.resolve_stream(_song_resource(), QualityTier.HIGH, AudioType.STEREO)
+
+
+def test_missing_binaries_name_the_settings_field(tmp_path, monkeypatch):
+    import waves.apple_engine as engine
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    monkeypatch.setattr(engine.shutil, "which", lambda name: None)
+
+    with pytest.raises(engine.AppleDownloadError, match="N_m3u8DL-RE"):
+        engine.download_song_file(song_id="song-1", atmos=False, cookies_path=str(cookies))

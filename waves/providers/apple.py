@@ -772,7 +772,10 @@ class AppleProvider(Provider):
             "item_id": self._id(raw_id),
             "artist_ids": artist_ids,
             "album_artist_ids": [artist_ids[0]] if artist_ids else [],
-            "artists": [(artist_id, artist_name) for artist_id in artist_ids],
+            # One combined display credit: per-artist names are unavailable,
+            # so only the first id carries it and the rest stay id-only
+            # instead of repeating the same string per credit.
+            "artists": [(artist_ids[0], artist_name)] + [(aid, "") for aid in artist_ids[1:]] if artist_ids else [],
             "album_artists": [artist_name] if artist_name else [],
             "copyright": str(attrs.get("copyright") or ""),
             "isrc": str(attrs.get("isrc") or ""),

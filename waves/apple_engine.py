@@ -144,6 +144,17 @@ async def _download_song_async(
         if not staged.is_file() or staged.stat().st_size == 0:
             raise AppleDownloadError(f"Apple download produced no file for song {song_id}")  # noqa: TRY003
         picked = str(getattr(getattr(media.stream_info, "audio_track", None), "codec", "") or "")
+        if shutil.which("ffprobe"):
+            # Fail fast on a wrong delivery (an AAC file for an Atmos ask
+            # would otherwise be reported as E-AC-3 downstream): the probe is
+            # best-effort here, the job runner verifies again per track.
+            probe = probe_audio_file(staged)
+            picked = str(probe.get("codec") or picked)
+            want = "eac3" if atmos else "aac"
+            if picked.lower() != want:
+                raise AppleDownloadError(  # noqa: TRY003 (user-facing words by design)
+                    f"Apple served {picked or 'an unknown codec'} for song {song_id}, expected {want}"
+                )
         return AppleDelivery(staged_path=staged, workdir=Path(workdir), is_atmos=atmos, codec=picked)
     finally:
         close = getattr(getattr(api, "client", None), "aclose", None)

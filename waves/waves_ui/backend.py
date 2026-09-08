@@ -11233,6 +11233,7 @@ class WavesBridge(LibraryMixin, QObject):
         file_template: str,
         collection: bool,
         media_id: str,
+        keep_ask: tuple | None = None,
     ) -> None:
         """Queue one Apple track or collection. The TIDAL _download's shape
         for the parts that are provider-blind (folder gate, ffmpeg gate,
@@ -11249,7 +11250,9 @@ class WavesBridge(LibraryMixin, QObject):
         if gate == "nudge":
             self._stash_pending_download(
                 media_id,
-                lambda: self._download_apple(type_media, row, collection_row, file_template, collection, media_id),
+                lambda: self._download_apple(
+                    type_media, row, collection_row, file_template, collection, media_id, keep_ask=keep_ask
+                ),
             )
             return
         if self._ffmpeg_gate_holds(
@@ -11257,8 +11260,29 @@ class WavesBridge(LibraryMixin, QObject):
             lambda: self._download_apple(type_media, row, collection_row, file_template, collection, media_id),
         ):
             return
-        ask = str(self.settings.data.apple_quality_audio or "HIGH")
-        ask_tier = _tier_word(ask)
+        if keep_ask is not None and keep_ask[0]:
+            # A retry asks at what its row asked, not at a setting that moved
+            # since (the TIDAL keep_ask rule).
+            ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] or _tier_word(keep_ask[0]))
+        else:
+            ask = str(self.settings.data.apple_quality_audio or "HIGH")
+            ask_tier = _tier_word(ask)
+        # A re-clicked row overlapping a queued or running one is pure
+        # duplication (the TIDAL _download guard, issue #32): a different
+        # pinned quality is an upgrade request and keeps its own row.
+        if media_id:
+            with self._queue_lock:
+                dup = any(
+                    it.get("media_id") == media_id
+                    and it.get("type") == type_media
+                    and it.get("status") in ("queued", "running")
+                    and it.get("template") == file_template
+                    and it.get("askQuality") == ask
+                    for it in self._queue
+                )
+            if dup:
+                self.downloadState.emit(media_id, "queued")
+                return
         # What the cookies tier can serve, stated from queue time like the
         # TIDAL ceiling: HIGH stereo, ATMOS when the toggle says so.
         expected = "ATMOS" if self._apple_wants_atmos() else "HIGH"
@@ -11279,6 +11303,9 @@ class WavesBridge(LibraryMixin, QObject):
             ask_tier=ask_tier,
         )
         self.downloadState.emit(media_id, "queued")
+        # The row's kept object for retries: Apple rows never enter _objs,
+        # so the retry path reads them back from here (see _row_object).
+        self._job_objs[qid] = row
         self._job_specs[qid] = _JobSpec(
             provider_id=CTX_APPLE,
             kind=type_media,
@@ -11359,6 +11386,10 @@ class WavesBridge(LibraryMixin, QObject):
                 signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})
                 self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
                 continue
+            # An upgrade run overwrites the stale copy in place; without the
+            # per-track verdict an upgrade would land beside it as a numbered
+            # copy and the old file would stay behind.
+            track_force = force or verdict == "force"
             try:
                 delivered = self._apple_deliver_track(
                     provider,
@@ -11373,7 +11404,7 @@ class WavesBridge(LibraryMixin, QObject):
                     audio_type=audio_type,
                     requested_rank=requested_rank,
                     ceiling_rank=ceiling_rank,
-                    force=force,
+                    force=track_force,
                     job_abort=job_abort,
                 )
             except AppleTrackUnavailable as exc:
@@ -14726,6 +14757,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self._restore_ffmpeg_flags()
                 if self._logged_in:
                     self._init_download()
+                self._configure_apple_provider()
                 self.ffmpegStateChanged.emit("done", f"FFmpeg {status.get('version', '')} ready")
                 self.ffmpegStatusChanged.emit()
             finally:
@@ -14750,6 +14782,7 @@ class WavesBridge(LibraryMixin, QObject):
         self._restore_ffmpeg_path()
         if self._logged_in:
             self._init_download()
+        self._configure_apple_provider()
         self.ffmpegStatusChanged.emit()
 
     # ----- in-app updater ----------------------------------------------- #
@@ -15184,16 +15217,41 @@ class WavesBridge(LibraryMixin, QObject):
     def _row_object(self, item: dict):
         """The live object a queue row downloads from: the one the row kept
         (every row queued since the queue began keeping them), else the
-        search-scoped bucket, else nothing (the caller re-fetches)."""
+        search-scoped bucket, else nothing (the caller re-fetches). Apple rows
+        keep row dicts and fall back to the provider's cache, which never
+        needs the network on a hit."""
         obj = self._job_objs.get(item["qid"])
         if obj is None:
             obj = self._objs.get(item["type"], {}).get(item["media_id"])
+        if obj is None and str(item.get("media_id") or "").startswith(f"{CTX_APPLE}:"):
+            provider = self.providers.get(CTX_APPLE)
+            raw = provider.cached(item["type"], item["media_id"]) if provider is not None else None
+            if raw is not None:
+                try:
+                    obj = provider.row_for(item["type"], raw)
+                except Exception:
+                    logger.debug("Could not rebuild the Apple row for a retry", exc_info=True)
+                    obj = None
         return obj
 
     def _start_retry(self, item: dict, obj) -> None:
         # Preserve a failed 'best of both' merge as a merge on retry, its plan
         # is kept stashed (only dropped on success), so a retried album isn't
         # silently degraded to a plain download.
+        if str(item.get("media_id") or "").startswith(f"{CTX_APPLE}:"):
+            # Apple rows keep row dicts, never engine objects: re-enter the
+            # Apple entry at the row's own ask, bypassing the TIDAL _download
+            # below (which would build a TIDAL spec for an Apple id).
+            self._download_apple(
+                item["type"],
+                obj,
+                obj if item["collection"] else None,
+                item["template"],
+                item["collection"],
+                item["media_id"],
+                keep_ask=(str(item.get("askQuality") or ""), str(item.get("quality") or "")),
+            )
+            return
         plan = self._merge_plans.get(item["media_id"]) if item["type"] == "album" else None
         self._download(
             obj,
@@ -15237,6 +15295,35 @@ class WavesBridge(LibraryMixin, QObject):
         the retry re-enters ``retryQueueItem`` (via the GUI hop), so a failed
         re-fetch leaves RETRY available instead of consuming the row."""
         bucket, media_id, qid = item["type"], item["media_id"], item["qid"]
+        if str(media_id).startswith(f"{CTX_APPLE}:"):
+            # Apple refetch through the Apple provider: no TIDAL sign-in
+            # gate, no _objs (the provider's own cache is the registry).
+            key = (bucket, media_id)
+            if key in self._refetch_inflight:
+                return
+            self._refetch_inflight.add(key)
+            gen = self._browse_gen
+            self._set_status("Fetching item…")
+
+            def apple_work() -> None:
+                obj = None
+                try:
+                    provider = self.providers.get(CTX_APPLE)
+                    if provider is not None:
+                        obj = provider.get_object(bucket, str(media_id).removeprefix(f"{CTX_APPLE}:"))
+                except Exception:
+                    logger.exception("Could not re-fetch Apple %s %s for retry", bucket, media_id)
+                if gen != self._browse_gen:
+                    self._refetch_inflight.discard(key)
+                    return
+                if obj is None:
+                    self._refetch_inflight.discard(key)
+                    self._set_status("That item is no longer available")
+                    return
+                self._queueRetryRefetched.emit(bucket, media_id, qid)
+
+            self.threadpool.start(Worker(apple_work))
+            return
         key = (bucket, media_id)
         if key in self._refetch_inflight or not self._logged_in:
             return

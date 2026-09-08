@@ -458,6 +458,7 @@ def _entry_stub(base: Path, provider, cookies: Path | None):
     stub._queue_lock = Lock()
     stub._pending_qids = deque()
     stub._job_specs = {}
+    stub._job_objs = {}
     stub.statuses = []
     stub._set_status = stub.statuses.append
     stub._enqueue = lambda *a, **k: WavesBridge._enqueue(stub, *a, **k)
@@ -566,3 +567,97 @@ def test_configure_apple_provider_reads_settings(tmp_path):
     assert stub._apple_cookies_ready() is True
     provider.cookies_path = str(tmp_path / "missing.txt")
     assert stub._apple_cookies_ready() is False
+
+
+def test_second_click_on_a_queued_row_acknowledges_without_requeueing(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(base, provider, cookies)
+
+    WavesBridge._download_apple(
+        stub, "album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1"
+    )
+    WavesBridge._download_apple(
+        stub, "album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1"
+    )
+
+    assert len(stub._queue) == 1
+    assert ("apple:album-1", "queued") in stub.downloadState.emits
+
+
+@needs_ffmpeg
+def test_stale_owned_copy_forces_an_in_place_overwrite(tmp_path, monkeypatch):
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    dest = base / "Aphex Twin" / "Xtal.m4a"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"stale-copy")
+    rec = {
+        "path": str(dest),
+        "quality_rank": quality_rank(QualityTier.LOW),
+        "requested_rank": quality_rank(QualityTier.LOW),
+        "ceiling_rank": quality_rank(QualityTier.HIGH),
+        "audio_mode": "STEREO",
+    }
+    stub = _bind(_stub(base, provider, _ownership=SimpleNamespace(ownership_of=lambda tid: rec)))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert dest.is_file() and dest.stat().st_size != len(b"stale-copy")
+    assert not (base / "Aphex Twin" / "Xtal_01.m4a").exists()
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(dest)
+
+
+def test_retry_reroutes_an_apple_row_through_the_apple_entry(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    stub = _entry_stub(base, provider, None)
+    row = {
+        "qid": 7,
+        "type": "album",
+        "name": "N",
+        "template": "T",
+        "collection": True,
+        "media_id": "apple:album-1",
+        "askQuality": "HIGH",
+        "quality": "HIGH",
+        "status": "failed",
+    }
+    calls = []
+    stub._download_apple = lambda *a, **k: calls.append((a, k))
+
+    WavesBridge._start_retry(stub, row, _album_row())
+
+    ((args, kwargs),) = calls
+    assert args[0] == "album" and args[5] == "apple:album-1"
+    assert kwargs["keep_ask"] == ("HIGH", "HIGH")
+
+
+def test_row_object_falls_back_to_the_provider_cache(tmp_path):
+    provider = _FakeProvider()
+    provider.cached = lambda kind, raw_id: _album_resource()
+    stub = SimpleNamespace(
+        _job_objs={},
+        _objs={"album": {}},
+        providers={CTX_APPLE: provider},
+    )
+    stub._row_object = lambda item: WavesBridge._row_object(stub, item)
+
+    row = stub._row_object({"qid": 9, "type": "album", "media_id": "apple:album-1"})
+
+    assert row["id"] == "apple:album-1"
