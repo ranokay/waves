@@ -619,6 +619,48 @@ def test_same_named_tracks_with_different_lengths_both_count(tmp_path):
     assert next(idx.iter_albums())["tracks"] == 2
 
 
+def test_same_named_different_seconds_stay_separate(tmp_path):
+    """A same-titled Atmos Version with proven-different seconds is a
+    different recording, not a twin: it stays its own canonical entry."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["s.flac", "a.m4a"])
+
+    def read_tags(path):
+        name = os.path.basename(path)
+        return _tags(title="Song", length={"s.flac": 200, "a.m4a": 260}[name])
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    assert idx.refresh(lib) == 1
+    album = next(idx.iter_albums())
+    assert album["tracks"] == 2
+    assert album["has_atmos"] is True
+
+
+def test_folded_same_named_different_seconds_stay_separate(tmp_path):
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["s.flac"])
+    _mk(tmp_path, "lib/Artist/Album/Dolby Atmos", ["a.m4a"])
+
+    def read_tags(path):
+        name = os.path.basename(path)
+        return _tags(title="Song", length={"s.flac": 200, "a.m4a": 260}[name])
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    idx.refresh(lib)
+    local, _ = _presence_for(idx)
+    key = matching.presence_key("Album", "Artist")
+    assert local[key][0]["tracks"] == 2
+    assert local[key][0]["has_atmos"] is True
+
+
 def test_untitled_atmos_versions_each_count(tmp_path):
     """With no title there is no evidence two files are twins: untitled
     Atmos Versions each stay their own entry."""

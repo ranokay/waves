@@ -398,20 +398,20 @@ def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> t
     silences it, so a count grown by promotion never testifies with seconds
     that exclude it.
     """
-    seen = {
-        matching.twin_key(t.get("title", ""), t.get("artist", ""))
+    seen = [
+        (matching.twin_key(t.get("title", ""), t.get("artist", "")), int(t.get("length", 0) or 0))
         for t in by_folder.get(album_id, [])
         if str(t.get("title", "") or "").strip()
-    }
+    ]
     extra = 0
     extra_runtime: int | None = 0
     promoted: list = []
     for t in sub_tracks:
         title = str(t.get("title", "") or "").strip()
         key = matching.twin_key(title, t.get("artist", ""))
-        if title and key in seen:
-            continue  # attaches to its twin or the already-counted same track
         length = int(t.get("length", 0) or 0)
+        if title and matching.meets_twin(key, length, seen):
+            continue  # attaches to its twin or the already-counted same track
         if (
             title
             and length > 0

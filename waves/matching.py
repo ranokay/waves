@@ -1092,6 +1092,17 @@ def twin_key(title: str, artist: str) -> tuple[str, str]:
 TWIN_LENGTH_TOL_S = _TRACK_DURATION_TOL_S
 
 
+def meets_twin(key: tuple, length: int, twins: list) -> bool:
+    """Whether a (twin_key, seconds) meets a twin among ``twins``: same pair,
+    and seconds compatible (either side silent, or within the bar). Silence
+    meets on purpose: a meet only ever attaches (excludes from the count,
+    the undercount direction that keeps buttons live), while only positive
+    seconds evidence splits same-named files into two entries -- counting on
+    a guess is what inflates coverage toward a wrong full claim.
+    """
+    return any(k == key and (s <= 0 or length <= 0 or abs(s - length) <= TWIN_LENGTH_TOL_S) for k, s in twins)
+
+
 def track_key(title: str, artist: str) -> tuple[str, str]:
     """The cross-catalog TRACK key: (normalised title, normalised artist), each
     canon'd first. Unlike the album key the title keeps its edition qualifiers:

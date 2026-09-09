@@ -2243,15 +2243,17 @@ class LibraryIndex:
 
         stereo = [(n, t) for (n, t, a) in read if not _is_atmos_file(a)]
         atmos = [(n, t) for (n, t, a) in read if _is_atmos_file(a)]
-        twin_keys = {_key(t) for (_, t) in stereo} - {matching.twin_key("", "")}
+        stereo_twins = [
+            (_key(t), int(t.get("length", 0) or 0)) for (_, t) in stereo if str(t.get("title", "") or "").strip()
+        ]
         promoted: list[tuple[str, dict]] = []
         promoted_lengths: list = []
         for name, other in atmos:
             title = str(other.get("title", "") or "").strip()
             key = _key(other)
-            if title and key in twin_keys:
-                continue  # attaches to its canonical twin
             length = int(other.get("length", 0) or 0)
+            if title and matching.meets_twin(key, length, stereo_twins):
+                continue  # attaches to its canonical twin
             if (
                 title
                 and length > 0
