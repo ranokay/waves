@@ -5972,6 +5972,26 @@ ApplicationWindow {
         }
     }
 
+    // First-class standalone lyrics/art actions (issue #34, spec section 7.3):
+    // LYRICS ONLY / ART ONLY beside DOWNLOAD on album and artist pages, plus
+    // the per-track hover affordance. Both providers; found and saved music
+    // alike (the provider resolves rows, not files).
+    component StandalonePair: Row {
+        id: sp
+        property string mediaId: ""
+        property bool compact: false
+        spacing: compact ? 10 : 12
+        Text {
+            text: "LYRICS ONLY"; color: root.textLo; font.pixelSize: compact ? 11 : 12
+            font.bold: true; font.letterSpacing: 0.8; anchors.verticalCenter: parent.verticalCenter
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: waves.downloadLyricsOnly(sp.mediaId) }
+        }
+        Text {
+            text: "ART ONLY"; color: root.textLo; font.pixelSize: compact ? 11 : 12
+            font.bold: true; font.letterSpacing: 0.8; anchors.verticalCenter: parent.verticalCenter
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: waves.downloadArtOnly(sp.mediaId) }
+        }
+    }
     component DownloadButton: Rectangle {
         id: db
         property string mediaId: ""
@@ -8448,6 +8468,7 @@ ApplicationWindow {
                                 libAlbum: ({ artist: ab.artistName, title: ab.title, year: ab.year, tracks: ab.trackCount, duration_sec: ab.durationSec })
                                 onTap: function(){ waves.downloadAlbum(albumId) }
                             }
+                            StandalonePair { mediaId: albumId; anchors.verticalCenter: parent.verticalCenter }
                             Text {
                                 text: "Copy link"; color: root.textLo; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter
                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: waves.copyShareUrl("album", albumId) }
@@ -9107,6 +9128,14 @@ ApplicationWindow {
                                    album: trow.album, year: trow.year,
                                    duration_sec: trow.durationSec })
                     onTap: function(){ trow.kind === "video" ? waves.downloadVideo(tId) : waves.downloadTrack(tId) }
+                }
+                // Per-track hover affordance (issue #34): compact standalone
+                // pair beside the track's split button. Visible on hover so
+                // the row stays quiet at rest.
+                StandalonePair {
+                    Layout.alignment: Qt.AlignVCenter
+                    mediaId: tId; compact: true
+                    visible: trow.kind !== "video" && trowMa.containsMouse
                 }
             }
         }
@@ -13216,6 +13245,11 @@ ApplicationWindow {
                                                 root.browseCardDownload({ kind: browseItemHeader.hd.kind, id: browseItemHeader.hd.id })
                                         }
                                     }
+                                    StandalonePair {
+                                        visible: !!browseItemHeader.hd && browseItemHeader.hd.kind === "album"
+                                        mediaId: browseItemHeader.hd ? (browseItemHeader.hd.id || "") : ""
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
                                     // Playlists only: the full source album of every track (issue #4).
                                     // Its state lives under "albums:<id>", apart from the playlist button's.
                                     DownloadButton {
@@ -13962,6 +13996,7 @@ ApplicationWindow {
                                 libArtist: root.artistData.name || ""
                                 onTap: function(){ waves.downloadArtist(root.artistData.id) }
                             }
+                            StandalonePair { mediaId: root.artistData.id || ""; anchors.verticalCenter: parent.verticalCenter }
                             // A library-scoped artist page (opened from My Tidal)
                             // shows only owned releases; offer a jump to the artist's
                             // full catalogue page. loadArtist() is the full path and

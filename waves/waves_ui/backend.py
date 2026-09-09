@@ -52,6 +52,7 @@ from waves.apple_engine import (
     _AppleSkipped,
 )
 from waves.apple_files import (
+    format_apple_path,
     pick_destination,
     tag_apple_file,
     write_cover_sidecar,
@@ -322,6 +323,10 @@ _FLAG_FIELDS = [
     "lyrics_file",
     "lyrics_file_synced_only",
     "lyrics_prefer_lrclib",
+    # Lyrics & art matrix (issue #34, spec section 9.1): word-timed source
+    # toggle (default on) and the verbatim Apple TTML sidecar (default off).
+    "lyrics_word_timed",
+    "lyrics_ttml_file",
     "download_delay",
     "extract_flac",
     "metadata_cover_embed",
@@ -956,6 +961,9 @@ _FIELD_LABELS = {
     "lyrics_file": "Save lyrics file",
     "lyrics_file_synced_only": "Only synced lyrics files",
     "lyrics_prefer_lrclib": "Prefer LRCLIB lyrics",
+    "lyrics_word_timed": "Prefer word-timed lyrics",
+    "lyrics_ttml_file": "Save Apple TTML file",
+    "cover_file_format": "Cover file format",
     "mark_explicit": "Mark explicit in title",
     # Advanced
     "path_binary_ffmpeg": "FFmpeg binary path",
@@ -1287,6 +1295,19 @@ def _record_names_a_broken_copy(rec: dict | None) -> bool:
     path and takes over the record."""
     path = str((rec or {}).get("path", "") or "")
     return "[None]" in path or "{album_track_num}" in path
+
+
+def _cover_sidecar_format(data) -> str:
+    """The sidecar cover format: jpg (default), png, or raw (Apple-only).
+
+    One normalizer for every writer so TIDAL and Apple agree on the
+    spelling; unknown values fall back to jpg and TIDAL treats raw as jpg
+    (it has no original-master sidecar).
+    """
+    fmt = str(getattr(data, "cover_file_format", "jpg") or "jpg").strip().lower()
+    if fmt in ("jpeg",):
+        return "jpg"
+    return fmt if fmt in ("jpg", "png", "raw") else "jpg"
 
 
 # How many consecutive deliveries under TIDAL's own advertised ceiling the
@@ -13320,7 +13341,13 @@ class WavesBridge(LibraryMixin, QObject):
                     logger.debug("Could not discard the Apple staging area", exc_info=True)
                 _drop_hold()
                 break
-        lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts)
+        full = getattr(self, "_apple_lyrics_full", None)
+        if callable(full):
+            lyrics_synced, lyrics_unsynced, lyrics_ttml = full(provider, row, facts)
+        else:
+            # Old test stubs predate the TTML verbatim: two-tuple only.
+            lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts)
+            lyrics_ttml = ""
         cover_data = self._apple_cover_bytes(provider, raw) if self._apple_wants_cover(collection) else None
         if not tag_apple_file(
             dest,
@@ -13334,7 +13361,9 @@ class WavesBridge(LibraryMixin, QObject):
             audio_type="atmos" if atmos else "stereo",
         ):
             logger.debug("Apple tagging reported failure for %s", diagnostics.content(track_id))
-        self._apple_write_sidecars(dest, lyrics_synced, lyrics_unsynced, cover_data, collection)
+        self._apple_write_sidecars(
+            dest, lyrics_synced, lyrics_unsynced, cover_data, collection, ttml_verbatim=lyrics_ttml
+        )
         # Honest delivered tier (issue #32): the provider probed the staged
         # bytes (ALAC 24/96 where the master tops out stays 24/96 in the
         # record); the landed file re-probes for depth/rate so the ownership
@@ -13626,14 +13655,14 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_lyrics(self, provider, row: dict, facts: dict) -> tuple[str, str]:
         """LRCLIB-first lyrics for one Apple track, or ("", "").
 
-        Apple's native TTML lyrics are the lyrics-ticket slice's work; the
-        shared LRCLIB lookup takes plain strings, so the cookies tier honors
-        the embed/sidecar toggles through it from day one.
+        Legacy two-tuple kept for old test stubs that override it; new code
+        prefers :meth:`_apple_lyrics_full` for the TTML verbatim. Kept
+        LRCLIB-only so a stubbed override never reaches the catalog.
         """
         from waves.lyrics import fetch_lrclib_lyrics
 
         data = self.settings.data
-        if not (data.lyrics_embed or data.lyrics_file):
+        if not (data.lyrics_embed or data.lyrics_file or getattr(data, "lyrics_ttml_file", False)):
             return "", ""
         if not getattr(data, "lyrics_prefer_lrclib", True):
             return "", ""
@@ -13649,6 +13678,140 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Apple LRCLIB lookup failed", exc_info=True)
             return "", ""
+
+    def _apple_lyrics_full(self, provider, row: dict, facts: dict) -> tuple[str, str, str]:
+        """Lyrics for one Apple track as (synced, plain, ttml_verbatim).
+
+        Source precedence (issue #34, spec section 9.1), both providers in
+        spirit, Apple in full:
+
+        1. word-timed when the toggle is on (default on): syllable TTML
+           sourced directly through the embedded catalog client and
+           converted in Waves' layer (enhanced LRC). It outranks a
+           line-timed LRCLIB hit.
+        2. LRCLIB-first (existing toggle, governs both providers).
+        3. provider-native fallback (Apple TTML to LRC conversion).
+        4. unsynced text last.
+
+        Syllable fetching degrades per track: a missing or unreadable
+        syllable document falls back to line-timed sources, never failing
+        the download. The verbatim TTML is returned alongside for the
+        sidecar-only save (zero conversion); embedding keeps its exact
+        TIDAL semantics (timed LRC in the primary field, TTML never
+        embedded).
+        """
+        from waves.lyrics import fetch_lrclib_lyrics
+
+        data = self.settings.data
+        if not (data.lyrics_embed or data.lyrics_file or getattr(data, "lyrics_ttml_file", False)):
+            return "", "", ""
+        word_on = bool(getattr(data, "lyrics_word_timed", True))
+        prefer_lrclib = bool(getattr(data, "lyrics_prefer_lrclib", True))
+
+        track_obj = None
+        try:
+            track_obj = provider.get_object("track", str(row.get("id") or ""))
+        except Exception:
+            track_obj = None
+
+        # 1. Word-timed: syllable TTML outranks a line-timed LRCLIB hit.
+        # The verbatim sidecar is independent of this toggle (spec: sidecar
+        # toggles independent, all combinations valid), so the syllable
+        # document is fetched when either the word-timed source or the TTML
+        # file is on.
+        word_lrc = ""
+        syllable_ttml = ""
+        ttml_on = bool(getattr(data, "lyrics_ttml_file", False))
+        if (word_on or ttml_on) and track_obj is not None:
+            try:
+                syllable_ttml = provider.fetch_syllable_ttml(track_obj) or ""
+            except Exception:
+                logger.debug("Apple syllable-TTML fetch failed", exc_info=True)
+                syllable_ttml = ""
+            if syllable_ttml and word_on:
+                try:
+                    from waves.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
+
+                    if ttml_timing_mode(syllable_ttml) == "word":
+                        word_lrc = ttml_to_enhanced_lrc(syllable_ttml) or ""
+                except Exception:
+                    logger.debug("Apple enhanced-LRC conversion failed", exc_info=True)
+                    word_lrc = ""
+
+        # 2. LRCLIB-first (existing toggle, both providers).
+        lrclib_synced = ""
+        lrclib_plain = ""
+        if prefer_lrclib:
+            try:
+                session = _waves_download.pooled_session()
+                lrclib_synced, lrclib_plain = fetch_lrclib_lyrics(
+                    session,
+                    artist=str(row.get("artist") or ""),
+                    title=str(row.get("title") or ""),
+                    album=str(row.get("album") or ""),
+                    duration=int(row.get("duration_sec") or 0),
+                )
+            except Exception:
+                logger.debug("Apple LRCLIB lookup failed", exc_info=True)
+                lrclib_synced, lrclib_plain = "", ""
+
+        if word_lrc:
+            # Word-timed wins for the synced slot; the plain sibling still
+            # prefers LRCLIB's text, then the syllable document's own text.
+            plain = lrclib_plain
+            if not plain and syllable_ttml:
+                try:
+                    from waves.ttml_lyrics import ttml_to_text
+
+                    plain = ttml_to_text(syllable_ttml) or ""
+                except Exception:
+                    plain = ""
+            verbatim = syllable_ttml
+            if not verbatim and track_obj is not None:
+                try:
+                    verbatim = provider.fetch_line_ttml(track_obj) or ""
+                except Exception:
+                    verbatim = ""
+            return word_lrc, plain, verbatim
+
+        if lrclib_synced or lrclib_plain:
+            verbatim = ""
+            if track_obj is not None:
+                try:
+                    verbatim = provider.fetch_line_ttml(track_obj) or ""
+                    if not verbatim and syllable_ttml:
+                        verbatim = syllable_ttml
+                except Exception:
+                    verbatim = syllable_ttml or ""
+            return lrclib_synced, lrclib_plain, verbatim
+
+        # 3. Provider-native fallback (Apple TTML to LRC conversion).
+        if track_obj is not None:
+            try:
+                native_synced, native_plain = provider.fetch_lyrics(track_obj)
+            except Exception:
+                logger.debug("Apple native lyrics fetch failed", exc_info=True)
+                native_synced, native_plain = "", ""
+            if native_synced or native_plain:
+                verbatim = ""
+                try:
+                    verbatim = provider.fetch_line_ttml(track_obj) or syllable_ttml or ""
+                except Exception:
+                    verbatim = syllable_ttml or ""
+                return native_synced, native_plain, verbatim
+            # 4. Unsynced text last: the native plain text already covers it;
+            # a bare syllable document's text is better than nothing.
+            if syllable_ttml:
+                try:
+                    from waves.ttml_lyrics import ttml_to_text
+
+                    plain = ttml_to_text(syllable_ttml) or ""
+                except Exception:
+                    plain = ""
+                if plain:
+                    return "", plain, syllable_ttml
+
+        return "", "", syllable_ttml
 
     def _apple_wants_cover(self, collection: bool) -> bool:
         """Whether this job fetches cover art at all: embedded, or filed per
@@ -13666,13 +13829,39 @@ class WavesBridge(LibraryMixin, QObject):
         )
 
     def _apple_cover_bytes(self, provider, raw: dict) -> bytes | None:
-        """The collection cover at the embedded size, or None."""
+        """The collection cover at the embedded size, or None.
+
+        ORIGIN maps per provider (issue #34, spec section 9.1): TIDAL keeps
+        its exact current behavior (embedded cap included); Apple's ORIGIN
+        is the true original-master image via the raw URL-rewrite path, with
+        the ``{w}x{h}`` template up to 5000x5000 otherwise. Embedded format
+        stays jpg for both (spec): Apple masters serve jpg, so the raw bytes
+        tag as jpeg; the png sniff in the sidecar writer only names the
+        filed copy.
+        """
         dimension = self.settings.data.metadata_cover_dimension
-        try:
-            size = 1280 if str(getattr(dimension, "value", dimension)) == "origin" else int(dimension)
-        except (TypeError, ValueError):
-            size = 320
-        url = provider.cover_url(raw, size)
+        is_origin = str(getattr(dimension, "value", dimension)) == "origin"
+        if is_origin:
+            try:
+                url = provider.cover_raw_url(raw)
+            except Exception:
+                url = ""
+            if not url:
+                # Same-size fallback: the template at its largest before
+                # giving up, mirroring the engine's original-mode fallback.
+                try:
+                    url = provider.cover_url(raw, 5000)
+                except Exception:
+                    url = ""
+        else:
+            try:
+                size = int(dimension)
+            except (TypeError, ValueError):
+                size = 320
+            try:
+                url = provider.cover_url(raw, size)
+            except Exception:
+                url = ""
         if not url:
             return None
         try:
@@ -13685,18 +13874,34 @@ class WavesBridge(LibraryMixin, QObject):
             return response.content or None
 
     def _apple_write_sidecars(
-        self, dest: pathlib.Path, lyrics_synced: str, lyrics_unsynced: str, cover_data: bytes | None, collection: bool
+        self,
+        dest: pathlib.Path,
+        lyrics_synced: str,
+        lyrics_unsynced: str,
+        cover_data: bytes | None,
+        collection: bool,
+        ttml_verbatim: str = "",
     ) -> None:
-        """Lyrics and cover sidecars per the shared toggles."""
-        from waves.lyrics import lyrics_file_choice
+        """Lyrics and cover sidecars per the shared toggles.
+
+        The per-format matrix (issue #34, spec section 9.1): independent
+        sidecar toggles (.lrc; .ttml on Apple; .txt under the existing
+        unsynced rule; extensions never faked; all embed x sidecar
+        combinations valid). SRT is not shipped.
+        """
+        from waves.lyrics import lyrics_sidecar_choices
 
         data = self.settings.data
-        if data.lyrics_file and (lyrics_synced or lyrics_unsynced):
-            text, suffix = lyrics_file_choice(
-                lyrics_synced, lyrics_unsynced, getattr(data, "lyrics_file_synced_only", False)
-            )
-            if text:
-                write_text_sidecar(dest.parent, dest.stem, suffix, text)
+        for text, suffix in lyrics_sidecar_choices(
+            synced=lyrics_synced,
+            plain=lyrics_unsynced,
+            ttml=ttml_verbatim,
+            lyrics_file=bool(data.lyrics_file),
+            synced_only=bool(getattr(data, "lyrics_file_synced_only", False)),
+            ttml_file=bool(getattr(data, "lyrics_ttml_file", False)),
+            is_apple=True,
+        ):
+            write_text_sidecar(dest.parent, dest.stem, suffix, text)
         # Same gate as the fetch decision above: a lone track files its cover
         # only with the single-track opt-in.
         want_cover_file = Download._want_cover_file(
@@ -13705,7 +13910,7 @@ class WavesBridge(LibraryMixin, QObject):
             bool(getattr(data, "cover_single_track_file", False)),
         )
         if want_cover_file and cover_data:
-            write_cover_sidecar(dest.parent, cover_data)
+            write_cover_sidecar(dest.parent, cover_data, _cover_sidecar_format(data))
 
     def _apple_gate_track(
         self, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
@@ -16365,6 +16570,437 @@ class WavesBridge(LibraryMixin, QObject):
 
         self._scan_pool.start(Worker(_counted_scan(self, work)))
 
+    # ---- Standalone lyrics / art actions (issue #34, spec section 7.3) ----
+
+    @Slot(str)
+    def downloadLyricsOnly(self, media_id: str) -> None:
+        """Fetch lyrics only, no audio: LYRICS ONLY beside DOWNLOAD.
+
+        First-class action on album and artist pages plus the per-track
+        hover affordance, on found and saved music alike, both providers.
+        Honors the embed/sidecar matrix independently of audio: sidecars per
+        the lyrics toggles, and an existing audio file gains the embed when
+        the embed toggle is on.
+        """
+        self._standalone_fetch(str(media_id or ""), mode="lyrics")
+
+    @Slot(str)
+    def downloadArtOnly(self, media_id: str) -> None:
+        """Fetch cover art only, no audio: ART ONLY beside DOWNLOAD.
+
+        Same placement and provider coverage as :meth:`downloadLyricsOnly`.
+        Honors the art side of the matrix independently of audio.
+        """
+        self._standalone_fetch(str(media_id or ""), mode="art")
+
+    def _standalone_fetch(self, media_id: str, mode: str) -> None:
+        """Queue a lyrics-only or art-only fetch on a worker thread."""
+        if not media_id:
+            return
+        gate = self._download_gate()
+        if gate == "block":
+            return
+        if gate == "nudge":
+            self._stash_pending_download(media_id, lambda: self._standalone_fetch(media_id, mode))
+            return
+        self.downloadState.emit(media_id, "running")
+        self._set_status(f"Fetching {'lyrics' if mode == 'lyrics' else 'artwork'}…")
+
+        def work() -> None:
+            try:
+                if media_id.startswith(f"{CTX_APPLE}:"):
+                    count = self._standalone_apple(media_id, mode)
+                else:
+                    count = self._standalone_tidal(media_id, mode)
+            except Exception:
+                logger.exception("Standalone %s fetch failed for %s", mode, media_id)
+                self.downloadState.emit(media_id, "failed")
+                self._set_status(f"Could not fetch {'lyrics' if mode == 'lyrics' else 'artwork'}, try again")
+                return
+            if count is None:
+                self.downloadState.emit(media_id, "failed")
+                self._set_status("That item is no longer available")
+            elif count == 0:
+                self.downloadState.emit(media_id, "failed")
+                self._set_status(f"No {'lyrics' if mode == 'lyrics' else 'artwork'} found")
+            else:
+                self.downloadState.emit(media_id, "done")
+                noun = "lyrics" if mode == "lyrics" else "artwork"
+                self._set_status(f"Saved {noun} for {count} track{'s' if count != 1 else ''}")
+
+        self.threadpool.start(Worker(work))
+
+    def _standalone_base_dir(self) -> pathlib.Path | None:
+        """The download folder standalone sidecars land under, or None."""
+        base = str(
+            (
+                getattr(getattr(self, "settings", None), "data", None)
+                and getattr(self.settings.data, "download_base_path", "")
+            )
+            or ""
+        ).strip()
+        if not base:
+            self._set_status("Choose a download folder first")
+            return None
+        path = pathlib.Path(base).expanduser()
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.debug("Standalone fetch could not create the download folder", exc_info=True)
+            return None
+        return path
+
+    def _standalone_apple_tracks(self, media_id: str) -> list[tuple[dict, dict | None, bool]] | None:
+        """Apple track rows for a standalone id: [(track_row, album_row, collection)]."""
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+        if provider is None:
+            return None
+        for kind in ("track", "album", "playlist", "artist"):
+            try:
+                raw = provider.cached(kind, media_id)
+            except Exception:
+                raw = None
+            if raw is None:
+                try:
+                    raw = provider.get_object(kind, media_id.removeprefix(f"{CTX_APPLE}:"))
+                except Exception:
+                    logger.debug("Standalone Apple miss for %s kind %s", media_id, kind, exc_info=True)
+                    continue
+            try:
+                if kind == "track":
+                    return [(provider.row_for("track", raw), None, False)]
+                if kind in ("album", "playlist"):
+                    album_row = provider.row_for(kind, raw)
+                    tracks = provider.collection_items(raw)
+                    return [(track, album_row, True) for track in tracks]
+                if kind == "artist":
+                    page = provider.artist_page(raw if isinstance(raw, dict) else {})
+                    out: list[tuple[dict, dict | None, bool]] = []
+                    for album_row in list(page.get("albums") or []) + list(page.get("eps") or []):
+                        try:
+                            album_raw = provider.get_object(
+                                "album", str(album_row.get("id") or "").removeprefix(f"{CTX_APPLE}:")
+                            )
+                        except Exception:
+                            logger.debug("Standalone Apple album miss, skipping", exc_info=True)
+                            continue
+                        try:
+                            full_album = provider.row_for("album", album_raw)
+                        except Exception:
+                            full_album = album_row
+                        try:
+                            tracks = provider.collection_items(album_raw)
+                        except Exception:
+                            tracks = []
+                        out.extend((track, full_album, True) for track in tracks)
+                    for track in page.get("tracks") or []:
+                        out.append((track, None, False))
+                    return out
+            except Exception:
+                logger.debug("Standalone Apple resolve failed for %s", kind, exc_info=True)
+                continue
+        return None
+
+    def _apple_standalone_dest(
+        self, base: pathlib.Path, track: dict, album: dict | None, collection: bool
+    ) -> tuple[pathlib.Path, str]:
+        """Folder and stem for one Apple standalone track, mirroring audio layout."""
+        data = self.settings.data
+        template = str(data.format_album if collection and album else data.format_track)
+        try:
+            relative = format_apple_path(
+                template,
+                track=track,
+                album=album,
+                pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
+                delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
+                delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
+                illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
+                illegal_map=dict(getattr(data, "filename_illegal_map", None) or {}),
+            )
+        except Exception:
+            relative = str(track.get("title") or "track")
+        parent = base / pathlib.Path(relative).parent
+        parent.mkdir(parents=True, exist_ok=True)
+        stem = pathlib.Path(relative).name or str(track.get("title") or "track")
+        return parent, stem
+
+    def _standalone_apple(self, media_id: str, mode: str) -> int | None:
+        """Run one Apple standalone fetch; returns tracks served, None gone."""
+        from waves.lyrics import lyrics_sidecar_choices
+
+        base = self._standalone_base_dir()
+        if base is None:
+            return 0
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+        resolved = self._standalone_apple_tracks(media_id)
+        if resolved is None:
+            return None
+        data = self.settings.data
+        served = 0
+        for track_row, album_row, collection in resolved:
+            raw = None
+            try:
+                raw = provider.get_object("track", str(track_row.get("id") or "").removeprefix(f"{CTX_APPLE}:"))
+            except Exception:
+                raw = None
+            facts: dict = {}
+            try:
+                facts = provider.track_facts(raw if raw is not None else track_row) or {}
+            except Exception:
+                facts = {}
+            folder, stem = self._apple_standalone_dest(base, track_row, album_row, collection)
+            if mode == "lyrics":
+                synced, plain, ttml = self._apple_lyrics_full(provider, track_row, facts)
+                if not (synced or plain or (ttml and bool(getattr(data, "lyrics_ttml_file", False)))):
+                    continue
+                wrote = False
+                for text, suffix in lyrics_sidecar_choices(
+                    synced=synced,
+                    plain=plain,
+                    ttml=ttml,
+                    lyrics_file=bool(data.lyrics_file),
+                    synced_only=bool(getattr(data, "lyrics_file_synced_only", False)),
+                    ttml_file=bool(getattr(data, "lyrics_ttml_file", False)),
+                    is_apple=True,
+                ):
+                    if write_text_sidecar(folder, stem, suffix, text) is not None:
+                        wrote = True
+                if wrote:
+                    served += 1
+                # Saved music gains the embed when the toggle is on and the
+                # audio file is already on disk.
+                if wrote and bool(data.lyrics_embed):
+                    self._apple_standalone_embed_lyrics(folder, stem, synced, plain, track_row, facts)
+            else:
+                want = self._apple_wants_cover(collection)
+                if not want and not bool(data.cover_album_file):
+                    continue
+                cover = None
+                try:
+                    cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row)
+                except Exception:
+                    cover = None
+                if not cover:
+                    continue
+                if write_cover_sidecar(folder, cover, _cover_sidecar_format(data)) is not None:
+                    served += 1
+                if bool(data.metadata_cover_embed):
+                    self._apple_standalone_embed_cover(folder, stem, cover, track_row, facts)
+        return served
+
+    def _apple_standalone_embed(
+        self,
+        folder: pathlib.Path,
+        stem: str,
+        row: dict,
+        facts: dict,
+        *,
+        synced: str = "",
+        plain: str = "",
+        cover: bytes | None = None,
+    ) -> None:
+        """Best-effort embed into an already-saved Apple audio file."""
+        for ext in (".m4a", ".mp4", ".flac", ".mp3"):
+            candidate = folder / f"{stem}{ext}"
+            if not candidate.is_file():
+                continue
+            try:
+                tag_apple_file(
+                    candidate,
+                    title=str(row.get("title") or ""),
+                    facts=facts or {},
+                    lyrics_synced=synced,
+                    lyrics_unsynced=plain,
+                    cover_data=cover,
+                    mark_explicit=bool(self.settings.data.mark_explicit),
+                    metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
+                )
+            except Exception:
+                logger.debug("Standalone Apple embed failed", exc_info=True)
+            return
+
+    def _apple_standalone_embed_lyrics(
+        self, folder: pathlib.Path, stem: str, synced: str, plain: str, row: dict, facts: dict
+    ) -> None:
+        """Best-effort embed into an already-saved Apple audio file."""
+        self._apple_standalone_embed(folder, stem, row, facts, synced=synced, plain=plain)
+
+    def _apple_standalone_embed_cover(
+        self, folder: pathlib.Path, stem: str, cover: bytes, row: dict, facts: dict
+    ) -> None:
+        """Best-effort cover embed into an already-saved Apple audio file."""
+        self._apple_standalone_embed(folder, stem, row, facts, cover=cover)
+
+    def _standalone_tidal_tracks(self, media_id: str) -> list | None:
+        """TIDAL engine objects for a standalone id, or None when gone."""
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_TIDAL)
+        if provider is None:
+            return None
+        for kind in ("track", "album", "artist", "playlist"):
+            try:
+                obj = provider.get_object(kind, media_id)
+            except Exception:
+                logger.debug("Standalone TIDAL miss for %s kind %s", media_id, kind, exc_info=True)
+                continue
+            try:
+                if kind == "track":
+                    return [(obj, None, False)]
+                items = provider.collection_items(obj)
+                album_row = obj if kind in ("album", "playlist") else None
+                return [(item, album_row, True) for item in items if not isinstance(item, Video)]
+            except Exception:
+                logger.debug("Standalone TIDAL resolve failed for %s", kind, exc_info=True)
+                continue
+        # Legacy _objs fallback for rows the provider registry never saw.
+        for kind in ("track", "album"):
+            obj = (getattr(self, "_objs", {}) or {}).get(kind, {}).get(media_id)
+            if obj is not None:
+                if kind == "track":
+                    return [(obj, None, False)]
+                try:
+                    items = list(obj.tracks()) if hasattr(obj, "tracks") else []
+                    return [(item, obj, True) for item in items]
+                except Exception:
+                    return None
+        return None
+
+    def _standalone_tidal(self, media_id: str, mode: str) -> int | None:
+        """Run one TIDAL standalone fetch; returns tracks served, None gone."""
+        from waves.lyrics import lyrics_sidecar_choices
+
+        base = self._standalone_base_dir()
+        if base is None:
+            return 0
+        dl = getattr(self, "_dl", None)
+        if dl is None:
+            return None
+        resolved = self._standalone_tidal_tracks(media_id)
+        if resolved is None:
+            return None
+        data = self.settings.data
+        served = 0
+        for track_obj, _album_obj, collection in resolved:
+            try:
+                _best, synced, unsynced = dl._retrieve_lyrics(track_obj)
+            except Exception:
+                synced, unsynced = "", ""
+            if mode == "lyrics":
+                choices = lyrics_sidecar_choices(
+                    synced=synced,
+                    plain=unsynced,
+                    ttml="",
+                    lyrics_file=bool(data.lyrics_file),
+                    synced_only=bool(getattr(data, "lyrics_file_synced_only", False)),
+                    ttml_file=False,
+                    is_apple=False,
+                )
+                if not choices:
+                    continue
+                folder, stem = self._tidal_standalone_dest(base, track_obj, collection)
+                wrote = False
+                for text, suffix in choices:
+                    target = folder / f"{stem}{suffix}"
+                    try:
+                        target.write_text(text, encoding="utf-8")
+                        wrote = True
+                    except OSError:
+                        logger.debug("Standalone TIDAL lyrics write failed", exc_info=True)
+                if wrote:
+                    served += 1
+                    # Saved music gains the embed when the toggle is on and
+                    # the audio file is already on disk (same rule as Apple).
+                    if bool(data.lyrics_embed):
+                        self._tidal_standalone_embed(folder, stem, track_obj, collection)
+            else:
+                try:
+                    from waves.constants import CoverDimensions
+
+                    album = getattr(track_obj, "album", None)
+                    dimension = data.metadata_cover_dimension
+                    if album is not None:
+                        if str(getattr(dimension, "value", dimension)) == "origin":
+                            url = album.image(CoverDimensions.PxORIGIN)
+                        else:
+                            try:
+                                url = album.image(int(dimension))
+                            except (TypeError, ValueError):
+                                url = album.image(320)
+                    else:
+                        url = ""
+                    cover = dl.cover_data_cached(url) if url else b""
+                except Exception:
+                    cover = b""
+                if not cover:
+                    continue
+                folder, stem = self._tidal_standalone_dest(base, track_obj, collection)
+                fmt = _cover_sidecar_format(data)
+                name = "cover.png" if fmt == "png" else "cover.jpg"
+                try:
+                    target = folder / name
+                    if not target.exists():
+                        target.write_bytes(bytes(cover))
+                    served += 1
+                    if bool(data.metadata_cover_embed):
+                        self._tidal_standalone_embed(folder, stem, track_obj, collection)
+                except OSError:
+                    logger.debug("Standalone TIDAL cover write failed", exc_info=True)
+        return served
+
+    @staticmethod
+    def _existing_audio_file(folder: pathlib.Path, stem: str) -> pathlib.Path | None:
+        """An already-saved audio file beside a standalone stem, if any."""
+        for ext in (".flac", ".m4a", ".mp4", ".mp3", ".ogg"):
+            candidate = folder / f"{stem}{ext}"
+            try:
+                if candidate.is_file():
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    def _tidal_standalone_embed(self, folder: pathlib.Path, stem: str, track_obj, collection: bool) -> None:
+        """Best-effort embed into an already-saved TIDAL audio file.
+
+        Reuses the download pipeline's own tag writer so saved music gains
+        the embed under the same matrix a fresh download would use. Found
+        music (no audio on disk) keeps sidecars only.
+        """
+        dl = getattr(self, "_dl", None)
+        if dl is None:
+            return
+        existing = self._existing_audio_file(folder, stem)
+        if existing is None:
+            return
+        try:
+            dl.metadata_write(track_obj, existing, bool(collection))
+        except Exception:
+            logger.debug("Standalone TIDAL embed failed", exc_info=True)
+
+    def _tidal_standalone_dest(self, base: pathlib.Path, track_obj, collection: bool) -> tuple[pathlib.Path, str]:
+        """Folder and stem for one TIDAL standalone track, mirroring audio layout."""
+        from waves.helper.path import format_path_media
+
+        data = self.settings.data
+        template = str(data.format_album if collection else data.format_track)
+        try:
+            relative = format_path_media(
+                template,
+                track_obj,
+                int(getattr(data, "album_track_num_pad_min", 1) or 1),
+                delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
+                delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
+                use_primary_album_artist=bool(getattr(data, "use_primary_album_artist", False)),
+                illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
+                illegal_map=dict(getattr(data, "filename_illegal_map", None) or {}),
+            )
+        except Exception:
+            relative = str(getattr(track_obj, "name", "") or "track")
+        parent = base / pathlib.Path(relative).parent
+        parent.mkdir(parents=True, exist_ok=True)
+        stem = pathlib.Path(relative).name or "track"
+        return parent, stem
+
     @Slot(str)
     def downloadPlaylistAlbums(self, playlist_id: str) -> None:
         """Queue the full source album of every track in a playlist (issue #4).
@@ -18543,8 +19179,29 @@ class WavesBridge(LibraryMixin, QObject):
                 f["requires_any"] = {
                     "lyrics_embed": bool(getattr(d, "lyrics_embed", False)),
                     "lyrics_file": bool(getattr(d, "lyrics_file", False)),
+                    "lyrics_ttml_file": bool(getattr(d, "lyrics_ttml_file", False)),
                 }
                 f["requires_hint"] = "Turn on a lyrics option first"
+            if key in ("lyrics_word_timed", "lyrics_ttml_file"):
+                # Same gate as the LRCLIB preference: word-timed sourcing and
+                # the verbatim TTML sidecar only matter while lyrics are
+                # fetched at all.
+                f["requires_any"] = {
+                    "lyrics_embed": bool(getattr(d, "lyrics_embed", False)),
+                    "lyrics_file": bool(getattr(d, "lyrics_file", False)),
+                    "lyrics_ttml_file": bool(getattr(d, "lyrics_ttml_file", False)),
+                }
+                f["requires_hint"] = "Turn on a lyrics option first"
+            if key == "cover_file_format":
+                # Small enum rendered as a dropdown: jpg/png everywhere, raw
+                # as the Apple-only original-master sidecar.
+                f["type"] = "enum"
+                f["value"] = str(getattr(d, "cover_file_format", "jpg") or "jpg")
+                f["options"] = [
+                    {"value": "jpg", "label": "JPG"},
+                    {"value": "png", "label": "PNG"},
+                    {"value": "raw", "label": "Original (Apple only)"},
+                ]
             if key in ("auto_update", "update_cadence", "ffmpeg_auto_update", "ffmpeg_update_cadence"):
                 # Rendered inside the updater / FFmpeg cards (toggle + cadence
                 # segment), not as the generic tile/row controls.
@@ -18696,11 +19353,14 @@ class WavesBridge(LibraryMixin, QObject):
                     "metadata_cover_dimension",
                     "metadata_cover_embed",
                     "cover_album_file",
+                    "cover_file_format",
                     "lyrics_embed",
                     "lyrics_file",
                     # lyrics_file_synced_only renders as a child inside the
                     # lyrics_file tile, not as its own tile.
                     "lyrics_prefer_lrclib",
+                    "lyrics_word_timed",
+                    "lyrics_ttml_file",
                     "mark_explicit",
                     "clean_album_artist",
                 ],
@@ -19267,6 +19927,9 @@ class WavesBridge(LibraryMixin, QObject):
                     # so a later force-disable can be undone to the right value.
                     if key in self._ffmpeg_flag_prefs:
                         self._ffmpeg_flag_prefs[key] = bool(value)
+                elif key == "cover_file_format":
+                    fmt = str(value or "jpg").strip().lower()
+                    setattr(data, key, fmt if fmt in ("jpg", "png", "raw") else "jpg")
                 else:
                     setattr(data, key, str(value))
             except Exception:

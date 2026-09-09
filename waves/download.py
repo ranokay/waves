@@ -46,7 +46,6 @@ from urllib3.util.ssl_ import create_urllib3_context
 from waves.config import ApiCallStopped, Settings, Tidal, api_waits_wake_for
 from waves.constants import (
     CHUNK_SIZE,
-    COVER_NAME,
     EXTENSION_LYRICS,
     FILENAME_LENGTH_MAX,
     METADATA_EXPLICIT,
@@ -3678,8 +3677,22 @@ class Download:
         Returns:
             bool: True if moved, False otherwise.
         """
+        # Sidecar format (issue #34): jpg (default) or png; raw is Apple-only
+        # and falls back to jpg here so TIDAL behavior stays byte-for-byte.
+        fmt = (
+            str(
+                (
+                    getattr(getattr(self, "settings", None), "data", None)
+                    and getattr(self.settings.data, "cover_file_format", "jpg")
+                )
+                or "jpg"
+            )
+            .strip()
+            .lower()
+        )
+        name = "cover.png" if fmt == "png" else "cover.jpg"
         # Build tmp lyrics filename
-        path_file_cover: pathlib.Path = file_media_dst.parent / COVER_NAME
+        path_file_cover: pathlib.Path = file_media_dst.parent / name
         result: bool = self._move_file(path_cover, path_file_cover, overwrite=False, skip_if_exists=True)
 
         return result
