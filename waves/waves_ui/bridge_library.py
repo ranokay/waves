@@ -263,28 +263,35 @@ def _sanitized_fragment(fragment: tuple) -> tuple:
     The download pipeline runs every rendered path component through
     sanitize_filename (the "_" stand-in, this platform) after substituting
     tokens, so a literal the platform rejects ("Atmos?" where "?" is
-    illegal) is stored rewritten while the configured spelling keeps the
-    original. Tokens pass through untouched -- they render per album first,
-    and the evidence gate still demands proven Atmos Versions. Literal
-    chunks are padded while sanitizing so a space beside a token survives
-    exactly as the interior space it is on disk. A component that refuses
-    to sanitize keeps its raw spelling.
+    illegal, the reserved name "CON") is stored rewritten while the
+    configured spelling keeps the original. Literal-only components
+    sanitize whole, exactly like the pipeline. Beside a token only the
+    literal chunk sanitizes, and an edge beside a token keeps its spaces:
+    there they are interior (the token's value sits next to them), while a
+    component edge trims exactly as on disk. Tokens pass through untouched
+    -- they render per album first. A chunk that refuses to sanitize keeps
+    its raw spelling.
     """
     out = []
     for component in fragment:
         chunks = re.split(r"(\{[^{}]*\})", component)
         rebuilt = []
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks):
             if not chunk or re.fullmatch(r"\{[^{}]*\}", chunk):
                 rebuilt.append(chunk)
                 continue
             try:
-                clean = sanitize_filename(
-                    f"a{chunk}a", replacement_text="_", validate_after_sanitize=True, platform="auto"
-                )
-                rebuilt.append(clean[1:-1] if len(clean) >= 2 else chunk)
+                clean = sanitize_filename(chunk, replacement_text="_", validate_after_sanitize=True, platform="auto")
             except Exception:
                 rebuilt.append(chunk)
+                continue
+            if i > 0:
+                lead = chunk[: len(chunk) - len(chunk.lstrip())]
+                clean = lead + clean.lstrip()
+            if i < len(chunks) - 1:
+                trail = chunk[len(chunk.rstrip()) :]
+                clean = clean.rstrip() + trail
+            rebuilt.append(clean)
         out.append("".join(rebuilt))
     return tuple(out)
 
@@ -328,13 +335,32 @@ def _component_meets(folder_name: str, part: str) -> bool:
     a literal part; for a placeholder-shaped part, the template positions
     hold -- leading literals anchor the start, trailing literals the end, so
     "{album_title} Atmos" meets "Discovery Atmos" but neither "Atmosphere"
-    nor "Album Atmos Deluxe". Tokens match any (possibly empty) span: the
-    renderer may substitute nothing."""
+    nor "Album Atmos Deluxe". Tokens match any (possibly empty) span, and
+    whitespace beside a token is flexible: an empty substitution lets the
+    pipeline trim it, so the badge does not depend on what the token held.
+    """
     if "{" not in part or "}" not in part:
         return folder_name.strip().casefold() == part
     pieces = re.split(r"(\{[^{}]*\})", part)
-    rx = "".join(".*" if re.fullmatch(r"\{[^{}]*\}", p) else re.escape(p) for p in pieces)
-    return re.fullmatch(rx, folder_name.strip().casefold()) is not None
+    rx = []
+    for piece in pieces:
+        if re.fullmatch(r"\{[^{}]*\}", piece):
+            rx.append(".*")
+            continue
+        if not piece:
+            continue
+        # Edge whitespace never constrains: the pipeline trims component
+        # edges, and a token beside the edge may substitute nothing. Only
+        # interior runs (inside core) stand verbatim.
+        edge = re.match(r"^(\s*)(.*?)(\s*)$", piece, re.DOTALL)
+        lead, core, trail = edge.groups() if edge else ("", piece, "")
+        if lead:
+            rx.append(r"\s*")
+        if core:
+            rx.append(re.escape(core))
+        if trail:
+            rx.append(r"\s*")
+    return re.fullmatch("".join(rx), folder_name.strip().casefold()) is not None
 
 
 def _match_fragment(folder_id: str, frag: tuple) -> str | None:

@@ -283,6 +283,9 @@ def test_atmos_parent_resolves_fragments():
     titled = _atmos_fragments("{album_title} Atmos")
     assert _atmos_parent("/lib/Artist/Album/Atmosphere", titled) is None
     assert _atmos_parent("/lib/Artist/Album/Album Atmos Deluxe", titled) is None
+    # An empty substitution trims the orphaned space: the badge does not
+    # depend on what the token held.
+    assert _atmos_parent("/lib/Artist/Album/Atmos", titled) == "/lib/Artist/Album"
     # Every level verifies: a placeholder before the leaf still demands the
     # leaf's literals, and a literal intermediate still demands its name.
     multi = _atmos_fragments("{album_title} Surround/Dolby Atmos")
@@ -308,6 +311,10 @@ def test_sanitized_fragment_spellings_fold(monkeypatch):
     assert _atmos_parent("/lib/Artist/Album/Atmos_", frags) == "/lib/Artist/Album"
     # Tokens survive sanitizing verbatim; surrounding spaces survive too.
     assert bridge._sanitized_fragment(("{album_title} atmos?",)) == ("{album_title} atmos_",)
+    # Whole-component rules apply: the entire literal sanitizes as one,
+    # so a boundary rewrite is not defeated by padding.
+    monkeypatch.setattr(bridge, "sanitize_filename", lambda name, **kw: "con_" if name == "con" else name)
+    assert bridge._sanitized_fragment(("con",)) == ("con_",)
 
 
 def test_placeholder_fragment_folds_to_the_album(tmp_path):
