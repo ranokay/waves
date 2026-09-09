@@ -4,7 +4,9 @@ WHAT THIS FENCES OFF
 --------------------
 Settings gains a Providers area: a TIDAL section (its session and its quality
 default) and an Apple Music section that is always visible behind an enable
-switch (default off) with a status light and runtime-manage placeholders.
+switch (default off) with a status light and setup-wizard + runtime-manage
+actions (issue #31 ships them live: Setup wizard, Update runtime,
+Remove runtime).
 The quality split itself (``tidal_quality_audio`` / ``apple_quality_audio``)
 and its migration landed with issue #24; this issue gives the split fields
 their sections: TIDAL's quality moves out of Downloads into the TIDAL
@@ -106,6 +108,8 @@ def test_the_apple_section_holds_the_switch_row_and_the_quality():
         "apple_quality_audio",
         "apple_cookies_path",
         "path_binary_nm3u8dlre",
+        "apple_apk_path",
+        "apple_wrapper_port",
         "apple_quarantine_dir",
         "apple_quarantine_keep",
     ]
@@ -114,9 +118,13 @@ def test_the_apple_section_holds_the_switch_row_and_the_quality():
     # the flag-tile grid, and the factory-reset walk still finds it.
     assert status["enabled_key"] == "apple_enabled"
     assert "apple_enabled" not in apple
-    # The status light sits at its not-set-up vocabulary, with the two
-    # runtime-manage placeholders that ship inert.
-    assert status["actions"] == [{"label": "Update runtime"}, {"label": "Remove runtime"}]
+    # The status light sits at its not-set-up vocabulary, with the setup
+    # wizard + runtime-manage actions behind it (issue #31 ships them live).
+    assert status["actions"] == [
+        {"label": "Setup wizard", "action": "apple_setup"},
+        {"label": "Update runtime", "action": "apple_update_runtime"},
+        {"label": "Remove runtime", "action": "apple_remove_runtime"},
+    ]
 
 
 def test_the_apple_switch_defaults_off_and_persists_as_an_engine_setting():

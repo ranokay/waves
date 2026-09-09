@@ -207,9 +207,17 @@ Item {
     // and the row prefers it while it holds a value (the channel name is
     // declared in the schema as the field's "live").
     property var appleStatusLive: null
+    property var appleRuntimeLive: null
+    property var appleSetupLive: null
+    property string appleRuntimeState: ""
+    property string appleRuntimeMsg: ""
+    property real appleRuntimePct: 0
     Connections {
         target: waves
         function onAppleStatusChanged() { page.appleStatusLive = waves.appleStatus() }
+        function onAppleRuntimeStatusChanged() { page.appleRuntimeLive = waves.appleRuntimeStatus() }
+        function onAppleRuntimeStateChanged(state, msg) { page.appleRuntimeState = state; page.appleRuntimeMsg = msg }
+        function onAppleRuntimeProgress(pct) { page.appleRuntimePct = pct }
     }
 
     // ---- In-app updater state ----
@@ -2470,22 +2478,35 @@ Item {
                                                     delegate: Rectangle {
                                                         id: actPill
                                                         required property var modelData
+                                                        readonly property string actKey: modelData.action !== undefined ? String(modelData.action) : ""
+                                                        // The setup-wizard slice ships the actions behind
+                                                        // these pills: Setup wizard scrolls to the Apple
+                                                        // section's steps, Update installs the managed
+                                                        // runtime, Remove deletes it. A pill without an
+                                                        // action key stays inert (no MouseArea).
+                                                        readonly property bool actLive: actPill.actKey !== ""
                                                         width: actTxt.implicitWidth + page.btnPadH * 2
                                                         height: actTxt.implicitHeight + page.btnPadV * 2
                                                         radius: page.btnRad
                                                         color: "transparent"; border.color: page.border1
-                                                        // A placeholder, not a promise of a click: faded
-                                                        // to the save button's disabled strength, with no
-                                                        // MouseArea at all, until the rollout ships the
-                                                        // actions behind them.
-                                                        opacity: 0.45
+                                                        opacity: actPill.actLive ? 1.0 : 0.45
+                                                        function runAppleAction() {
+                                                            if (actPill.actKey === "apple_update_runtime") waves.installAppleRuntime()
+                                                            else if (actPill.actKey === "apple_remove_runtime") waves.removeAppleRuntime()
+                                                            else if (actPill.actKey === "apple_setup") page.appleSetupLive = waves.appleSetupState()
+                                                        }
                                                         Text {
                                                             id: actTxt
                                                             anchors.centerIn: parent
                                                             text: actPill.modelData.label.toUpperCase()
                                                             textFormat: Text.PlainText
-                                                            color: page.textDim; font.pixelSize: 12
+                                                            color: actPill.actLive ? page.textHi : page.textDim; font.pixelSize: 12
                                                             font.family: page.uiFont; font.bold: true; font.letterSpacing: page.btnTrack
+                                                        }
+                                                        MouseArea {
+                                                            visible: actPill.actLive
+                                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                            onClicked: actPill.runAppleAction()
                                                         }
                                                     }
                                                 }

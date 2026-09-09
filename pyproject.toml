@@ -242,6 +242,11 @@ ignore = [
 # intentionally shells out (S603/S607); install() is one linear sequence (C901);
 # and its raised errors carry deliberately descriptive messages (TRY003).
 "waves/waves_ui/ffmpeg_manager.py" = ["S603", "S607", "C901", "TRY003"]
+# Same shape for the managed Apple runtime (issue #31): it downloads and runs
+# the N_m3u8DL-RE binary and probes the container runtime (S603/S607), its
+# install is one linear sequence (C901), and its errors carry deliberately
+# descriptive messages (TRY003).
+"waves/apple_runtime.py" = ["S603", "S607", "C901", "TRY003"]
 # The updater downloads and swaps a packaged build, so it intentionally shells
 # out (S603/S607) for the platform swap/relaunch; install()/_apply are linear
 # sequences (C901); and its errors carry deliberately descriptive messages (TRY003).

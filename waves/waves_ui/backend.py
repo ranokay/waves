@@ -366,6 +366,9 @@ _NUMBER_FIELDS = [
     # Integrity gate (issue #30): automatic re-downloads after an integrity
     # failure, tunable in Advanced. Default 2 (3 attempts total).
     "apple_integrity_retries",
+    # Setup wizard (issue #31): wrapper HTTP API port override. 0 means pick
+    # a free high port; rendered as a plain number field in the Apple section.
+    "apple_wrapper_port",
 ]
 # Second-scale floats (Advanced), rendered as a decimal stepper.
 _FLOAT_FIELDS = [
@@ -697,6 +700,9 @@ _PATH_FIELDS = [
     # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
     # through; the wizard provisions it later.
     "path_binary_nm3u8dlre",
+    # Setup wizard (issue #31): the user-supplied APK path, browsed like a
+    # file. Waves never fetches it; the wizard verifies the pinned version.
+    "apple_apk_path",
     # Integrity gate (issue #30): quarantine folder override, browsed like a
     # download folder. Empty means the default inside the download folder.
     "apple_quarantine_dir",
@@ -706,6 +712,7 @@ _BROWSE = {
     "path_binary_ffmpeg": "file",
     "apple_cookies_path": "file",
     "path_binary_nm3u8dlre": "file",
+    "apple_apk_path": "file",
     "apple_quarantine_dir": "dir",
 }
 # String fields whose value is a character or two: they render as a compact
@@ -903,6 +910,8 @@ _FIELD_LABELS = {
     "apple_quality_audio": "Audio quality (Apple)",
     "apple_cookies_path": "Cookies file (Apple)",
     "path_binary_nm3u8dlre": "N_m3u8DL-RE binary path",
+    "apple_apk_path": "Apple Music APK (you supply)",
+    "apple_wrapper_port": "Wrapper port (Apple)",
     "apple_quarantine_dir": "Quarantine folder (Apple)",
     "apple_quarantine_keep": "Keep quarantined files",
     "apple_integrity_retries": "Integrity retries (Apple)",
@@ -1004,18 +1013,39 @@ def _enum_options(key: str, members) -> list:
     return out
 
 
-def _apple_status(enabled: bool) -> dict:
-    """The Apple status light's ``{"state", "word"}`` for a given switch
-    state (issue #25, spec §9.2.3). One source for both the bridge slot (the
-    page's live mirror) and the schema's baked value, so the two can never
-    disagree. The light has four designed states — not set up / runtime
-    ready / signed in / needs attention — of which this slice can honestly
-    report the first two: ``off`` while the component is disabled,
-    ``not_set_up`` once enabled, because the managed runtime and its wizard
-    do not exist yet."""
-    if not enabled:
-        return {"state": "off", "word": "Off"}
-    return {"state": "not_set_up", "word": "Not set up"}
+def _apple_status(
+    enabled: bool,
+    *,
+    runtime_ready: bool = False,
+    signed_in: bool = False,
+    needs_attention: bool = False,
+    cookies_ready: bool = False,
+) -> dict:
+    """The Apple status light's ``{"state", "word"}`` (issue #25, spec §9.2.3).
+
+    One source for both the bridge slot (the page's live mirror) and the
+    schema's baked value, so the two can never disagree. The light has five
+    states: ``off`` while the component is disabled, ``not_set_up`` once
+    enabled but with neither runtime nor sign-in, ``runtime_ready`` when
+    the managed N_m3u8DL-RE is provisioned, ``signed_in`` when a verified
+    cookies export (cookies tier, no runtime needed) or a wrapper session
+    unlocks downloads, and ``needs_attention`` when a saved cookies path
+    or runtime needs repair. Precedence is needs_attention > signed_in >
+    runtime_ready > not_set_up > off. ``cookies_ready`` without
+    ``signed_in`` still lights ``signed_in``: the cookies tier unlocks
+    AAC 256 + Atmos with no runtime at all (spec §2).
+    """
+    # Local import avoids a module-import cycle in tests that stub the bridge.
+    from waves.apple_runtime import describe_setup
+
+    described = describe_setup(
+        enabled=bool(enabled),
+        runtime_ready=bool(runtime_ready),
+        signed_in=bool(signed_in),
+        needs_attention=bool(needs_attention),
+        cookies_ready=bool(cookies_ready),
+    )
+    return {"state": described["state"], "word": described["word"]}
 
 
 # Batch size for "My Tidal" infinite scroll. Each category is fetched one page
@@ -3647,6 +3677,14 @@ class WavesBridge(LibraryMixin, QObject):
     # Emitted when a save actually moves the apple_enabled switch, so the
     # page's live mirror re-reads appleStatus() without a schema rebuild.
     appleStatusChanged = Signal()
+    # Managed Apple runtime (Settings → Providers · Apple Music, issue #31).
+    appleRuntimeStatusChanged = Signal()
+    appleRuntimeProgress = Signal(float)
+    appleRuntimeStateChanged = Signal(str, str)  # state, message
+    # An Apple download was requested before setup completed (spec §7.1):
+    # QML routes this into the setup wizard at the sign-in step instead of
+    # leaving a dead button.
+    appleSetupRequested = Signal(str)  # reason: "cookies" | "runtime" | "setup"
     # A download was HELD because FFmpeg is missing: without it the files
     # would be degraded (no FLAC extraction, no video conversion, no track
     # length repair, so strict players can read 0:00). QML shows a blocking
@@ -3853,6 +3891,19 @@ class WavesBridge(LibraryMixin, QObject):
         # the on-disk value up front is what keeps them from being misread as a
         # user choice. Updated on save in applySettings.
         self._ffmpeg_user_path = (self.settings.data.path_binary_ffmpeg or "").strip()
+        # Managed Apple runtime (issue #31, spec §2/§10): the N_m3u8DL-RE
+        # binary and wrapper port state live under the same app data dir as
+        # FFmpeg, provisioned by the setup wizard. Imported lazily so plain
+        # unit-test stubs without the package still bind bridge methods.
+        try:
+            from waves.apple_runtime import AppleRuntimeManager
+
+            self._apple_runtime = AppleRuntimeManager(os.path.dirname(self.settings.file_path))
+        except Exception:
+            logger.debug("Apple runtime manager unavailable", exc_info=True)
+            self._apple_runtime = None
+        self._apple_runtime_abort = Event()
+        self._apple_runtime_inflight = False
         # The Apple provider reads the resolved FFmpeg path, so this runs
         # after the manager above exists.
         self._configure_apple_provider()
@@ -11790,9 +11841,19 @@ class WavesBridge(LibraryMixin, QObject):
         marks an explicit re-ask of a FAILED row and rides the queued spec to
         the skip-list gate. They travel separately so a deferred replay keeps
         the row's pinned ask without promoting a fresh row into a retry.
+
+        A pre-setup click routes into the setup wizard at the sign-in step
+        (spec §7.1): the affordance stays live and opens the path to making
+        it work, instead of failing silently.
         """
         if not self._apple_cookies_ready():
-            self._set_status("Apple downloads need a cookies export: set one in Settings under Providers, Apple Music")
+            self._set_status(
+                "Apple downloads need a cookies export: open Settings, Providers, Apple Music to continue setup"
+            )
+            try:
+                self.appleSetupRequested.emit("cookies")
+            except Exception:
+                logger.debug("Apple setup route emit failed", exc_info=True)
             self.downloadState.emit(media_id, "")
             return
         gate = self._download_gate()
@@ -16780,14 +16841,253 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(result="QVariant")
     def appleStatus(self) -> dict:
         """The Apple provider's status-light state (spec §9.2.3), for the
-        settings page's live mirror: ``{"state", "word"}``. The light has four
-        designed states — not set up / runtime ready / signed in / needs
-        attention — of which this slice can honestly report the first two:
-        ``off`` while the component is disabled, ``not_set_up`` once enabled,
-        because the managed runtime and its wizard do not exist yet. The
-        schema bakes the same value at build time; the signal exists for the
-        flip the moment a save lands."""
-        return _apple_status(bool(getattr(getattr(self.settings, "data", None), "apple_enabled", False)))
+        settings page's live mirror: ``{"state", "word"}``. Five states —
+        off / not set up / runtime ready / signed in / needs attention —
+        read live off the managed runtime and the cookies export, so the
+        light tracks each wizard stage. The schema bakes the same value at
+        build time; the signal exists for the flip the moment a save lands."""
+        try:
+            flags = self._apple_live_flags()
+        except Exception:
+            logger.debug("Apple status flags failed", exc_info=True)
+            flags = {"enabled": bool(getattr(getattr(self.settings, "data", None), "apple_enabled", False))}
+        return _apple_status(
+            bool(flags.get("enabled", False)),
+            runtime_ready=bool(flags.get("runtime_ready", False)),
+            signed_in=bool(flags.get("signed_in", False)),
+            needs_attention=bool(flags.get("needs_attention", False)),
+            cookies_ready=bool(flags.get("cookies_ready", False)),
+        )
+
+    @Slot(result="QVariant")
+    def appleSetupState(self) -> dict:
+        """The in-place setup wizard's full state (issue #31, spec §2).
+
+        One dict the QML wizard renders step by step: the light (state,
+        word, tier, next_step), the cookies tier (path, ready, verified),
+        the managed runtime (state, path, version, wrapper image), the
+        container runtime (name, available, running, hint), the APK
+        (path, pinned version), and the wrapper port/URL. Pure reads, no
+        network, safe on the GUI thread.
+        """
+        from waves.apple_runtime import (
+            APK_PINNED_VERSION,
+            WRAPPER_LIBS_VERSION,
+            WRAPPER_V2_IMAGE,
+            describe_setup,
+            detect_container_runtime,
+            verify_apk,
+            verify_cookies_file,
+            wrapper_url,
+        )
+
+        data = getattr(getattr(self, "settings", None), "data", None)
+        try:
+            flags = self._apple_live_flags()
+        except Exception:
+            flags = {"enabled": bool(getattr(data, "apple_enabled", False))}
+        described = describe_setup(
+            enabled=bool(flags.get("enabled", False)),
+            runtime_ready=bool(flags.get("runtime_ready", False)),
+            signed_in=bool(flags.get("signed_in", False)),
+            needs_attention=bool(flags.get("needs_attention", False)),
+            cookies_ready=bool(flags.get("cookies_ready", False)),
+        )
+        cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
+        try:
+            cookies_check = verify_cookies_file(cookies_path)
+            cookies_verified = bool(cookies_check.get("has_token", False))
+        except Exception as exc:
+            cookies_verified = False
+            cookies_error = str(exc)
+        else:
+            cookies_error = ""
+        manager = getattr(self, "_apple_runtime", None)
+        try:
+            runtime = (
+                dict(manager.status(str(getattr(data, "path_binary_nm3u8dlre", "") or "")))
+                if manager is not None
+                else {"state": "missing"}
+            )
+        except Exception:
+            runtime = {"state": "missing"}
+        try:
+            container = detect_container_runtime()
+        except Exception:
+            container = {"name": "", "available": False, "running": False, "hint": ""}
+        apk_path = str(getattr(data, "apple_apk_path", "") or "")
+        try:
+            apk_check = verify_apk(apk_path) if apk_path.strip() else None
+            apk_verified = bool(apk_check and apk_check.get("ok", False))
+            apk_error = ""
+        except Exception as exc:
+            apk_verified = False
+            apk_error = str(exc)
+            apk_check = None
+        preferred_port = 0
+        try:
+            preferred_port = int(getattr(data, "apple_wrapper_port", 0) or 0)
+        except (TypeError, ValueError):
+            preferred_port = 0
+        port = 0
+        try:
+            port = int(manager.read_port()) if manager is not None else 0
+        except Exception:
+            port = 0
+        if not port:
+            port = preferred_port if 1024 <= preferred_port <= 65535 else 0
+        return {
+            "light": described,
+            "enabled": bool(flags.get("enabled", False)),
+            "cookies": {
+                "path": cookies_path,
+                "ready": bool(flags.get("cookies_ready", False)),
+                "verified": cookies_verified,
+                "error": cookies_error,
+            },
+            "runtime": runtime,
+            "container": container,
+            "apk": {
+                "path": apk_path,
+                "pinned_version": APK_PINNED_VERSION,
+                "verified": apk_verified,
+                "error": apk_error,
+            },
+            "wrapper": {
+                "image": WRAPPER_V2_IMAGE,
+                "libs": WRAPPER_LIBS_VERSION,
+                "port": port,
+                "url": wrapper_url(port) if port else "",
+            },
+        }
+
+    @Slot(result="QVariant")
+    def appleRuntimeStatus(self) -> dict:
+        """The managed N_m3u8DL-RE status for the Apple section."""
+        manager = getattr(self, "_apple_runtime", None)
+        data = getattr(getattr(self, "settings", None), "data", None)
+        custom = str(getattr(data, "path_binary_nm3u8dlre", "") or "")
+        try:
+            if manager is None:
+                return {"state": "missing", "available": False, "managed": False, "path": ""}
+            return dict(manager.status(custom))
+        except Exception:
+            logger.debug("Apple runtime status failed", exc_info=True)
+            return {"state": "missing", "available": False, "managed": False, "path": ""}
+
+    @Slot(result="QVariant")
+    def appleContainerStatus(self) -> dict:
+        """Detect the container runtime; never installs one."""
+        try:
+            from waves.apple_runtime import detect_container_runtime
+
+            return detect_container_runtime()
+        except Exception:
+            logger.debug("Apple container probe failed", exc_info=True)
+            return {"name": "", "available": False, "running": False, "hint": ""}
+
+    @Slot(str, result="QVariant")
+    def appleVerifyCookies(self, path: str) -> dict:
+        """Verify a cookies export unlocks the cookies tier."""
+        from waves.apple_runtime import verify_cookies_file
+
+        try:
+            return {"ok": True, **verify_cookies_file(path)}
+        except Exception as exc:
+            return {"ok": False, "path": str(path or ""), "error": str(exc)}
+
+    @Slot(str, result="QVariant")
+    def appleVerifyApk(self, path: str) -> dict:
+        """Verify a user-supplied APK against the pinned version."""
+        from waves.apple_runtime import verify_apk
+
+        try:
+            return verify_apk(path)
+        except Exception as exc:
+            return {"ok": False, "path": str(path or ""), "error": str(exc)}
+
+    @Slot(result="QVariant")
+    def appleEnsurePort(self) -> dict:
+        """Persist and return the wrapper port: override when free, else picked."""
+        manager = getattr(self, "_apple_runtime", None)
+        if manager is None:
+            return {"port": 0, "url": ""}
+        data = getattr(getattr(self, "settings", None), "data", None)
+        try:
+            preferred = int(getattr(data, "apple_wrapper_port", 0) or 0)
+        except (TypeError, ValueError):
+            preferred = 0
+        try:
+            from waves.apple_runtime import wrapper_url as _url
+
+            port = manager.ensure_port(preferred)
+            return {"port": port, "url": _url(port)}
+        except Exception as exc:
+            logger.debug("Apple port ensure failed", exc_info=True)
+            return {"port": 0, "url": "", "error": str(exc)}
+
+    @Slot()
+    def installAppleRuntime(self) -> None:
+        """Provision the managed N_m3u8DL-RE on a worker thread."""
+        if getattr(self, "_apple_runtime_inflight", False):
+            return
+        manager = getattr(self, "_apple_runtime", None)
+        if manager is None:
+            self.appleRuntimeStateChanged.emit("failed", "Apple runtime unavailable on this machine")
+            return
+        self._apple_runtime_inflight = True
+
+        def work() -> None:
+            with contextlib.suppress(Exception):
+                self._apple_runtime_abort.clear()
+            self.appleRuntimeStateChanged.emit("downloading", "Downloading N_m3u8DL-RE…")
+            try:
+                try:
+                    status = manager.install(
+                        progress_cb=lambda p: self.appleRuntimeProgress.emit(float(p)),
+                        log_cb=lambda m: self.appleRuntimeStateChanged.emit("downloading", m),
+                        abort=self._apple_runtime_abort,
+                    )
+                except Exception as exc:
+                    from waves.apple_runtime import AppleRuntimeCancelled
+
+                    if isinstance(exc, AppleRuntimeCancelled):
+                        self.appleRuntimeStateChanged.emit("cancelled", "Cancelled")
+                        self.appleRuntimeStatusChanged.emit()
+                        return
+                    logger.exception("Apple runtime install failed")
+                    self.appleRuntimeStateChanged.emit("failed", str(exc) or "Install failed")
+                    return
+                self._configure_apple_provider()
+                self.appleRuntimeStateChanged.emit("done", f"N_m3u8DL-RE {status.get('version', '')} ready")
+                self.appleRuntimeStatusChanged.emit()
+                self.appleStatusChanged.emit()
+            finally:
+                self._apple_runtime_inflight = False
+
+        self.threadpool.start(Worker(work))
+
+    @Slot()
+    def cancelAppleRuntime(self) -> None:
+        with contextlib.suppress(Exception):
+            self._apple_runtime_abort.set()
+
+    @Slot()
+    def removeAppleRuntime(self) -> None:
+        """Remove the managed N_m3u8DL-RE copy."""
+        manager = getattr(self, "_apple_runtime", None)
+        if manager is None:
+            return
+        try:
+            manager.remove()
+        except Exception:
+            logger.debug("Apple runtime remove failed", exc_info=True)
+        self._configure_apple_provider()
+        try:
+            self.appleRuntimeStatusChanged.emit()
+        except Exception:
+            logger.debug("Apple runtime signal emit failed", exc_info=True)
+        self.appleStatusChanged.emit()
 
     @Slot(result="QVariant")
     def settingsSchema(self) -> list:
@@ -16805,7 +17105,17 @@ class WavesBridge(LibraryMixin, QObject):
         # read at build time — the TIDAL session, and the Apple component's
         # light, through the same helper the appleStatus() slot serves the
         # page's live mirror from, so the two can never disagree.
-        apple_status = _apple_status(bool(getattr(d, "apple_enabled", False)))
+        try:
+            _flags = self._apple_live_flags()
+        except Exception:
+            _flags = {"enabled": bool(getattr(d, "apple_enabled", False))}
+        apple_status = _apple_status(
+            bool(_flags.get("enabled", False)),
+            runtime_ready=bool(_flags.get("runtime_ready", False)),
+            signed_in=bool(_flags.get("signed_in", False)),
+            needs_attention=bool(_flags.get("needs_attention", False)),
+            cookies_ready=bool(_flags.get("cookies_ready", False)),
+        )
         logged_in = bool(getattr(self, "_logged_in", False))
 
         def field(key: str, ftype: str, value, extra: dict | None = None) -> dict:
@@ -17135,15 +17445,15 @@ class WavesBridge(LibraryMixin, QObject):
                 },
                 {
                     # The Apple section's master switch, status light and
-                    # runtime-manage placeholders in one row (issue #25, spec
+                    # runtime-manage actions in one row (issues #25/#31, spec
                     # §9.2.3). apple_enabled rides as enabled_key: the switch
                     # stages into editMap like any toggle and SAVE CHANGES
                     # persists it, while enabled_key is what makes
                     # _factory_default_values enumerate it for RESET ALL
-                    # SETTINGS. The actions are placeholders for the managed
-                    # runtime's update/remove, which ship with the Apple
-                    # rollout; they render inert on purpose. "live" names the
-                    # channel the page re-reads when a save moves the switch.
+                    # SETTINGS. The actions drive the managed runtime's
+                    # install/remove behind the setup wizard (issue #31);
+                    # "action" names the slot channel QML calls. "live" names
+                    # the channel the page re-reads when a save moves the switch.
                     "key": "provider_apple_status",
                     "enabled_key": "apple_enabled",
                     "switch_value": bool(getattr(d, "apple_enabled", False)),
@@ -17152,14 +17462,16 @@ class WavesBridge(LibraryMixin, QObject):
                     "help": (
                         "Apple Music ships off by default. Turn it on to add Apple Music "
                         "catalog results to search. Search needs no Apple account or runtime. "
-                        "The Not set up status applies to downloads, which arrive later."
+                        "Downloads need setup below: a cookies export unlocks AAC 256 and Atmos "
+                        "at once (no runtime), while the managed runtime plus your APK unlock the full tier."
                     ),
                     "type": "status",
                     "value": apple_status["state"],
                     "word": apple_status["word"],
                     "actions": [
-                        {"label": "Update runtime"},
-                        {"label": "Remove runtime"},
+                        {"label": "Setup wizard", "action": "apple_setup"},
+                        {"label": "Update runtime", "action": "apple_update_runtime"},
+                        {"label": "Remove runtime", "action": "apple_remove_runtime"},
                     ],
                 },
             ]
@@ -17291,16 +17603,22 @@ class WavesBridge(LibraryMixin, QObject):
                 # Always visible, per the optional-component decision: the
                 # section renders while Apple is off, so the switch stays
                 # discoverable and the light shows what is (not) set up.
+                # The in-place setup wizard (issue #31, spec §2) lives here:
+                # cookies export for the fallback tier, managed runtime plus
+                # user-supplied APK for the full tier, wrapper port override.
                 "group": "Providers · Apple Music",
                 "id": "providers_apple",
                 "desc": (
-                    "Turn on Apple Music catalog search here. AAC 256 and Atmos downloads need a cookies export below; full setup arrives later."
+                    "Turn on Apple Music catalog search here. A cookies export unlocks AAC 256 and Atmos "
+                    "downloads at once with no runtime; the managed runtime plus the APK you supply unlock the full tier."
                 ),
                 "fields": [
                     "provider_apple_status",
                     "apple_quality_audio",
                     "apple_cookies_path",
                     "path_binary_nm3u8dlre",
+                    "apple_apk_path",
+                    "apple_wrapper_port",
                     "apple_quarantine_dir",
                     "apple_quarantine_keep",
                 ],
@@ -17580,7 +17898,9 @@ class WavesBridge(LibraryMixin, QObject):
         path is the RESOLVED one (explicit override, else the managed copy
         _resolve_ffmpeg injects in memory): the persisted setting alone is
         "" on the normal managed path, which would fail the gate that the
-        manager itself just passed.
+        manager itself just passed. The N_m3u8DL-RE path follows the same
+        rule: explicit override, else the managed runtime copy, else "" for
+        PATH lookup at fetch time.
         """
         provider = self.providers.get(CTX_APPLE)
         if provider is None:
@@ -17594,7 +17914,13 @@ class WavesBridge(LibraryMixin, QObject):
         data = getattr(self.settings, "data", None)
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
-        provider.nm3u8dlre_path = str(getattr(data, "path_binary_nm3u8dlre", "") or "")
+        resolver = getattr(self, "_resolve_apple_nm3u8dlre", None)
+        if callable(resolver):
+            provider.nm3u8dlre_path = str(resolver() or "")
+        else:
+            # Plain unit-test stubs bind _configure_apple_provider without the
+            # resolver; fall back to the saved override there.
+            provider.nm3u8dlre_path = str(getattr(data, "path_binary_nm3u8dlre", "") or "")
         # A custom quarantine folder from a previous session already exists on
         # disk: register it now (startup runs here, settings saves re-enter
         # here) so the boot scan excludes it before any new failure occurs.
@@ -17610,10 +17936,91 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.warning("Apple quarantine dirs could not be registered for scan exclusion")
 
+    def _resolve_apple_nm3u8dlre(self) -> str:
+        """The N_m3u8DL-RE binary an Apple download would use.
+
+        Precedence is explicit override → managed runtime copy → "" (PATH
+        lookup at fetch time). In-memory only, never persisted: like the
+        FFmpeg resolve above, the managed path must not land in settings.
+        """
+        data = getattr(getattr(self, "settings", None), "data", None)
+        override = str(getattr(data, "path_binary_nm3u8dlre", "") or "").strip()
+        if override:
+            return override
+        manager = getattr(self, "_apple_runtime", None)
+        try:
+            if manager is not None and manager.is_installed():
+                return str(manager.binary_path)
+        except Exception:
+            logger.debug("Apple runtime resolve failed", exc_info=True)
+        return ""
+
+    def _apple_runtime_ready(self) -> bool:
+        """Whether the managed N_m3u8DL-RE is provisioned."""
+        manager = getattr(self, "_apple_runtime", None)
+        try:
+            return bool(manager is not None and manager.is_installed())
+        except Exception:
+            return False
+
+    def _apple_needs_attention(self) -> bool:
+        """Whether saved Apple state needs repair (the red light).
+
+        True when a cookies path is saved but its file is gone, or an
+        N_m3u8DL-RE override is saved but its file is gone. A managed
+        runtime whose manifest vanished counts as not-ready, not broken:
+        the wizard simply provisions again.
+        """
+        data = getattr(getattr(self, "settings", None), "data", None)
+        cookies = str(getattr(data, "apple_cookies_path", "") or "").strip()
+        if cookies and not pathlib.Path(cookies).expanduser().is_file():
+            return True
+        override = str(getattr(data, "path_binary_nm3u8dlre", "") or "").strip()
+        return bool(override and not pathlib.Path(override).is_file())
+
+    def _apple_live_flags(self) -> dict:
+        """Live inputs for the Apple status light, read off current state."""
+        data = getattr(getattr(self, "settings", None), "data", None)
+        enabled = bool(getattr(data, "apple_enabled", False))
+        cookies_ready = bool(self._apple_cookies_ready())
+        runtime_ready = bool(self._apple_runtime_ready())
+        needs_attention = bool(self._apple_needs_attention())
+        # A cookies export whose session expired is needs_attention, not
+        # signed_in: verify the token marker, not just the file's presence.
+        signed_in = False
+        if cookies_ready and not needs_attention:
+            try:
+                from waves.apple_runtime import verify_cookies_file
+
+                provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+                cookies_path = str(getattr(provider, "cookies_path", "") or "") or str(
+                    getattr(data, "apple_cookies_path", "") or ""
+                )
+                verify_cookies_file(cookies_path)
+                signed_in = True
+            except Exception:
+                signed_in = False
+                # File present but no token: the export is stale. That is a
+                # repair case only when the user saved it expecting downloads;
+                # while merely enabled without downloads it stays not_set_up.
+                # Mark attention only if a path was explicitly saved.
+                if str(getattr(data, "apple_cookies_path", "") or "").strip():
+                    needs_attention = True
+        return {
+            "enabled": enabled,
+            "runtime_ready": runtime_ready,
+            "signed_in": signed_in,
+            "needs_attention": needs_attention,
+            "cookies_ready": cookies_ready and signed_in,
+        }
+
     def _apple_cookies_ready(self) -> bool:
         """Whether an Apple download can start: a cookies file is set."""
-        provider = self.providers.get(CTX_APPLE)
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
         path = str(getattr(provider, "cookies_path", "") or "")
+        if not path:
+            data = getattr(getattr(self, "settings", None), "data", None)
+            path = str(getattr(data, "apple_cookies_path", "") or "")
         return bool(path) and pathlib.Path(path).expanduser().is_file()
 
     @Slot("QVariant")
@@ -17715,10 +18122,19 @@ class WavesBridge(LibraryMixin, QObject):
             or "path_binary_ffmpeg" in values
             or "path_binary_nm3u8dlre" in values
             or "apple_quarantine_dir" in values
+            or "apple_apk_path" in values
+            or "apple_wrapper_port" in values
         ):
             # The cookies-tier paths the Apple provider resolves against (the
             # quarantine dir re-registers its scan exclusion here as well).
             self._configure_apple_provider()
+            # The light tracks cookies and runtime paths, not just the switch:
+            # saving a cookies export moves not_set_up to signed_in at once.
+            self.appleStatusChanged.emit()
+            try:
+                self.appleRuntimeStatusChanged.emit()
+            except Exception:
+                logger.debug("Apple runtime signal emit failed", exc_info=True)
         if "apple_enabled" in values and bool(getattr(data, "apple_enabled", False)) != apple_enabled_before:
             # Search reads the saved switch on its next request. The live
             # settings page also needs the status light refreshed now.
