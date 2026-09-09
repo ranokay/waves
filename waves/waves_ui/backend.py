@@ -370,6 +370,9 @@ _NUMBER_FIELDS = [
     # Setup wizard (issue #31): wrapper HTTP API port override. 0 means pick
     # a free high port; rendered as a plain number field in the Apple section.
     "apple_wrapper_port",
+    # Session supervision (issue #33, spec §3): proactive Apple pacing, same
+    # shape as TIDAL's api_rate_limit_* (pause after N songs for N seconds).
+    "apple_pacing_batch_size",
 ]
 # Second-scale floats (Advanced), rendered as a decimal stepper.
 _FLOAT_FIELDS = [
@@ -377,6 +380,10 @@ _FLOAT_FIELDS = [
     "download_delay_sec_max",
     "api_rate_limit_delay_sec",
     "apple_integrity_retry_delay_sec",
+    # Session supervision (issue #33, spec §3): the proactive Apple pause
+    # length, and the idle timeout after which the sidecar stops itself.
+    "apple_pacing_delay_sec",
+    "apple_wrapper_idle_sec",
 ]
 # Waves' opinionated defaults layered over the engine's stock dataclass defaults.
 # Applied once on a brand-new install (_apply_first_run_defaults) and restored
@@ -917,6 +924,9 @@ _FIELD_LABELS = {
     "apple_quarantine_keep": "Keep quarantined files",
     "apple_integrity_retries": "Integrity retries (Apple)",
     "apple_integrity_retry_delay_sec": "Integrity retry delay (s)",
+    "apple_pacing_batch_size": "Pause every N songs (Apple)",
+    "apple_pacing_delay_sec": "Length of that pause (s, Apple)",
+    "apple_wrapper_idle_sec": "Wrapper idle stop (s, Apple)",
     "quality_video": "Video quality",
     "downloads_concurrent_max": "Concurrent track downloads",
     "download_dolby_atmos": "Download Dolby Atmos",
@@ -3927,6 +3937,20 @@ class WavesBridge(LibraryMixin, QObject):
         # held from schedule until the worker finishes, never touched by
         # inline stub probes.
         self._apple_container_refresh_lock = Lock()
+        # Session supervision (issue #33, spec §3): the lazy sidecar's
+        # health/idle lifecycle. The supervisor is pure (injectable runner
+        # and HTTP probe) so workers drive it without touching Qt; the
+        # last-activity stamp lives here beside it.
+        try:
+            from waves.apple_supervision import SidecarSupervisor
+
+            self._apple_supervisor = SidecarSupervisor(manager=self._apple_runtime)
+        except Exception:
+            logger.debug("Apple sidecar supervisor unavailable", exc_info=True)
+            self._apple_supervisor = None
+        self._apple_last_activity = 0.0
+        self._apple_idle_timer = None
+        self._apple_idle_lock = Lock()
         try:
             self.threadpool.start(Worker(self._refresh_apple_container_cache))
         except Exception:
@@ -12218,9 +12242,32 @@ class WavesBridge(LibraryMixin, QObject):
         ok = fail = skipped = unavailable = quarantined = 0
         failed_names: list[str] = []
         landed: list = []
+        # Session supervision (issue #33, spec §3): the sidecar starts lazily
+        # on the first Apple download that needs it. Cookies-tier asks (HIGH)
+        # never touch it; only a LOSSLESS-or-better ask waits here.
+        try:
+            need_wrapper = bool(self._apple_needs_wrapper(requested_rank))
+        except Exception:
+            need_wrapper = False
+        if need_wrapper:
+            try:
+                ensured = self._apple_ensure_sidecar(qid, job_abort, need_wrapper=True)
+            except Exception:
+                logger.debug("Apple sidecar ensure failed; proceeding to fetch", exc_info=True)
+                ensured = True
+            if not ensured:
+                raise _AppleAborted()
         for pos, row in enumerate(rows, start=1):
             if job_abort.is_set():
                 break
+            # Proactive pacing (issue #33, spec §3): pause after N songs for
+            # N seconds, same shape as TIDAL's. STOP lands promptly.
+            try:
+                pace_ok = self._apple_pace_if_due(pos, job_abort, qid)
+            except Exception:
+                pace_ok = True
+            if pace_ok is False:
+                raise _AppleAborted()
             track_id = str(row.get("id"))
             # Atmos rows skip stereo-only tracks (no Atmos to fetch); stereo
             # rows fetch stereo for every track (every Apple song has stereo).
@@ -12326,18 +12373,59 @@ class WavesBridge(LibraryMixin, QObject):
                         )
                         break
                     except Exception as exc:
-                        throttled = provider.classify_refusal(exc).kind is RefusalKind.THROTTLED and attempts < len(
-                            _APPLE_THROTTLE_WAITS
-                        )
+                        # A dead sidecar holds the row, never fails it: one
+                        # clear message, automatic resume when it returns.
+                        try:
+                            from waves.apple_supervision import is_wrapper_down_error
+                        except Exception:
+                            is_wrapper_down_error = None
+                        try:
+                            down = bool(is_wrapper_down_error(exc)) if callable(is_wrapper_down_error) else False
+                        except Exception:
+                            down = False
+                        if down:
+                            logger.warning("Apple runtime down mid-run; holding %s", diagnostics.content(track_id))
+                            with contextlib.suppress(Exception):
+                                self._apple_set_held(qid)
+                            try:
+                                ensured = self._apple_ensure_sidecar(qid, job_abort, need_wrapper=True)
+                            except Exception:
+                                logger.debug("Apple sidecar re-ensure failed", exc_info=True)
+                                ensured = False
+                            if not ensured or job_abort.is_set():
+                                raise _AppleAborted() from exc
+                            continue
+                        try:
+                            from waves.apple_supervision import THROTTLE_MAX_ATTEMPTS
+                        except Exception:
+                            THROTTLE_MAX_ATTEMPTS = len(_APPLE_THROTTLE_WAITS)
+                        try:
+                            throttled = provider.classify_refusal(exc).kind is RefusalKind.THROTTLED and int(
+                                attempts
+                            ) < int(THROTTLE_MAX_ATTEMPTS)
+                        except Exception:
+                            throttled = False
                         if not throttled:
                             raise
-                        wait = _APPLE_THROTTLE_WAITS[attempts]
+                        try:
+                            wait = float(self._apple_throttle_delay(attempts, exc))
+                        except Exception:
+                            wait = 5.0
                         attempts += 1
                         logger.warning(
-                            "Apple rate-limited this job; retrying %s in %ss", diagnostics.content(track_id), wait
+                            "Apple rate-limited this job; retrying %s in %ss",
+                            diagnostics.content(track_id),
+                            round(wait, 1),
                         )
-                        self._set_status(f"Apple is rate-limiting; retrying in {int(wait)}s…")
-                        if not self._apple_sleep_abortable(wait, job_abort):
+                        try:
+                            waited = self._apple_throttle_wait(qid, wait, job_abort, track_id)
+                        except Exception:
+                            # Old test stubs without the countdown helper keep
+                            # the previous abortable sleep there.
+                            with contextlib.suppress(Exception):
+                                self._set_status(f"Apple is rate-limiting; retrying in {int(wait)}s…")
+                            waited = self._apple_sleep_abortable(wait, job_abort)
+                        if not waited:
                             raise _AppleAborted() from exc
             except AppleTrackUnavailable as exc:
                 unavailable += 1
@@ -12380,6 +12468,10 @@ class WavesBridge(LibraryMixin, QObject):
                 continue
             ok += 1
             landed.append(pathlib.Path(delivered["path"]))
+            # Wrapper work stamps the idle clock so an in-flight run never
+            # looks idle to the sidecar stop.
+            with contextlib.suppress(Exception):
+                self._apple_note_activity()
             # A verified copy landing clears the skip-list (REDOWNLOAD's way
             # back; also clears a stale mark when Apple re-encoded). The
             # fetched Version clears its own mark (check_version above).
@@ -12456,6 +12548,397 @@ class WavesBridge(LibraryMixin, QObject):
             if remaining <= 0:
                 return True
             time.sleep(min(0.2, remaining))
+
+    # ----- Apple session supervision (issue #33, spec §3) --------------------
+    def _apple_setting(self, name: str, default):
+        """One Apple supervision setting off the live config, defensively.
+
+        Old unit-test stubs bind the runner without these fields; they read
+        as the default (pacing/idle off) so they never pause or stop.
+        """
+        try:
+            data = getattr(getattr(self, "settings", None), "data", None)
+            value = getattr(data, name, default)
+        except Exception:
+            return default
+        else:
+            return value if value is not None else default
+
+    def _apple_pacing_policy(self) -> tuple[int, float]:
+        """Proactive Apple pacing: pause after N songs for N seconds.
+
+        Same shape as TIDAL's api_rate_limit_*. Read on every track (a
+        settings change takes effect on the next download, never the next
+        restart) and best-effort: a value that cannot be read means no
+        pause, never a download that will not start. Old test stubs without
+        the fields read as (0, 0.0) so they never pause.
+        """
+        try:
+            from waves.apple_supervision import pacing_policy
+        except Exception:
+            return 0, 0.0
+        try:
+            return pacing_policy(
+                self._apple_setting("apple_pacing_batch_size", 0),
+                self._apple_setting("apple_pacing_delay_sec", 0.0),
+            )
+        except Exception:
+            return 0, 0.0
+
+    def _apple_pace_if_due(self, pos_1based: int, job_abort, qid: int = 0) -> bool:
+        """Stand back when this 1-based track opens a new Apple pacing batch.
+
+        Returns False only when STOP lands mid-pause (the caller aborts the
+        job). The pause is a deliberate stall, logged at INFO like TIDAL's
+        so a support bundle names it instead of showing a silent gap.
+        """
+        try:
+            from waves.apple_supervision import pacing_due, pacing_message
+        except Exception:
+            return True
+        every, seconds = self._apple_pacing_policy()
+        if not every or seconds <= 0:
+            return True
+        try:
+            due = pacing_due(int(pos_1based), int(every))
+        except Exception:
+            due = False
+        if not due:
+            return True
+        try:
+            self.fn_logger.info(pacing_message(seconds, every))
+        except Exception:
+            logger.info("Apple pacing pause for %ss after %s songs", seconds, every)
+        try:
+            self._set_status(f"Pausing Apple downloads for {float(seconds):g}s…")
+        except Exception:
+            logger.debug("Apple pacing status failed", exc_info=True)
+        return bool(self._apple_sleep_abortable(float(seconds), job_abort))
+
+    def _apple_throttle_delay(self, attempt: int, exc) -> float:
+        """Reactive 429 wait: Retry-After wins, else exponential, capped."""
+        try:
+            from waves.apple_supervision import parse_retry_after, throttle_delay
+        except Exception:
+            try:
+                return float(_APPLE_THROTTLE_WAITS[min(int(attempt), len(_APPLE_THROTTLE_WAITS) - 1)])
+            except Exception:
+                return 5.0
+        try:
+            retry_after = parse_retry_after(exc)
+        except Exception:
+            retry_after = None
+        try:
+            return float(throttle_delay(int(attempt), retry_after))
+        except Exception:
+            return 5.0
+
+    def _apple_throttle_wait(self, qid: int, wait: float, job_abort, track_id: str = "") -> bool:
+        """Wait out a license-exchange 429 with a visible resume countdown.
+
+        The row stays in Downloading with its countdown (a presentation, not
+        a new state); STOP lands promptly and returns False. RETRY ALL covers
+        anything manually stopped because a stop settles the row cancelled.
+        Ticks the countdown about once a second so the drawer visibly counts
+        down instead of stalling silently.
+        """
+        try:
+            from waves.apple_supervision import throttled_message
+        except Exception:
+            throttled_message = lambda s: f"Apple is rate-limiting; retrying in {int(s)}s…"
+        try:
+            total = max(0.0, float(wait))
+        except (TypeError, ValueError):
+            total = 0.0
+        deadline = time.monotonic() + total
+        try:
+            self._set_status(throttled_message(total))
+        except Exception:
+            logger.debug("Apple throttle status failed", exc_info=True)
+        set_status = getattr(self, "_set_queue_status", None)
+        if callable(set_status):
+            try:
+                set_status(int(qid), "running", throttled_message(total))
+            except Exception:
+                logger.debug("Apple throttle row update failed", exc_info=True)
+        last_shown = -1
+        while True:
+            if job_abort.is_set():
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            shown = round(remaining)
+            if shown != last_shown and shown >= 0:
+                last_shown = shown
+                with contextlib.suppress(Exception):
+                    self._set_status(throttled_message(remaining))
+                if callable(set_status):
+                    with contextlib.suppress(Exception):
+                        set_status(int(qid), "running", throttled_message(remaining))
+            time.sleep(min(0.25, remaining))
+
+    def _apple_set_held(self, qid: int, detail: str = "") -> None:
+        """Hold an Apple row with one clear message (presentation, not a state).
+
+        The row sits under Queued with its reason; it resumes automatically
+        when the runtime returns and respects STOP while it waits.
+        """
+        try:
+            from waves.apple_supervision import held_message
+        except Exception:
+            held_message = lambda d="": "Held: the Apple runtime is not running. Waiting for it to return."
+        try:
+            message = held_message(detail)
+        except Exception:
+            message = "Held: the Apple runtime is not running. Waiting for it to return."
+        set_status = getattr(self, "_set_queue_status", None)
+        if callable(set_status):
+            try:
+                set_status(int(qid), "queued", message)
+            except Exception:
+                logger.debug("Apple held row update failed", exc_info=True)
+        try:
+            self._set_status(message)
+        except Exception:
+            logger.debug("Apple held status failed", exc_info=True)
+
+    def _apple_needs_wrapper(self, requested_rank: int = -1) -> bool:
+        """Whether this job's ask can need the wrapper sidecar at all.
+
+        The cookies tier serves HIGH alone (AAC 256 + Atmos); only a
+        LOSSLESS-or-better ask reaches for the wrapper's ALAC path. Reads
+        defensively so old stubs without the ladder still answer.
+        """
+        try:
+            from waves.constants import QualityTier, quality_rank
+        except Exception:
+            return False
+        try:
+            want = int(requested_rank)
+        except (TypeError, ValueError):
+            return False
+        try:
+            return want >= int(quality_rank(QualityTier.LOSSLESS))
+        except Exception:
+            return False
+
+    def _apple_supervisor_for_job(self):
+        """The sidecar supervisor for Apple jobs, or None on plain stubs."""
+        sup = getattr(self, "_apple_supervisor", None)
+        if sup is not None:
+            return sup
+        # Plain unit-test stubs bind _run_apple_job without a bridge __init__:
+        # build a throwaway supervisor around whatever runtime they carry so
+        # held/idle paths still exercise without Qt.
+        try:
+            from waves.apple_supervision import SidecarSupervisor
+
+            return SidecarSupervisor(manager=getattr(self, "_apple_runtime", None))
+        except Exception:
+            return None
+
+    def _apple_wrapper_port_for_job(self) -> int:
+        """The wrapper HTTP port this job would probe, or 0 when unset."""
+        manager = getattr(self, "_apple_runtime", None)
+        try:
+            persisted = int(manager.read_port()) if manager is not None else 0
+        except Exception:
+            persisted = 0
+        try:
+            preferred = int(self._apple_setting("apple_wrapper_port", 0) or 0)
+        except (TypeError, ValueError):
+            preferred = 0
+        if 1024 <= preferred <= 65535:
+            return preferred
+        return persisted if 1 <= persisted <= 65535 else 0
+
+    def _apple_ensure_sidecar(self, qid: int, job_abort, *, need_wrapper: bool) -> bool:
+        """Lazily start the sidecar when this job needs it; hold until ready.
+
+        Search, browsing and link resolution never call here (they ride the
+        dev token alone). Returns True when the job may proceed, False when
+        STOP landed while held. When the runtime is missing or dies, the row
+        is HELD with one clear message and re-probed until it returns; the
+        wait is the HELD_POLL tick, never a failure, and manual retry covers
+        a manual stop. Never re-provisions: the runtime is the setup wizard's
+        artifact.
+        """
+        if not need_wrapper:
+            return True
+        if job_abort.is_set():
+            return False
+        # No manager and no wrapper URL on a plain stub means there is no
+        # sidecar to supervise: proceed so old tests keep fetching.
+        manager = getattr(self, "_apple_runtime", None)
+        provider = None
+        try:
+            provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+        except Exception:
+            provider = None
+        wrapper_url = ""
+        try:
+            wrapper_url = str(getattr(provider, "wrapper_url", "") or "").strip()
+        except Exception:
+            wrapper_url = ""
+        if manager is None and not wrapper_url:
+            return True
+        try:
+            from waves.apple_supervision import HELD_POLL_SEC
+        except Exception:
+            HELD_POLL_SEC = 5.0
+        sup = self._apple_supervisor_for_job()
+        # The wrapper tier was never set up (no URL and no persisted port):
+        # the cookies path serves alone, exactly as before supervision.
+        # Only a configured tier that stops answering holds.
+        port_probe = self._apple_wrapper_port_for_job()
+        if not wrapper_url and not port_probe:
+            return True
+        # Poll until the supervised port exists and answers, or STOP lands.
+        # The wizard may pick the port concurrently; the fast path below
+        # covers the already-running case without ever sleeping.
+        while not job_abort.is_set():
+            port = self._apple_wrapper_port_for_job()
+            if sup is not None and port:
+                try:
+                    if sup.is_ready(port):
+                        with contextlib.suppress(Exception):
+                            sup.note_activity()
+                        with contextlib.suppress(Exception):
+                            self._apple_note_activity()
+                        return True
+                except Exception:
+                    logger.debug("Wrapper health probe failed", exc_info=True)
+                try:
+                    started = sup.ensure_started(http_port=port)
+                except Exception:
+                    logger.debug("Wrapper ensure-start failed", exc_info=True)
+                    started = False
+                if started:
+                    with contextlib.suppress(Exception):
+                        self._apple_note_activity()
+                    with contextlib.suppress(Exception):
+                        set_status = getattr(self, "_set_queue_status", None)
+                        if callable(set_status):
+                            set_status(int(qid), "running", "")
+                    return True
+                # Still down: stay held with the same one message, never a
+                # wall of failures.
+                self._apple_set_held(qid)
+            else:
+                # Configured for the wrapper tier but no supervised port yet:
+                # the wizard has not picked one. Hold with the setup words
+                # instead of failing the wall.
+                self._apple_set_held(qid, "Finish setup in Settings under Providers, Apple Music.")
+            if not self._apple_sleep_abortable(HELD_POLL_SEC, job_abort):
+                return False
+        return False
+
+    def _apple_note_activity(self) -> None:
+        """Stamp wrapper work now for the idle-stop clock."""
+        with contextlib.suppress(Exception):
+            self._apple_last_activity = time.monotonic()
+        sup = getattr(self, "_apple_supervisor", None)
+        if sup is not None:
+            with contextlib.suppress(Exception):
+                sup.note_activity()
+
+    def _apple_idle_timeout(self) -> float:
+        """The supervised idle stop delay, or 0 when it never stops."""
+        try:
+            return max(0.0, float(self._apple_setting("apple_wrapper_idle_sec", 0.0) or 0.0))
+        except (TypeError, ValueError, AttributeError):
+            return 0.0
+
+    def _schedule_apple_idle_stop(self) -> None:
+        """Stop the idle sidecar after its timeout, unless Apple work lands."""
+        timeout = self._apple_idle_timeout()
+        if timeout <= 0:
+            return
+        sup = getattr(self, "_apple_supervisor", None)
+        if sup is None:
+            return
+        try:
+            lock = getattr(self, "_apple_idle_lock", None)
+            if lock is not None and not lock.acquire(blocking=False):
+                return
+        except Exception:
+            lock = None
+        try:
+            import threading as _threading
+
+            timer = _threading.Timer(float(timeout), self._apple_idle_stop_if_idle)
+            timer.daemon = True
+            with contextlib.suppress(Exception):
+                self._apple_idle_timer = timer
+            timer.start()
+        except Exception:
+            logger.debug("Apple idle-stop schedule failed", exc_info=True)
+            if lock is not None:
+                with contextlib.suppress(Exception):
+                    lock.release()
+        else:
+            if lock is not None:
+                with contextlib.suppress(Exception):
+                    lock.release()
+
+    def _apple_idle_stop_if_idle(self) -> None:
+        """Worker body: stop the sidecar only when it has truly idled.
+
+        One clock answers: the supervisor owns the activity stamp (the
+        bridge mirrors it on every stamp), so there is no second clock to
+        diverge from. When work is busy or the timeout has not passed yet,
+        the countdown is rescheduled instead of dropped, so a job ending
+        just before the timeout still stops the sidecar once it truly idles.
+        Note on `--restart unless-stopped`: an explicit `docker stop` stays
+        stopped (the policy restarts exited containers on daemon restart,
+        never a container stopped on purpose); the next Apple download
+        restarts it by name.
+        """
+        try:
+            timeout = self._apple_idle_timeout()
+            sup = getattr(self, "_apple_supervisor", None)
+            if timeout <= 0 or sup is None:
+                return
+            try:
+                busy = self._apple_busy()
+            except Exception:
+                busy = False
+            try:
+                idle = sup.should_stop(timeout, apple_busy=busy)
+            except Exception:
+                idle = False
+            if not idle:
+                # Not yet idle (busy or recent activity): countdown again
+                # from now instead of dropping the stop.
+                with contextlib.suppress(Exception):
+                    self._schedule_apple_idle_stop()
+                return
+            try:
+                stopped = sup.stop()
+            except Exception:
+                logger.debug("Apple idle stop failed", exc_info=True)
+                return
+            if stopped:
+                logger.info("Apple wrapper sidecar stopped after %.0fs idle", timeout)
+        finally:
+            pass
+
+    def _apple_busy(self) -> bool:
+        """Whether any download work is queued or running right now.
+
+        Over-approximates on purpose: the idle stop only fires when nothing
+        at all is queued or running, so it can never stop the sidecar from
+        under an Apple job, whatever provider the running row belongs to.
+        """
+        with contextlib.suppress(Exception):
+            if getattr(self, "_running_qid", None) is not None:
+                return True
+        with contextlib.suppress(Exception):
+            pending = getattr(self, "_pending_qids", None)
+            if pending:
+                return len(pending) > 0
+        return False
 
     def _apple_track_relative(
         self,
@@ -13362,6 +13845,14 @@ class WavesBridge(LibraryMixin, QObject):
             self._job_aborts.pop(qid, None)
             self._release_job_signals(qid)
             self._job_dls.pop(qid, None)
+            # Session supervision (issue #33): an Apple job ending restarts
+            # the idle clock's countdown; the sidecar stops itself when no
+            # download has needed it for the tuned timeout.
+            try:
+                if spec.provider_id == CTX_APPLE:
+                    self._schedule_apple_idle_stop()
+            except Exception:
+                logger.debug("Apple idle-stop schedule failed", exc_info=True)
 
     def _pump_queue(self) -> None:
         """Start the next queued row's download if nothing is running.
@@ -18094,6 +18585,9 @@ class WavesBridge(LibraryMixin, QObject):
                     "path_binary_nm3u8dlre",
                     "apple_apk_path",
                     "apple_wrapper_port",
+                    "apple_pacing_batch_size",
+                    "apple_pacing_delay_sec",
+                    "apple_wrapper_idle_sec",
                     "apple_quarantine_dir",
                     "apple_quarantine_keep",
                 ],

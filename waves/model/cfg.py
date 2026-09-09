@@ -82,6 +82,14 @@ class Settings:
     # quarantines after 1 retry. Pacing between integrity retries.
     apple_integrity_retries: int = 2
     apple_integrity_retry_delay_sec: float = 5.0
+    # Session supervision + pacing (issue #33, spec §3): proactive Apple
+    # pacing, same shape as TIDAL's api_rate_limit_* (pause after N songs
+    # for N seconds; initial 30 s every 25 songs, fully tunable), and the
+    # idle timeout after which the supervised sidecar stops itself
+    # (initial 5 minutes, Advanced-tunable).
+    apple_pacing_batch_size: int = 25
+    apple_pacing_delay_sec: float = 30.0
+    apple_wrapper_idle_sec: float = 300.0
     # Quarantine: where persistently-bad Apple files land. Empty means the
     # default "Waves Quarantine" folder inside the download folder; a set value
     # is the full folder path. The folder is always excluded from the library
@@ -233,7 +241,7 @@ class HelpSettings:
         "*.txt. Applies to every enabled provider."
     )
     lyrics_file_synced_only: str = (
-        "Only save a lyrics file when timed (synced) lyrics exist; untimed lyrics " "then produce no *.txt file."
+        "Only save a lyrics file when timed (synced) lyrics exist; untimed lyrics then produce no *.txt file."
     )
     lyrics_prefer_lrclib: str = (
         "Fetch lyrics from the community LRCLIB database first (the source behind LRCGet), "
@@ -280,6 +288,15 @@ class HelpSettings:
         "not bit-perfect fidelity."
     )
     apple_integrity_retry_delay_sec: str = "How long to wait between Apple integrity retries, in seconds."
+    apple_pacing_batch_size: str = (
+        "How many Apple songs to download before pausing, so a long run does not ask Apple too much at once. "
+        "0 never pauses."
+    )
+    apple_pacing_delay_sec: str = "How long that Apple pause lasts, in seconds. 0 never pauses."
+    apple_wrapper_idle_sec: str = (
+        "How long the Apple wrapper sidecar idles with no Apple download needing it before it stops itself, "
+        "in seconds. 0 never stops it."
+    )
     apple_quarantine_dir: str = (
         "Where Apple tracks that fail their integrity check are kept. Empty uses the default "
         "'Waves Quarantine' folder inside the download folder. The folder is excluded from the "

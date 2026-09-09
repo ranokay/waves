@@ -247,6 +247,10 @@ ignore = [
 # install is one linear sequence (C901), and its errors carry deliberately
 # descriptive messages (TRY003).
 "waves/apple_runtime.py" = ["S603", "S607", "C901", "TRY003"]
+# Session supervision (issue #33): it starts/stops the wrapper sidecar via the
+# container runtime and probes its health endpoint (S603/S607), and its
+# helpers carry deliberately descriptive messages (TRY003).
+"waves/apple_supervision.py" = ["S603", "S607", "TRY003"]
 # The updater downloads and swaps a packaged build, so it intentionally shells
 # out (S603/S607) for the platform swap/relaunch; install()/_apply are linear
 # sequences (C901); and its errors carry deliberately descriptive messages (TRY003).

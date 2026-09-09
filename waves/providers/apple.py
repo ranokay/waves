@@ -972,9 +972,14 @@ class AppleProvider(Provider):
 
     def classify_refusal(self, exc) -> Refusal:
         """Apple engine errors into the shared refusal vocabulary."""
-        from waves.apple_engine import AppleCredentialsError
+        from waves.apple_engine import AppleCredentialsError, AppleWrapperDown
 
         if isinstance(exc, AppleCredentialsError):
+            return Refusal(RefusalKind.FAILURE, str(exc))
+        if isinstance(exc, AppleWrapperDown):
+            # The sidecar being down is HELD at the runner (presentation, not
+            # a state); inside the refusal vocabulary it stays retryable
+            # FAILURE, never an unavailable refusal.
             return Refusal(RefusalKind.FAILURE, str(exc))
         name = type(exc).__name__
         text = f"{name}: {exc}"
