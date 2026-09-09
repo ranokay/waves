@@ -2281,10 +2281,18 @@ class LibraryIndex:
         # Version: with flat placement the walk's first file can be an Atmos
         # twin whose provider spells the album differently, and judging the
         # canonical siblings against it zeroes the count and files the album
-        # under the wrong edition. Stereo first; an all-Atmos folder promotes
-        # everything, so the fallback is canonical too. The per-file rows keep
-        # walk order (the representative row first) -- order carries nothing.
-        rep = stereo[0][1] if stereo else tags
+        # under the wrong edition. The first proven-stereo file speaks for
+        # the release; an unclassified file (transient probe failure) only
+        # steps in when no classified stereo row exists, and a promoted
+        # Atmos row only when nothing else can. The per-file rows keep walk
+        # order (the representative row first) -- order carries nothing.
+        classified = [(n, t) for (n, t, a) in read if str(a or "").strip().lower() == "stereo"]
+        if classified:
+            rep = classified[0][1]
+        elif stereo:
+            rep = stereo[0][1]
+        else:
+            rep = tags
         # The representative's row carries its read Version through, unknown
         # included: persisting a guess would retire the folder from its
         # classification retry (see _track_row and the freshness gate).

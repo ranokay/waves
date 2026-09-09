@@ -687,6 +687,32 @@ def test_album_identity_comes_from_a_canonical_file(tmp_path):
     assert album["has_atmos"] is True
 
 
+def test_unknown_first_file_yields_to_classified_stereo(tmp_path):
+    """An unclassified first file must not establish the album identity
+    ahead of classified stereo rows: the release speaks through proven
+    stereo first."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["00.m4a", "01.flac", "02.flac"])
+
+    def read_tags(path):
+        name = os.path.basename(path)
+        if name == "00.m4a":
+            return _tags(album="Album (Deluxe)", title="One")
+        return _tags(title={"01.flac": "One", "02.flac": "Two"}[name])
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: None if p.endswith("00.m4a") else "stereo",
+    )
+    assert idx.refresh(lib) == 1
+    album = next(idx.iter_albums())
+    assert album["title"] == "Album"
+    # The stray dissents and loses to the overwhelming majority (a zero
+    # count was the bug: the unknown row set the question).
+    assert album["tracks"] == 2
+
+
 def test_promoted_first_file_still_votes(tmp_path):
     """A promoted atmos-only first file is a canonical entry with a voice:
     a stray's dissent counts (and loses to the overwhelming majority)
