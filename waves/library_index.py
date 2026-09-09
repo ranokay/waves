@@ -2274,9 +2274,7 @@ class LibraryIndex:
         # for counting but testifies to nothing, so it can neither badge nor
         # block. Legacy rows classify on their one backfill re-read, so the
         # badge follows a folder change by at most one scan.
-        has_atmos = any(_is_atmos_file(a) for (_, _, a) in read) and any(
-            str(a or "").strip().lower() == "stereo" for (_, _, a) in read
-        )
+        has_atmos = bool(atmos) and any(str(a or "").strip().lower() == "stereo" for (_, _, a) in read)
         # The album-level facts come from a canonical file, never an attached
         # Version: with flat placement the walk's first file can be an Atmos
         # twin whose provider spells the album differently, and judging the
