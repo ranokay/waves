@@ -2594,7 +2594,9 @@ Item {
                                                         Text {
                                                             id: stepTxt
                                                             anchors.centerIn: parent
-                                                            text: "CONTINUE"
+                                                            // The button says what it does (Remove,
+                                                            // Pull image…), never a bare Continue.
+                                                            text: (modelData.action_label !== undefined && String(modelData.action_label) !== "" ? String(modelData.action_label) : "CONTINUE").toUpperCase()
                                                             textFormat: Text.PlainText
                                                             color: page.textHi; font.pixelSize: 12
                                                             font.family: page.uiFont; font.bold: true; font.letterSpacing: page.btnTrack

@@ -240,30 +240,37 @@ def detect_container_runtime(runner=None, timeout: int = 10) -> dict:
     }
 
 
-def gentle_start_command() -> list[str] | None:
+def gentle_start_command(name: str = "docker") -> list[str] | None:
     """The gentle start attempt for an idle container runtime, if any.
 
-    macOS only: ``open -a Docker`` wakes Docker Desktop without installing
-    anything. Other platforms return None: the wizard guides instead.
+    macOS only: ``open -a`` wakes the desktop app without installing
+    anything (Docker Desktop, or Podman Desktop for a Podman runtime).
+    Other platforms return None: the wizard guides instead.
     """
-    if platform.system() == "Darwin":
-        return ["open", "-a", "Docker"]
-    return None
+    if platform.system() != "Darwin":
+        return None
+    app = "Podman Desktop" if name == "podman" else "Docker"
+    return ["open", "-a", app]
 
 
-def attempt_gentle_start(runner=None) -> bool:
-    """Try the gentle start; return True when one was attempted."""
-    cmd = gentle_start_command()
+def attempt_gentle_start(runner=None, name: str = "docker") -> bool:
+    """Try the gentle start for the detected runtime; True when it launched.
+
+    Returns False when there is no gentle start for this platform/runtime
+    or the launch itself failed, so the caller falls back to the manual
+    guidance instead of claiming an attempt.
+    """
+    cmd = gentle_start_command(name)
     if not cmd:
         return False
     run = runner or (lambda *a, **k: subprocess.run(*a, **k))
     try:
-        run(cmd, capture_output=True, timeout=30)
+        proc = run(cmd, capture_output=True, timeout=30)
     except Exception:
         logger.debug("Gentle container start failed", exc_info=True)
         return False
     else:
-        return True
+        return proc.returncode == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -434,14 +441,12 @@ def describe_setup(
         state = "not_set_up"
     tier = "none"
     if state == "signed_in":
-        tier = "cookies" if cookies_ready and not runtime_ready else ("full" if runtime_ready else "cookies")
-        # A runtime plus a session is the full tier; cookies alone is the
-        # fallback tier. Either unlocks downloads; the wrapper slice raises
-        # the ceiling from HIGH when it lands.
+        # The cookies tier: AAC 256 + Atmos unlocked. The fetch binary is
+        # shared download plumbing, not a tier upgrade; the full tier
+        # (wrapper ALAC) names itself once a wrapper session exists.
+        tier = "cookies"
     elif state == "runtime_ready":
         tier = "runtime"
-    if state == "signed_in" and runtime_ready and cookies_ready:
-        tier = "full"
     next_step = {
         "off": "Turn on Apple Music to start setup.",
         "not_set_up": "Continue setup: provision the runtime or add a cookies export.",

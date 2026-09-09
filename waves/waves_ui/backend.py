@@ -1048,6 +1048,19 @@ def _apple_status(
     return {"state": described["state"], "word": described["word"]}
 
 
+# Button words for the wizard steps' actions. A step button says what it
+# does ("Remove", not "Continue"), so a destructive action never wears a
+# next-step mask. QML uppercases for the pill style.
+_APPLE_STEP_ACTION_LABELS = {
+    "apple_update_runtime": "Install",
+    "apple_remove_runtime": "Remove",
+    "apple_pull_image": "Pull image",
+    "apple_start_container": "Start",
+    "apple_ensure_port": "Set port",
+    "apple_setup": "Refresh",
+}
+
+
 # Batch size for "My Tidal" infinite scroll. Each category is fetched one page
 # at a time (with a network offset) and QML renders the rows lazily in a
 # virtualised ListView, prefetching the next page before the user hits the
@@ -11865,6 +11878,21 @@ class WavesBridge(LibraryMixin, QObject):
                 logger.debug("Apple setup route emit failed", exc_info=True)
             self.downloadState.emit(media_id, "")
             return
+        # The engine pulls every tier through N_m3u8DL-RE: without a binary
+        # the row would queue and then fail, so route to the wizard's
+        # runtime step instead. Plain test stubs predate the helper and keep
+        # the old cookies-only gate there.
+        binary_gate = getattr(self, "_apple_fetch_binary_ready", None)
+        if callable(binary_gate) and not binary_gate():
+            self._set_status(
+                "Apple downloads need the N_m3u8DL-RE fetch binary: open Settings, Providers, Apple Music to provision it"
+            )
+            try:
+                self.appleSetupRequested.emit("runtime")
+            except Exception:
+                logger.debug("Apple setup route emit failed", exc_info=True)
+            self.downloadState.emit(media_id, "")
+            return
         gate = self._download_gate()
         if gate == "block":
             self.downloadState.emit(media_id, "")
@@ -17026,8 +17054,10 @@ class WavesBridge(LibraryMixin, QObject):
 
         Each step carries ``key``/``label``/``state`` (``done``, ``todo``,
         or ``attention``)/``detail``/``action`` (the QML action key that
-        advances it, ``""`` when it needs no click). The QML stays dumb:
-        it renders this list and calls back the named actions.
+        advances it, ``""`` when it needs no click)/``action_label`` (the
+        button's own words, so a destructive action never wears a
+        "continue" mask). The QML stays dumb: it renders this list and
+        calls back the named actions.
         """
         steps = [
             {
@@ -17036,12 +17066,13 @@ class WavesBridge(LibraryMixin, QObject):
                 "state": "done" if enabled else "todo",
                 "detail": "Catalog search joins the results once enabled; search needs no account.",
                 "action": "",
+                "action_label": "",
             }
         ]
         if cookies_verified:
             cookies_state, cookies_detail = (
                 "done",
-                "Signed-in cookies export: AAC 256 and Atmos downloads work now, no runtime needed.",
+                "Signed-in cookies export verified. AAC 256 and Atmos downloads unlock once the fetch binary below is ready; no container runtime needed.",
             )
         elif cookies_path.strip():
             cookies_state, cookies_detail = (
@@ -17056,10 +17087,11 @@ class WavesBridge(LibraryMixin, QObject):
         steps.append(
             {
                 "key": "cookies",
-                "label": "Cookies tier (no runtime)",
+                "label": "Cookies tier (no container runtime)",
                 "state": cookies_state,
                 "detail": cookies_detail,
                 "action": "",
+                "action_label": "",
             }
         )
         if runtime_state == "managed":
@@ -17083,6 +17115,7 @@ class WavesBridge(LibraryMixin, QObject):
                 "state": runtime_step[0],
                 "detail": runtime_step[1],
                 "action": runtime_step[2],
+                "action_label": _APPLE_STEP_ACTION_LABELS.get(runtime_step[2], ""),
             }
         )
         if container.get("running"):
@@ -17106,6 +17139,7 @@ class WavesBridge(LibraryMixin, QObject):
                 "state": container_step[0],
                 "detail": container_step[1],
                 "action": container_step[2],
+                "action_label": _APPLE_STEP_ACTION_LABELS.get(container_step[2], ""),
             }
         )
         if image_pulled:
@@ -17119,6 +17153,7 @@ class WavesBridge(LibraryMixin, QObject):
                 "state": image_step[0],
                 "detail": image_step[1],
                 "action": image_step[2],
+                "action_label": _APPLE_STEP_ACTION_LABELS.get(image_step[2], ""),
             }
         )
         if apk_verified:
@@ -17148,6 +17183,7 @@ class WavesBridge(LibraryMixin, QObject):
                 "state": apk_step[0],
                 "detail": apk_step[1],
                 "action": apk_step[2],
+                "action_label": _APPLE_STEP_ACTION_LABELS.get(apk_step[2], ""),
             }
         )
         steps.append(
@@ -17159,6 +17195,7 @@ class WavesBridge(LibraryMixin, QObject):
                     f"Wrapper API runs at an explicit free high port{(': ' + str(port)) if port else ' (picked at setup)'}."
                 ),
                 "action": "" if port else "apple_ensure_port",
+                "action_label": "" if port else _APPLE_STEP_ACTION_LABELS.get("apple_ensure_port", ""),
             }
         )
         return steps
@@ -17179,8 +17216,11 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(result="QVariant")
     def appleContainerStatus(self) -> dict:
-        """Detect the container runtime; never installs one."""
+        """The container runtime, from the GUI-safe cached probe."""
+        probe = getattr(self, "_apple_container_state", None)
         try:
+            if callable(probe):
+                return probe()
             from waves.apple_runtime import detect_container_runtime
 
             return detect_container_runtime()
@@ -17310,8 +17350,10 @@ class WavesBridge(LibraryMixin, QObject):
         def work() -> None:
             from waves.apple_runtime import attempt_gentle_start
 
+            cache = getattr(self, "_apple_container_cache", None) or {}
+            name = str((cache.get("result") or {}).get("name") or "docker")
             try:
-                attempted = bool(attempt_gentle_start())
+                attempted = bool(attempt_gentle_start(name=name))
             except Exception:
                 logger.debug("Apple gentle container start failed", exc_info=True)
                 attempted = False
@@ -18272,11 +18314,29 @@ class WavesBridge(LibraryMixin, QObject):
         return ""
 
     def _apple_runtime_ready(self) -> bool:
-        """Whether the managed N_m3u8DL-RE is provisioned."""
-        manager = getattr(self, "_apple_runtime", None)
+        """Whether an Apple download can fetch: N_m3u8DL-RE is resolvable.
+
+        Explicit override, managed runtime copy, or a binary on PATH, in
+        that order. The cookies tier needs no container runtime, but the
+        fetch binary is what pulls the encrypted segments, so the light
+        and the download gate both read this, not the managed copy alone.
+        """
+        return self._apple_fetch_binary_ready()
+
+    def _apple_fetch_binary_ready(self) -> bool:
+        """The fetch-binary check behind the light and the download gate."""
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+        data = getattr(getattr(self, "settings", None), "data", None)
+        for candidate in (
+            str(getattr(provider, "nm3u8dlre_path", "") or ""),
+            str(getattr(data, "path_binary_nm3u8dlre", "") or ""),
+        ):
+            if candidate.strip() and pathlib.Path(candidate).expanduser().is_file():
+                return True
         try:
-            return bool(manager is not None and manager.is_installed())
+            return bool(shutil.which("N_m3u8DL-RE"))
         except Exception:
+            logger.debug("Apple fetch-binary PATH probe failed", exc_info=True)
             return False
 
     def _apple_needs_attention(self) -> bool:
@@ -18312,19 +18372,38 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_container_state(self, max_age_s: float = 120.0) -> dict:
         """The container-runtime probe for GUI-thread callers (cached).
 
-        Fresh cache wins (no subprocess at all). Cold or stale cache probes
-        inline with a short timeout so a hung daemon can only stall Settings
-        briefly; workers refresh the cache fully in the background
-        (start-up warm-up, appleStartContainer).
+        Never runs a subprocess on the GUI thread: a fresh cache wins, a
+        stale cache is served while a worker refreshes underneath, and a
+        cold cache answers "checking" while a worker probes (only stub
+        bridges with no worker pool probe inline, briefly). Session
+        supervision owns the fully asynchronous lifecycle; this keeps the
+        wizard's reads free.
         """
         cache = getattr(self, "_apple_container_cache", None)
         if isinstance(cache, dict) and isinstance(cache.get("result"), dict):
             try:
-                if time.time() - float(cache.get("at") or 0) < max_age_s:
-                    return dict(cache["result"])
+                fresh = time.time() - float(cache.get("at") or 0) < max_age_s
             except (TypeError, ValueError):
-                pass
+                fresh = False
+            if not fresh:
+                self._schedule_apple_container_refresh()
+            return dict(cache["result"])
+        if self._schedule_apple_container_refresh():
+            return {"name": "", "available": False, "running": False, "hint": "Checking for a container runtime…"}
         return self._refresh_apple_container_cache(timeout=3)
+
+    def _schedule_apple_container_refresh(self) -> bool:
+        """Refresh the container probe on a worker; False when no pool exists."""
+        pool = getattr(self, "threadpool", None)
+        start = getattr(pool, "start", None)
+        if not callable(start):
+            return False
+        try:
+            start(Worker(self._refresh_apple_container_cache))
+        except Exception:
+            logger.debug("Apple container refresh schedule failed", exc_info=True)
+            return False
+        return True
 
     def _apple_live_flags(self) -> dict:
         """Live inputs for the Apple status light, read off current state."""
@@ -18335,6 +18414,9 @@ class WavesBridge(LibraryMixin, QObject):
         needs_attention = bool(self._apple_needs_attention())
         # A cookies export whose session expired is needs_attention, not
         # signed_in: verify the token marker, not just the file's presence.
+        # Signed in additionally needs the fetch binary: the engine pulls
+        # every tier through N_m3u8DL-RE, so verified cookies without a
+        # binary cannot start a download (the gate below says the same).
         signed_in = False
         if cookies_ready and not needs_attention:
             try:
@@ -18345,7 +18427,7 @@ class WavesBridge(LibraryMixin, QObject):
                     getattr(data, "apple_cookies_path", "") or ""
                 )
                 verify_cookies_file(cookies_path)
-                signed_in = True
+                signed_in = bool(self._apple_fetch_binary_ready())
             except Exception:
                 signed_in = False
                 # File present but no token: the export is stale. That is a

@@ -25,7 +25,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import tarfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -47,6 +49,12 @@ from waves.apple_runtime import (
     wrapper_url,
 )
 from waves.waves_ui.backend import WavesBridge, _apple_status
+
+
+@pytest.fixture(autouse=True)
+def _isolated_path_binaries(monkeypatch):
+    """Bridge light/gate tests must not see the machine's own binaries."""
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
 
 
 def _cookies_file(tmp_path: Path, *, with_token: bool = True) -> str:
@@ -110,9 +118,12 @@ def test_describe_setup_precedence():
     assert describe_setup(enabled=True, runtime_ready=True)["state"] == "runtime_ready"
     assert describe_setup(enabled=True, cookies_ready=True)["state"] == "signed_in"
     assert describe_setup(enabled=True, signed_in=True)["state"] == "signed_in"
-    # Cookies alone unlock the tier with no runtime (spec section 2).
+    # Cookies alone unlock the tier with no container runtime (spec §2);
+    # the fetch binary is shared plumbing, and the full tier names itself
+    # once a wrapper session exists.
     assert describe_setup(enabled=True, cookies_ready=True)["tier"] == "cookies"
-    assert describe_setup(enabled=True, runtime_ready=True, cookies_ready=True)["tier"] == "full"
+    assert describe_setup(enabled=True, runtime_ready=True, cookies_ready=True)["tier"] == "cookies"
+    assert describe_setup(enabled=True, runtime_ready=True)["tier"] == "runtime"
     # Repair beats everything but off.
     assert describe_setup(enabled=True, signed_in=True, needs_attention=True)["state"] == "needs_attention"
     assert describe_setup(enabled=True, runtime_ready=True, signed_in=True)["state"] == "signed_in"
@@ -194,8 +205,28 @@ def test_gentle_start_is_macos_only(monkeypatch):
 
     monkeypatch.setattr(_platform, "system", lambda: "Darwin")
     assert gentle_start_command() == ["open", "-a", "Docker"]
+    assert gentle_start_command("podman") == ["open", "-a", "Podman Desktop"]
     monkeypatch.setattr(_platform, "system", lambda: "Linux")
     assert gentle_start_command() is None
+
+
+def test_gentle_start_reports_only_a_launch(monkeypatch):
+    import platform as _platform
+
+    from waves.apple_runtime import attempt_gentle_start
+
+    monkeypatch.setattr(_platform, "system", lambda: "Darwin")
+
+    def _ok(*a, **k):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def _failing(*a, **k):
+        return SimpleNamespace(returncode=1, stdout="", stderr="nope")
+
+    assert attempt_gentle_start(runner=_ok, name="podman") is True
+    assert attempt_gentle_start(runner=_failing, name="docker") is False
+    monkeypatch.setattr(_platform, "system", lambda: "Linux")
+    assert attempt_gentle_start(runner=_ok) is False
 
 
 # ---- free high port ----------------------------------------------------------- #
@@ -500,14 +531,22 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     stub.settings = SimpleNamespace(data=data)
     stub.providers = {}
     stub._apple_runtime = AppleRuntimeManager(tmp_path)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub, SimpleNamespace)
     stub._apple_runtime_ready = WavesBridge._apple_runtime_ready.__get__(stub, SimpleNamespace)
     stub._apple_needs_attention = WavesBridge._apple_needs_attention.__get__(stub, SimpleNamespace)
     stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
     stub._apple_live_flags = WavesBridge._apple_live_flags.__get__(stub, SimpleNamespace)
     # GUI-thread callers read the cached probe, never a live subprocess:
-    # tests pin the cache instead of touching the machine's runtimes.
-    stub._apple_container_cache = {"at": 0.0, "result": None}
+    # tests pin a fresh absent cache instead of touching the machine's
+    # runtimes (cold-cache tests set their own stale value explicitly).
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "", "available": False, "running": False, "hint": ""},
+    }
     stub._refresh_apple_container_cache = WavesBridge._refresh_apple_container_cache.__get__(stub, SimpleNamespace)
+    stub._schedule_apple_container_refresh = WavesBridge._schedule_apple_container_refresh.__get__(
+        stub, SimpleNamespace
+    )
     stub._apple_container_state = WavesBridge._apple_container_state.__get__(stub, SimpleNamespace)
     stub.appleStatus = WavesBridge.appleStatus.__get__(stub, SimpleNamespace)
     stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub, SimpleNamespace)
@@ -520,14 +559,35 @@ def test_fresh_machine_light_is_not_set_up(tmp_path):
     assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up"}
 
 
-def test_cookies_path_alone_unlocks_signed_in_without_runtime(tmp_path):
+def _stub_binary(tmp_path: Path) -> str:
+    """A stand-in fetch binary so the tier reads ready without a download."""
+    binary = tmp_path / "N_m3u8DL-RE"
+    binary.write_bytes(b"#!/bin/sh\n")
+    return str(binary)
+
+
+def test_cookies_plus_binary_unlocks_signed_in_without_container(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
     stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
     assert stub.appleStatus() == {"state": "signed_in", "word": "Signed in"}
     state = stub.appleSetupState()
     assert state["light"]["tier"] == "cookies"
     assert state["cookies"]["verified"] is True
     assert state["runtime"]["state"] in ("missing", "path")
+
+
+def test_cookies_without_any_binary_is_not_signed_in(tmp_path):
+    # Verified cookies alone cannot start a download: the engine pulls
+    # every tier through N_m3u8DL-RE, so the light stays honest until the
+    # fetch binary below is ready.
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
+    assert stub.settings.data.path_binary_nm3u8dlre == ""
+    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up"}
+    state = stub.appleSetupState()
+    assert state["cookies"]["verified"] is True
+    assert state["light"]["state"] == "not_set_up"
 
 
 def test_stale_cookies_export_needs_attention(tmp_path):
@@ -554,6 +614,21 @@ def test_managed_runtime_alone_is_runtime_ready(tmp_path, monkeypatch):
         ),
         session=_Sess(blob, hashlib.sha256(blob).hexdigest()),
     )
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    # What _configure_apple_provider writes after provisioning: the resolved
+    # managed path on the provider.
+    stub.providers["apple"] = SimpleNamespace(cookies_path="", nm3u8dlre_path=str(mgr.binary_path))
+    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready"}
+
+
+def test_override_binary_counts_as_runtime_ready(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready"}
+
+
+def test_path_binary_counts_as_runtime_ready(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/N_m3u8DL-RE" if name == "N_m3u8DL-RE" else None)
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready"}
 
@@ -656,8 +731,10 @@ def test_fresh_machine_steps_walk_in_order():
     assert steps["enable"]["state"] == "done"
     assert steps["cookies"]["state"] == "todo" and steps["cookies"]["action"] == ""
     assert steps["runtime"]["action"] == "apple_update_runtime"
+    assert steps["runtime"]["action_label"] == "Install"
     assert steps["container"]["action"] == ""  # absent runtime: guide only, never install
     assert steps["image"]["action"] == "apple_pull_image"
+    assert steps["image"]["action_label"] == "Pull image"
     assert steps["port"]["action"] == "apple_ensure_port"
 
 
@@ -677,6 +754,10 @@ def test_container_running_and_runtime_managed_are_done():
     )
     assert steps["cookies"]["state"] == "done"
     assert steps["runtime"]["state"] == "done"
+    # A finished step's button says what it does: removal wears its own
+    # label, never a next-step mask.
+    assert steps["runtime"]["action"] == "apple_remove_runtime"
+    assert steps["runtime"]["action_label"] == "Remove"
     assert steps["container"]["state"] == "done" and steps["container"]["action"] == ""
     assert steps["image"]["state"] == "done"
     assert steps["port"]["state"] == "done" and steps["port"]["action"] == ""
@@ -718,25 +799,33 @@ def test_container_state_caches_for_gui_callers(tmp_path, monkeypatch):
 
     monkeypatch.setattr("waves.apple_runtime.detect_container_runtime", fake_detect)
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub._apple_container_cache = {"at": 0.0, "result": None}  # cold: no probe completed yet
     stub.appleSetupState()
     stub.appleSetupState()
     assert calls == [3]  # cold probe once, short GUI timeout; the second read rides the cache
 
 
-def test_container_refresh_uses_the_full_timeout(tmp_path, monkeypatch):
+def test_stale_cache_serves_immediately_and_refreshes_on_worker(tmp_path, monkeypatch):
+    stale = {"name": "docker", "available": True, "running": False, "hint": "Start Docker Desktop"}
+    fresh = {"name": "docker", "available": True, "running": True, "hint": ""}
     calls = []
 
     def fake_detect(timeout=10):
         calls.append(timeout)
-        return {"name": "docker", "available": True, "running": True, "hint": ""}
+        return fresh
 
     monkeypatch.setattr("waves.apple_runtime.detect_container_runtime", fake_detect)
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
-    stub._refresh_apple_container_cache(timeout=10)
+    stub._apple_container_cache = {"at": time.time() - 1000.0, "result": dict(stale)}
+    started = []
+    stub.threadpool = SimpleNamespace(start=lambda worker: started.append(worker))
+    # Served synchronously with no subprocess: the GUI never waits.
+    assert stub._apple_container_state() == stale
+    assert calls == [] and len(started) == 1
+    # The scheduled worker refreshes the cache with the full timeout.
+    started[0].run()
     assert calls == [10]
-    # A fresh cache is returned as-is with no new probe.
-    stub._apple_container_state()
-    assert calls == [10]
+    assert stub._apple_container_state() == fresh
 
 
 def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):
@@ -752,3 +841,49 @@ def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):
     stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
     WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
     assert "cookies" in seen
+
+
+def test_download_click_without_fetch_binary_routes_to_the_runtime_step(tmp_path):
+    seen = []
+    cookies = _cookies_file(tmp_path, with_token=True)
+    provider = SimpleNamespace(cookies_path=cookies, nm3u8dlre_path="")
+    stub = SimpleNamespace(
+        providers={"apple": provider},
+        settings=SimpleNamespace(
+            data=SimpleNamespace(apple_cookies_path=cookies, path_binary_nm3u8dlre=""),
+        ),
+        appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
+        downloadState=SimpleNamespace(emit=lambda *a: None),
+    )
+    stub._set_status = lambda text: seen.append(text)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub, SimpleNamespace)
+    # Cookies verify, but no fetch binary anywhere: the row must not queue
+    # only to fail inside the engine.
+    queued = []
+    stub._download_gate = lambda: "ok"
+    stub._enqueue = lambda *a, **k: queued.append(a)
+    WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
+    assert queued == []
+    assert "runtime" in seen
+
+
+def test_download_click_with_cookies_and_binary_passes_the_gates(tmp_path):
+    seen = []
+    cookies = _cookies_file(tmp_path, with_token=True)
+    binary = _stub_binary(tmp_path)
+    provider = SimpleNamespace(cookies_path=cookies, nm3u8dlre_path=binary)
+    stub = SimpleNamespace(
+        providers={"apple": provider},
+        settings=SimpleNamespace(
+            data=SimpleNamespace(apple_cookies_path=cookies, path_binary_nm3u8dlre=binary),
+        ),
+        appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
+        downloadState=SimpleNamespace(emit=lambda *a: None),
+    )
+    stub._set_status = lambda text: seen.append(text)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
+    stub._apple_fetch_binary_ready = WavesBridge._apple_fetch_binary_ready.__get__(stub, SimpleNamespace)
+    stub._download_gate = lambda: "block"  # stop after the setup gates: no queueing here
+    WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
+    assert seen == []

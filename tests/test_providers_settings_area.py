@@ -327,6 +327,8 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     assert "appleSetupLive" in qml
     assert "installAppleRuntime" in qml and "installAppleImage" in qml
     assert "appleStartContainer" in qml and "appleEnsurePort" in qml
+    # Step buttons say what they do (Remove, Pull image…), never Continue.
+    assert "action_label" in qml
     # The schema snapshots TIDAL's session, so login/logout must rebuild it.
     assert "onLoggedInChanged" in qml
     # The Apple switch is reachable without a pointer.
