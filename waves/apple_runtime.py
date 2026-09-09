@@ -48,8 +48,8 @@ import requests
 
 logger = logging.getLogger("waves.apple_runtime")
 
-_TIME_TIMEOUT = 30
-_CHUNK = 1 << 16  # 64 KiB streaming chunks
+_HTTP_TIMEOUT = 30
+_IO_CHUNK = 1 << 16  # 64 KiB streaming chunks
 _UA = "Waves-apple-runtime"
 
 # --------------------------------------------------------------------------- #
@@ -230,12 +230,12 @@ def attempt_gentle_start(runner=None) -> bool:
 
 
 def pick_free_high_port(low: int = WRAPPER_PORT_LOW, high: int = WRAPPER_PORT_HIGH) -> int:
-    """Pick a free TCP port on loopback in the high range.
+    """Pick a free TCP port on loopback in the high range (never port 80).
 
     Binds each candidate to prove it is free, then releases it. The small
     TOCTOU window (another process grabbing it before the wrapper starts)
     is closed by the caller retrying on EADDRINUSE; this only picks the
-    first offer.
+    first offer. Raises OSError when the whole high range is taken.
     """
     for port in range(low, high + 1):
         with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
@@ -245,13 +245,7 @@ def pick_free_high_port(low: int = WRAPPER_PORT_LOW, high: int = WRAPPER_PORT_HI
             except OSError:
                 continue
             return port
-    # Fall back to whatever the OS hands out, as long as it is unprivileged.
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-        sock.bind(("127.0.0.1", 0))
-        picked = int(sock.getsockname()[1])
-    if picked < 1024:
-        raise OSError("no free high port available")
-    return picked
+    raise OSError("no free high port available")
 
 
 def wrapper_url(port: int) -> str:
@@ -267,10 +261,14 @@ def wrapper_url(port: int) -> str:
 def verify_apk(path: str, expected_sha256: str = APK_SHA256) -> dict:
     """Verify a user-supplied APK/.apkm file against the pinned version.
 
-    Returns ``{"ok", "path", "sha256", "note"}``. Raises FileNotFoundError
-    when missing and ValueError on a hash mismatch (fail-closed: an
-    unverified APK never reaches the wrapper). An empty expected hash
-    verifies presence and extension only.
+    Returns ``{"ok", "path", "sha256", "hash_pending", "note"}``. Raises
+    FileNotFoundError when missing and ValueError on a hash mismatch
+    (fail-closed: an unverified APK never reaches the wrapper). While no
+    pinned hash is published (``APK_SHA256`` empty) the check covers
+    presence, extension, and version only, and reports
+    ``hash_pending: True`` so the wizard never claims a SHA check it did
+    not perform; filling in the published hash turns the full check on
+    with no other change.
     """
     p = Path(str(path or "").strip()).expanduser()
     if not str(path or "").strip() or not p.is_file():
@@ -281,13 +279,16 @@ def verify_apk(path: str, expected_sha256: str = APK_SHA256) -> dict:
     digest = _sha256_file(p)
     if expected_sha256 and digest.lower() != expected_sha256.lower():
         raise ValueError(f"APK checksum mismatch: expected {expected_sha256}, got {digest}")
+    hash_pending = not bool(expected_sha256)
     return {
         "ok": True,
         "path": str(p),
         "sha256": digest,
+        "hash_pending": hash_pending,
         "note": (
-            f"Pinned Apple Music APK {APK_PINNED_VERSION}: verified. "
-            "Extract inside the wrapper per wrapper-v2's documented .apkm steps; Waves never fetches this file."
+            f"Pinned Apple Music APK {APK_PINNED_VERSION}: "
+            + ("version checked; SHA-256 check pending the published hash. " if hash_pending else "SHA-256 verified. ")
+            + "Extract inside the wrapper per wrapper-v2's documented .apkm steps; Waves never fetches this file."
         ),
     }
 
@@ -483,7 +484,13 @@ class AppleRuntimeManager:
             return 0
 
     def ensure_port(self, preferred: int = 0) -> int:
-        """Persist and return the wrapper port: preferred when free, else picked."""
+        """Persist and return the wrapper port.
+
+        A nonzero explicit override (the config-first ``apple_wrapper_port``)
+        wins when it is unprivileged and free; otherwise Waves picks a free
+        high port itself. The picked port is always high; only an explicit
+        user choice may sit elsewhere in the unprivileged range.
+        """
         if preferred and 1024 <= preferred <= 65535 and _port_free(preferred):
             port = int(preferred)
         else:
@@ -503,11 +510,21 @@ class AppleRuntimeManager:
         return port
 
     # ----- status -------------------------------------------------------- #
+    def _base_status(self) -> dict:
+        """The wrapper pins every status answer carries, managed or not."""
+        return {"wrapper_image": WRAPPER_V2_IMAGE, "wrapper_libs": WRAPPER_LIBS_VERSION}
+
     def status(self, custom_path: str = "") -> dict:
-        """Describe the managed N_m3u8DL-RE for the UI."""
+        """Describe the managed N_m3u8DL-RE for the UI.
+
+        An explicit override or a binary on PATH reports as an unmanaged
+        ``path`` (the FFmpeg manager's precedence); only the copy this
+        manager provisioned reports ``managed``.
+        """
         if self.is_installed():
             mani = self._read_manifest()
             return {
+                **self._base_status(),
                 "state": "managed",
                 "available": True,
                 "managed": True,
@@ -515,12 +532,11 @@ class AppleRuntimeManager:
                 "version": str(mani.get("version") or NM3U8DLRE_VERSION),
                 "source_url": str(mani.get("url") or ""),
                 "sha256": str(mani.get("sha256") or ""),
-                "wrapper_image": WRAPPER_V2_IMAGE,
-                "wrapper_libs": WRAPPER_LIBS_VERSION,
             }
         cp = (custom_path or "").strip()
         if cp and Path(cp).is_file():
             return {
+                **self._base_status(),
                 "state": "path",
                 "available": True,
                 "managed": False,
@@ -528,12 +544,11 @@ class AppleRuntimeManager:
                 "version": "",
                 "source_url": "",
                 "sha256": "",
-                "wrapper_image": WRAPPER_V2_IMAGE,
-                "wrapper_libs": WRAPPER_LIBS_VERSION,
             }
         found = shutil.which("N_m3u8DL-RE")
         if found:
             return {
+                **self._base_status(),
                 "state": "path",
                 "available": True,
                 "managed": False,
@@ -541,10 +556,9 @@ class AppleRuntimeManager:
                 "version": "",
                 "source_url": "",
                 "sha256": "",
-                "wrapper_image": WRAPPER_V2_IMAGE,
-                "wrapper_libs": WRAPPER_LIBS_VERSION,
             }
         return {
+            **self._base_status(),
             "state": "missing",
             "available": False,
             "managed": False,
@@ -552,8 +566,6 @@ class AppleRuntimeManager:
             "version": "",
             "source_url": "",
             "sha256": "",
-            "wrapper_image": WRAPPER_V2_IMAGE,
-            "wrapper_libs": WRAPPER_LIBS_VERSION,
         }
 
     # ----- install ------------------------------------------------------- #
@@ -656,14 +668,65 @@ class AppleRuntimeManager:
         self.manifest_path.unlink(missing_ok=True)
         return self.status()
 
+    # ----- wrapper image ------------------------------------------------- #
+    @property
+    def image_manifest_path(self) -> Path:
+        return self.runtime_dir / "wrapper-image.json"
+
+    def image_pulled(self) -> bool:
+        """Whether the pinned wrapper-v2 image was pulled by this manager."""
+        try:
+            with open(self.image_manifest_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception:
+            return False
+        return isinstance(data, dict) and data.get("image") == WRAPPER_V2_IMAGE and bool(data.get("pulled_at"))
+
+    def ensure_image(self, runner=None, binary: str = "docker", log_cb=None) -> dict:
+        """Pull the pinned Waves-built wrapper-v2 image and record it.
+
+        Waves builds the image from source and pins the tag; this only
+        fetches that exact tag through the user's own container runtime
+        (Docker by default, or the detected compatible binary the caller
+        passes). Records provenance (image + pull time) beside the runtime
+        manifest. ``runner`` is an injectable ``subprocess.run`` for tests.
+        Running the container and its health/idle lifecycle is session
+        supervision's slice, not this one.
+        """
+        run = runner or (lambda *a, **k: subprocess.run(*a, **k))
+        if log_cb:
+            log_cb(f"pulling {WRAPPER_V2_IMAGE}")
+        logger.info("apple-runtime: pulling %s", WRAPPER_V2_IMAGE)
+        proc = run([binary, "pull", WRAPPER_V2_IMAGE], capture_output=True, text=True, timeout=600)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Could not pull {WRAPPER_V2_IMAGE}: {(proc.stderr or proc.stdout or '').strip() or 'container runtime refused'}"
+            )
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {"image": WRAPPER_V2_IMAGE, "libs": WRAPPER_LIBS_VERSION, "pulled_at": int(time.time())}
+        tmp_fd, tmp_name = tempfile.mkstemp(dir=self.runtime_dir, prefix="wrapper-image.", suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                json.dump(manifest, fh, indent=2)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_name, self.image_manifest_path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_name)
+            raise
+        if log_cb:
+            log_cb(f"pulled {WRAPPER_V2_IMAGE}")
+        return manifest
+
     # ----- internals ----------------------------------------------------- #
     def _download(self, sess, url: str, dest: Path, progress_cb, abort: Event | None) -> None:
-        with sess.get(url, stream=True, timeout=_TIME_TIMEOUT) as resp:
+        with sess.get(url, stream=True, timeout=_HTTP_TIMEOUT) as resp:
             resp.raise_for_status()
             total = int(resp.headers.get("Content-Length") or 0)
             done = 0
             with open(dest, "wb") as fh:
-                for chunk in resp.iter_content(chunk_size=_CHUNK):
+                for chunk in resp.iter_content(chunk_size=_IO_CHUNK):
                     if abort is not None and abort.is_set():
                         raise AppleRuntimeCancelled()
                     if not chunk:
@@ -679,7 +742,7 @@ class AppleRuntimeManager:
         if not sha_url:
             return None
         try:
-            resp = sess.get(sha_url, timeout=_TIME_TIMEOUT)
+            resp = sess.get(sha_url, timeout=_HTTP_TIMEOUT)
             resp.raise_for_status()
             text = resp.text
         except Exception:
@@ -701,7 +764,7 @@ def _port_free(port: int) -> bool:
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(_CHUNK), b""):
+        for chunk in iter(lambda: fh.read(_IO_CHUNK), b""):
             h.update(chunk)
     return h.hexdigest()
 
@@ -725,7 +788,7 @@ def _extract_binary(arc_path: Path, dest: Path, exe_name: str) -> None:
             raise FileNotFoundError(f"no '{exe_name}' inside {arc_path.name}")
         with src, open(dest, "wb") as out:
             while True:
-                chunk = src.read(_CHUNK)
+                chunk = src.read(_IO_CHUNK)
                 if not chunk:
                     break
                 out.write(chunk)

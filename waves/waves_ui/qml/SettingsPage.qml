@@ -214,8 +214,14 @@ Item {
     property real appleRuntimePct: 0
     Connections {
         target: waves
-        function onAppleStatusChanged() { page.appleStatusLive = waves.appleStatus() }
-        function onAppleRuntimeStatusChanged() { page.appleRuntimeLive = waves.appleRuntimeStatus() }
+        function onAppleStatusChanged() {
+            page.appleStatusLive = waves.appleStatus()
+            page.appleSetupLive = waves.appleSetupState()
+        }
+        function onAppleRuntimeStatusChanged() {
+            page.appleRuntimeLive = waves.appleRuntimeStatus()
+            page.appleSetupLive = waves.appleSetupState()
+        }
         function onAppleRuntimeStateChanged(state, msg) { page.appleRuntimeState = state; page.appleRuntimeMsg = msg }
         function onAppleRuntimeProgress(pct) { page.appleRuntimePct = pct }
     }
@@ -2287,6 +2293,7 @@ Item {
                                                       : modelData.type === "cover_sizes" ? coverCol.implicitHeight
                                                       : modelData.type === "library" ? libraryLoader.implicitHeight
                                                       : modelData.type === "status" ? statusCol.implicitHeight
+                                                      : modelData.type === "apple_setup" ? setupCol.implicitHeight
                                                       : inlineRow.implicitHeight
 
                                         // Enum / int / float / short str: label + help on
@@ -2298,7 +2305,7 @@ Item {
                                             id: inlineRow
                                             visible: (modelData.type !== "str" || modelData.inline === true)
                                                      && modelData.type !== "cover_sizes" && modelData.type !== "library"
-                                                     && modelData.type !== "status"
+                                                     && modelData.type !== "status" && modelData.type !== "apple_setup"
                                             width: parent.width; spacing: 14
                                             ColumnLayout {
                                                 Layout.fillWidth: true; spacing: 2
@@ -2507,6 +2514,88 @@ Item {
                                                             visible: actPill.actLive
                                                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                                                             onClicked: actPill.runAppleAction()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Apple setup wizard (issue #31): the in-place
+                                        // steps from appleSetupState(), walked in order.
+                                        // Each step names its advancing action (or none);
+                                        // the card re-reads the live mirror whenever the
+                                        // light or the runtime moves, so a landed step
+                                        // ticks over at once.
+                                        Column {
+                                            id: setupCol
+                                            visible: modelData.type === "apple_setup"
+                                            width: parent.width; spacing: 8
+                                            Component.onCompleted: {
+                                                if (modelData.type === "apple_setup") page.appleSetupLive = waves.appleSetupState()
+                                            }
+                                            function stepColor(state) {
+                                                if (state === "done") return page.accent
+                                                if (state === "attention") return page.red
+                                                return page.gold
+                                            }
+                                            function runStepAction(actKey) {
+                                                if (actKey === "apple_update_runtime") waves.installAppleRuntime()
+                                                else if (actKey === "apple_remove_runtime") waves.removeAppleRuntime()
+                                                else if (actKey === "apple_pull_image") waves.installAppleImage()
+                                                else if (actKey === "apple_start_container") { waves.appleStartContainer(); page.appleSetupLive = waves.appleSetupState() }
+                                                else if (actKey === "apple_ensure_port") { waves.appleEnsurePort(); page.appleSetupLive = waves.appleSetupState() }
+                                                else if (actKey === "apple_setup") page.appleSetupLive = waves.appleSetupState()
+                                            }
+                                            Text {
+                                                text: modelData.label; color: page.textHi
+                                                textFormat: Text.PlainText
+                                                font.pixelSize: 14; font.weight: Font.Medium
+                                            }
+                                            Text {
+                                                visible: modelData.help !== ""; width: parent.width
+                                                text: modelData.help; color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                textFormat: Text.PlainText
+                                            }
+                                            Repeater {
+                                                model: (page.appleSetupLive && page.appleSetupLive.steps) ? page.appleSetupLive.steps : []
+                                                delegate: Column {
+                                                    required property var modelData
+                                                    width: parent.width; spacing: 2
+                                                    Row {
+                                                        spacing: 8; width: parent.width
+                                                        Rectangle {
+                                                            width: 8; height: 8; radius: 4
+                                                            anchors.verticalCenter: parent.verticalCenter
+                                                            color: setupCol.stepColor(String(modelData.state))
+                                                        }
+                                                        Text {
+                                                            text: modelData.label; color: page.textHi
+                                                            textFormat: Text.PlainText
+                                                            font.pixelSize: 13; font.weight: Font.Medium
+                                                        }
+                                                    }
+                                                    Text {
+                                                        x: 16; width: parent.width - 16
+                                                        text: modelData.detail; color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                        textFormat: Text.PlainText
+                                                    }
+                                                    Rectangle {
+                                                        visible: modelData.action !== undefined && String(modelData.action) !== ""
+                                                        x: 16; width: stepTxt.implicitWidth + page.btnPadH * 2
+                                                        height: stepTxt.implicitHeight + page.btnPadV * 2
+                                                        radius: page.btnRad
+                                                        color: "transparent"; border.color: page.border1
+                                                        Text {
+                                                            id: stepTxt
+                                                            anchors.centerIn: parent
+                                                            text: "CONTINUE"
+                                                            textFormat: Text.PlainText
+                                                            color: page.textHi; font.pixelSize: 12
+                                                            font.family: page.uiFont; font.bold: true; font.letterSpacing: page.btnTrack
+                                                        }
+                                                        MouseArea {
+                                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                            onClicked: setupCol.runStepAction(String(modelData.action))
                                                         }
                                                     }
                                                 }

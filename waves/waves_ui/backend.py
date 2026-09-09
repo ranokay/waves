@@ -16864,16 +16864,18 @@ class WavesBridge(LibraryMixin, QObject):
         """The in-place setup wizard's full state (issue #31, spec §2).
 
         One dict the QML wizard renders step by step: the light (state,
-        word, tier, next_step), the cookies tier (path, ready, verified),
-        the managed runtime (state, path, version, wrapper image), the
-        container runtime (name, available, running, hint), the APK
-        (path, pinned version), and the wrapper port/URL. Pure reads, no
+        word, tier, next_step), the ``steps`` list (each with key, label,
+        state ``done``/``todo``/``attention``, detail, and the action slot
+        key QML calls, ``""`` when the step needs no click), plus the raw
+        blocks behind them (cookies, runtime, container, apk with its
+        scripted extraction plan, wrapper image/port). Pure reads, no
         network, safe on the GUI thread.
         """
         from waves.apple_runtime import (
             APK_PINNED_VERSION,
             WRAPPER_LIBS_VERSION,
             WRAPPER_V2_IMAGE,
+            apk_extract_plan,
             describe_setup,
             detect_container_runtime,
             verify_apk,
@@ -16919,11 +16921,17 @@ class WavesBridge(LibraryMixin, QObject):
         try:
             apk_check = verify_apk(apk_path) if apk_path.strip() else None
             apk_verified = bool(apk_check and apk_check.get("ok", False))
+            apk_hash_pending = bool(apk_check and apk_check.get("hash_pending", False))
             apk_error = ""
         except Exception as exc:
             apk_verified = False
+            apk_hash_pending = False
             apk_error = str(exc)
             apk_check = None
+        try:
+            image_pulled = bool(manager is not None and manager.image_pulled())
+        except Exception:
+            image_pulled = False
         preferred_port = 0
         try:
             preferred_port = int(getattr(data, "apple_wrapper_port", 0) or 0)
@@ -16936,9 +16944,24 @@ class WavesBridge(LibraryMixin, QObject):
             port = 0
         if not port:
             port = preferred_port if 1024 <= preferred_port <= 65535 else 0
+        steps = self._apple_wizard_steps(
+            enabled=bool(flags.get("enabled", False)),
+            cookies_path=cookies_path,
+            cookies_verified=cookies_verified,
+            cookies_error=cookies_error,
+            runtime_state=str(runtime.get("state") or "missing"),
+            container=container,
+            apk_path=apk_path,
+            apk_verified=apk_verified,
+            apk_hash_pending=apk_hash_pending,
+            apk_error=apk_error,
+            image_pulled=image_pulled,
+            port=port,
+        )
         return {
             "light": described,
             "enabled": bool(flags.get("enabled", False)),
+            "steps": steps,
             "cookies": {
                 "path": cookies_path,
                 "ready": bool(flags.get("cookies_ready", False)),
@@ -16951,15 +16974,174 @@ class WavesBridge(LibraryMixin, QObject):
                 "path": apk_path,
                 "pinned_version": APK_PINNED_VERSION,
                 "verified": apk_verified,
+                "hash_pending": apk_hash_pending,
                 "error": apk_error,
+                "extract_plan": apk_extract_plan(apk_path or "the APK you supply"),
             },
             "wrapper": {
                 "image": WRAPPER_V2_IMAGE,
                 "libs": WRAPPER_LIBS_VERSION,
+                "image_pulled": image_pulled,
                 "port": port,
                 "url": wrapper_url(port) if port else "",
+                "login_hint": (
+                    "Apple ID sign-in plus 2FA happens once inside the wrapper guest; "
+                    "its tokens persist across container restarts. This step unlocks when the full tier runs."
+                ),
             },
         }
+
+    @staticmethod
+    def _apple_wizard_steps(
+        *,
+        enabled: bool,
+        cookies_path: str,
+        cookies_verified: bool,
+        cookies_error: str,
+        runtime_state: str,
+        container: dict,
+        apk_path: str,
+        apk_verified: bool,
+        apk_hash_pending: bool,
+        apk_error: str,
+        image_pulled: bool,
+        port: int,
+    ) -> list:
+        """The wizard's steps for the QML in-place flow, in walking order.
+
+        Each step carries ``key``/``label``/``state`` (``done``, ``todo``,
+        or ``attention``)/``detail``/``action`` (the QML action key that
+        advances it, ``""`` when it needs no click). The QML stays dumb:
+        it renders this list and calls back the named actions.
+        """
+        steps = [
+            {
+                "key": "enable",
+                "label": "Turn on Apple Music",
+                "state": "done" if enabled else "todo",
+                "detail": "Catalog search joins the results once enabled; search needs no account.",
+                "action": "",
+            }
+        ]
+        if cookies_verified:
+            cookies_state, cookies_detail = (
+                "done",
+                "Signed-in cookies export: AAC 256 and Atmos downloads work now, no runtime needed.",
+            )
+        elif cookies_path.strip():
+            cookies_state, cookies_detail = (
+                "attention",
+                cookies_error or "That cookies export has no signed-in session.",
+            )
+        else:
+            cookies_state, cookies_detail = (
+                "todo",
+                "Export cookies from a logged-in music.apple.com tab, then set the path below.",
+            )
+        steps.append(
+            {
+                "key": "cookies",
+                "label": "Cookies tier (no runtime)",
+                "state": cookies_state,
+                "detail": cookies_detail,
+                "action": "",
+            }
+        )
+        if runtime_state == "managed":
+            runtime_step = ("done", "Managed N_m3u8DL-RE is provisioned and verified.", "apple_remove_runtime")
+        elif runtime_state == "path":
+            runtime_step = (
+                "done",
+                "Using your own N_m3u8DL-RE binary; the wizard can still provision the managed copy.",
+                "apple_update_runtime",
+            )
+        else:
+            runtime_step = (
+                "todo",
+                "One click downloads the pinned release, verifies its checksum, extracts and chmods it.",
+                "apple_update_runtime",
+            )
+        steps.append(
+            {
+                "key": "runtime",
+                "label": "Managed fetch binary",
+                "state": runtime_step[0],
+                "detail": runtime_step[1],
+                "action": runtime_step[2],
+            }
+        )
+        if container.get("running"):
+            container_step = ("done", f"{container.get('name')} is running.", "")
+        elif container.get("available"):
+            container_step = (
+                "todo",
+                "The runtime is installed but not running; start it, then continue.",
+                "apple_start_container",
+            )
+        else:
+            container_step = (
+                "todo",
+                str(container.get("hint") or "A container runtime is needed for the full tier."),
+                "",
+            )
+        steps.append(
+            {
+                "key": "container",
+                "label": "Container runtime (never auto-installed)",
+                "state": container_step[0],
+                "detail": container_step[1],
+                "action": container_step[2],
+            }
+        )
+        if image_pulled:
+            image_step: tuple[str, str, str] = ("done", "Pinned wrapper image is on this machine.", "")
+        else:
+            image_step = ("todo", "Pull the exact Waves-built wrapper image the full tier runs.", "apple_pull_image")
+        steps.append(
+            {
+                "key": "image",
+                "label": "Wrapper image (pinned)",
+                "state": image_step[0],
+                "detail": image_step[1],
+                "action": image_step[2],
+            }
+        )
+        if apk_verified:
+            apk_detail = (
+                "APK verified against the pinned version"
+                + (" (SHA check pending the published hash)." if apk_hash_pending else ".")
+                + " Follow the extraction plan below inside the wrapper guest."
+            )
+            apk_step = ("done", apk_detail, "")
+        elif apk_path.strip():
+            apk_step = ("attention", apk_error or "That APK could not be verified.", "")
+        else:
+            apk_step = (
+                "todo",
+                "You supply the pinned APK version yourself; Waves verifies it and scripts the extraction, never fetching it.",
+                "",
+            )
+        steps.append(
+            {
+                "key": "apk",
+                "label": "Your APK (never fetched by Waves)",
+                "state": apk_step[0],
+                "detail": apk_step[1],
+                "action": apk_step[2],
+            }
+        )
+        steps.append(
+            {
+                "key": "port",
+                "label": "Wrapper port (never 80)",
+                "state": "done" if port else "todo",
+                "detail": (
+                    f"Wrapper API runs at an explicit free high port{(': ' + str(port)) if port else ' (picked at setup)'}."
+                ),
+                "action": "" if port else "apple_ensure_port",
+            }
+        )
+        return steps
 
     @Slot(result="QVariant")
     def appleRuntimeStatus(self) -> dict:
@@ -17088,6 +17270,71 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Apple runtime signal emit failed", exc_info=True)
         self.appleStatusChanged.emit()
+
+    @Slot(result="QVariant")
+    def appleStartContainer(self) -> dict:
+        """Attempt the gentle container start, then re-probe (never installs).
+
+        Returns ``{"attempted", "container"}`` so the wizard step can say
+        what happened; the page re-reads ``appleSetupState()`` after.
+        """
+        from waves.apple_runtime import attempt_gentle_start, detect_container_runtime
+
+        try:
+            attempted = bool(attempt_gentle_start())
+        except Exception:
+            logger.debug("Apple gentle container start failed", exc_info=True)
+            attempted = False
+        try:
+            container = detect_container_runtime()
+        except Exception:
+            container = {"name": "", "available": False, "running": False, "hint": ""}
+        return {"attempted": attempted, "container": container}
+
+    @Slot()
+    def installAppleImage(self) -> None:
+        """Pull the pinned wrapper-v2 image on a worker thread."""
+        if getattr(self, "_apple_runtime_inflight", False):
+            return
+        manager = getattr(self, "_apple_runtime", None)
+        if manager is None:
+            self.appleRuntimeStateChanged.emit("failed", "Apple runtime unavailable on this machine")
+            return
+        try:
+            from waves.apple_runtime import detect_container_runtime
+
+            container = detect_container_runtime()
+            binary = str(container.get("name") or "docker")
+        except Exception:
+            binary = "docker"
+        self._apple_runtime_inflight = True
+
+        def work() -> None:
+            with contextlib.suppress(Exception):
+                self._apple_runtime_abort.clear()
+            self.appleRuntimeStateChanged.emit("downloading", "Pulling the wrapper image…")
+            try:
+                try:
+                    manager.ensure_image(
+                        binary=binary,
+                        log_cb=lambda m: self.appleRuntimeStateChanged.emit("downloading", m),
+                    )
+                except Exception as exc:
+                    from waves.apple_runtime import AppleRuntimeCancelled
+
+                    if isinstance(exc, AppleRuntimeCancelled):
+                        self.appleRuntimeStateChanged.emit("cancelled", "Cancelled")
+                        return
+                    logger.exception("Apple wrapper image pull failed")
+                    self.appleRuntimeStateChanged.emit("failed", str(exc) or "Pull failed")
+                    return
+                self.appleRuntimeStateChanged.emit("done", "Wrapper image ready")
+                self.appleRuntimeStatusChanged.emit()
+                self.appleStatusChanged.emit()
+            finally:
+                self._apple_runtime_inflight = False
+
+        self.threadpool.start(Worker(work))
 
     @Slot(result="QVariant")
     def settingsSchema(self) -> list:
@@ -17474,6 +17721,24 @@ class WavesBridge(LibraryMixin, QObject):
                         {"label": "Remove runtime", "action": "apple_remove_runtime"},
                     ],
                 },
+                {
+                    # The in-place setup wizard steps (issue #31, spec §2):
+                    # a bridge-computed card, not a pref. QML renders the
+                    # step list from the live appleSetupState() mirror
+                    # ("live" names that channel, like apple_status above)
+                    # and calls back the actions the steps name. It stages
+                    # no edit and carries no factory default.
+                    "key": "apple_setup_wizard",
+                    "label": "Setup wizard",
+                    "help": (
+                        "Walks the setup in order: cookies unlock AAC 256 and Atmos at once, "
+                        "then the managed runtime, container, wrapper image, your APK, and port "
+                        "unlock the full tier. Steps refresh live as each lands."
+                    ),
+                    "type": "apple_setup",
+                    "live": "apple_setup",
+                    "value": "",
+                },
             ]
         }
 
@@ -17614,6 +17879,7 @@ class WavesBridge(LibraryMixin, QObject):
                 ),
                 "fields": [
                     "provider_apple_status",
+                    "apple_setup_wizard",
                     "apple_quality_audio",
                     "apple_cookies_path",
                     "path_binary_nm3u8dlre",
@@ -17921,6 +18187,15 @@ class WavesBridge(LibraryMixin, QObject):
             # Plain unit-test stubs bind _configure_apple_provider without the
             # resolver; fall back to the saved override there.
             provider.nm3u8dlre_path = str(getattr(data, "path_binary_nm3u8dlre", "") or "")
+        # The engine's isolated config dir exists from here on, so anything
+        # the engine materialises lands under Waves' own managed area, never
+        # in a user-visible engine config file.
+        try:
+            manager = getattr(self, "_apple_runtime", None)
+            if manager is not None:
+                manager.engine_config_dir()
+        except Exception:
+            logger.debug("Apple engine config dir ensure failed", exc_info=True)
         # A custom quarantine folder from a previous session already exists on
         # disk: register it now (startup runs here, settings saves re-enter
         # here) so the boot scan excludes it before any new failure occurs.
@@ -18142,6 +18417,11 @@ class WavesBridge(LibraryMixin, QObject):
             self._search_cache.clear()
             self._set_busy(False)
             self.appleStatusChanged.emit()
+            if bool(getattr(data, "apple_enabled", False)):
+                # Turning Apple on starts the in-place setup wizard (spec
+                # §2): Main.qml routes this into Settings at the Apple
+                # section, so the switch flip lands on the next step.
+                self.appleSetupRequested.emit("setup")
         # Under the same lock _save_settings holds, for the same reason. This
         # region does the restores explicitly instead of going through the
         # helper, but the values it restores are the ones the helper borrows and

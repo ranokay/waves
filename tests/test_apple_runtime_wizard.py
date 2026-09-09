@@ -153,10 +153,13 @@ def test_gentle_start_is_macos_only(monkeypatch):
 
 def test_picked_port_is_high_and_free():
     port = pick_free_high_port()
-    assert 1024 <= port <= 65535
-    assert port >= 49152 or port >= 1024  # OS fallback still unprivileged
+    assert 49152 <= port <= 65535
     assert wrapper_url(port) == f"http://127.0.0.1:{port}"
-    assert ":80" not in wrapper_url(port).rsplit(":", 1)[-1] or port != 80
+
+
+def test_pick_exhausted_high_range_raises():
+    with pytest.raises(OSError, match="no free high port"):
+        pick_free_high_port(low=65535, high=65534)
 
 
 def test_manager_ensure_port_prefers_override_when_free(tmp_path):
@@ -189,7 +192,7 @@ def test_verify_apk_checks_hash_when_pinned(tmp_path):
     p.write_bytes(b"fake-apk-bytes")
     digest = hashlib.sha256(b"fake-apk-bytes").hexdigest()
     ok = verify_apk(str(p), expected_sha256=digest)
-    assert ok["ok"] is True and ok["sha256"] == digest
+    assert ok["ok"] is True and ok["sha256"] == digest and ok["hash_pending"] is False
     with pytest.raises(ValueError, match="mismatch"):
         verify_apk(str(p), expected_sha256="0" * 64)
 
@@ -197,7 +200,9 @@ def test_verify_apk_checks_hash_when_pinned(tmp_path):
 def test_verify_apk_without_pinned_hash_checks_presence(tmp_path):
     p = tmp_path / "music.apk"
     p.write_bytes(b"bytes")
-    assert verify_apk(str(p), expected_sha256="")["ok"] is True
+    ok = verify_apk(str(p), expected_sha256="")
+    assert ok["ok"] is True and ok["hash_pending"] is True
+    assert "pending" in ok["note"]
 
 
 def test_apk_plan_scripts_extraction_and_names_pin(tmp_path):
@@ -404,6 +409,7 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     stub._apple_live_flags = WavesBridge._apple_live_flags.__get__(stub, SimpleNamespace)
     stub.appleStatus = WavesBridge.appleStatus.__get__(stub, SimpleNamespace)
     stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub, SimpleNamespace)
+    stub._apple_wizard_steps = WavesBridge._apple_wizard_steps
     return stub
 
 
@@ -479,3 +485,126 @@ def test_resolve_prefers_override_then_managed(tmp_path, monkeypatch):
         session=_Sess(blob, hashlib.sha256(blob).hexdigest()),
     )
     assert stub._resolve_apple_nm3u8dlre() == str(mgr.binary_path)
+
+
+# ---- wrapper image -------------------------------------------------------------- #
+
+
+def _ok_runner(seen):
+    def run(cmd, **_k):
+        seen.append(cmd)
+        return SimpleNamespace(returncode=0, stdout="Pulled", stderr="")
+
+    return run
+
+
+def test_ensure_image_pulls_the_pinned_tag_and_records_it(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+    assert mgr.image_pulled() is False
+    seen = []
+    mani = mgr.ensure_image(runner=_ok_runner(seen))
+    assert seen == [["docker", "pull", WRAPPER_V2_IMAGE]]
+    assert mani["image"] == WRAPPER_V2_IMAGE
+    assert mgr.image_pulled() is True
+
+
+def test_ensure_image_failure_raises_and_records_nothing(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+
+    def failing(cmd, **_k):
+        return SimpleNamespace(returncode=1, stdout="", stderr="no such image")
+
+    with pytest.raises(RuntimeError, match="Could not pull"):
+        mgr.ensure_image(runner=failing)
+    assert mgr.image_pulled() is False
+
+
+def test_ensure_image_uses_the_detected_compatible_binary(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+    seen = []
+    mgr.ensure_image(runner=_ok_runner(seen), binary="podman")
+    assert seen == [["podman", "pull", WRAPPER_V2_IMAGE]]
+
+
+# ---- wizard steps ----------------------------------------------------------------- #
+
+
+def _steps(**over):
+    base = {
+        "enabled": True,
+        "cookies_path": "",
+        "cookies_verified": False,
+        "cookies_error": "",
+        "runtime_state": "missing",
+        "container": {"name": "", "available": False, "running": False, "hint": "Install Docker Desktop"},
+        "apk_path": "",
+        "apk_verified": False,
+        "apk_hash_pending": False,
+        "apk_error": "",
+        "image_pulled": False,
+        "port": 0,
+    }
+    base.update(over)
+    return {s["key"]: s for s in WavesBridge._apple_wizard_steps(**base)}
+
+
+def test_fresh_machine_steps_walk_in_order():
+    steps = _steps(enabled=True)
+    assert list(steps) == ["enable", "cookies", "runtime", "container", "image", "apk", "port"]
+    assert steps["enable"]["state"] == "done"
+    assert steps["cookies"]["state"] == "todo" and steps["cookies"]["action"] == ""
+    assert steps["runtime"]["action"] == "apple_update_runtime"
+    assert steps["container"]["action"] == ""  # absent runtime: guide only, never install
+    assert steps["image"]["action"] == "apple_pull_image"
+    assert steps["port"]["action"] == "apple_ensure_port"
+
+
+def test_container_step_offers_the_gentle_start_when_idle():
+    steps = _steps(container={"name": "docker", "available": True, "running": False, "hint": "Start Docker Desktop"})
+    assert steps["container"]["state"] == "todo"
+    assert steps["container"]["action"] == "apple_start_container"
+
+
+def test_container_running_and_runtime_managed_are_done():
+    steps = _steps(
+        cookies_verified=True,
+        runtime_state="managed",
+        container={"name": "docker", "available": True, "running": True, "hint": ""},
+        image_pulled=True,
+        port=51234,
+    )
+    assert steps["cookies"]["state"] == "done"
+    assert steps["runtime"]["state"] == "done"
+    assert steps["container"]["state"] == "done" and steps["container"]["action"] == ""
+    assert steps["image"]["state"] == "done"
+    assert steps["port"]["state"] == "done" and steps["port"]["action"] == ""
+
+
+def test_stale_cookies_and_bad_apk_are_attention():
+    steps = _steps(cookies_path="/c.txt", cookies_error="no token", apk_path="/m.apkm", apk_error="bad hash")
+    assert steps["cookies"]["state"] == "attention"
+    assert steps["apk"]["state"] == "attention"
+
+
+def test_setup_state_carries_steps_plan_image_and_login_hint(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    state = stub.appleSetupState()
+    assert [s["key"] for s in state["steps"]] == ["enable", "cookies", "runtime", "container", "image", "apk", "port"]
+    assert any(APK_PINNED_VERSION in step for step in state["apk"]["extract_plan"])
+    assert state["wrapper"]["image_pulled"] is False
+    assert "2FA" in state["wrapper"]["login_hint"]
+
+
+def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):
+    seen = []
+    provider = SimpleNamespace(cookies_path="")
+    stub = SimpleNamespace(
+        providers={"apple": provider},
+        settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="")),
+        appleSetupRequested=SimpleNamespace(emit=lambda reason: seen.append(reason)),
+        downloadState=SimpleNamespace(emit=lambda *a: None),
+    )
+    stub._set_status = lambda text: seen.append(text)
+    stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
+    WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
+    assert "cookies" in seen
