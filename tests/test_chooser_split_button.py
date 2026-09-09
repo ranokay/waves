@@ -334,3 +334,24 @@ def test_download_with_chooser_apple_parks_pins_across_a_refetch():
     b.downloadWithChooser("apple:456", "track", "HI-RES", "both")
     assert refetched == [("track", "apple:456")]
     assert b._chooser_refetch_pins[("track", "apple:456")] == ("track", "HI-RES", "both")
+
+
+def test_download_with_chooser_keeps_the_gate_message_when_nothing_queued(monkeypatch):
+    """A held or blocked click keeps the gate's own status, never Queued."""
+    monkeypatch.setattr(backend, "_image", lambda obj, size: "")
+    monkeypatch.setattr(backend, "_quality_label", lambda obj, provider=None: "HI-RES")
+    monkeypatch.setattr(backend, "_primary_artist_name", lambda obj: "Artist")
+    monkeypatch.setattr(backend, "_track_count", lambda obj: 1)
+    monkeypatch.setattr(backend, "_offers_both", lambda obj: False)
+    monkeypatch.setattr(backend, "_atmos_only", lambda obj: False)
+    monkeypatch.setattr(backend, "_has_atmos", lambda obj: False)
+    monkeypatch.setattr(backend, "name_builder_title", lambda obj: "Song")
+    b = _bridge()
+    b._objs["track"]["t1"] = _track("t1")
+    b._download_gate = lambda: "block"
+    b._set_status("gate says pick a folder")
+    b.downloadWithChooser("t1", "track", "LOSSLESS", "stereo")
+    assert b._queue == []
+    assert getattr(b, "_last_status", "") != ""
+    assert "Queued" not in str(getattr(b, "_last_status", ""))
+    assert b.downloadState.calls[-1] == ("t1", "")
