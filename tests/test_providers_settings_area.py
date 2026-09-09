@@ -111,6 +111,9 @@ def test_the_apple_section_holds_the_switch_row_and_the_quality():
         "path_binary_nm3u8dlre",
         "apple_apk_path",
         "apple_wrapper_port",
+        "apple_pacing_batch_size",
+        "apple_pacing_delay_sec",
+        "apple_wrapper_idle_sec",
         "apple_quarantine_dir",
         "apple_quarantine_keep",
     ]
@@ -139,6 +142,15 @@ def test_the_apple_switch_defaults_off_and_persists_as_an_engine_setting():
     status = sections["providers_apple"]["fields"][0]
     assert status["switch_value"] is False
     assert status["value"] == "off"
+
+
+def test_the_supervision_seconds_fields_span_their_defaults():
+    sections = _schema()
+    fields = {f["key"]: f for f in sections["providers_apple"]["fields"]}
+    assert fields["apple_wrapper_idle_sec"]["value"] == 300.0
+    assert fields["apple_wrapper_idle_sec"]["maximum"] >= 300.0
+    assert fields["apple_pacing_delay_sec"]["value"] == 30.0
+    assert fields["apple_pacing_delay_sec"]["maximum"] >= 30.0
 
 
 def test_the_status_light_flips_with_the_switch_and_the_session():

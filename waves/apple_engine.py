@@ -36,6 +36,19 @@ class AppleDownloadError(Exception):
     """Fetching, decrypting or verifying one Apple song failed."""
 
 
+class AppleHeld(RuntimeError):
+    """The Apple runtime is missing or died: the job waits, it never fails."""
+
+
+class AppleWrapperDown(AppleHeld, AppleDownloadError):
+    """The wrapper sidecar is not answering (held-not-failed, issue #33).
+
+    Subclasses AppleDownloadError so older catchers keep catching it; the
+    supervision runner tests for this type first and holds the row with one
+    clear message instead of failing it.
+    """
+
+
 class AppleIntegrityError(AppleDownloadError):
     """A staged Apple file failed verification (integrity gate, issue #30).
 
@@ -293,7 +306,7 @@ async def _open_wrapper_session(*, base_url: str, decrypt_host: str, decrypt_por
             raise AppleCredentialsError(  # noqa: TRY003
                 "The Apple wrapper is not signed in: re-open setup in Settings under Providers, Apple Music, and complete the login step."
             ) from exc
-        raise AppleDownloadError(f"Apple wrapper is unreachable at {base_url}: {exc}") from exc  # noqa: TRY003
+        raise AppleWrapperDown(f"Apple wrapper is unreachable at {base_url}: {exc}") from exc  # noqa: TRY003
 
 
 async def _fetch_alac_staged(

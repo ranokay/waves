@@ -15492,7 +15492,12 @@ ApplicationWindow {
                                         textFormat: Text.PlainText  // composed from a remote artist name
                                         text: {
                                             var a = model.artist ? model.artist + " · " : ""
-                                            if (qrow.st === "queued") return a + "Queued"
+                                            // Session supervision (issue #33): HELD and
+                                            // THROTTLED are presentations, not new
+                                            // states. A held row stays queued with its
+                                            // reason; a throttled row stays running
+                                            // with its countdown.
+                                            if (qrow.st === "queued") return a + (model.reason ? model.reason : "Queued")
                                             // A failure states WHAT failed when the job
                                             // knows ("6 of 501 tracks failed"): on a long
                                             // playlist the collapsed row is the whole
@@ -15501,6 +15506,9 @@ ApplicationWindow {
                                             // saved none.
                                             if (qrow.st === "failed") return a + (model.reason ? model.reason : "Failed")
                                             if (qrow.st === "cancelled") return a + "Stopped"
+                                            // A throttled row states its countdown inside
+                                            // its normal downloading state.
+                                            if (qrow.st === "running" && model.reason) return a + model.reason
                                             if (model.collection && model.tracks > 0)
                                                 // Floor, not round: the roll-up now moves with the in-flight
                                                 // track, and 6.4 done of 12 must read "6/12", not "7/12".
