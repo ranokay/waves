@@ -344,7 +344,7 @@ def _component_meets(folder_name: str, part: str) -> bool:
         return folder_name.strip().casefold() == part
     pieces = re.split(r"(\{[^{}]*\})", part)
     rx = []
-    for piece in pieces:
+    for i, piece in enumerate(pieces):
         if re.fullmatch(r"\{[^{}]*\}", piece):
             rx.append(".*")
             continue
@@ -352,15 +352,21 @@ def _component_meets(folder_name: str, part: str) -> bool:
             continue
         # Edge whitespace never constrains: the pipeline trims component
         # edges, and a token beside the edge may substitute nothing. Only
-        # interior runs (inside core) stand verbatim. Trailing dots go the
-        # same way: the pipeline trims them after rendering ("{album_title}."
-        # lands as "Album"), so both sides meet stripped of them.
+        # interior runs (inside core) stand verbatim. Trailing dots trim
+        # only at the component's true end (nothing but emptiness follows):
+        # the pipeline trims them after rendering, so "{album_title}."
+        # meets the on-disk "Album", while the dot in "Atmos.{album_title}"
+        # sits before a value and stays put. A dots-only ending constrains
+        # nothing by itself -- but the evidence gate still demands proven
+        # Atmos Versions and no stereo before anything folds.
         edge = re.match(r"^(\s*)(.*?)(\s*)$", piece, re.DOTALL)
         lead, core, trail = edge.groups() if edge else ("", piece, "")
         if lead:
             rx.append(r"\s*")
-        if core.rstrip("."):
-            rx.append(re.escape(core.rstrip(".")))
+        if not any(pieces[i + 1 :]):
+            core = core.rstrip(".")
+        if core:
+            rx.append(re.escape(core))
         if trail:
             rx.append(r"\s*")
     return re.fullmatch("".join(rx), folder_name.strip().casefold().rstrip(".")) is not None
@@ -492,7 +498,7 @@ def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> t
     silences it, so a count grown by promotion never testifies with seconds
     that exclude it.
     """
-    parent_has_stereo = any(str(t.get("audio_type", "") or "") != "atmos" for t in by_folder.get(album_id, []))
+    parent_has_stereo = any(str(t.get("audio_type", "") or "") == "stereo" for t in by_folder.get(album_id, []))
     seen = [
         (matching.twin_key(t.get("title", ""), t.get("artist", "")), int(t.get("length", 0) or 0))
         for t in by_folder.get(album_id, [])

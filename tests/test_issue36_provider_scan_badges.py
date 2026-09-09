@@ -299,6 +299,34 @@ def test_atmos_parent_resolves_fragments():
     assert _atmos_parent("/lib/Artist/Album/Anything/Dolby Atmos", configured_only) is None
 
 
+def test_unknown_sibling_never_badges_atmos_too(tmp_path):
+    """TOO needs proven stereo: an unclassified file reads canonical for
+    counting but testifies to nothing."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["01.flac", "02.m4a"])
+
+    def read_tags(path):
+        return _tags(title=os.path.basename(path))
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith("02.m4a") else None,
+    )
+    assert idx.refresh(lib) == 1
+    album = next(idx.iter_albums())
+    assert album["tracks"] == 2
+    assert album["has_atmos"] is False
+
+
+def test_interior_dot_before_a_token_survives(tmp_path):
+    """A dot inside the component (before a token) is literal on disk: only
+    the component's true end trims."""
+    frags = _atmos_fragments("Atmos.{album_title}")
+    assert _atmos_parent("/lib/Artist/Album/Atmos.Discovery", frags) == "/lib/Artist/Album"
+    assert _atmos_parent("/lib/Artist/Album/Atmosphere", frags) is None
+
+
 def test_all_atmos_parent_fold_earns_no_too(tmp_path):
     """A parent holding only Atmos Versions (flat placement from before a
     subfolder switch) plus a folded all-Atmos subfolder is all-Atmos, not
