@@ -43,8 +43,8 @@ def _index(tmp_path, tagmap, audiomap=None):
 
     def read_audio_type(path):
         if audiomap is None:
-            return None
-        return audiomap.get(os.path.basename(path))
+            return "stereo"
+        return audiomap.get(os.path.basename(path), "stereo")
 
     return LibraryIndex(
         str(tmp_path / "library.sqlite3"),
@@ -83,7 +83,7 @@ def test_atmos_twins_attach_and_never_count(tmp_path):
     idx = LibraryIndex(
         str(tmp_path / "library.sqlite3"),
         read_tags=read_tags,
-        read_audio_type=lambda p: audiomap.get(os.path.basename(p)),
+        read_audio_type=lambda p: audiomap.get(os.path.basename(p), "stereo"),
     )
     assert idx.refresh(lib) == 1
     album = next(idx.iter_albums())
@@ -466,3 +466,94 @@ def test_maybe_proof_and_arbiter_inputs_unchanged(tmp_path):
         "local_rate": 0,
         "local_class": "",
     }
+
+
+def test_repeated_atmos_only_versions_count_once(tmp_path):
+    """Two files of one atmos-only track (numbered per-provider copies
+    sharing their tags) are one canonical entry: counting both inflates
+    coverage toward a full claim over a partial copy."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["song.m4a", "song (1).m4a"])
+
+    def read_tags(path):
+        return _tags(title="Song")
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos",
+    )
+    assert idx.refresh(lib) == 1
+    album = next(idx.iter_albums())
+    assert album["tracks"] == 1
+    assert album["has_atmos"] is False
+    assert len(list(idx.iter_tracks())) == 2
+
+
+def test_repeated_atmos_only_versions_in_the_subfolder_count_once(tmp_path):
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["01.flac"])
+    _mk(tmp_path, "lib/Artist/Album/Dolby Atmos", ["bonus.m4a", "bonus (1).m4a"])
+
+    def read_tags(path):
+        name = os.path.basename(path)
+        return _tags(title={"01.flac": "One"}.get(name, "Bonus"))
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    idx.refresh(lib)
+    local, _ = _presence_for(idx)
+    key = matching.presence_key("Album", "Artist")
+    assert local[key][0]["tracks"] == 2
+    assert local[key][0]["has_atmos"] is True
+
+
+def test_unknown_audio_type_retries_the_folder(tmp_path):
+    """A file whose tags read but whose Version probe fails persists
+    unknown (""), never "stereo", and the folder re-reads on the next scan
+    instead of believing the guess forever."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["01.flac", "02.m4a"])
+    calls: list[str] = []
+
+    def read_tags(path):
+        calls.append(path)
+        return _tags(title=os.path.basename(path))
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: None if p.endswith("02.m4a") else "stereo",
+    )
+    assert idx.refresh(lib) == 1
+    first_pass = len(calls)
+    rows = {r["title"]: r["audio_type"] for r in idx.iter_tracks()}
+    assert rows["02.m4a"] == ""
+    assert rows["01.flac"] == "stereo"
+    # Nothing changed on disk, yet the folder is owed a retry.
+    idx.refresh(lib)
+    assert len(calls) > first_pass
+
+
+def test_classified_audio_type_settles_the_folder(tmp_path):
+    """Once every file classifies, an unchanged folder is not re-read."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["01.flac", "02.m4a"])
+    calls: list[str] = []
+
+    def read_tags(path):
+        calls.append(path)
+        return _tags(title=os.path.basename(path))
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    assert idx.refresh(lib) == 1
+    first_pass = len(calls)
+    idx.refresh(lib)
+    assert len(calls) == first_pass

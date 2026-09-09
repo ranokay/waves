@@ -2002,11 +2002,26 @@ class LibraryIndex:
         with self._lock:
             rows = self._conn.execute("""SELECT folder_path, dir_mtime, codec, track_count, recorded_at,
                           (SELECT COUNT(*) FROM tracks WHERE tracks.folder_path = albums.folder_path),
-                          declared, runtime, has_atmos
+                          declared, runtime, has_atmos,
+                          (SELECT COUNT(*) FROM tracks
+                            WHERE tracks.folder_path = albums.folder_path AND tracks.audio_type = '')
                    FROM albums""").fetchall()
-        for path, mtime, codec, count, recorded, tracks, declared, runtime, has_atmos in rows:
+        for path, mtime, codec, count, recorded, tracks, declared, runtime, has_atmos, unknown in rows:
             resting = now - float(recorded or 0) < _UNREADABLE_RETRY_S
-            fresh = codec is not None and declared is not None and runtime is not None and has_atmos is not None
+            # Unknown is a file whose tags read but whose Version did not (a
+            # transient probe failure): the folder re-reads until every file
+            # classifies, so a guessed-at "stereo" never hardens into a
+            # permanent overcount. Classification succeeds on retry all but
+            # pathologically, so unlike an unreadable file this rests no
+            # window -- a folder that cannot classify retries every scan, and
+            # each retry is one folder's tag reads, not the library's.
+            fresh = (
+                codec is not None
+                and declared is not None
+                and runtime is not None
+                and has_atmos is not None
+                and unknown == 0
+            )
             out[path] = (mtime, fresh and tracks > 0 and (tracks >= count or resting))
         return out
 
@@ -2100,7 +2115,7 @@ class LibraryIndex:
                 progress(batch[-1], committed=True)
 
     @staticmethod
-    def _track_row(dirpath: str, tags: dict, audio_type: str = "stereo") -> tuple:
+    def _track_row(dirpath: str, tags: dict, audio_type: str | None = "stereo") -> tuple:
         """One file's row for the tracks table: its own title and track artist
         (falling back to the album artist when the per-track credit is blank)
         plus its stream quality. An untagged file still gets a row, empty title
@@ -2108,11 +2123,15 @@ class LibraryIndex:
         has had its per-file read, and an empty title honestly matches nothing.
 
         ``audio_type`` is which Version the file is (§8.4, issue #36):
-        "stereo" (the default, what every pre-Atmos row was) or "atmos" for
-        a Version attached to its canonical track rather than counted as one."""
+        "stereo" (the default, what every pre-Atmos row was), "atmos" for a
+        Version attached to its canonical track rather than counted as one,
+        or None/"" when the Version could not be read at all. Unknown reads
+        as canonical until classified, but it is persisted as unknown (never
+        laundered into "stereo") so the freshness gate retries the folder on
+        the next scan instead of believing the guess forever."""
         atype = str(audio_type or "").strip().lower()
         if atype not in ("stereo", "atmos"):
-            atype = "stereo"
+            atype = ""
         return (
             dirpath,
             str(tags.get("title", "") or ""),
@@ -2204,27 +2223,35 @@ class LibraryIndex:
             with contextlib.suppress(Exception):
                 atype = self._read_audio_type(os.path.join(dirpath, name))
             read.append((name, other, atype))
+
         # The partition: stereo files are canonical; an Atmos file with a
         # same-titled canonical sibling attaches to that track, one without
         # stays its own canonical entry (an atmos-only track). Compared on
         # the (title, artist) twin key, the same pair the track matcher keys
         # on, so distinct same-titled tracks never attach to each other; an
         # empty title can be nobody's twin and attaches, since a title-less
-        # row honestly matches nothing either way.
+        # row honestly matches nothing either way. A second Atmos Version of
+        # an already-promoted key attaches to the first: two files of one
+        # atmos-only track (numbered per-provider copies sharing their tags)
+        # are one canonical entry, never two, or coverage inflates toward a
+        # full claim over a partial copy.
+        def _key(tags: dict) -> tuple:
+            return matching.twin_key(tags.get("title", ""), tags.get("track_artist", "") or tags.get("artist", ""))
+
         stereo = [(n, t) for (n, t, a) in read if not _is_atmos_file(a)]
         atmos = [(n, t) for (n, t, a) in read if _is_atmos_file(a)]
-        twin_keys = {
-            matching.twin_key(t.get("title", ""), t.get("track_artist", "") or t.get("artist", "")) for (_, t) in stereo
-        } - {matching.twin_key("", "")}
+        twin_keys = {_key(t) for (_, t) in stereo} - {matching.twin_key("", "")}
         promoted: list[tuple[str, dict]] = []
+        promoted_keys: set = set()
         for name, other in atmos:
             title = str(other.get("title", "") or "").strip()
-            key = matching.twin_key(title, other.get("track_artist", "") or other.get("artist", ""))
-            if not title or key not in twin_keys:
-                # No canonical twin: an atmos-only track stays its own
-                # canonical entry. One WITH a twin attaches to that track
-                # and is simply not promoted.
-                promoted.append((name, other))
+            key = _key(other)
+            if title and key in twin_keys:
+                continue  # attaches to its canonical twin
+            if key in promoted_keys:
+                continue  # attaches to the already-promoted same track
+            promoted_keys.add(key)
+            promoted.append((name, other))
         canonical = stereo + promoted
         # The unreadable files (in the walk's listing but yielding no tags)
         # keep their historical benefit of the doubt as canonical: their
@@ -2233,7 +2260,10 @@ class LibraryIndex:
         unreadable = len(audio) - len(read)
         has_atmos = bool(atmos) and bool(stereo)
         first_is_canon = not _is_atmos_file(first_type) or any(n == first_audio for (n, _) in promoted)
-        tracks = [self._track_row(dirpath, tags, "atmos" if _is_atmos_file(first_type) else "stereo")]
+        # The representative's row carries its read Version through, unknown
+        # included: persisting a guess would retire the folder from its
+        # classification retry (see _track_row and the freshness gate).
+        tracks = [self._track_row(dirpath, tags, first_type)]
         want = str(tags.get("album", "") or "").strip().casefold()
         # What the folder's files SAY the release is, believed only when they
         # speak with one voice. Silence is not disagreement (the same principle
@@ -2259,7 +2289,7 @@ class LibraryIndex:
             if name in canon_names:
                 for key, seen in shape.items():
                     seen.add(int(other.get(key, 0) or 0))
-            tracks.append(self._track_row(dirpath, other, "atmos" if _is_atmos_file(atype) else "stereo"))
+            tracks.append(self._track_row(dirpath, other, atype))
         if dissent:
             # Only the files that positively voted for the majority album are
             # counted. Subtracting the dissenters from the raw file count
@@ -2492,7 +2522,9 @@ class LibraryIndex:
             row = self._conn.execute(
                 """SELECT dir_mtime, track_count, codec, recorded_at,
                           (SELECT COUNT(*) FROM tracks WHERE tracks.folder_path = albums.folder_path),
-                          declared, runtime, raw_count, has_atmos
+                          declared, runtime, raw_count, has_atmos,
+                          (SELECT COUNT(*) FROM tracks
+                            WHERE tracks.folder_path = albums.folder_path AND tracks.audio_type = '')
                    FROM albums WHERE folder_path = ?""",
                 (folder_path,),
             ).fetchone()
@@ -2506,10 +2538,11 @@ class LibraryIndex:
         count, and the verdict itself is plain Python (_unchanged_verdict)."""
         with self._lock:
             rows = self._conn.execute("""SELECT albums.folder_path, dir_mtime, track_count, codec, recorded_at,
-                          COALESCE(tc.n, 0), declared, runtime, raw_count, has_atmos
+                          COALESCE(tc.n, 0), declared, runtime, raw_count, has_atmos, COALESCE(tc.u, 0)
                    FROM albums
-                   LEFT JOIN (SELECT folder_path, COUNT(*) AS n FROM tracks
-                              GROUP BY folder_path) tc
+                   LEFT JOIN (SELECT folder_path, COUNT(*) AS n,
+                                     SUM(CASE WHEN audio_type = '' THEN 1 ELSE 0 END) AS u
+                              FROM tracks GROUP BY folder_path) tc
                      ON tc.folder_path = albums.folder_path""").fetchall()
         return {r[0]: r[1:] for r in rows}
 
@@ -2544,6 +2577,10 @@ class LibraryIndex:
             # NULL has_atmos is a row from before Atmos capture (§8.4, issue
             # #36); one re-read backfills it (0/1, like runtime above).
             and row[8] is not None
+            # Unclassified track rows (audio_type '') are a transient probe
+            # failure mid-read, never a finished answer: the folder re-reads
+            # until every file classifies (§8.4).
+            and row[9] == 0
             and row[4] > 0
             and (row[4] >= row[1] or time.time() - float(row[3] or 0) < _UNREADABLE_RETRY_S)
         )

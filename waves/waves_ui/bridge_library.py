@@ -384,18 +384,22 @@ def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> t
 
     A re-homed Atmos Version with a same-titled canonical twin in the parent
     attaches and never counts; one without is an atmos-only track, its own
-    canonical entry, counted. Either way the album holds Atmos Versions.
+    canonical entry, counted -- once no matter how many files carry it, or
+    numbered per-provider copies inflate coverage toward a full claim over a
+    partial copy. Either way the album holds Atmos Versions.
     """
-    parent_twins = {
+    seen = {
         matching.twin_key(t.get("title", ""), t.get("artist", ""))
         for t in by_folder.get(album_id, [])
         if str(t.get("title", "") or "").strip()
     }
     extra = 0
     for t in sub_tracks:
-        title = str(t.get("title", "") or "").strip()
-        if not title or matching.twin_key(title, t.get("artist", "")) not in parent_twins:
-            extra += 1
+        key = matching.twin_key(str(t.get("title", "") or "").strip(), t.get("artist", ""))
+        if key in seen:
+            continue  # attaches to its twin or the already-counted same track
+        seen.add(key)
+        extra += 1
     return extra, True
 
 
