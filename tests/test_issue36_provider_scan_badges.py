@@ -299,6 +299,39 @@ def test_atmos_parent_resolves_fragments():
     assert _atmos_parent("/lib/Artist/Album/Anything/Dolby Atmos", configured_only) is None
 
 
+def test_all_atmos_parent_fold_earns_no_too(tmp_path):
+    """A parent holding only Atmos Versions (flat placement from before a
+    subfolder switch) plus a folded all-Atmos subfolder is all-Atmos, not
+    ATMOS TOO: the badge needs stereo too."""
+    lib = _mk(tmp_path, "lib", [])
+    parent = _mk(tmp_path, "lib/Artist/Album", ["01.m4a"])
+    _mk(tmp_path, "lib/Artist/Album/Dolby Atmos", ["02.m4a"])
+
+    def read_tags(path):
+        name = os.path.basename(path)
+        return _tags(title={"01.m4a": "One", "02.m4a": "Two"}[name])
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos",
+    )
+    idx.refresh(lib)
+    local, _ = _presence_for(idx)
+    key = matching.presence_key("Album", "Artist")
+    assert len(local[key]) == 1
+    assert local[key][0]["tracks"] == 2
+    assert local[key][0]["has_atmos"] is False
+    assert local[key][0]["id"] == parent
+
+
+def test_trailing_dot_fragment_meets_trimmed_folder():
+    """The pipeline trims trailing dots after rendering: a placeholder
+    fragment keeps meeting the on-disk spelling."""
+    frags = _atmos_fragments("{album_title}.")
+    assert _atmos_parent("/lib/Artist/Album/Discovery", frags) == "/lib/Artist/Album"
+
+
 def test_dropped_placeholder_level_folds_to_the_album(tmp_path):
     """A placeholder-only level rendering empty drops out of the path: the
     Versions land one level higher, and the fold follows them."""

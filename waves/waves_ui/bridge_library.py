@@ -338,7 +338,8 @@ def _component_meets(folder_name: str, part: str) -> bool:
     nor "Album Atmos Deluxe". Tokens match any (possibly empty) span, and
     whitespace beside a token is flexible: an empty substitution lets the
     pipeline trim it, so the badge does not depend on what the token held.
-    """
+    Trailing dots go the same way on both sides: the pipeline trims them
+    after rendering, so "{album_title}." meets the on-disk "Album"."""
     if "{" not in part or "}" not in part:
         return folder_name.strip().casefold() == part
     pieces = re.split(r"(\{[^{}]*\})", part)
@@ -351,16 +352,18 @@ def _component_meets(folder_name: str, part: str) -> bool:
             continue
         # Edge whitespace never constrains: the pipeline trims component
         # edges, and a token beside the edge may substitute nothing. Only
-        # interior runs (inside core) stand verbatim.
+        # interior runs (inside core) stand verbatim. Trailing dots go the
+        # same way: the pipeline trims them after rendering ("{album_title}."
+        # lands as "Album"), so both sides meet stripped of them.
         edge = re.match(r"^(\s*)(.*?)(\s*)$", piece, re.DOTALL)
         lead, core, trail = edge.groups() if edge else ("", piece, "")
         if lead:
             rx.append(r"\s*")
-        if core:
-            rx.append(re.escape(core))
+        if core.rstrip("."):
+            rx.append(re.escape(core.rstrip(".")))
         if trail:
             rx.append(r"\s*")
-    return re.fullmatch("".join(rx), folder_name.strip().casefold()) is not None
+    return re.fullmatch("".join(rx), folder_name.strip().casefold().rstrip(".")) is not None
 
 
 def _match_parses(folder_id: str, frag: tuple) -> list:
@@ -479,12 +482,17 @@ def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> t
     titled key dedupes or attaches, and the dedupe wants seconds evidence
     too (title, artist and length within two seconds, the track matcher's own
     bar for seconds testifying): exact title/artist equality does not prove
-    two album positions are copies. Either way the album holds Atmos
-    Versions. ``extra_runtime`` sums the promoted tracks' seconds (None when
+    two album positions are copies. ``has_atmos`` is the parent's stereo
+    presence, not a constant: the folded folder brings proven Atmos Versions
+    (the fold gate demands it), but "TOO" needs stereo too -- a parent
+    holding only Atmos Versions (flat placement from before a subfolder
+    switch) earns no micro-badge. Either way the album holds Atmos Versions.
+    ``extra_runtime`` sums the promoted tracks' seconds (None when
     any promoted track never said): the caller folds them into the runtime or
     silences it, so a count grown by promotion never testifies with seconds
     that exclude it.
     """
+    parent_has_stereo = any(str(t.get("audio_type", "") or "") != "atmos" for t in by_folder.get(album_id, []))
     seen = [
         (matching.twin_key(t.get("title", ""), t.get("artist", "")), int(t.get("length", 0) or 0))
         for t in by_folder.get(album_id, [])
@@ -509,7 +517,7 @@ def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> t
             promoted.append((key, length))
         extra += 1
         extra_runtime = extra_runtime + length if extra_runtime is not None and length > 0 else None
-    return extra, True, extra_runtime
+    return extra, parent_has_stereo, extra_runtime
 
 
 def _rehome_map(folded: dict, by_id: dict) -> dict:
@@ -689,7 +697,11 @@ class LibraryMixin:
             has_atmos = bool(a.get("has_atmos"))
             runtime = int(a.get("runtime", 0) or 0)
             if a["id"] in folded:
-                extra, has_atmos, extra_runtime = _folded_parent_counts(a["id"], by_folder, folded[a["id"]])
+                extra, folded_atmos, extra_runtime = _folded_parent_counts(a["id"], by_folder, folded[a["id"]])
+                # Either scope's Versions light the badge: the folder's own
+                # (read at scan time) or the subfolder's (proven by the fold
+                # gate, with stereo proven in the parent).
+                has_atmos = has_atmos or folded_atmos
                 # A count grown by promoted Atmos-only tracks must testify
                 # with their seconds too: the folder's runtime excludes them,
                 # and an incomplete sum refutes true matches instead of
