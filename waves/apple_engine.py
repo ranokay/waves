@@ -576,10 +576,10 @@ def apple_tier_for_delivery(
 
     AAC 256 -> HIGH (Apple has no LOW); ALAC 16-bit -> LOSSLESS; ALAC
     24-bit -> HI_RES_LOSSLESS (24/96 and 24/192 are both this rung; the
-    "24/192" detail rides label text, never rank). Bit depth decides;
-    sample rate only breaks the tie when depth is unknown. Atmos E-AC-3
-    answers HIGH: the drawer words it ATMOS, never a rung. Unknown stays
-    on the fallback, never invented.
+    "24/192" detail rides label text, never rank). Bit depth alone decides
+    hi-res: a rate without a depth never promotes (a 16-bit 48 kHz master
+    stays LOSSLESS). Atmos E-AC-3 answers HIGH: the drawer words it ATMOS,
+    never a rung. Unknown stays on the fallback, never invented.
     """
     from waves.constants import QualityTier
 
@@ -596,8 +596,6 @@ def apple_tier_for_delivery(
             return QualityTier.HI_RES_LOSSLESS.value
         if depth > 0:
             return QualityTier.LOSSLESS.value
-        if rate > 44100:
-            return QualityTier.HI_RES_LOSSLESS.value
         if rate > 0:
             return QualityTier.LOSSLESS.value
         return str(fallback or QualityTier.HIGH.value)
@@ -610,8 +608,9 @@ def apple_delivery_detail(codec: str, bit_depth: int | None, sample_rate: int | 
     """Label text for an Apple delivery ("ALAC 24/192"), never a rank.
 
     The Chooser and the queue's plain-words readout render this detail as
-    text; the rank comparison reads only the tier (spec §4.3). Empty when
-    nothing is known.
+    text; the rank comparison reads only the tier (spec §4.3). Rates render
+    in kHz (96000 -> "96", 44100 -> "44.1"), matching the documented
+    "ALAC 24/192" shape. Empty when nothing is known.
     """
     norm = str(codec or "").lower().replace("-", "").replace("_", "")
     if norm == "alac":
@@ -629,10 +628,11 @@ def apple_delivery_detail(codec: str, bit_depth: int | None, sample_rate: int | 
     except (TypeError, ValueError):
         rate = 0
     depth = int(bit_depth) if isinstance(bit_depth, int) and bit_depth > 0 else 0
-    if depth and rate:
-        return f"{name} {depth}/{rate}"
+    khz = f"{rate / 1000:g}" if rate > 0 else ""
+    if depth and khz:
+        return f"{name} {depth}/{khz}"
     if depth:
         return f"{name} {depth}-bit"
-    if rate:
-        return f"{name} {rate} Hz"
+    if khz:
+        return f"{name} {khz} kHz"
     return name

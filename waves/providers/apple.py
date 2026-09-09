@@ -808,11 +808,13 @@ class AppleProvider(Provider):
         self._staged[str(delivery.staged_path)] = delivery
         # Honest tier off the staged bytes: the master may top out at 24/96
         # where HI_RES was asked, and the readout must say so. Detail rides
-        # codecs/bit_depth/sample_rate; the tier alone ranks.
+        # codecs/bit_depth/sample_rate; the tier alone ranks. A probe that
+        # fails too cannot record the ask as verified: ALAC proves at least
+        # LOSSLESS, so that is the substitute, never the requested rung.
         try:
             probe = probe_audio_file(str(delivery.staged_path), self._probe_path())
         except Exception:
-            logger.debug("Apple ALAC probe failed; trusting the ask", exc_info=True)
+            logger.debug("Apple ALAC probe failed; recording LOSSLESS, not the ask", exc_info=True)
             probe = {"codec": "alac", "sample_rate": "", "bit_depth": None}
         codec = str(probe.get("codec") or "alac")
         bit_depth = probe.get("bit_depth")
@@ -820,7 +822,7 @@ class AppleProvider(Provider):
             sample_rate: int | None = int(str(probe.get("sample_rate") or "").strip())
         except (TypeError, ValueError):
             sample_rate = None
-        tier_value = apple_tier_for_delivery(codec, bit_depth, sample_rate or "", fallback=want.value)
+        tier_value = apple_tier_for_delivery(codec, bit_depth, sample_rate or "", fallback=QualityTier.LOSSLESS.value)
         logger.debug(
             "Apple ALAC delivery %s",
             apple_delivery_detail(codec, bit_depth, sample_rate or ""),

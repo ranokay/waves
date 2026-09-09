@@ -12811,7 +12811,7 @@ class WavesBridge(LibraryMixin, QObject):
         # row carries reality, not the ask. Detail rides bit_depth/
         # sample_rate/codecs label text, never rank.
         try:
-            landed_probe = probe_audio_file(dest) or {}
+            landed_probe = probe_audio_file(dest, self._apple_probe()) or {}
         except Exception:
             landed_probe = {}
         try:

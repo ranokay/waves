@@ -43,10 +43,12 @@ def test_tier_mapping_is_honest_and_detail_never_ranks():
     assert apple_tier_for_delivery("alac", 16, 48000) == QualityTier.LOSSLESS.value
     assert apple_tier_for_delivery("alac", 24, 96000) == QualityTier.HI_RES_LOSSLESS.value
     assert apple_tier_for_delivery("alac", 24, 192000) == QualityTier.HI_RES_LOSSLESS.value
+    # Depth unknown never promotes from rate alone.
+    assert apple_tier_for_delivery("alac", None, 96000) == QualityTier.LOSSLESS.value
     # 24/96 and 24/192 share the one rung; the numbers ride the label.
     assert apple_tier_for_delivery("alac", 24, 96000) == apple_tier_for_delivery("alac", 24, 192000)
-    assert apple_delivery_detail("alac", 24, 96000) == "ALAC 24/96000"
-    assert apple_delivery_detail("alac", 24, 192000) == "ALAC 24/192000"
+    assert apple_delivery_detail("alac", 24, 96000) == "ALAC 24/96"
+    assert apple_delivery_detail("alac", 24, 192000) == "ALAC 24/192"
     assert quality_rank(apple_tier_for_delivery("alac", 24, 96000)) == quality_rank(
         apple_tier_for_delivery("alac", 24, 192000)
     )
@@ -240,6 +242,34 @@ def test_corrupt_alac_never_falls_back_to_aac(tmp_path, monkeypatch):
         provider.resolve_stream(_song_resource(), QualityTier.HI_RES_LOSSLESS, AudioType.STEREO)
 
 
+def test_probe_failure_records_lossless_not_the_ask(tmp_path, monkeypatch):
+    """A failed probe cannot record the requested rung as verified."""
+    from types import SimpleNamespace as _NS
+
+    import waves.apple_engine as engine
+
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"fake-alac")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.setattr(
+        engine,
+        "download_song_alac_file",
+        lambda **kwargs: _NS(staged_path=staged, workdir=workdir, is_atmos=False, codec="alac"),
+    )
+
+    def _no_probe(path, ffprobe_path=""):
+        raise RuntimeError("no ffprobe here")
+
+    monkeypatch.setattr(engine, "probe_audio_file", _no_probe)
+    provider = AppleProvider(catalog=None)
+    provider.wrapper_url = "http://127.0.0.1:51234"
+
+    info = provider.resolve_stream(_song_resource(), QualityTier.HI_RES_LOSSLESS, AudioType.STEREO)
+    assert info.delivered["tier"] == QualityTier.LOSSLESS.value
+    provider.discard_delivery(str(staged))
+
+
 def test_wrapper_session_persists_across_provider_restarts(tmp_path, monkeypatch):
     """Same URL, new provider instance, no re-login: the guest holds the session."""
     import waves.apple_engine as engine
@@ -279,7 +309,7 @@ def test_probe_bit_depth_prefers_bits_per_sample():
     assert engine._probe_bit_depth({}) is None
 
 
-def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path):
+def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path, monkeypatch):
     from waves.apple_runtime import AppleRuntimeManager
     from waves.waves_ui.backend import WavesBridge
 
@@ -291,10 +321,11 @@ def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path):
     )
     stub._resolve_apple_wrapper_url = WavesBridge._resolve_apple_wrapper_url.__get__(stub, SimpleNamespace)
     assert stub._resolve_apple_wrapper_url().endswith(f":{persisted}")
-    stub.settings.data.apple_wrapper_port = 50000 if persisted != 50000 else 50001
-    # Override wins when free; either way it names the override port.
-    url = stub._resolve_apple_wrapper_url()
-    assert url.endswith(f":{stub.settings.data.apple_wrapper_port}") or url.endswith(f":{persisted}")
+    override = 50000 if persisted != 50000 else 50001
+    stub.settings.data.apple_wrapper_port = override
+    monkeypatch.setattr("waves.apple_runtime._port_free", lambda port: True)
+    # Override accepted: the resolved URL names it explicitly.
+    assert stub._resolve_apple_wrapper_url().endswith(f":{override}")
 
 
 def test_expected_word_caps_by_ceiling():
