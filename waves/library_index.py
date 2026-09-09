@@ -2228,13 +2228,13 @@ class LibraryIndex:
         # same-titled canonical sibling attaches to that track, one without
         # stays its own canonical entry (an atmos-only track). Compared on
         # the (title, artist) twin key, the same pair the track matcher keys
-        # on, so distinct same-titled tracks never attach to each other; an
-        # empty title can be nobody's twin and attaches, since a title-less
-        # row honestly matches nothing either way. A second Atmos Version of
-        # an already-promoted key attaches to the first: two files of one
-        # atmos-only track (numbered per-provider copies sharing their tags)
-        # are one canonical entry, never two, or coverage inflates toward a
-        # full claim over a partial copy.
+        # on, so distinct same-titled tracks never attach to each other. Only
+        # a titled key dedupes: with no title there is no evidence two files
+        # are twins, so untitled Versions each stay their own entry. A second
+        # Atmos Version of an already-promoted key attaches to the first: two
+        # files of one atmos-only track (numbered per-provider copies sharing
+        # their tags) are one canonical entry, never two, or coverage
+        # inflates toward a full claim over a partial copy.
         def _key(tags: dict) -> tuple:
             return matching.twin_key(tags.get("title", ""), tags.get("track_artist", "") or tags.get("artist", ""))
 
@@ -2248,9 +2248,10 @@ class LibraryIndex:
             key = _key(other)
             if title and key in twin_keys:
                 continue  # attaches to its canonical twin
-            if key in promoted_keys:
+            if title and key in promoted_keys:
                 continue  # attaches to the already-promoted same track
-            promoted_keys.add(key)
+            if title:
+                promoted_keys.add(key)
             promoted.append((name, other))
         canonical = stereo + promoted
         # The unreadable files (in the walk's listing but yielding no tags)
@@ -2259,12 +2260,19 @@ class LibraryIndex:
         # a transient read hiccup.
         unreadable = len(audio) - len(read)
         has_atmos = bool(atmos) and bool(stereo)
-        first_is_canon = not _is_atmos_file(first_type) or any(n == first_audio for (n, _) in promoted)
+        # The album-level facts come from a canonical file, never an attached
+        # Version: with flat placement the walk's first file can be an Atmos
+        # twin whose provider spells the album differently, and judging the
+        # canonical siblings against it zeroes the count and files the album
+        # under the wrong edition. Stereo first; an all-Atmos folder promotes
+        # everything, so the fallback is canonical too. The per-file rows keep
+        # walk order (the representative row first) -- order carries nothing.
+        rep_name, rep = (stereo[0][0], stereo[0][1]) if stereo else (first_audio, tags)
         # The representative's row carries its read Version through, unknown
         # included: persisting a guess would retire the folder from its
         # classification retry (see _track_row and the freshness gate).
         tracks = [self._track_row(dirpath, tags, first_type)]
-        want = str(tags.get("album", "") or "").strip().casefold()
+        want = str(rep.get("album", "") or "").strip().casefold()
         # What the folder's files SAY the release is, believed only when they
         # speak with one voice. Silence is not disagreement (the same principle
         # as the album check below: only positive evidence rejects), so a stray
@@ -2274,8 +2282,8 @@ class LibraryIndex:
         # sitting flat in one folder, and its own file count already covers it.
         # The vote runs on the canonical set only: an attached Version's tags
         # describe the same release and must neither prove nor dispute it.
-        shape = {k: {int(tags.get(k, 0) or 0)} for k in ("track_total", "disc_no", "disc_total")}
-        agree, dissent = (1 if want and first_is_canon else 0), 0
+        shape = {k: {int(rep.get(k, 0) or 0)} for k in ("track_total", "disc_no", "disc_total")}
+        agree, dissent = (1 if want and rep_name == first_audio else 0), 0
         canon_names = {n for (n, _) in canonical}
         for name, other, atype in read:
             if name == first_audio:
@@ -2331,16 +2339,16 @@ class LibraryIndex:
         )
         return (
             dirpath,
-            tags.get("album", ""),
-            tags.get("artist", ""),
-            tags.get("date", ""),
+            rep.get("album", ""),
+            rep.get("artist", ""),
+            rep.get("date", ""),
             count,
             mtime,
             int(time.time()),
-            str(tags.get("codec", "") or ""),
-            int(tags.get("bitrate", 0) or 0),
-            int(tags.get("bits", 0) or 0),
-            int(tags.get("rate", 0) or 0),
+            str(rep.get("codec", "") or ""),
+            int(rep.get("bitrate", 0) or 0),
+            int(rep.get("bits", 0) or 0),
+            int(rep.get("rate", 0) or 0),
             agreed("track_total"),
             agreed("disc_no"),
             agreed("disc_total"),

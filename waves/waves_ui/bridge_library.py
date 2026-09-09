@@ -276,55 +276,58 @@ def _atmos_fragments(configured: str) -> set:
     return frags
 
 
-def _fragment_literals(fragment: tuple) -> tuple:
-    """A fragment's literal (non-placeholder) folder-name segments.
+def _fragment_literals(component: str) -> tuple:
+    """One fragment component's literal (non-placeholder) segments, in order.
 
-    Splits each component on "{...}" tokens and keeps the non-blank
-    remainder, so "{album_title} Atmos" contributes "atmos". Empty when the
-    fragment is placeholders alone -- nothing matchable without the album's
-    own media context, so such a fragment never matches (safe direction).
+    Splits on "{...}" tokens and keeps the non-blank remainder, so
+    "{album_title} Atmos" contributes ("atmos",). Empty when the component
+    is placeholders alone -- nothing matchable without the album's own media
+    context, so such a component constrains nothing (safe direction: the
+    evidence gate still demands proven Atmos Versions and no stereo).
     """
-    literals = []
-    for component in fragment:
-        for chunk in re.split(r"\{[^{}]*\}", component):
-            chunk = chunk.strip()
-            if chunk:
-                literals.append(chunk)
-    return tuple(literals)
+    return tuple(chunk.strip() for chunk in re.split(r"\{[^{}]*\}", component) if chunk.strip())
+
+
+def _component_meets(folder_name: str, part: str) -> bool:
+    """Whether one path component meets one fragment component: equality for
+    a literal part, in-order literals for a placeholder-shaped one."""
+    if "{" not in part or "}" not in part:
+        return folder_name.strip().casefold() == part
+    name = folder_name.casefold()
+    pos = 0
+    literals = _fragment_literals(part)
+    for lit in literals:
+        at = name.find(lit, pos)
+        if at < 0:
+            return False
+        pos = at + len(lit)
+    return True
 
 
 def _match_fragment(folder_id: str, frag: tuple) -> str | None:
     """Strip one fragment off a folder, returning the album folder, or None.
 
-    Components compare back to front with the OS splitter; a placeholder
-    component matches any single level (its value renders per album, and the
-    scan holds tags, not the media objects the renderer substitutes).
+    Components compare back to front with the OS splitter, every level
+    verified: a literal level wants equality, a placeholder-shaped level
+    wants its literals in order ("{album_title} Atmos" meets
+    "Discovery Atmos", and "{album_title} Surround/Dolby Atmos" still
+    demands a real "Surround" level). A fragment whose every level is
+    placeholders alone never matches -- with no literals there is nothing
+    to meet.
     """
     rest = str(folder_id or "")
-    exact = True
+    met_literal = False
     for part in reversed(frag):
         head, tail = os.path.split(rest)
         if not head or head == rest:
             return None
-        if "{" in part and "}" in part:
-            exact = False
-        elif tail.strip().casefold() != part:
+        if not _component_meets(tail, part):
             return None
+        met_literal = met_literal or _fragment_literals(part) != ()
         rest = head
-    if rest == str(folder_id or ""):
+    if rest == str(folder_id or "") or not met_literal:
         return None
-    if exact:
-        return rest
-    # Placeholder-shaped: the leaf's literals must read in order.
-    leaf = os.path.basename(str(folder_id or "")).casefold()
-    literals = _fragment_literals((frag[-1],))
-    pos = 0
-    for lit in literals:
-        at = leaf.find(lit, pos)
-        if at < 0:
-            return None
-        pos = at + len(lit)
-    return rest if literals else None
+    return rest
 
 
 def _atmos_parent(folder_id: str, fragments: set) -> str | None:
@@ -379,14 +382,19 @@ def _fold_atmos_subfolders(albums: list, by_folder: dict, fragments: set) -> tup
     return folded, {t["id"] for sub in folded.values() for t in sub}
 
 
-def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> tuple[int, bool]:
-    """A folded parent's ``(extra_tracks, has_atmos)`` (§8.4, issue #36).
+def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> tuple[int, bool, int | None]:
+    """A folded parent's ``(extra_tracks, has_atmos, extra_runtime)`` (§8.4, issue #36).
 
     A re-homed Atmos Version with a same-titled canonical twin in the parent
     attaches and never counts; one without is an atmos-only track, its own
     canonical entry, counted -- once no matter how many files carry it, or
     numbered per-provider copies inflate coverage toward a full claim over a
-    partial copy. Either way the album holds Atmos Versions.
+    partial copy. Only a titled key dedupes or attaches: with no title there
+    is no evidence two files are twins. Either way the album holds Atmos
+    Versions. ``extra_runtime`` sums the promoted tracks' seconds (None when
+    any promoted track never said): the caller folds them into the runtime or
+    silences it, so a count grown by promotion never testifies with seconds
+    that exclude it.
     """
     seen = {
         matching.twin_key(t.get("title", ""), t.get("artist", ""))
@@ -394,13 +402,18 @@ def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> t
         if str(t.get("title", "") or "").strip()
     }
     extra = 0
+    extra_runtime: int | None = 0
     for t in sub_tracks:
-        key = matching.twin_key(str(t.get("title", "") or "").strip(), t.get("artist", ""))
-        if key in seen:
+        title = str(t.get("title", "") or "").strip()
+        key = matching.twin_key(title, t.get("artist", ""))
+        if title and key in seen:
             continue  # attaches to its twin or the already-counted same track
-        seen.add(key)
+        if title:
+            seen.add(key)
         extra += 1
-    return extra, True
+        length = int(t.get("length", 0) or 0)
+        extra_runtime = extra_runtime + length if extra_runtime is not None and length > 0 else None
+    return extra, True, extra_runtime
 
 
 def _rehome_map(folded: dict, by_id: dict) -> dict:
@@ -578,8 +591,16 @@ class LibraryMixin:
                 continue
             extra = 0
             has_atmos = bool(a.get("has_atmos"))
+            runtime = int(a.get("runtime", 0) or 0)
             if a["id"] in folded:
-                extra, has_atmos = _folded_parent_counts(a["id"], by_folder, folded[a["id"]])
+                extra, has_atmos, extra_runtime = _folded_parent_counts(a["id"], by_folder, folded[a["id"]])
+                # A count grown by promoted Atmos-only tracks must testify
+                # with their seconds too: the folder's runtime excludes them,
+                # and an incomplete sum refutes true matches instead of
+                # proving them. Complete on both sides, the seconds join;
+                # anything less, the witness stands down (0, "never said").
+                if extra:
+                    runtime = runtime + extra_runtime if runtime > 0 and extra_runtime is not None else 0
             # A Various-Artists credit is refused HERE, on the raw tag,
             # because the artist folds can move a marker out of the
             # detectors' reach ("V / A" splits at the spaced slash to a
@@ -616,10 +637,11 @@ class LibraryMixin:
                     "disc_no": a.get("disc_no", 0),
                     "disc_total": a.get("disc_total", 0),
                     # The folder's summed play length in seconds (0 when
-                    # its files never said), the identity witness no tag
-                    # has to carry: it can prove an undated match and
-                    # refute a same-count impostor.
-                    "runtime": a.get("runtime", 0),
+                    # its files never said), grown by promoted Atmos-only
+                    # tracks above -- the identity witness no tag has to
+                    # carry: it can prove an undated match and refute a
+                    # same-count impostor.
+                    "runtime": runtime,
                 }
             )
         by_track: dict = {}

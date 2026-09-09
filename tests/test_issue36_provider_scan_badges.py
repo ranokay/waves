@@ -278,6 +278,17 @@ def test_atmos_parent_resolves_fragments():
     assert _atmos_parent("/lib/Artist/Album/Discovery", frags) is None
     # Placeholders alone match nothing: no literals, no evidence-free fold.
     assert _atmos_parent("/lib/Artist/Album/2024", _atmos_fragments("{album_year}")) is None
+    # Every level verifies: a placeholder before the leaf still demands the
+    # leaf's literals, and a literal intermediate still demands its name.
+    multi = _atmos_fragments("{album_title} Surround/Dolby Atmos")
+    assert _atmos_parent("/lib/Artist/Album/Discovery Surround/Dolby Atmos", multi) == "/lib/Artist/Album"
+    # The default still meets a bare leaf; the configured multi does not meet
+    # a wrong intermediate (its parent is no album, so no fold either way).
+    assert _atmos_parent("/lib/Artist/Album/Discovery Surround/Dolby Atmos", {("dolby atmos",)}) == (
+        "/lib/Artist/Album/Discovery Surround"
+    )
+    configured_only = {f for f in multi if len(f) > 1}
+    assert _atmos_parent("/lib/Artist/Album/Anything/Dolby Atmos", configured_only) is None
 
 
 def test_placeholder_fragment_folds_to_the_album(tmp_path):
@@ -536,6 +547,78 @@ def test_unknown_audio_type_retries_the_folder(tmp_path):
     # Nothing changed on disk, yet the folder is owed a retry.
     idx.refresh(lib)
     assert len(calls) > first_pass
+
+
+def test_album_identity_comes_from_a_canonical_file(tmp_path):
+    """With flat placement the walk's first file can be an attached Atmos
+    twin: the album facts still come from the canonical siblings, so a twin
+    spelling the album differently neither zeroes the count nor files the
+    album under the wrong edition."""
+    lib = _mk(tmp_path, "lib", [])
+    # Sorted first: the Atmos twin with the foreign spelling.
+    _mk(tmp_path, "lib/Artist/Album", ["00.m4a", "01.flac", "02.flac"])
+
+    def read_tags(path):
+        name = os.path.basename(path)
+        if name == "00.m4a":
+            return _tags(album="Album (Deluxe)", title="One")
+        return _tags(title={"01.flac": "One", "02.flac": "Two"}[name])
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    assert idx.refresh(lib) == 1
+    album = next(idx.iter_albums())
+    assert album["title"] == "Album"
+    assert album["tracks"] == 2
+    assert album["has_atmos"] is True
+
+
+def test_untitled_atmos_versions_each_count(tmp_path):
+    """With no title there is no evidence two files are twins: untitled
+    Atmos Versions each stay their own entry."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["a.m4a", "b.m4a"])
+
+    def read_tags(path):
+        return _tags(title="")
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos",
+    )
+    assert idx.refresh(lib) == 1
+    assert next(idx.iter_albums())["tracks"] == 2
+
+
+def test_promoted_subfolder_tracks_lend_their_seconds(tmp_path):
+    """A count grown by promoted Atmos-only tracks testifies with their
+    seconds too: the verdict stays proven instead of refuting on an
+    incomplete sum."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["01.flac", "02.flac"])
+    _mk(tmp_path, "lib/Artist/Album/Dolby Atmos", ["bonus.m4a"])
+
+    def read_tags(path):
+        name = os.path.basename(path)
+        titles = {"01.flac": "One", "02.flac": "Two", "bonus.m4a": "Bonus"}
+        return _tags(title=titles[name], length=200)
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    idx.refresh(lib)
+    local, _ = _presence_for(idx)
+    verdict = matching.decide_presence("Album", "Artist", "2024", 3, local, 600)
+    assert verdict["present"] is True
+    assert verdict["local_tracks"] == 3
+    assert verdict["sure"] is True
+    assert verdict["has_atmos"] is True
 
 
 def test_classified_audio_type_settles_the_folder(tmp_path):
