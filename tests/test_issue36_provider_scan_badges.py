@@ -296,6 +296,20 @@ def test_atmos_parent_resolves_fragments():
     assert _atmos_parent("/lib/Artist/Album/Anything/Dolby Atmos", configured_only) is None
 
 
+def test_sanitized_fragment_spellings_fold(monkeypatch):
+    """The download pipeline rewrites what the platform rejects: the fold
+    knows the on-disk spelling too."""
+    import waves.waves_ui.bridge_library as bridge
+
+    monkeypatch.setattr(bridge, "sanitize_filename", lambda name, **kw: str(name).replace("?", "_"))
+    frags = _atmos_fragments("Atmos?")
+    assert ("atmos?",) in frags
+    assert ("atmos_",) in frags
+    assert _atmos_parent("/lib/Artist/Album/Atmos_", frags) == "/lib/Artist/Album"
+    # Tokens survive sanitizing verbatim; surrounding spaces survive too.
+    assert bridge._sanitized_fragment(("{album_title} atmos?",)) == ("{album_title} atmos_",)
+
+
 def test_placeholder_fragment_folds_to_the_album(tmp_path):
     lib = _mk(tmp_path, "lib", [])
     parent = _mk(tmp_path, "lib/Artist/Discovery", ["01.flac"])

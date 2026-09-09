@@ -41,6 +41,7 @@ import re
 import sys
 import time
 
+from pathvalidate import sanitize_filename
 from PySide6 import QtCore, QtGui
 from PySide6.QtCore import Signal, Slot
 
@@ -256,6 +257,38 @@ def _rearm(bridge) -> None:
         hook()
 
 
+def _sanitized_fragment(fragment: tuple) -> tuple:
+    """The fragment as it lands on disk.
+
+    The download pipeline runs every rendered path component through
+    sanitize_filename (the "_" stand-in, this platform) after substituting
+    tokens, so a literal the platform rejects ("Atmos?" where "?" is
+    illegal) is stored rewritten while the configured spelling keeps the
+    original. Tokens pass through untouched -- they render per album first,
+    and the evidence gate still demands proven Atmos Versions. Literal
+    chunks are padded while sanitizing so a space beside a token survives
+    exactly as the interior space it is on disk. A component that refuses
+    to sanitize keeps its raw spelling.
+    """
+    out = []
+    for component in fragment:
+        chunks = re.split(r"(\{[^{}]*\})", component)
+        rebuilt = []
+        for chunk in chunks:
+            if not chunk or re.fullmatch(r"\{[^{}]*\}", chunk):
+                rebuilt.append(chunk)
+                continue
+            try:
+                clean = sanitize_filename(
+                    f"a{chunk}a", replacement_text="_", validate_after_sanitize=True, platform="auto"
+                )
+                rebuilt.append(clean[1:-1] if len(clean) >= 2 else chunk)
+            except Exception:
+                rebuilt.append(chunk)
+        out.append("".join(rebuilt))
+    return tuple(out)
+
+
 def _atmos_fragments(configured: str) -> set:
     """The Atmos placement fragments as tuples of casefolded folder names.
 
@@ -273,7 +306,9 @@ def _atmos_fragments(configured: str) -> set:
     parts = tuple(p.strip().casefold() for p in str(configured or "").replace("\\", "/").split("/") if p.strip())
     if parts:
         frags.add(parts)
-    return frags
+    # The on-disk spellings too: what the pipeline's sanitize step rewrites
+    # (a set: spellings that survive unchanged add nothing).
+    return frags | {_sanitized_fragment(frag) for frag in frags}
 
 
 def _fragment_literals(component: str) -> tuple:
