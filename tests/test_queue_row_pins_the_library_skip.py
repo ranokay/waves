@@ -242,7 +242,7 @@ def test_the_setting_is_pinned_the_same_way_the_audio_quality_is():
     stub = _Stub(_Live(True))
     qid = _queue_album(stub)
     row = stub._queue_index[qid]
-        # The row pins the Waves tier string (issue #24).
+    # The row pins the Waves tier string (issue #24).
     assert row["askQuality"] == "LOSSLESS"
     assert row["askLibrarySkip"] is True
 

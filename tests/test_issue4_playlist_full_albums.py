@@ -121,9 +121,7 @@ class _Stub:
         # fake's album fetch, playlist -> its playlist fetch.
         self.providers = {
             "tidal": SimpleNamespace(
-                get_object=lambda kind, raw_id: session.album(raw_id)
-                if kind == "album"
-                else session.playlist(raw_id)
+                get_object=lambda kind, raw_id: session.album(raw_id) if kind == "album" else session.playlist(raw_id)
             )
         }
         self._objs = {"album": {}, "playlist": {"pl1": playlist} if cached else {}}

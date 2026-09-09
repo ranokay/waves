@@ -933,7 +933,13 @@ def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
 
     with pytest.raises(DownloadIncomplete) as excinfo:
         WavesBridge._run_apple_job(
-            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
         )
 
     assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
@@ -1059,7 +1065,13 @@ def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
 
     with pytest.raises(DownloadIncomplete):
         WavesBridge._run_apple_job(
-            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
         )
 
     # An ordinary failure: no quarantine wording, no skip-list mark, and the
@@ -1119,7 +1131,12 @@ def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
 
     with pytest.raises(DownloadIncomplete):
         WavesBridge._run_apple_job(
-            stub, 1, spec, _song_resource(atmos=False), signals=relay, job_abort=Event(),
+            stub,
+            1,
+            spec,
+            _song_resource(atmos=False),
+            signals=relay,
+            job_abort=Event(),
             file_template="{artist_name}/{track_title}",
         )
 
@@ -1134,7 +1151,12 @@ def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
     relay2 = _Relay()
     spec2 = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
     summary2 = WavesBridge._run_apple_job(
-        stub2, 1, spec2, _song_resource(atmos=False), signals=relay2, job_abort=Event(),
+        stub2,
+        1,
+        spec2,
+        _song_resource(atmos=False),
+        signals=relay2,
+        job_abort=Event(),
         file_template="{artist_name}/{track_title}",
     )
     assert summary2 == " (already downloaded)"
@@ -1185,7 +1207,12 @@ def test_resolve_stage_failure_files_under_effective_version(tmp_path, monkeypat
 
     with pytest.raises(DownloadIncomplete) as excinfo:
         WavesBridge._run_apple_job(
-            stub, 1, spec, _song_resource(atmos=False), signals=relay, job_abort=Event(),
+            stub,
+            1,
+            spec,
+            _song_resource(atmos=False),
+            signals=relay,
+            job_abort=Event(),
             file_template="{artist_name}/{track_title}",
         )
 

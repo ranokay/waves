@@ -47,6 +47,9 @@ gamdl = "~3.8.5"
 pyside6 = { version = "6.11.1", optional = true }
 tidalapi = "^0.8.10"
 python-ffmpeg = "^2.0.12"
+# Direct import in waves/apple_engine.py (the cookies-tier fallback shells
+# through it); pinned to gamdl's own floor so the two can never disagree.
+yt-dlp = ">=2025.10.22"
 pycryptodome = "^3.23.0"
 certifi = ">=2026.4.22"
 urllib3 = "^2.7.0"

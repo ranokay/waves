@@ -105,24 +105,33 @@ def _payload(album_ids=("al1",), pop=-1):
     }
 
 
-def _wire(monkeypatch, album_ids=("al1",), pop=50):
+def _wire(monkeypatch, stub, album_ids=("al1",), pop=50):
+    """The catalog behind a search: a fake TIDAL provider serving the old
+    engine-object shape, plus the meter helpers. The search pipeline reads
+    the wire exclusively through the Provider seam (it no longer calls a
+    backend-module ``search_results_all``), so the fake lives on the stub's
+    providers dict, where the real TidalProvider would sit."""
     artist = SimpleNamespace(id="a1", name="Artist 1")
     monkeypatch.setattr(backend, "_image", lambda obj, dimension=320: "")
     monkeypatch.setattr(backend, "_artist_roles", lambda a: "")
     monkeypatch.setattr(backend, "_artist_popularity", lambda a: pop)
-    monkeypatch.setattr(
-        backend,
-        "search_results_all",
-        lambda session, needle, **kw: {"artists": [artist], "albums": [SimpleNamespace(id=i) for i in album_ids]},
-    )
+    stub.providers = {
+        "tidal": SimpleNamespace(
+            name="TIDAL",
+            search=lambda needle: {
+                "artists": [artist],
+                "albums": [SimpleNamespace(id=i) for i in album_ids],
+            },
+        )
+    }
 
 
 def test_a_restored_search_paints_first_and_the_wire_corrects_it_in_place(monkeypatch):
     # The wire knows no meter this time (-1), so the carried-over one is
     # what the refreshed page must still show.
-    _wire(monkeypatch, album_ids=("al1", "al2"), pop=-1)
     stub = _Stub()
-    stub._search_cache["needle"] = (_STALE_STAMP, _payload(("al1",), pop=40))
+    _wire(monkeypatch, stub, album_ids=("al1", "al2"), pop=-1)
+    stub._search_cache["tidal:needle"] = (_STALE_STAMP, _payload(("al1",), pop=40))
     stub.search("needle")
 
     first, second = _payloads(stub)
@@ -131,55 +140,57 @@ def test_a_restored_search_paints_first_and_the_wire_corrects_it_in_place(monkey
     assert second["artists"][0]["popularity"] == 40, "the meter the stale page shows is carried over"
     assert True not in stub.busy, "rows are on screen the whole time: no spinner"
     assert stub.statuses[0].startswith("Searching") and stub.statuses[-1] == "3 results"
-    stamp, kept = stub._search_cache["needle"]
+    stamp, kept = stub._search_cache["tidal:needle"]
     assert stamp > _STALE_STAMP and "refresh" not in kept and len(kept["albums"]) == 2
     assert stub.saves >= 1, "the corrected page reaches the snapshot"
 
 
 def test_a_confirmed_stale_page_is_left_alone(monkeypatch):
-    _wire(monkeypatch, album_ids=("al1",))
     stub = _Stub()
-    stub._search_cache["needle"] = (_STALE_STAMP, _payload(("al1",), pop=40))
+    _wire(monkeypatch, stub, album_ids=("al1",))
+    stub._search_cache["tidal:needle"] = (_STALE_STAMP, _payload(("al1",), pop=40))
     stub.search("needle")
     assert len(stub.searchResults.emits) == 1, "nothing moved, so nothing is rebuilt"
     assert stub.statuses[-1] == "2 results"
-    assert stub._search_cache["needle"][0] > _STALE_STAMP, "but the window is fresh again"
+    assert stub._search_cache["tidal:needle"][0] > _STALE_STAMP, "but the window is fresh again"
 
 
 def test_a_stale_page_in_this_session_takes_the_same_path(monkeypatch):
-    _wire(monkeypatch, album_ids=("al1", "al2"))
-    monkeypatch.setattr(backend.time, "monotonic", lambda: 1000.0)
     stub = _Stub()
-    stub._search_cache["needle"] = (1000.0 - WavesBridge._SEARCH_TTL - 1, _payload(("al1",)))
+    _wire(monkeypatch, stub, album_ids=("al1", "al2"))
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 1000.0)
+    stub._search_cache["tidal:needle"] = (1000.0 - WavesBridge._SEARCH_TTL - 1, _payload(("al1",)))
     stub.search("needle")
     assert [("refresh" in p) for p in _payloads(stub)] == [False, True]
 
 
 def test_a_fresh_hit_is_still_served_without_the_wire(monkeypatch):
     calls = []
-    monkeypatch.setattr(backend, "search_results_all", lambda *a, **k: calls.append(1) or {})
-    monkeypatch.setattr(backend.time, "monotonic", lambda: 1000.0)
     stub = _Stub()
-    stub._search_cache["needle"] = (999.0, _payload())
+    stub.providers = {
+        "tidal": SimpleNamespace(name="TIDAL", search=lambda needle: calls.append(1) or {"artists": [], "albums": []})
+    }
+    monkeypatch.setattr(backend.time, "monotonic", lambda: 1000.0)
+    stub._search_cache["tidal:needle"] = (999.0, _payload())
     stub.search("needle")
     assert calls == [] and len(stub.searchResults.emits) == 1
 
 
 def test_a_failed_wire_never_replaces_the_page_that_had_rows(monkeypatch):
-    monkeypatch.setattr(backend, "search_results_all", lambda *a, **k: {})
     stub = _Stub()
+    stub.providers = {"tidal": SimpleNamespace(name="TIDAL", search=lambda needle: {})}
     stale = _payload(("al1",))
-    stub._search_cache["needle"] = (_STALE_STAMP, stale)
+    stub._search_cache["tidal:needle"] = (_STALE_STAMP, stale)
     stub.search("needle")
     assert len(stub.searchResults.emits) == 1, "an empty answer is more likely a failure than a change"
-    assert stub._search_cache["needle"] == (_STALE_STAMP, stale)
+    assert stub._search_cache["tidal:needle"] == (_STALE_STAMP, stale)
 
 
 def test_the_enrichment_writes_the_meter_into_the_cached_page(monkeypatch):
-    _wire(monkeypatch, pop=73)
     stub = _Stub()
+    _wire(monkeypatch, stub, pop=73)
     stub.search("needle")
-    assert stub._search_cache["needle"][1]["artists"][0]["popularity"] == 73
+    assert stub._search_cache["tidal:needle"][1]["artists"][0]["popularity"] == 73
     assert stub.saves == 2, "once with the rows, once more with the meters"
 
 

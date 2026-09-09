@@ -41,7 +41,7 @@ def test_every_mask_source_item_is_hidden():
     for path in _qml_files():
         text = path.read_text(encoding="utf-8")
         for mask_id in _SOURCE_ITEM.findall(text):
-            decl = re.search(r"\bid:\s*%s\b" % re.escape(mask_id), text)
+            decl = re.search(rf"\bid:\s*{re.escape(mask_id)}\b", text)
             assert decl, f"{path.name}: mask {mask_id} is used but never declared"
             # The declaration's own block: up to the next `id:` or the end.
             after = text[decl.end() : decl.end() + 600]

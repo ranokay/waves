@@ -427,7 +427,9 @@ def test_a_merge_refused_entirely_does_not_report_done(tmp_path):
     written, so the plain-album rule holds here too: never a finished album
     over an empty folder."""
     names = ["a.flac", "b.flac", "c.flac"]
-    kind, msg = _merge_outcome(tmp_path, names, refused=3, outcomes=dict.fromkeys(range(1, len(names) + 1), (False, "")))
+    kind, msg = _merge_outcome(
+        tmp_path, names, refused=3, outcomes=dict.fromkeys(range(1, len(names) + 1), (False, ""))
+    )
     assert kind is not None, "a merge that wrote nothing at all reported success"
     assert "not available on TIDAL" in msg, msg
 

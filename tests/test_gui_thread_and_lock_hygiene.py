@@ -130,10 +130,7 @@ def test_browse_fetch_does_not_hold_the_lock_across_the_request():
 
     def _inside_with(n: ast.AST) -> bool:
         for w in with_blocks:
-            if (
-                w.lineno <= n.lineno
-                and getattr(n, "end_lineno", n.lineno) <= getattr(w, "end_lineno", w.lineno)
-            ):
+            if w.lineno <= n.lineno and getattr(n, "end_lineno", n.lineno) <= getattr(w, "end_lineno", w.lineno):
                 return True
         return False
 

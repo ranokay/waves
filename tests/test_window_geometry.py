@@ -407,7 +407,7 @@ def test_fit_geometry_reads_available_not_full(monkeypatch):
     to sit above it; using the full 1080 geometry instead would leave it under
     the taskbar."""
     _patch_screens(monkeypatch, [_FakeScreen(_FakeRect(0, 0, 1920, 1040))])
-    x, y, w, h = WavesBridge._fit_geometry_to_screens(None, 0, 1030, 1000, 40)
+    _x, y, _w, h = WavesBridge._fit_geometry_to_screens(None, 0, 1030, 1000, 40)
     assert y + h <= 1040
 
 

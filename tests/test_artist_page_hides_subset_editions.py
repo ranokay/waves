@@ -88,7 +88,7 @@ def test_the_two_shelves_are_judged_together():
 def test_a_fetch_failure_keeps_both():
     short, full, _ = _forsaker()
     short._fail = True
-    albums, eps = _Stub()._hide_subset_editions([], [short, full])
+    _albums, eps = _Stub()._hide_subset_editions([], [short, full])
     assert [a.id for a in eps] == ["a5", "a7"]
 
 

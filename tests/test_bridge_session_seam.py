@@ -85,15 +85,14 @@ class TestTheStaticContract:
             if not (start <= line <= end) and attr not in allowed
         ]
         assert offenders == [], (
-            "the bridge reached the TIDAL object directly (route through "
-            f"self.providers instead): {offenders}"
+            "the bridge reached the TIDAL object directly (route through " f"self.providers instead): {offenders}"
         )
 
     def test_no_getattr_reach_either(self):
         # getattr(self.tidal, "session", None) is the same reach spelled
         # sideways, invisible to the attribute walk.
         source = BACKEND_PATH.read_text(encoding="utf-8")
-        assert 'getattr(self.tidal' not in source
+        assert "getattr(self.tidal" not in source
 
     def test_the_two_allowed_touches_are_exactly_these(self):
         source = BACKEND_PATH.read_text(encoding="utf-8")
@@ -357,6 +356,7 @@ class TestTheSessionLifecycle:
             "_artist_cache": {},
             "_artist_loading": {},
             "_album_tracks_cache": {},
+            "_edition_tracks_cache": {},
             "_home_cache": None,
             "_home_loading": False,
             "_home_reval_ts": 1.0,
@@ -494,7 +494,15 @@ class TestTheCatalogRoads:
     def test_the_home_rows_read_the_provider_and_drop_the_handles(self):
         stub = self._stub(browse_home=object())
         stub._page_rows = lambda page: [
-            {"title": "Shelf", "more": "pages/data/x", "data": "d", "total": 5, "offset": 2, "modType": "m", "items": []}
+            {
+                "title": "Shelf",
+                "more": "pages/data/x",
+                "data": "d",
+                "total": 5,
+                "offset": 2,
+                "modType": "m",
+                "items": [],
+            }
         ]
 
         rows = WavesBridge._home_v2_rows.__get__(stub, type(stub))()
@@ -594,7 +602,9 @@ class TestTheCatalogRoads:
         assert bumps == [("42", None, "failed")]
 
     def test_the_video_album_fallback_searches_tracks_through_the_provider(self):
-        tr = SimpleNamespace(name="Selected Works", id="9", album=SimpleNamespace(id=5), artists=[SimpleNamespace(name="Artist")])
+        tr = SimpleNamespace(
+            name="Selected Works", id="9", album=SimpleNamespace(id=5), artists=[SimpleNamespace(name="Artist")]
+        )
         stub = self._stub(search_tracks=[tr])
         remembered: list = []
         stub._remember = lambda kind, mid, o: remembered.append((kind, mid))

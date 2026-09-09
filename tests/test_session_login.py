@@ -60,9 +60,7 @@ class _LoginStub:
         self._prefetch_called = False
         self.sessionResolvedChanged = _Signal()
         self.threadpool = _InlinePool()
-        self.providers = {
-            "tidal": _FakeLoginProvider(resume_ok=login_ok, resume_raises=login_raises)
-        }
+        self.providers = {"tidal": _FakeLoginProvider(resume_ok=login_ok, resume_raises=login_raises)}
 
     def _set_status(self, msg: str) -> None:
         self._statuses.append(msg)
@@ -170,9 +168,7 @@ class _PkceStub:
         self._init_download_called = False
         self._prefetch_called = False
         self.threadpool = _InlinePool()
-        self.providers = {
-            "tidal": _FakePkceProvider(finalize_ok=finalize_ok, exchange_raises=exchange_raises)
-        }
+        self.providers = {"tidal": _FakePkceProvider(finalize_ok=finalize_ok, exchange_raises=exchange_raises)}
 
     def _set_busy(self, value: bool) -> None:
         self._busy.append(value)

@@ -76,6 +76,16 @@ def _run_scenario() -> int:
     patch_offline()
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    # Main.qml holds QML Settings elements (first-run flags, legal
+    # acceptance) that warn -- and fail to persist -- without application
+    # identifiers. Mirror what app.py sets, plus the organization domain QML
+    # Settings additionally requires on Linux: without it the offscreen run
+    # reports "Failed to initialize QSettings instance" and the suite fails
+    # for harness reasons, not QML ones. XDG_CONFIG_HOME above is throwaway,
+    # so nothing persists outside this scenario.
+    app.setApplicationName("Waves")
+    app.setOrganizationName("Waves")
+    app.setOrganizationDomain("waves")
     try:
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:

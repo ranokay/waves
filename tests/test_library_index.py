@@ -12,6 +12,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from waves.library_index import (
     _EMPTY_STRIKE_GAP_S,
     _NETWORK_WORKERS,
@@ -1350,6 +1352,15 @@ def test_a_respelled_root_keeps_its_walk_warm_and_never_doubles(tmp_path):
     reads.clear()
 
     respelled = lib.upper() if lib != lib.upper() else lib.lower()
+    try:
+        aliases = os.path.samefile(lib, respelled)
+    except OSError:
+        aliases = False
+    if not aliases:
+        # A respelling names the same folder only where the filesystem folds
+        # case; on a case-sensitive filesystem it is a different (missing)
+        # folder, a scenario this test cannot stage.
+        pytest.skip("needs a case-insensitive filesystem")
     # The fake reader is keyed by the folder's stored spelling; answer the
     # respelled path too, so a wrongly-cold re-read is visible, not an error.
     tags[d.replace(lib, respelled, 1)] = tags[d]

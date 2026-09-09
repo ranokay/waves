@@ -78,9 +78,9 @@ def _apply(stub, values):
 def test_tidal_quality_change_reapplies_session_settings():
     stub = _apply_stub()
     _apply(stub, {"tidal_quality_audio": "HI_RES_LOSSLESS"})
-    assert stub._apply_quality_calls == [("HI_RES_LOSSLESS", "stereo")], (
-        "quality change never reached the provider's apply_quality"
-    )
+    assert stub._apply_quality_calls == [
+        ("HI_RES_LOSSLESS", "stereo")
+    ], "quality change never reached the provider's apply_quality"
     assert stub.settings.data.tidal_quality_audio == "HI_RES_LOSSLESS"
 
 

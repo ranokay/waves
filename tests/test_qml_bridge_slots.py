@@ -82,7 +82,7 @@ def test_every_qml_call_into_the_bridge_resolves():
         absent = used - members
         if absent:
             missing[qml.name] = absent
-    assert not missing, "QML calls bridge members that QML cannot see (missing @Slot or @Property): %r" % missing
+    assert not missing, f"QML calls bridge members that QML cannot see (missing @Slot or @Property): {missing!r}"
 
 
 def test_the_hover_prefetch_slots_are_the_ones_that_regressed():

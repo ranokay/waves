@@ -135,7 +135,7 @@ def test_duplicated_listing_is_deduped(tmp_path, monkeypatch):
 
 
 def test_duplicated_listing_marks_the_dir_unreliable(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     real = _fake_listing(monkeypatch, {lib: lambda e: e * 2})
     assert idx.refresh(lib) == 2
@@ -157,7 +157,7 @@ def test_a_cache_from_before_listings_were_judged_relists_its_root_once(tmp_path
     # the next scan re-list the root once. Simulated by scanning with a CLEAN
     # root listing under the old code's conditions (no marker, no verdict),
     # then switching the share to a broken one without touching the root.
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     idx.refresh(lib)
     with idx._lock:
@@ -178,7 +178,7 @@ def test_a_cache_from_before_listings_were_judged_relists_its_root_once(tmp_path
 
 
 def test_a_fresh_cache_is_unaffected_by_the_marker(tmp_path):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     assert idx.refresh(lib) == 2
     assert idx.unreliable_dirs() == []
@@ -188,7 +188,7 @@ def test_a_fresh_cache_is_unaffected_by_the_marker(tmp_path):
 def test_an_unchanged_folder_keeps_its_untrusted_flag(tmp_path, monkeypatch):
     # A warm scan reuses the stored listing, and with it the stored verdict:
     # the badge fallback must keep probing until a CLEAN listing says otherwise.
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     real = _fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx.refresh(lib)
@@ -203,7 +203,7 @@ def test_a_warm_scan_keeps_the_measured_shape(tmp_path, monkeypatch):
     # reuses the stored one, so forgetting them at the start of every walk left
     # Settings explaining a truncation it could no longer measure: "came back
     # incomplete" with no numbers, one scan after the numbers were had.
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     real = _fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx.refresh(lib)
@@ -218,7 +218,7 @@ def test_a_healed_share_forgets_the_shape_and_the_recovery(tmp_path, monkeypatch
     # The other side of keeping it: once every listing is trusted there is
     # nothing to explain and nothing left to reconcile, so neither fact may
     # survive into the note.
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     _fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx.refresh(lib)
@@ -235,7 +235,7 @@ def test_the_recovery_verdict_survives_a_relaunch(tmp_path, monkeypatch):
     # It is a fact about the CACHE, not about the run that measured it: the
     # folders a recovery wrote are still there after a restart, so the note
     # must not fall back to warning about missing badges until a scan says so.
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     path = str(tmp_path / "library.sqlite3")
     idx = LibraryIndex(path, read_tags=_reader(tags))
     _fake_listing(monkeypatch, {lib: lambda e: e * 2})
@@ -251,7 +251,7 @@ def test_a_recovery_is_complete_only_when_every_name_is_indexed(tmp_path, monkey
     # What the bridge asks after a fresh mount hands it the real names: a name
     # the cache holds counts however it is spelled, one the walk would never
     # descend into is not missing, and a real absence is.
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     idx.refresh(lib)
     assert idx.listing_holds_all(lib, ["A", "B"])
@@ -264,7 +264,7 @@ def test_a_recovery_is_complete_only_when_every_name_is_indexed(tmp_path, monkey
 
 
 def test_unreliable_listing_never_condemns_a_missing_child(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     assert idx.refresh(lib) == 2
     # From now on the root repeats A and never names B (the first page, twice).
@@ -280,7 +280,7 @@ def test_unreliable_listing_never_condemns_a_missing_child(tmp_path, monkeypatch
 def test_truncated_listing_without_repeats_is_caught_by_the_stat_verify(tmp_path, monkeypatch):
     # A plain first-page cutoff: no repeated names, so the dedupe sees nothing.
     # The listing looks perfectly healthy and simply omits B.
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     assert idx.refresh(lib) == 2
     _fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name == "A"]})
@@ -293,7 +293,7 @@ def test_truncated_listing_without_repeats_is_caught_by_the_stat_verify(tmp_path
 
 
 def test_healthy_listing_still_condemns_a_vanished_child(tmp_path):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     assert idx.refresh(lib) == 2
     shutil.rmtree(os.path.join(lib, "B"))
@@ -321,7 +321,7 @@ def _root_hides_c(monkeypatch, lib):
 
 
 def test_probe_indexes_a_hidden_artist(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     c = _hidden_c(tmp_path, tags)
     idx = _index(tmp_path, tags)
     _root_hides_c(monkeypatch, lib)
@@ -342,7 +342,7 @@ def test_probe_indexes_a_hidden_artist(tmp_path, monkeypatch):
 
 
 def test_a_probed_folder_is_polled_for_changes(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     _hidden_c(tmp_path, tags)
     idx = _index(tmp_path, tags)
     _root_hides_c(monkeypatch, lib)
@@ -352,7 +352,7 @@ def test_a_probed_folder_is_polled_for_changes(tmp_path, monkeypatch):
 
 
 def test_probe_tries_the_spellings_in_order_and_stops_at_the_first_hit(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     _hidden_c(tmp_path, tags)
     idx = _index(tmp_path, tags)
     _root_hides_c(monkeypatch, lib)
@@ -369,7 +369,7 @@ def test_probe_tries_the_spellings_in_order_and_stops_at_the_first_hit(tmp_path,
 
 
 def test_probe_skips_a_spelling_twin_of_a_stored_child(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     _fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx.refresh(lib)
@@ -380,7 +380,7 @@ def test_probe_skips_a_spelling_twin_of_a_stored_child(tmp_path, monkeypatch):
 
 
 def test_probe_returns_none_while_a_scan_holds_the_lock(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     _hidden_c(tmp_path, tags)
     idx = _index(tmp_path, tags)
     _root_hides_c(monkeypatch, lib)
@@ -396,7 +396,7 @@ def test_probe_returns_none_while_a_scan_holds_the_lock(tmp_path, monkeypatch):
 
 
 def test_probe_refuses_a_foreign_or_unscanned_root(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     _hidden_c(tmp_path, tags)
     idx = _index(tmp_path, tags)
     # Never scanned: no generation to stamp, nothing written.
@@ -412,7 +412,7 @@ def test_probe_refuses_a_foreign_or_unscanned_root(tmp_path, monkeypatch):
 
 def test_probe_is_a_no_op_on_a_trusted_listing(tmp_path):
     # A healthy library pays nothing: no untrusted folder, no stat, no write.
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     idx.refresh(lib)
     asked: list[str] = []
@@ -421,7 +421,7 @@ def test_probe_is_a_no_op_on_a_trusted_listing(tmp_path):
 
 
 def test_probe_writes_no_prune(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     _hidden_c(tmp_path, tags)
     idx = _index(tmp_path, tags)
     _root_hides_c(monkeypatch, lib)
@@ -435,7 +435,7 @@ def test_probe_writes_no_prune(tmp_path, monkeypatch):
 
 
 def test_probe_verdicts_run_no_per_album_queries(tmp_path, monkeypatch):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     _hidden_c(tmp_path, tags)
     idx = _index(tmp_path, tags)
     _root_hides_c(monkeypatch, lib)
@@ -451,7 +451,7 @@ def test_probe_verdicts_run_no_per_album_queries(tmp_path, monkeypatch):
 
 
 def test_subtree_walk_never_touches_last_scan_status(tmp_path):
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     idx.refresh(lib)
     assert idx.last_scan_status == SCAN_OK
@@ -598,7 +598,7 @@ def test_probe_never_indexes_a_folder_the_walk_skips(tmp_path, monkeypatch):
     parent is flagged untrusted on every scan from then on, and the folder
     itself shows up as an album the user owns, which makes the download gate
     refuse to re-fetch a deleted album."""
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     for junk in ("@eaDir", "#recycle", ".hidden"):
         d = _mk(tmp_path, f"lib/{junk}/[2022] Junk", ["01.flac"])
         tags[d] = {"album": "Junk", "artist": junk, "date": "2022"}
@@ -615,7 +615,7 @@ def test_a_cache_polluted_by_an_older_probe_is_swept_on_open(tmp_path, monkeypat
     """Rows an older build's probe already wrote would age out over two clean
     generations, but until then they keep flagging their parent, so a cache
     carrying them is swept once when it is opened."""
-    lib, a, b, tags = _two_artists(tmp_path)
+    lib, _a, _b, tags = _two_artists(tmp_path)
     junk = _mk(tmp_path, "lib/@eaDir/[2022] Junk", ["01.flac"])
     tags[junk] = {"album": "Junk", "artist": "@eaDir", "date": "2022"}
     idx = _index(tmp_path, tags)

@@ -242,7 +242,7 @@ def test_file_mode_reader_prefers_the_tag_over_the_codec(tmp_path, monkeypatch):
 
         pytest.skip("needs ffmpeg")
     target = tmp_path / "song.m4a"
-    subprocess.run(  # (fixed argv: a local tone fixture, no user input)
+    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
         [ffmpeg, "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "aac", str(target)],
         check=True,
     )

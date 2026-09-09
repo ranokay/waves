@@ -35,13 +35,13 @@
 
 The setup wizard (§9.3) provisions what Waves can, **FFmpeg-manager style** — the user does only what only they can. Both tiers were proven end-to-end on macOS Apple silicon ([Ticket: Apple Music account + one-time decryption setup (human)](https://github.com/ranokay/waves/issues/14)); the run's record is the wizard's requirements doc.
 
-| Step | Tier | Who |
-|---|---|---|
-| Managed runtime: wrapper-v2 image built/provisioned, N_m3u8DL-RE downloaded, checksum-verified, extracted, chmod'd | full | Waves, one click |
-| Container runtime (Docker) present and running | full | detected; Waves attempts a gentle start (`open -a Docker`) and otherwise guides — **never silently installs a hypervisor product** |
-| Apple ID login + 2FA | full | human, one time; wrapper tokens persist (session restore across a container restart was verified live) |
-| Apple Music APK supply | full | human, one time (§10.2) |
-| Cookies export from a logged-in music.apple.com browser session | fallback | human |
+| Step                                                                                                               | Tier     | Who                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Managed runtime: wrapper-v2 image built/provisioned, N_m3u8DL-RE downloaded, checksum-verified, extracted, chmod'd | full     | Waves, one click                                                                                                                   |
+| Container runtime (Docker) present and running                                                                     | full     | detected; Waves attempts a gentle start (`open -a Docker`) and otherwise guides — **never silently installs a hypervisor product** |
+| Apple ID login + 2FA                                                                                               | full     | human, one time; wrapper tokens persist (session restore across a container restart was verified live)                             |
+| Apple Music APK supply                                                                                             | full     | human, one time (§10.2)                                                                                                            |
+| Cookies export from a logged-in music.apple.com browser session                                                    | fallback | human                                                                                                                              |
 
 - **The two tiers**: **cookies alone** unlocks AAC 256 + Atmos (no runtime at all — Atmos needs no wrapper since gamdl 3.8.0); **ALAC (up to 24/192)** unlocks when the managed wrapper step completes. The wizard offers the cookies tier as the graceful fallback for anyone who won't run the runtime, upgradeable in place later.
 - **Search needs nothing**: the dev token is auto-scraped; the Apple search group renders before any setup exists (§7.1).
@@ -54,12 +54,12 @@ The setup wizard (§9.3) provisions what Waves can, **FFmpeg-manager style** —
 - **Lifecycle**: search, browsing, and link resolution never start the wrapper. Waves starts it **lazily on the first Apple download**, health-probes its HTTP API, and **stops it after an idle period** (initial idle timeout: 5 minutes, Advanced-tunable) — an idle Docker VM must not burn memory and battery. The runtime is the setup wizard's artifact; supervision never re-provisions silently.
 - **Failure classes and what the user sees**:
 
-| Class | Presentation | Recovery |
-|---|---|---|
-| Runtime missing / dies mid-run | Apple downloads are **HELD, not failed** — one clear message, no wall of failures | Automatic when the runtime returns; manual via existing retry affordances |
-| License-exchange 429 | Affected rows show **THROTTLED with a visible resume countdown** inside their normal downloading state | Automatic, in place |
-| Dev-token scraper breakage | Search/catalog die with honest words: "Apple changed their web app — a Waves update is needed" | The updater ships the pinned-engine bump (§10.4) — no hot-patching, no silent hoping |
-| Wrapper session / cookies expiry | Status light → needs attention; downloads pause at the next boundary | One click re-opens the wizard's login step; wrapper tokens refresh on their own between times |
+| Class                            | Presentation                                                                                           | Recovery                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| Runtime missing / dies mid-run   | Apple downloads are **HELD, not failed** — one clear message, no wall of failures                      | Automatic when the runtime returns; manual via existing retry affordances                     |
+| License-exchange 429             | Affected rows show **THROTTLED with a visible resume countdown** inside their normal downloading state | Automatic, in place                                                                           |
+| Dev-token scraper breakage       | Search/catalog die with honest words: "Apple changed their web app — a Waves update is needed"         | The updater ships the pinned-engine bump (§10.4) — no hot-patching, no silent hoping          |
+| Wrapper session / cookies expiry | Status light → needs attention; downloads pause at the next boundary                                   | One click re-opens the wizard's login step; wrapper tokens refresh on their own between times |
 
 - **Pacing**: **proactive** — Apple pacing fields in the Apple settings section, same shape as TIDAL's `api_rate_limit_*`: pause after N songs for N seconds; initial values **30 s every 25 songs**, tuned to the undocumented 429 threshold, fully tunable. **Reactive** — on a 429, honor `Retry-After` when present, else exponential backoff capped at a few minutes; resume the same job in place. Automatic recovery is never a failure and never a user task.
 - **Queue vocabulary**: **HELD and THROTTLED are presentations, not new states.** A held row sits under Queued/Held with its reason; a throttled row stays in Downloading with its countdown. Both resume automatically and respect STOP; RETRY ALL covers anything manually stopped.
@@ -193,11 +193,11 @@ v1 includes Apple previews: the documented **30-second AAC preview URL** (a plai
 
 A generic `WAVES_*` family written by **both** providers going forward:
 
-| Tag | Content |
-|---|---|
-| `WAVES_ITEM_ID` | the namespaced id (`tidal:…` / `apple:…`) |
-| `WAVES_ARTIST_IDS` / `WAVES_ALBUM_ARTIST_ID` | the multi-credit id groundwork, now namespaced |
-| `WAVES_AUDIO_TYPE` | `stereo` / `atmos` — recognition never depends on codec sniffing |
+| Tag                                          | Content                                                          |
+| -------------------------------------------- | ---------------------------------------------------------------- |
+| `WAVES_ITEM_ID`                              | the namespaced id (`tidal:…` / `apple:…`)                        |
+| `WAVES_ARTIST_IDS` / `WAVES_ALBUM_ARTIST_ID` | the multi-credit id groundwork, now namespaced                   |
+| `WAVES_AUDIO_TYPE`                           | `stereo` / `atmos` — recognition never depends on codec sniffing |
 
 On MP4 (Apple ALAC/AAC/Atmos and TIDAL Atmos) these ride the existing freeform-atom mechanism (`----:com.apple.iTunes:…`); on FLAC, vorbis comments. TIDAL downloads keep writing the legacy `WAVES_TIDAL_*` tags alongside. The scan reads **generic-first, legacy-fallback**; the codec sniff retires to a legacy fallback only.
 
@@ -207,8 +207,8 @@ Apple files land through the **same template system** as TIDAL — one `Artist/[
 
 ### 8.3 Badge semantics: two different questions
 
-- **IN LIBRARY / PARTIALLY / MAYBE — scan-based, provider-blind.** They answer *"does this music exist on disk?"*; the scan matches by tags whoever saved it. Owning the TIDAL master **does** badge the Apple search result IN LIBRARY — the music is in your library. MAYBE-proof and the MusicBrainz arbiter work unchanged.
-- **DOWNLOADED / HAVE / REDOWNLOAD — ownership-based, strictly per-provider.** They answer *"has Waves saved this provider's version?"*. Owning TIDAL's HI-RES never shows Apple's row as DOWNLOADED. The queue's HAVE marking is per-provider likewise.
+- **IN LIBRARY / PARTIALLY / MAYBE — scan-based, provider-blind.** They answer _"does this music exist on disk?"_; the scan matches by tags whoever saved it. Owning the TIDAL master **does** badge the Apple search result IN LIBRARY — the music is in your library. MAYBE-proof and the MusicBrainz arbiter work unchanged.
+- **DOWNLOADED / HAVE / REDOWNLOAD — ownership-based, strictly per-provider.** They answer _"has Waves saved this provider's version?"_. Owning TIDAL's HI-RES never shows Apple's row as DOWNLOADED. The queue's HAVE marking is per-provider likewise.
 - **Quality upgrades stay per-provider**: each provider's quality setting governs its own re-fetch ladder. No cross-provider upgrade interaction — wanting Apple's ALAC when TIDAL's copy exists is a deliberate choice, and both copies coexist as separate Versions.
 
 ### 8.4 Atmos files in the scan
@@ -223,12 +223,12 @@ An Atmos file is a **Version attached to its canonical track, never a duplicate*
 
 **Formats & sidecars** — sidecar toggles independent, one per format, all combinations valid, extensions never faked:
 
-| Format | Providers | What it is |
-|---|---|---|
-| LRC (line-timed) | both | the interoperable standard, as today |
-| Enhanced LRC (word-timed) | Apple | Waves converts syllable TTML → enhanced LRC in its own layer |
-| **TTML (verbatim)** | Apple | **a first-class format choice**: saved exactly as Apple serves it, zero conversion loss |
-| TXT (unsynced plain) | both | unchanged `.txt` rule, never a fake `.lrc` |
+| Format                    | Providers | What it is                                                                              |
+| ------------------------- | --------- | --------------------------------------------------------------------------------------- |
+| LRC (line-timed)          | both      | the interoperable standard, as today                                                    |
+| Enhanced LRC (word-timed) | Apple     | Waves converts syllable TTML → enhanced LRC in its own layer                            |
+| **TTML (verbatim)**       | Apple     | **a first-class format choice**: saved exactly as Apple serves it, zero conversion loss |
+| TXT (unsynced plain)      | both      | unchanged `.txt` rule, never a fake `.lrc`                                              |
 
 SRT is dropped for v1 (a conversion artifact, not something Apple provides).
 
@@ -261,7 +261,7 @@ SRT is dropped for v1 (a conversion artifact, not something Apple provides).
 5. **Platform order**: macOS Apple silicon ships first (arm64 image runs natively — the deciding fact). **Windows and Linux follow as later enablements**: both need the container-runtime path verified per platform (image architecture for x86-64 hosts among them) — an enablement-verification requirement of those milestones, not an open design decision.
 6. **Notarization**: Waves' own signing/notarization pipeline is unchanged; the provisioning flow must keep downloaded executables inside the app's managed-runtime area with provenance recorded (source URL + checksum), the pattern the FFmpeg manager already uses.
 
-## 11. What does *not* change
+## 11. What does _not_ change
 
 Worth stating plainly, since the spec touches everything:
 
@@ -300,24 +300,24 @@ Each slice leaves the TIDAL path demonstrably unchanged; the test suite is the p
 
 ## Appendix: decision index
 
-| Map ticket | Ruling | Spec sections |
-|---|---|---|
-| [Evaluate glomatico/gamdl](https://github.com/ranokay/waves/issues/2) | good fit; MIT; search built in; 429 + corruption + token-scrape risks | 1 |
-| [Evaluate zhaarey/apple-music-downloader](https://github.com/ranokay/waves/issues/3) | functionally best, **unlicensed** — never vendored | 1, 11 |
-| [Evaluate WorldObservationLog wrapper & AppleMusicDecrypt](https://github.com/ranokay/waves/issues/4) | most embeddable shape; M-series crash risk; **kept as fallback** | 1, 4.1 |
-| [ALAC corruption: what Waves must do](https://github.com/ranokay/waves/issues/5) | engine-agnostic verify + retry + quarantine mandatory | 6 |
-| [Apple catalog surface](https://github.com/ranokay/waves/issues/6) | documented search/`audioVariants`/`hasLyrics`/ISRC/art template; exact tiers + TTML + original art on undocumented extensions | 4.3, 7.4, 9.1, 12 |
-| [Provider seam: where TIDAL assumptions live](https://github.com/ranokay/waves/issues/7) | ~15-method interface suffices; coupling surprises named | 4 |
-| [Design the Provider abstraction seam](https://github.com/ranokay/waves/issues/9) | fused interface, both implement now; row-dict contract; namespaced ids; Waves quality enum; composition; Atmos fence; no Engine layer | 4 |
-| [Lyrics & album-art policy matrix](https://github.com/ranokay/waves/issues/10) | per-format sidecar toggles; verbatim TTML first-class; direct syllable sourcing; ORIGIN per provider | 9.1 |
-| [Stereo + Atmos dual-download behavior](https://github.com/ranokay/waves/issues/12) | alongside semantics; per-version rows/ownership/gates; Atmos path template | 5 |
-| [Config-first settings architecture](https://github.com/ranokay/waves/issues/11) | two-axis layout; quality split + one migration; Apple section + wizard + status light | 9.2 |
-| [Per-download chooser & provider-sectioned search UI](https://github.com/ranokay/waves/issues/13) | Variant A: provider groups, split button, standalone actions | 7 |
-| [Apple Music account + one-time decryption setup (human)](https://github.com/ranokay/waves/issues/14) | both tiers proven; wizard fuel: config landmine, tar.gz, APK, port 80, search-needs-nothing | 2 |
-| [Apple session supervision](https://github.com/ranokay/waves/issues/17) | on-demand sidecar; held-not-failed; throttled countdown; honest breakage messaging; no new queue states | 3 |
-| [ALAC verification & quarantine](https://github.com/ranokay/waves/issues/16) | always-on pre-swap; 2 retries + outbreak pre-filter; Quarantine folder + skip-list; REDOWNLOAD re-ask | 6 |
-| [Recognizing Apple files & badges](https://github.com/ranokay/waves/issues/18) | generic tag family; shared templates; two badge questions; Atmos as Version | 8 |
-| [Choose the Apple engine approach](https://github.com/ranokay/waves/issues/8) | **gamdl embedded + wrapper-v2 for ALAC**; N_m3u8DL-RE mode; WorldObs-v3 fallback; two-tier setup | 1, 2 |
+| Map ticket                                                                                            | Ruling                                                                                                                                | Spec sections     |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| [Evaluate glomatico/gamdl](https://github.com/ranokay/waves/issues/2)                                 | good fit; MIT; search built in; 429 + corruption + token-scrape risks                                                                 | 1                 |
+| [Evaluate zhaarey/apple-music-downloader](https://github.com/ranokay/waves/issues/3)                  | functionally best, **unlicensed** — never vendored                                                                                    | 1, 11             |
+| [Evaluate WorldObservationLog wrapper & AppleMusicDecrypt](https://github.com/ranokay/waves/issues/4) | most embeddable shape; M-series crash risk; **kept as fallback**                                                                      | 1, 4.1            |
+| [ALAC corruption: what Waves must do](https://github.com/ranokay/waves/issues/5)                      | engine-agnostic verify + retry + quarantine mandatory                                                                                 | 6                 |
+| [Apple catalog surface](https://github.com/ranokay/waves/issues/6)                                    | documented search/`audioVariants`/`hasLyrics`/ISRC/art template; exact tiers + TTML + original art on undocumented extensions         | 4.3, 7.4, 9.1, 12 |
+| [Provider seam: where TIDAL assumptions live](https://github.com/ranokay/waves/issues/7)              | ~15-method interface suffices; coupling surprises named                                                                               | 4                 |
+| [Design the Provider abstraction seam](https://github.com/ranokay/waves/issues/9)                     | fused interface, both implement now; row-dict contract; namespaced ids; Waves quality enum; composition; Atmos fence; no Engine layer | 4                 |
+| [Lyrics & album-art policy matrix](https://github.com/ranokay/waves/issues/10)                        | per-format sidecar toggles; verbatim TTML first-class; direct syllable sourcing; ORIGIN per provider                                  | 9.1               |
+| [Stereo + Atmos dual-download behavior](https://github.com/ranokay/waves/issues/12)                   | alongside semantics; per-version rows/ownership/gates; Atmos path template                                                            | 5                 |
+| [Config-first settings architecture](https://github.com/ranokay/waves/issues/11)                      | two-axis layout; quality split + one migration; Apple section + wizard + status light                                                 | 9.2               |
+| [Per-download chooser & provider-sectioned search UI](https://github.com/ranokay/waves/issues/13)     | Variant A: provider groups, split button, standalone actions                                                                          | 7                 |
+| [Apple Music account + one-time decryption setup (human)](https://github.com/ranokay/waves/issues/14) | both tiers proven; wizard fuel: config landmine, tar.gz, APK, port 80, search-needs-nothing                                           | 2                 |
+| [Apple session supervision](https://github.com/ranokay/waves/issues/17)                               | on-demand sidecar; held-not-failed; throttled countdown; honest breakage messaging; no new queue states                               | 3                 |
+| [ALAC verification & quarantine](https://github.com/ranokay/waves/issues/16)                          | always-on pre-swap; 2 retries + outbreak pre-filter; Quarantine folder + skip-list; REDOWNLOAD re-ask                                 | 6                 |
+| [Recognizing Apple files & badges](https://github.com/ranokay/waves/issues/18)                        | generic tag family; shared templates; two badge questions; Atmos as Version                                                           | 8                 |
+| [Choose the Apple engine approach](https://github.com/ranokay/waves/issues/8)                         | **gamdl embedded + wrapper-v2 for ALAC**; N_m3u8DL-RE mode; WorldObs-v3 fallback; two-tier setup                                      | 1, 2              |
 
 **Decisions made during spec synthesis** (not previously pinned as their own tickets; flagged for review):
 

@@ -173,8 +173,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     # scroll; the panels have their (empty) track lists so no fetch is owed.
     q("root.filterType = 'albums'")
     q(
-        "root.trackCache = (function(){ var m = {}; for (var i = 0; i < %d; ++i) m['a' + i] = []; return m })()"
-        % _ALBUMS
+        f"root.trackCache = (function(){{ var m = {{}}; for (var i = 0; i < {_ALBUMS}; ++i) m['a' + i] = []; return m }})()"
     )
     settle(400)
     if not q("results.contentHeight > results.height * 2"):

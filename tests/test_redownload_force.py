@@ -133,7 +133,9 @@ class _OwnBridge:
         self._own_pool = self._Pool()
         self._ownAnnounceArm = self._Sig()
         self._downloads_running = lambda: False
-        self.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=tidal_quality_audio, download_dolby_atmos=False))
+        self.settings = SimpleNamespace(
+            data=SimpleNamespace(tidal_quality_audio=tidal_quality_audio, download_dolby_atmos=False)
+        )
         for name in (
             "ownershipOf",
             "_would_refetch_atmos",
