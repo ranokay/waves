@@ -13,21 +13,23 @@ feature.
 
 ## Session and status
 
-| Signal                                                                 | Fires when                                                                                                 |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `loggedInChanged`                                                      | Login/logout completes (property `loggedIn`)                                                               |
-| `sessionResolvedChanged`                                               | The restored session finishes resolving (property `sessionResolved`)                                       |
-| `statusChanged`                                                        | The status-bar text changes                                                                                |
-| `busyChanged`                                                          | A blocking operation starts/ends                                                                           |
-| `loginUrlReady(url)`                                                   | The browser-login URL is ready to open                                                                     |
-| `backRequested`                                                        | The platform back gesture (macOS trackpad swipe) asks to navigate back                                     |
-| `motionBgChanged`                                                      | The motion-background preference flipped; Main.qml re-reads it                                             |
-| `confirmCategoryDlChanged`                                             | The "confirm DOWNLOAD ALL on a Browse category" preference flipped (property `confirmCategoryDl`)          |
-| `settingsPersistedExternally`                                          | Settings were saved by something other than the Settings page (a dialog, a recovery); the page re-reads    |
-| `forwardRequested`                                                     | The mouse forward button asks to navigate forward (the back button fires `backRequested`)                  |
-| `hoverMotionChanged` / `artHoverTiltChanged` / `videoHoverPeekChanged` | The matching motion preference flipped (`setWavesPref`); the surfaces re-read it                           |
-| `diagnosticsExported(path)`                                            | A diagnostics export finished (`""` = failed)                                                              |
-| `appleStatusChanged`                                                   | A save moved `apple_enabled`; Settings re-reads `appleStatus()` and Main clears Apple search rows when off |
+| Signal                                                                                             | Fires when                                                                                                    |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `loggedInChanged`                                                                                  | Login/logout completes (property `loggedIn`)                                                                  |
+| `sessionResolvedChanged`                                                                           | The restored session finishes resolving (property `sessionResolved`)                                          |
+| `statusChanged`                                                                                    | The status-bar text changes                                                                                   |
+| `busyChanged`                                                                                      | A blocking operation starts/ends                                                                              |
+| `loginUrlReady(url)`                                                                               | The browser-login URL is ready to open                                                                        |
+| `backRequested`                                                                                    | The platform back gesture (macOS trackpad swipe) asks to navigate back                                        |
+| `motionBgChanged`                                                                                  | The motion-background preference flipped; Main.qml re-reads it                                                |
+| `confirmCategoryDlChanged`                                                                         | The "confirm DOWNLOAD ALL on a Browse category" preference flipped (property `confirmCategoryDl`)             |
+| `settingsPersistedExternally`                                                                      | Settings were saved by something other than the Settings page (a dialog, a recovery); the page re-reads       |
+| `forwardRequested`                                                                                 | The mouse forward button asks to navigate forward (the back button fires `backRequested`)                     |
+| `hoverMotionChanged` / `artHoverTiltChanged` / `videoHoverPeekChanged`                             | The matching motion preference flipped (`setWavesPref`); the surfaces re-read it                              |
+| `diagnosticsExported(path)`                                                                        | A diagnostics export finished (`""` = failed)                                                                 |
+| `appleStatusChanged`                                                                               | A save moved `apple_enabled`; Settings re-reads `appleStatus()` and Main clears Apple search rows when off    |
+| `appleSetupRequested(reason)`                                                                      | Apple needs setup (`setup` on enable, `cookies` on a pre-setup download click); Main deep-links to the wizard |
+| `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull lifecycle (apple_runtime.py); Settings re-reads `appleSetupState()`    |
 
 ## Search, artist pages, library
 

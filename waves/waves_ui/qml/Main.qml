@@ -2373,6 +2373,13 @@ ApplicationWindow {
         settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
         Qt.callLater(function() { settingsPage.jumpToCard("ffmpeg") })
     }
+    // Deep-link to the Apple setup wizard (from enabling Apple Music or a
+    // pre-setup Apple download click): the in-place steps in Providers.
+    function openAppleSetup() {
+        navPush(); markNav("settings")
+        settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
+        Qt.callLater(function() { settingsPage.jumpToCard("providers_apple") })
+    }
     // Browse: open the tab (fetching the landing page once per session) and
     // drill into an editorial page. Target-first flag order, same as above.
     function openBrowse() {
@@ -11787,6 +11794,9 @@ ApplicationWindow {
         target: waves
         function onAppleStatusChanged() {
             if (waves.appleStatus().state === "off") root.clearAppleSearch()
+        }
+        function onAppleSetupRequested(reason) {
+            root.openAppleSetup()
         }
         function onLibraryLoaded(cat, items, more) {
             root.libCatHasMore[cat] = more

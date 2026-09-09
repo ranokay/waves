@@ -4,7 +4,9 @@ WHAT THIS FENCES OFF
 --------------------
 Settings gains a Providers area: a TIDAL section (its session and its quality
 default) and an Apple Music section that is always visible behind an enable
-switch (default off) with a status light and runtime-manage placeholders.
+switch (default off) with a status light and setup-wizard + runtime-manage
+actions (issue #31 ships them live: Setup wizard, Update runtime,
+Remove runtime).
 The quality split itself (``tidal_quality_audio`` / ``apple_quality_audio``)
 and its migration landed with issue #24; this issue gives the split fields
 their sections: TIDAL's quality moves out of Downloads into the TIDAL
@@ -103,9 +105,12 @@ def test_the_apple_section_holds_the_switch_row_and_the_quality():
     apple = _keys(sections["providers_apple"])
     assert apple == [
         "provider_apple_status",
+        "apple_setup_wizard",
         "apple_quality_audio",
         "apple_cookies_path",
         "path_binary_nm3u8dlre",
+        "apple_apk_path",
+        "apple_wrapper_port",
         "apple_quarantine_dir",
         "apple_quarantine_keep",
     ]
@@ -114,9 +119,18 @@ def test_the_apple_section_holds_the_switch_row_and_the_quality():
     # the flag-tile grid, and the factory-reset walk still finds it.
     assert status["enabled_key"] == "apple_enabled"
     assert "apple_enabled" not in apple
-    # The status light sits at its not-set-up vocabulary, with the two
-    # runtime-manage placeholders that ship inert.
-    assert status["actions"] == [{"label": "Update runtime"}, {"label": "Remove runtime"}]
+    # The status light sits at its not-set-up vocabulary, with the setup
+    # wizard + runtime-manage actions behind it (issue #31 ships them live).
+    assert status["actions"] == [
+        {"label": "Setup wizard", "action": "apple_setup"},
+        {"label": "Update runtime", "action": "apple_update_runtime"},
+        {"label": "Remove runtime", "action": "apple_remove_runtime"},
+    ]
+    # The in-place wizard card follows the status row: bridge-computed, not
+    # a pref, rendered from the live setup mirror.
+    wizard = sections["providers_apple"]["fields"][1]
+    assert wizard["key"] == "apple_setup_wizard" and wizard["type"] == "apple_setup"
+    assert wizard["live"] == "apple_setup"
 
 
 def test_the_apple_switch_defaults_off_and_persists_as_an_engine_setting():
@@ -199,6 +213,7 @@ def _apply_stub(apple_enabled: bool = False):
     stub.confirmCategoryDlChanged = _signal()
     stub.librarySourceChanged = _signal()
     stub.appleStatusChanged = _signal()
+    stub.appleSetupRequested = _signal()
     stub._search_gen = 0
     stub._search_cache = {}
     stub.dl_pool = SimpleNamespace(setMaxThreadCount=lambda n: None)
@@ -241,6 +256,19 @@ def test_a_flip_off_is_also_a_flip():
     stub.appleStatusChanged = _signal(seen)
     _apply(stub, {"apple_enabled": False})
     assert len(seen) == 1
+
+
+def test_turning_apple_on_requests_the_setup_wizard():
+    stub = _apply_stub()
+    seen = []
+    stub.appleSetupRequested = _signal(seen)
+    _apply(stub, {"apple_enabled": True})
+    assert seen == [("setup",)]
+    # Off again, or an unchanged resubmit, requests nothing.
+    _apply(stub, {"apple_enabled": False})
+    assert seen == [("setup",)]
+    _apply(stub, {"apple_enabled": False})
+    assert seen == [("setup",)]
 
 
 def test_an_untouched_switch_emits_nothing():
@@ -293,6 +321,14 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     # holds a value.
     assert "onAppleStatusChanged" in qml
     assert '"apple_status"' in qml
+    # The in-place wizard card (issue #31) renders the live setup mirror and
+    # calls back the named step actions.
+    assert '"apple_setup"' in qml
+    assert "appleSetupLive" in qml
+    assert "installAppleRuntime" in qml and "installAppleImage" in qml
+    assert "appleStartContainer" in qml and "appleEnsurePort" in qml
+    # Step buttons say what they do (Remove, Pull image…), never Continue.
+    assert "action_label" in qml
     # The schema snapshots TIDAL's session, so login/logout must rebuild it.
     assert "onLoggedInChanged" in qml
     # The Apple switch is reachable without a pointer.
@@ -313,3 +349,16 @@ def test_the_factory_reset_walk_still_finds_the_switch_through_the_composite():
     sections = _schema()
     status = sections["providers_apple"]["fields"][0]
     assert {status.get("key"), status.get("enabled_key")} == {"provider_apple_status", "apple_enabled"}
+
+
+def test_enabling_and_pre_setup_clicks_deep_link_into_the_wizard():
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+    qml = src.read_text(encoding="utf-8")
+    # Enabling Apple Music and tapping an Apple download before setup
+    # completes both land in Settings at the Apple section (issue #31,
+    # spec section 7.1): the affordance stays live and opens the path.
+    assert "onAppleSetupRequested" in qml
+    assert "openAppleSetup" in qml
+    assert '"providers_apple"' in qml

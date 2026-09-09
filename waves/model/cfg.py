@@ -66,6 +66,16 @@ class Settings:
     # binary Apple downloads fetch through. Empty means PATH; the wizard
     # provisions and pins it later.
     path_binary_nm3u8dlre: str = ""
+    # Setup wizard (issue #31, spec section 2 and 10): the user-supplied Apple
+    # Music APK the full tier's wrapper guest needs. Waves never fetches,
+    # bundles, mirrors, or proxies it; the wizard verifies the pinned
+    # version by SHA-256 and scripts the .apkm extraction.
+    apple_apk_path: str = ""
+    # Wrapper HTTP API port (spec section 2 wizard fuel): 0 means Waves picks
+    # a free high port at setup time and passes it explicitly everywhere.
+    # Never 80: that default is collision-prone on a desktop. A nonzero
+    # value is a config-first override for a port the user knows is free.
+    apple_wrapper_port: int = 0
     # Integrity gate (issue #30, spec §6): always-on Apple verification knobs.
     # Retries counts AUTOMATIC re-downloads after an integrity failure (2 means
     # 3 attempts total); the outbreak pre-filter (Encoded date >= 2025-05)
@@ -253,6 +263,15 @@ class HelpSettings:
     path_binary_nm3u8dlre: str = (
         "Path to the N_m3u8DL-RE binary Apple downloads fetch through. Only necessary if it is not "
         "on $PATH; the setup wizard provisions it later."
+    )
+    apple_apk_path: str = (
+        "Path to the Apple Music APK you supply for the full Apple tier (pinned version, SHA-verified "
+        "by the setup wizard). Waves never downloads this file for you; the wizard tells you which "
+        "version to get and checks the one you bring."
+    )
+    apple_wrapper_port: str = (
+        "Port the Apple wrapper's HTTP API runs on. 0 (the default) means Waves picks a free high port "
+        "at setup time; the port-80 default is never used because it collides on desktops."
     )
     apple_integrity_retries: str = (
         "How many times an Apple track that fails its integrity check is automatically re-downloaded "
