@@ -4194,6 +4194,11 @@ class WavesBridge(LibraryMixin, QObject):
         # In-flight re-fetches of evicted download targets, keyed (bucket, id),
         # so a double-click can't spawn two network fetches for the same item.
         self._refetch_inflight: set[tuple[str, str]] = set()
+        # Chooser pins parked while a refetch runs, keyed (bucket, id) to
+        # (kind, tier word, audio word). A Chooser click whose object is gone
+        # replays through downloadWithChooser on _mediaRefetched instead of
+        # falling back to Settings defaults.
+        self._chooser_refetch_pins: dict[tuple[str, str], tuple[str, str, str]] = {}
         self._mediaRefetched.connect(self._on_media_refetched)
         self._queueRetryRefetched.connect(self._on_queue_retry_refetched)
         # Forced queued: the pop must run on the GUI thread AFTER any track
@@ -8797,6 +8802,327 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Could not read the target audio quality", exc_info=True)
             return ""
 
+    # ---- Chooser split button + popover (issue #35, spec §7.2) ------------
+    # Every download control is a split button: the main face queues with the
+    # saved Settings defaults, the chevron face (or right-click) opens the
+    # anchored Chooser popover. The popover's choice applies to that click
+    # only (pinned like keep_ask, never stored in _quality_overrides);
+    # SET AS DEFAULTS writes the same values back through applySettings.
+
+    def _get_apple_enabled(self) -> bool:
+        """Whether Apple Music is enabled in Settings."""
+        try:
+            return bool(
+                getattr(getattr(self, "settings", None), "data", None)
+                and getattr(self.settings.data, "apple_enabled", False)
+            )
+        except Exception:
+            return False
+
+    appleEnabled = Property(bool, _get_apple_enabled, notify=appleStatusChanged)
+
+    @Slot(result=bool)
+    def isAppleEnabled(self) -> bool:
+        """Whether the Apple provider section is enabled (spec §7.1).
+
+        QML gates the split-button chevron on this: with Apple disabled rows
+        keep today's single-face behavior unchanged."""
+        return self._get_apple_enabled()
+
+    def _chooser_provider_of(self, media_id: str) -> str:
+        """The row's provider from its id prefix (apple: or tidal)."""
+        mid = str(media_id or "")
+        if mid.startswith(f"{CTX_APPLE}:"):
+            return CTX_APPLE
+        return CTX_TIDAL
+
+    def _chooser_is_collection_kind(self, kind: str) -> bool:
+        """Whether a download kind belongs to a provider (fixed segment)."""
+        return str(kind or "").strip().lower() in ("album", "playlist", "mix", "artist", "folder", "category")
+
+    def _chooser_tier_entries(self, provider_id: str) -> list:
+        """The provider's tiers with detail text for the Chooser popover.
+
+        TIDAL renders its four rungs; Apple renders its three (no LOW) with
+        the ALAC/AAC detail from the spec. Detail is label text, never rank."""
+        pid = str(provider_id or "").strip().lower()
+        if pid == CTX_APPLE:
+            return [
+                {"value": "HI_RES_LOSSLESS", "word": "HI-RES", "detail": "ALAC 24/192"},
+                {"value": "LOSSLESS", "word": "LOSSLESS", "detail": "ALAC 16/44.1"},
+                {"value": "HIGH", "word": "HIGH", "detail": "AAC 256"},
+            ]
+        return [
+            {"value": "HI_RES_LOSSLESS", "word": "HI-RES", "detail": "FLAC 24-bit up to 192 kHz"},
+            {"value": "LOSSLESS", "word": "LOSSLESS", "detail": "FLAC 16-bit/44.1 kHz"},
+            {"value": "HIGH", "word": "HIGH", "detail": "AAC 320"},
+            {"value": "LOW", "word": "LOW", "detail": "AAC 96"},
+        ]
+
+    @Slot(str, result="QVariant")
+    def chooserTiers(self, provider_id: str) -> list:
+        """The Chooser's tier list for one provider (see _chooser_tier_entries)."""
+        return self._chooser_tier_entries(provider_id)
+
+    @Slot(str, result=str)
+    def chooserDefaultTier(self, provider_id: str) -> str:
+        """The Settings tier word for one provider (the Chooser default)."""
+        return self._chooser_default_tier_word(provider_id)
+
+    def _chooser_default_tier_word(self, provider_id: str) -> str:
+        """The Settings tier word for one provider."""
+        try:
+            data = getattr(getattr(self, "settings", None), "data", None)
+            if data is None:
+                return ""
+            if str(provider_id or "") == CTX_APPLE:
+                return _tier_word(str(getattr(data, "apple_quality_audio", "") or ""))
+            return _tier_word(str(getattr(data, "tidal_quality_audio", "") or ""))
+        except Exception:
+            logger.debug("Could not read the Chooser default tier", exc_info=True)
+            return ""
+
+    def _chooser_default_audio(self) -> str:
+        """The audio-type control's default from Settings.
+
+        download_dolby_atmos off means stereo, on means both (alongside).
+        Atmos-alone has no Settings spelling; it is a per-click choice only."""
+        data = getattr(getattr(self, "settings", None), "data", None)
+        if data is not None and bool(getattr(data, "download_dolby_atmos", False)):
+            return "both"
+        return "stereo"
+
+    def _chooser_atmos_only(self, media_id: str, kind: str) -> bool:
+        """Whether the audio-type control collapses to ATMOS ONLY.
+
+        TIDAL lists some tracks as their own Atmos-only ids; Apple tracks
+        always carry stereo, so only the TIDAL path can answer True here."""
+        try:
+            if self._chooser_provider_of(media_id) == CTX_APPLE:
+                return False
+            if str(kind or "").strip().lower() != "track":
+                return False
+            objs = getattr(self, "_objs", None) or {}
+            obj = (objs.get("track") or {}).get(str(media_id or ""))
+            if obj is None:
+                return False
+            return bool(_atmos_only(obj))
+        except Exception:
+            return False
+
+    @Slot(str, str, result="QVariant")
+    def chooserDefaults(self, media_id: str, kind: str = "") -> dict:
+        """Everything the Chooser popover needs to open on this control.
+
+        provider: the row's provider (tidal/apple); providerFixed: True on
+        collection rows (a collection belongs to its provider); tier: the
+        Settings tier word for that provider; audioType: stereo/both from
+        Settings; atmosOnly: collapse the audio control; tiers: the
+        provider's tier entries; lyrics/art: the shared quick-toggles."""
+        provider_id = self._chooser_provider_of(media_id)
+        try:
+            data = getattr(getattr(self, "settings", None), "data", None)
+            lyrics_embed = bool(getattr(data, "lyrics_embed", False)) if data is not None else False
+            lyrics_file = bool(getattr(data, "lyrics_file", False)) if data is not None else False
+            lyrics_ttml = bool(getattr(data, "lyrics_ttml_file", False)) if data is not None else False
+            cover_embed = bool(getattr(data, "metadata_cover_embed", True)) if data is not None else True
+            cover_file = bool(getattr(data, "cover_album_file", True)) if data is not None else True
+        except Exception:
+            lyrics_embed = lyrics_file = lyrics_ttml = False
+            cover_embed = cover_file = True
+        return {
+            "provider": provider_id,
+            "providerFixed": bool(self._chooser_is_collection_kind(kind)),
+            "tier": self._chooser_default_tier_word(provider_id),
+            "audioType": self._chooser_default_audio(),
+            "atmosOnly": bool(self._chooser_atmos_only(media_id, kind)),
+            "tiers": self._chooser_tier_entries(provider_id),
+            "audioOptions": ["stereo", "atmos", "both"],
+            "lyricsEmbed": lyrics_embed,
+            "lyricsFile": lyrics_file,
+            "lyricsTtml": lyrics_ttml,
+            "coverEmbed": cover_embed,
+            "coverFile": cover_file,
+            "appleEnabled": self._get_apple_enabled(),
+        }
+
+    @Slot("QVariant")
+    def saveChooserDefaults(self, values) -> None:
+        """SET AS DEFAULTS: persist the Chooser's tier + audio-type + toggles.
+
+        Writes back through applySettings so the face reflects it immediately
+        (targetTierChanged / ownership refresh ride along). Values carry
+        provider/tier/audioType plus the lyrics/art quick-toggles; unknown
+        keys are ignored by applySettings."""
+        if hasattr(values, "toVariant"):
+            try:
+                values = values.toVariant()
+            except Exception:
+                return
+        incoming = dict(values or {})
+        provider_id = str(incoming.get("provider") or "").strip().lower()
+        tier_word = str(incoming.get("tier") or "").strip()
+        audio = str(incoming.get("audioType") or incoming.get("audio_type") or "").strip().lower()
+        staged: dict = {}
+        tier = tier_from_word(tier_word) if tier_word else None
+        if tier is not None:
+            if provider_id == CTX_APPLE and tier == QualityTier.LOW:
+                pass
+            elif provider_id == CTX_APPLE:
+                staged["apple_quality_audio"] = str(tier.value)
+            else:
+                staged["tidal_quality_audio"] = str(tier.value)
+        if audio in ("stereo", "both"):
+            staged["download_dolby_atmos"] = audio == "both"
+        # "atmos" alone has no Settings spelling (the toggle means alongside
+        # in v1, spec section 5): SET AS DEFAULTS leaves it unchanged rather
+        # than misrecording it as both.
+        for key in ("lyrics_embed", "lyrics_file", "lyrics_ttml_file", "metadata_cover_embed", "cover_album_file"):
+            if key in incoming:
+                staged[key] = bool(incoming[key])
+        # QML uses camelCase toggle names; accept both spellings.
+        aliases = {
+            "lyricsEmbed": "lyrics_embed",
+            "lyricsFile": "lyrics_file",
+            "lyricsTtml": "lyrics_ttml_file",
+            "coverEmbed": "metadata_cover_embed",
+            "coverFile": "cover_album_file",
+        }
+        for camel, snake in aliases.items():
+            if camel in incoming and snake not in staged:
+                staged[snake] = bool(incoming[camel])
+        if staged:
+            self.applySettings(staged)
+
+    def _chooser_normalize_audio(self, audio_type: str | None) -> str | None:
+        """Normalize a Chooser audio word, or None to follow Settings."""
+        text = str(audio_type or "").strip().lower()
+        return text if text in ("stereo", "atmos", "both") else None
+
+    def _chooser_park_refetch(self, bucket: str, media_id: str, kind: str, tier: str, audio_type: str) -> None:
+        """Park one Chooser click while its object re-fetches.
+
+        Keyed (bucket, id) so _on_media_refetched replays this click instead
+        of the plain slot's Settings defaults. Last writer wins when a plain
+        click already has the same id in flight."""
+        try:
+            pins = getattr(self, "_chooser_refetch_pins", None)
+            if pins is None:
+                pins = self._chooser_refetch_pins = {}
+            pins[(str(bucket or ""), str(media_id or ""))] = (
+                str(kind or ""),
+                str(tier or ""),
+                str(audio_type or ""),
+            )
+        except Exception:
+            logger.debug("Could not park a Chooser refetch", exc_info=True)
+
+    def _chooser_take_refetch(self, bucket: str, media_id: str) -> tuple | None:
+        """Take a parked Chooser click for a refetched id, or None."""
+        try:
+            pins = getattr(self, "_chooser_refetch_pins", None) or {}
+            return pins.pop((str(bucket or ""), str(media_id or "")), None)
+        except Exception:
+            return None
+
+    def _chooser_drop_refetch(self, bucket: str, media_id: str) -> None:
+        """Drop a parked Chooser click when its refetch fails."""
+        try:
+            pins = getattr(self, "_chooser_refetch_pins", None) or {}
+            pins.pop((str(bucket or ""), str(media_id or "")), None)
+        except Exception:
+            logger.debug("Could not drop a Chooser refetch", exc_info=True)
+
+    def _chooser_ask_for(self, provider_id: str, tier_word: str | None) -> tuple | None:
+        """The pinned ask for a Chooser click, or None to follow Settings.
+
+        Returns (askQuality value, tier word) like _ask_quality_for; Apple
+        has no LOW rung so LOW there falls back to Settings."""
+        word = str(tier_word or "").strip()
+        if not word:
+            return None
+        tier = tier_from_word(word)
+        if tier is None:
+            return None
+        if str(provider_id or "") == CTX_APPLE and tier == QualityTier.LOW:
+            return None
+        return (str(tier.value), _tier_word(str(tier.value)))
+
+    @Slot(str, str, str, str)
+    def downloadWithChooser(self, media_id: str, kind: str, tier: str = "", audio_type: str = "") -> None:
+        """DOWNLOAD from the Chooser popover: that click only, never stored.
+
+        tier is a UI word (HI-RES/LOSSLESS/HIGH/LOW); audio_type is
+        stereo/atmos/both ("" follows Settings). Unsupported kinds fall back
+        to the row's plain download slot."""
+        mid = str(media_id or "")
+        k = str(kind or "").strip().lower()
+        if not mid or not k:
+            return
+        provider_id = self._chooser_provider_of(mid)
+        ask = self._chooser_ask_for(provider_id, tier)
+        audio = self._chooser_normalize_audio(audio_type)
+        if provider_id == CTX_APPLE:
+            self._download_apple_with_chooser(mid, k, ask, audio)
+            return
+        # TIDAL kinds with per-click support; bulk sweeps keep Settings.
+        templates = {
+            "track": (False, self.settings.data.format_track),
+            "album": (True, self.settings.data.format_album),
+            "playlist": (True, self._playlist_template(mid)),
+            "mix": (True, self.settings.data.format_mix),
+            "video": (False, self.settings.data.format_video),
+        }
+        if k in templates:
+            collection, template = templates[k]
+            obj = (getattr(self, "_objs", None) or {}).get(k, {}).get(mid)
+            if obj is None:
+                self._chooser_park_refetch(k, mid, k, tier, audio_type)
+                self._refetch_for_download(k, mid)
+                return
+            plan = (getattr(self, "_merge_plans", None) or {}).get(mid) if k == "album" else None
+            self._download(
+                obj,
+                k,
+                name_builder_title(obj),
+                template,
+                collection,
+                mid,
+                merge_plan=plan,
+                chooser_ask=ask,
+                chooser_audio=audio,
+            )
+            files = 1 if (audio != "both" or k == "video") else 2
+            self._chooser_confirm_status(provider_id, ask, audio, files)
+            return
+        # Artist / folder / category sweeps: no per-click pinning in v1, the
+        # main face (Settings defaults) is the honest path.
+        fallback = {
+            "artist": getattr(self, "downloadArtist", None),
+            "folder": getattr(self, "downloadFolder", None),
+            "category": getattr(self, "downloadPlaylistCategory", None),
+        }.get(k)
+        if callable(fallback):
+            fallback(mid)
+
+    def _chooser_confirm_status(self, provider_id: str, ask: tuple | None, audio: str | None, files: int) -> None:
+        """The queued confirmation: provider / tier / files on the status line."""
+        try:
+            if ask is not None and len(ask) > 1 and str(ask[1] or "").strip():
+                tier_word = str(ask[1])
+            else:
+                tier_word = self._chooser_default_tier_word(provider_id)
+            name = "APPLE MUSIC" if str(provider_id or "") == CTX_APPLE else "TIDAL"
+            if audio == "both":
+                files_word = "2 files: stereo + Atmos"
+            elif audio == "atmos":
+                files_word = "Atmos only"
+            else:
+                files_word = "stereo"
+            self._set_status(f"Queued: {name} - {tier_word} - {files_word}")
+        except Exception:
+            logger.debug("Chooser confirm status failed", exc_info=True)
+
     def _enqueue(
         self,
         name: str,
@@ -11675,11 +12001,17 @@ class WavesBridge(LibraryMixin, QObject):
         merge_plan: list | None = None,
         provider_id: str = CTX_TIDAL,
         keep_ask: tuple | None = None,
+        chooser_ask: tuple | None = None,
+        chooser_audio: str | None = None,
     ) -> None:
         """``keep_ask`` = (askQuality, tier word) of a row being RETRIED: the
         retry asks at what that row asked, not at a choice or setting that
         has moved since, and spends no choice (the row already had its own
-        ask). Every fresh click leaves it None."""
+        ask). Every fresh click leaves it None.
+
+        ``chooser_ask``/``chooser_audio`` pin one Chooser click (issue #35):
+        that click only, never stored. ``chooser_ask`` is (askQuality, tier
+        word) like keep_ask; ``chooser_audio`` is stereo/atmos/both."""
         if not self._logged_in:
             self._set_status("Sign in before downloading")
             return
@@ -11702,13 +12034,33 @@ class WavesBridge(LibraryMixin, QObject):
             self._stash_pending_download(
                 media_id,
                 lambda: self._download(
-                    obj, type_media, name, file_template, collection, media_id, merge_plan, keep_ask=keep_ask
+                    obj,
+                    type_media,
+                    name,
+                    file_template,
+                    collection,
+                    media_id,
+                    merge_plan,
+                    keep_ask=keep_ask,
+                    chooser_ask=chooser_ask,
+                    chooser_audio=chooser_audio,
                 ),
             )
             return
         if self._ffmpeg_gate_holds(
             media_id,
-            lambda: self._download(obj, type_media, name, file_template, collection, media_id, merge_plan),
+            lambda: self._download(
+                obj,
+                type_media,
+                name,
+                file_template,
+                collection,
+                media_id,
+                merge_plan,
+                keep_ask=keep_ask,
+                chooser_ask=chooser_ask,
+                chooser_audio=chooser_audio,
+            ),
         ):
             return
         # An identical row already waiting or running makes a second one pure
@@ -11718,14 +12070,21 @@ class WavesBridge(LibraryMixin, QObject):
         # quality is NOT a duplicate: that click is an upgrade or downgrade
         # request and keeps its own row. Terminal rows (done, failed, stopped)
         # never block a fresh ask.
-        # The tier this click asks at: the item's (or, for a track, its
-        # album's) quality choice when one stands, else the setting. Read here,
-        # after every gate, so a held download asks at the choice that stands
-        # when it is finally released. A download never spends the choice: it
+        # The tier this click asks at: the Chooser's pin when this is a
+        # Chooser click, else the item's (or, for a track, its album's)
+        # quality choice when one stands, else the setting. Read here, after
+        # every gate, so a held download asks at the choice that stands when
+        # it is finally released. A download never spends the choice: it
         # stays on the item, stated by its badge, until the item is given
         # another tier (livetest report: download a song at a chosen tier and
         # its badge fell straight back to the catalog's word).
-        if keep_ask is not None and keep_ask[0]:
+        if chooser_ask is not None and chooser_ask[0]:
+            ask, ask_tier = (
+                str(chooser_ask[0]),
+                str(chooser_ask[1] if len(chooser_ask) > 1 else "" or _tier_word(chooser_ask[0])),
+            )
+            keep_ver = None
+        elif keep_ask is not None and keep_ask[0]:
             ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] if len(keep_ask) > 1 else "" or _tier_word(keep_ask[0]))
             # A retry is of THIS row: it keeps the Version the row asked at,
             # not a fresh dual pair (each row carries its own retry).
@@ -11734,11 +12093,14 @@ class WavesBridge(LibraryMixin, QObject):
         else:
             ask, ask_tier = self._ask_quality_for(obj, type_media, media_id)
             keep_ver = None
+        chooser_ver = self._chooser_normalize_audio(chooser_audio) if chooser_ask is not None or chooser_audio else None
         # Dual-download Versions (§5.1-5.2): toggle on means alongside (two
         # rows, two files) where a real choice exists; toggle off stays
         # byte-identical single rows. Merges and videos never dual (v1). A
-        # retry (keep_ask) re-queues only its own Version. Test stubs without
-        # settings read as toggle-off (single legacy, existing behavior).
+        # retry (keep_ask) re-queues only its own Version, and a Chooser
+        # click (chooser_audio) pins its own Versions for that click only.
+        # Test stubs without settings read as toggle-off (single legacy,
+        # existing behavior).
         versions: list[str | None]
         try:
             _atmos_on = bool(
@@ -11749,6 +12111,19 @@ class WavesBridge(LibraryMixin, QObject):
             _atmos_on = False
         if keep_ver is not None:
             versions = [keep_ver]
+        elif chooser_ver is not None and (merge_plan is not None or type_media == "video"):
+            versions = [None]
+        elif chooser_ver == "both" and type_media in ("track", "album"):
+            versions = ["stereo", "atmos"] if _offers_both(obj) else [None]
+        elif chooser_ver == "both" and type_media in ("playlist", "mix"):
+            versions = ["stereo", "atmos"]
+        elif chooser_ver in ("stereo", "atmos") and type_media in ("track", "album", "playlist", "mix"):
+            if (type_media in ("track", "album") and bool(_atmos_only(obj))) or (
+                chooser_ver == "atmos" and type_media in ("track", "album") and not bool(_has_atmos(obj))
+            ):
+                versions = [None]
+            else:
+                versions = [chooser_ver]
         elif merge_plan is not None or type_media == "video" or not _atmos_on:
             versions = [None]
         elif type_media in ("track", "album"):
@@ -11914,10 +12289,12 @@ class WavesBridge(LibraryMixin, QObject):
                 logger.exception("Could not re-fetch Apple %s %s for download", bucket, media_id)
             if gen != self._browse_gen:
                 self._refetch_inflight.discard(key)
+                self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "")
                 return
             if obj is None:
                 self._refetch_inflight.discard(key)
+                self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "failed")
                 self._set_status("That item is no longer available")
                 self._bump_download_groups(media_id, None, "failed")
@@ -11936,6 +12313,8 @@ class WavesBridge(LibraryMixin, QObject):
         media_id: str,
         keep_ask: tuple | None = None,
         is_retry: bool = False,
+        chooser_ask: tuple | None = None,
+        chooser_audio: str | None = None,
     ) -> None:
         """Queue one Apple track or collection. The TIDAL _download's shape
         for the parts that are provider-blind (folder gate, ffmpeg gate,
@@ -11946,6 +12325,9 @@ class WavesBridge(LibraryMixin, QObject):
         marks an explicit re-ask of a FAILED row and rides the queued spec to
         the skip-list gate. They travel separately so a deferred replay keeps
         the row's pinned ask without promoting a fresh row into a retry.
+
+        ``chooser_ask``/``chooser_audio`` pin one Chooser click (issue #35),
+        that click only, never stored.
 
         A pre-setup click routes into the setup wizard at the sign-in step
         (spec §7.1): the affordance stays live and opens the path to making
@@ -11992,6 +12374,8 @@ class WavesBridge(LibraryMixin, QObject):
                     media_id,
                     keep_ask=keep_ask,
                     is_retry=is_retry,
+                    chooser_ask=chooser_ask,
+                    chooser_audio=chooser_audio,
                 ),
             )
             return
@@ -12006,10 +12390,18 @@ class WavesBridge(LibraryMixin, QObject):
                 media_id,
                 keep_ask=keep_ask,
                 is_retry=is_retry,
+                chooser_ask=chooser_ask,
+                chooser_audio=chooser_audio,
             ),
         ):
             return
-        if keep_ask is not None and keep_ask[0]:
+        if chooser_ask is not None and chooser_ask[0]:
+            ask, ask_tier = (
+                str(chooser_ask[0]),
+                str(chooser_ask[1] if len(chooser_ask) > 1 else "" or _tier_word(chooser_ask[0])),
+            )
+            keep_ver = None
+        elif keep_ask is not None and keep_ask[0]:
             # A retry asks at what its row asked, not at a setting that moved
             # since (the TIDAL keep_ask rule). It retries only its own Version.
             # Whether this re-entry IS a retry rides is_retry (set by
@@ -12022,13 +12414,19 @@ class WavesBridge(LibraryMixin, QObject):
             ask = str(self.settings.data.apple_quality_audio or "HIGH")
             ask_tier = _tier_word(ask)
             keep_ver = None
+        chooser_ver = self._chooser_normalize_audio(chooser_audio) if chooser_ask is not None or chooser_audio else None
         provider = self.providers.get(CTX_APPLE)
         # Dual-download Versions (§5.1-5.2): toggle on means alongside where a
         # track carries Atmos; toggle off stays single stereo rows. A retry
-        # re-queues only its own Version.
+        # re-queues only its own Version, and a Chooser click pins its own
+        # Versions for that click only.
         versions: list[str | None]
         if keep_ver is not None:
             versions = [keep_ver]
+        elif chooser_ver == "both":
+            versions = ["stereo", "atmos"]
+        elif chooser_ver in ("stereo", "atmos"):
+            versions = [chooser_ver]
         elif not self._apple_wants_atmos():
             versions = [None]
         else:
@@ -12156,6 +12554,64 @@ class WavesBridge(LibraryMixin, QObject):
             return
         self.downloadState.emit(media_id, "queued")
         self._pump_queue()
+
+    def _download_apple_with_chooser(self, media_id: str, kind: str, ask: tuple | None, audio: str | None) -> None:
+        """Route a Chooser Apple click to the cached row, then _download_apple.
+
+        Unknown rows re-fetch first (the _download_apple_collection dance);
+        the ask/audio pins ride as chooser_ask/chooser_audio for that click
+        only."""
+        provider = self.providers.get(CTX_APPLE)
+        if provider is None:
+            return
+        raw_kind = str(kind or "").strip().lower()
+        tier_word = str(ask[1]) if ask is not None and len(ask) > 1 else ""
+        audio_word = str(audio or "")
+        if raw_kind == "track":
+            raw = provider.cached("track", media_id) if hasattr(provider, "cached") else None
+            if raw is None:
+                self._chooser_park_refetch("track", media_id, raw_kind, tier_word, audio_word)
+                self._refetch_apple_for_download("track", media_id)
+                return
+            row = provider.row_for("track", raw)
+            self._download_apple(
+                "track",
+                row,
+                None,
+                self.settings.data.format_track,
+                False,
+                media_id,
+                chooser_ask=ask,
+                chooser_audio=audio,
+            )
+        elif raw_kind in ("album", "playlist"):
+            raw = provider.cached(raw_kind, media_id) if hasattr(provider, "cached") else None
+            if raw is None:
+                self._chooser_park_refetch(raw_kind, media_id, raw_kind, tier_word, audio_word)
+                self._refetch_apple_for_download(raw_kind, media_id)
+                return
+            row = provider.row_for(raw_kind, raw)
+            template = self.settings.data.format_playlist if raw_kind == "playlist" else self.settings.data.format_album
+            self._download_apple(
+                raw_kind,
+                row,
+                row,
+                template,
+                True,
+                media_id,
+                chooser_ask=ask,
+                chooser_audio=audio,
+            )
+        elif raw_kind == "mix":
+            self._set_status("Apple mixes arrive with the full Apple rollout")
+            return
+        elif raw_kind == "video":
+            self._set_status("Apple videos arrive with the full Apple rollout")
+            return
+        else:
+            return
+        files = 1 if audio != "both" else 2
+        self._chooser_confirm_status(CTX_APPLE, ask, audio, files)
 
     def _apple_wants_atmos(self) -> bool:
         """The instead-of Atmos toggle, read live per job like the engine's."""
@@ -15574,11 +16030,13 @@ class WavesBridge(LibraryMixin, QObject):
                 # Account changed while fetching, don't start a download the
                 # new user never asked for.
                 self._refetch_inflight.discard(key)
+                self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "")
                 self._bump_download_groups(media_id, None, "failed")
                 return
             if obj is None:
                 self._refetch_inflight.discard(key)
+                self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "failed")
                 self._set_status("That item is no longer available")
                 # A group member that never re-materialised must still be
@@ -15598,6 +16056,11 @@ class WavesBridge(LibraryMixin, QObject):
         # second click can't slip into the gap between the worker finishing and
         # the queued re-dispatch and double-queue the download.
         self._refetch_inflight.discard((bucket, media_id))
+        parked = self._chooser_take_refetch(bucket, media_id)
+        if parked is not None:
+            kind, tier_word, audio_word = parked
+            self.downloadWithChooser(media_id, kind, tier_word, audio_word)
+            return
         dispatch = {
             "album": self.downloadAlbum,
             "track": self.downloadTrack,
