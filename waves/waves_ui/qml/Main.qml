@@ -79,10 +79,19 @@ ApplicationWindow {
         return (q === "HI-RES" || q === "VIDEO") ? goldCont : q === "LOSSLESS" ? greenCont
              : q === "HIGH" ? cyanCont : surface3
     }
+    // ---- Chooser split button (issue #35, spec §7.2) --------------------
+    // Mirrored once: with Apple disabled every DownloadButton keeps today's
+    // single-face behavior; with Apple enabled each gains its chevron face.
+    property bool appleEnabled: false
+    function refreshAppleEnabled() {
+        try { root.appleEnabled = waves.isAppleEnabled() === true }
+        catch (e) { root.appleEnabled = false }
+    }
     Connections {
         target: waves
         function onQualityOverridesChanged() { root.qualityOverrides = waves.qualityOverrides || ({}) }
         function onTargetTierChanged() { root.targetTier = waves.targetTier || "" }
+        function onAppleStatusChanged() { root.refreshAppleEnabled() }
         function onQualityChoiceChanged(ids) { root.reopenDoneButtons(ids) }
         function onLibrarySourceChanged() {
             root.libraryOn = waves.wavesPref("library_enabled") === true
@@ -312,6 +321,7 @@ ApplicationWindow {
         if (showMax) root.visibility = Window.Maximized
         else root.visible = true
         root._geomReady = true
+        try { root.refreshAppleEnabled() } catch (e) {}
 
         if (root.signedIn && browseSections.length === 0 && !browseLoading) {
             browseLoading = true
@@ -6016,6 +6026,95 @@ ApplicationWindow {
             return ""
         }
         property var onTap: (function(){})
+        // ---- Chooser split button (issue #35, spec 7.2) ------------------
+        // chooserKind names what this control downloads (track, album,
+        // playlist, mix, video, artist, folder, category). Track rows and
+        // collection pages carry per-click support. Bulk sweeps keep Settings.
+        property string chooserKind: "track"
+        // A collection belongs to its provider, so the provider segment stays
+        // fixed there. Track rows fix it too in v1. Cross provider counterparts
+        // need ISRC dedupe, which is post v1, so the segment names the row's
+        // provider everywhere for now.
+        property bool providerFixed: chooserKind !== "track" && chooserKind !== "video"
+        // Per-click pins exist for track rows and collection pages only
+        // (acceptance). Bulk sweeps keep Settings, so they keep one face.
+        readonly property bool chooserSupported: chooserKind === "track" || chooserKind === "album"
+            || chooserKind === "playlist" || chooserKind === "mix" || chooserKind === "video"
+        readonly property bool showChooser: root.appleEnabled && chooserSupported
+        property bool chooserBuilt: false
+        readonly property bool chooserOpen: chooserLoader.item !== null && chooserLoader.item.visible
+        property string chooserProvider: ""
+        property string chooserTier: ""
+        property string chooserAudio: "stereo"
+        property bool chooserAtmosOnly: false
+        property var chooserTiers: []
+        property bool chooserLyricsEmbed: false
+        property bool chooserLyricsFile: false
+        property bool chooserLyricsTtml: false
+        property bool chooserCoverEmbed: true
+        property bool chooserCoverFile: true
+        function chooserRowProvider() {
+            var mid = "" + (db.mediaId || "")
+            return mid.indexOf("apple:") === 0 ? "apple" : "tidal"
+        }
+        function refreshChooser() {
+            var d = ({})
+            try { d = waves.chooserDefaults(db.mediaId, db.chooserKind) || ({}) } catch (e) { d = ({}) }
+            db.chooserProvider = "" + (d.provider || db.chooserRowProvider())
+            db.chooserTier = "" + (d.tier || "")
+            db.chooserAudio = "" + (d.audioType || "stereo")
+            db.chooserAtmosOnly = d.atmosOnly === true
+            if (db.chooserAtmosOnly) db.chooserAudio = "atmos"
+            db.chooserTiers = d.tiers || []
+            db.chooserLyricsEmbed = d.lyricsEmbed === true
+            db.chooserLyricsFile = d.lyricsFile === true
+            db.chooserLyricsTtml = d.lyricsTtml === true
+            db.chooserCoverEmbed = d.coverEmbed !== false
+            db.chooserCoverFile = d.coverFile !== false
+        }
+        function refreshChooserForProvider() {
+            var tiers = []
+            try { tiers = waves.chooserTiers(db.chooserProvider) || [] } catch (e) { tiers = [] }
+            db.chooserTiers = tiers
+            var tierWord = ""
+            try { tierWord = "" + (waves.chooserDefaultTier(db.chooserProvider) || "") } catch (e) { tierWord = "" }
+            if (tierWord !== "") db.chooserTier = tierWord
+        }
+        function openChooser() {
+            if (!db.showChooser) return
+            if (db.st === "running" || db.waiting) return
+            db.chooserBuilt = true
+            db.refreshChooser()
+            var m = chooserLoader.item
+            if (m) m.open()
+        }
+        function closeChooser() { if (chooserLoader.item) chooserLoader.item.close() }
+        function confirmChooser() {
+            var k = "" + (db.chooserKind || "")
+            var supported = k === "track" || k === "album" || k === "playlist" || k === "mix" || k === "video"
+            if (!supported) {
+                try { db.onTap() } catch (e) {}
+                db.closeChooser()
+                return
+            }
+            var tier = db.chooserAtmosOnly ? "" : ("" + (db.chooserTier || ""))
+            var audio = db.chooserAtmosOnly ? "atmos" : ("" + (db.chooserAudio || ""))
+            try { waves.downloadWithChooser(db.mediaId, k, tier, audio) } catch (e) {}
+            db.closeChooser()
+        }
+        function saveChooserAsDefaults() {
+            var vals = {
+                provider: "" + (db.chooserProvider || db.chooserRowProvider()),
+                tier: "" + (db.chooserTier || ""),
+                audioType: db.chooserAtmosOnly ? "atmos" : ("" + (db.chooserAudio || "")),
+                lyrics_embed: db.chooserLyricsEmbed,
+                lyrics_file: db.chooserLyricsFile,
+                lyrics_ttml_file: db.chooserLyricsTtml,
+                metadata_cover_embed: db.chooserCoverEmbed,
+                cover_album_file: db.chooserCoverFile
+            }
+            try { waves.saveChooserDefaults(vals) } catch (e) {}
+        }
         // Opt-in for track-scoped buttons only: the ownership store is keyed by
         // exact track id, so a plain album/playlist/artist mediaId must not be
         // looked up as if it were one.
@@ -6631,15 +6730,208 @@ ApplicationWindow {
             // Named so the scenario test can drive the REAL tap area rather
             // than the functions behind it (the wiring is the thing at risk).
             objectName: "dbTapArea"
-            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-            onPressed: db.scale = 0.96
+            anchors.fill: parent
+            anchors.rightMargin: db.showChooser ? 28 : 0
+            cursorShape: Qt.PointingHandCursor
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            onPressed: function(m) { if (m.button === Qt.LeftButton) db.scale = 0.96 }
             onReleased: db.scale = 1.0
             onCanceled: db.scale = 1.0
-            onClicked: {
+            onClicked: function(m) {
+                if (m.button === Qt.RightButton) { db.openChooser(); return }
                 // A library claim is a guess, so it answers instead of ignoring.
                 if (db.libClaim) { db.openLibraryClaim(); return }
                 if (db.st === "running" || db.st === "done" || db.waiting) return
                 db.onTap()
+            }
+        }
+        // The chevron face. Visible only while Apple is enabled, so with Apple
+        // disabled the control keeps today's single face byte for byte.
+        Rectangle {
+            id: dbChev
+            visible: db.showChooser
+            anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
+            width: 28
+            radius: root.btnRad
+            color: "transparent"
+            border.width: 0
+            Rectangle { anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 1; color: db.edge; opacity: 0.6 }
+            Text {
+                textFormat: Text.PlainText
+                text: "▾"
+                color: root.accent
+                font.pixelSize: 12; font.bold: true
+                anchors.centerIn: parent
+            }
+            MouseArea {
+                objectName: "dbChooserTap"
+                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                onClicked: db.openChooser()
+            }
+        }
+        Loader { id: chooserLoader; active: db.chooserBuilt; sourceComponent: chooserComp }
+        Component {
+            id: chooserComp
+            Popup {
+                id: chooserPop
+                objectName: "chooserPopover"
+                parent: db
+                x: Math.max(0, db.width - width); y: db.height + 4
+                width: 320; padding: 12
+                modal: false; focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                background: Rectangle { radius: 10; color: root.surfaceHi; border.color: root.outline }
+                contentItem: Column {
+                    spacing: 10
+                    Text { textFormat: Text.PlainText; text: "DOWNLOAD WITH"; color: root.textDim; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1 }
+                    Column {
+                        spacing: 4
+                        Text { textFormat: Text.PlainText; text: "PROVIDER"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
+                        Row {
+                            spacing: 6
+                            // Fixed to the row's provider in v1. Cross provider
+                            // counterparts need ISRC dedupe, which is post v1,
+                            // so the segment names the provider without switching.
+                            Rectangle {
+                                width: 140; height: 26; radius: 6
+                                color: db.chooserProvider === "tidal" ? root.accentCont : root.surface3
+                                border.color: db.chooserProvider === "tidal" ? root.accentDim : root.outline; border.width: 1
+                                Text { textFormat: Text.PlainText; text: "TIDAL"; color: db.chooserProvider === "tidal" ? root.accentContTx : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
+                                MouseArea { anchors.fill: parent; enabled: false; cursorShape: Qt.PointingHandCursor }
+                            }
+                            Rectangle {
+                                width: 140; height: 26; radius: 6
+                                color: db.chooserProvider === "apple" ? root.surfaceHi : root.surface3
+                                border.color: db.chooserProvider === "apple" ? root.textHi : root.outline; border.width: 1
+                                Text { textFormat: Text.PlainText; text: "APPLE MUSIC"; color: db.chooserProvider === "apple" ? root.textHi : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
+                                MouseArea { anchors.fill: parent; enabled: false; cursorShape: Qt.PointingHandCursor }
+                            }
+                        }
+                    }
+                    Column {
+                        spacing: 4
+                        Text { textFormat: Text.PlainText; text: "AUDIO QUALITY"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
+                        Repeater {
+                            model: db.chooserTiers
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: 296; height: 26; radius: 5
+                                color: ("" + modelData.word) === ("" + db.chooserTier) ? root.qualTint(modelData.word) : "transparent"
+                                border.color: ("" + modelData.word) === ("" + db.chooserTier) ? root.qualBorder(modelData.word) : "transparent"
+                                border.width: 1
+                                Row {
+                                    anchors.left: parent.left; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter; spacing: 6
+                                    Rectangle { width: 6; height: 6; radius: 3; color: root.qualDot(modelData.word); anchors.verticalCenter: parent.verticalCenter }
+                                    Text { textFormat: Text.PlainText; text: "" + modelData.word; color: root.qualFg(modelData.word); font.family: root.mono; font.pixelSize: 10; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                                    Text { textFormat: Text.PlainText; text: "" + (modelData.detail || ""); color: root.textLo; font.family: root.mono; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
+                                }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserTier = "" + modelData.word }
+                            }
+                        }
+                    }
+                    Column {
+                        spacing: 4
+                        Text { textFormat: Text.PlainText; text: "AUDIO TYPE"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
+                        Text {
+                            visible: db.chooserAtmosOnly
+                            textFormat: Text.PlainText; text: "ATMOS ONLY"; color: root.textHi
+                            font.family: root.mono; font.pixelSize: 10; font.bold: true
+                        }
+                        Row {
+                            visible: !db.chooserAtmosOnly
+                            spacing: 6
+                            Repeater {
+                                model: ["stereo", "atmos", "both"]
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: 94; height: 26; radius: 6
+                                    color: db.chooserAudio === modelData ? root.accentCont : root.surface3
+                                    border.color: db.chooserAudio === modelData ? root.accentDim : root.outline; border.width: 1
+                                    Text { textFormat: Text.PlainText; text: modelData.toUpperCase(); color: db.chooserAudio === modelData ? root.accentContTx : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserAudio = modelData }
+                                }
+                            }
+                        }
+                    }
+                    Column {
+                        spacing: 4
+                        Text { textFormat: Text.PlainText; text: "LYRICS"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
+                        Row {
+                            spacing: 8
+                            Rectangle {
+                                width: 90; height: 24; radius: 5
+                                color: db.chooserLyricsEmbed ? root.accentCont : root.surface3
+                                border.color: db.chooserLyricsEmbed ? root.accentDim : root.outline; border.width: 1
+                                Text { textFormat: Text.PlainText; text: db.chooserLyricsEmbed ? "EMBED ON" : "EMBED OFF"; color: db.chooserLyricsEmbed ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsEmbed = !db.chooserLyricsEmbed; try { waves.applySettings({lyrics_embed: db.chooserLyricsEmbed}) } catch (e) {} } }
+                            }
+                            Rectangle {
+                                width: 70; height: 24; radius: 5
+                                color: db.chooserLyricsFile ? root.accentCont : root.surface3
+                                border.color: db.chooserLyricsFile ? root.accentDim : root.outline; border.width: 1
+                                Text { textFormat: Text.PlainText; text: db.chooserLyricsFile ? ".LRC ON" : ".LRC OFF"; color: db.chooserLyricsFile ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsFile = !db.chooserLyricsFile; try { waves.applySettings({lyrics_file: db.chooserLyricsFile}) } catch (e) {} } }
+                            }
+                            Rectangle {
+                                width: 80; height: 24; radius: 5
+                                color: db.chooserLyricsTtml ? root.accentCont : root.surface3
+                                border.color: db.chooserLyricsTtml ? root.accentDim : root.outline; border.width: 1
+                                opacity: db.chooserProvider === "apple" ? 1 : 0.4
+                                Text { textFormat: Text.PlainText; text: db.chooserLyricsTtml ? ".TTML ON" : ".TTML OFF"; color: db.chooserLyricsTtml ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
+                                MouseArea { anchors.fill: parent; enabled: db.chooserProvider === "apple"; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsTtml = !db.chooserLyricsTtml; try { waves.applySettings({lyrics_ttml_file: db.chooserLyricsTtml}) } catch (e) {} } }
+                            }
+                        }
+                    }
+                    Column {
+                        spacing: 4
+                        Text { textFormat: Text.PlainText; text: "ALBUM ART"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
+                        Row {
+                            spacing: 8
+                            Rectangle {
+                                width: 130; height: 24; radius: 5
+                                color: db.chooserCoverFile ? root.accentCont : root.surface3
+                                border.color: db.chooserCoverFile ? root.accentDim : root.outline; border.width: 1
+                                Text { textFormat: Text.PlainText; text: db.chooserCoverFile ? "SIDECAR ON" : "SIDECAR OFF"; color: db.chooserCoverFile ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserCoverFile = !db.chooserCoverFile; try { waves.applySettings({cover_album_file: db.chooserCoverFile}) } catch (e) {} } }
+                            }
+                            Rectangle {
+                                width: 110; height: 24; radius: 5
+                                color: db.chooserCoverEmbed ? root.accentCont : root.surface3
+                                border.color: db.chooserCoverEmbed ? root.accentDim : root.outline; border.width: 1
+                                Text { textFormat: Text.PlainText; text: db.chooserCoverEmbed ? "EMBED ON" : "EMBED OFF"; color: db.chooserCoverEmbed ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserCoverEmbed = !db.chooserCoverEmbed; try { waves.applySettings({metadata_cover_embed: db.chooserCoverEmbed}) } catch (e) {} } }
+                            }
+                        }
+                    }
+                    Row {
+                        spacing: 8
+                        Rectangle {
+                            width: 150; height: 30; radius: 6; color: "transparent"
+                            border.color: root.accentDim; border.width: 1
+                            Text { textFormat: Text.PlainText; text: "SET AS DEFAULTS"; color: root.accentContTx; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.saveChooserAsDefaults() }
+                        }
+                        Rectangle {
+                            width: 120; height: 30; radius: 6; color: root.accent
+                            Text { textFormat: Text.PlainText; text: "DOWNLOAD"; color: root.accentText; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.confirmChooser() }
+                        }
+                    }
+                    Text { textFormat: Text.PlainText; text: "Defaults come from Settings. Tier and audio apply to this click only. Lyrics and art save to Settings at once."; color: root.textDim; font.pixelSize: 9; wrapMode: Text.WordWrap; width: 296 }
+                }
+                enter: Transition {
+                    ParallelAnimation {
+                        NumberAnimation { property: "opacity"; from: 0; to: 1; duration: root.hoverMotion ? 120 : 0 }
+                        NumberAnimation { property: "scale"; from: 0.8; to: 1; duration: root.hoverMotion ? 260 : 0; easing.type: Easing.OutBack }
+                    }
+                }
+                exit: Transition {
+                    ParallelAnimation {
+                        NumberAnimation { property: "opacity"; from: 1; to: 0; duration: root.hoverMotion ? 110 : 0 }
+                        NumberAnimation { property: "scale"; from: 1; to: 0.9; duration: root.hoverMotion ? 110 : 0; easing.type: Easing.InQuad }
+                    }
+                }
             }
         }
         // Always enabled: a HoverHandler whose enabled flips false UNDER the
@@ -6805,6 +7097,7 @@ ApplicationWindow {
             DownloadButton {
                 visible: !plRow.isFolder
                 mediaId: plRow.isFolder ? "" : model.id
+                chooserKind: "playlist"
                 collectionCheck: !plRow.isFolder
                 label: "Download playlist"
                 onTap: function(){ waves.downloadPlaylist(model.id) }
@@ -6817,6 +7110,7 @@ ApplicationWindow {
                 DownloadButton {
                     id: folderBtn
                     mediaId: plRow.isFolder ? plRow.model.id : ""
+                    chooserKind: "folder"
                     label: "Download all"
                     onTap: function(){ waves.downloadFolder(folderBtn.mediaId) }
                 }
@@ -7932,6 +8226,7 @@ ApplicationWindow {
             DownloadButton {
                 id: vDl
                 mediaId: vcell.vid; ownedCheck: true; label: "Download"; noun: "video"
+                chooserKind: "video"
                 anchors.right: parent.right
                 anchors.verticalCenter: vMetaCol.verticalCenter
                 onTap: function(){ waves.downloadVideo(vcell.vid) }
@@ -8382,6 +8677,7 @@ ApplicationWindow {
                 }
                 DownloadButton {
                     Layout.alignment: Qt.AlignVCenter; mediaId: albumId; collectionCheck: true; label: "Download album"
+                    chooserKind: "album"
                     libAlbum: ({ artist: ab.artistName, title: ab.title, year: ab.year, tracks: ab.trackCount, duration_sec: ab.durationSec })
                     onTap: function(){ waves.downloadAlbum(albumId) }
                 }
@@ -8464,6 +8760,7 @@ ApplicationWindow {
                             // separate action.
                             DownloadButton {
                                 mediaId: albumId; label: "Download album"
+                                chooserKind: "album"
                                 collectionIds: ab.trackList.length > 0 ? ab.trackList.map(function(t){ return t.id }) : []
                                 libAlbum: ({ artist: ab.artistName, title: ab.title, year: ab.year, tracks: ab.trackCount, duration_sec: ab.durationSec })
                                 onTap: function(){ waves.downloadAlbum(albumId) }
@@ -8651,7 +8948,7 @@ ApplicationWindow {
                     }
                     Text { textFormat: Text.PlainText; text: pb.subLabel; color: root.textLo; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
                 }
-                DownloadButton { Layout.alignment: Qt.AlignVCenter; mediaId: plId; collectionCheck: true; label: "Download playlist"; onTap: function(){ waves.downloadPlaylist(plId) } }
+                DownloadButton { Layout.alignment: Qt.AlignVCenter; mediaId: plId; chooserKind: "playlist"; collectionCheck: true; label: "Download playlist"; onTap: function(){ waves.downloadPlaylist(plId) } }
             }
             MouseArea { id: pbRowMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; z: -1; onClicked: toggle() }
         }
@@ -8698,7 +8995,7 @@ ApplicationWindow {
                         Row {
                             spacing: 10; topPadding: 6
                             DownloadButton {
-                                mediaId: plId; label: "Download playlist"; collectionCheck: true
+                                mediaId: plId; label: "Download playlist"; chooserKind: "playlist"; collectionCheck: true
                                 onTap: function(){ waves.downloadPlaylist(plId) }
                             }
                             Text {
@@ -9118,6 +9415,7 @@ ApplicationWindow {
                 }
                 DownloadButton {
                     Layout.alignment: Qt.AlignVCenter; mediaId: tId; ownedCheck: true
+                    chooserKind: trow.kind === "video" ? "video" : "track"
                     label: trow.kind === "video" ? "Download video" : "Download track"
                     // The same identity the pill beside the title resolves, so
                     // the row says one thing in two places: the pill answers at
@@ -9275,7 +9573,7 @@ ApplicationWindow {
             PreviewBar { width: parent.width; pid: aId }
             DownloadButton {
                 width: parent.width
-                mediaId: aId; label: "Download artist"
+                mediaId: aId; chooserKind: "artist"; label: "Download artist"
                 // What the strip on the cover already says, said again by the
                 // control that would act on it: a catalogue you partly hold
                 // is not a fresh grab.
@@ -10182,6 +10480,7 @@ ApplicationWindow {
                         anchors.horizontalCenter: parent.horizontalCenter
                         width: st === "running" ? parent.width : implicitWidth
                         mediaId: ac.card.id || ""
+                        chooserKind: ac.card.kind || "album"
                         // No ownership rollup here: this button is visible only
                         // while a LIVE download state exists, and live state always
                         // outranks the owned rollup, so the rollup's result could
@@ -11147,6 +11446,7 @@ ApplicationWindow {
                 id: catBtn
                 bare: true
                 mediaId: bt.catId
+                chooserKind: "category"
                 label: "Download all"
                 // Retry after a failed rollup re-queues from the cached list.
                 onTap: function(){ waves.downloadPlaylistCategory(bt.path) }
@@ -13228,6 +13528,7 @@ ApplicationWindow {
                                     visible: browseItemHeader.hd !== null
                                     DownloadButton {
                                         mediaId: browseItemHeader.hd ? (browseItemHeader.hd.id || "") : ""
+                                        chooserKind: browseItemHeader.hd ? (browseItemHeader.hd.kind || "album") : "album"
                                         label: browseItemHeader.hd
                                                ? (browseItemHeader.hd.kind === "playlist" ? "Download playlist"
                                                   : browseItemHeader.hd.kind === "mix" ? "Download mix" : "Download album")
@@ -13255,6 +13556,7 @@ ApplicationWindow {
                                     DownloadButton {
                                         visible: !!browseItemHeader.hd && browseItemHeader.hd.kind === "playlist"
                                         mediaId: browseItemHeader.hd ? ("albums:" + (browseItemHeader.hd.id || "")) : ""
+                                        chooserKind: "playlistAlbums"
                                         label: "Download full albums"
                                         noun: "albums"
                                         onTap: function() {
@@ -13717,7 +14019,7 @@ ApplicationWindow {
                                 Text { textFormat: Text.PlainText; text: model.title; color: root.textHi; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                                 Text { textFormat: Text.PlainText; text: model.subtitle ? model.subtitle : "Mix"; color: root.textLo; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
                             }
-                            DownloadButton { mediaId: model.id; collectionCheck: true; label: "Download mix"; onTap: function(){ waves.downloadMix(model.id) } }
+                            DownloadButton { mediaId: model.id; chooserKind: "mix"; collectionCheck: true; label: "Download mix"; onTap: function(){ waves.downloadMix(model.id) } }
                         }
                         }
                     }
@@ -13990,6 +14292,7 @@ ApplicationWindow {
                             spacing: 12
                             DownloadButton {
                                 mediaId: root.artistData.id || ""
+                                chooserKind: "artist"
                                 label: "Download discography"
                                 // The badge directly above says what is held;
                                 // this says what a click would add to.
@@ -14146,6 +14449,7 @@ ApplicationWindow {
                     trailing: Component {
                         DownloadButton {
                             mediaId: "vids:" + root.artistData.id
+                            chooserKind: "artistVideos"
                             label: "All videos"
                             onTap: function(){ waves.downloadArtistVideos(root.artistData.id) }
                         }
@@ -14692,7 +14996,7 @@ ApplicationWindow {
                                 Text { textFormat: Text.PlainText; text: model.title; color: root.textHi; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                                 Text { textFormat: Text.PlainText; text: model.subtitle ? model.subtitle : "Mix"; color: root.textLo; font.pixelSize: 12 }
                             }
-                            DownloadButton { mediaId: model.id; collectionCheck: true; label: "Download mix"; onTap: function(){ waves.downloadMix(model.id) } }
+                            DownloadButton { mediaId: model.id; chooserKind: "mix"; collectionCheck: true; label: "Download mix"; onTap: function(){ waves.downloadMix(model.id) } }
                         }
                     }
                 }
