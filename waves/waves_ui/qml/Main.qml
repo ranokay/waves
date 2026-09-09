@@ -4400,6 +4400,10 @@ ApplicationWindow {
         property int declared: 0
         readonly property int want: pxt.declared > pxt.have ? pxt.declared : pxt.total
         readonly property bool partial: pxt.have > 0 && pxt.want > 0 && pxt.have < pxt.want
+        // A trailing micro-word for the pill's last position (the album
+        // pill's " · ATMOS TOO"). Empty everywhere else, so every other
+        // pill reads exactly as before; the pill's width follows pxBase.
+        property string extra: ""
         // True when the match's IDENTITY is proven (exact edition title, both
         // years agreeing): the "?" is reserved for matches the matcher could
         // not prove are the same album. Coverage is a separate axis, already
@@ -4462,7 +4466,7 @@ ApplicationWindow {
             id: pxBase
             textFormat: Text.PlainText
             x: pxt.proven ? 7 : 17; anchors.verticalCenter: parent.verticalCenter
-            text: pxt.partial ? (pxt.have + " OF " + pxt.want + " IN LIBRARY") : "IN LIBRARY"
+            text: (pxt.partial ? (pxt.have + " OF " + pxt.want + " IN LIBRARY") : "IN LIBRARY") + pxt.extra
             color: root.pillClassTx(pxt.qclass); font.family: root.mono; font.pixelSize: 9; font.bold: true
         }
         MouseArea {
@@ -4573,6 +4577,13 @@ ApplicationWindow {
         // on tracks (coverage is already spelled out as N OF M). Track pills
         // and the artist rollup have no identity proofs and keep theirs.
         proven: !!(presence && presence.present && presence.sure === true)
+        // The Atmos micro-badge (§8.4): the album on disk holds Dolby Atmos Versions
+        // beside its canonical set. Spoken as the pill's last word, so the
+        // badge needs no second anchor beside a pill whose row already
+        // reserves its width; libraries without Atmos never take this branch
+        // and read exactly as before.
+        readonly property bool atmos: !!(presence && presence.present && presence.has_atmos === true)
+        extra: appl.atmos ? " · ATMOS TOO" : ""
     }
 
     // The track twin of AlbumPresencePill: the same LibraryTag, resolved
@@ -9652,6 +9663,9 @@ ApplicationWindow {
         readonly property bool libPresent: !!(bc.libPresence && bc.libPresence.present === true)
         readonly property bool libFull: !!(bc.libPresence && bc.libPresence.full === true)
         readonly property bool libSure: !!(bc.libPresence && bc.libPresence.sure === true)
+        // The Atmos micro-badge (§8.4): the album on disk holds Dolby Atmos Versions
+        // beside its canonical set.
+        readonly property bool libAtmos: !!(bc.libPresence && bc.libPresence.has_atmos === true)
         // The three states the art card's strip already names: a proven
         // complete copy, an unproven one, and a partial copy (which stays a
         // plain live download, since completing an album is not a duplicate).
@@ -9708,8 +9722,12 @@ ApplicationWindow {
                 color: root.textHi; font.pixelSize: 12; font.bold: true
                 // Height hugs the actual line count, a one-line title no
                 // longer leaves a blank second line above the caption.
+                // The ATMOS TOO micro-badge takes the second line's room, so
+                // a card showing it holds its title to one line: the caption
+                // column and the bottom-anchored control row otherwise meet
+                // on two-line titles.
                 width: parent.width
-                elide: Text.ElideRight; maximumLineCount: 2; wrapMode: Text.Wrap
+                elide: Text.ElideRight; maximumLineCount: (bc.libPresent && bc.libAtmos) ? 1 : 2; wrapMode: Text.Wrap
                 font.underline: bcTitleMa.containsMouse && bc.openable
                 MouseArea {
                     id: bcTitleMa
@@ -9724,6 +9742,15 @@ ApplicationWindow {
             // "N tracks") gets the whole row now that the download control
             // lives on its own line below.
             CardCaption { card: bc.card; px: 11; width: parent.width }
+            // The Atmos micro-badge (§8.4). In the caption column, so it
+            // rides the card's own layout; the column skips hidden children,
+            // so cards without Atmos keep their exact shape.
+            Text {
+                visible: bc.libPresent && bc.libAtmos
+                textFormat: Text.PlainText; text: "ATMOS TOO"
+                color: root.textDim; font.family: root.mono; font.pixelSize: 9; font.bold: true
+                width: parent.width; elide: Text.ElideRight
+            }
         }
         // Control line pinned to the bottom edge so shelf rows align:
         // ▶ PREVIEW on the left, bare-text download on the right.
@@ -10396,6 +10423,17 @@ ApplicationWindow {
                 albumId: ac.libPresence ? (ac.libPresence.local_album_id || "") : ""
                 qclass: ac.libPresence ? (ac.libPresence.local_class || "") : ""
                 proven: ac.libSure
+            }
+            // The Atmos micro-badge (§8.4): the copy holds Dolby Atmos
+            // Versions beside its canonical set. Under the library pill, the
+            // one corner no caption or hover control uses; absolutely placed,
+            // so it can never move the art or the caption, and hidden
+            // libraries never take this branch.
+            Text {
+                visible: ac.libPresent && !!(ac.libPresence && ac.libPresence.has_atmos === true)
+                textFormat: Text.PlainText; text: "ATMOS TOO"
+                x: 10; y: 32
+                color: root.textDim; font.family: root.mono; font.pixelSize: 9; font.bold: true
             }
             // The artist answer to the pill above, for the same reason: a shelf
             // of artists has to say "what do I already have" at a glance. It

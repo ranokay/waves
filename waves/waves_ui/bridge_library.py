@@ -37,9 +37,11 @@ import contextlib
 import logging
 import os
 import pathlib
+import re
 import sys
 import time
 
+from pathvalidate import sanitize_filename
 from PySide6 import QtCore, QtGui
 from PySide6.QtCore import Signal, Slot
 
@@ -255,6 +257,294 @@ def _rearm(bridge) -> None:
         hook()
 
 
+def _sanitized_fragment(fragment: tuple) -> tuple:
+    """The fragment as it lands on disk.
+
+    The download pipeline runs every rendered path component through
+    sanitize_filename (the "_" stand-in, this platform) after substituting
+    tokens, so a literal the platform rejects ("Atmos?" where "?" is
+    illegal, the reserved name "CON") is stored rewritten while the
+    configured spelling keeps the original. Literal-only components
+    sanitize whole, exactly like the pipeline. Beside a token only the
+    literal chunk sanitizes, and an edge beside a token keeps its spaces:
+    there they are interior (the token's value sits next to them), while a
+    component edge trims exactly as on disk. Tokens pass through untouched
+    -- they render per album first. A chunk that refuses to sanitize keeps
+    its raw spelling.
+    """
+    out = []
+    for component in fragment:
+        chunks = re.split(r"(\{[^{}]*\})", component)
+        rebuilt = []
+        for i, chunk in enumerate(chunks):
+            if not chunk or re.fullmatch(r"\{[^{}]*\}", chunk):
+                rebuilt.append(chunk)
+                continue
+            try:
+                clean = sanitize_filename(chunk, replacement_text="_", validate_after_sanitize=True, platform="auto")
+            except Exception:
+                rebuilt.append(chunk)
+                continue
+            if i > 0:
+                lead = chunk[: len(chunk) - len(chunk.lstrip())]
+                clean = lead + clean.lstrip()
+            if i < len(chunks) - 1:
+                trail = chunk[len(chunk.rstrip()) :]
+                clean = clean.rstrip() + trail
+            rebuilt.append(clean)
+        out.append("".join(rebuilt))
+    return tuple(out)
+
+
+def _atmos_fragments(configured: str) -> set:
+    """The Atmos placement fragments as tuples of casefolded folder names.
+
+    The Dolby Atmos template inserts one fragment folder between the album
+    folder and the file (§5.4), configurable in Settings and "Dolby Atmos"
+    by default; a multi-level fragment ("Surround/Dolby Atmos") inserts a
+    path. Both spellings fold: a library written under a renamed fragment
+    still attaches after the user renames it back, and the default covers
+    every library that never touched it. Placeholder tokens (the path
+    templates render the whole string per album, so "{album_title} Atmos"
+    lands as "Discovery Atmos") are kept in place here; the matcher below
+    compares on the literal segments around them.
+    """
+    frags = {("dolby atmos",)}
+    parts = tuple(p.strip().casefold() for p in str(configured or "").replace("\\", "/").split("/") if p.strip())
+    if parts:
+        frags.add(parts)
+    # The on-disk spellings too: what the pipeline's sanitize step rewrites
+    # (a set: spellings that survive unchanged add nothing).
+    return frags | {_sanitized_fragment(frag) for frag in frags}
+
+
+def _fragment_literals(component: str) -> tuple:
+    """One fragment component's literal (non-placeholder) segments, in order.
+
+    Splits on "{...}" tokens and keeps the non-blank remainder, so
+    "{album_title} Atmos" contributes ("atmos",). Empty when the component
+    is placeholders alone -- nothing matchable without the album's own media
+    context, so such a component constrains nothing (safe direction: the
+    evidence gate still demands proven Atmos Versions and no stereo).
+    """
+    return tuple(chunk.strip() for chunk in re.split(r"\{[^{}]*\}", component) if chunk.strip())
+
+
+def _component_meets(folder_name: str, part: str) -> bool:
+    """Whether one path component meets one fragment component: equality for
+    a literal part; for a placeholder-shaped part, the template positions
+    hold -- leading literals anchor the start, trailing literals the end, so
+    "{album_title} Atmos" meets "Discovery Atmos" but neither "Atmosphere"
+    nor "Album Atmos Deluxe". Tokens match any (possibly empty) span, and
+    whitespace beside a token is flexible: an empty substitution lets the
+    pipeline trim it, so the badge does not depend on what the token held.
+    Trailing dots go the same way on both sides: the pipeline trims them
+    after rendering, so "{album_title}." meets the on-disk "Album"."""
+    if "{" not in part or "}" not in part:
+        return folder_name.strip().casefold() == part
+    pieces = re.split(r"(\{[^{}]*\})", part)
+    rx = []
+    for i, piece in enumerate(pieces):
+        if re.fullmatch(r"\{[^{}]*\}", piece):
+            rx.append(".*")
+            continue
+        if not piece:
+            continue
+        # Edge whitespace never constrains: the pipeline trims component
+        # edges, and a token beside the edge may substitute nothing. Only
+        # interior runs (inside core) stand verbatim. Trailing dots trim
+        # only at the component's true end (nothing but emptiness follows):
+        # the pipeline trims them after rendering, so "{album_title}."
+        # meets the on-disk "Album", while the dot in "Atmos.{album_title}"
+        # sits before a value and stays put. A dots-only ending constrains
+        # nothing by itself -- but the evidence gate still demands proven
+        # Atmos Versions and no stereo before anything folds.
+        edge = re.match(r"^(\s*)(.*?)(\s*)$", piece, re.DOTALL)
+        lead, core, trail = edge.groups() if edge else ("", piece, "")
+        if lead:
+            rx.append(r"\s*")
+        if not any(pieces[i + 1 :]):
+            core = core.rstrip(".")
+        if core:
+            rx.append(re.escape(core))
+        if trail:
+            rx.append(r"\s*")
+    return re.fullmatch("".join(rx), folder_name.strip().casefold().rstrip(".")) is not None
+
+
+def _match_parses(folder_id: str, frag: tuple) -> list:
+    """Every album folder a fragment alignment leaves, deepest first.
+
+    Components compare back to front with the OS splitter. A literal level
+    must meet its path level (equality, or template positions for a
+    placeholder-shaped one). A placeholder-only level consumes one level of
+    any name (a rendered value) or none at all: the renderer drops empty
+    values (_drop_empty_segments), so "{album_year}/Surround" lands an
+    undated album's Versions directly under "Surround". A fragment whose
+    every level is placeholders alone never matches -- with no literals
+    there is nothing to meet.
+    """
+    if not frag or not any(_fragment_literals(part) != () for part in frag):
+        return []
+    # (rest path, levels still to align from the leaf). A set: two skip
+    # patterns can converge on one state, and each must expand once.
+    states = {(str(folder_id or ""), len(frag))}
+    found: list = []
+    while states:
+        rest, n = states.pop()
+        if n == 0:
+            if rest and rest != str(folder_id or ""):
+                found.append(rest)
+            continue
+        part = frag[n - 1]
+        head, tail = os.path.split(rest)
+        if not head or head == rest:
+            continue
+        if _fragment_literals(part) == ():
+            states.add((head, n - 1))  # a rendered value
+            states.add((rest, n - 1))  # dropped as empty
+        elif _component_meets(tail, part):
+            states.add((head, n - 1))
+    # Deepest first, deduplicated: the Atmos files land under the stereo
+    # files' own folder, so the innermost album owns the placement.
+    return sorted(set(found), key=lambda p: p.count(os.sep), reverse=True)
+
+
+def _atmos_parents(folder_id: str, fragments: set) -> list:
+    """Every album folder any fragment alignment leaves, longest fragment
+    first, deepest alignment first within it. The fold takes the first
+    indexed one: the files land under the stereo files' own folder, so the
+    innermost album owns the placement."""
+    found: list = []
+    for frag in sorted(fragments, key=len, reverse=True):
+        if not frag:
+            continue
+        for parent in _match_parses(folder_id, frag):
+            if parent not in found:
+                found.append(parent)
+    return found
+
+
+def _atmos_parent(folder_id: str, fragments: set) -> str | None:
+    """The album folder an Atmos folder attaches to, or None when the folder
+    is not an Atmos placement. Matches the complete configured fragment, so
+    a multi-level fragment resolves past its non-audio intermediates (which
+    the walk never indexes: they hold no audio directly). Compared component
+    by component with the OS splitter, so absolute roots and both separator
+    styles resolve.
+
+    A fragment carrying placeholders matches on its literal segments
+    ("{album_title} Atmos" meets "Discovery Atmos"): the scan holds tags,
+    not the media objects the renderer substitutes, so the literals are the
+    closest matchable thing. Placeholder-only levels may also render empty
+    and drop out, so every alignment is tried and the deepest wins (see
+    _match_parses). Placeholder-only fragments never match.
+    """
+    for parent in _atmos_parents(folder_id, fragments):
+        return parent
+    return None
+
+
+def _fold_atmos_subfolders(albums: list, by_folder: dict, fragments: set) -> tuple[dict, set]:
+    """Fold Atmos subfolders back into their parent albums (§8.4, issue #36).
+
+    An album's Atmos Versions live in the album folder and its Atmos
+    subfolder, but the walk indexes every folder holding audio as its own
+    album -- so the subfolder arrives here as a would-be album of its own.
+    Returns ``(folded, folded_rows)``: ``folded`` maps a parent folder id to
+    the subfolder's track rows (which re-home to the parent's scope), and
+    ``folded_rows`` holds the subfolder folder ids (which drop out of the
+    album index: placement, not a release). Folding needs positive evidence:
+    at least one proven Atmos Version and no proven-stereo file. An
+    all-unknown subfolder (pre-Atmos rows before their one backfill re-read)
+    stays its own album for that one scan rather than badging ATMOS TOO on a
+    guess; a subfolder holding a proven-stereo file is somebody's real album
+    under a borrowed name and is left alone.
+    """
+    by_id = {a["id"]: a for a in albums}
+    folded: dict[str, list[dict]] = {}
+    for a in albums:
+        for parent_id in _atmos_parents(a["id"], fragments):
+            if parent_id not in by_id or parent_id == a["id"]:
+                continue  # not an album: a dropped intermediate, try outward
+            # The innermost indexed home decides: a proven-stereo file makes
+            # the subfolder somebody's real album under a borrowed name, and
+            # no outer album may claim it afterwards.
+            sub_tracks = by_folder.get(a["id"], [])
+            types = {str(t.get("audio_type", "") or "") for t in sub_tracks}
+            if sub_tracks and "atmos" in types and "stereo" not in types:
+                folded.setdefault(parent_id, []).extend(sub_tracks)
+            break
+    return folded, {t["id"] for sub in folded.values() for t in sub}
+
+
+def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> tuple[int, bool, int | None]:
+    """A folded parent's ``(extra_tracks, has_atmos, extra_runtime)`` (§8.4, issue #36).
+
+    A re-homed Atmos Version with a same-titled canonical twin in the parent
+    attaches and never counts; one without is an atmos-only track, its own
+    canonical entry, counted -- once per recording, or numbered per-provider
+    copies inflate coverage toward a full claim over a partial copy. Only a
+    titled key dedupes or attaches, and the dedupe wants seconds evidence
+    too (title, artist and length within two seconds, the track matcher's own
+    bar for seconds testifying): exact title/artist equality does not prove
+    two album positions are copies. ``has_atmos`` is the parent's stereo
+    presence, not a constant: the folded folder brings proven Atmos Versions
+    (the fold gate demands it), but "TOO" needs stereo too -- a parent
+    holding only Atmos Versions (flat placement from before a subfolder
+    switch) earns no micro-badge. Either way the album holds Atmos Versions.
+    ``extra_runtime`` sums the promoted tracks' seconds (None when
+    any promoted track never said): the caller folds them into the runtime or
+    silences it, so a count grown by promotion never testifies with seconds
+    that exclude it.
+    """
+    parent_has_stereo = any(str(t.get("audio_type", "") or "") == "stereo" for t in by_folder.get(album_id, []))
+    seen = [
+        (matching.twin_key(t.get("title", ""), t.get("artist", "")), int(t.get("length", 0) or 0))
+        for t in by_folder.get(album_id, [])
+        if str(t.get("title", "") or "").strip()
+    ]
+    extra = 0
+    extra_runtime: int | None = 0
+    promoted: list = []
+    for t in sub_tracks:
+        title = str(t.get("title", "") or "").strip()
+        key = matching.twin_key(title, t.get("artist", ""))
+        length = int(t.get("length", 0) or 0)
+        if title and matching.meets_twin(key, length, seen):
+            continue  # attaches to its twin or the already-counted same track
+        if (
+            title
+            and length > 0
+            and any(k == key and abs(v - length) <= matching.TWIN_LENGTH_TOL_S for k, v in promoted)
+        ):
+            continue  # same seconds: another Version of the promoted track
+        if title and length > 0:
+            promoted.append((key, length))
+        extra += 1
+        extra_runtime = extra_runtime + length if extra_runtime is not None and length > 0 else None
+    return extra, parent_has_stereo, extra_runtime
+
+
+def _rehome_map(folded: dict, by_id: dict) -> dict:
+    """Where folded Atmos tracks answer: under the parent album's identity.
+
+    The subfolder is placement, not a release, so proving against its name
+    proves nothing. Keyed by object id: the rows are shared references, so
+    identity is stable within one build.
+    """
+    rehomed: dict = {}
+    for pid, sub in folded.items():
+        parent = by_id.get(pid, {})
+        for t in sub:
+            rehomed[id(t)] = {
+                "album": parent.get("title", t.get("album", "")),
+                "album_year": parent.get("year", t.get("album_year", "")),
+                "id": pid,
+            }
+    return rehomed
+
+
 class LibraryMixin:
     """The local music-library scan, watch and presence family, mixed into
     WavesBridge (see the module docstring)."""
@@ -373,14 +663,58 @@ class LibraryMixin:
                 self._library_artist_index = rollup
                 self._library_artist_index_src = idx
 
+    def _atmos_placement(self) -> set:
+        """This library's Atmos placement fragments (see _atmos_fragments):
+        the Settings fragment plus the default. Read here, on the caller,
+        so the pure folder math below stays settings-free and unit-testable
+        without the bridge."""
+        try:
+            settings = getattr(self, "settings", None)
+            configured = str(getattr(getattr(settings, "data", None), "format_atmos", "") or "")
+        except Exception:
+            configured = ""
+        return _atmos_fragments(configured)
+
     def _build_presence_indexes(self, lib) -> tuple[dict, dict]:
         """Both presence indexes (albums, tracks) from one committed cache
         read, so every publish lands them as a pair and the two pills always
         describe the same scan. Reads only ``lib`` (handed in, never
         self._library at use time: see the generation notes in
         _rebuild_library_index), so the launch seed and the scan share it."""
+        albums = list(lib.iter_albums())
+        tracks = list(lib.iter_tracks())
+        by_id = {a["id"]: a for a in albums}
+        # getattr: partial test stubs bind this builder without the naming
+        # helper (see the probe family's guards); without it only the default
+        # fragment folds.
+        _placement = getattr(self, "_atmos_placement", None)
+        fragments = _placement() if callable(_placement) else _atmos_fragments("")
+        by_folder: dict = {}
+        for t in tracks:
+            by_folder.setdefault(t["id"], []).append(t)
+        folded, folded_rows = _fold_atmos_subfolders(albums, by_folder, fragments)
         local: dict = {}
-        for a in lib.iter_albums():
+        for a in albums:
+            # A folded Atmos subfolder is not an album: its row drops out
+            # here, its tracks re-home to the parent below.
+            if a["id"] in folded_rows:
+                continue
+            extra = 0
+            has_atmos = bool(a.get("has_atmos"))
+            runtime = int(a.get("runtime", 0) or 0)
+            if a["id"] in folded:
+                extra, folded_atmos, extra_runtime = _folded_parent_counts(a["id"], by_folder, folded[a["id"]])
+                # Either scope's Versions light the badge: the folder's own
+                # (read at scan time) or the subfolder's (proven by the fold
+                # gate, with stereo proven in the parent).
+                has_atmos = has_atmos or folded_atmos
+                # A count grown by promoted Atmos-only tracks must testify
+                # with their seconds too: the folder's runtime excludes them,
+                # and an incomplete sum refutes true matches instead of
+                # proving them. Complete on both sides, the seconds join;
+                # anything less, the witness stands down (0, "never said").
+                if extra:
+                    runtime = runtime + extra_runtime if runtime > 0 and extra_runtime is not None else 0
             # A Various-Artists credit is refused HERE, on the raw tag,
             # because the artist folds can move a marker out of the
             # detectors' reach ("V / A" splits at the spaced slash to a
@@ -396,8 +730,11 @@ class LibraryMixin:
                     # and that is too loose to gate a download on.
                     "title": a["title"],
                     "year": a["year"],
-                    "tracks": a["tracks"],
+                    "tracks": a["tracks"] + extra,
                     "id": a["id"],
+                    # Whether Atmos Versions sit alongside the canonical
+                    # set (§8.4): the album card's ATMOS TOO micro-badge.
+                    "has_atmos": has_atmos,
                     # Quality facts ride along so the badge can name the
                     # copy ("MP3 128").
                     "codec": a.get("codec", ""),
@@ -414,21 +751,24 @@ class LibraryMixin:
                     "disc_no": a.get("disc_no", 0),
                     "disc_total": a.get("disc_total", 0),
                     # The folder's summed play length in seconds (0 when
-                    # its files never said), the identity witness no tag
-                    # has to carry: it can prove an undated match and
-                    # refute a same-count impostor.
-                    "runtime": a.get("runtime", 0),
+                    # its files never said), grown by promoted Atmos-only
+                    # tracks above -- the identity witness no tag has to
+                    # carry: it can prove an undated match and refute a
+                    # same-count impostor.
+                    "runtime": runtime,
                 }
             )
         by_track: dict = {}
-        for t in lib.iter_tracks():
+        rehomed = _rehome_map(folded, by_id)
+        for t in tracks:
             if not t["title"] or not t["artist"]:
                 continue  # an untagged file honestly matches nothing
             if matching.is_various_artists(t["artist"]):
                 continue  # same raw-tag refusal as the album rows above
+            home = rehomed.get(id(t))
             by_track.setdefault(matching.track_key(t["title"], t["artist"]), []).append(
                 {
-                    "id": t["id"],
+                    "id": home["id"] if home else t["id"],
                     "codec": t.get("codec", ""),
                     "bitrate": t.get("bitrate", 0),
                     "bits": t.get("bits", 0),
@@ -438,8 +778,11 @@ class LibraryMixin:
                     # matcher). Carried per row rather than looked up later,
                     # because the album index is keyed by presence key and
                     # cannot be asked "what is at this path".
-                    "album": t.get("album", ""),
-                    "album_year": t.get("album_year", ""),
+                    # A folded Atmos subfolder's tracks answer under the
+                    # parent album: the subfolder is placement, not a
+                    # release, and proving against its name proves nothing.
+                    "album": home["album"] if home else t.get("album", ""),
+                    "album_year": home["album_year"] if home else t.get("album_year", ""),
                     # The file's play length in seconds (0 when it never
                     # said): a second, tag-free identity witness.
                     "length": t.get("length", 0),

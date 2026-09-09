@@ -20369,6 +20369,7 @@ class WavesBridge(LibraryMixin, QObject):
         # a presence test would sweep the library again on each one.
         lib_before = {k: self._waves_prefs.get(k) for k in ("library_enabled", "library_source", "library_folder")}
         dl_base_before = getattr(data, "download_base_path", None)
+        atmos_before = getattr(data, "format_atmos", None)
         # The Apple status light follows the SAVED switch, so the same
         # before/after comparison decides whether the page should re-read
         # appleStatus(): every later save in one visit resubmits the switch
@@ -20544,6 +20545,13 @@ class WavesBridge(LibraryMixin, QObject):
         # covers both.
         if getattr(data, "download_base_path", None) != dl_base_before:
             self.librarySourceChanged.emit()
+        # A renamed Atmos fragment re-homes future downloads AND re-reads past
+        # ones: the presence index folds subfolders by this name, so a save
+        # that changed it rebuilds the index (a warm incremental sweep: no
+        # folder re-reads, the badges just re-resolve). A resubmitted
+        # unchanged value scans nothing, like the library keys above.
+        if getattr(data, "format_atmos", None) != atmos_before:
+            lib_edit = True
         # SAVE CHANGES is also the library card's Start scan: a library setting
         # that actually MOVED starts the fresh configuration's first scan,
         # provided the master switch is on and a folder is set, which is exactly

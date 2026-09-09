@@ -557,8 +557,13 @@ def _join_discs(best: dict, survivors: list) -> tuple[dict, int, int]:
     # disc has one: a set missing one disc's minutes would refute true matches.
     runtimes = [_as_int(c.get("runtime")) for c in discs]
     runtime = sum(runtimes) if all(r > 0 for r in runtimes) else 0
+    # An Atmos Version on any disc is an Atmos Version of the set (§8.4, issue
+    # #36): the ATMOS TOO micro-badge belongs to the album, not to one disc.
+    joined = dict(best, id=reveal, runtime=runtime)
+    if any(bool(c.get("has_atmos")) for c in discs):
+        joined["has_atmos"] = True
     return (
-        dict(best, id=reveal, runtime=runtime),
+        joined,
         sum(_as_int(c.get("tracks")) for c in discs),
         _declared_total(discs),
     )
@@ -920,7 +925,7 @@ def decide_presence(title, artist, year, tracks, index, duration=0) -> dict:
     key collides across unrelated comps) and albums credited to nobody (a
     title-only match means nothing).
     """
-    hidden = {"present": False, "partial": False, "sure": False, "full": False}
+    hidden = {"present": False, "partial": False, "sure": False, "full": False, "has_atmos": False}
     hidden.update({"local_album_id": "", "local_tracks": 0, "local_year": "", "local_declared": 0})
     hidden["local_runtime"] = 0
     hidden.update({"local_quality": "", "local_codec": "", "local_lossless": False, "local_bits": 0, "local_rate": 0})
@@ -1029,6 +1034,11 @@ def decide_presence(title, artist, year, tracks, index, duration=0) -> dict:
         "full": full,
         "local_album_id": str(best.get("id", "") or ""),
         "local_tracks": local_tracks,
+        # Whether the matched album holds Atmos Versions alongside its
+        # canonical set (§8.4, issue #36): the album card's ATMOS TOO
+        # micro-badge. Rides the matched candidate (joined discs OR theirs),
+        # never the query -- it describes what is on disk.
+        "has_atmos": bool(best.get("has_atmos")),
         # What the local release SAYS it holds, so a caller can spell out a
         # shortfall TIDAL's own count cannot see (14 of a 63-track set beside a
         # 14-track edition on screen).
@@ -1060,6 +1070,37 @@ def decide_presence(title, artist, year, tracks, index, duration=0) -> dict:
 
 
 # --- Track presence (per-file rows, exact on normalised text) -------------------
+
+
+def twin_key(title: str, artist: str) -> tuple[str, str]:
+    """One track's attach identity: (title, artist), bare casefolded words.
+
+    The same pair the track index keys on: distinct tracks sharing a title
+    but not an artist (a compilation's recurring song) are different
+    recordings, and an Atmos Version must never attach to one. Tighter than
+    track_key's canon'd spelling on purpose: an attach removes a track from
+    the album's count, so a near-miss promotes to its own canonical entry
+    instead -- the direction that keeps download buttons live.
+    """
+    return (str(title or "").strip().casefold(), str(artist or "").strip().casefold())
+
+
+# Seconds evidence for coalescing numbered Versions of one track (§8.4):
+# title, artist and seconds together name a recording, so two files sharing
+# all three within this bar are one track twice, not two tracks. The track
+# matcher's own bar for seconds testifying.
+TWIN_LENGTH_TOL_S = _TRACK_DURATION_TOL_S
+
+
+def meets_twin(key: tuple, length: int, twins: list) -> bool:
+    """Whether a (twin_key, seconds) meets a twin among ``twins``: same pair,
+    and seconds compatible (either side silent, or within the bar). Silence
+    meets on purpose: a meet only ever attaches (excludes from the count,
+    the undercount direction that keeps buttons live), while only positive
+    seconds evidence splits same-named files into two entries -- counting on
+    a guess is what inflates coverage toward a wrong full claim.
+    """
+    return any(k == key and (s <= 0 or length <= 0 or abs(s - length) <= TWIN_LENGTH_TOL_S) for k, s in twins)
 
 
 def track_key(title: str, artist: str) -> tuple[str, str]:
