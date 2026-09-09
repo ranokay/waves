@@ -387,10 +387,12 @@ def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> t
 
     A re-homed Atmos Version with a same-titled canonical twin in the parent
     attaches and never counts; one without is an atmos-only track, its own
-    canonical entry, counted -- once no matter how many files carry it, or
-    numbered per-provider copies inflate coverage toward a full claim over a
-    partial copy. Only a titled key dedupes or attaches: with no title there
-    is no evidence two files are twins. Either way the album holds Atmos
+    canonical entry, counted -- once per recording, or numbered per-provider
+    copies inflate coverage toward a full claim over a partial copy. Only a
+    titled key dedupes or attaches, and the dedupe wants seconds evidence
+    too (title, artist and length within two seconds, the track matcher's own
+    bar for seconds testifying): exact title/artist equality does not prove
+    two album positions are copies. Either way the album holds Atmos
     Versions. ``extra_runtime`` sums the promoted tracks' seconds (None when
     any promoted track never said): the caller folds them into the runtime or
     silences it, so a count grown by promotion never testifies with seconds
@@ -403,15 +405,22 @@ def _folded_parent_counts(album_id: str, by_folder: dict, sub_tracks: list) -> t
     }
     extra = 0
     extra_runtime: int | None = 0
+    promoted: list = []
     for t in sub_tracks:
         title = str(t.get("title", "") or "").strip()
         key = matching.twin_key(title, t.get("artist", ""))
         if title and key in seen:
             continue  # attaches to its twin or the already-counted same track
-        if title:
-            seen.add(key)
-        extra += 1
         length = int(t.get("length", 0) or 0)
+        if (
+            title
+            and length > 0
+            and any(k == key and abs(v - length) <= matching.TWIN_LENGTH_TOL_S for k, v in promoted)
+        ):
+            continue  # same seconds: another Version of the promoted track
+        if title and length > 0:
+            promoted.append((key, length))
+        extra += 1
         extra_runtime = extra_runtime + length if extra_runtime is not None and length > 0 else None
     return extra, True, extra_runtime
 

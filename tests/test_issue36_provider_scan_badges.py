@@ -576,6 +576,49 @@ def test_album_identity_comes_from_a_canonical_file(tmp_path):
     assert album["has_atmos"] is True
 
 
+def test_promoted_first_file_still_votes(tmp_path):
+    """A promoted atmos-only first file is a canonical entry with a voice:
+    a stray's dissent counts (and loses to the overwhelming majority)
+    instead of silencing the folder or zeroing it."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["00.m4a", "01.flac", "02.flac"])
+
+    def read_tags(path):
+        name = os.path.basename(path)
+        if name == "00.m4a":
+            return _tags(album="Other", title="Stray")
+        return _tags(title={"01.flac": "One", "02.flac": "Two"}[name])
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    assert idx.refresh(lib) == 1
+    album = next(idx.iter_albums())
+    assert album["title"] == "Album"
+    assert album["tracks"] == 2
+
+
+def test_same_named_tracks_with_different_lengths_both_count(tmp_path):
+    """Exact title/artist equality does not prove two positions are copies:
+    distinct seconds keep both canonical entries."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["a.m4a", "b.m4a"])
+
+    def read_tags(path):
+        name = os.path.basename(path)
+        return _tags(title="Song", length={"a.m4a": 200, "b.m4a": 260}[name])
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos",
+    )
+    assert idx.refresh(lib) == 1
+    assert next(idx.iter_albums())["tracks"] == 2
+
+
 def test_untitled_atmos_versions_each_count(tmp_path):
     """With no title there is no evidence two files are twins: untitled
     Atmos Versions each stay their own entry."""

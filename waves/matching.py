@@ -1085,6 +1085,13 @@ def twin_key(title: str, artist: str) -> tuple[str, str]:
     return (str(title or "").strip().casefold(), str(artist or "").strip().casefold())
 
 
+# Seconds evidence for coalescing numbered Versions of one track (§8.4):
+# title, artist and seconds together name a recording, so two files sharing
+# all three within this bar are one track twice, not two tracks. The track
+# matcher's own bar for seconds testifying.
+TWIN_LENGTH_TOL_S = _TRACK_DURATION_TOL_S
+
+
 def track_key(title: str, artist: str) -> tuple[str, str]:
     """The cross-catalog TRACK key: (normalised title, normalised artist), each
     canon'd first. Unlike the album key the title keeps its edition qualifiers:

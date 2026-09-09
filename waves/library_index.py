@@ -2231,10 +2231,13 @@ class LibraryIndex:
         # on, so distinct same-titled tracks never attach to each other. Only
         # a titled key dedupes: with no title there is no evidence two files
         # are twins, so untitled Versions each stay their own entry. A second
-        # Atmos Version of an already-promoted key attaches to the first: two
-        # files of one atmos-only track (numbered per-provider copies sharing
-        # their tags) are one canonical entry, never two, or coverage
-        # inflates toward a full claim over a partial copy.
+        # Atmos Version of an already-promoted key attaches to the first, but
+        # only on seconds evidence: exact title/artist equality does not prove
+        # two album positions are copies, so the dedupe also wants the play
+        # lengths to agree -- title, artist and seconds together name a
+        # recording, the matcher's own philosophy, and container rounding gets
+        # two seconds of slack. Without lengths both stay counted: excluding
+        # on a guess is the direction that hides tracks.
         def _key(tags: dict) -> tuple:
             return matching.twin_key(tags.get("title", ""), tags.get("track_artist", "") or tags.get("artist", ""))
 
@@ -2242,16 +2245,21 @@ class LibraryIndex:
         atmos = [(n, t) for (n, t, a) in read if _is_atmos_file(a)]
         twin_keys = {_key(t) for (_, t) in stereo} - {matching.twin_key("", "")}
         promoted: list[tuple[str, dict]] = []
-        promoted_keys: set = set()
+        promoted_lengths: list = []
         for name, other in atmos:
             title = str(other.get("title", "") or "").strip()
             key = _key(other)
             if title and key in twin_keys:
                 continue  # attaches to its canonical twin
-            if title and key in promoted_keys:
-                continue  # attaches to the already-promoted same track
-            if title:
-                promoted_keys.add(key)
+            length = int(other.get("length", 0) or 0)
+            if (
+                title
+                and length > 0
+                and any(k == key and abs(v - length) <= matching.TWIN_LENGTH_TOL_S for k, v in promoted_lengths)
+            ):
+                continue  # same seconds: another Version of the promoted track
+            if title and length > 0:
+                promoted_lengths.append((key, length))
             promoted.append((name, other))
         canonical = stereo + promoted
         # The unreadable files (in the walk's listing but yielding no tags)
@@ -2267,7 +2275,7 @@ class LibraryIndex:
         # under the wrong edition. Stereo first; an all-Atmos folder promotes
         # everything, so the fallback is canonical too. The per-file rows keep
         # walk order (the representative row first) -- order carries nothing.
-        rep_name, rep = (stereo[0][0], stereo[0][1]) if stereo else (first_audio, tags)
+        rep = stereo[0][1] if stereo else tags
         # The representative's row carries its read Version through, unknown
         # included: persisting a guess would retire the folder from its
         # classification retry (see _track_row and the freshness gate).
@@ -2283,11 +2291,15 @@ class LibraryIndex:
         # The vote runs on the canonical set only: an attached Version's tags
         # describe the same release and must neither prove nor dispute it.
         shape = {k: {int(rep.get(k, 0) or 0)} for k in ("track_total", "disc_no", "disc_total")}
-        agree, dissent = (1 if want and rep_name == first_audio else 0), 0
+        # Every canonical file votes, the walk's first included: it may be a
+        # promoted atmos-only track (its own entry, its own voice), and
+        # skipping it let a stray first file's silence count the rest. Only
+        # an attached Version sits out -- its tags describe the twin's
+        # release, never its own. Rows keep walk order (the first row is
+        # already built above); the vote below is the whole electorate.
+        agree, dissent = 0, 0
         canon_names = {n for (n, _) in canonical}
         for name, other, atype in read:
-            if name == first_audio:
-                continue
             got = str(other.get("album", "") or "").strip().casefold()
             if name in canon_names and want and got:
                 if got == want:
@@ -2297,7 +2309,8 @@ class LibraryIndex:
             if name in canon_names:
                 for key, seen in shape.items():
                     seen.add(int(other.get(key, 0) or 0))
-            tracks.append(self._track_row(dirpath, other, atype))
+            if name != first_audio:
+                tracks.append(self._track_row(dirpath, other, atype))
         if dissent:
             # Only the files that positively voted for the majority album are
             # counted. Subtracting the dissenters from the raw file count
