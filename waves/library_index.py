@@ -41,6 +41,7 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import SimpleQueue
 from threading import Lock
 
+import waves.matching as matching
 from waves.poolgauge import PoolGauge
 
 # Child of the "waves" logger so scan milestones feed the breadcrumb ring crash
@@ -2205,17 +2206,21 @@ class LibraryIndex:
             read.append((name, other, atype))
         # The partition: stereo files are canonical; an Atmos file with a
         # same-titled canonical sibling attaches to that track, one without
-        # stays its own canonical entry (an atmos-only track). Comparison is
-        # on the bare casefolded title, the same spelling the track matcher
-        # keys on; an empty title can be nobody's twin and attaches, since a
-        # title-less row honestly matches nothing either way.
+        # stays its own canonical entry (an atmos-only track). Compared on
+        # the (title, artist) twin key, the same pair the track matcher keys
+        # on, so distinct same-titled tracks never attach to each other; an
+        # empty title can be nobody's twin and attaches, since a title-less
+        # row honestly matches nothing either way.
         stereo = [(n, t) for (n, t, a) in read if not _is_atmos_file(a)]
         atmos = [(n, t) for (n, t, a) in read if _is_atmos_file(a)]
-        twin_titles = {str(t.get("title", "") or "").strip().casefold() for (_, t) in stereo} - {""}
+        twin_keys = {
+            matching.twin_key(t.get("title", ""), t.get("track_artist", "") or t.get("artist", "")) for (_, t) in stereo
+        } - {matching.twin_key("", "")}
         promoted: list[tuple[str, dict]] = []
         for name, other in atmos:
-            title = str(other.get("title", "") or "").strip().casefold()
-            if not title or title not in twin_titles:
+            title = str(other.get("title", "") or "").strip()
+            key = matching.twin_key(title, other.get("track_artist", "") or other.get("artist", ""))
+            if not title or key not in twin_keys:
                 # No canonical twin: an atmos-only track stays its own
                 # canonical entry. One WITH a twin attaches to that track
                 # and is simply not promoted.

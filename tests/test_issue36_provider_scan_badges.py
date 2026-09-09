@@ -20,6 +20,7 @@ from waves import matching
 from waves.library_index import LibraryIndex, _default_audio_type
 from waves.ownership import OwnershipStore
 from waves.waves_ui.backend import WavesBridge
+from waves.waves_ui.bridge_library import _atmos_fragments, _atmos_parent
 
 
 def _mk(base, rel, files):
@@ -52,8 +53,10 @@ def _index(tmp_path, tagmap, audiomap=None):
     )
 
 
-def _presence_for(lib):
+def _presence_for(lib, placement=None):
     stub = type("S", (), {})()
+    if placement is not None:
+        stub._atmos_placement = lambda: _atmos_fragments(placement)
     return WavesBridge._build_presence_indexes(stub, lib)
 
 
@@ -233,6 +236,93 @@ def test_subfolder_with_proven_stereo_stays_its_own_album(tmp_path):
     assert matching.presence_key("Album", "Artist") in local
     # Somebody's real album under a borrowed name: left alone, not folded.
     assert matching.presence_key("Other Album", "Artist") in local
+
+
+def test_multi_level_atmos_fragment_folds_to_the_album(tmp_path):
+    """A configured multi-level fragment ("Surround/Dolby Atmos") resolves
+    past its non-audio intermediates to the album, not to another level."""
+    lib = _mk(tmp_path, "lib", [])
+    parent = _mk(tmp_path, "lib/Artist/Album", ["01.flac", "02.flac"])
+    _mk(tmp_path, "lib/Artist/Album/Surround/Dolby Atmos", ["01.m4a"])
+
+    def read_tags(path):
+        return _tags(title={"01.flac": "One", "02.flac": "Two", "01.m4a": "One"}[os.path.basename(path)])
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    idx.refresh(lib)
+    local, _ = _presence_for(idx, placement="Surround/Dolby Atmos")
+    key = matching.presence_key("Album", "Artist")
+    assert len(local[key]) == 1
+    assert local[key][0]["tracks"] == 2
+    assert local[key][0]["has_atmos"] is True
+    assert local[key][0]["id"] == parent
+
+
+def test_atmos_parent_resolves_fragments():
+    assert _atmos_parent("/lib/Artist/Album/Dolby Atmos", {("dolby atmos",)}) == "/lib/Artist/Album"
+    assert _atmos_parent("/lib/Artist/Album/Surround/Dolby Atmos", {("surround", "dolby atmos")}) == (
+        "/lib/Artist/Album"
+    )
+    assert _atmos_parent("/lib/Artist/Album/Surround/Dolby Atmos", {("dolby atmos",)}) == ("/lib/Artist/Album/Surround")
+    assert _atmos_parent("/lib/Artist/Album", {("dolby atmos",)}) is None
+    assert _atmos_parent("Dolby Atmos", {("dolby atmos",)}) is None
+    assert _atmos_fragments("") == {("dolby atmos",)}
+    assert _atmos_fragments("Surround/Dolby Atmos") == {("dolby atmos",), ("surround", "dolby atmos")}
+    # Placeholder tokens render per album on disk: the literals still meet.
+    frags = _atmos_fragments("{album_title} Atmos")
+    assert _atmos_parent("/lib/Artist/Album/Discovery Atmos", frags) == "/lib/Artist/Album"
+    assert _atmos_parent("/lib/Artist/Album/Discovery", frags) is None
+    # Placeholders alone match nothing: no literals, no evidence-free fold.
+    assert _atmos_parent("/lib/Artist/Album/2024", _atmos_fragments("{album_year}")) is None
+
+
+def test_placeholder_fragment_folds_to_the_album(tmp_path):
+    lib = _mk(tmp_path, "lib", [])
+    parent = _mk(tmp_path, "lib/Artist/Discovery", ["01.flac"])
+    _mk(tmp_path, "lib/Artist/Discovery/Discovery Atmos", ["01.m4a"])
+
+    def read_tags(path):
+        return _tags(album="Discovery", title="One")
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    idx.refresh(lib)
+    local, _ = _presence_for(idx, placement="{album_title} Atmos")
+    key = matching.presence_key("Discovery", "Artist")
+    assert len(local[key]) == 1
+    assert local[key][0]["tracks"] == 1
+    assert local[key][0]["has_atmos"] is True
+    assert local[key][0]["id"] == parent
+
+
+def test_same_title_different_artist_never_attaches(tmp_path):
+    """The twin key is (title, artist) like the track matcher: a same-titled
+    Atmos Version by another artist is a different recording, its own
+    canonical entry, counted."""
+    lib = _mk(tmp_path, "lib", [])
+    _mk(tmp_path, "lib/Artist/Album", ["a.flac", "b.m4a"])
+
+    def read_tags(path):
+        if os.path.basename(path) == "a.flac":
+            return _tags(title="Song", track_artist="Artist A")
+        return _tags(title="Song", track_artist="Artist B")
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    assert idx.refresh(lib) == 1
+    album = next(idx.iter_albums())
+    assert album["tracks"] == 2
+    assert album["has_atmos"] is True
 
 
 def test_all_unknown_subfolder_never_badges_atmos_too(tmp_path):

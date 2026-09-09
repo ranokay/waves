@@ -1072,6 +1072,19 @@ def decide_presence(title, artist, year, tracks, index, duration=0) -> dict:
 # --- Track presence (per-file rows, exact on normalised text) -------------------
 
 
+def twin_key(title: str, artist: str) -> tuple[str, str]:
+    """One track's attach identity: (title, artist), bare casefolded words.
+
+    The same pair the track index keys on: distinct tracks sharing a title
+    but not an artist (a compilation's recurring song) are different
+    recordings, and an Atmos Version must never attach to one. Tighter than
+    track_key's canon'd spelling on purpose: an attach removes a track from
+    the album's count, so a near-miss promotes to its own canonical entry
+    instead -- the direction that keeps download buttons live.
+    """
+    return (str(title or "").strip().casefold(), str(artist or "").strip().casefold())
+
+
 def track_key(title: str, artist: str) -> tuple[str, str]:
     """The cross-catalog TRACK key: (normalised title, normalised artist), each
     canon'd first. Unlike the album key the title keeps its edition qualifiers:

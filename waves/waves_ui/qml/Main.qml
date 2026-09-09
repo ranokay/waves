@@ -9722,8 +9722,12 @@ ApplicationWindow {
                 color: root.textHi; font.pixelSize: 12; font.bold: true
                 // Height hugs the actual line count, a one-line title no
                 // longer leaves a blank second line above the caption.
+                // The ATMOS TOO micro-badge takes the second line's room, so
+                // a card showing it holds its title to one line: the caption
+                // column and the bottom-anchored control row otherwise meet
+                // on two-line titles.
                 width: parent.width
-                elide: Text.ElideRight; maximumLineCount: 2; wrapMode: Text.Wrap
+                elide: Text.ElideRight; maximumLineCount: (bc.libPresent && bc.libAtmos) ? 1 : 2; wrapMode: Text.Wrap
                 font.underline: bcTitleMa.containsMouse && bc.openable
                 MouseArea {
                     id: bcTitleMa
