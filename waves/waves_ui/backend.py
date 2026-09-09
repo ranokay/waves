@@ -63,6 +63,7 @@ from waves.constants import (
     CTX_TIDAL,
     DEFAULT_ILLEGAL_MAP,
     LIBRARY_PAGE,
+    TIER_RANK,
     CoverDimensions,
     DownsampleTarget,
     InitialKey,
@@ -12092,6 +12093,27 @@ class WavesBridge(LibraryMixin, QObject):
         q = self.settings.data.apple_quality_audio if pinned is None else pinned
         return quality_rank(str(getattr(q, "value", q) or ""))
 
+    def _apple_expected_word(self, job_atype, *, requested_rank: int, ceiling_rank: int) -> str:
+        """The queue row's expected word: ATMOS for Atmos rows, else the
+        requested tier capped by the servable ceiling (issue #32).
+
+        Cookies-tier ceiling HIGH keeps the old HIGH; the wrapper ceiling
+        HI_RES lets a HI_RES ask read HI-RES. Detail ("ALAC 24/192") never
+        rides this word, only the tier.
+        """
+        if job_atype == "atmos" or (job_atype is None and self._apple_wants_atmos()):
+            return "ATMOS"
+        try:
+            want = int(requested_rank)
+            ceil = int(ceiling_rank)
+        except (TypeError, ValueError):
+            want, ceil = -1, -1
+        rank = min(want, ceil) if want >= 0 and ceil >= 0 else (want if want >= 0 else ceil)
+        for tier_value, tier_rank in TIER_RANK.items():
+            if tier_rank == rank:
+                return _tier_word(tier_value)
+        return _tier_word(str(getattr(self.settings.data, "apple_quality_audio", "") or "")) or "HIGH"
+
     def _run_apple_job(self, qid, spec, obj, *, signals, job_abort, file_template) -> str:
         """Download one Apple track or collection, emitting the shared
         lifecycle events so queue rows, delivered words, ownership and badges
@@ -12140,7 +12162,22 @@ class WavesBridge(LibraryMixin, QObject):
             job_version = "stereo"
         ask_tier = self._job_quality(qid)
         requested_rank = self._apple_target_rank(ask_tier)
-        ceiling_rank = quality_rank(QualityTier.HIGH)
+        try:
+            ceiling_probe = provider.advertised_ceiling(None)
+        except Exception:
+            ceiling_probe = None
+        try:
+            if ceiling_probe is None and bool(getattr(provider, "wrapper_available", False)):
+                # Wrapper up but object unknown: predict the ask (the per-track
+                # gate and the deliver record still read the track's own
+                # ceiling, so AAC-only masters settle honestly after one fetch).
+                ceiling_rank = int(requested_rank)
+            elif ceiling_probe is None:
+                ceiling_rank = quality_rank(QualityTier.HIGH)
+            else:
+                ceiling_rank = int(ceiling_probe)
+        except Exception:
+            ceiling_rank = quality_rank(QualityTier.HIGH)
         force = media_id in self._redownload_overrides
         if collection:
             header = provider.row_for(type_media, obj)
@@ -12200,6 +12237,18 @@ class WavesBridge(LibraryMixin, QObject):
                     signals.track_event.emit({"id": track_id, "status": "skipped"})
                     self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
                     continue
+            try:
+                expected_word = self._apple_expected_word(
+                    job_atype, requested_rank=requested_rank, ceiling_rank=ceiling_rank
+                )
+            except Exception:
+                # Plain unit-test stubs bind _run_apple_job without the new
+                # helper; fall back to the pre-wrapper words there.
+                try:
+                    wants_atmos = bool(self._apple_wants_atmos())
+                except Exception:
+                    wants_atmos = False
+                expected_word = "ATMOS" if (job_atype == "atmos" or (job_atype is None and wants_atmos)) else "HIGH"
             signals.track_event.emit(
                 {
                     "id": track_id,
@@ -12208,11 +12257,7 @@ class WavesBridge(LibraryMixin, QObject):
                     "vol": int(row.get("vol") or 1),
                     "duration": str(row.get("duration") or ""),
                     "status": "running",
-                    "expected": (
-                        "ATMOS"
-                        if (job_atype == "atmos" or (job_atype is None and self._apple_wants_atmos()))
-                        else "HIGH"
-                    ),
+                    "expected": expected_word,
                 }
             )
             verdict, gate_rec = self._apple_gate_track(provider, track_id, requested_rank, force, audio_type=job_atype)
@@ -12760,20 +12805,65 @@ class WavesBridge(LibraryMixin, QObject):
         ):
             logger.debug("Apple tagging reported failure for %s", diagnostics.content(track_id))
         self._apple_write_sidecars(dest, lyrics_synced, lyrics_unsynced, cover_data, collection)
+        # Honest delivered tier (issue #32): the provider probed the staged
+        # bytes (ALAC 24/96 where the master tops out stays 24/96 in the
+        # record); the landed file re-probes for depth/rate so the ownership
+        # row carries reality, not the ask. Detail rides bit_depth/
+        # sample_rate/codecs label text, never rank.
         try:
-            rate = (probe_audio_file(dest) or {}).get("sample_rate") or None
+            landed_probe = probe_audio_file(dest, self._apple_probe()) or {}
         except Exception:
+            landed_probe = {}
+        try:
+            delivered = dict(getattr(info, "delivered", None) or {})
+        except Exception:
+            delivered = {}
+        tier = str(delivered.get("tier") or QualityTier.HIGH.value)
+        try:
+            probe_depth = landed_probe.get("bit_depth")
+            depth = int(probe_depth) if isinstance(probe_depth, int) and probe_depth > 0 else None
+            if depth is None and delivered.get("bit_depth") is not None:
+                depth = int(delivered.get("bit_depth"))
+        except (TypeError, ValueError):
+            depth = None
+        try:
+            raw_rate = landed_probe.get("sample_rate") or delivered.get("sample_rate")
+            rate = int(str(raw_rate or "").strip()) if str(raw_rate or "").strip().isdigit() else None
+        except (TypeError, ValueError):
             rate = None
+        # A landed ALAC file re-derives its tier off its own bytes (a 24/96
+        # master asked as HI_RES stays HI_RES with rate 96000; a 16/44.1
+        # master asked as HI_RES lands LOSSLESS, honestly).
+        try:
+            from waves.apple_engine import apple_tier_for_delivery as _honest_tier
+
+            codecs_landed = str(landed_probe.get("codec") or delivered.get("codecs") or info.codecs or "")
+            if not atmos and "alac" in codecs_landed.lower().replace("-", ""):
+                tier = _honest_tier(codecs_landed, depth, rate or "", fallback=tier)
+        except Exception:
+            logger.debug("Apple honest-tier re-probe failed; keeping the staged tier", exc_info=True)
+        # Per-track ceiling for the ownership record (issue #32): an AAC-only
+        # master caps at HIGH even when the job asked HI_RES, so the copy
+        # settles instead of reopening an upgrade that is not coming. Falls
+        # back to the job's ceiling when the track cannot be read.
+        try:
+            per_track_ceiling = provider.advertised_ceiling(raw)
+        except Exception:
+            per_track_ceiling = None
+        try:
+            ceiling_for_record = int(per_track_ceiling) if per_track_ceiling is not None else int(ceiling_rank)
+        except (TypeError, ValueError):
+            ceiling_for_record = int(ceiling_rank)
         return {
             "path": str(dest),
             "quality": {
-                "tier": QualityTier.HIGH.value,
+                "tier": tier,
                 "audio_mode": "DOLBY_ATMOS" if atmos else "STEREO",
-                "bit_depth": None,
-                "sample_rate": int(rate) if str(rate or "").isdigit() else None,
+                "bit_depth": depth,
+                "sample_rate": rate,
                 "codecs": str(info.codecs or ""),
                 "requested_rank": int(requested_rank),
-                "ceiling_rank": int(ceiling_rank),
+                "ceiling_rank": int(ceiling_for_record),
             },
         }
 
@@ -13092,8 +13182,9 @@ class WavesBridge(LibraryMixin, QObject):
     ) -> tuple[str | None, dict | None]:
         """Ownership verdict plus the record it was read from: 'skip' when an
         owned copy is current, 'force' when owned but stale, (None, None)
-        when nothing is owned. Ranked on the cookies tier's ceiling, so a
-        HIGH copy settles whatever was asked.
+        when nothing is owned. Ranked on the servable ceiling (issue #32):
+        cookies tier HIGH settles whatever was asked; wrapper tier uses the
+        track's own ceiling (an AAC-only master caps at HIGH, never HI_RES).
 
         Dual-download rows (§5.3) ask per Version (audio_type stereo/atmos),
         so owning stereo leaves the Atmos half fetching and vice versa.
@@ -13133,7 +13224,25 @@ class WavesBridge(LibraryMixin, QObject):
                 wants = self._apple_wants_atmos() and bool(provider.has_atmos(raw))
             except Exception:
                 wants = False
-        current = _copy_is_current(rec, requested_rank, wants, provider.advertised_ceiling(None))
+        try:
+            raw_for_ceiling = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
+        except Exception:
+            raw_for_ceiling = None
+        try:
+            ceiling = provider.advertised_ceiling(raw_for_ceiling)
+        except Exception:
+            ceiling = None
+        try:
+            # Plain test doubles implement advertised_ceiling(None-only);
+            # a TypeError there means "no per-track ceiling", not a gate.
+            if ceiling is None:
+                try:
+                    ceiling = provider.advertised_ceiling(None)
+                except Exception:
+                    ceiling = None
+        except Exception:
+            ceiling = None
+        current = _copy_is_current(rec, requested_rank, wants, ceiling)
         return ("skip", rec) if current else ("force", rec)
 
     def _apple_job_body(self, qid, spec, obj, *, signals, job_abort, row_ask, name) -> None:
@@ -18266,7 +18375,9 @@ class WavesBridge(LibraryMixin, QObject):
         "" on the normal managed path, which would fail the gate that the
         manager itself just passed. The N_m3u8DL-RE path follows the same
         rule: explicit override, else the managed runtime copy, else "" for
-        PATH lookup at fetch time.
+        PATH lookup at fetch time. The wrapper URL (issue #32) follows the
+        persisted port: an explicit override wins when free, else the
+        manager's persisted pick, else "" (no wrapper tier).
         """
         provider = self.providers.get(CTX_APPLE)
         if provider is None:
@@ -18287,6 +18398,12 @@ class WavesBridge(LibraryMixin, QObject):
             # Plain unit-test stubs bind _configure_apple_provider without the
             # resolver; fall back to the saved override there.
             provider.nm3u8dlre_path = str(getattr(data, "path_binary_nm3u8dlre", "") or "")
+        try:
+            provider.wrapper_url = str(self._resolve_apple_wrapper_url() or "")
+        except Exception:
+            logger.debug("Apple wrapper URL resolve failed", exc_info=True)
+            with contextlib.suppress(Exception):
+                provider.wrapper_url = ""
         # The engine's isolated config dir exists from here on, so anything
         # the engine materialises lands under Waves' own managed area, never
         # in a user-visible engine config file.
@@ -18328,6 +18445,50 @@ class WavesBridge(LibraryMixin, QObject):
                 return str(manager.binary_path)
         except Exception:
             logger.debug("Apple runtime resolve failed", exc_info=True)
+        return ""
+
+    def _resolve_apple_wrapper_url(self) -> str:
+        """The wrapper HTTP API URL an Apple ALAC download would use (issue #32).
+
+        Precedence is the config-first override (apple_wrapper_port when it
+        names a free unprivileged port) else the manager's persisted pick,
+        else "" (no wrapper tier). The persisted port survives restarts, so
+        the wrapper session (whose tokens live in the guest) needs no
+        re-login: the same URL answers again after a container restart.
+        """
+        data = getattr(getattr(self, "settings", None), "data", None)
+        try:
+            preferred = int(getattr(data, "apple_wrapper_port", 0) or 0)
+        except (TypeError, ValueError):
+            preferred = 0
+        manager = getattr(self, "_apple_runtime", None)
+        try:
+            persisted = int(manager.read_port()) if manager is not None else 0
+        except Exception:
+            persisted = 0
+        if 1024 <= preferred <= 65535:
+            try:
+                from waves.apple_runtime import _port_free, wrapper_url
+            except Exception:
+                return ""
+            try:
+                if preferred == persisted or _port_free(preferred):
+                    return wrapper_url(preferred)
+            except Exception:
+                logger.debug("Apple wrapper override probe failed", exc_info=True)
+                try:
+                    from waves.apple_runtime import wrapper_url as _url
+
+                    return _url(preferred)
+                except Exception:
+                    return ""
+        if persisted:
+            try:
+                from waves.apple_runtime import wrapper_url
+
+                return wrapper_url(persisted)
+            except Exception:
+                return ""
         return ""
 
     def _apple_runtime_ready(self) -> bool:

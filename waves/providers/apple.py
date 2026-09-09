@@ -72,10 +72,24 @@ class AppleProvider(Provider):
         self.cookies_path: str = ""
         self.nm3u8dlre_path: str = ""
         self.ffmpeg_path: str = ""
+        # Managed wrapper configuration for the ALAC path (issue #32): the
+        # wrapper HTTP API URL (a persisted free high port, never port 80).
+        # Written by the bridge from the runtime manager; empty means the
+        # wrapper tier is not set up and the cookies tier serves alone. The
+        # session itself lives in the guest (tokens persist across container
+        # restarts), so Waves stores no Apple ID secret here, only the URL.
+        self.wrapper_url: str = ""
+        self.wrapper_decrypt_host: str = "127.0.0.1"
+        self.wrapper_decrypt_port: int = 10020
         # Staged deliveries by their file path: resolve_stream decrypts into
         # a workdir the caller moves out of, then releases here so the temp
         # tree is removed. Never global: one entry per in-flight track.
         self._staged: dict[str, object] = {}
+
+    @property
+    def wrapper_available(self) -> bool:
+        """Whether the managed wrapper tier can serve ALAC right now."""
+        return bool(str(self.wrapper_url or "").strip())
 
     def _run(self, awaitable):
         with self._loop_lock:
@@ -619,10 +633,21 @@ class AppleProvider(Provider):
         return set()
 
     def advertised_tier(self, obj) -> QualityTier | None:
-        # What the COOKIES tier serves, not what the catalog describes: the
-        # row words (HI-RES/LOSSLESS from audioTraits) name the master Apple
-        # holds, while this tier downloads AAC 256 until the wrapper unlocks
-        # ALAC (the setup-wizard slice raises it then).
+        # Servable ceiling, not catalog prose: without the wrapper only AAC
+        # 256 serves (HIGH whatever the traits say); with the wrapper the
+        # catalog's own traits decide (ALAC 16/44.1 LOSSLESS, 24-bit hi-res
+        # HI_RES_LOSSLESS). The row words already name the master; this tier
+        # is what a download at this object would actually serve.
+        if not self.wrapper_available:
+            return QualityTier.HIGH
+        item = self._unwrap(obj)
+        if not isinstance(item, dict):
+            return QualityTier.HIGH
+        traits = {str(trait).lower() for trait in self._attributes(item).get("audioTraits") or []}
+        if "hi-res-lossless" in traits:
+            return QualityTier.HI_RES_LOSSLESS
+        if "lossless" in traits:
+            return QualityTier.LOSSLESS
         return QualityTier.HIGH
 
     def advertised_deliveries(self, obj) -> list[tuple[QualityTier, AudioType]]:
@@ -630,13 +655,38 @@ class AppleProvider(Provider):
         item = self._unwrap(obj)
         if isinstance(item, dict) and self._has_atmos(item):
             deliveries.append((QualityTier.HIGH, AudioType.ATMOS))
+        if self.wrapper_available and isinstance(item, dict):
+            traits = {str(trait).lower() for trait in self._attributes(item).get("audioTraits") or []}
+            # The wrapper unlocks the lossless rungs the master actually
+            # holds; detail ("ALAC 24/192") rides Chooser label text, never
+            # rank, so both hi-res sample rates share the one rung.
+            if "hi-res-lossless" in traits:
+                if (QualityTier.LOSSLESS, AudioType.STEREO) not in deliveries:
+                    deliveries.append((QualityTier.LOSSLESS, AudioType.STEREO))
+                deliveries.append((QualityTier.HI_RES_LOSSLESS, AudioType.STEREO))
+            elif "lossless" in traits:
+                deliveries.append((QualityTier.LOSSLESS, AudioType.STEREO))
         return deliveries
 
     def advertised_ceiling(self, obj) -> int | None:
-        # The cookies tier's servable ceiling: AAC 256 whatever the setting
-        # asks, so owning a HIGH copy settles instead of re-fetching forever.
-        # The wrapper slice raises this with the tier it unlocks, which
-        # reopens upgrades exactly as the stored-ranks machinery expects.
+        # Servable ceiling, per-track when the object is known (issue #32).
+        # Cookies tier alone: HIGH always. Wrapper tier: the master's own
+        # traits (HI_RES for hi-res, LOSSLESS for lossless, HIGH otherwise),
+        # so an AAC-only master never over-promises HI_RES. None when the
+        # object is unknown and the wrapper is up (never a guess; the gate
+        # settles off the stored ranks then, per _copy_is_current).
+        if not self.wrapper_available:
+            return quality_rank(QualityTier.HIGH)
+        if obj is None:
+            return None
+        item = self._unwrap(obj)
+        if not isinstance(item, dict):
+            return None
+        traits = {str(trait).lower() for trait in self._attributes(item).get("audioTraits") or []}
+        if "hi-res-lossless" in traits:
+            return quality_rank(QualityTier.HI_RES_LOSSLESS)
+        if "lossless" in traits:
+            return quality_rank(QualityTier.LOSSLESS)
         return quality_rank(QualityTier.HIGH)
 
     @staticmethod
@@ -668,9 +718,14 @@ class AppleProvider(Provider):
         engine downloads and decrypts into a staged .m4a and ``local_file``
         carries it; ``urls`` stays empty because no segment pipeline can
         replay an encrypted Apple delivery. The caller stages the file and
-        reads ``delivered`` for the ownership record. ``tier`` is accepted
-        for interface symmetry; the cookies tier serves one delivery whatever
-        it says (the ask still rides the ownership record's requested rank).
+        reads ``delivered`` for the ownership record.
+
+        Stereo LOSSLESS/HI_RES takes the ALAC path through the managed
+        wrapper when it is set up (issue #32); everything else takes the
+        cookies path (AAC 256 stereo, E-AC-3 Atmos). The delivered tier is
+        honest (probed off the staged bytes, e.g. 24/96 where the master
+        tops out); the "ALAC 24/192" detail rides codecs/bit_depth/
+        sample_rate label text, never rank.
         """
         from waves.apple_engine import download_song_file
 
@@ -678,6 +733,32 @@ class AppleProvider(Provider):
         if not isinstance(item, dict) or not item.get("id"):
             raise KeyError(str(getattr(track, "id", track)))
         atmos = self._delivery_atmos(item, audio_type)
+        try:
+            want = QualityTier(tier) if isinstance(tier, QualityTier) else QualityTier(str(tier))
+        except ValueError:
+            want = QualityTier.HIGH
+        if not atmos and want in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS) and self.wrapper_available:
+            try:
+                return self._resolve_via_wrapper(item, want)
+            except Exception as exc:
+                from waves.apple_engine import AppleCredentialsError, AppleIntegrityError
+
+                if isinstance(exc, (AppleCredentialsError, AppleIntegrityError)):
+                    # Credentials need the wizard; integrity needs retry +
+                    # quarantine (spec §6). Neither falls back to AAC: a bad
+                    # ALAC file must never arrive as a good AAC one.
+                    raise
+                # Only a genuinely unavailable ALAC variant (no ALAC master,
+                # FairPlay missing) falls back to cookies AAC when cookies
+                # exist, so one AAC-only master cannot hole its album. The
+                # verdict comes from the shared refusal vocabulary (§4.4).
+                try:
+                    kind = self.classify_refusal(exc).kind
+                except Exception:
+                    kind = None
+                if str(kind) != str(RefusalKind.UNAVAILABLE) or not str(self.cookies_path or "").strip():
+                    raise
+                logger.debug("Apple ALAC unavailable, falling back to AAC", exc_info=True)
         delivery = download_song_file(
             song_id=str(item.get("id")),
             atmos=atmos,
@@ -698,7 +779,7 @@ class AppleProvider(Provider):
                 "tier": QualityTier.HIGH.value,
                 "audio_type": str(AudioType.ATMOS if atmos else AudioType.STEREO),
                 "bit_depth": None,
-                "sample_rate": None,
+                "sample_rate": self._probe_sample_rate(str(delivery.staged_path)),
                 "codecs": codecs,
             },
             replay_gain=None,
@@ -706,6 +787,88 @@ class AppleProvider(Provider):
             single_file=True,
             local_file=str(delivery.staged_path),
         )
+
+    def _resolve_via_wrapper(self, item: dict, want: QualityTier) -> StreamInfo:
+        """One stereo song through the managed wrapper's ALAC path."""
+        from waves.apple_engine import (
+            apple_delivery_detail,
+            apple_tier_for_delivery,
+            download_song_alac_file,
+            probe_audio_file,
+        )
+
+        delivery = download_song_alac_file(
+            song_id=str(item.get("id")),
+            wrapper_url=self.wrapper_url,
+            nm3u8dlre_path=self.nm3u8dlre_path,
+            ffmpeg_path=self.ffmpeg_path,
+            decrypt_host=self.wrapper_decrypt_host,
+            decrypt_port=self.wrapper_decrypt_port,
+        )
+        self._staged[str(delivery.staged_path)] = delivery
+        # Honest tier off the staged bytes: the master may top out at 24/96
+        # where HI_RES was asked, and the readout must say so. Detail rides
+        # codecs/bit_depth/sample_rate; the tier alone ranks. A probe that
+        # fails too cannot record the ask as verified: ALAC proves at least
+        # LOSSLESS, so that is the substitute, never the requested rung.
+        try:
+            probe = probe_audio_file(str(delivery.staged_path), self._probe_path())
+        except Exception:
+            logger.debug("Apple ALAC probe failed; recording LOSSLESS, not the ask", exc_info=True)
+            probe = {"codec": "alac", "sample_rate": "", "bit_depth": None}
+        codec = str(probe.get("codec") or "alac")
+        bit_depth = probe.get("bit_depth")
+        try:
+            sample_rate: int | None = int(str(probe.get("sample_rate") or "").strip())
+        except (TypeError, ValueError):
+            sample_rate = None
+        tier_value = apple_tier_for_delivery(codec, bit_depth, sample_rate or "", fallback=QualityTier.LOSSLESS.value)
+        logger.debug(
+            "Apple ALAC delivery %s",
+            apple_delivery_detail(codec, bit_depth, sample_rate or ""),
+            extra={"tier": tier_value},
+        )
+        return StreamInfo(
+            urls=[],
+            file_extension=".m4a",
+            codecs=codec or "alac",
+            requires_flac_extraction=False,
+            delivered={
+                "tier": tier_value,
+                "audio_type": str(AudioType.STEREO),
+                "bit_depth": bit_depth,
+                "sample_rate": sample_rate,
+                "codecs": codec or "alac",
+            },
+            replay_gain=None,
+            encrypted=False,
+            single_file=True,
+            local_file=str(delivery.staged_path),
+        )
+
+    def _probe_path(self) -> str:
+        """An ffprobe binary for the ALAC honesty probe, or "" to trust."""
+        try:
+            from waves.apple_engine import ffprobe_for
+
+            return ffprobe_for(self.ffmpeg_path)
+        except Exception:
+            return ""
+
+    def _probe_sample_rate(self, staged_path: str) -> int | None:
+        """A staged AAC file's sample rate for the ownership record, if known."""
+        try:
+            from waves.apple_engine import probe_audio_file
+
+            probe = probe_audio_file(staged_path, self._probe_path())
+        except Exception:
+            return None
+        else:
+            try:
+                rate = int(str(probe.get("sample_rate") or "").strip())
+            except (TypeError, ValueError):
+                return None
+            return rate if rate > 0 else None
 
     def discard_delivery(self, local_file: str) -> None:
         """Remove a staged delivery's workdir after its file moved out."""
@@ -818,6 +981,14 @@ class AppleProvider(Provider):
         lowered = str(exc).lower()
         if "429" in text or "TooManyRequests" in name or ("rate" in lowered and "limit" in lowered):
             return Refusal(RefusalKind.THROTTLED, "Apple is rate-limiting; back off and retry")
-        if "NotStreamable" in name or "not found" in str(exc).lower() or "404" in text:
+        if (
+            "NotStreamable" in name
+            or "FormatNotAvailable" in name
+            or "DecryptionNotAvailable" in name
+            or "formatnotavailable" in lowered
+            or "decryptionnotavailable" in lowered
+            or "not found" in str(exc).lower()
+            or "404" in text
+        ):
             return Refusal(RefusalKind.UNAVAILABLE, "this item is not available on Apple Music")
         return Refusal(RefusalKind.FAILURE, str(exc) or name)

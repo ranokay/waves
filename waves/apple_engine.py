@@ -277,6 +277,182 @@ async def _download_song_async(
                 logger.debug("Could not close the Apple API session", exc_info=True)
 
 
+async def _open_wrapper_session(*, base_url: str, decrypt_host: str, decrypt_port: int):
+    """A logged-in wrapper session, or AppleCredentialsError when logged out."""
+    from gamdl.api.wrapper import WrapperApi
+
+    try:
+        return await WrapperApi.create(
+            base_url=base_url,
+            decrypt_host=str(decrypt_host or "127.0.0.1"),
+            decrypt_port=int(decrypt_port or 10020),
+        )
+    except Exception as exc:
+        text = f"{type(exc).__name__}: {exc}".lower()
+        if "not authenticated" in text or "logged_out" in text or "login" in text:
+            raise AppleCredentialsError(  # noqa: TRY003
+                "The Apple wrapper is not signed in: re-open setup in Settings under Providers, Apple Music, and complete the login step."
+            ) from exc
+        raise AppleDownloadError(f"Apple wrapper is unreachable at {base_url}: {exc}") from exc  # noqa: TRY003
+
+
+async def _fetch_alac_staged(
+    *, song_id: str, workdir: str, nm3u8dlre_path: str, ffmpeg_path: str, wrapper_api
+) -> AppleDelivery:
+    """One ALAC fetch through an open wrapper session, verified fail-fast."""
+    from gamdl.api.apple_music import AppleMusicApi
+    from gamdl.downloader.base import AppleMusicBaseDownloader
+    from gamdl.downloader.downloader import DownloadMode
+    from gamdl.downloader.song import AppleMusicSongDownloader
+    from gamdl.interface.base import AppleMusicBaseInterface
+    from gamdl.interface.enums import SongCodec
+    from gamdl.interface.interface import AppleMusicInterface
+    from gamdl.interface.music_video import AppleMusicMusicVideoInterface
+    from gamdl.interface.song import AppleMusicSongInterface
+    from gamdl.interface.uploaded_video import AppleMusicUploadedVideoInterface
+
+    try:
+        api = await AppleMusicApi.create_from_wrapper(wrapper_api=wrapper_api)
+    except Exception as exc:
+        raise AppleDownloadError(f"Apple wrapper session failed for song {song_id}: {exc}") from exc  # noqa: TRY003
+    try:
+        base_interface = await AppleMusicBaseInterface.create(apple_music_api=api, wrapper_api=wrapper_api)
+        song_interface = AppleMusicSongInterface(base=base_interface, codec_priority=[SongCodec.ALAC])
+        interface = AppleMusicInterface(
+            song=song_interface,
+            music_video=AppleMusicMusicVideoInterface(base=base_interface),
+            uploaded_video=AppleMusicUploadedVideoInterface(base=base_interface),
+        )
+        base_downloader = AppleMusicBaseDownloader(
+            interface=interface,
+            output_path=workdir,
+            temp_path=workdir,
+            nm3u8dlre_path=nm3u8dlre_path,
+            ffmpeg_path=ffmpeg_path,
+            download_mode=DownloadMode.NM3U8DLRE,
+            silent=True,
+        )
+        song_downloader = AppleMusicSongDownloader(base=base_downloader)
+        staged, picked = await _fetch_song_staged(
+            interface=interface, song_downloader=song_downloader, song_id=str(song_id)
+        )
+        resolved_probe = ffprobe_for(ffmpeg_path)
+        if resolved_probe:
+            try:
+                picked = _verify_delivery(
+                    staged=staged,
+                    song_id=str(song_id),
+                    atmos=False,
+                    resolved_probe=resolved_probe,
+                    ffmpeg_path=ffmpeg_path,
+                )
+            except AppleIntegrityError as integrity_exc:
+                if not integrity_exc.workdir:
+                    integrity_exc.workdir = str(workdir)
+                if not integrity_exc.staged_path:
+                    integrity_exc.staged_path = str(staged)
+                raise
+        return AppleDelivery(staged_path=staged, workdir=Path(workdir), is_atmos=False, codec=picked)
+    finally:
+        close = getattr(getattr(api, "client", None), "aclose", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:
+                logger.debug("Could not close the Apple API session", exc_info=True)
+
+
+async def _download_song_via_wrapper_async(
+    *,
+    song_id: str,
+    wrapper_url: str,
+    workdir: str,
+    nm3u8dlre_path: str,
+    ffmpeg_path: str,
+    decrypt_host: str = "127.0.0.1",
+    decrypt_port: int = 10020,
+) -> AppleDelivery:
+    """Fetch one ALAC song through the managed wrapper-v2 guest (issue #32).
+
+    The wrapper holds the Apple ID session itself: its tokens persist across
+    container restarts (verified live, spec §2), so this creates the session
+    without credentials and succeeds whenever the guest is still signed in.
+    A logged-out guest raises AppleCredentialsError with the wizard's login
+    step as the fix; every other fetch problem raises AppleDownloadError.
+    """
+    base_url = str(wrapper_url or "").strip().rstrip("/")
+    if not base_url:
+        raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
+            "Apple hi-res downloads need the managed wrapper: finish setup in Settings under Providers, Apple Music."
+        )
+    wrapper_api = await _open_wrapper_session(base_url=base_url, decrypt_host=decrypt_host, decrypt_port=decrypt_port)
+    try:
+        return await _fetch_alac_staged(
+            song_id=str(song_id),
+            workdir=str(workdir),
+            nm3u8dlre_path=nm3u8dlre_path,
+            ffmpeg_path=ffmpeg_path,
+            wrapper_api=wrapper_api,
+        )
+    finally:
+        close_wrapper = getattr(getattr(wrapper_api, "client", None), "aclose", None)
+        if close_wrapper is not None:
+            try:
+                await close_wrapper()
+            except Exception:
+                logger.debug("Could not close the wrapper session", exc_info=True)
+
+
+def download_song_alac_file(
+    *,
+    song_id: str,
+    wrapper_url: str,
+    nm3u8dlre_path: str = "",
+    ffmpeg_path: str = "",
+    decrypt_host: str = "127.0.0.1",
+    decrypt_port: int = 10020,
+) -> AppleDelivery:
+    """Fetch one ALAC song through the managed wrapper into a fresh workdir.
+
+    Session persistence is the wrapper's own property (tokens survive a
+    container restart): a second call with the same URL needs no re-login.
+    Raises AppleCredentialsError when the guest is logged out or unreachable
+    as a login problem, AppleDownloadError otherwise.
+    """
+    url = str(wrapper_url or "").strip()
+    if not url:
+        raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
+            "Apple hi-res downloads need the managed wrapper: finish setup in Settings under Providers, Apple Music."
+        )
+    nm3u8dlre = _require_binary("N_m3u8DL-RE", nm3u8dlre_path)
+    ffmpeg = _require_binary("ffmpeg", ffmpeg_path)
+    try:
+        import yt_dlp  # noqa: F401  (direct-URL fallback shells through it)
+    except ImportError as exc:
+        raise AppleDownloadError("Apple downloads need the yt-dlp package installed.") from exc  # noqa: TRY003
+    workdir = Path(tempfile.mkdtemp(prefix="waves-apple-alac-"))
+    try:
+        return asyncio.run(
+            _download_song_via_wrapper_async(
+                song_id=str(song_id),
+                wrapper_url=url,
+                workdir=str(workdir),
+                nm3u8dlre_path=nm3u8dlre,
+                ffmpeg_path=ffmpeg,
+                decrypt_host=decrypt_host,
+                decrypt_port=int(decrypt_port or 10020),
+            )
+        )
+    except AppleIntegrityError:
+        raise
+    except (AppleCredentialsError, AppleDownloadError):
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
+    except Exception as exc:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise AppleDownloadError(f"Apple ALAC download failed for song {song_id}: {exc}") from exc  # noqa: TRY003
+
+
 def download_song_file(
     *,
     song_id: str,
@@ -331,10 +507,11 @@ def cleanup_delivery(delivery: AppleDelivery) -> None:
 def probe_audio_file(path: str | Path, ffprobe_path: str = "") -> dict:
     """ffprobe's reading of one audio file's first stream.
 
-    Returns {"codec": ..., "sample_rate": ...} with "" unknowns. Raises
-    AppleDownloadError when ffprobe is missing; a file with no audio stream
-    raises AppleIntegrityError (a corrupt/truncated delivery, never an infra
-    failure).
+    Returns {"codec": ..., "sample_rate": ..., "bit_depth": ...} with ""
+    unknowns and None depth when ffprobe reports none (lossy AAC carries no
+    bit depth). Raises AppleDownloadError when ffprobe is missing; a file
+    with no audio stream raises AppleIntegrityError (a corrupt/truncated
+    delivery, never an infra failure).
     """
     ffprobe = _require_binary("ffprobe", ffprobe_path)
     try:
@@ -346,7 +523,7 @@ def probe_audio_file(path: str | Path, ffprobe_path: str = "") -> dict:
                 "-select_streams",
                 "a:0",
                 "-show_entries",
-                "stream=codec_name,sample_rate",
+                "stream=codec_name,sample_rate,bits_per_sample,bits_per_raw_sample,sample_fmt",
                 "-of",
                 "json",
                 str(path),
@@ -366,4 +543,96 @@ def probe_audio_file(path: str | Path, ffprobe_path: str = "") -> dict:
             "The Apple download has no playable audio stream", staged_path=str(path)
         )
     stream = streams[0]
-    return {"codec": str(stream.get("codec_name") or ""), "sample_rate": str(stream.get("sample_rate") or "")}
+    return {
+        "codec": str(stream.get("codec_name") or ""),
+        "sample_rate": str(stream.get("sample_rate") or ""),
+        "bit_depth": _probe_bit_depth(stream),
+    }
+
+
+def _probe_bit_depth(stream: dict) -> int | None:
+    """One ffprobe audio stream's bit depth, or None when it carries none.
+
+    ALAC reports bits_per_sample (24 for hi-res, 16 for CD); lossy AAC
+    reports none, which is itself the signal (no depth to claim). No
+    sample_fmt guessing: a 24-bit payload in a 32-bit container must not
+    read as 32, and a 16-bit payload in a padded container must not read
+    as hi-res.
+    """
+    for key in ("bits_per_sample", "bits_per_raw_sample"):
+        try:
+            depth = int(str(stream.get(key) or "").strip())
+        except (TypeError, ValueError):
+            continue
+        if depth > 0:
+            return depth
+    return None
+
+
+def apple_tier_for_delivery(
+    codec: str, bit_depth: int | None, sample_rate: int | str | None, fallback: str = "HIGH"
+) -> str:
+    """An Apple delivery's honest Waves tier value (spec §4.3, issue #32).
+
+    AAC 256 -> HIGH (Apple has no LOW); ALAC 16-bit -> LOSSLESS; ALAC
+    24-bit -> HI_RES_LOSSLESS (24/96 and 24/192 are both this rung; the
+    "24/192" detail rides label text, never rank). Bit depth alone decides
+    hi-res: a rate without a depth never promotes (a 16-bit 48 kHz master
+    stays LOSSLESS). Atmos E-AC-3 answers HIGH: the drawer words it ATMOS,
+    never a rung. Unknown stays on the fallback, never invented.
+    """
+    from waves.constants import QualityTier
+
+    norm = str(codec or "").lower().replace("-", "").replace("_", "")
+    if norm in ("eac3", "ec3", "ac4"):
+        return QualityTier.HIGH.value
+    if norm == "alac":
+        try:
+            rate = int(str(sample_rate or "").strip())
+        except (TypeError, ValueError):
+            rate = 0
+        depth = int(bit_depth) if isinstance(bit_depth, int) and bit_depth > 0 else 0
+        if depth >= 24:
+            return QualityTier.HI_RES_LOSSLESS.value
+        if depth > 0:
+            return QualityTier.LOSSLESS.value
+        if rate > 0:
+            return QualityTier.LOSSLESS.value
+        return str(fallback or QualityTier.HIGH.value)
+    if norm == "aac":
+        return QualityTier.HIGH.value
+    return str(fallback or QualityTier.HIGH.value)
+
+
+def apple_delivery_detail(codec: str, bit_depth: int | None, sample_rate: int | str | None) -> str:
+    """Label text for an Apple delivery ("ALAC 24/192"), never a rank.
+
+    The Chooser and the queue's plain-words readout render this detail as
+    text; the rank comparison reads only the tier (spec §4.3). Rates render
+    in kHz (96000 -> "96", 44100 -> "44.1"), matching the documented
+    "ALAC 24/192" shape. Empty when nothing is known.
+    """
+    norm = str(codec or "").lower().replace("-", "").replace("_", "")
+    if norm == "alac":
+        name = "ALAC"
+    elif norm == "aac":
+        name = "AAC"
+    elif norm in ("eac3", "ec3", "ac4"):
+        name = "E-AC-3"
+    elif norm:
+        name = str(codec or "").upper()
+    else:
+        return ""
+    try:
+        rate = int(str(sample_rate or "").strip())
+    except (TypeError, ValueError):
+        rate = 0
+    depth = int(bit_depth) if isinstance(bit_depth, int) and bit_depth > 0 else 0
+    khz = f"{rate / 1000:g}" if rate > 0 else ""
+    if depth and khz:
+        return f"{name} {depth}/{khz}"
+    if depth:
+        return f"{name} {depth}-bit"
+    if khz:
+        return f"{name} {khz} kHz"
+    return name
