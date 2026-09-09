@@ -17,7 +17,7 @@ def test_new_settings_defaults_match_spec():
 
 
 def test_word_timed_outranks_line_lrclib():
-    """Precedence unit: the backend prefers enhanced LRC over LRCLIB text.
+    """Precedence unit: the provider layer prefers enhanced LRC over LRCLIB text.
 
     Exercises the ordering rule directly: when a word-timed document exists,
     its conversion wins the synced slot even against a line-timed LRCLIB hit.
@@ -39,6 +39,18 @@ def test_standalone_slots_exist():
 
     assert hasattr(backend_module.WavesBridge, "downloadLyricsOnly")
     assert hasattr(backend_module.WavesBridge, "downloadArtOnly")
+
+
+def test_provider_word_timed_lrc_helper():
+    from waves.providers.apple import AppleProvider
+
+    syllable = """<tt xmlns:itunes="x" itunes:timing="Word"><body><div>
+    <p begin="00:01.00"><span begin="00:01.00">Hi</span></p></div></body></tt>"""
+    provider = AppleProvider(catalog=object(), catalog_factory=lambda: None)
+    provider.fetch_syllable_ttml = lambda track: syllable  # type: ignore[method-assign]
+    assert "<00:01.00>Hi" in provider.fetch_word_timed_lrc({"id": "apple:1"})
+    provider.fetch_syllable_ttml = lambda track: ""  # type: ignore[method-assign]
+    assert provider.fetch_word_timed_lrc({"id": "apple:1"}) == ""
 
 
 def test_provider_native_lyrics_converts_ttml():

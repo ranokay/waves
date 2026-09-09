@@ -5975,7 +5975,7 @@ ApplicationWindow {
     // First-class standalone lyrics/art actions (issue #34, spec section 7.3):
     // LYRICS ONLY / ART ONLY beside DOWNLOAD on album and artist pages, plus
     // the per-track hover affordance. Both providers; found and saved music
-    // alike (the backend resolves rows, not files).
+    // alike (the provider resolves rows, not files).
     component StandalonePair: Row {
         id: sp
         property string mediaId: ""

@@ -1297,6 +1297,19 @@ def _record_names_a_broken_copy(rec: dict | None) -> bool:
     return "[None]" in path or "{album_track_num}" in path
 
 
+def _cover_sidecar_format(data) -> str:
+    """The sidecar cover format: jpg (default), png, or raw (Apple-only).
+
+    One normalizer for every writer so TIDAL and Apple agree on the
+    spelling; unknown values fall back to jpg and TIDAL treats raw as jpg
+    (it has no original-master sidecar).
+    """
+    fmt = str(getattr(data, "cover_file_format", "jpg") or "jpg").strip().lower()
+    if fmt in ("jpeg",):
+        return "jpg"
+    return fmt if fmt in ("jpg", "png", "raw") else "jpg"
+
+
 # How many consecutive deliveries under TIDAL's own advertised ceiling the
 # upgrade gate will chase before it settles for what it keeps being given.
 # Two, so a genuine one-off (a bad edge node, a session that fell back mid
@@ -13702,15 +13715,20 @@ class WavesBridge(LibraryMixin, QObject):
             track_obj = None
 
         # 1. Word-timed: syllable TTML outranks a line-timed LRCLIB hit.
+        # The verbatim sidecar is independent of this toggle (spec: sidecar
+        # toggles independent, all combinations valid), so the syllable
+        # document is fetched when either the word-timed source or the TTML
+        # file is on.
         word_lrc = ""
         syllable_ttml = ""
-        if word_on and track_obj is not None:
+        ttml_on = bool(getattr(data, "lyrics_ttml_file", False))
+        if (word_on or ttml_on) and track_obj is not None:
             try:
                 syllable_ttml = provider.fetch_syllable_ttml(track_obj) or ""
             except Exception:
                 logger.debug("Apple syllable-TTML fetch failed", exc_info=True)
                 syllable_ttml = ""
-            if syllable_ttml:
+            if syllable_ttml and word_on:
                 try:
                     from waves.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
 
@@ -13816,7 +13834,10 @@ class WavesBridge(LibraryMixin, QObject):
         ORIGIN maps per provider (issue #34, spec section 9.1): TIDAL keeps
         its exact current behavior (embedded cap included); Apple's ORIGIN
         is the true original-master image via the raw URL-rewrite path, with
-        the ``{w}x{h}`` template up to 5000x5000 otherwise.
+        the ``{w}x{h}`` template up to 5000x5000 otherwise. Embedded format
+        stays jpg for both (spec): Apple masters serve jpg, so the raw bytes
+        tag as jpeg; the png sniff in the sidecar writer only names the
+        filed copy.
         """
         dimension = self.settings.data.metadata_cover_dimension
         is_origin = str(getattr(dimension, "value", dimension)) == "origin"
@@ -13860,7 +13881,6 @@ class WavesBridge(LibraryMixin, QObject):
         cover_data: bytes | None,
         collection: bool,
         ttml_verbatim: str = "",
-        raw_for_cover: dict | None = None,
     ) -> None:
         """Lyrics and cover sidecars per the shared toggles.
 
@@ -13890,10 +13910,7 @@ class WavesBridge(LibraryMixin, QObject):
             bool(getattr(data, "cover_single_track_file", False)),
         )
         if want_cover_file and cover_data:
-            fmt = str(getattr(data, "cover_file_format", "jpg") or "jpg").strip().lower()
-            if fmt not in ("jpg", "png", "raw"):
-                fmt = "jpg"
-            write_cover_sidecar(dest.parent, cover_data, fmt)
+            write_cover_sidecar(dest.parent, cover_data, _cover_sidecar_format(data))
 
     def _apple_gate_track(
         self, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
@@ -16766,17 +16783,22 @@ class WavesBridge(LibraryMixin, QObject):
                     cover = None
                 if not cover:
                     continue
-                fmt = str(getattr(data, "cover_file_format", "jpg") or "jpg").strip().lower()
-                if fmt not in ("jpg", "png", "raw"):
-                    fmt = "jpg"
-                if write_cover_sidecar(folder, cover, fmt) is not None:
+                if write_cover_sidecar(folder, cover, _cover_sidecar_format(data)) is not None:
                     served += 1
                 if bool(data.metadata_cover_embed):
                     self._apple_standalone_embed_cover(folder, stem, cover, track_row, facts)
         return served
 
-    def _apple_standalone_embed_lyrics(
-        self, folder: pathlib.Path, stem: str, synced: str, plain: str, row: dict, facts: dict
+    def _apple_standalone_embed(
+        self,
+        folder: pathlib.Path,
+        stem: str,
+        row: dict,
+        facts: dict,
+        *,
+        synced: str = "",
+        plain: str = "",
+        cover: bytes | None = None,
     ) -> None:
         """Best-effort embed into an already-saved Apple audio file."""
         for ext in (".m4a", ".mp4", ".flac", ".mp3"):
@@ -16790,34 +16812,25 @@ class WavesBridge(LibraryMixin, QObject):
                     facts=facts or {},
                     lyrics_synced=synced,
                     lyrics_unsynced=plain,
-                    cover_data=None,
-                    mark_explicit=bool(self.settings.data.mark_explicit),
-                    metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
-                )
-            except Exception:
-                logger.debug("Standalone lyrics embed failed", exc_info=True)
-            return
-
-    def _apple_standalone_embed_cover(
-        self, folder: pathlib.Path, stem: str, cover: bytes, row: dict, facts: dict
-    ) -> None:
-        """Best-effort cover embed into an already-saved Apple audio file."""
-        for ext in (".m4a", ".mp4", ".flac", ".mp3"):
-            candidate = folder / f"{stem}{ext}"
-            if not candidate.is_file():
-                continue
-            try:
-                tag_apple_file(
-                    candidate,
-                    title=str(row.get("title") or ""),
-                    facts=facts or {},
                     cover_data=cover,
                     mark_explicit=bool(self.settings.data.mark_explicit),
                     metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
                 )
             except Exception:
-                logger.debug("Standalone cover embed failed", exc_info=True)
+                logger.debug("Standalone Apple embed failed", exc_info=True)
             return
+
+    def _apple_standalone_embed_lyrics(
+        self, folder: pathlib.Path, stem: str, synced: str, plain: str, row: dict, facts: dict
+    ) -> None:
+        """Best-effort embed into an already-saved Apple audio file."""
+        self._apple_standalone_embed(folder, stem, row, facts, synced=synced, plain=plain)
+
+    def _apple_standalone_embed_cover(
+        self, folder: pathlib.Path, stem: str, cover: bytes, row: dict, facts: dict
+    ) -> None:
+        """Best-effort cover embed into an already-saved Apple audio file."""
+        self._apple_standalone_embed(folder, stem, row, facts, cover=cover)
 
     def _standalone_tidal_tracks(self, media_id: str) -> list | None:
         """TIDAL engine objects for a standalone id, or None when gone."""
@@ -16895,27 +16908,74 @@ class WavesBridge(LibraryMixin, QObject):
                         logger.debug("Standalone TIDAL lyrics write failed", exc_info=True)
                 if wrote:
                     served += 1
+                    # Saved music gains the embed when the toggle is on and
+                    # the audio file is already on disk (same rule as Apple).
+                    if bool(data.lyrics_embed):
+                        self._tidal_standalone_embed(folder, stem, track_obj, collection)
             else:
                 try:
+                    from waves.constants import CoverDimensions
+
                     album = getattr(track_obj, "album", None)
-                    url = album.image(int(data.metadata_cover_dimension)) if album is not None else ""
+                    dimension = data.metadata_cover_dimension
+                    if album is not None:
+                        if str(getattr(dimension, "value", dimension)) == "origin":
+                            url = album.image(CoverDimensions.PxORIGIN)
+                        else:
+                            try:
+                                url = album.image(int(dimension))
+                            except (TypeError, ValueError):
+                                url = album.image(320)
+                    else:
+                        url = ""
                     cover = dl.cover_data_cached(url) if url else b""
                 except Exception:
                     cover = b""
                 if not cover:
                     continue
                 folder, stem = self._tidal_standalone_dest(base, track_obj, collection)
-                del stem  # cover files as cover.jpg/png per the sidecar rule
-                fmt = str(getattr(data, "cover_file_format", "jpg") or "jpg").strip().lower()
+                fmt = _cover_sidecar_format(data)
                 name = "cover.png" if fmt == "png" else "cover.jpg"
                 try:
                     target = folder / name
                     if not target.exists():
                         target.write_bytes(bytes(cover))
                     served += 1
+                    if bool(data.metadata_cover_embed):
+                        self._tidal_standalone_embed(folder, stem, track_obj, collection)
                 except OSError:
                     logger.debug("Standalone TIDAL cover write failed", exc_info=True)
         return served
+
+    @staticmethod
+    def _existing_audio_file(folder: pathlib.Path, stem: str) -> pathlib.Path | None:
+        """An already-saved audio file beside a standalone stem, if any."""
+        for ext in (".flac", ".m4a", ".mp4", ".mp3", ".ogg"):
+            candidate = folder / f"{stem}{ext}"
+            try:
+                if candidate.is_file():
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    def _tidal_standalone_embed(self, folder: pathlib.Path, stem: str, track_obj, collection: bool) -> None:
+        """Best-effort embed into an already-saved TIDAL audio file.
+
+        Reuses the download pipeline's own tag writer so saved music gains
+        the embed under the same matrix a fresh download would use. Found
+        music (no audio on disk) keeps sidecars only.
+        """
+        dl = getattr(self, "_dl", None)
+        if dl is None:
+            return
+        existing = self._existing_audio_file(folder, stem)
+        if existing is None:
+            return
+        try:
+            dl.metadata_write(track_obj, existing, bool(collection))
+        except Exception:
+            logger.debug("Standalone TIDAL embed failed", exc_info=True)
 
     def _tidal_standalone_dest(self, base: pathlib.Path, track_obj, collection: bool) -> tuple[pathlib.Path, str]:
         """Folder and stem for one TIDAL standalone track, mirroring audio layout."""
