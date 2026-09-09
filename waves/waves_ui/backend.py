@@ -9081,7 +9081,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self._refetch_for_download(k, mid)
                 return
             plan = (getattr(self, "_merge_plans", None) or {}).get(mid) if k == "album" else None
-            self._download(
+            queued = self._download(
                 obj,
                 k,
                 name_builder_title(obj),
@@ -9092,8 +9092,9 @@ class WavesBridge(LibraryMixin, QObject):
                 chooser_ask=ask,
                 chooser_audio=audio,
             )
-            files = 1 if (audio != "both" or k == "video") else 2
-            self._chooser_confirm_status(provider_id, ask, audio, files)
+            if queued:
+                files = 1 if (audio != "both" or k == "video") else 2
+                self._chooser_confirm_status(provider_id, ask, audio, files)
             return
         # Artist / folder / category sweeps: no per-click pinning in v1, the
         # main face (Settings defaults) is the honest path.
@@ -12003,7 +12004,7 @@ class WavesBridge(LibraryMixin, QObject):
         keep_ask: tuple | None = None,
         chooser_ask: tuple | None = None,
         chooser_audio: str | None = None,
-    ) -> None:
+    ) -> bool:
         """``keep_ask`` = (askQuality, tier word) of a row being RETRIED: the
         retry asks at what that row asked, not at a choice or setting that
         has moved since, and spends no choice (the row already had its own
@@ -12011,10 +12012,15 @@ class WavesBridge(LibraryMixin, QObject):
 
         ``chooser_ask``/``chooser_audio`` pin one Chooser click (issue #35):
         that click only, never stored. ``chooser_ask`` is (askQuality, tier
-        word) like keep_ask; ``chooser_audio`` is stereo/atmos/both."""
+        word) like keep_ask; ``chooser_audio`` is stereo/atmos/both.
+
+        Returns True when a row was queued (or the identical row was already
+        on its way and acknowledged); False when a gate held or blocked the
+        click and nothing was queued, so callers that confirm with their own
+        status line keep the gate's message instead of overwriting it."""
         if not self._logged_in:
             self._set_status("Sign in before downloading")
-            return
+            return False
         # A download must land somewhere the user can find. Every download path
         # funnels through here, so one guard covers tracks, albums, videos,
         # playlists, mixes and whole-artist queues.
@@ -12025,7 +12031,7 @@ class WavesBridge(LibraryMixin, QObject):
             # here, and without this emit that button is dead for the session
             # (idle buttons ignore the "" emit, so it is safe for direct clicks).
             self.downloadState.emit(media_id, "")
-            return
+            return False
         if gate == "nudge":
             # Still on the legacy default: hold this exact download until the
             # user decides. The queue is untouched, so the download button
@@ -12046,7 +12052,7 @@ class WavesBridge(LibraryMixin, QObject):
                     chooser_audio=chooser_audio,
                 ),
             )
-            return
+            return False
         if self._ffmpeg_gate_holds(
             media_id,
             lambda: self._download(
@@ -12062,7 +12068,7 @@ class WavesBridge(LibraryMixin, QObject):
                 chooser_audio=chooser_audio,
             ),
         ):
-            return
+            return False
         # An identical row already waiting or running makes a second one pure
         # duplication: the same item, at the same pinned quality, into the same
         # folder, downloaded twice (a re-clicked discography overlapping a
@@ -12230,9 +12236,10 @@ class WavesBridge(LibraryMixin, QObject):
             # Every Version already queued/running: acknowledge like a fresh row
             # would (the work asked for is already on its way).
             self.downloadState.emit(media_id, "queued")
-            return
+            return True
         self.downloadState.emit(media_id, "queued")
         self._pump_queue()
+        return True
 
     # ----- Apple downloads (cookies tier) ----------------------------------
     # One click downloads an Apple album/playlist/track end-to-end through
@@ -12315,7 +12322,7 @@ class WavesBridge(LibraryMixin, QObject):
         is_retry: bool = False,
         chooser_ask: tuple | None = None,
         chooser_audio: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Queue one Apple track or collection. The TIDAL _download's shape
         for the parts that are provider-blind (folder gate, ffmpeg gate,
         ask pinning, queue row, spec, pump); the Apple fetch happens at
@@ -12328,6 +12335,10 @@ class WavesBridge(LibraryMixin, QObject):
 
         ``chooser_ask``/``chooser_audio`` pin one Chooser click (issue #35),
         that click only, never stored.
+
+        Returns True when a row was queued (or acknowledged); False when a
+        gate held or blocked the click, so the Chooser keeps the gate's own
+        message instead of overwriting it with "Queued".
 
         A pre-setup click routes into the setup wizard at the sign-in step
         (spec §7.1): the affordance stays live and opens the path to making
@@ -12342,7 +12353,7 @@ class WavesBridge(LibraryMixin, QObject):
             except Exception:
                 logger.debug("Apple setup route emit failed", exc_info=True)
             self.downloadState.emit(media_id, "")
-            return
+            return False
         # The engine pulls every tier through N_m3u8DL-RE: without a binary
         # the row would queue and then fail, so route to the wizard's
         # runtime step instead. Plain test stubs predate the helper and keep
@@ -12357,11 +12368,11 @@ class WavesBridge(LibraryMixin, QObject):
             except Exception:
                 logger.debug("Apple setup route emit failed", exc_info=True)
             self.downloadState.emit(media_id, "")
-            return
+            return False
         gate = self._download_gate()
         if gate == "block":
             self.downloadState.emit(media_id, "")
-            return
+            return False
         if gate == "nudge":
             self._stash_pending_download(
                 media_id,
@@ -12378,7 +12389,7 @@ class WavesBridge(LibraryMixin, QObject):
                     chooser_audio=chooser_audio,
                 ),
             )
-            return
+            return False
         if self._ffmpeg_gate_holds(
             media_id,
             lambda: self._download_apple(
@@ -12394,7 +12405,7 @@ class WavesBridge(LibraryMixin, QObject):
                 chooser_audio=chooser_audio,
             ),
         ):
-            return
+            return False
         if chooser_ask is not None and chooser_ask[0]:
             ask, ask_tier = (
                 str(chooser_ask[0]),
@@ -12551,9 +12562,10 @@ class WavesBridge(LibraryMixin, QObject):
             self._pending_qids.append(qid)
         if not queued_any:
             self.downloadState.emit(media_id, "queued")
-            return
+            return True
         self.downloadState.emit(media_id, "queued")
         self._pump_queue()
+        return True
 
     def _download_apple_with_chooser(self, media_id: str, kind: str, ask: tuple | None, audio: str | None) -> None:
         """Route a Chooser Apple click to the cached row, then _download_apple.
@@ -12574,7 +12586,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self._refetch_apple_for_download("track", media_id)
                 return
             row = provider.row_for("track", raw)
-            self._download_apple(
+            queued = self._download_apple(
                 "track",
                 row,
                 None,
@@ -12584,6 +12596,10 @@ class WavesBridge(LibraryMixin, QObject):
                 chooser_ask=ask,
                 chooser_audio=audio,
             )
+            if queued:
+                files = 1 if audio != "both" else 2
+                self._chooser_confirm_status(CTX_APPLE, ask, audio, files)
+            return
         elif raw_kind in ("album", "playlist"):
             raw = provider.cached(raw_kind, media_id) if hasattr(provider, "cached") else None
             if raw is None:
@@ -12592,7 +12608,7 @@ class WavesBridge(LibraryMixin, QObject):
                 return
             row = provider.row_for(raw_kind, raw)
             template = self.settings.data.format_playlist if raw_kind == "playlist" else self.settings.data.format_album
-            self._download_apple(
+            queued = self._download_apple(
                 raw_kind,
                 row,
                 row,
@@ -12602,6 +12618,10 @@ class WavesBridge(LibraryMixin, QObject):
                 chooser_ask=ask,
                 chooser_audio=audio,
             )
+            if queued:
+                files = 1 if audio != "both" else 2
+                self._chooser_confirm_status(CTX_APPLE, ask, audio, files)
+            return
         elif raw_kind == "mix":
             self._set_status("Apple mixes arrive with the full Apple rollout")
             return
@@ -12610,8 +12630,6 @@ class WavesBridge(LibraryMixin, QObject):
             return
         else:
             return
-        files = 1 if audio != "both" else 2
-        self._chooser_confirm_status(CTX_APPLE, ask, audio, files)
 
     def _apple_wants_atmos(self) -> bool:
         """The instead-of Atmos toggle, read live per job like the engine's."""
