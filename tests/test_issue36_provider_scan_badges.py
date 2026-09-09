@@ -278,6 +278,11 @@ def test_atmos_parent_resolves_fragments():
     assert _atmos_parent("/lib/Artist/Album/Discovery", frags) is None
     # Placeholders alone match nothing: no literals, no evidence-free fold.
     assert _atmos_parent("/lib/Artist/Album/2024", _atmos_fragments("{album_year}")) is None
+    # Template positions hold: the trailing literal anchors the end, so
+    # near-miss words never fold.
+    titled = _atmos_fragments("{album_title} Atmos")
+    assert _atmos_parent("/lib/Artist/Album/Atmosphere", titled) is None
+    assert _atmos_parent("/lib/Artist/Album/Album Atmos Deluxe", titled) is None
     # Every level verifies: a placeholder before the leaf still demands the
     # leaf's literals, and a literal intermediate still demands its name.
     multi = _atmos_fragments("{album_title} Surround/Dolby Atmos")

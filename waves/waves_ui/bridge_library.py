@@ -290,18 +290,16 @@ def _fragment_literals(component: str) -> tuple:
 
 def _component_meets(folder_name: str, part: str) -> bool:
     """Whether one path component meets one fragment component: equality for
-    a literal part, in-order literals for a placeholder-shaped one."""
+    a literal part; for a placeholder-shaped part, the template positions
+    hold -- leading literals anchor the start, trailing literals the end, so
+    "{album_title} Atmos" meets "Discovery Atmos" but neither "Atmosphere"
+    nor "Album Atmos Deluxe". Tokens match any (possibly empty) span: the
+    renderer may substitute nothing."""
     if "{" not in part or "}" not in part:
         return folder_name.strip().casefold() == part
-    name = folder_name.casefold()
-    pos = 0
-    literals = _fragment_literals(part)
-    for lit in literals:
-        at = name.find(lit, pos)
-        if at < 0:
-            return False
-        pos = at + len(lit)
-    return True
+    pieces = re.split(r"(\{[^{}]*\})", part)
+    rx = "".join(".*" if re.fullmatch(r"\{[^{}]*\}", p) else re.escape(p) for p in pieces)
+    return re.fullmatch(rx, folder_name.strip().casefold()) is not None
 
 
 def _match_fragment(folder_id: str, frag: tuple) -> str | None:
