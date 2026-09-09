@@ -363,53 +363,76 @@ def _component_meets(folder_name: str, part: str) -> bool:
     return re.fullmatch("".join(rx), folder_name.strip().casefold()) is not None
 
 
-def _match_fragment(folder_id: str, frag: tuple) -> str | None:
-    """Strip one fragment off a folder, returning the album folder, or None.
+def _match_parses(folder_id: str, frag: tuple) -> list:
+    """Every album folder a fragment alignment leaves, deepest first.
 
-    Components compare back to front with the OS splitter, every level
-    verified: a literal level wants equality, a placeholder-shaped level
-    wants its literals in order ("{album_title} Atmos" meets
-    "Discovery Atmos", and "{album_title} Surround/Dolby Atmos" still
-    demands a real "Surround" level). A fragment whose every level is
-    placeholders alone never matches -- with no literals there is nothing
-    to meet.
+    Components compare back to front with the OS splitter. A literal level
+    must meet its path level (equality, or template positions for a
+    placeholder-shaped one). A placeholder-only level consumes one level of
+    any name (a rendered value) or none at all: the renderer drops empty
+    values (_drop_empty_segments), so "{album_year}/Surround" lands an
+    undated album's Versions directly under "Surround". A fragment whose
+    every level is placeholders alone never matches -- with no literals
+    there is nothing to meet.
     """
-    rest = str(folder_id or "")
-    met_literal = False
-    for part in reversed(frag):
+    if not frag or not any(_fragment_literals(part) != () for part in frag):
+        return []
+    # (rest path, levels still to align from the leaf). A set: two skip
+    # patterns can converge on one state, and each must expand once.
+    states = {(str(folder_id or ""), len(frag))}
+    found: list = []
+    while states:
+        rest, n = states.pop()
+        if n == 0:
+            if rest and rest != str(folder_id or ""):
+                found.append(rest)
+            continue
+        part = frag[n - 1]
         head, tail = os.path.split(rest)
         if not head or head == rest:
-            return None
-        if not _component_meets(tail, part):
-            return None
-        met_literal = met_literal or _fragment_literals(part) != ()
-        rest = head
-    if rest == str(folder_id or "") or not met_literal:
-        return None
-    return rest
+            continue
+        if _fragment_literals(part) == ():
+            states.add((head, n - 1))  # a rendered value
+            states.add((rest, n - 1))  # dropped as empty
+        elif _component_meets(tail, part):
+            states.add((head, n - 1))
+    # Deepest first, deduplicated: the Atmos files land under the stereo
+    # files' own folder, so the innermost album owns the placement.
+    return sorted(set(found), key=lambda p: p.count(os.sep), reverse=True)
+
+
+def _atmos_parents(folder_id: str, fragments: set) -> list:
+    """Every album folder any fragment alignment leaves, longest fragment
+    first, deepest alignment first within it. The fold takes the first
+    indexed one: the files land under the stereo files' own folder, so the
+    innermost album owns the placement."""
+    found: list = []
+    for frag in sorted(fragments, key=len, reverse=True):
+        if not frag:
+            continue
+        for parent in _match_parses(folder_id, frag):
+            if parent not in found:
+                found.append(parent)
+    return found
 
 
 def _atmos_parent(folder_id: str, fragments: set) -> str | None:
     """The album folder an Atmos folder attaches to, or None when the folder
     is not an Atmos placement. Matches the complete configured fragment, so
     a multi-level fragment resolves past its non-audio intermediates (which
-    the walk never indexes: they hold no audio directly). Longest fragment
-    wins, so a nested placement still resolves to the album, not to another
-    fragment level. Compared component by component with the OS splitter, so
-    absolute roots and both separator styles resolve.
+    the walk never indexes: they hold no audio directly). Compared component
+    by component with the OS splitter, so absolute roots and both separator
+    styles resolve.
 
-    A fragment carrying placeholders additionally matches on its literal
-    segments in order ("{album_title} Atmos" meets "Discovery Atmos"): the
-    scan holds tags, not the media objects the renderer substitutes, so the
-    literals are the closest matchable thing. Placeholder-only fragments
-    never match.
+    A fragment carrying placeholders matches on its literal segments
+    ("{album_title} Atmos" meets "Discovery Atmos"): the scan holds tags,
+    not the media objects the renderer substitutes, so the literals are the
+    closest matchable thing. Placeholder-only levels may also render empty
+    and drop out, so every alignment is tried and the deepest wins (see
+    _match_parses). Placeholder-only fragments never match.
     """
-    for frag in sorted(fragments, key=len, reverse=True):
-        if not frag:
-            continue
-        parent = _match_fragment(folder_id, frag)
-        if parent is not None:
-            return parent
+    for parent in _atmos_parents(folder_id, fragments):
+        return parent
     return None
 
 
@@ -432,12 +455,17 @@ def _fold_atmos_subfolders(albums: list, by_folder: dict, fragments: set) -> tup
     by_id = {a["id"]: a for a in albums}
     folded: dict[str, list[dict]] = {}
     for a in albums:
-        parent_id = _atmos_parent(a["id"], fragments)
-        if parent_id is not None and parent_id in by_id and parent_id != a["id"]:
+        for parent_id in _atmos_parents(a["id"], fragments):
+            if parent_id not in by_id or parent_id == a["id"]:
+                continue  # not an album: a dropped intermediate, try outward
+            # The innermost indexed home decides: a proven-stereo file makes
+            # the subfolder somebody's real album under a borrowed name, and
+            # no outer album may claim it afterwards.
             sub_tracks = by_folder.get(a["id"], [])
             types = {str(t.get("audio_type", "") or "") for t in sub_tracks}
             if sub_tracks and "atmos" in types and "stereo" not in types:
                 folded.setdefault(parent_id, []).extend(sub_tracks)
+            break
     return folded, {t["id"] for sub in folded.values() for t in sub}
 
 

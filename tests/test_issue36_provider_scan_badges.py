@@ -299,6 +299,30 @@ def test_atmos_parent_resolves_fragments():
     assert _atmos_parent("/lib/Artist/Album/Anything/Dolby Atmos", configured_only) is None
 
 
+def test_dropped_placeholder_level_folds_to_the_album(tmp_path):
+    """A placeholder-only level rendering empty drops out of the path: the
+    Versions land one level higher, and the fold follows them."""
+    lib = _mk(tmp_path, "lib", [])
+    parent = _mk(tmp_path, "lib/Artist/Album", ["01.flac"])
+    _mk(tmp_path, "lib/Artist/Album/Surround", ["01.m4a"])
+
+    def read_tags(path):
+        return _tags(title="One")
+
+    idx = LibraryIndex(
+        str(tmp_path / "library.sqlite3"),
+        read_tags=read_tags,
+        read_audio_type=lambda p: "atmos" if p.endswith(".m4a") else "stereo",
+    )
+    idx.refresh(lib)
+    local, _ = _presence_for(idx, placement="{album_year}/Surround")
+    key = matching.presence_key("Album", "Artist")
+    assert len(local[key]) == 1
+    assert local[key][0]["tracks"] == 1
+    assert local[key][0]["has_atmos"] is True
+    assert local[key][0]["id"] == parent
+
+
 def test_sanitized_fragment_spellings_fold(monkeypatch):
     """The download pipeline rewrites what the platform rejects: the fold
     knows the on-disk spelling too."""

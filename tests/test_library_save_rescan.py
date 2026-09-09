@@ -59,6 +59,7 @@ def _stub(*, enabled=False, source="separate", folder="", download_base="/dl"):
     s.settings = SimpleNamespace(
         data=SimpleNamespace(
             download_base_path=download_base,
+            format_atmos="Dolby Atmos",
             quality_audio="LOW_320K",
             ffmpeg_source="system",
             skip_existing=False,
@@ -144,6 +145,22 @@ def test_resubmitted_download_folder_does_not_rescan_in_download_mode():
     _apply(s, {"download_base_path": "/dl", "library_enabled": True, "library_source": "download"})
     assert s.drops == [], "an unchanged download folder dropped the badges"
     assert s.rescans == []
+
+
+def test_renamed_atmos_fragment_rescans():
+    # The presence index folds subfolders by this name: a save that changed
+    # it rebuilds the index so badges re-resolve at once.
+    s = _stub(enabled=True, folder="/lib")
+    _apply(s, {"format_atmos": "Immersive"})
+    assert s.rescans == ["/lib"]
+
+
+def test_resubmitted_atmos_fragment_does_not_rescan():
+    s = _stub(enabled=True, folder="/lib")
+    _apply(s, {"format_atmos": "Immersive"})
+    assert s.rescans == ["/lib"]
+    _apply(s, {"format_atmos": "Immersive"})
+    assert s.rescans == ["/lib"], "an unchanged fragment rescanned the library"
 
 
 def test_moved_download_folder_rescans_in_download_mode():
