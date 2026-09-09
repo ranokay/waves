@@ -70,11 +70,22 @@ def test_throttle_delay_is_exponential_then_capped_and_retry_after_wins():
 def test_parse_retry_after_reads_headers_attrs_and_words():
     assert parse_retry_after(SimpleNamespace(headers={"Retry-After": "120"})) == 120.0
     assert parse_retry_after(SimpleNamespace(headers={"retry-after": "30"})) == 30.0
+    assert parse_retry_after(SimpleNamespace(headers={"Retry-after": "44"})) == 44.0
     assert parse_retry_after(SimpleNamespace(response=SimpleNamespace(headers={"Retry-After": "7"}))) == 7.0
     assert parse_retry_after(SimpleNamespace(retry_after=17)) == 17.0
     assert parse_retry_after(RuntimeError("HTTP 429 Retry-After: 45")) == 45.0
     assert parse_retry_after(RuntimeError("rate limited, retry in 12s")) == 12.0
     assert parse_retry_after(RuntimeError("boom")) is None
+
+
+def test_parse_retry_after_accepts_an_http_date():
+    import datetime
+    from email.utils import format_datetime
+
+    future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=120)
+    headers = {"Retry-After": format_datetime(future, usegmt=True)}
+    wait = parse_retry_after(SimpleNamespace(headers=headers))
+    assert wait is not None and 0.0 < wait <= 120.0
 
 
 def test_presentations_carry_one_clear_message_with_countdown():
@@ -158,6 +169,16 @@ def test_supervisor_idles_and_stops_only_when_truly_idle():
     assert sup.should_stop(0) is False
 
 
+def test_supervisor_zero_monotonic_reading_is_real_activity_not_never():
+    sup = SidecarSupervisor(runner=lambda *a, **k: SimpleNamespace(returncode=0), monotonic=lambda: 0.0)
+    assert sup._last_activity is None
+    sup.note_activity()
+    assert sup._last_activity == 0.0
+    assert sup.should_stop(300.0, apple_busy=False) is False
+    sup._monotonic = lambda: 301.0
+    assert sup.should_stop(300.0, apple_busy=False) is True
+
+
 def test_supervisor_ready_and_ensure_paths():
     ok_probe = lambda url, timeout=5: SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
     sup = SidecarSupervisor(
@@ -198,6 +219,37 @@ def test_supervisor_ready_and_ensure_paths():
     assert sup3.stop() is True
 
 
+def test_supervisor_recreates_a_running_but_unhealthy_container(tmp_path):
+    from waves.apple_supervision import container_states
+
+    assert container_states("waves-wrapper-v2 running\nother exited") == {
+        "waves-wrapper-v2": "running",
+        "other": "exited",
+    }
+    probes = {"n": 0}
+
+    def _never_healthy(url, timeout=5):
+        probes["n"] += 1
+        raise ConnectionError("down")
+
+    seen: list = []
+
+    def _runner(args, **kwargs):
+        seen.append(list(args))
+        if args[:2] == ["docker", "ps"]:
+            return SimpleNamespace(returncode=0, stdout="waves-wrapper-v2 running\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    sup = SidecarSupervisor(runner=_runner, http_get=_never_healthy, monotonic=lambda: 0.0)
+    assert sup.ensure_started(http_port=51234, image="img:1", data_dir=str(tmp_path / "wd")) is False
+    kinds = [cmd[:2] for cmd in seen]
+    assert ["docker", "ps"] in kinds
+    # Running-but-unhealthy is never plain-started; it is removed and rerun.
+    assert ["docker", "start"] not in kinds
+    assert ["docker", "rm"] in kinds
+    assert ["docker", "run"] in kinds
+
+
 def _bridge_stub(**settings_overrides):
     data = SimpleNamespace(apple_pacing_batch_size=0, apple_pacing_delay_sec=0.0, apple_wrapper_idle_sec=0.0)
     for key, value in settings_overrides.items():
@@ -205,6 +257,7 @@ def _bridge_stub(**settings_overrides):
     stub = SimpleNamespace(settings=SimpleNamespace(data=data), _apple_runtime=None, _apple_supervisor=None)
     for name in (
         "_apple_setting",
+        "_apple_effective_wrapper_port",
         "_apple_pacing_policy",
         "_apple_pace_if_due",
         "_apple_throttle_delay",
@@ -290,13 +343,18 @@ def test_backend_ensure_skips_cookies_tier_and_holds_a_dead_sidecar(tmp_path):
     assert stub2._apple_ensure_sidecar(1, Event(), need_wrapper=True) is True
 
     # Wrapper-tier ask with a configured but dead sidecar: held, then resume.
-    states = {"ready": False}
+    # The first start attempt fails while the row visibly waits; the sleep
+    # callback asserts the held presentation mid-wait, then the retry heals.
+    states = {"ready": False, "starts": 0}
 
     class _Sup:
         def is_ready(self, port):
             return states["ready"]
 
         def ensure_started(self, **kwargs):
+            states["starts"] += 1
+            if states["starts"] < 2:
+                return False
             states["ready"] = True
             return True
 
@@ -311,10 +369,18 @@ def test_backend_ensure_skips_cookies_tier_and_holds_a_dead_sidecar(tmp_path):
         )
     }
     stub3._apple_supervisor = _Sup()
-    stub3._apple_sleep_abortable = lambda secs, abort: True
+
+    def _sleep_once(secs, abort):
+        row = stub3._queue_index[9]
+        assert row["status"] == "queued" and "Held" in row["reason"]
+        return True
+
+    stub3._apple_sleep_abortable = _sleep_once
     stub3._queue_index[9] = {"status": "running", "reason": ""}
     assert stub3._apple_ensure_sidecar(9, Event(), need_wrapper=True) is True
-    assert "Held" in stub3._queue_index[9]["reason"] or stub3._queue_index[9]["status"] in ("queued", "running")
+    assert states["ready"] is True
+    assert stub3._queue_index[9]["status"] == "running"
+    assert stub3._queue_index[9]["reason"] == ""
 
     # STOP while held: the wait ends promptly as a stop, for RETRY ALL.
     stub4 = _bridge_stub()

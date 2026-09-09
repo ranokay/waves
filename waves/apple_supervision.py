@@ -145,27 +145,85 @@ def pacing_due(track_index_1based: int, batch: int) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def _headers_retry_after(headers) -> float | None:
-    """A Retry-After value off one headers mapping, or None."""
+def _retry_after_value(value) -> float | None:
+    """A raw Retry-After value as seconds: numeric delay or RFC HTTP-date."""
     try:
-        value = None
-        if hasattr(headers, "get"):
-            for key in ("Retry-After", "retry-after", "RETRY_AFTER"):
-                value = headers.get(key)
-                if value is not None:
-                    break
-        elif isinstance(headers, dict):
-            for key, val in headers.items():
-                if str(key).lower() == "retry-after":
-                    value = val
-                    break
-        if value is None:
-            return None
-        secs = float(str(value).strip().split(",")[0])
-    except (TypeError, ValueError, AttributeError):
+        text = str(value).strip()
+    except (TypeError, AttributeError):
         return None
+    if not text:
+        return None
+    # A numeric delay (a list takes the first member); an HTTP-date carries
+    # a comma too ("Wed, 09 Sep ..."), so the comma split applies to the
+    # numeric probe only, never to the date parse below.
+    try:
+        secs = float(text.split(",")[0].strip())
+    except (TypeError, ValueError):
+        pass
     else:
         return secs if secs >= 0 else None
+    # RFC 9110 allows an HTTP-date instead of a delay: wait until then.
+    try:
+        from email.utils import parsedate_to_datetime
+    except ImportError:
+        return None
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    try:
+        import datetime
+
+        now = datetime.datetime.now(datetime.UTC)
+        moment = when if when.tzinfo is not None else when.replace(tzinfo=datetime.UTC)
+        return max(0.0, (moment - now).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _scan_header_items(headers):
+    """A Retry-After value found by case-insensitive items scan, or None."""
+    try:
+        items = headers.items() if hasattr(headers, "items") else None
+    except (TypeError, AttributeError):
+        return None
+    if items is None:
+        return None
+    try:
+        for key, val in items:
+            if str(key).lower() == "retry-after":
+                return val
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return None
+
+
+def _get_header_keys(headers):
+    """A Retry-After value found by exact .get lookup, or None."""
+    if not hasattr(headers, "get"):
+        return None
+    try:
+        for key in ("Retry-After", "retry-after", "RETRY_AFTER"):
+            value = headers.get(key)
+            if value is not None:
+                return value
+    except (TypeError, AttributeError):
+        return None
+    return None
+
+
+def _headers_retry_after(headers) -> float | None:
+    """A Retry-After value off one headers mapping, or None.
+
+    Scans case-insensitively: mappings with any key spelling (including
+    mixed case) match, whether or not they offer .get.
+    """
+    found = _scan_header_items(headers)
+    if found is None:
+        found = _get_header_keys(headers)
+    if found is None:
+        return None
+    return _retry_after_value(found)
 
 
 def _attrs_retry_after(exc: BaseException) -> float | None:
@@ -387,10 +445,27 @@ def container_stop_args(name: str = WRAPPER_CONTAINER_NAME, binary: str = "docke
     return [str(binary), "stop", str(name)]
 
 
+def container_remove_args(name: str = WRAPPER_CONTAINER_NAME, binary: str = "docker") -> list[str]:
+    """Remove the supervised sidecar container so a fresh one can take its ports."""
+    return [str(binary), "rm", "-f", str(name)]
+
+
+def container_states(ps_output: str) -> dict[str, str]:
+    """A `docker ps -a --format {{.Names}} {{.State}}` listing as {name: state}."""
+    states: dict[str, str] = {}
+    for line in str(ps_output or "").splitlines():
+        parts = line.strip().rsplit(None, 1)
+        if len(parts) == 2 and parts[0]:
+            states[parts[0]] = parts[1].strip().lower()
+    return states
+
+
 def container_exists(running_names: str, name: str = WRAPPER_CONTAINER_NAME) -> bool:
-    """Whether `docker ps -a --format {{.Names}}` output names our sidecar."""
+    """Whether a container listing names our sidecar (any state, either listing shape)."""
     wanted = str(name).strip()
-    return any(line.strip() == wanted for line in str(running_names or "").splitlines())
+    if not wanted:
+        return False
+    return any((line.strip().split(None, 1) or [""])[0] == wanted for line in str(running_names or "").splitlines())
 
 
 class SidecarSupervisor:
@@ -420,7 +495,9 @@ class SidecarSupervisor:
         self._monotonic = monotonic or time.monotonic
         self._container = str(container or WRAPPER_CONTAINER_NAME)
         self._binary = str(binary or "docker")
-        self._last_activity = 0.0
+        # None until the first noted wrapper activity: a monotonic clock can
+        # legitimately read 0.0, so 0.0 must not mean "never noted".
+        self._last_activity: float | None = None
 
     # ----- activity / idle ------------------------------------------------ #
     def note_activity(self) -> float:
@@ -430,7 +507,7 @@ class SidecarSupervisor:
 
     def idle_seconds(self) -> float:
         """Seconds since the last noted wrapper activity (0 when never)."""
-        if not self._last_activity:
+        if self._last_activity is None:
             return 0.0
         return max(0.0, float(self._monotonic()) - self._last_activity)
 
@@ -440,7 +517,7 @@ class SidecarSupervisor:
             limit = float(idle_timeout)
         except (TypeError, ValueError):
             return False
-        if limit <= 0 or apple_busy or not self._last_activity:
+        if limit <= 0 or apple_busy or self._last_activity is None:
             return False
         return self.idle_seconds() >= limit
 
@@ -497,42 +574,83 @@ class SidecarSupervisor:
             return ""
         return host_data
 
-    def _have_container(self) -> bool:
-        """Whether a stopped sidecar container exists to restart by name."""
+    def _container_state(self) -> str:
+        """Our sidecar's state ("running", "exited", ...) or "" when absent."""
         try:
-            names = self._run([self._binary, "ps", "-a", "--format", "{{.Names}}"], timeout=15)
+            proc = self._run(
+                [self._binary, "ps", "-a", "--format", "{{.Names}} {{.State}}"],
+                timeout=15,
+            )
         except Exception:
             logger.debug("Wrapper container list failed", exc_info=True)
-            return False
-        return bool(getattr(names, "returncode", 1) == 0) and container_exists(
-            getattr(names, "stdout", "") or "", self._container
-        )
+            return ""
+        if getattr(proc, "returncode", 1) != 0:
+            return ""
+        return container_states(getattr(proc, "stdout", "") or "").get(self._container, "")
 
-    def _start_container(self, *, image: str, port: int, decrypt_port: int, host_data: str, start_timeout: int) -> None:
-        """Restart the named container, else run a fresh one from the image."""
+    def _have_container(self) -> bool:
+        """Whether a sidecar container exists to restart by name (any state)."""
+        return bool(self._container_state())
+
+    def _run_fresh(self, *, image: str, port: int, decrypt_port: int, host_data: str, start_timeout: int) -> None:
+        """Run a fresh sidecar from the image with the current port mapping."""
         try:
-            if self._have_container():
+            proc = self._run(
+                container_run_args(
+                    image=image,
+                    http_port=port,
+                    decrypt_port=int(decrypt_port or WRAPPER_CONTAINER_DECRYPT_PORT),
+                    data_dir=host_data,
+                    name=self._container,
+                    binary=self._binary,
+                ),
+                timeout=start_timeout,
+            )
+        except Exception:
+            logger.debug("Wrapper sidecar start failed", exc_info=True)
+            return
+        if getattr(proc, "returncode", 1) != 0:
+            logger.warning(
+                "Wrapper sidecar would not start: %s",
+                ((getattr(proc, "stderr", "") or getattr(proc, "stdout", "")) or "").strip()
+                or "container runtime refused",
+            )
+
+    def _remove_container(self) -> None:
+        """Remove the named sidecar so a fresh one can take its ports."""
+        try:
+            self._run(container_remove_args(self._container, self._binary), timeout=60)
+        except Exception:
+            logger.debug("Wrapper sidecar remove failed", exc_info=True)
+
+    def _start_container(
+        self, *, state: str, image: str, port: int, decrypt_port: int, host_data: str, start_timeout: int
+    ) -> None:
+        """Restart a stopped container, else run a fresh one from the image.
+
+        A running-but-unhealthy container is never "started" (a no-op that
+        would leave the rows held): it is removed and recreated with the
+        current port mapping, which also heals a stale `-p` mapping after
+        the wrapper port setting changed.
+        """
+        if state and state != "running":
+            try:
                 proc = self._run(container_start_args(self._container, self._binary), timeout=60)
-            else:
-                proc = self._run(
-                    container_run_args(
-                        image=image,
-                        http_port=port,
-                        decrypt_port=int(decrypt_port or WRAPPER_CONTAINER_DECRYPT_PORT),
-                        data_dir=host_data,
-                        name=self._container,
-                        binary=self._binary,
-                    ),
-                    timeout=start_timeout,
-                )
+            except Exception:
+                logger.debug("Wrapper sidecar start failed", exc_info=True)
+                return
             if getattr(proc, "returncode", 1) != 0:
                 logger.warning(
                     "Wrapper sidecar would not start: %s",
                     ((getattr(proc, "stderr", "") or getattr(proc, "stdout", "")) or "").strip()
                     or "container runtime refused",
                 )
-        except Exception:
-            logger.debug("Wrapper sidecar start failed", exc_info=True)
+            return
+        if state == "running":
+            self._remove_container()
+        self._run_fresh(
+            image=image, port=port, decrypt_port=decrypt_port, host_data=host_data, start_timeout=start_timeout
+        )
 
     def ensure_started(
         self,
@@ -545,10 +663,11 @@ class SidecarSupervisor:
     ) -> bool:
         """Start the sidecar when its health probe does not answer.
 
-        Restarts a stopped container by name when one exists, else runs a
-        fresh one from the pinned image with the session volume mounted.
-        Returns True when the probe answers afterwards. Never pulls or
-        provisions: the runtime is the setup wizard's artifact.
+        Restarts a stopped container by name; a running-but-unhealthy one
+        (or a stale port mapping) is recreated from the pinned image with
+        the session volume mounted, then probed again. Returns True when
+        the probe answers afterwards. Never pulls or provisions: the runtime
+        is the setup wizard's artifact.
         """
         try:
             port = int(http_port)
@@ -563,9 +682,27 @@ class SidecarSupervisor:
         host_data = self._resolve_data_dir(data_dir)
         if not host_data:
             return False
-        # A stopped container restarts by name; a missing one runs fresh.
         # Either way the probe afterwards decides, never the exit code alone.
+        state = self._container_state()
         self._start_container(
+            state=state,
+            image=img,
+            port=port,
+            decrypt_port=decrypt_port,
+            host_data=host_data,
+            start_timeout=start_timeout,
+        )
+        if self.is_ready(port):
+            self.note_activity()
+            return True
+        if state == "running":
+            # Already recreated once above with the current mapping; probing
+            # again decides, never a third churn in one pass.
+            return False
+        # A start that left no healthy probe heals one way: recreate from
+        # the image with the current mapping and probe once more.
+        self._remove_container()
+        self._run_fresh(
             image=img, port=port, decrypt_port=decrypt_port, host_data=host_data, start_timeout=start_timeout
         )
         ready = self.is_ready(port)

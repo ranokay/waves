@@ -1330,6 +1330,39 @@ def _apple_effective_version(provider, track_id: str, audio_type) -> str:
         return "atmos"
 
 
+def _apple_effective_port(data, manager) -> int:
+    """The one wrapper HTTP port every Apple path agrees on (issue #33).
+
+    Module-level so plain unit-test stubs binding one resolver keep working
+    without the other: an explicit `apple_wrapper_port` wins when it is
+    unprivileged and either matches the persisted pick or is actually free
+    (an occupied override falls back to the persisted port); else the
+    manager's persisted pick; else 0 (no wrapper tier).
+    """
+    try:
+        preferred = int(getattr(data, "apple_wrapper_port", 0) or 0)
+    except (TypeError, ValueError):
+        preferred = 0
+    try:
+        persisted = int(manager.read_port()) if manager is not None else 0
+    except Exception:
+        persisted = 0
+    if 1024 <= preferred <= 65535:
+        if preferred == persisted:
+            return preferred
+        try:
+            from waves.apple_runtime import _port_free
+        except Exception:
+            return preferred
+        try:
+            if _port_free(preferred):
+                return preferred
+        except Exception:
+            logger.debug("Apple wrapper override probe failed", exc_info=True)
+            return preferred
+    return persisted if 1 <= persisted <= 65535 else 0
+
+
 def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int | None = None) -> bool:
     """Is the copy already on disk as good as what a download queued now would
     write, so that fetching it again would achieve nothing?
@@ -3948,7 +3981,7 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Apple sidecar supervisor unavailable", exc_info=True)
             self._apple_supervisor = None
-        self._apple_last_activity = 0.0
+        self._apple_last_activity = None
         self._apple_idle_timer = None
         self._apple_idle_lock = Lock()
         try:
@@ -12740,17 +12773,19 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _apple_wrapper_port_for_job(self) -> int:
         """The wrapper HTTP port this job would probe, or 0 when unset."""
+        resolve = getattr(self, "_apple_effective_wrapper_port", None)
+        if callable(resolve):
+            try:
+                return int(resolve() or 0)
+            except (TypeError, ValueError):
+                return 0
+        # Plain unit-test stubs bind this method without the shared
+        # resolver: fall back to the persisted pick alone.
         manager = getattr(self, "_apple_runtime", None)
         try:
             persisted = int(manager.read_port()) if manager is not None else 0
         except Exception:
             persisted = 0
-        try:
-            preferred = int(self._apple_setting("apple_wrapper_port", 0) or 0)
-        except (TypeError, ValueError):
-            preferred = 0
-        if 1024 <= preferred <= 65535:
-            return preferred
         return persisted if 1 <= persisted <= 65535 else 0
 
     def _apple_ensure_sidecar(self, qid: int, job_abort, *, need_wrapper: bool) -> bool:
@@ -12806,6 +12841,14 @@ class WavesBridge(LibraryMixin, QObject):
                             sup.note_activity()
                         with contextlib.suppress(Exception):
                             self._apple_note_activity()
+                        # A row held on an earlier poll resumes visibly: the
+                        # held reason clears the same way the started branch
+                        # below clears it, or it would read "Held" while
+                        # downloading normally.
+                        with contextlib.suppress(Exception):
+                            set_status = getattr(self, "_set_queue_status", None)
+                            if callable(set_status):
+                                set_status(int(qid), "running", "")
                         return True
                 except Exception:
                     logger.debug("Wrapper health probe failed", exc_info=True)
@@ -12867,6 +12910,10 @@ class WavesBridge(LibraryMixin, QObject):
         try:
             import threading as _threading
 
+            previous = getattr(self, "_apple_idle_timer", None)
+            if previous is not None:
+                with contextlib.suppress(Exception):
+                    previous.cancel()
             timer = _threading.Timer(float(timeout), self._apple_idle_stop_if_idle)
             timer.daemon = True
             with contextlib.suppress(Exception):
@@ -18085,11 +18132,15 @@ class WavesBridge(LibraryMixin, QObject):
                 current = getattr(d, key)
                 return field(key, "enum", getattr(current, "name", str(current)), {"options": _enum_options(key, enum)})
             if key in _FLOAT_FIELDS:
+                # Most second-scale fields pause under a minute; the
+                # supervision knobs (issue #33) run longer by design (idle
+                # default 300 s), so they carry their own ceiling.
+                maximum = {"apple_wrapper_idle_sec": 3600.0, "apple_pacing_delay_sec": 600.0}.get(key, 60)
                 return field(
                     key,
                     "float",
                     float(getattr(d, key)),
-                    {"minimum": 0, "maximum": 60, "step": 0.5, "decimals": 1},
+                    {"minimum": 0, "maximum": maximum, "step": 0.5, "decimals": 1},
                 )
             if key in _NUMBER_FIELDS:
                 return field(key, "int", int(getattr(d, key)))
@@ -18941,6 +18992,24 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Apple runtime resolve failed", exc_info=True)
         return ""
 
+    def _apple_effective_wrapper_port(self) -> int:
+        """The one wrapper HTTP port every Apple path agrees on (issue #33).
+
+        Precedence mirrors the config-first override rule: an explicit
+        `apple_wrapper_port` wins when it is unprivileged and either matches
+        the persisted pick or is actually free (an occupied override falls
+        back to the persisted port, never to a port the provider would not
+        also use); else the manager's persisted pick; else 0 (no tier).
+        Both the provider URL resolver and the supervision probe read this,
+        so the sidecar is always started and probed on the port the provider
+        would connect to. Module-level helper underneath, so plain stubs
+        binding one resolver keep working without the other.
+        """
+        return _apple_effective_port(
+            getattr(getattr(self, "settings", None), "data", None),
+            getattr(self, "_apple_runtime", None),
+        )
+
     def _resolve_apple_wrapper_url(self) -> str:
         """The wrapper HTTP API URL an Apple ALAC download would use (issue #32).
 
@@ -18950,37 +19019,21 @@ class WavesBridge(LibraryMixin, QObject):
         the wrapper session (whose tokens live in the guest) needs no
         re-login: the same URL answers again after a container restart.
         """
-        data = getattr(getattr(self, "settings", None), "data", None)
-        try:
-            preferred = int(getattr(data, "apple_wrapper_port", 0) or 0)
-        except (TypeError, ValueError):
-            preferred = 0
-        manager = getattr(self, "_apple_runtime", None)
-        try:
-            persisted = int(manager.read_port()) if manager is not None else 0
-        except Exception:
-            persisted = 0
-        if 1024 <= preferred <= 65535:
-            try:
-                from waves.apple_runtime import _port_free, wrapper_url
-            except Exception:
-                return ""
-            try:
-                if preferred == persisted or _port_free(preferred):
-                    return wrapper_url(preferred)
-            except Exception:
-                logger.debug("Apple wrapper override probe failed", exc_info=True)
-                try:
-                    from waves.apple_runtime import wrapper_url as _url
-
-                    return _url(preferred)
-                except Exception:
-                    return ""
-        if persisted:
+        resolve = getattr(self, "_apple_effective_wrapper_port", None)
+        if callable(resolve):
+            port = resolve()
+        else:
+            # Plain unit-test stubs bind this resolver without the shared
+            # one (issue #32 pins this precedence here).
+            port = _apple_effective_port(
+                getattr(getattr(self, "settings", None), "data", None),
+                getattr(self, "_apple_runtime", None),
+            )
+        if port:
             try:
                 from waves.apple_runtime import wrapper_url
 
-                return wrapper_url(persisted)
+                return wrapper_url(port)
             except Exception:
                 return ""
         return ""

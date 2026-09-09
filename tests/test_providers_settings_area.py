@@ -144,6 +144,15 @@ def test_the_apple_switch_defaults_off_and_persists_as_an_engine_setting():
     assert status["value"] == "off"
 
 
+def test_the_supervision_seconds_fields_span_their_defaults():
+    sections = _schema()
+    fields = {f["key"]: f for f in sections["providers_apple"]["fields"]}
+    assert fields["apple_wrapper_idle_sec"]["value"] == 300.0
+    assert fields["apple_wrapper_idle_sec"]["maximum"] >= 300.0
+    assert fields["apple_pacing_delay_sec"]["value"] == 30.0
+    assert fields["apple_pacing_delay_sec"]["maximum"] >= 30.0
+
+
 def test_the_status_light_flips_with_the_switch_and_the_session():
     on = WavesBridge.settingsSchema(_schema_stub(apple_enabled=True))
     status = next(s for s in on if s["id"] == "providers_apple")["fields"][0]
