@@ -188,11 +188,40 @@ class AppleProvider(Provider):
         template = str(artwork.get("url") or "") if isinstance(artwork, dict) else ""
         if not template:
             return ""
-        return (
-            template.replace("{w}", str(width))
-            .replace("{h}", str(height if height is not None else width))
-            .replace("{f}", "jpg")
-        )
+        # The {w}x{h} template serves up to the master's native size
+        # (5000x5000 on recent Apple masters); clamp only to keep the
+        # request sane, never down to the TIDAL-legacy 1280 cap.
+        try:
+            w = max(16, min(5000, int(width)))
+        except (TypeError, ValueError):
+            w = 320
+        try:
+            h = max(16, min(5000, int(height))) if height is not None else w
+        except (TypeError, ValueError):
+            h = w
+        return template.replace("{w}", str(w)).replace("{h}", str(h)).replace("{f}", "jpg")
+
+    @staticmethod
+    def cover_raw_url(obj) -> str:
+        """The true original-master image URL for an Apple resource.
+
+        The gamdl raw-mode rewrite: strip the ``image/thumb/`` path segment,
+        swap the ``is1-ssl`` host for ``a1``, and drop the ``{w}x{h}bb.jpg``
+        suffix. Empty when the resource carries no artwork template.
+        """
+        item = obj["item"] if isinstance(obj, dict) and "item" in obj else obj
+        attrs = item.get("attributes") or {} if isinstance(item, dict) else {}
+        artwork = attrs.get("artwork") or {}
+        template = str(artwork.get("url") or "") if isinstance(artwork, dict) else ""
+        if not template:
+            return ""
+        import re
+
+        url = re.sub(r"is1-ssl", "a1", template)
+        url = re.sub(r"image/thumb/", "", url)
+        url = re.sub(r"/\{w\}x\{h\}bb\.jpg", "", url)
+        url = re.sub(r"/\{w\}x\{h\}([a-z]{2})\.jpg", "", url)
+        return url
 
     @staticmethod
     def _seconds(attrs: dict) -> int:
@@ -897,14 +926,147 @@ class AppleProvider(Provider):
         return None
 
     def fetch_lyrics(self, track) -> tuple[str, str]:
-        return "", ""
+        """Apple-native lyrics as (synced, plain), converted in Waves' layer.
+
+        Fetches the line-timed ``lyrics`` relationship and converts TTML to
+        LRC here (never waiting on upstream gamdl). Empty when Apple serves
+        no lyrics for the song or the fetch fails; the caller falls through
+        to unsynced text last per the source precedence.
+        """
+        try:
+            ttml = self.fetch_line_ttml(track)
+        except Exception:
+            logger.debug("Apple native lyrics fetch failed", exc_info=True)
+            return "", ""
+        if not ttml:
+            return "", ""
+        try:
+            from waves.ttml_lyrics import ttml_timing_mode, ttml_to_lrc, ttml_to_text
+        except Exception:
+            return "", ""
+        mode = ttml_timing_mode(ttml)
+        if mode == "none":
+            return "", ttml_to_text(ttml)
+        return ttml_to_lrc(ttml), ttml_to_text(ttml)
+
+    async def _fetch_ttml_resource(self, song_id: str, relation: str) -> str:
+        """One TTML document off the ``lyrics`` / ``syllable-lyrics`` sub-resource.
+
+        Direct sourcing through the embedded catalog client (spec section
+        9.1): ``GET /v1/catalog/{storefront}/songs/{id}/{relation}``. Returns
+        the TTML string, or "" when Apple serves none for this song.
+        """
+        raw_id = str(song_id or "").removeprefix(f"{CTX_APPLE}:")
+        if not raw_id or (self._catalog is None and self._catalog_factory is None):
+            return ""
+        if self._catalog is None:
+            self._catalog = await self._catalog_factory()
+        storefront = str(getattr(self._catalog, "storefront", "us") or "us")
+        uri = f"/v1/catalog/{storefront}/songs/{raw_id}/{relation}"
+        try:
+            response = await self._catalog._amp_request(uri, {"extend": "ttmlLocalizations"})
+        except Exception:
+            logger.debug("Apple %s fetch failed for %s", relation, raw_id, exc_info=True)
+            return ""
+        return self._ttml_from_response(response)
+
+    @staticmethod
+    def _ttml_from_attrs(attrs: object) -> str:
+        """TTML out of one resource's attributes, or ""."""
+        if not isinstance(attrs, dict):
+            return ""
+        for key in ("ttml", "ttmlLocalizations", "ttml_localizations"):
+            value = attrs.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+            if isinstance(value, dict):
+                for nested in value.values():
+                    if isinstance(nested, str) and nested.strip() and "<tt" in nested:
+                        return nested
+        return ""
+
+    @classmethod
+    def _ttml_from_relationships(cls, entry: dict) -> str:
+        """TTML out of a relationship-style include, or ""."""
+        rels = entry.get("relationships") or {}
+        if not isinstance(rels, dict):
+            return ""
+        for rel in rels.values():
+            rel_data = (rel or {}).get("data") if isinstance(rel, dict) else None
+            rel_items = rel_data if isinstance(rel_data, list) else [rel_data] if isinstance(rel_data, dict) else []
+            for rel_entry in rel_items:
+                if not isinstance(rel_entry, dict):
+                    continue
+                found = cls._ttml_from_attrs(rel_entry.get("attributes"))
+                if found:
+                    return found
+        return ""
+
+    @classmethod
+    def _ttml_from_response(cls, response: object) -> str:
+        """The TTML string out of a lyrics sub-resource reply, or ""."""
+        if not isinstance(response, dict):
+            return ""
+        data = response.get("data")
+        items = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            found = cls._ttml_from_attrs(entry.get("attributes")) or cls._ttml_from_relationships(entry)
+            if found:
+                return found
+        # Included-section shape (song fetch with include=lyrics).
+        included = response.get("included")
+        for entry in included if isinstance(included, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            found = cls._ttml_from_attrs(entry.get("attributes"))
+            if found:
+                return found
+        return ""
+
+    def _song_id_of(self, track) -> str:
+        item = self._unwrap(track)
+        if isinstance(item, dict):
+            return str(item.get("id") or "")
+        track_id = str(getattr(track, "id", track) or "")
+        return track_id
+
+    def fetch_syllable_ttml(self, track) -> str:
+        """Word-timed syllable TTML for one song, or "" when absent."""
+        try:
+            return self._run(self._fetch_ttml_resource(self._song_id_of(track), "syllable-lyrics"))
+        except Exception:
+            logger.debug("Apple syllable-TTML fetch failed", exc_info=True)
+            return ""
+
+    def fetch_line_ttml(self, track) -> str:
+        """Line-timed TTML for one song, or "" when absent."""
+        try:
+            return self._run(self._fetch_ttml_resource(self._song_id_of(track), "lyrics"))
+        except Exception:
+            logger.debug("Apple line-TTML fetch failed", exc_info=True)
+            return ""
+
+    def fetch_word_timed_lrc(self, track) -> str:
+        """Enhanced (word-timed) LRC for one song, converted in Waves' layer."""
+        ttml = self.fetch_syllable_ttml(track)
+        if not ttml:
+            return ""
+        try:
+            from waves.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
+        except Exception:
+            return ""
+        if ttml_timing_mode(ttml) != "word":
+            return ""
+        return ttml_to_enhanced_lrc(ttml)
 
     def cover_url(self, obj, dimension: int) -> str:
         """Best-effort cover URL at the requested square dimension."""
         item = self._unwrap(obj)
         attrs = self._attributes(item if isinstance(item, dict) else {})
         try:
-            dim = max(16, int(dimension))
+            dim = max(16, min(5000, int(dimension)))
         except (TypeError, ValueError):
             dim = 320
         return self._art(attrs, dim)

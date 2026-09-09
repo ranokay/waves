@@ -18,6 +18,14 @@ class Settings:
     # lyrics, which are machine-transcribed for tracks nobody has submitted
     # text for yet. TIDAL remains the fallback when LRCLIB has no match.
     lyrics_prefer_lrclib: bool = True
+    # Word-timed source (issue #34, spec section 9.1): on Apple, syllable TTML
+    # outranks a line-timed LRCLIB hit when on (default on). TIDAL has no
+    # word-timed source, so this is a no-op there.
+    lyrics_word_timed: bool = True
+    # Verbatim Apple TTML sidecar (issue #34, spec section 9.1): saved exactly
+    # as Apple serves it, zero conversion, sidecar-only (never embedded).
+    # Apple only; default off. TIDAL has no TTML source.
+    lyrics_ttml_file: bool = False
     use_primary_album_artist: bool = (
         False  # When True, uses first album artist instead of track artists for folder paths
     )
@@ -145,6 +153,10 @@ class Settings:
     # the saved file, so the embedded art and the on-disk cover can differ.
     metadata_cover_file_dimension: str = "follow"
     metadata_cover_embed: bool = True
+    # Sidecar cover format (issue #34, spec section 9.1): "jpg" (default) or
+    # "png" on both providers, plus "raw" on Apple (the true original-master
+    # bytes, extension follows the served image). Embedded art stays jpg.
+    cover_file_format: str = "jpg"
     mark_explicit: bool = False
     cover_album_file: bool = True
     # Also write cover.jpg when a single track is downloaded on its own (not just
@@ -249,6 +261,15 @@ class HelpSettings:
         "machine-transcribed for many newer track IDs and often wrong. Applies to every "
         "enabled provider."
     )
+    lyrics_word_timed: str = (
+        "Prefer word-timed lyrics when Apple serves syllable TTML: the enhanced LRC "
+        "outranks a line-timed LRCLIB hit. Default on. No effect on TIDAL, which has "
+        "no word-timed source."
+    )
+    lyrics_ttml_file: str = (
+        "Save Apple's verbatim TTML beside the track (zero conversion, sidecar-only, "
+        "never embedded). Apple only; default off."
+    )
     api_key_index: str = "Set the device API KEY."
     album_info_save: str = "Save album info to track?"
     video_download: str = "Allow download of videos."
@@ -339,6 +360,10 @@ class HelpSettings:
         "otherwise pick an independent size (80, 160, 320, 640, 1280, origin)."
     )
     metadata_cover_embed: str = "Embed album cover into file."
+    cover_file_format: str = (
+        "Sidecar cover format: jpg (default) or png on both providers, plus raw on "
+        "Apple (the true original-master bytes). Embedded art stays jpg."
+    )
     mark_explicit: str = "Mark explicit tracks with '🅴' in track title (only applies to metadata)."
     cover_album_file: str = "Save cover to 'cover.jpg', if an album is downloaded."
     cover_single_track_file: str = "Also save cover.jpg when downloading a single track on its own."

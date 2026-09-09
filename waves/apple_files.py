@@ -172,11 +172,28 @@ def write_text_sidecar(directory: str | Path, stem: str, suffix: str, content: s
     return target
 
 
-def write_cover_sidecar(directory: str | Path, image: bytes) -> Path | None:
-    """cover.jpg beside the track, written atomically, or None."""
+def write_cover_sidecar(directory: str | Path, image: bytes, file_format: str = "jpg") -> Path | None:
+    """Cover sidecar beside the track, written atomically, or None.
+
+    ``file_format`` is ``jpg`` (default) or ``png`` on both providers, plus
+    ``raw`` on Apple (the true original-master bytes, whose extension follows
+    the served image). The format only names the file; the bytes are already
+    in that format (embedded art stays jpg per spec section 9.1).
+    """
     if not image:
         return None
-    target = Path(directory) / "cover.jpg"
+    fmt = str(file_format or "jpg").strip().lower()
+    if fmt not in ("jpg", "jpeg", "png", "raw"):
+        fmt = "jpg"
+    if fmt == "raw":
+        # The raw master arrives as jpg or png; sniff the magic rather than
+        # trusting the setting. PNG magic first, else jpg.
+        name = "cover.png" if bytes(image[:8]).startswith(b"\x89PNG\r\n\x1a\n") else "cover.jpg"
+    elif fmt == "png":
+        name = "cover.png"
+    else:
+        name = "cover.jpg"
+    target = Path(directory) / name
     if target.exists():
         return target
     tmp = Path(str(target) + ".tmp")
