@@ -69,7 +69,32 @@ def test_pins_are_versioned_not_floating():
     assert APK_PINNED_VERSION
     rel = pinned_release("macos", "arm64")
     assert rel is not None and rel.version == NM3U8DLRE_VERSION
-    assert rel.url.endswith(".tar.gz") and (rel.sha256_url or "").endswith(".sha256")
+    assert rel.url.endswith("osx-arm64_20260629.tar.gz")
+    assert rel.sha256  # inline pin: the release publishes no checksum sidecars
+
+
+def test_pin_table_covers_every_desktop_platform_with_a_hash():
+    from waves.apple_runtime import NM3U8DLRE_RELEASES, NM3U8DLRE_SHA256
+
+    for platform_key in [
+        ("macos", "arm64"),
+        ("macos", "amd64"),
+        ("linux", "amd64"),
+        ("linux", "arm64"),
+        ("windows", "amd64"),
+        ("windows", "arm64"),
+    ]:
+        url = NM3U8DLRE_RELEASES[platform_key]
+        assert url.startswith("https://github.com/nilaoda/N_m3u8DL-RE/releases/download/")
+        assert NM3U8DLRE_VERSION in url
+        if platform_key[0] == "windows":
+            assert url.endswith(".zip")
+        else:
+            assert url.endswith(".tar.gz")
+        sha = NM3U8DLRE_SHA256[platform_key]
+        assert len(sha) == 64 and all(c in "0123456789abcdef" for c in sha)
+        rel = pinned_release(*platform_key)
+        assert rel is not None and rel.url == url and rel.sha256 == sha
 
 
 def test_pinned_release_unknown_platform_is_none():
@@ -121,6 +146,31 @@ def test_detect_container_daemon_down_guides_not_installs():
     found = detect_container_runtime(runner=runner)
     assert found["available"] is True and found["running"] is False
     assert "Start" in found["hint"] and "install" not in found["hint"].lower()
+
+
+def test_detect_container_keeps_probing_past_a_stopped_docker():
+    calls = []
+
+    def runner(cmd, **_k):
+        calls.append(cmd[0])
+        if cmd[0] == "docker":
+            return SimpleNamespace(returncode=1, stdout="", stderr="Cannot connect")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    found = detect_container_runtime(runner=runner)
+    assert calls == ["docker", "podman"]
+    assert found == {"name": "podman", "available": True, "running": True, "hint": ""}
+
+
+def test_detect_container_hint_names_the_idle_runtime():
+    def runner(cmd, **_k):
+        if cmd[0] == "docker":
+            raise FileNotFoundError(cmd[0])
+        return SimpleNamespace(returncode=1, stdout="", stderr="stopped")
+
+    found = detect_container_runtime(runner=runner)
+    assert found["name"] == "podman" and found["running"] is False
+    assert "Podman" in found["hint"] and "Docker Desktop" not in found["hint"]
 
 
 def test_detect_container_absent_guides_to_manual_install():
@@ -206,10 +256,24 @@ def test_verify_apk_without_pinned_hash_checks_presence(tmp_path):
 
 
 def test_apk_plan_scripts_extraction_and_names_pin(tmp_path):
+    from waves.apple_runtime import APK_SHA256
+
     plan = apk_extract_plan(str(tmp_path / "music.apkm"))
     assert any(APK_PINNED_VERSION in step for step in plan)
-    assert any("SHA-256" in step or "SHA" in step for step in plan)
+    if APK_SHA256:
+        assert any("fail-closed" in step for step in plan)
+    else:
+        # No pinned hash published: the plan must say so, never claim a
+        # check that did not run.
+        assert any("pending" in step for step in plan)
     assert any("Waves never fetches" in verify_apk(str(_apk(tmp_path)), expected_sha256="")["note"] for _ in [0])
+
+
+def test_apk_plan_with_pinned_hash_claims_the_check():
+    plan = apk_extract_plan("/m.apkm", hash_pinned=True)
+    assert any("fail-closed" in step for step in plan)
+    pending = apk_extract_plan("/m.apkm", hash_pinned=False)
+    assert any("pending" in step for step in pending)
 
 
 def _apk(tmp_path: Path) -> str:
@@ -247,6 +311,39 @@ def _make_tarball(exe_name: str, payload: bytes = b"#!/bin/sh\necho v0\n") -> by
         info.mode = 0o755
         tf.addfile(info, io.BytesIO(payload))
     return buf.getvalue()
+
+
+def _make_zip(exe_name: str, payload: bytes = b"MZ-fake-binary") -> bytes:
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        zf.writestr(exe_name, payload)
+    return buf.getvalue()
+
+
+def test_extract_reads_tar_gz_and_zip(tmp_path):
+    from waves.apple_runtime import _exe_name, _extract_binary
+
+    mgr = AppleRuntimeManager(tmp_path)
+    exe = _exe_name(mgr.os_key or "macos")
+    tar_dest, zip_dest = tmp_path / "from-tar", tmp_path / "from-zip"
+    tarball, zipped = tmp_path / "a.tar.gz", tmp_path / "b.zip"
+    tarball.write_bytes(_make_tarball(exe, b"tar-payload"))
+    zipped.write_bytes(_make_zip("N_m3u8DL-RE.exe", b"zip-payload"))
+    _extract_binary(tarball, tar_dest, exe)
+    assert tar_dest.read_bytes() == b"tar-payload"
+    _extract_binary(zipped, zip_dest, "N_m3u8DL-RE.exe")
+    assert zip_dest.read_bytes() == b"zip-payload"
+
+
+def test_extract_rejects_unknown_format(tmp_path):
+    from waves.apple_runtime import _extract_binary
+
+    blob = tmp_path / "a.7z"
+    blob.write_bytes(b"nope")
+    with pytest.raises(ValueError, match="unsupported"):
+        _extract_binary(blob, tmp_path / "out", "N_m3u8DL-RE")
 
 
 class _Resp:
@@ -407,6 +504,11 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     stub._apple_needs_attention = WavesBridge._apple_needs_attention.__get__(stub, SimpleNamespace)
     stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
     stub._apple_live_flags = WavesBridge._apple_live_flags.__get__(stub, SimpleNamespace)
+    # GUI-thread callers read the cached probe, never a live subprocess:
+    # tests pin the cache instead of touching the machine's runtimes.
+    stub._apple_container_cache = {"at": 0.0, "result": None}
+    stub._refresh_apple_container_cache = WavesBridge._refresh_apple_container_cache.__get__(stub, SimpleNamespace)
+    stub._apple_container_state = WavesBridge._apple_container_state.__get__(stub, SimpleNamespace)
     stub.appleStatus = WavesBridge.appleStatus.__get__(stub, SimpleNamespace)
     stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub, SimpleNamespace)
     stub._apple_wizard_steps = WavesBridge._apple_wizard_steps
@@ -593,6 +695,48 @@ def test_setup_state_carries_steps_plan_image_and_login_hint(tmp_path):
     assert any(APK_PINNED_VERSION in step for step in state["apk"]["extract_plan"])
     assert state["wrapper"]["image_pulled"] is False
     assert "2FA" in state["wrapper"]["login_hint"]
+
+
+def test_apk_without_pinned_hash_stays_open_not_done(tmp_path):
+    apk = tmp_path / "music.apkm"
+    apk.write_bytes(b"bytes")
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.settings.data.apple_apk_path = str(apk)
+    state = stub.appleSetupState()
+    assert state["apk"]["verified"] is False
+    assert state["apk"]["hash_pending"] is True
+    apk_step = next(s for s in state["steps"] if s["key"] == "apk")
+    assert apk_step["state"] == "todo"
+
+
+def test_container_state_caches_for_gui_callers(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_detect(timeout=10):
+        calls.append(timeout)
+        return {"name": "", "available": False, "running": False, "hint": ""}
+
+    monkeypatch.setattr("waves.apple_runtime.detect_container_runtime", fake_detect)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.appleSetupState()
+    stub.appleSetupState()
+    assert calls == [3]  # cold probe once, short GUI timeout; the second read rides the cache
+
+
+def test_container_refresh_uses_the_full_timeout(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_detect(timeout=10):
+        calls.append(timeout)
+        return {"name": "docker", "available": True, "running": True, "hint": ""}
+
+    monkeypatch.setattr("waves.apple_runtime.detect_container_runtime", fake_detect)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub._refresh_apple_container_cache(timeout=10)
+    assert calls == [10]
+    # A fresh cache is returned as-is with no new probe.
+    stub._apple_container_state()
+    assert calls == [10]
 
 
 def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):

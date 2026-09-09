@@ -3904,6 +3904,15 @@ class WavesBridge(LibraryMixin, QObject):
             self._apple_runtime = None
         self._apple_runtime_abort = Event()
         self._apple_runtime_inflight = False
+        # Cached container-runtime probe (issue #31): appleSetupState() runs
+        # on the GUI thread, where a `docker info` against a hung daemon
+        # would freeze Settings. GUI callers read this cache; workers
+        # refresh it (warm-up below, appleStartContainer, image pull).
+        self._apple_container_cache: dict = {"at": 0.0, "result": None}
+        try:
+            self.threadpool.start(Worker(self._refresh_apple_container_cache))
+        except Exception:
+            logger.debug("Apple container warm-up probe failed", exc_info=True)
         # The Apple provider reads the resolved FFmpeg path, so this runs
         # after the manager above exists.
         self._configure_apple_provider()
@@ -16914,14 +16923,20 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             runtime = {"state": "missing"}
         try:
-            container = detect_container_runtime()
+            probe = getattr(self, "_apple_container_state", None)
+            # Plain unit-test stubs bind appleSetupState without the cache;
+            # they fall back to a direct probe there.
+            container = probe() if callable(probe) else detect_container_runtime()
         except Exception:
             container = {"name": "", "available": False, "running": False, "hint": ""}
         apk_path = str(getattr(data, "apple_apk_path", "") or "")
         try:
             apk_check = verify_apk(apk_path) if apk_path.strip() else None
-            apk_verified = bool(apk_check and apk_check.get("ok", False))
+            apk_ok = bool(apk_check and apk_check.get("ok", False))
             apk_hash_pending = bool(apk_check and apk_check.get("hash_pending", False))
+            # Fail-closed presentation: without a pinned hash no surface may
+            # claim the APK verified, however good the file looks.
+            apk_verified = bool(apk_ok and not apk_hash_pending)
             apk_error = ""
         except Exception as exc:
             apk_verified = False
@@ -17107,12 +17122,17 @@ class WavesBridge(LibraryMixin, QObject):
             }
         )
         if apk_verified:
-            apk_detail = (
-                "APK verified against the pinned version"
-                + (" (SHA check pending the published hash)." if apk_hash_pending else ".")
-                + " Follow the extraction plan below inside the wrapper guest."
-            )
+            apk_detail = "APK SHA-256 verified against the pinned version. Follow the extraction plan below inside the wrapper guest."
             apk_step = ("done", apk_detail, "")
+        elif apk_path.strip() and apk_hash_pending:
+            # The file checks out as far as can be checked, but no pinned
+            # hash exists yet: fail-closed presentation keeps the step open
+            # until Waves publishes the hash, then it completes.
+            apk_step = (
+                "todo",
+                "Version checked; the SHA-256 check unlocks once Waves publishes the pinned hash, then this step completes.",
+                "",
+            )
         elif apk_path.strip():
             apk_step = ("attention", apk_error or "That APK could not be verified.", "")
         else:
@@ -17239,6 +17259,12 @@ class WavesBridge(LibraryMixin, QObject):
                         return
                     logger.exception("Apple runtime install failed")
                     self.appleRuntimeStateChanged.emit("failed", str(exc) or "Install failed")
+                    # Refresh the wizard card too, so the failed step is
+                    # visible where the user clicked, not only on the signal.
+                    try:
+                        self.appleRuntimeStatusChanged.emit()
+                    except Exception:
+                        logger.debug("Apple runtime signal emit failed", exc_info=True)
                     return
                 self._configure_apple_provider()
                 self.appleRuntimeStateChanged.emit("done", f"N_m3u8DL-RE {status.get('version', '')} ready")
@@ -17271,25 +17297,37 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Apple runtime signal emit failed", exc_info=True)
         self.appleStatusChanged.emit()
 
-    @Slot(result="QVariant")
-    def appleStartContainer(self) -> dict:
-        """Attempt the gentle container start, then re-probe (never installs).
+    @Slot()
+    def appleStartContainer(self) -> None:
+        """Attempt the gentle container start on a worker, then re-probe.
 
-        Returns ``{"attempted", "container"}`` so the wizard step can say
-        what happened; the page re-reads ``appleSetupState()`` after.
+        Never installs anything. Completion (running, still idle, or absent)
+        arrives via appleRuntimeStateChanged, and the page re-reads
+        appleSetupState() off appleRuntimeStatusChanged like every other
+        runtime action — the slot itself never blocks the GUI thread.
         """
-        from waves.apple_runtime import attempt_gentle_start, detect_container_runtime
 
-        try:
-            attempted = bool(attempt_gentle_start())
-        except Exception:
-            logger.debug("Apple gentle container start failed", exc_info=True)
-            attempted = False
-        try:
-            container = detect_container_runtime()
-        except Exception:
-            container = {"name": "", "available": False, "running": False, "hint": ""}
-        return {"attempted": attempted, "container": container}
+        def work() -> None:
+            from waves.apple_runtime import attempt_gentle_start
+
+            try:
+                attempted = bool(attempt_gentle_start())
+            except Exception:
+                logger.debug("Apple gentle container start failed", exc_info=True)
+                attempted = False
+            container = self._refresh_apple_container_cache(timeout=10)
+            if container.get("running"):
+                self.appleRuntimeStateChanged.emit("done", f"{container.get('name')} is running")
+            elif attempted:
+                self.appleRuntimeStateChanged.emit("downloading", "Waiting for the container runtime to start…")
+            else:
+                self.appleRuntimeStateChanged.emit("failed", str(container.get("hint") or "No container runtime found"))
+            try:
+                self.appleRuntimeStatusChanged.emit()
+            except Exception:
+                logger.debug("Apple runtime signal emit failed", exc_info=True)
+
+        self.threadpool.start(Worker(work))
 
     @Slot()
     def installAppleImage(self) -> None:
@@ -17301,9 +17339,8 @@ class WavesBridge(LibraryMixin, QObject):
             self.appleRuntimeStateChanged.emit("failed", "Apple runtime unavailable on this machine")
             return
         try:
-            from waves.apple_runtime import detect_container_runtime
-
-            container = detect_container_runtime()
+            probe = getattr(self, "_apple_container_state", None)
+            container = probe() if callable(probe) else {"name": "", "available": False, "running": False, "hint": ""}
             binary = str(container.get("name") or "docker")
         except Exception:
             binary = "docker"
@@ -17327,6 +17364,10 @@ class WavesBridge(LibraryMixin, QObject):
                         return
                     logger.exception("Apple wrapper image pull failed")
                     self.appleRuntimeStateChanged.emit("failed", str(exc) or "Pull failed")
+                    try:
+                        self.appleRuntimeStatusChanged.emit()
+                    except Exception:
+                        logger.debug("Apple runtime signal emit failed", exc_info=True)
                     return
                 self.appleRuntimeStateChanged.emit("done", "Wrapper image ready")
                 self.appleRuntimeStatusChanged.emit()
@@ -18252,6 +18293,38 @@ class WavesBridge(LibraryMixin, QObject):
             return True
         override = str(getattr(data, "path_binary_nm3u8dlre", "") or "").strip()
         return bool(override and not pathlib.Path(override).is_file())
+
+    def _refresh_apple_container_cache(self, timeout: int = 10) -> dict:
+        """Probe the container runtime and store it for GUI-thread readers."""
+        from waves.apple_runtime import detect_container_runtime
+
+        try:
+            result = detect_container_runtime(timeout=timeout)
+        except Exception:
+            logger.debug("Apple container probe failed", exc_info=True)
+            result = {"name": "", "available": False, "running": False, "hint": ""}
+        try:
+            self._apple_container_cache = {"at": time.time(), "result": result}
+        except Exception:
+            logger.debug("Apple container cache store failed", exc_info=True)
+        return result
+
+    def _apple_container_state(self, max_age_s: float = 120.0) -> dict:
+        """The container-runtime probe for GUI-thread callers (cached).
+
+        Fresh cache wins (no subprocess at all). Cold or stale cache probes
+        inline with a short timeout so a hung daemon can only stall Settings
+        briefly; workers refresh the cache fully in the background
+        (start-up warm-up, appleStartContainer).
+        """
+        cache = getattr(self, "_apple_container_cache", None)
+        if isinstance(cache, dict) and isinstance(cache.get("result"), dict):
+            try:
+                if time.time() - float(cache.get("at") or 0) < max_age_s:
+                    return dict(cache["result"])
+            except (TypeError, ValueError):
+                pass
+        return self._refresh_apple_container_cache(timeout=3)
 
     def _apple_live_flags(self) -> dict:
         """Live inputs for the Apple status light, read off current state."""

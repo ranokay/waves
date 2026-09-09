@@ -2,7 +2,8 @@
 
 The full Apple tier needs two provisioned pieces Waves owns end to end,
 FFmpeg-manager style: the N_m3u8DL-RE fetch binary (pinned release,
-downloaded as a tar.gz, checksum-verified, extracted, chmod'd) and the
+downloaded as tar.gz or zip per platform, checksum-verified, extracted,
+chmod'd) and the
 wrapper-v2 container image (Waves-built, pinned) running on a free high
 port. The Apple Music APK stays user-supplied: the wizard guides the user
 to the pinned version, verifies it by SHA-256, and scripts the .apkm
@@ -64,25 +65,50 @@ WRAPPER_V2_IMAGE = "ghcr.io/ranokay/waves-wrapper-v2:0.2.3"
 # wrapper-v2's LIBS_VERSION.json. The wizard shows this version when it asks
 # the user to supply the APK, so the APK and the image can never disagree.
 WRAPPER_LIBS_VERSION = "17.0.0"
-# The N_m3u8DL-RE release the managed install provisions. Pinned so every
-# machine fetches the same bytes; bumps ship through Waves' normal update
-# channel with provenance recorded in the manifest.
-NM3U8DLRE_VERSION = "v0.7.3"
+# The N_m3u8DL-RE release the managed install provisions: the latest
+# published upstream tag at pin time. Pinned so every machine fetches the
+# same bytes; bumps ship through Waves' normal update channel with
+# provenance recorded in the manifest. Re-pin by updating the asset names
+# and the SHA-256 table below from the release page in the same commit.
+NM3U8DLRE_VERSION = "v0.6.0-beta"
+_NM3U8DLRE_BASE = "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.6.0-beta"
 NM3U8DLRE_RELEASES = {
-    # asset base URL per (os_key, arch); the ".tar.gz" and ".tar.gz.sha256"
-    # sidecars hang off it. Real URLs resolve at install time; tests inject
-    # their own Release so no test ever touches the network.
-    ("macos", "arm64"): "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.7.3/N_m3u8DL-RE_BETA_macos-arm64",
-    ("macos", "amd64"): "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.7.3/N_m3u8DL-RE_BETA_macos-x64",
-    ("linux", "amd64"): "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.7.3/N_m3u8DL-RE_BETA_linux-x64",
-    ("linux", "arm64"): "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.7.3/N_m3u8DL-RE_BETA_linux-arm64",
-    ("windows", "amd64"): "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.7.3/N_m3u8DL-RE_BETA_win-x64",
-    ("windows", "arm64"): "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.7.3/N_m3u8DL-RE_BETA_win-arm64",
+    # Exact published asset names per (os_key, arch). macOS/Linux ship
+    # .tar.gz holding one root-level binary; Windows ships .zip holding one
+    # root-level .exe. Tests inject their own Release so no test ever
+    # touches the network.
+    ("macos", "arm64"): f"{_NM3U8DLRE_BASE}/N_m3u8DL-RE_v0.6.0-beta_osx-arm64_20260629.tar.gz",
+    ("macos", "amd64"): f"{_NM3U8DLRE_BASE}/N_m3u8DL-RE_v0.6.0-beta_osx-x64_20260629.tar.gz",
+    ("linux", "amd64"): f"{_NM3U8DLRE_BASE}/N_m3u8DL-RE_v0.6.0-beta_linux-x64_20260629.tar.gz",
+    ("linux", "arm64"): f"{_NM3U8DLRE_BASE}/N_m3u8DL-RE_v0.6.0-beta_linux-arm64_20260629.tar.gz",
+    ("windows", "amd64"): f"{_NM3U8DLRE_BASE}/N_m3u8DL-RE_v0.6.0-beta_win-x64_20260629.zip",
+    ("windows", "arm64"): f"{_NM3U8DLRE_BASE}/N_m3u8DL-RE_v0.6.0-beta_win-arm64_20260629.zip",
+}
+# SHA-256 of each pinned asset above, taken from the upstream release
+# binaries at pin time (2026-09-09) and reviewed into git here. The release
+# publishes no checksum sidecars, so these inline pins ARE the
+# verification: the install refuses to proceed without a matching entry
+# (fail-closed), and a bump re-pins the table. Trust note (same limit as
+# the FFmpeg manager's same-origin sidecar): the pins prove the bytes match
+# what upstream served at pin time, reviewed in the bump commit — not an
+# independent audit of upstream.
+NM3U8DLRE_SHA256 = {
+    ("macos", "arm64"): "ca181b7e8976564766c34e3cefe48fff409f58289ca970ade062668c01c53918",
+    ("macos", "amd64"): "4dab8d256ae3164557f48a3326c8fa60da99e37536ee1589ce6c841180fa8204",
+    ("linux", "amd64"): "2ebcd450594a08c0de0bcd502a80c5d3f89a702a0fa6604199527bb8d6eee4db",
+    ("linux", "arm64"): "17f3c2c2372cbb859bf42e77bf59f7a049e5642fc4f6d234195e70bbea178299",
+    ("windows", "amd64"): "3825fd42ee502f98a9378f6fdddb2f7822709f521806214f466db6935c950f1a",
+    ("windows", "arm64"): "3a13527812a5f18b9981b3cd6f7f36bd17cd7d76b5f3273281a58354e5fcebd6",
 }
 # Pinned APK the wizard asks the user to supply (from LIBS_VERSION.json).
 # Waves never fetches it; this version string and SHA-256 only verify what
 # the user brings and script the .apkm extraction.
 APK_PINNED_VERSION = "4.7.0"
+# No published SHA-256 exists for the pinned APK yet: fill this in when
+# wrapper-v2 publishes its LIBS hash, and the full hash check turns on with
+# no other change. While empty, verify_apk checks presence, extension, and
+# version only and reports hash_pending so no surface can claim a check
+# that did not run.
 APK_SHA256 = ""  # filled when the wrapper release publishes its hash; empty means "version check only"
 
 # Wrapper HTTP API: never port 80 on a desktop (collision-prone). The
@@ -136,16 +162,22 @@ def _exe_name(os_key: str) -> str:
 
 
 def pinned_release(os_key: str = "", arch: str = "") -> Nm3u8dlreRelease | None:
-    """The pinned N_m3u8DL-RE release for this (or the given) platform."""
+    """The pinned N_m3u8DL-RE release for this (or the given) platform.
+
+    Carries the exact published asset URL plus its inline pinned SHA-256
+    (the release publishes no checksum sidecars). None when the platform
+    has no pinned asset.
+    """
     if not os_key or not arch:
         os_key, arch = _safe_target()
-    base = NM3U8DLRE_RELEASES.get((os_key, arch))
-    if not base:
+    url = NM3U8DLRE_RELEASES.get((os_key, arch))
+    if not url:
         return None
     return Nm3u8dlreRelease(
         version=NM3U8DLRE_VERSION,
-        url=base + ".tar.gz",
-        sha256_url=base + ".tar.gz.sha256",
+        url=url,
+        sha256_url=None,
+        sha256=NM3U8DLRE_SHA256.get((os_key, arch)),
     )
 
 
@@ -160,20 +192,25 @@ def _session() -> requests.Session:
 # --------------------------------------------------------------------------- #
 
 
-def detect_container_runtime(runner=None) -> dict:
+def detect_container_runtime(runner=None, timeout: int = 10) -> dict:
     """Detect the container runtime the full tier needs.
 
     Returns ``{"name", "available", "running", "hint"}``. ``available``
     means a runtime binary exists; ``running`` means its daemon answers.
-    Waves never silently installs one: when absent the hint guides the
-    user to install Docker themselves.
+    Docker is probed first, then a Docker-compatible fallback (Podman);
+    a stopped first candidate never hides a running second one. Waves
+    never silently installs one: when absent the hint guides the user to
+    install Docker themselves.
 
-    ``runner`` is an injectable ``subprocess.run`` for tests.
+    ``runner`` is an injectable ``subprocess.run`` for tests; ``timeout``
+    bounds each probe (the GUI thread uses a short one via the bridge's
+    cached wrapper, workers use the full one).
     """
     run = runner or (lambda *a, **k: subprocess.run(*a, **k))
+    degraded: dict | None = None
     for name, probe in (("docker", ["docker", "info"]), ("podman", ["podman", "info"])):
         try:
-            proc = run(probe, capture_output=True, text=True, timeout=10)
+            proc = run(probe, capture_output=True, text=True, timeout=timeout)
         except FileNotFoundError:
             continue
         except Exception:
@@ -181,13 +218,18 @@ def detect_container_runtime(runner=None) -> dict:
             continue
         if proc.returncode == 0:
             return {"name": name, "available": True, "running": True, "hint": ""}
-        # Binary exists but the daemon is not answering.
-        return {
-            "name": name,
-            "available": True,
-            "running": False,
-            "hint": "Start Docker Desktop, then continue setup.",
-        }
+        # Binary exists but the daemon is not answering. Keep looking: a
+        # stopped Docker must not hide a running Podman.
+        if degraded is None:
+            started = "Docker Desktop" if name == "docker" else "Podman"
+            degraded = {
+                "name": name,
+                "available": True,
+                "running": False,
+                "hint": f"Start {started}, then continue setup.",
+            }
+    if degraded is not None:
+        return degraded
     return {
         "name": "",
         "available": False,
@@ -293,11 +335,22 @@ def verify_apk(path: str, expected_sha256: str = APK_SHA256) -> dict:
     }
 
 
-def apk_extract_plan(apk_path: str) -> list[str]:
-    """The scripted .apkm extraction steps the wizard walks the user through."""
+def apk_extract_plan(apk_path: str, hash_pinned: bool | None = None) -> list[str]:
+    """The scripted .apkm extraction steps the wizard walks the user through.
+
+    The hash step says what actually ran: with no pinned hash published yet
+    it must not claim a SHA-256 check happened.
+    """
+    if hash_pinned is None:
+        hash_pinned = bool(APK_SHA256)
+    hash_step = (
+        "Verify its SHA-256 against the pinned hash (done above, fail-closed)."
+        if hash_pinned
+        else "SHA-256 check pending: no pinned hash is published yet, so only the version was checked."
+    )
     return [
         f"Confirm the pinned APK version ({APK_PINNED_VERSION}) at: {apk_path}",
-        "Verify its SHA-256 against the pinned hash (done above, fail-closed).",
+        hash_step,
         "Unpack the .apkm (a zip of split APKs) into its base + config splits.",
         "Copy the splits into the wrapper guest per wrapper-v2's LIBS setup notes.",
         "Restart the wrapper container and confirm its /health endpoint answers.",
@@ -605,7 +658,8 @@ class AppleRuntimeManager:
         _check_abort()
 
         _log(f"downloading N_m3u8DL-RE {release.version}")
-        with tempfile.NamedTemporaryFile(dir=self.bin_dir, suffix=".tar.gz", delete=False) as tmp:
+        arc_suffix = ".zip" if str(release.url).lower().endswith(".zip") else ".tar.gz"
+        with tempfile.NamedTemporaryFile(dir=self.bin_dir, suffix=arc_suffix, delete=False) as tmp:
             arc_tmp = Path(tmp.name)
         fd_staged, staged_name = tempfile.mkstemp(
             dir=self.bin_dir, prefix=_exe_name(self.os_key or "macos") + ".", suffix=".new"
@@ -770,7 +824,22 @@ def _sha256_file(path: Path) -> str:
 
 
 def _extract_binary(arc_path: Path, dest: Path, exe_name: str) -> None:
-    """Extract the N_m3u8DL-RE executable from its tar.gz to ``dest``."""
+    """Extract the N_m3u8DL-RE executable from its archive to ``dest``.
+
+    Upstream ships .tar.gz on macOS/Linux and .zip on Windows, each holding
+    one root-level binary. Dispatch on the archive suffix so a platform's
+    real format extracts; anything else raises instead of guessing.
+    """
+    suffix = arc_path.suffix.lower()
+    if suffix == ".zip":
+        _extract_binary_zip(arc_path, dest, exe_name)
+    elif arc_path.name.endswith(".tar.gz") or suffix in (".tgz", ".gz"):
+        _extract_binary_tar(arc_path, dest, exe_name)
+    else:
+        raise ValueError(f"unsupported N_m3u8DL-RE archive format: {arc_path.name}")
+
+
+def _extract_binary_tar(arc_path: Path, dest: Path, exe_name: str) -> None:
     with tarfile.open(arc_path, "r:gz") as tf:
         members = [m for m in tf.getmembers() if m.isfile()]
         cand = [m for m in members if os.path.basename(m.name) == exe_name]
@@ -787,6 +856,25 @@ def _extract_binary(arc_path: Path, dest: Path, exe_name: str) -> None:
         if src is None:
             raise FileNotFoundError(f"no '{exe_name}' inside {arc_path.name}")
         with src, open(dest, "wb") as out:
+            while True:
+                chunk = src.read(_IO_CHUNK)
+                if not chunk:
+                    break
+                out.write(chunk)
+
+
+def _extract_binary_zip(arc_path: Path, dest: Path, exe_name: str) -> None:
+    import zipfile
+
+    with zipfile.ZipFile(arc_path) as zf:
+        members = [n for n in zf.namelist() if not n.endswith("/")]
+        cand = [n for n in members if os.path.basename(n) == exe_name]
+        if not cand:
+            cand = sorted(members, key=lambda n: n.count("/"))
+            if not cand:
+                raise FileNotFoundError(f"no '{exe_name}' inside {arc_path.name}")
+        cand.sort(key=lambda n: (0 if "/bin/" in f"/{n}" else 1, n.count("/")))
+        with zf.open(cand[0]) as src, open(dest, "wb") as out:
             while True:
                 chunk = src.read(_IO_CHUNK)
                 if not chunk:

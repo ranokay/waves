@@ -222,7 +222,10 @@ Item {
             page.appleRuntimeLive = waves.appleRuntimeStatus()
             page.appleSetupLive = waves.appleSetupState()
         }
-        function onAppleRuntimeStateChanged(state, msg) { page.appleRuntimeState = state; page.appleRuntimeMsg = msg }
+        function onAppleRuntimeStateChanged(state, msg) {
+            page.appleRuntimeState = state; page.appleRuntimeMsg = msg
+            page.appleSetupLive = waves.appleSetupState()
+        }
         function onAppleRuntimeProgress(pct) { page.appleRuntimePct = pct }
     }
 
@@ -2542,7 +2545,10 @@ Item {
                                                 if (actKey === "apple_update_runtime") waves.installAppleRuntime()
                                                 else if (actKey === "apple_remove_runtime") waves.removeAppleRuntime()
                                                 else if (actKey === "apple_pull_image") waves.installAppleImage()
-                                                else if (actKey === "apple_start_container") { waves.appleStartContainer(); page.appleSetupLive = waves.appleSetupState() }
+                                                // Fire-and-forget on purpose: the start
+                                                // runs on a worker and the card re-reads
+                                                // the live mirror off its signals.
+                                                else if (actKey === "apple_start_container") waves.appleStartContainer()
                                                 else if (actKey === "apple_ensure_port") { waves.appleEnsurePort(); page.appleSetupLive = waves.appleSetupState() }
                                                 else if (actKey === "apple_setup") page.appleSetupLive = waves.appleSetupState()
                                             }
@@ -2599,6 +2605,42 @@ Item {
                                                         }
                                                     }
                                                 }
+                                            }
+                                            // Runtime operation readout: progress while a
+                                            // download or pull runs, the failure in red
+                                            // when one lands. Driven by the bridge's
+                                            // lifecycle signals, not the step list.
+                                            Text {
+                                                visible: page.appleRuntimeState !== ""
+                                                width: parent.width
+                                                text: page.appleRuntimeState === "downloading" && page.appleRuntimePct > 0
+                                                      ? page.appleRuntimeMsg + " " + Math.round(page.appleRuntimePct) + "%"
+                                                      : page.appleRuntimeMsg
+                                                color: page.appleRuntimeState === "failed" ? page.red
+                                                     : page.appleRuntimeState === "done" ? page.accent : page.textLo
+                                                font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                textFormat: Text.PlainText
+                                            }
+                                            // The human half of the full tier: the APK
+                                            // extraction plan and the Apple ID sign-in
+                                            // note the backend ships with the mirror.
+                                            // Rendered, not stashed: the APK step points
+                                            // here, and sign-in has no step of its own.
+                                            Text {
+                                                readonly property var plan: (page.appleSetupLive && page.appleSetupLive.apk && page.appleSetupLive.apk.extract_plan) ? page.appleSetupLive.apk.extract_plan : []
+                                                visible: plan.length > 0
+                                                width: parent.width
+                                                text: "APK extraction plan:\n" + plan.map(function(s, i) { return (i + 1) + ". " + s }).join("\n")
+                                                color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                textFormat: Text.PlainText
+                                            }
+                                            Text {
+                                                readonly property string hint: (page.appleSetupLive && page.appleSetupLive.wrapper && page.appleSetupLive.wrapper.login_hint) ? String(page.appleSetupLive.wrapper.login_hint) : ""
+                                                visible: hint !== ""
+                                                width: parent.width
+                                                text: "Sign-in: " + hint
+                                                color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                textFormat: Text.PlainText
                                             }
                                         }
 
