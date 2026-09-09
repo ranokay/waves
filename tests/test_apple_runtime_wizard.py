@@ -547,6 +547,9 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     stub._schedule_apple_container_refresh = WavesBridge._schedule_apple_container_refresh.__get__(
         stub, SimpleNamespace
     )
+    stub._scheduled_apple_container_refresh = WavesBridge._scheduled_apple_container_refresh.__get__(
+        stub, SimpleNamespace
+    )
     stub._apple_container_state = WavesBridge._apple_container_state.__get__(stub, SimpleNamespace)
     stub.appleStatus = WavesBridge.appleStatus.__get__(stub, SimpleNamespace)
     stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub, SimpleNamespace)
@@ -563,6 +566,7 @@ def _stub_binary(tmp_path: Path) -> str:
     """A stand-in fetch binary so the tier reads ready without a download."""
     binary = tmp_path / "N_m3u8DL-RE"
     binary.write_bytes(b"#!/bin/sh\n")
+    binary.chmod(0o755)
     return str(binary)
 
 
@@ -722,6 +726,7 @@ def _steps(**over):
         "port": 0,
     }
     base.update(over)
+    base.setdefault("port_dirty", False)
     return {s["key"]: s for s in WavesBridge._apple_wizard_steps(**base)}
 
 
@@ -741,7 +746,26 @@ def test_fresh_machine_steps_walk_in_order():
 def test_container_step_offers_the_gentle_start_when_idle():
     steps = _steps(container={"name": "docker", "available": True, "running": False, "hint": "Start Docker Desktop"})
     assert steps["container"]["state"] == "todo"
-    assert steps["container"]["action"] == "apple_start_container"
+    import platform as _platform
+
+    if _platform.system() == "Darwin":
+        assert steps["container"]["action"] == "apple_start_container"
+        assert steps["container"]["action_label"] == "Start"
+    else:
+        assert steps["container"]["action"] == ""
+
+
+def test_container_step_hides_start_where_no_start_command_exists(monkeypatch):
+    import platform as _platform
+
+    monkeypatch.setattr(_platform, "system", lambda: "Linux")
+    steps = _steps(container={"name": "docker", "available": True, "running": False, "hint": "Start Docker Desktop"})
+    assert steps["container"]["state"] == "todo"
+    assert steps["container"]["action"] == ""
+    assert (
+        "Start Docker Desktop" in steps["container"]["detail"]
+        or "installed but not running" in steps["container"]["detail"]
+    )
 
 
 def test_container_running_and_runtime_managed_are_done():
@@ -803,6 +827,62 @@ def test_container_state_caches_for_gui_callers(tmp_path, monkeypatch):
     stub.appleSetupState()
     stub.appleSetupState()
     assert calls == [3]  # cold probe once, short GUI timeout; the second read rides the cache
+
+
+def test_non_executable_override_does_not_light_the_tier(tmp_path):
+    plain = tmp_path / "not-a-binary.txt"
+    plain.write_bytes(b"nope")
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
+    stub.settings.data.path_binary_nm3u8dlre = str(plain)
+    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up"}
+
+
+def test_port_override_wins_over_persisted_pick(tmp_path):
+    from waves.apple_runtime import wrapper_url
+
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    manager = stub._apple_runtime
+    persisted = manager.ensure_port(0)
+    assert 49152 <= persisted <= 65535
+    stub.settings.data.apple_wrapper_port = 50000 if persisted != 50000 else 50001
+    state = stub.appleSetupState()
+    assert state["wrapper"]["port"] == stub.settings.data.apple_wrapper_port
+    assert state["wrapper"]["url"] == wrapper_url(state["wrapper"]["port"])
+    port_step = next(s for s in state["steps"] if s["key"] == "port")
+    assert port_step["state"] == "done" and port_step["action"] == "apple_ensure_port"
+    # Matching override and persisted pick: nothing to persist.
+    stub.settings.data.apple_wrapper_port = persisted
+    state = stub.appleSetupState()
+    assert state["wrapper"]["port"] == persisted
+    assert next(s for s in state["steps"] if s["key"] == "port")["action"] == ""
+
+
+def test_concurrent_refreshes_coalesce_to_one_probe(tmp_path, monkeypatch):
+    from threading import Lock
+
+    calls = []
+
+    def fake_detect(timeout=10):
+        calls.append(timeout)
+        return {"name": "", "available": False, "running": False, "hint": ""}
+
+    monkeypatch.setattr("waves.apple_runtime.detect_container_runtime", fake_detect)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub._apple_container_refresh_lock = Lock()
+    stub._apple_container_cache = {
+        "at": time.time() - 1000.0,
+        "result": {"name": "", "available": False, "running": False, "hint": ""},
+    }
+    ran = []
+    stub.threadpool = SimpleNamespace(start=lambda worker: ran.append(worker))
+    stub._apple_container_state()
+    stub._apple_container_state()
+    assert len(ran) == 1  # second stale read coalesced onto the in-flight refresh
+    ran[0].run()
+    assert calls == [10]
+    assert stub._apple_container_state() == {"name": "", "available": False, "running": False, "hint": ""}
+    assert calls == [10]
 
 
 def test_stale_cache_serves_immediately_and_refreshes_on_worker(tmp_path, monkeypatch):

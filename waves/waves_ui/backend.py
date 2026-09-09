@@ -3922,6 +3922,10 @@ class WavesBridge(LibraryMixin, QObject):
         # would freeze Settings. GUI callers read this cache; workers
         # refresh it (warm-up below, appleStartContainer, image pull).
         self._apple_container_cache: dict = {"at": 0.0, "result": None}
+        # Coalesces concurrent container refreshes (one probe in flight):
+        # held from schedule until the worker finishes, never touched by
+        # inline stub probes.
+        self._apple_container_refresh_lock = Lock()
         try:
             self.threadpool.start(Worker(self._refresh_apple_container_cache))
         except Exception:
@@ -16980,13 +16984,16 @@ class WavesBridge(LibraryMixin, QObject):
             preferred_port = int(getattr(data, "apple_wrapper_port", 0) or 0)
         except (TypeError, ValueError):
             preferred_port = 0
-        port = 0
+        persisted_port = 0
         try:
-            port = int(manager.read_port()) if manager is not None else 0
+            persisted_port = int(manager.read_port()) if manager is not None else 0
         except Exception:
-            port = 0
-        if not port:
-            port = preferred_port if 1024 <= preferred_port <= 65535 else 0
+            persisted_port = 0
+        # An explicit override wins over the persisted automatic pick, so a
+        # changed preference applies instead of displaying the stale URL.
+        # ensure_port persists it (when free) the next time the step runs.
+        port = preferred_port if 1024 <= preferred_port <= 65535 else persisted_port
+        port_dirty = bool(port) and port != persisted_port
         steps = self._apple_wizard_steps(
             enabled=bool(flags.get("enabled", False)),
             cookies_path=cookies_path,
@@ -17000,6 +17007,7 @@ class WavesBridge(LibraryMixin, QObject):
             apk_error=apk_error,
             image_pulled=image_pulled,
             port=port,
+            port_dirty=port_dirty,
         )
         return {
             "light": described,
@@ -17049,6 +17057,7 @@ class WavesBridge(LibraryMixin, QObject):
         apk_error: str,
         image_pulled: bool,
         port: int,
+        port_dirty: bool = False,
     ) -> list:
         """The wizard's steps for the QML in-place flow, in walking order.
 
@@ -17121,10 +17130,15 @@ class WavesBridge(LibraryMixin, QObject):
         if container.get("running"):
             container_step = ("done", f"{container.get('name')} is running.", "")
         elif container.get("available"):
+            # The gentle start exists on macOS only: elsewhere the step
+            # keeps the manual guidance with no dead button.
+            from waves.apple_runtime import gentle_start_command
+
+            startable = gentle_start_command(str(container.get("name") or "docker")) is not None
             container_step = (
                 "todo",
                 "The runtime is installed but not running; start it, then continue.",
-                "apple_start_container",
+                "apple_start_container" if startable else "",
             )
         else:
             container_step = (
@@ -17193,9 +17207,12 @@ class WavesBridge(LibraryMixin, QObject):
                 "state": "done" if port else "todo",
                 "detail": (
                     f"Wrapper API runs at an explicit free high port{(': ' + str(port)) if port else ' (picked at setup)'}."
+                    + (" Override set: persist it to apply." if port_dirty else "")
                 ),
-                "action": "" if port else "apple_ensure_port",
-                "action_label": "" if port else _APPLE_STEP_ACTION_LABELS.get("apple_ensure_port", ""),
+                "action": "apple_ensure_port" if (not port or port_dirty) else "",
+                "action_label": (
+                    _APPLE_STEP_ACTION_LABELS.get("apple_ensure_port", "") if (not port or port_dirty) else ""
+                ),
             }
         )
         return steps
@@ -18324,15 +18341,27 @@ class WavesBridge(LibraryMixin, QObject):
         return self._apple_fetch_binary_ready()
 
     def _apple_fetch_binary_ready(self) -> bool:
-        """The fetch-binary check behind the light and the download gate."""
+        """The fetch-binary check behind the light and the download gate.
+
+        A candidate counts only when it is an executable file: a picked
+        text file (or the wrong program) must not light the tier green to
+        fail later inside the engine. Order is explicit override, managed
+        runtime copy, then PATH.
+        """
         provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
         data = getattr(getattr(self, "settings", None), "data", None)
         for candidate in (
             str(getattr(provider, "nm3u8dlre_path", "") or ""),
             str(getattr(data, "path_binary_nm3u8dlre", "") or ""),
         ):
-            if candidate.strip() and pathlib.Path(candidate).expanduser().is_file():
-                return True
+            if not candidate.strip():
+                continue
+            path = pathlib.Path(candidate).expanduser()
+            try:
+                if path.is_file() and os.access(path, os.X_OK):
+                    return True
+            except Exception:
+                logger.debug("Apple fetch-binary candidate check failed", exc_info=True)
         try:
             return bool(shutil.which("N_m3u8DL-RE"))
         except Exception:
@@ -18393,17 +18422,38 @@ class WavesBridge(LibraryMixin, QObject):
         return self._refresh_apple_container_cache(timeout=3)
 
     def _schedule_apple_container_refresh(self) -> bool:
-        """Refresh the container probe on a worker; False when no pool exists."""
+        """Refresh the container probe on a worker; False when no pool exists.
+
+        Coalesced: when a refresh is already in flight the call is a no-op
+        success, so a burst of setup-state reads against a hung daemon
+        enqueues one probe, not one per read.
+        """
         pool = getattr(self, "threadpool", None)
         start = getattr(pool, "start", None)
         if not callable(start):
             return False
+        lock = getattr(self, "_apple_container_refresh_lock", None)
+        if lock is not None and not lock.acquire(blocking=False):
+            return True
         try:
-            start(Worker(self._refresh_apple_container_cache))
+            start(Worker(self._scheduled_apple_container_refresh))
         except Exception:
+            if lock is not None:
+                with contextlib.suppress(Exception):
+                    lock.release()
             logger.debug("Apple container refresh schedule failed", exc_info=True)
             return False
         return True
+
+    def _scheduled_apple_container_refresh(self) -> None:
+        """Worker body for a scheduled refresh: probe, then release the lock."""
+        try:
+            self._refresh_apple_container_cache()
+        finally:
+            lock = getattr(self, "_apple_container_refresh_lock", None)
+            if lock is not None:
+                with contextlib.suppress(Exception):
+                    lock.release()
 
     def _apple_live_flags(self) -> dict:
         """Live inputs for the Apple status light, read off current state."""
