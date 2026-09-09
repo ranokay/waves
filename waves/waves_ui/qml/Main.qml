@@ -6083,6 +6083,10 @@ ApplicationWindow {
         function openChooser() {
             if (!db.showChooser) return
             if (db.st === "running" || db.waiting) return
+            // An owned copy stays inert and a tag match keeps its gate, the
+            // same rule the main face follows.
+            if (db.libClaim) { db.openLibraryClaim(); return }
+            if (db.st === "done") return
             db.chooserBuilt = true
             db.refreshChooser()
             var m = chooserLoader.item
@@ -6090,16 +6094,23 @@ ApplicationWindow {
         }
         function closeChooser() { if (chooserLoader.item) chooserLoader.item.close() }
         function confirmChooser() {
+            if (db.libClaim) { db.closeChooser(); db.openLibraryClaim(); return }
+            if (db.st === "done" || db.st === "running" || db.waiting) { db.closeChooser(); return }
             var k = "" + (db.chooserKind || "")
             var supported = k === "track" || k === "album" || k === "playlist" || k === "mix" || k === "video"
             if (!supported) {
-                try { db.onTap() } catch (e) {}
+                try { db.onTap() } catch (e) { try { waves.uiLog("chooser", "chooser fallback failed: " + e, -1) } catch (e2) {} }
                 db.closeChooser()
                 return
             }
             var tier = db.chooserAtmosOnly ? "" : ("" + (db.chooserTier || ""))
             var audio = db.chooserAtmosOnly ? "atmos" : ("" + (db.chooserAudio || ""))
-            try { waves.downloadWithChooser(db.mediaId, k, tier, audio) } catch (e) {}
+            try {
+                waves.downloadWithChooser(db.mediaId, k, tier, audio)
+            } catch (e) {
+                try { waves.uiLog("chooser", "downloadWithChooser failed: " + e, -1) } catch (e2) {}
+                try { db.onTap() } catch (e3) {}
+            }
             db.closeChooser()
         }
         function saveChooserAsDefaults() {
@@ -6365,6 +6376,7 @@ ApplicationWindow {
                                 dbMetricDone.implicitWidth, dbMetricQueued.implicitWidth,
                                 (db.libAlbum || db.libArtist !== "") ? dbMetricLib.implicitWidth
                                             : db.libTrack ? dbMetricLibTrack.implicitWidth : 0) + root.btnPadH * 2
+                       + (db.showChooser ? 28 : 0)
         Row {
             id: dbMetric
             visible: false; spacing: 7
@@ -6756,11 +6768,10 @@ ApplicationWindow {
             color: "transparent"
             border.width: 0
             Rectangle { anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 1; color: db.edge; opacity: 0.6 }
-            Text {
-                textFormat: Text.PlainText
-                text: "▾"
-                color: root.accent
-                font.pixelSize: 12; font.bold: true
+            ExpandChevron {
+                tile: 16; glyph: 11; showTile: false
+                stroke: root.accent
+                open: db.chooserOpen
                 anchors.centerIn: parent
             }
             MouseArea {
@@ -6777,7 +6788,11 @@ ApplicationWindow {
                 id: chooserPop
                 objectName: "chooserPopover"
                 parent: db
-                x: Math.max(0, db.width - width); y: db.height + 4
+                // Right edge aligned with the control, and clamped inside the
+                // window: the popover is wider than the download button.
+                x: db.width - width
+                y: db.height + 4
+                margins: 8
                 width: 320; padding: 12
                 modal: false; focus: true
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent

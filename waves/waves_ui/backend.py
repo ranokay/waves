@@ -4194,6 +4194,11 @@ class WavesBridge(LibraryMixin, QObject):
         # In-flight re-fetches of evicted download targets, keyed (bucket, id),
         # so a double-click can't spawn two network fetches for the same item.
         self._refetch_inflight: set[tuple[str, str]] = set()
+        # Chooser pins parked while a refetch runs, keyed (bucket, id) to
+        # (kind, tier word, audio word). A Chooser click whose object is gone
+        # replays through downloadWithChooser on _mediaRefetched instead of
+        # falling back to Settings defaults.
+        self._chooser_refetch_pins: dict[tuple[str, str], tuple[str, str, str]] = {}
         self._mediaRefetched.connect(self._on_media_refetched)
         self._queueRetryRefetched.connect(self._on_queue_retry_refetched)
         # Forced queued: the pop must run on the GUI thread AFTER any track
@@ -8805,6 +8810,7 @@ class WavesBridge(LibraryMixin, QObject):
     # SET AS DEFAULTS writes the same values back through applySettings.
 
     def _get_apple_enabled(self) -> bool:
+        """Whether Apple Music is enabled in Settings."""
         try:
             return bool(
                 getattr(getattr(self, "settings", None), "data", None)
@@ -8824,12 +8830,14 @@ class WavesBridge(LibraryMixin, QObject):
         return self._get_apple_enabled()
 
     def _chooser_provider_of(self, media_id: str) -> str:
+        """The row's provider from its id prefix (apple: or tidal)."""
         mid = str(media_id or "")
         if mid.startswith(f"{CTX_APPLE}:"):
             return CTX_APPLE
         return CTX_TIDAL
 
     def _chooser_is_collection_kind(self, kind: str) -> bool:
+        """Whether a download kind belongs to a provider (fixed segment)."""
         return str(kind or "").strip().lower() in ("album", "playlist", "mix", "artist", "folder", "category")
 
     def _chooser_tier_entries(self, provider_id: str) -> list:
@@ -8862,6 +8870,7 @@ class WavesBridge(LibraryMixin, QObject):
         return self._chooser_default_tier_word(provider_id)
 
     def _chooser_default_tier_word(self, provider_id: str) -> str:
+        """The Settings tier word for one provider."""
         try:
             data = getattr(getattr(self, "settings", None), "data", None)
             if data is None:
@@ -8986,8 +8995,43 @@ class WavesBridge(LibraryMixin, QObject):
             self.applySettings(staged)
 
     def _chooser_normalize_audio(self, audio_type: str | None) -> str | None:
+        """Normalize a Chooser audio word, or None to follow Settings."""
         text = str(audio_type or "").strip().lower()
         return text if text in ("stereo", "atmos", "both") else None
+
+    def _chooser_park_refetch(self, bucket: str, media_id: str, kind: str, tier: str, audio_type: str) -> None:
+        """Park one Chooser click while its object re-fetches.
+
+        Keyed (bucket, id) so _on_media_refetched replays this click instead
+        of the plain slot's Settings defaults. Last writer wins when a plain
+        click already has the same id in flight."""
+        try:
+            pins = getattr(self, "_chooser_refetch_pins", None)
+            if pins is None:
+                pins = self._chooser_refetch_pins = {}
+            pins[(str(bucket or ""), str(media_id or ""))] = (
+                str(kind or ""),
+                str(tier or ""),
+                str(audio_type or ""),
+            )
+        except Exception:
+            logger.debug("Could not park a Chooser refetch", exc_info=True)
+
+    def _chooser_take_refetch(self, bucket: str, media_id: str) -> tuple | None:
+        """Take a parked Chooser click for a refetched id, or None."""
+        try:
+            pins = getattr(self, "_chooser_refetch_pins", None) or {}
+            return pins.pop((str(bucket or ""), str(media_id or "")), None)
+        except Exception:
+            return None
+
+    def _chooser_drop_refetch(self, bucket: str, media_id: str) -> None:
+        """Drop a parked Chooser click when its refetch fails."""
+        try:
+            pins = getattr(self, "_chooser_refetch_pins", None) or {}
+            pins.pop((str(bucket or ""), str(media_id or "")), None)
+        except Exception:
+            logger.debug("Could not drop a Chooser refetch", exc_info=True)
 
     def _chooser_ask_for(self, provider_id: str, tier_word: str | None) -> tuple | None:
         """The pinned ask for a Chooser click, or None to follow Settings.
@@ -9033,6 +9077,7 @@ class WavesBridge(LibraryMixin, QObject):
             collection, template = templates[k]
             obj = (getattr(self, "_objs", None) or {}).get(k, {}).get(mid)
             if obj is None:
+                self._chooser_park_refetch(k, mid, k, tier, audio_type)
                 self._refetch_for_download(k, mid)
                 return
             plan = (getattr(self, "_merge_plans", None) or {}).get(mid) if k == "album" else None
@@ -12244,10 +12289,12 @@ class WavesBridge(LibraryMixin, QObject):
                 logger.exception("Could not re-fetch Apple %s %s for download", bucket, media_id)
             if gen != self._browse_gen:
                 self._refetch_inflight.discard(key)
+                self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "")
                 return
             if obj is None:
                 self._refetch_inflight.discard(key)
+                self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "failed")
                 self._set_status("That item is no longer available")
                 self._bump_download_groups(media_id, None, "failed")
@@ -12518,9 +12565,12 @@ class WavesBridge(LibraryMixin, QObject):
         if provider is None:
             return
         raw_kind = str(kind or "").strip().lower()
+        tier_word = str(ask[1]) if ask is not None and len(ask) > 1 else ""
+        audio_word = str(audio or "")
         if raw_kind == "track":
             raw = provider.cached("track", media_id) if hasattr(provider, "cached") else None
             if raw is None:
+                self._chooser_park_refetch("track", media_id, raw_kind, tier_word, audio_word)
                 self._refetch_apple_for_download("track", media_id)
                 return
             row = provider.row_for("track", raw)
@@ -12537,6 +12587,7 @@ class WavesBridge(LibraryMixin, QObject):
         elif raw_kind in ("album", "playlist"):
             raw = provider.cached(raw_kind, media_id) if hasattr(provider, "cached") else None
             if raw is None:
+                self._chooser_park_refetch(raw_kind, media_id, raw_kind, tier_word, audio_word)
                 self._refetch_apple_for_download(raw_kind, media_id)
                 return
             row = provider.row_for(raw_kind, raw)
@@ -15979,11 +16030,13 @@ class WavesBridge(LibraryMixin, QObject):
                 # Account changed while fetching, don't start a download the
                 # new user never asked for.
                 self._refetch_inflight.discard(key)
+                self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "")
                 self._bump_download_groups(media_id, None, "failed")
                 return
             if obj is None:
                 self._refetch_inflight.discard(key)
+                self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "failed")
                 self._set_status("That item is no longer available")
                 # A group member that never re-materialised must still be
@@ -16003,6 +16056,11 @@ class WavesBridge(LibraryMixin, QObject):
         # second click can't slip into the gap between the worker finishing and
         # the queued re-dispatch and double-queue the download.
         self._refetch_inflight.discard((bucket, media_id))
+        parked = self._chooser_take_refetch(bucket, media_id)
+        if parked is not None:
+            kind, tier_word, audio_word = parked
+            self.downloadWithChooser(media_id, kind, tier_word, audio_word)
+            return
         dispatch = {
             "album": self.downloadAlbum,
             "track": self.downloadTrack,

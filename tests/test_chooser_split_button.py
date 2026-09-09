@@ -101,6 +101,8 @@ def _bridge(**over):
     b.providers = {CTX_TIDAL: SimpleNamespace(), CTX_APPLE: SimpleNamespace()}
     b._refetch_for_download = lambda bucket, mid: setattr(b, "_refetched", (bucket, mid))
     b._refetched = None
+    b._chooser_refetch_pins = {}
+    b._refetch_inflight = set()
     _bind(
         b,
         "_get_apple_enabled",
@@ -116,6 +118,9 @@ def _bridge(**over):
         "chooserDefaults",
         "saveChooserDefaults",
         "_chooser_normalize_audio",
+        "_chooser_park_refetch",
+        "_chooser_take_refetch",
+        "_chooser_drop_refetch",
         "_chooser_ask_for",
         "downloadWithChooser",
         "_chooser_confirm_status",
@@ -293,3 +298,39 @@ def test_download_with_chooser_apple_routes_with_pins(monkeypatch):
     assert seen["mid"] == "apple:456"
     assert seen["ask"] == ("HI_RES_LOSSLESS", "HI-RES")
     assert seen["audio"] == "both"
+
+
+def test_download_with_chooser_parks_pins_across_a_refetch(monkeypatch):
+    """A Chooser click on an evicted id replays with its pins, not Settings."""
+    monkeypatch.setattr(backend, "_image", lambda obj, size: "")
+    monkeypatch.setattr(backend, "_quality_label", lambda obj, provider=None: "HI-RES")
+    monkeypatch.setattr(backend, "_primary_artist_name", lambda obj: "Artist")
+    monkeypatch.setattr(backend, "_track_count", lambda obj: 1)
+    monkeypatch.setattr(backend, "_offers_both", lambda obj: False)
+    monkeypatch.setattr(backend, "_atmos_only", lambda obj: False)
+    monkeypatch.setattr(backend, "_has_atmos", lambda obj: False)
+    monkeypatch.setattr(backend, "name_builder_title", lambda obj: "Song")
+    b = _bridge(tidal_quality_audio="HIGH")
+    _bind(b, "_on_media_refetched")
+    # Cold cache: the click parks instead of queueing.
+    b.downloadWithChooser("t1", "track", "LOSSLESS", "stereo")
+    assert b._queue == []
+    assert b._chooser_refetch_pins[("track", "t1")] == ("track", "LOSSLESS", "stereo")
+    # The fetch lands: replay queues at the parked pins, not Settings.
+    b._objs["track"]["t1"] = _track("t1")
+    b._refetch_inflight.discard(("track", "t1"))
+    b._on_media_refetched("track", "t1")
+    assert (b._queue[-1]["askQuality"], b._queue[-1]["quality"]) == ("LOSSLESS", "LOSSLESS")
+    assert ("track", "t1") not in b._chooser_refetch_pins
+
+
+def test_download_with_chooser_apple_parks_pins_across_a_refetch():
+    b = _bridge(apple_enabled=True)
+    provider = SimpleNamespace(cached=lambda kind, mid: None)
+    b.providers[CTX_APPLE] = provider
+    refetched = []
+    b._refetch_apple_for_download = lambda bucket, mid: refetched.append((bucket, mid))
+    _bind(b, "_download_apple_with_chooser")
+    b.downloadWithChooser("apple:456", "track", "HI-RES", "both")
+    assert refetched == [("track", "apple:456")]
+    assert b._chooser_refetch_pins[("track", "apple:456")] == ("track", "HI-RES", "both")
