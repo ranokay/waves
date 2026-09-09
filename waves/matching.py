@@ -557,8 +557,13 @@ def _join_discs(best: dict, survivors: list) -> tuple[dict, int, int]:
     # disc has one: a set missing one disc's minutes would refute true matches.
     runtimes = [_as_int(c.get("runtime")) for c in discs]
     runtime = sum(runtimes) if all(r > 0 for r in runtimes) else 0
+    # An Atmos Version on any disc is an Atmos Version of the set (§8.4, issue
+    # #36): the ATMOS TOO micro-badge belongs to the album, not to one disc.
+    joined = dict(best, id=reveal, runtime=runtime)
+    if any(bool(c.get("has_atmos")) for c in discs):
+        joined["has_atmos"] = True
     return (
-        dict(best, id=reveal, runtime=runtime),
+        joined,
         sum(_as_int(c.get("tracks")) for c in discs),
         _declared_total(discs),
     )
@@ -920,7 +925,7 @@ def decide_presence(title, artist, year, tracks, index, duration=0) -> dict:
     key collides across unrelated comps) and albums credited to nobody (a
     title-only match means nothing).
     """
-    hidden = {"present": False, "partial": False, "sure": False, "full": False}
+    hidden = {"present": False, "partial": False, "sure": False, "full": False, "has_atmos": False}
     hidden.update({"local_album_id": "", "local_tracks": 0, "local_year": "", "local_declared": 0})
     hidden["local_runtime"] = 0
     hidden.update({"local_quality": "", "local_codec": "", "local_lossless": False, "local_bits": 0, "local_rate": 0})
@@ -1029,6 +1034,11 @@ def decide_presence(title, artist, year, tracks, index, duration=0) -> dict:
         "full": full,
         "local_album_id": str(best.get("id", "") or ""),
         "local_tracks": local_tracks,
+        # Whether the matched album holds Atmos Versions alongside its
+        # canonical set (§8.4, issue #36): the album card's ATMOS TOO
+        # micro-badge. Rides the matched candidate (joined discs OR theirs),
+        # never the query -- it describes what is on disk.
+        "has_atmos": bool(best.get("has_atmos")),
         # What the local release SAYS it holds, so a caller can spell out a
         # shortfall TIDAL's own count cannot see (14 of a 63-track set beside a
         # 14-track edition on screen).

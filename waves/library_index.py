@@ -580,6 +580,57 @@ def _is_audio(name: str) -> bool:
     return os.path.splitext(name)[1].lower() in AUDIO_EXTS
 
 
+# §8.4 of the provider spec (issue #36): which Version a file is, read the way
+# the download gate reads it (see download._file_audio_mode_is_atmos) -- the
+# WAVES_AUDIO_TYPE tag first, the codec sniff as the legacy fallback. Only an
+# MP4 container can hold Atmos, so the sniff answers "stereo" without opening
+# any other extension; the tag is still consulted first everywhere, so a file
+# Waves wrote is never misread because its container shares an extension.
+_ATMOS_SUFFIXES = frozenset({".m4a", ".mp4"})
+_ATMOS_CODECS = ("ec-3", "ac-4")
+
+
+def _default_audio_type(path: str) -> str | None:
+    """ "atmos" / "stereo" / None (unknown) for one audio file.
+
+    Tag first: a file Waves wrote carries WAVES_AUDIO_TYPE, which answers
+    without opening the container and can never misread a shared extension.
+    Untagged files (every library already on disk, a user's own files) fall
+    back to the codec sniff, which stays the legacy answer, never the source.
+    None means the file could not be read at all; callers treat that as
+    "not proven Atmos" and keep the file in the canonical set rather than
+    guessing it away.
+    """
+    try:
+        from waves.metadata import read_audio_type
+    except Exception:
+        read_audio_type = None  # type: ignore[assignment]
+    if read_audio_type is not None:
+        try:
+            tagged = read_audio_type(path)
+        except Exception:
+            tagged = None
+        if tagged in ("atmos", "stereo"):
+            return tagged
+    if os.path.splitext(path)[1].lower() not in _ATMOS_SUFFIXES:
+        return "stereo"
+    try:
+        from mutagen.mp4 import MP4
+
+        codec = str(getattr(MP4(path).info, "codec", "") or "")
+    except Exception:
+        return None
+    return "atmos" if codec.startswith(_ATMOS_CODECS) else "stereo"
+
+
+def _is_atmos_file(audio_type: str | None) -> bool:
+    """True only for a proven Atmos file. Unknown (None, unreadable) stays in
+    the canonical set: dropping a file the scan could not read would
+    undercount an album on a transient hiccup, the exact direction the
+    backfill gate refuses to persist."""
+    return str(audio_type or "").strip().lower() == "atmos"
+
+
 class _RateLimitedEmit:
     """The scan's progress-event gate: forwards to the callback at most once per
     ``interval`` seconds, so a live per-item count cannot flood the GUI with
@@ -635,6 +686,7 @@ class LibraryIndex:
         *,
         read_tags: Callable[[str], dict | None] = _read_album_tags,
         is_audio: Callable[[str], bool] = _is_audio,
+        read_audio_type: Callable[[str], str | None] | None = None,
     ) -> None:
         self._path = str(db_path)
         parent = os.path.dirname(self._path)
@@ -642,6 +694,11 @@ class LibraryIndex:
             os.makedirs(parent, exist_ok=True)
         self._read_tags = read_tags
         self._is_audio = is_audio
+        # Which Version one file is (§8.4, issue #36). A separate probe from
+        # the tag reader on purpose: the injected readers in tests answer per
+        # folder, while the audio type is per file, and the real reader needs
+        # the non-easy interface the tag reader never opens.
+        self._read_audio_type = read_audio_type or _default_audio_type
         # Outcome of the most recent refresh() (see the SCAN_* constants). Read by
         # the backend on the same worker that refreshed, so no cross-thread race.
         self.last_scan_status = SCAN_UNSET
@@ -722,6 +779,15 @@ class LibraryIndex:
                 # read as unchanged forever, the exact blindness force_full
                 # exists to cure.
                 "raw_count INTEGER",
+                # §8.4 (issue #36): whether the folder holds Atmos Versions
+                # alongside its canonical set. NULL is a row from before Atmos
+                # capture (one backfill re-read, like declared); 0/1 is the
+                # finished answer. The album's "N OF M" arithmetic runs on the
+                # canonical (non-Atmos) files; Atmos Versions attach per track.
+                # Nullable on purpose: the default would backfill existing
+                # rows as "no Atmos" and they would never re-read to learn
+                # otherwise (see _unchanged_verdict).
+                "has_atmos INTEGER",
             ):
                 with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                     self._conn.execute(f"ALTER TABLE albums ADD COLUMN {col}")
@@ -765,20 +831,28 @@ class LibraryIndex:
             # (see _unchanged and _load_album_mtimes), which is how an existing
             # cache migrates without being thrown away.
             self._conn.execute("""CREATE TABLE IF NOT EXISTS tracks (
-                       folder_path TEXT NOT NULL,
-                       title       TEXT,
-                       artist      TEXT,
-                       codec       TEXT,
-                       bitrate     INTEGER NOT NULL DEFAULT 0,
-                       bits        INTEGER NOT NULL DEFAULT 0,
-                       rate        INTEGER NOT NULL DEFAULT 0,
-                       length      INTEGER NOT NULL DEFAULT 0
-                   )""")
+                        folder_path TEXT NOT NULL,
+                        title       TEXT,
+                        artist      TEXT,
+                        codec       TEXT,
+                        bitrate     INTEGER NOT NULL DEFAULT 0,
+                        bits        INTEGER NOT NULL DEFAULT 0,
+                        rate        INTEGER NOT NULL DEFAULT 0,
+                        length      INTEGER NOT NULL DEFAULT 0
+                    )""")
             # A pre-length tracks table migrates in place; its rows read length
             # 0 ("the file never said") until the album row's NULL runtime
             # forces the folder's one backfill re-read, which rewrites them.
             with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                 self._conn.execute("ALTER TABLE tracks ADD COLUMN length INTEGER NOT NULL DEFAULT 0")
+            # §8.4 (issue #36): which Version one file is. '' is a row from
+            # before Atmos capture ("unknown", reads as canonical until the
+            # album row's NULL has_atmos forces the folder's one backfill
+            # re-read, which rewrites it); 'stereo' / 'atmos' is the finished
+            # answer. The default keeps the migration to one statement: fresh
+            # rows are always written explicitly by _upsert.
+            with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+                self._conn.execute("ALTER TABLE tracks ADD COLUMN audio_type TEXT NOT NULL DEFAULT ''")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_folder ON tracks(folder_path)")
             # Small key/value store: the scan root last walked (a change wipes the
             # tree so the new root walks fresh) and the monotonic scan generation.
@@ -1927,11 +2001,11 @@ class LibraryIndex:
         with self._lock:
             rows = self._conn.execute("""SELECT folder_path, dir_mtime, codec, track_count, recorded_at,
                           (SELECT COUNT(*) FROM tracks WHERE tracks.folder_path = albums.folder_path),
-                          declared, runtime
+                          declared, runtime, has_atmos
                    FROM albums""").fetchall()
-        for path, mtime, codec, count, recorded, tracks, declared, runtime in rows:
+        for path, mtime, codec, count, recorded, tracks, declared, runtime, has_atmos in rows:
             resting = now - float(recorded or 0) < _UNREADABLE_RETRY_S
-            fresh = codec is not None and declared is not None and runtime is not None
+            fresh = codec is not None and declared is not None and runtime is not None and has_atmos is not None
             out[path] = (mtime, fresh and tracks > 0 and (tracks >= count or resting))
         return out
 
@@ -2025,12 +2099,19 @@ class LibraryIndex:
                 progress(batch[-1], committed=True)
 
     @staticmethod
-    def _track_row(dirpath: str, tags: dict) -> tuple:
+    def _track_row(dirpath: str, tags: dict, audio_type: str = "stereo") -> tuple:
         """One file's row for the tracks table: its own title and track artist
         (falling back to the album artist when the per-track credit is blank)
         plus its stream quality. An untagged file still gets a row, empty title
         and all: the row's EXISTENCE is what tells the backfill gate this folder
-        has had its per-file read, and an empty title honestly matches nothing."""
+        has had its per-file read, and an empty title honestly matches nothing.
+
+        ``audio_type`` is which Version the file is (§8.4, issue #36):
+        "stereo" (the default, what every pre-Atmos row was) or "atmos" for
+        a Version attached to its canonical track rather than counted as one."""
+        atype = str(audio_type or "").strip().lower()
+        if atype not in ("stereo", "atmos"):
+            atype = "stereo"
         return (
             dirpath,
             str(tags.get("title", "") or ""),
@@ -2040,6 +2121,7 @@ class LibraryIndex:
             int(tags.get("bits", 0) or 0),
             int(tags.get("rate", 0) or 0),
             int(tags.get("length", 0) or 0),
+            atype,
         )
 
     def _read_row(self, job: _Candidate, alive: Callable[[], bool]) -> tuple | None:
@@ -2068,7 +2150,21 @@ class LibraryIndex:
         shape and its runtime, because a sum over mixed contents is exactly
         the undercount/overcount those witnesses must never carry. Unreadable
         or untagged files never count as disagreement, and never cost a track
-        row beyond their own: only positive evidence rejects."""
+        row beyond their own: only positive evidence rejects.
+
+        §8.4 (issue #36): an Atmos Version is never a second canonical entry. Every
+        read file is classified (WAVES_AUDIO_TYPE tag first, codec sniff as
+        the legacy fallback) and the folder is partitioned: the "N OF M"
+        arithmetic, the majority vote, the declared shape and the runtime all
+        run on the CANONICAL set (the non-Atmos files), while an Atmos Version
+        whose title matches a canonical sibling attaches to that track --
+        kept as a per-track row (so the track pill still sees it) but never
+        counted. An Atmos file with no canonical twin is an atmos-only track
+        and stays its own canonical entry. A file whose type could not be
+        read at all stays canonical: dropping it would undercount on a
+        transient hiccup. ``has_atmos`` reports whether Atmos Versions sit
+        alongside stereo ones (the ATMOS TOO micro-badge); an all-Atmos
+        folder promotes everything and reports False -- there is no "too"."""
         dirpath, first_audio, mtime, count, audio = job
         if not alive():
             return None
@@ -2082,17 +2178,14 @@ class LibraryIndex:
             tags = None
         if not tags:
             return None
-        tracks = [self._track_row(dirpath, tags)]
-        want = str(tags.get("album", "") or "").strip().casefold()
-        # What the folder's files SAY the release is, believed only when they
-        # speak with one voice. Silence is not disagreement (the same principle
-        # as the album check below: only positive evidence rejects), so a stray
-        # untagged file costs nothing, but two different answers mean the folder
-        # cannot be asked and the claim is dropped. Disc numbers included: files
-        # declaring different discs are not a folder in conflict, they are a set
-        # sitting flat in one folder, and its own file count already covers it.
-        shape = {k: {int(tags.get(k, 0) or 0)} for k in ("track_total", "disc_no", "disc_total")}
-        agree, dissent = (1 if want else 0), 0
+        first_path = os.path.join(dirpath, first_audio)
+        first_type: str | None = None
+        with contextlib.suppress(Exception):
+            first_type = self._read_audio_type(first_path)
+        # Every file is read (tags plus its Version) before anything is
+        # judged, so the partition below sees the whole folder: an Atmos
+        # Version can only attach to a twin this read has actually seen.
+        read: list[tuple[str, dict, str | None]] = [(first_audio, tags, first_type)]
         for name in audio:
             if name == first_audio:
                 continue
@@ -2106,15 +2199,62 @@ class LibraryIndex:
                 other = self._read_tags(os.path.join(dirpath, name))
             if not other:
                 continue
+            atype: str | None = None
+            with contextlib.suppress(Exception):
+                atype = self._read_audio_type(os.path.join(dirpath, name))
+            read.append((name, other, atype))
+        # The partition: stereo files are canonical; an Atmos file with a
+        # same-titled canonical sibling attaches to that track, one without
+        # stays its own canonical entry (an atmos-only track). Comparison is
+        # on the bare casefolded title, the same spelling the track matcher
+        # keys on; an empty title can be nobody's twin and attaches, since a
+        # title-less row honestly matches nothing either way.
+        stereo = [(n, t) for (n, t, a) in read if not _is_atmos_file(a)]
+        atmos = [(n, t) for (n, t, a) in read if _is_atmos_file(a)]
+        twin_titles = {str(t.get("title", "") or "").strip().casefold() for (_, t) in stereo} - {""}
+        promoted: list[tuple[str, dict]] = []
+        for name, other in atmos:
+            title = str(other.get("title", "") or "").strip().casefold()
+            if not title or title not in twin_titles:
+                # No canonical twin: an atmos-only track stays its own
+                # canonical entry. One WITH a twin attaches to that track
+                # and is simply not promoted.
+                promoted.append((name, other))
+        canonical = stereo + promoted
+        # The unreadable files (in the walk's listing but yielding no tags)
+        # keep their historical benefit of the doubt as canonical: their
+        # Version is unknowable, and guessing "attached" would undercount on
+        # a transient read hiccup.
+        unreadable = len(audio) - len(read)
+        has_atmos = bool(atmos) and bool(stereo)
+        first_is_canon = not _is_atmos_file(first_type) or any(n == first_audio for (n, _) in promoted)
+        tracks = [self._track_row(dirpath, tags, "atmos" if _is_atmos_file(first_type) else "stereo")]
+        want = str(tags.get("album", "") or "").strip().casefold()
+        # What the folder's files SAY the release is, believed only when they
+        # speak with one voice. Silence is not disagreement (the same principle
+        # as the album check below: only positive evidence rejects), so a stray
+        # untagged file costs nothing, but two different answers mean the folder
+        # cannot be asked and the claim is dropped. Disc numbers included: files
+        # declaring different discs are not a folder in conflict, they are a set
+        # sitting flat in one folder, and its own file count already covers it.
+        # The vote runs on the canonical set only: an attached Version's tags
+        # describe the same release and must neither prove nor dispute it.
+        shape = {k: {int(tags.get(k, 0) or 0)} for k in ("track_total", "disc_no", "disc_total")}
+        agree, dissent = (1 if want and first_is_canon else 0), 0
+        canon_names = {n for (n, _) in canonical}
+        for name, other, atype in read:
+            if name == first_audio:
+                continue
             got = str(other.get("album", "") or "").strip().casefold()
-            if want and got:
+            if name in canon_names and want and got:
                 if got == want:
                     agree += 1
                 else:
                     dissent += 1
-            for key, seen in shape.items():
-                seen.add(int(other.get(key, 0) or 0))
-            tracks.append(self._track_row(dirpath, other))
+            if name in canon_names:
+                for key, seen in shape.items():
+                    seen.add(int(other.get(key, 0) or 0))
+            tracks.append(self._track_row(dirpath, other, "atmos" if _is_atmos_file(atype) else "stereo"))
         if dissent:
             # Only the files that positively voted for the majority album are
             # counted. Subtracting the dissenters from the raw file count
@@ -2125,6 +2265,11 @@ class LibraryIndex:
             # album the user holds 10 of.
             overwhelming = dissent == 1 or dissent <= (agree + dissent) * 0.1
             count = agree if overwhelming and agree > dissent else 0
+        else:
+            # No dispute: every canonical file counts, unreadable ones with
+            # their historical benefit of the doubt. Attached Versions never
+            # did -- that is the whole of §8.4's arithmetic change.
+            count = len(canonical) + unreadable
 
         def agreed(key: str) -> int:
             if dissent:
@@ -2134,6 +2279,21 @@ class LibraryIndex:
             seen = shape[key] - {0}
             return seen.pop() if len(seen) == 1 else 0
 
+        # The folder's summed play length over the canonical set only, believed
+        # only when EVERY canonical file reported one (only positive evidence,
+        # like agreed() above), no file disputed the album, and no file went
+        # unread (an unknown length would make the sum lie): a sum missing a
+        # file's minutes, or carrying a stray's or an attached Version's, would
+        # refute true matches. 0 says "the files never said", NULL stays the
+        # pre-capture sentinel. Attached Atmos Versions never enter the sum --
+        # they are the same recordings twice, and the witness must fingerprint
+        # the release, not the Versions.
+        canon_lengths = [int(t.get("length", 0) or 0) for (_, t) in canonical]
+        runtime = (
+            sum(canon_lengths)
+            if not dissent and not unreadable and canon_lengths and all(v > 0 for v in canon_lengths)
+            else 0
+        )
         return (
             dirpath,
             tags.get("album", ""),
@@ -2149,17 +2309,9 @@ class LibraryIndex:
             agreed("track_total"),
             agreed("disc_no"),
             agreed("disc_total"),
-            # The folder's summed play length, believed only when EVERY read
-            # file reported one (only positive evidence, like agreed() above)
-            # and no file disputed the album: a sum missing a file's minutes,
-            # or carrying a stray's, would refute true matches. 0 says "the
-            # files never said", NULL stays the pre-capture sentinel.
-            (
-                sum(t[7] for t in tracks)
-                if not dissent and len(tracks) == len(audio) and all(t[7] > 0 for t in tracks)
-                else 0
-            ),
+            runtime,
             raw,
+            1 if has_atmos else 0,
             tuple(tracks),
         )
 
@@ -2174,11 +2326,15 @@ class LibraryIndex:
         disc_total}``, all 0 when its files never said or did not agree.
         ``tracks`` counts the files the folder HOLDS; ``declared`` is how many
         the release says it has, which is the only way to tell a complete copy
-        of a smaller edition from a copy short a track."""
+        of a smaller edition from a copy short a track.
+
+        ``has_atmos`` (§8.4, issue #36) says whether Atmos Versions sit
+        alongside the canonical set: ``tracks`` already excludes the attached
+        Versions, and this flag drives the album card's ATMOS TOO micro-badge."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT album, artist, year, track_count, folder_path, codec, bitrate, bits, rate,"
-                " declared, disc_no, disc_total, runtime FROM albums"
+                " declared, disc_no, disc_total, runtime, has_atmos FROM albums"
             ).fetchall()
         for (
             album,
@@ -2194,6 +2350,7 @@ class LibraryIndex:
             disc_no,
             disc_total,
             runtime,
+            has_atmos,
         ) in rows:
             yield {
                 "title": str(album or ""),
@@ -2210,6 +2367,8 @@ class LibraryIndex:
                 "disc_total": int(disc_total or 0),
                 # Summed play length in seconds, 0 when the files never said.
                 "runtime": int(runtime or 0),
+                # Whether Atmos Versions sit alongside the canonical set.
+                "has_atmos": bool(has_atmos),
             }
 
     def iter_tracks(self) -> Iterator[dict]:
@@ -2224,16 +2383,19 @@ class LibraryIndex:
         its own in this table and its title alone proves nothing (a title plus
         artist match any edition, any compilation, any re-recording sharing the
         name), so the folder's identity is the only evidence a track match can
-        offer. decide_track_presence weighs it exactly as the album matcher
+        offer.         decide_track_presence weighs it exactly as the album matcher
         weighs its own, which is what lets a track inside a proven album drop
-        the badge's "?"."""
+        the badge's "?". ``audio_type`` (§8.4, issue #36) says which Version
+        the file is ("stereo" / "atmos"); attached Atmos Versions ride along as
+        rows of their own so the track pill still sees them, while the album
+        arithmetic never counts them."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT t.title, t.artist, t.folder_path, t.codec, t.bitrate, t.bits, t.rate, t.length, "
-                "a.album, a.year "
+                "t.audio_type, a.album, a.year "
                 "FROM tracks t LEFT JOIN albums a ON a.folder_path = t.folder_path"
             ).fetchall()
-        for title, artist, path, codec, bitrate, bits, rate, length, album, album_year in rows:
+        for title, artist, path, codec, bitrate, bits, rate, length, audio_type, album, album_year in rows:
             yield {
                 "title": str(title or ""),
                 "artist": str(artist or ""),
@@ -2246,6 +2408,10 @@ class LibraryIndex:
                 "album_year": str(album_year or ""),
                 # The file's own play length in seconds, 0 when it never said.
                 "length": int(length or 0),
+                # Which Version the file is (§8.4, issue #36): "stereo" /
+                # "atmos", or "" for a pre-Atmos row (reads as canonical
+                # until its folder's one backfill re-read rewrites it).
+                "audio_type": str(audio_type or ""),
             }
 
     def poll_containers_changed(self, root: str) -> bool | None:
@@ -2321,7 +2487,7 @@ class LibraryIndex:
             row = self._conn.execute(
                 """SELECT dir_mtime, track_count, codec, recorded_at,
                           (SELECT COUNT(*) FROM tracks WHERE tracks.folder_path = albums.folder_path),
-                          declared, runtime, raw_count
+                          declared, runtime, raw_count, has_atmos
                    FROM albums WHERE folder_path = ?""",
                 (folder_path,),
             ).fetchone()
@@ -2335,7 +2501,7 @@ class LibraryIndex:
         count, and the verdict itself is plain Python (_unchanged_verdict)."""
         with self._lock:
             rows = self._conn.execute("""SELECT albums.folder_path, dir_mtime, track_count, codec, recorded_at,
-                          COALESCE(tc.n, 0), declared, runtime, raw_count
+                          COALESCE(tc.n, 0), declared, runtime, raw_count, has_atmos
                    FROM albums
                    LEFT JOIN (SELECT folder_path, COUNT(*) AS n FROM tracks
                               GROUP BY folder_path) tc
@@ -2370,6 +2536,9 @@ class LibraryIndex:
             # NULL runtime is a row from before duration capture; one re-read
             # backfills it (0, "the files never said", is a finished answer).
             and row[6] is not None
+            # NULL has_atmos is a row from before Atmos capture (§8.4, issue
+            # #36); one re-read backfills it (0/1, like runtime above).
+            and row[8] is not None
             and row[4] > 0
             and (row[4] >= row[1] or time.time() - float(row[3] or 0) < _UNREADABLE_RETRY_S)
         )
@@ -2381,8 +2550,9 @@ class LibraryIndex:
             self._conn.executemany(
                 """INSERT INTO albums
                        (folder_path, album, artist, year, track_count, dir_mtime, recorded_at,
-                        codec, bitrate, bits, rate, declared, disc_no, disc_total, runtime, raw_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        codec, bitrate, bits, rate, declared, disc_no, disc_total, runtime, raw_count,
+                        has_atmos)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(folder_path) DO UPDATE SET
                        album=excluded.album, artist=excluded.artist, year=excluded.year,
                        track_count=excluded.track_count, dir_mtime=excluded.dir_mtime,
@@ -2390,17 +2560,17 @@ class LibraryIndex:
                        bitrate=excluded.bitrate, bits=excluded.bits, rate=excluded.rate,
                        declared=excluded.declared, disc_no=excluded.disc_no,
                        disc_total=excluded.disc_total, runtime=excluded.runtime,
-                       raw_count=excluded.raw_count""",
-                [row[:16] for row in batch],
+                       raw_count=excluded.raw_count, has_atmos=excluded.has_atmos""",
+                [row[:17] for row in batch],
             )
             # Replace, not merge: the read is of the whole folder, so its track
             # rows are the whole truth for that folder and stale rows (a renamed
             # or re-tagged file) must not linger beside the fresh ones.
             self._conn.executemany("DELETE FROM tracks WHERE folder_path = ?", [(row[0],) for row in batch])
             self._conn.executemany(
-                "INSERT INTO tracks (folder_path, title, artist, codec, bitrate, bits, rate, length)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [t for row in batch for t in row[16]],
+                "INSERT INTO tracks (folder_path, title, artist, codec, bitrate, bits, rate, length, audio_type)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [t for row in batch for t in row[17]],
             )
             self._conn.commit()
 

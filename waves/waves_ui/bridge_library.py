@@ -255,6 +255,73 @@ def _rearm(bridge) -> None:
         hook()
 
 
+def _fold_atmos_subfolders(albums: list, tracks: list, atmos_names: set) -> tuple[dict, set]:
+    """Fold Atmos subfolders back into their parent albums (§8.4, issue #36).
+
+    An album's Atmos Versions live in the album folder and its Atmos
+    subfolder, but the walk indexes every folder holding audio as its own
+    album -- so the subfolder arrives here as a would-be album of its own.
+    Returns ``(folded, folded_rows)``: ``folded`` maps a parent folder id to
+    the subfolder's track rows (which re-home to the parent's scope), and
+    ``folded_rows`` holds the subfolder folder ids (which drop out of the
+    album index: placement, not a release). Folding needs positive evidence:
+    at least one proven Atmos Version and no proven-stereo file. An
+    all-unknown subfolder (pre-Atmos rows before their one backfill re-read)
+    stays its own album for that one scan rather than badging ATMOS TOO on a
+    guess; a subfolder holding a proven-stereo file is somebody's real album
+    under a borrowed name and is left alone.
+    """
+    by_id = {a["id"]: a for a in albums}
+    folded: dict[str, list[dict]] = {}
+    for a in albums:
+        parent_id = os.path.dirname(a["id"])
+        if os.path.basename(a["id"]).strip().casefold() in atmos_names and parent_id in by_id and parent_id != a["id"]:
+            sub_tracks = [t for t in tracks if t["id"] == a["id"]]
+            types = {str(t.get("audio_type", "") or "") for t in sub_tracks}
+            if sub_tracks and "atmos" in types and "stereo" not in types:
+                folded.setdefault(parent_id, []).extend(sub_tracks)
+    return folded, {t["id"] for sub in folded.values() for t in sub}
+
+
+def _folded_parent_counts(album_id: str, tracks: list, sub_tracks: list) -> tuple[int, bool]:
+    """A folded parent's ``(extra_tracks, has_atmos)`` (§8.4, issue #36).
+
+    A re-homed Atmos Version with a same-titled canonical twin in the parent
+    attaches and never counts; one without is an atmos-only track, its own
+    canonical entry, counted. Either way the album holds Atmos Versions.
+    """
+    parent_titles = {
+        str(t.get("title", "") or "").strip().casefold()
+        for t in tracks
+        if t["id"] == album_id and str(t.get("title", "") or "").strip()
+    }
+    extra = 0
+    for t in sub_tracks:
+        title = str(t.get("title", "") or "").strip().casefold()
+        if not title or title not in parent_titles:
+            extra += 1
+    return extra, True
+
+
+def _rehome_map(folded: dict, by_id: dict) -> dict:
+    """Where folded Atmos tracks answer: under the parent album's identity.
+
+    The subfolder is placement, not a release, so proving against its name
+    proves nothing. Keyed by object id: the rows are shared references, so
+    identity is stable within one build.
+    """
+    rehomed: dict = {}
+    for pid, sub in folded.items():
+        parent = by_id.get(pid, {})
+        for t in sub:
+            rehomed[id(t)] = {
+                "album": parent.get("title", t.get("album", "")),
+                "album_year": parent.get("year", t.get("album_year", "")),
+                "id": pid,
+            }
+    return rehomed
+
+
 class LibraryMixin:
     """The local music-library scan, watch and presence family, mixed into
     WavesBridge (see the module docstring)."""
@@ -373,14 +440,51 @@ class LibraryMixin:
                 self._library_artist_index = rollup
                 self._library_artist_index_src = idx
 
+    def _atmos_subfolder_names(self) -> set[str]:
+        """Folder names that hold an album's Atmos Versions, casefolded.
+
+        The Dolby Atmos template inserts one fragment folder between the
+        album folder and the file (§5.4), configurable in Settings and
+        "Dolby Atmos" by default. Both spellings fold: a library written
+        under a renamed fragment still attaches after the user renames it
+        back, and the default covers every library that never touched it.
+        """
+        names = {"dolby atmos"}
+        try:
+            settings = getattr(self, "settings", None)
+            configured = str(getattr(getattr(settings, "data", None), "format_atmos", "") or "").strip().casefold()
+        except Exception:
+            configured = ""
+        if configured:
+            # Only the final fragment names a folder ("A/B" inserts a path).
+            names.add(configured.split("/")[-1].split("\\")[-1].strip())
+        return {n for n in names if n}
+
     def _build_presence_indexes(self, lib) -> tuple[dict, dict]:
         """Both presence indexes (albums, tracks) from one committed cache
         read, so every publish lands them as a pair and the two pills always
         describe the same scan. Reads only ``lib`` (handed in, never
         self._library at use time: see the generation notes in
         _rebuild_library_index), so the launch seed and the scan share it."""
+        albums = list(lib.iter_albums())
+        tracks = list(lib.iter_tracks())
+        by_id = {a["id"]: a for a in albums}
+        # getattr: partial test stubs bind this builder without the naming
+        # helper (see the probe family's guards); without it only the default
+        # fragment folds.
+        _names = getattr(self, "_atmos_subfolder_names", None)
+        atmos_names = _names() if callable(_names) else {"dolby atmos"}
+        folded, folded_rows = _fold_atmos_subfolders(albums, tracks, atmos_names)
         local: dict = {}
-        for a in lib.iter_albums():
+        for a in albums:
+            # A folded Atmos subfolder is not an album: its row drops out
+            # here, its tracks re-home to the parent below.
+            if a["id"] in folded_rows:
+                continue
+            extra = 0
+            has_atmos = bool(a.get("has_atmos"))
+            if a["id"] in folded:
+                extra, has_atmos = _folded_parent_counts(a["id"], tracks, folded[a["id"]])
             # A Various-Artists credit is refused HERE, on the raw tag,
             # because the artist folds can move a marker out of the
             # detectors' reach ("V / A" splits at the spaced slash to a
@@ -396,8 +500,11 @@ class LibraryMixin:
                     # and that is too loose to gate a download on.
                     "title": a["title"],
                     "year": a["year"],
-                    "tracks": a["tracks"],
+                    "tracks": a["tracks"] + extra,
                     "id": a["id"],
+                    # Whether Atmos Versions sit alongside the canonical
+                    # set (§8.4): the album card's ATMOS TOO micro-badge.
+                    "has_atmos": has_atmos,
                     # Quality facts ride along so the badge can name the
                     # copy ("MP3 128").
                     "codec": a.get("codec", ""),
@@ -421,14 +528,16 @@ class LibraryMixin:
                 }
             )
         by_track: dict = {}
-        for t in lib.iter_tracks():
+        rehomed = _rehome_map(folded, by_id)
+        for t in tracks:
             if not t["title"] or not t["artist"]:
                 continue  # an untagged file honestly matches nothing
             if matching.is_various_artists(t["artist"]):
                 continue  # same raw-tag refusal as the album rows above
+            home = rehomed.get(id(t))
             by_track.setdefault(matching.track_key(t["title"], t["artist"]), []).append(
                 {
-                    "id": t["id"],
+                    "id": home["id"] if home else t["id"],
                     "codec": t.get("codec", ""),
                     "bitrate": t.get("bitrate", 0),
                     "bits": t.get("bits", 0),
@@ -438,8 +547,11 @@ class LibraryMixin:
                     # matcher). Carried per row rather than looked up later,
                     # because the album index is keyed by presence key and
                     # cannot be asked "what is at this path".
-                    "album": t.get("album", ""),
-                    "album_year": t.get("album_year", ""),
+                    # A folded Atmos subfolder's tracks answer under the
+                    # parent album: the subfolder is placement, not a
+                    # release, and proving against its name proves nothing.
+                    "album": home["album"] if home else t.get("album", ""),
+                    "album_year": home["album_year"] if home else t.get("album_year", ""),
                     # The file's play length in seconds (0 when it never
                     # said): a second, tag-free identity witness.
                     "length": t.get("length", 0),
