@@ -287,7 +287,13 @@ def test_verify_apk_without_pinned_hash_checks_presence(tmp_path):
 
 
 def test_apk_plan_scripts_extraction_and_names_pin(tmp_path):
-    from waves.apple_runtime import APK_SHA256
+    from waves.apple_runtime import APK_PINNED_VERSION, APK_SHA256
+
+    # The blessed 3.6.0 hash is published: full verification is on, and the
+    # pin names the proven version (see APK_PINNED_VERSION's comment for why
+    # 4.7.0 does not work).
+    assert APK_PINNED_VERSION == "3.6.0-beta"
+    assert len(APK_SHA256) == 64 and all(c in "0123456789abcdef" for c in APK_SHA256.lower())
 
     plan = apk_extract_plan(str(tmp_path / "music.apkm"))
     assert any(APK_PINNED_VERSION in step for step in plan)
@@ -802,7 +808,10 @@ def test_setup_state_carries_steps_plan_image_and_login_hint(tmp_path):
     assert "2FA" in state["wrapper"]["login_hint"]
 
 
-def test_apk_without_pinned_hash_stays_open_not_done(tmp_path):
+def test_apk_without_pinned_hash_stays_open_not_done(tmp_path, monkeypatch):
+    # Simulates the pre-hash world (APK_SHA256 now carries the blessed 3.6.0
+    # hash): presence/version check only, never a claimed SHA check.
+    monkeypatch.setattr("waves.apple_runtime.APK_SHA256", "")
     apk = tmp_path / "music.apkm"
     apk.write_bytes(b"bytes")
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")

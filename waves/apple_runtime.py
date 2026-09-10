@@ -100,16 +100,18 @@ NM3U8DLRE_SHA256 = {
     ("windows", "amd64"): "3825fd42ee502f98a9378f6fdddb2f7822709f521806214f466db6935c950f1a",
     ("windows", "arm64"): "3a13527812a5f18b9981b3cd6f7f36bd17cd7d76b5f3273281a58354e5fcebd6",
 }
-# Pinned APK the wizard asks the user to supply (from LIBS_VERSION.json).
-# Waves never fetches it; this version string and SHA-256 only verify what
-# the user brings and script the .apkm extraction.
-APK_PINNED_VERSION = "4.7.0"
-# No published SHA-256 exists for the pinned APK yet: fill this in when
-# wrapper-v2 publishes its LIBS hash, and the full hash check turns on with
-# no other change. While empty, verify_apk checks presence, extension, and
-# version only and reports hash_pending so no surface can claim a check
-# that did not run.
-APK_SHA256 = ""  # filled when the wrapper release publishes its hash; empty means "version check only"
+# Pinned APK the wizard asks the user to supply. 3.6.0-beta (build 1109) is
+# the proven combo: its native libs carry DT_HASH, export the symbols the
+# wrapper resolves, and need nothing newer than the chroot's libc. (4.7.0
+# fails all three: GNU-hash-only main lib, hidden make_shared, API-23+
+# imports.) Waves never fetches it; this version string and SHA-256 only
+# verify what the user brings and script the .apkm extraction.
+APK_PINNED_VERSION = "3.6.0-beta"
+# SHA-256 of the blessed APKMirror bundle
+# (com.apple.android.music_3.6.0-beta-1109_2arch_2dpi_*.apkm). With a hash
+# published, verify_apk fail-closes on mismatch; empty would mean
+# "version check only".
+APK_SHA256 = "5be907af370a7f6bd73344e646dcfebe2e64c2da3b9ad71192110c91950f3f67"
 
 # Wrapper HTTP API: never port 80 on a desktop (collision-prone). The
 # manager picks a free high port and passes it explicitly everywhere.
@@ -307,7 +309,7 @@ def wrapper_url(port: int) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def verify_apk(path: str, expected_sha256: str = APK_SHA256) -> dict:
+def verify_apk(path: str, expected_sha256: str | None = None) -> dict:
     """Verify a user-supplied APK/.apkm file against the pinned version.
 
     Returns ``{"ok", "path", "sha256", "hash_pending", "note"}``. Raises
@@ -317,8 +319,11 @@ def verify_apk(path: str, expected_sha256: str = APK_SHA256) -> dict:
     presence, extension, and version only, and reports
     ``hash_pending: True`` so the wizard never claims a SHA check it did
     not perform; filling in the published hash turns the full check on
-    with no other change.
+    with no other change. The default resolves at call time so tests (and
+    future pins) can override the module constant.
     """
+    if expected_sha256 is None:
+        expected_sha256 = APK_SHA256
     p = Path(str(path or "").strip()).expanduser()
     if not str(path or "").strip() or not p.is_file():
         raise FileNotFoundError(f"APK not found: {path or '(no path given)'}")
