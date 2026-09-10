@@ -15,6 +15,10 @@ time, and the shared sections' help text says it governs both providers.
 Nothing sits behind the switch yet: flipping it records the choice and moves
 the status light, nothing else.
 
+Issue #60 nests the two sections as cards inside ONE Providers section
+(each with its logo header and its fields); the field contents pinned below
+are unchanged, only the path to reach them gained a level.
+
 The page-side status row and its live mirror are pinned by source assertions
 (the repo's settings-page QML convention); the bridge side is exercised for
 real on plain stubs.
@@ -76,19 +80,32 @@ def _keys(section):
     return [f["key"] for f in section["fields"]]
 
 
-def test_the_providers_area_renders_two_provider_sections():
+def _providers(sections=None):
+    """The provider cards nested in the one Providers section (issue #60),
+    keyed by card id."""
+    sections = sections if sections is not None else _schema()
+    providers = next(s for s in sections.values() if s["id"] == "providers")["providers"]
+    return {p["id"]: p for p in providers}
+
+
+def test_the_providers_area_is_one_section_with_two_provider_cards():
     schema = WavesBridge.settingsSchema(_schema_stub())
     ids = [s["id"] for s in schema]
-    assert "providers_tidal" in ids and "providers_apple" in ids
-    tidal = next(s for s in schema if s["id"] == "providers_tidal")
-    apple = next(s for s in schema if s["id"] == "providers_apple")
-    assert tidal["group"].startswith("Providers ·")
-    assert apple["group"].startswith("Providers ·")
+    assert "providers" in ids
+    assert "providers_tidal" not in ids and "providers_apple" not in ids
+    section = next(s for s in schema if s["id"] == "providers")
+    assert section["group"] == "Providers"
+    assert section["fields"] == []
+    cards = _providers({s["id"]: s for s in schema})
+    assert set(cards) == {"providers_tidal", "providers_apple"}
+    assert cards["providers_tidal"]["name"] == "TIDAL"
+    assert cards["providers_apple"]["name"] == "Apple Music"
+    for card in cards.values():
+        assert card["desc"]
 
 
-def test_the_tidal_section_hosts_the_session_and_its_quality_default():
-    sections = _schema()
-    assert _keys(sections["providers_tidal"]) == ["provider_tidal_session", "tidal_quality_audio"]
+def test_the_tidal_card_hosts_the_session_and_its_quality_default():
+    assert _keys(_providers()["providers_tidal"]) == ["provider_tidal_session", "tidal_quality_audio"]
 
 
 def test_the_tidals_quality_default_no_longer_sits_under_downloads():
@@ -100,9 +117,8 @@ def test_the_tidals_quality_default_no_longer_sits_under_downloads():
     assert "download_dolby_atmos" in _keys(sections["downloads"])
 
 
-def test_the_apple_section_holds_the_switch_row_and_the_quality():
-    sections = _schema()
-    apple = _keys(sections["providers_apple"])
+def test_the_apple_card_holds_the_switch_row_and_the_quality():
+    apple = _keys(_providers()["providers_apple"])
     assert apple == [
         "provider_apple_status",
         "apple_setup_wizard",
@@ -117,7 +133,7 @@ def test_the_apple_section_holds_the_switch_row_and_the_quality():
         "apple_quarantine_dir",
         "apple_quarantine_keep",
     ]
-    status = sections["providers_apple"]["fields"][0]
+    status = _providers()["providers_apple"]["fields"][0]
     # The switch rides the status row (the section's master control), never
     # the flag-tile grid, and the factory-reset walk still finds it.
     assert status["enabled_key"] == "apple_enabled"
@@ -131,22 +147,20 @@ def test_the_apple_section_holds_the_switch_row_and_the_quality():
     ]
     # The in-place wizard card follows the status row: bridge-computed, not
     # a pref, rendered from the live setup mirror.
-    wizard = sections["providers_apple"]["fields"][1]
+    wizard = _providers()["providers_apple"]["fields"][1]
     assert wizard["key"] == "apple_setup_wizard" and wizard["type"] == "apple_setup"
     assert wizard["live"] == "apple_setup"
 
 
 def test_the_apple_switch_defaults_off_and_persists_as_an_engine_setting():
     assert ModelSettings().apple_enabled is False
-    sections = _schema()
-    status = sections["providers_apple"]["fields"][0]
+    status = _providers()["providers_apple"]["fields"][0]
     assert status["switch_value"] is False
     assert status["value"] == "off"
 
 
 def test_the_supervision_seconds_fields_span_their_defaults():
-    sections = _schema()
-    fields = {f["key"]: f for f in sections["providers_apple"]["fields"]}
+    fields = {f["key"]: f for f in _providers()["providers_apple"]["fields"]}
     assert fields["apple_wrapper_idle_sec"]["value"] == 300.0
     assert fields["apple_wrapper_idle_sec"]["maximum"] >= 300.0
     assert fields["apple_pacing_delay_sec"]["value"] == 30.0
@@ -155,16 +169,19 @@ def test_the_supervision_seconds_fields_span_their_defaults():
 
 def test_the_status_light_flips_with_the_switch_and_the_session():
     on = WavesBridge.settingsSchema(_schema_stub(apple_enabled=True))
-    status = next(s for s in on if s["id"] == "providers_apple")["fields"][0]
+    cards = {p["id"]: p for p in next(s for s in on if s["id"] == "providers")["providers"]}
+    status = cards["providers_apple"]["fields"][0]
     assert status["value"] == "not_set_up"
     assert status["word"] == "Not set up"
     assert status["switch_value"] is True
 
     signed = WavesBridge.settingsSchema(_schema_stub(logged_in=True))
-    session = next(s for s in signed if s["id"] == "providers_tidal")["fields"][0]
+    tidal = {p["id"]: p for p in next(s for s in signed if s["id"] == "providers")["providers"]}
+    session = tidal["providers_tidal"]["fields"][0]
     assert session["value"] == "signed_in" and session["word"] == "Signed in"
     unsigned = WavesBridge.settingsSchema(_schema_stub())
-    session = next(s for s in unsigned if s["id"] == "providers_tidal")["fields"][0]
+    plain = {p["id"]: p for p in next(s for s in unsigned if s["id"] == "providers")["providers"]}
+    session = plain["providers_tidal"]["fields"][0]
     assert session["value"] == "not_signed_in" and session["word"] == "Not signed in"
 
 
@@ -348,7 +365,8 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     assert "Accessible.role: Accessible.CheckBox" in qml
     assert "Keys.onPressed" in qml
     assert "!event.isAutoRepeat" in qml
-    # Both provider sections have glyphs of their own.
+    # Both provider cards have glyphs of their own (the QML resolves them
+    # through providerLogo, keyed by card id).
     assert '"providers_tidal"' in qml and '"providers_apple"' in qml
 
 
@@ -358,8 +376,7 @@ def test_the_factory_reset_walk_still_finds_the_switch_through_the_composite():
     # the switch. Pinned against the real schema walk above (see
     # test_factory_reset_resets_the_apple_switch); this asserts the
     # enumeration keys the walk reads are the ones the row declares.
-    sections = _schema()
-    status = sections["providers_apple"]["fields"][0]
+    status = _providers()["providers_apple"]["fields"][0]
     assert {status.get("key"), status.get("enabled_key")} == {"provider_apple_status", "apple_enabled"}
 
 
@@ -374,3 +391,53 @@ def test_enabling_and_pre_setup_clicks_deep_link_into_the_wizard():
     assert "onAppleSetupRequested" in qml
     assert "openAppleSetup" in qml
     assert '"providers_apple"' in qml
+
+
+# ---- issue #60: one Providers section, one card per provider -----------------
+
+
+def test_provider_cards_hold_only_field_kinds_the_band_renders():
+    # The band renders rowFields through the shared row renderer and plain
+    # bools through the shared toggle tile. Any other kind (a third-width
+    # row, a char map, an embedded card) would silently vanish, so adding
+    # one must come with its renderer.
+    for card in _providers().values():
+        kinds = {(f["key"], f.get("type"), bool(f.get("third"))) for f in card["fields"]}
+        for key, kind, third in kinds:
+            assert kind in ("status", "apple_setup", "enum", "str", "int", "float", "bool"), key
+            assert third is False, key
+
+
+def test_factory_reset_reaches_inside_the_provider_cards():
+    stub = _schema_stub(apple_enabled=True)
+    stub.settingsSchema = _bind(stub, "settingsSchema")
+    stub._factory_default_values = _bind(stub, "_factory_default_values")
+    values = stub._factory_default_values()
+    # The switch, both quality defaults, and a deep Apple runtime key all
+    # resolve through the nested cards, not just the top-level sections.
+    assert values["apple_enabled"] is False
+    assert values["tidal_quality_audio"] == "HI_RES_LOSSLESS"
+    assert values["apple_quality_audio"] == "HI_RES_LOSSLESS"
+    assert values["apple_wrapper_idle_sec"] == 300.0
+    assert values["apple_quarantine_keep"] is True
+
+
+def test_the_page_renders_provider_bands_with_logos_and_deep_links():
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "SettingsPage.qml"
+    qml = src.read_text(encoding="utf-8")
+    # One band per provider entry, each headed by its official logo and
+    # name, fields through the shared renderers.
+    assert "card.modelData.providers" in qml
+    assert "page.providerLogo(modelData.id)" in qml
+    assert "modelData.name" in qml
+    assert "page.rowFields(modelData.fields)" in qml
+    assert "page.boolFields(modelData.fields)" in qml
+    # The section header carries both marks and counts the nested fields.
+    assert "dualLogo" in qml
+    assert "providerFieldCount" in qml
+    # Provider deep-links resolve onto the one section (bands stay
+    # expanded while it is open).
+    assert 'cardId === "providers_tidal"' in qml
+    assert 'cardId === "providers_apple"' in qml
