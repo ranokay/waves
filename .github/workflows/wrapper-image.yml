@@ -1,0 +1,202 @@
+# Publishing the Waves wrapper image (issue #76).
+#
+# Upstream wrapper-v2 ships source only, so Waves publishes its own pinned
+# image for end-user pulls. The build needs Apple's native libraries, which
+# must never enter this repo: they arrive at build time through the private
+# APK_URL secret (an .apk/.apkm you host privately), are extracted and
+# hash-verified against the source tree's LIBS_VERSION.json, and only then
+# baked into the pushed image. The secret is unreadable from forks, so fork
+# PRs can read this file but never run the publish path.
+#
+# What gets published: linux/arm64 only (the Apple-silicon native path; the
+# compile stage stays linux/amd64 because Google ships the NDK as x86_64
+# only). The pushed tag must equal the pin in waves/apple_runtime.py
+# (WRAPPER_V2_IMAGE); the pin-drift test fails the suite otherwise.
+name: wrapper-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      wrapper_ref:
+        description: "Upstream wrapper-v2 ref to build (branch, tag, or SHA; prefer a SHA)"
+        required: false
+        default: "main"
+        type: string
+      image_tag:
+        description: "Tag to push (must equal the WRAPPER_V2_IMAGE pin)"
+        required: false
+        default: "0.2.3"
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+# Publishes must never overlap: two pushes of one tag is a race.
+concurrency:
+  group: wrapper-image-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build and publish (linux/arm64)
+    runs-on: ubuntu-latest
+    env:
+      APK_URL: ${{ secrets.APK_URL }}
+      IMAGE: ghcr.io/ranokay/waves-wrapper-v2
+      TAG: ${{ inputs.image_tag }}
+      TARGET_ARCH: arm64-v8a
+      RUNTIME_PLATFORM: linux/arm64
+
+    steps:
+      - name: Check out upstream wrapper-v2 at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: glomatico/wrapper-v2
+          ref: ${{ inputs.wrapper_ref }}
+          path: wrapper-v2
+
+      - name: Record the exact source SHA
+        working-directory: wrapper-v2
+        run: |
+          echo "WRAPPER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git rev-parse HEAD
+
+      # The arm64 image runs under QEMU on amd64 runners (smoke test only;
+      # the compile stage stays amd64 for the x86_64-only NDK).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            jq unzip curl ca-certificates
+
+      - name: Validate Compose config
+        working-directory: wrapper-v2
+        run: docker compose config --quiet
+
+      - name: Rust unit tests
+        working-directory: wrapper-v2
+        run: cargo test
+
+      - name: Make scripts executable
+        working-directory: wrapper-v2
+        run: chmod +x tools/extract-libs.sh tools/stage-system.sh
+
+      - name: Sanity check APK_URL secret
+        run: |
+          if [[ -z "${APK_URL}" ]]; then
+            echo "::error::APK_URL secret is not set."
+            echo "Maintainers: add a repository secret APK_URL pointing at a privately hosted"
+            echo "Apple Music .apk/.apkm (see docs/wrapper-image.md). It is never committed."
+            exit 1
+          fi
+
+      - name: Download Apple Music artifact
+        run: |
+          mkdir -p .tmp
+          artifact=".tmp/apple-music.apk"
+          if [[ "${APK_URL,,}" == *.apkm* ]]; then
+            artifact=".tmp/apple-music.apkm"
+          fi
+          curl -fL --retry 3 --retry-delay 2 -o "${artifact}" "${APK_URL}"
+          echo "APPLE_MUSIC_ARTIFACT=${artifact}" >> "$GITHUB_ENV"
+          ls -lh "${artifact}"
+
+      - name: Extract Apple native libs (hash-verified against LIBS_VERSION.json)
+        working-directory: wrapper-v2
+        run: |
+          ./tools/extract-libs.sh \
+            --bundle "${GITHUB_WORKSPACE}/${APPLE_MUSIC_ARTIFACT}" \
+            --arch "${TARGET_ARCH}"
+
+      - name: Stage Android system binaries
+        working-directory: wrapper-v2
+        run: ./tools/stage-system.sh --arch "${TARGET_ARCH}"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: wrapper-v2
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          build-args: |
+            BUILD_PLATFORM=linux/amd64
+            RUNTIME_PLATFORM=${{ env.RUNTIME_PLATFORM }}
+            TARGET_ARCH=${{ env.TARGET_ARCH }}
+
+      - name: Smoke test (HTTP and TCP)
+        run: |
+          docker rm -f wrapper-smoke 2>/dev/null || true
+          # Same caps as production (see apple_supervision.container_run_args):
+          # AppArmor's default profile can deny mount(2) even with CAP_SYS_ADMIN.
+          docker run -d \
+            --platform "${RUNTIME_PLATFORM}" \
+            --name wrapper-smoke \
+            --cap-add SYS_ADMIN --cap-add SYS_CHROOT --cap-add SYS_PTRACE \
+            --security-opt apparmor=unconfined \
+            -p 8080:80 \
+            -p 11020:10020 \
+            "${IMAGE}:${TAG}"
+          http_ok=0
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8080/health >/dev/null; then
+              echo "health OK after ${i} attempt(s)"
+              http_ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$http_ok" != "1" ]]; then
+            echo "::error::health did not become ready in time"
+            docker logs wrapper-smoke 2>&1 || true
+            docker rm -f wrapper-smoke 2>/dev/null || true
+            exit 1
+          fi
+          curl -sf http://127.0.0.1:8080/health | jq .
+          tcp_ok=0
+          for i in $(seq 1 20); do
+            if timeout 2 bash -c '</dev/tcp/127.0.0.1/11020' 2>/dev/null; then
+              echo "TCP decrypt listener OK after ${i} attempt(s)"
+              tcp_ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$tcp_ok" != "1" ]]; then
+            echo "::error::TCP decrypt listener did not accept connections in time"
+            docker logs wrapper-smoke 2>&1 || true
+            docker rm -f wrapper-smoke 2>/dev/null || true
+            exit 1
+          fi
+          docker rm -f wrapper-smoke
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## Wrapper image published"
+            echo ""
+            echo "| Fact | Value |"
+            echo "| ---- | ----- |"
+            echo "| Image | \`${IMAGE}:${TAG}\` |"
+            echo "| Upstream ref | \`${{ inputs.wrapper_ref }}\` (\`${WRAPPER_SHA}\`) |"
+            echo "| Arch | \`${TARGET_ARCH}\` / \`${RUNTIME_PLATFORM}\` |"
+            echo ""
+            echo "Guest libs pinned by the source tree:"
+            echo '```json'
+            cat wrapper-v2/LIBS_VERSION.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
