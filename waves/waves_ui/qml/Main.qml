@@ -16484,7 +16484,12 @@ ApplicationWindow {
         // sessionResolved gates the overlay so an already-signed-in launch
         // doesn't flash the logged-out screen while the cached-token network
         // check is still in flight.
-        visible: waves.sessionResolved && !root.signedIn
+        // The provider picker (issue #63) owns the first run: this panel only
+        // shows once the picker was answered, and never while Apple Music is
+        // the chosen provider (an Apple-only user is not signed out of
+        // anything). Nothing here ever starts a login on its own: the
+        // browser opens solely on the button click below.
+        visible: waves.sessionResolved && !root.signedIn && !waves.appleEnabled && setupSettings.providerPickerDone
         // A logged-out cold launch fades in with the rest of the interface.
         opacity: root.bootContentShown
         color: "#d606070e"
@@ -16558,6 +16563,110 @@ ApplicationWindow {
         }
     }
 
+    // Provider picker (issue #63): first run offers the choice of provider
+    // instead of dropping straight into the TIDAL login above. Two cards
+    // with the official marks; TIDAL continues into the login panel, Apple
+    // Music enables the provider (its setup wizard opens itself) and never
+    // shows the TIDAL panel. "Not now" dismisses to today's passive login
+    // panel. Answered once, persisted, never nags. Nothing auto-opens a
+    // browser: every login starts on an explicit click.
+    Rectangle {
+        id: providerPicker
+        anchors.fill: parent
+        visible: waves.sessionResolved && !root.signedIn && !waves.appleEnabled && !setupSettings.providerPickerDone
+        // A fresh cold launch fades in with the rest of the interface.
+        opacity: root.bootContentShown
+        color: "#d606070e"
+        MouseArea { anchors.fill: parent }
+        Rectangle {
+            anchors.centerIn: parent; width: 480; radius: 14; color: root.surface2; border.color: root.outline
+            implicitHeight: pickCol.implicitHeight + 40
+            ColumnLayout {
+                id: pickCol; anchors.centerIn: parent; width: parent.width - 40; spacing: 13
+                WelcomeBanner { Layout.fillWidth: true; Layout.preferredHeight: 75 }
+                Text {
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                    text: "Choose where to start. You can enable the other provider later in Settings."
+                    color: root.textLo; font.pixelSize: 13
+                }
+                // TIDAL card: sign in with a TIDAL account.
+                Rectangle {
+                    Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
+                    implicitHeight: tidalPickRow.implicitHeight + 24
+                    RowLayout {
+                        id: tidalPickRow
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
+                        Image {
+                            Layout.alignment: Qt.AlignVCenter
+                            source: "assets/providers/tidal.png"
+                            width: 30; height: 20
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true; cache: true
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 6
+                            Text { text: "TIDAL"; color: root.textHi; font.pixelSize: 15; font.weight: Font.DemiBold }
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                text: "Sign in with your TIDAL account."
+                                color: root.textLo; font.pixelSize: 12
+                            }
+                            GateAction {
+                                label: "CONTINUE WITH TIDAL"
+                                onClicked: setupSettings.providerPickerDone = true
+                            }
+                        }
+                    }
+                }
+                // Apple Music card: search needs no account; downloads ride
+                // the one-time setup wizard.
+                Rectangle {
+                    Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
+                    implicitHeight: applePickRow.implicitHeight + 24
+                    RowLayout {
+                        id: applePickRow
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
+                        Image {
+                            Layout.alignment: Qt.AlignVCenter
+                            source: "assets/providers/apple-music.png"
+                            width: 22; height: 22
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true; cache: true
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 6
+                            Text { text: "Apple Music"; color: root.textHi; font.pixelSize: 15; font.weight: Font.DemiBold }
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                text: "Search works with no account; downloads need the one-time setup."
+                                color: root.textLo; font.pixelSize: 12
+                            }
+                            GateAction {
+                                label: "CONTINUE WITH APPLE MUSIC"
+                                onClicked: {
+                                    setupSettings.providerPickerDone = true
+                                    waves.applySettings({"apple_enabled": true})
+                                }
+                            }
+                        }
+                    }
+                }
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: "Not now"
+                    color: root.textDim; font.pixelSize: 12; font.underline: true
+                    MouseArea {
+                        anchors.fill: parent; anchors.margins: -6
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: setupSettings.providerPickerDone = true
+                    }
+                }
+            }
+        }
+    }
+
     // ====================================================================
     // FFmpeg setup gate, shown after sign-in. FFmpeg powers several core
     // features, so we nudge users toward the one-click managed install (the same
@@ -16590,6 +16699,10 @@ ApplicationWindow {
         // Exit warning (exitGate): "Don't warn me again" mutes the
         // downloads-still-running close prompt permanently.
         property bool exitWarnMuted: false
+        // Provider picker (issue #63): answered = a provider card or "Not
+        // now" was clicked, the picker never returns. Persisted like every
+        // other first-run gate above.
+        property bool providerPickerDone: false
     }
     FfmpegManager { id: appFfmpeg; objectName: "appFfmpeg" }
 
