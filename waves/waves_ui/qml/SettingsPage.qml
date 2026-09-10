@@ -3508,6 +3508,10 @@ Item {
                                         id: flagTile
                                         required property var modelData
                                         required property int index
+                                        // A field with depends_on (e.g. the Custom-template tag
+                                        // toggles) shows only while that key is on; the Flow
+                                        // skips hidden tiles, so the grid re-flows around them.
+                                        visible: page.depOK(modelData)
                                         // Flags that need FFmpeg are greyed and inert while it's missing.
                                         readonly property bool ffBlocked: modelData.requires_ffmpeg === true && page.ff.stateKey === "missing"
                                         // Flags that only matter while another flag is on (e.g. the

@@ -30,6 +30,54 @@ class Settings:
     # as Apple serves it, zero conversion, sidecar-only (never embedded).
     # Apple only; default on (issue #59: best quality). TIDAL has no TTML source.
     lyrics_ttml_file: bool = True
+    # Per-provider lyrics & artwork (issue #61): each provider keeps its own
+    # options inside its Providers card, so what TIDAL embeds need not match
+    # what Apple files. Fresh installs start both mirrors at the shared best
+    # defaults; existing installs are migrated once (config._migrate_settings
+    # copies the shared values into both mirrors). The word-timed and TTML
+    # mirrors exist on TIDAL too for a uniform table, but stay inert there
+    # (TIDAL has no word-timed or TTML source); raw cover bytes fall back to
+    # jpg on TIDAL, which has no original-master sidecar.
+    tidal_lyrics_embed: bool = False
+    tidal_lyrics_file: bool = True
+    tidal_lyrics_file_synced_only: bool = False
+    tidal_lyrics_prefer_lrclib: bool = True
+    tidal_lyrics_word_timed: bool = True
+    tidal_lyrics_ttml_file: bool = True
+    tidal_metadata_cover_dimension: CoverDimensions = CoverDimensions.PxORIGIN
+    tidal_metadata_cover_file_dimension: str = "follow"
+    tidal_metadata_cover_embed: bool = True
+    tidal_cover_album_file: bool = True
+    tidal_cover_single_track_file: bool = False
+    tidal_cover_file_format: str = "raw"
+    apple_lyrics_embed: bool = False
+    apple_lyrics_file: bool = True
+    apple_lyrics_file_synced_only: bool = False
+    apple_lyrics_prefer_lrclib: bool = True
+    apple_lyrics_word_timed: bool = True
+    apple_lyrics_ttml_file: bool = True
+    apple_metadata_cover_dimension: CoverDimensions = CoverDimensions.PxORIGIN
+    apple_metadata_cover_file_dimension: str = "follow"
+    apple_metadata_cover_embed: bool = True
+    apple_cover_album_file: bool = True
+    apple_cover_single_track_file: bool = False
+    apple_cover_file_format: str = "raw"
+    # One-time marker for the shared-to-mirror migration above. Once set, the
+    # migration leaves both mirrors alone, so each provider's choices stand.
+    lyrics_art_per_provider_migrated: bool = False
+    # One tag template for every provider (issue #61): with the custom switch
+    # off ("Provider default") every file carries what its provider supplies
+    # (plus the long-standing gates below); with it on, the tag groups
+    # switched off here are omitted. Lyrics and cover embedding are NOT
+    # template tags: the per-provider embed toggles above are their single
+    # source of truth, so no template tag duplicates them.
+    metadata_custom: bool = False
+    metadata_tag_composer: bool = True
+    metadata_tag_copyright: bool = True
+    metadata_tag_isrc: bool = True
+    metadata_tag_bpm: bool = True
+    metadata_tag_initial_key: bool = True
+    metadata_tag_upc: bool = True
     use_primary_album_artist: bool = (
         False  # When True, uses first album artist instead of track artists for folder paths
     )
@@ -278,6 +326,84 @@ class HelpSettings:
         "Save Apple's verbatim TTML beside the track (zero conversion, sidecar-only, "
         "never embedded). Apple only; default on."
     )
+    # Per-provider mirrors (issue #61) share the wording above; the Providers
+    # cards name the provider, so the help stays provider-neutral here.
+    tidal_lyrics_embed: str = "Embed lyrics in the TIDAL audio file, if lyrics are available."
+    tidal_lyrics_file: str = (
+        "Save lyrics next to the TIDAL track: timed lyrics as a *.lrc file, untimed ones as *.txt. Default on."
+    )
+    tidal_lyrics_file_synced_only: str = (
+        "Only save a lyrics file when timed (synced) lyrics exist; untimed lyrics then produce no *.txt file."
+    )
+    tidal_lyrics_prefer_lrclib: str = (
+        "Fetch lyrics from the community LRCLIB database first, falling back to TIDAL's own lyrics "
+        "when it has no match. TIDAL's own lyrics are machine-transcribed for many newer track IDs "
+        "and often wrong."
+    )
+    tidal_lyrics_word_timed: str = (
+        "Prefer word-timed lyrics when served. No effect on TIDAL, which has no word-timed source."
+    )
+    tidal_lyrics_ttml_file: str = (
+        "Save the verbatim TTML beside the track. No effect on TIDAL, which has no TTML source."
+    )
+    tidal_metadata_cover_dimension: str = (
+        "The square dimensions of the cover image embedded into the TIDAL track. Possible values: 80, 160, 320, 640, 1280, origin."
+    )
+    tidal_metadata_cover_file_dimension: str = (
+        "Size of the saved 'cover.jpg' for TIDAL downloads. 'Same as embedded' matches the embedded "
+        "cover size; otherwise pick an independent size (80, 160, 320, 640, 1280, origin)."
+    )
+    tidal_metadata_cover_embed: str = "Embed album cover into the TIDAL file."
+    tidal_cover_album_file: str = "Save cover to 'cover.jpg', if a TIDAL album is downloaded."
+    tidal_cover_single_track_file: str = "Also save cover.jpg when downloading a single TIDAL track on its own."
+    tidal_cover_file_format: str = (
+        "Sidecar cover format for TIDAL downloads: jpg or png (raw falls back to jpg, "
+        "TIDAL has no original-master sidecar). Embedded art stays jpg."
+    )
+    apple_lyrics_embed: str = "Embed lyrics in the Apple Music audio file, if lyrics are available."
+    apple_lyrics_file: str = (
+        "Save lyrics next to the Apple Music track: timed lyrics as a *.lrc file, untimed ones as " "*.txt. Default on."
+    )
+    apple_lyrics_file_synced_only: str = (
+        "Only save a lyrics file when timed (synced) lyrics exist; untimed lyrics then produce no *.txt file."
+    )
+    apple_lyrics_prefer_lrclib: str = (
+        "Fetch lyrics from the community LRCLIB database first, falling back to Apple's own lyrics "
+        "when it has no match."
+    )
+    apple_lyrics_word_timed: str = (
+        "Prefer word-timed lyrics when Apple serves syllable TTML: the enhanced LRC outranks a "
+        "line-timed LRCLIB hit. Default on."
+    )
+    apple_lyrics_ttml_file: str = (
+        "Save Apple's verbatim TTML beside the track (zero conversion, sidecar-only, never " "embedded). Default on."
+    )
+    apple_metadata_cover_dimension: str = (
+        "The square dimensions of the cover image embedded into the Apple Music track. Possible "
+        "values: 80, 160, 320, 640, 1280, origin (the true original-master image)."
+    )
+    apple_metadata_cover_file_dimension: str = (
+        "Size of the saved cover file for Apple Music downloads. 'Same as embedded' matches the "
+        "embedded cover size; otherwise pick an independent size (80, 160, 320, 640, 1280, origin)."
+    )
+    apple_metadata_cover_embed: str = "Embed album cover into the Apple Music file."
+    apple_cover_album_file: str = "Save cover beside the download, if an Apple Music album is downloaded."
+    apple_cover_single_track_file: str = "Also save cover when downloading a single Apple Music track on its own."
+    apple_cover_file_format: str = (
+        "Sidecar cover format for Apple Music downloads: raw (default: the true original-master "
+        "bytes), jpg, or png. Embedded art stays jpg."
+    )
+    metadata_custom: str = (
+        "Custom tag template: with this off every file carries what its provider supplies "
+        "('Provider default'); with it on, the tag groups switched off below are omitted. Lyrics "
+        "and cover embedding are not template tags: the per-provider embed toggles decide those."
+    )
+    metadata_tag_composer: str = "Write the composer tag (Custom template only)."
+    metadata_tag_copyright: str = "Write the copyright tag (Custom template only)."
+    metadata_tag_isrc: str = "Write the ISRC tag (Custom template only)."
+    metadata_tag_bpm: str = "Write the BPM tag (Custom template only)."
+    metadata_tag_initial_key: str = "Write the initial-key tag (Custom template only)."
+    metadata_tag_upc: str = "Write the UPC tag (Custom template only)."
     api_key_index: str = "Set the device API KEY."
     album_info_save: str = "Save album info to track?"
     video_download: str = "Allow download of videos."
@@ -438,3 +564,75 @@ class Token:
     access_token: str | None = None
     refresh_token: str | None = None
     expiry_time: float = 0.0
+
+
+# Per-provider lyrics & artwork mirrors (issue #61): the shared key names
+# each provider prefixes. The migration loop and the schema walk both read
+# this table, so a new mirrored option lands in both by adding one word.
+LYRICS_ART_KEYS: tuple[str, ...] = (
+    "lyrics_embed",
+    "lyrics_file",
+    "lyrics_file_synced_only",
+    "lyrics_prefer_lrclib",
+    "lyrics_word_timed",
+    "lyrics_ttml_file",
+    "metadata_cover_dimension",
+    "metadata_cover_file_dimension",
+    "metadata_cover_embed",
+    "cover_album_file",
+    "cover_single_track_file",
+    "cover_file_format",
+)
+
+PROVIDER_IDS: tuple[str, ...] = ("tidal", "apple")
+
+# Custom-template tag groups (issue #61): the metadata tags a Custom
+# template can omit, one toggle each (metadata_tag_<name>).
+METADATA_TAG_FLAGS: tuple[str, ...] = (
+    "composer",
+    "copyright",
+    "isrc",
+    "bpm",
+    "initial_key",
+    "upc",
+)
+
+_MISSING = object()
+
+
+def provider_setting(data, provider_id: str, key: str, default=None):
+    """One lyrics/artwork option for one provider (issue #61).
+
+    Reads the provider's mirror (``tidal_lyrics_embed``) with the shared key
+    as legacy fallback, so configs and stubs that predate the split keep
+    their meaning: an old install behaves exactly as configured until the
+    one-time migration copies its values into both mirrors.
+    """
+    pid = str(provider_id or "").strip().lower() or "tidal"
+    if data is None:
+        return default
+    namespaced = getattr(data, f"{pid}_{key}", _MISSING)
+    if namespaced is not _MISSING:
+        return namespaced
+    return getattr(data, key, default)
+
+
+def metadata_tag_write(data, tag: str) -> bool:
+    """Whether the Custom template keeps one tag group (issue #61).
+
+    Provider default (the custom switch off) writes everything; Custom
+    omits the groups switched off. Unknown tags and unreadable configs
+    write, never drop: omitting is always the user's explicit choice.
+    """
+    if data is None:
+        return True
+    try:
+        custom = bool(getattr(data, "metadata_custom", False))
+    except Exception:
+        return True
+    if not custom:
+        return True
+    try:
+        return bool(getattr(data, f"metadata_tag_{tag}", True))
+    except Exception:
+        return True

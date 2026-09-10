@@ -217,10 +217,20 @@ def test_save_chooser_defaults_stages_through_apply_settings():
     staged.clear()
     b.saveChooserDefaults({"provider": "apple", "tier": "LOW", "audioType": ""})
     assert "apple_quality_audio" not in staged
-    # Quick toggles ride along under both spellings.
+    # Quick toggles ride along under both spellings, staged onto the row's
+    # own provider mirrors (issue #61).
     staged.clear()
     b.saveChooserDefaults({"provider": "tidal", "tier": "", "audioType": "", "lyricsEmbed": True, "coverFile": False})
-    assert staged["lyrics_embed"] is True and staged["cover_album_file"] is False
+    assert staged["tidal_lyrics_embed"] is True and staged["tidal_cover_album_file"] is False
+    staged.clear()
+    b.saveChooserDefaults({"provider": "apple", "tier": "", "audioType": "", "lyricsEmbed": True, "coverFile": False})
+    assert staged["apple_lyrics_embed"] is True and staged["apple_cover_album_file"] is False
+    # An explicit mirror wins over the shared spelling.
+    staged.clear()
+    b.saveChooserDefaults(
+        {"provider": "tidal", "tier": "", "audioType": "", "lyricsEmbed": True, "tidal_lyrics_embed": False}
+    )
+    assert staged["tidal_lyrics_embed"] is False
 
 
 def test_download_with_chooser_pins_that_click_only(monkeypatch):

@@ -254,6 +254,13 @@ def tag_apple_file(
     mark_explicit: bool = False,
     metadata_target_upc: str = "UPC",
     audio_type: str | None = None,
+    # Custom-template omit flags (issue #61): all written by default.
+    write_composer: bool = True,
+    write_copyright: bool = True,
+    write_isrc: bool = True,
+    write_bpm: bool = True,
+    write_initial_key: bool = True,
+    write_upc: bool = True,
 ) -> bool:
     """Tag one Apple file: generic WAVES_* family only, never TIDAL legacy."""
     album = facts.get("album") or {}
@@ -285,6 +292,12 @@ def tag_apple_file(
             album_artist_ids=facts.get("album_artist_ids") or [],
             legacy_ids=False,
             audio_type=audio_type,
+            write_composer=write_composer,
+            write_copyright=write_copyright,
+            write_isrc=write_isrc,
+            write_bpm=write_bpm,
+            write_initial_key=write_initial_key,
+            write_upc=write_upc,
         )
     except KeyError:
         logger.debug("Unknown UPC target for Apple tags", exc_info=True)

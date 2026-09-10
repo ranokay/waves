@@ -105,7 +105,17 @@ def test_the_providers_area_is_one_section_with_two_provider_cards():
 
 
 def test_the_tidal_card_hosts_the_session_and_its_quality_default():
-    assert _keys(_providers()["providers_tidal"]) == ["provider_tidal_session", "tidal_quality_audio"]
+    assert _keys(_providers()["providers_tidal"]) == [
+        "provider_tidal_session",
+        "tidal_quality_audio",
+        "tidal_lyrics_embed",
+        "tidal_lyrics_file",
+        "tidal_lyrics_prefer_lrclib",
+        "tidal_metadata_cover_dimension",
+        "tidal_metadata_cover_embed",
+        "tidal_cover_album_file",
+        "tidal_cover_file_format",
+    ]
 
 
 def test_the_tidals_quality_default_no_longer_sits_under_downloads():
@@ -123,6 +133,15 @@ def test_the_apple_card_holds_the_switch_row_and_the_quality():
         "provider_apple_status",
         "apple_setup_wizard",
         "apple_quality_audio",
+        "apple_lyrics_embed",
+        "apple_lyrics_file",
+        "apple_lyrics_prefer_lrclib",
+        "apple_lyrics_word_timed",
+        "apple_lyrics_ttml_file",
+        "apple_metadata_cover_dimension",
+        "apple_metadata_cover_embed",
+        "apple_cover_album_file",
+        "apple_cover_file_format",
         "apple_cookies_path",
         "path_binary_nm3u8dlre",
         "apple_apk_path",
@@ -397,14 +416,24 @@ def test_enabling_and_pre_setup_clicks_deep_link_into_the_wizard():
 
 
 def test_provider_cards_hold_only_field_kinds_the_band_renders():
-    # The band renders rowFields through the shared row renderer and plain
-    # bools through the shared toggle tile. Any other kind (a third-width
-    # row, a char map, an embedded card) would silently vanish, so adding
-    # one must come with its renderer.
+    # The band renders rowFields through the shared row renderer (which also
+    # covers the cover_sizes composite) and plain bools through the shared
+    # toggle tile. Any other kind (a third-width row, a char map, an
+    # embedded card) would silently vanish, so adding one must come with
+    # its renderer.
     for card in _providers().values():
         kinds = {(f["key"], f.get("type"), bool(f.get("third"))) for f in card["fields"]}
         for key, kind, third in kinds:
-            assert kind in ("status", "apple_setup", "enum", "str", "int", "float", "bool"), key
+            assert kind in (
+                "status",
+                "apple_setup",
+                "enum",
+                "str",
+                "int",
+                "float",
+                "bool",
+                "cover_sizes",
+            ), key
             assert third is False, key
 
 

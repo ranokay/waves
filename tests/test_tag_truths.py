@@ -157,6 +157,14 @@ def _download() -> Download:
     dl.settings.data.metadata_replay_gain = False
     dl.settings.data.mark_explicit = False
     dl.settings.data.metadata_target_upc = "UPC"
+    # Per-provider mirrors (issue #61): this pipeline reads the TIDAL card's
+    # options, so the stub states them, not just the legacy shared keys.
+    dl.settings.data.tidal_lyrics_embed = False
+    dl.settings.data.tidal_lyrics_file = False
+    dl.settings.data.tidal_lyrics_prefer_lrclib = False
+    dl.settings.data.tidal_metadata_cover_embed = False
+    dl.settings.data.tidal_cover_album_file = False
+    dl.settings.data.tidal_cover_single_track_file = False
     dl.event_abort = threading.Event()
     dl.event_run = threading.Event()
     dl.event_run.set()

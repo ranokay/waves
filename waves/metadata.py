@@ -284,6 +284,16 @@ class Metadata:
         album_artist_ids: [str] = None,
         legacy_ids: bool = True,
         audio_type: str | None = None,
+        # Custom-template omit flags (issue #61): one per omittable tag
+        # group, all defaulting to written (Provider-default behavior). The
+        # callers derive them from the template; lyrics and cover are NOT
+        # here (their embed toggles decide those).
+        write_composer: bool = True,
+        write_copyright: bool = True,
+        write_isrc: bool = True,
+        write_bpm: bool = True,
+        write_initial_key: bool = True,
+        write_upc: bool = True,
     ):
         self.path_file = path_file
         self.title = title
@@ -298,6 +308,12 @@ class Metadata:
         self.date = date
         self.composer = composer
         self.isrc = isrc
+        self.write_composer = write_composer
+        self.write_copyright = write_copyright
+        self.write_isrc = write_isrc
+        self.write_bpm = write_bpm
+        self.write_initial_key = write_initial_key
+        self.write_upc = write_upc
         self.lyrics = lyrics
         self.lyrics_unsynced = lyrics_unsynced
         self.cover_data = cover_data
@@ -416,12 +432,28 @@ class Metadata:
             self.track_peak_amplitude,
         )
 
+    def _set_flac_custom_tags(self):
+        # Custom-template omit flags (issue #61), split from set_flac so the
+        # writer stays under the branch budget.
+        if self.write_copyright:
+            self.m.tags["COPYRIGHT"] = self.copy_right
+        if self.write_composer:
+            self.m.tags["COMPOSER"] = self.composer
+        if self.write_isrc:
+            self.m.tags["ISRC"] = self.isrc
+        if self.write_upc:
+            self.m.tags[self.target_upc["FLAC"]] = self.upc
+        if self.write_bpm:
+            self.m.tags["BPM"] = str(self.bpm if self.bpm > 0 else "")
+        if self.write_initial_key:
+            self.m.tags["INITIALKEY"] = self.initial_key
+
     def set_flac(self):
         self.m.tags["TITLE"] = self.title
         self.m.tags["ALBUM"] = self.album
         self.m.tags["ALBUMARTIST"] = self.albumartist
         self.m.tags["ARTIST"] = self.artists
-        self.m.tags["COPYRIGHT"] = self.copy_right
+        self._set_flac_custom_tags()
         self.m.tags["TRACKNUMBER"] = str(self.tracknumber)
         # 0 means the count is unknown (the album summary carried none):
         # write nothing rather than "of 1" beside a real track number.
@@ -431,14 +463,9 @@ class Metadata:
         self.m.tags["DISCTOTAL"] = str(self.totaldisc)
         self.m.tags["DATE"] = self.date
         self.m.tags["ORIGINALDATE"] = self.date
-        self.m.tags["COMPOSER"] = self.composer
-        self.m.tags["ISRC"] = self.isrc
         self.m.tags["LYRICS"] = self._primary_lyrics()
         self.m.tags["UNSYNCEDLYRICS"] = self.lyrics_unsynced
         self.m.tags["URL"] = self.url_share
-        self.m.tags[self.target_upc["FLAC"]] = self.upc
-        self.m.tags["BPM"] = str(self.bpm if self.bpm > 0 else "")
-        self.m.tags["INITIALKEY"] = self.initial_key
         self.m.tags["RELEASETYPE"] = self.release_type
         self.m.tags[ITEM_ID_TAG] = self.item_id
         self.m.tags[GENERIC_ITEM_ID_TAG] = self.namespaced_item_id
@@ -457,6 +484,22 @@ class Metadata:
             for key, text in self._rg_pairs():
                 self.m.tags[key] = text
 
+    def _set_mp3_custom_tags(self):
+        # Custom-template omit flags (issue #61), split from set_mp3 so the
+        # writer stays under the branch budget.
+        if self.write_copyright:
+            self.m.tags.add(TCOP(encoding=3, text=self.copy_right))
+        if self.write_composer:
+            self.m.tags.add(TCOM(encoding=3, text=self.composer))
+        if self.write_isrc:
+            self.m.tags.add(TSRC(encoding=3, text=self.isrc))
+        if self.write_upc:
+            self.m.tags.add(TXXX(encoding=3, desc=self.target_upc["MP3"], text=self.upc))
+        if self.write_bpm:
+            self.m.tags.add(TBPM(encoding=3, text=str(self.bpm if self.bpm > 0 else "")))
+        if self.write_initial_key:
+            self.m.tags.add(TKEY(encoding=3, text=self.initial_key))
+
     def set_mp3(self):
         # ID3 Frame (tags) overview: https://exiftool.org/TagNames/ID3.html / https://id3.org/id3v2.3.0
         # Mapping overview: https://docs.mp3tag.de/mapping/
@@ -464,11 +507,9 @@ class Metadata:
         self.m.tags.add(TALB(encoding=3, text=self.album))
         self.m.tags.add(TPE2(encoding=3, text=self.albumartist))  # TPE2 is the album artist
         self.m.tags.add(TPE1(encoding=3, text=self.artists))
-        self.m.tags.add(TCOP(encoding=3, text=self.copy_right))
+        self._set_mp3_custom_tags()
         self.m.tags.add(TRCK(encoding=3, text=str(self.tracknumber)))
         self.m.tags.add(TDRC(encoding=3, text=self.date))
-        self.m.tags.add(TCOM(encoding=3, text=self.composer))
-        self.m.tags.add(TSRC(encoding=3, text=self.isrc))
         if self.lyrics:
             # SYLT is a list of (text, timestamp) pairs; handed a plain string
             # mutagen raises while rendering, which would abort the whole save.
@@ -477,9 +518,6 @@ class Metadata:
         # A URL frame has one field, "url", and mutagen silently discards every
         # other keyword: WOAS(text=...) wrote an empty URL and dropped its value.
         self.m.tags.add(WOAS(url=self.url_share))
-        self.m.tags.add(TXXX(encoding=3, desc=self.target_upc["MP3"], text=self.upc))
-        self.m.tags.add(TBPM(encoding=3, text=str(self.bpm if self.bpm > 0 else "")))
-        self.m.tags.add(TKEY(encoding=3, text=self.initial_key))
         self.m.tags.add(TXXX(encoding=3, desc="MusicBrainz Album Type", text=self.release_type))
         self._set_mp3_ids()
 
@@ -506,26 +544,36 @@ class Metadata:
         if self.namespaced_album_artist_ids:
             self.m.tags.add(TXXX(encoding=3, desc=GENERIC_ALBUM_ARTIST_ID_TAG, text=self.namespaced_album_artist_ids))
 
+    def _set_mp4_custom_tags(self):
+        # Custom-template omit flags (issue #61), split from set_mp4 so the
+        # writer stays under the branch budget.
+        if self.write_copyright:
+            self.m.tags["cprt"] = self.copy_right
+        if self.write_composer:
+            self.m.tags["\xa9wrt"] = self.composer
+        if self.write_isrc:
+            self.m.tags["isrc"] = self.isrc
+        if self.write_upc:
+            self.m.tags[f"----:com.apple.iTunes:{self.target_upc['MP4']}"] = self.upc.encode("utf-8")
+        if self.bpm > 0 and self.write_bpm:
+            self.m.tags["tmpo"] = [self.bpm]
+        if self.write_initial_key:
+            self.m.tags["----:com.apple.iTunes:initialkey"] = self.initial_key.encode("utf-8")
+
     def set_mp4(self):
         self.m.tags["\xa9nam"] = self.title
         self.m.tags["\xa9alb"] = self.album
         self.m.tags["aART"] = self.albumartist
         self.m.tags["\xa9ART"] = self.artists
-        self.m.tags["cprt"] = self.copy_right
+        self._set_mp4_custom_tags()
         self.m.tags["trkn"] = [[self.tracknumber, self.totaltrack]]
         self.m.tags["disk"] = [[self.discnumber, self.totaldisc]]
         # self.m.tags['\xa9gen'] = self.genre
         self.m.tags["\xa9day"] = self.date
-        self.m.tags["\xa9wrt"] = self.composer
         self.m.tags["\xa9lyr"] = self._primary_lyrics()
         self.m.tags["----:com.apple.iTunes:UNSYNCEDLYRICS"] = self.lyrics_unsynced.encode("utf-8")
-        self.m.tags["isrc"] = self.isrc
         self.m.tags["\xa9url"] = self.url_share
-        self.m.tags[f"----:com.apple.iTunes:{self.target_upc['MP4']}"] = self.upc.encode("utf-8")
         self.m.tags["rtng"] = [1 if self.explicit else 0]
-        if self.bpm > 0:
-            self.m.tags["tmpo"] = [self.bpm]
-        self.m.tags["----:com.apple.iTunes:initialkey"] = self.initial_key.encode("utf-8")
 
         self.m.tags["----:com.apple.iTunes:MusicBrainz Album Type"] = self.release_type.encode("utf-8")
         if self.item_id:

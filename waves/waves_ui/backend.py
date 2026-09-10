@@ -100,7 +100,7 @@ from waves.library_index import (
     cache_file_for_root,
     root_comparison_key,
 )
-from waves.model.cfg import HelpSettings
+from waves.model.cfg import METADATA_TAG_FLAGS, HelpSettings, metadata_tag_write, provider_setting
 from waves.model.cfg import Settings as CfgSettings
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.downloader import TrackStreamInfo
@@ -327,6 +327,20 @@ _FLAG_FIELDS = [
     # toggle (default on) and the verbatim Apple TTML sidecar (default off).
     "lyrics_word_timed",
     "lyrics_ttml_file",
+    # Per-provider mirrors (issue #61): each provider's own lyrics/artwork
+    # options, rendered inside its Providers card.
+    "tidal_lyrics_embed",
+    "tidal_lyrics_file",
+    "tidal_lyrics_file_synced_only",
+    "tidal_lyrics_prefer_lrclib",
+    "tidal_lyrics_word_timed",
+    "tidal_lyrics_ttml_file",
+    "apple_lyrics_embed",
+    "apple_lyrics_file",
+    "apple_lyrics_file_synced_only",
+    "apple_lyrics_prefer_lrclib",
+    "apple_lyrics_word_timed",
+    "apple_lyrics_ttml_file",
     "download_delay",
     "extract_flac",
     "metadata_cover_embed",
@@ -334,6 +348,28 @@ _FLAG_FIELDS = [
     # Child of cover_album_file, carried inside its "cover_scope" composite rather
     # than as its own tile; listed here so applySettings persists it as a bool.
     "cover_single_track_file",
+    "tidal_metadata_cover_embed",
+    "tidal_cover_album_file",
+    "tidal_cover_single_track_file",
+    "apple_metadata_cover_embed",
+    "apple_cover_album_file",
+    "apple_cover_single_track_file",
+    "skip_existing",
+    "confirm_category_download",
+    "symlink_to_track",
+    "playlist_create",
+    "mark_explicit",
+    "use_primary_album_artist",
+    "download_dolby_atmos",
+    # Custom tag template (issue #61): the master switch plus one omit flag
+    # per tag group, shown only while the switch is on.
+    "metadata_custom",
+    "metadata_tag_composer",
+    "metadata_tag_copyright",
+    "metadata_tag_isrc",
+    "metadata_tag_bpm",
+    "metadata_tag_initial_key",
+    "metadata_tag_upc",
     "skip_existing",
     "confirm_category_download",
     "symlink_to_track",
@@ -358,6 +394,9 @@ _CHOICE_FIELDS = [
     ("apple_quality_audio", QualityTier),
     ("quality_video", QualityVideo),
     ("metadata_cover_dimension", CoverDimensions),
+    # Per-provider mirrors (issue #61).
+    ("tidal_metadata_cover_dimension", CoverDimensions),
+    ("apple_metadata_cover_dimension", CoverDimensions),
     # Advanced
     ("downsample_target", DownsampleTarget),
     ("metadata_target_upc", MetadataTargetUPC),
@@ -953,7 +992,7 @@ _FIELD_LABELS = {
     "use_primary_album_artist": "Primary album artist for folders",
     "symlink_to_track": "Symlink into track folder",
     "playlist_create": "Create .m3u8 playlist",
-    # Metadata & artwork
+    # Metadata (the tag template; lyrics/cover embedding lives per provider)
     "metadata_cover_dimension": "Embedded cover size",
     "metadata_cover_embed": "Embed cover art",
     "cover_album_file": "Save cover.jpg",
@@ -965,6 +1004,36 @@ _FIELD_LABELS = {
     "lyrics_ttml_file": "Save Apple TTML file",
     "cover_file_format": "Cover file format",
     "mark_explicit": "Mark explicit in title",
+    # Per-provider mirrors (issue #61): the Providers cards already name the
+    # provider, so the labels stay provider-neutral.
+    "tidal_lyrics_embed": "Embed lyrics",
+    "tidal_lyrics_file": "Save lyrics file",
+    "tidal_lyrics_file_synced_only": "Only synced lyrics files",
+    "tidal_lyrics_prefer_lrclib": "Prefer LRCLIB lyrics",
+    "tidal_lyrics_word_timed": "Prefer word-timed lyrics",
+    "tidal_lyrics_ttml_file": "Save TTML file",
+    "tidal_metadata_cover_dimension": "Embedded cover size",
+    "tidal_metadata_cover_embed": "Embed cover art",
+    "tidal_cover_album_file": "Save cover.jpg",
+    "tidal_cover_file_format": "Cover file format",
+    "apple_lyrics_embed": "Embed lyrics",
+    "apple_lyrics_file": "Save lyrics file",
+    "apple_lyrics_file_synced_only": "Only synced lyrics files",
+    "apple_lyrics_prefer_lrclib": "Prefer LRCLIB lyrics",
+    "apple_lyrics_word_timed": "Prefer word-timed lyrics",
+    "apple_lyrics_ttml_file": "Save Apple TTML file",
+    "apple_metadata_cover_dimension": "Embedded cover size",
+    "apple_metadata_cover_embed": "Embed cover art",
+    "apple_cover_album_file": "Save cover",
+    "apple_cover_file_format": "Cover file format",
+    # Custom tag template (issue #61).
+    "metadata_custom": "Custom tag template",
+    "metadata_tag_composer": "Composer tag",
+    "metadata_tag_copyright": "Copyright tag",
+    "metadata_tag_isrc": "ISRC tag",
+    "metadata_tag_bpm": "BPM tag",
+    "metadata_tag_initial_key": "Initial-key tag",
+    "metadata_tag_upc": "UPC tag",
     # Advanced
     "path_binary_ffmpeg": "FFmpeg binary path",
     "downsample_target": "Downsample target",
@@ -1001,6 +1070,24 @@ _ENUM_LABELS = {
     },
     "quality_video": {"P360": "360p", "P480": "480p", "P720": "720p", "P1080": "1080p"},
     "metadata_cover_dimension": {
+        "Px80": "80×80",
+        "Px160": "160×160",
+        "Px320": "320×320",
+        "Px640": "640×640",
+        "Px1280": "1280×1280",
+        "PxORIGIN": "Original",
+    },
+    # Per-provider mirrors (issue #61): identical rungs, one list each so a
+    # provider's wording can diverge later without touching the other.
+    "tidal_metadata_cover_dimension": {
+        "Px80": "80×80",
+        "Px160": "160×160",
+        "Px320": "320×320",
+        "Px640": "640×640",
+        "Px1280": "1280×1280",
+        "PxORIGIN": "Original",
+    },
+    "apple_metadata_cover_dimension": {
         "Px80": "80×80",
         "Px160": "160×160",
         "Px320": "320×320",
@@ -1299,14 +1386,16 @@ def _record_names_a_broken_copy(rec: dict | None) -> bool:
     return "[None]" in path or "{album_track_num}" in path
 
 
-def _cover_sidecar_format(data) -> str:
+def _cover_sidecar_format(data, key: str = "cover_file_format") -> str:
     """The sidecar cover format: jpg, png, or raw (Apple-only).
 
     One normalizer for every writer so TIDAL and Apple agree on the
     spelling; unknown values fall back to jpg and TIDAL treats raw as jpg
-    (it has no original-master sidecar).
+    (it has no original-master sidecar). ``key`` selects whose mirror to
+    read (issue #61); the shared key stays the legacy fallback.
     """
-    fmt = str(getattr(data, "cover_file_format", "jpg") or "jpg").strip().lower()
+    fmt = str(provider_setting(data, "apple" if key.startswith("apple_") else "tidal", key, "jpg") or "jpg")
+    fmt = fmt.strip().lower()
     if fmt in ("jpeg",):
         return "jpg"
     return fmt if fmt in ("jpg", "png", "raw") else "jpg"
@@ -8923,12 +9012,14 @@ class WavesBridge(LibraryMixin, QObject):
         provider's tier entries; lyrics/art: the shared quick-toggles."""
         provider_id = self._chooser_provider_of(media_id)
         try:
-            data = getattr(getattr(self, "settings", None), "data", None)
-            lyrics_embed = bool(getattr(data, "lyrics_embed", False)) if data is not None else False
-            lyrics_file = bool(getattr(data, "lyrics_file", False)) if data is not None else False
-            lyrics_ttml = bool(getattr(data, "lyrics_ttml_file", False)) if data is not None else False
-            cover_embed = bool(getattr(data, "metadata_cover_embed", True)) if data is not None else True
-            cover_file = bool(getattr(data, "cover_album_file", True)) if data is not None else True
+            # Per-provider quick toggles (issue #61): the Chooser stages the
+            # row's own provider options, and SET AS DEFAULTS writes them back
+            # to that provider's mirrors.
+            lyrics_embed = bool(self._psetting(provider_id, "lyrics_embed", False))
+            lyrics_file = bool(self._psetting(provider_id, "lyrics_file", False))
+            lyrics_ttml = bool(self._psetting(provider_id, "lyrics_ttml_file", False))
+            cover_embed = bool(self._psetting(provider_id, "metadata_cover_embed", True))
+            cover_file = bool(self._psetting(provider_id, "cover_album_file", True))
         except Exception:
             lyrics_embed = lyrics_file = lyrics_ttml = False
             cover_embed = cover_file = True
@@ -8979,9 +9070,26 @@ class WavesBridge(LibraryMixin, QObject):
         # "atmos" alone has no Settings spelling (the toggle means alongside
         # in v1, spec section 5): SET AS DEFAULTS leaves it unchanged rather
         # than misrecording it as both.
-        for key in ("lyrics_embed", "lyrics_file", "lyrics_ttml_file", "metadata_cover_embed", "cover_album_file"):
-            if key in incoming:
-                staged[key] = bool(incoming[key])
+        # Lyrics/art quick-toggles write back to the row's own provider
+        # mirrors (issue #61); the shared keys stay legacy carriers. An
+        # explicit mirror always wins over its shared spelling.
+        provider_prefix = "apple_" if provider_id == CTX_APPLE else "tidal_"
+        _toggle_bases = (
+            "lyrics_embed",
+            "lyrics_file",
+            "lyrics_ttml_file",
+            "metadata_cover_embed",
+            "cover_album_file",
+        )
+        for _prefix in ("tidal_", "apple_"):
+            for _base in _toggle_bases:
+                _key = _prefix + _base
+                if _key in incoming and _key not in staged:
+                    staged[_key] = bool(incoming[_key])
+        for _base in _toggle_bases:
+            _mirror = provider_prefix + _base
+            if _mirror not in staged and _base in incoming:
+                staged[_mirror] = bool(incoming[_base])
         # QML uses camelCase toggle names; accept both spellings.
         aliases = {
             "lyricsEmbed": "lyrics_embed",
@@ -8991,8 +9099,8 @@ class WavesBridge(LibraryMixin, QObject):
             "coverFile": "cover_album_file",
         }
         for camel, snake in aliases.items():
-            if camel in incoming and snake not in staged:
-                staged[snake] = bool(incoming[camel])
+            if camel in incoming and provider_prefix + snake not in staged:
+                staged[provider_prefix + snake] = bool(incoming[camel])
         if staged:
             self.applySettings(staged)
 
@@ -13080,6 +13188,27 @@ class WavesBridge(LibraryMixin, QObject):
             time.sleep(min(0.2, remaining))
 
     # ----- Apple session supervision (issue #33, spec §3) --------------------
+    def _psetting(self, provider_id: str, key: str, default=None):
+        """One lyrics/artwork option for one provider (issue #61).
+
+        Reads the provider's mirror with the shared key as legacy fallback,
+        defensively (old unit-test stubs bind the bridge without these
+        fields; they read as the default).
+        """
+        try:
+            data = getattr(getattr(self, "settings", None), "data", None)
+            return provider_setting(data, provider_id, key, default)
+        except Exception:
+            return default
+
+    def _tag_write_flags(self) -> dict:
+        """The Custom template's omit flags for tag writers (issue #61)."""
+        try:
+            data = getattr(getattr(self, "settings", None), "data", None)
+        except Exception:
+            data = None
+        return {f"write_{tag}": metadata_tag_write(data, tag) for tag in METADATA_TAG_FLAGS}
+
     def _apple_setting(self, name: str, default):
         """One Apple supervision setting off the live config, defensively.
 
@@ -13831,10 +13960,11 @@ class WavesBridge(LibraryMixin, QObject):
             facts=facts,
             lyrics_synced=lyrics_synced,
             lyrics_unsynced=lyrics_unsynced,
-            cover_data=cover_data if self.settings.data.metadata_cover_embed else None,
+            cover_data=cover_data if self._psetting(CTX_APPLE, "metadata_cover_embed", True) else None,
             mark_explicit=bool(self.settings.data.mark_explicit),
             metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
             audio_type="atmos" if atmos else "stereo",
+            **self._tag_write_flags(),
         ):
             logger.debug("Apple tagging reported failure for %s", diagnostics.content(track_id))
         self._apple_write_sidecars(
@@ -14137,10 +14267,13 @@ class WavesBridge(LibraryMixin, QObject):
         """
         from waves.lyrics import fetch_lrclib_lyrics
 
-        data = self.settings.data
-        if not (data.lyrics_embed or data.lyrics_file or getattr(data, "lyrics_ttml_file", False)):
+        if not (
+            self._psetting(CTX_APPLE, "lyrics_embed", False)
+            or self._psetting(CTX_APPLE, "lyrics_file", False)
+            or self._psetting(CTX_APPLE, "lyrics_ttml_file", False)
+        ):
             return "", ""
-        if not getattr(data, "lyrics_prefer_lrclib", True):
+        if not self._psetting(CTX_APPLE, "lyrics_prefer_lrclib", True):
             return "", ""
         try:
             session = _waves_download.pooled_session()
@@ -14178,11 +14311,14 @@ class WavesBridge(LibraryMixin, QObject):
         """
         from waves.lyrics import fetch_lrclib_lyrics
 
-        data = self.settings.data
-        if not (data.lyrics_embed or data.lyrics_file or getattr(data, "lyrics_ttml_file", False)):
+        if not (
+            self._psetting(CTX_APPLE, "lyrics_embed", False)
+            or self._psetting(CTX_APPLE, "lyrics_file", False)
+            or self._psetting(CTX_APPLE, "lyrics_ttml_file", False)
+        ):
             return "", "", ""
-        word_on = bool(getattr(data, "lyrics_word_timed", True))
-        prefer_lrclib = bool(getattr(data, "lyrics_prefer_lrclib", True))
+        word_on = bool(self._psetting(CTX_APPLE, "lyrics_word_timed", True))
+        prefer_lrclib = bool(self._psetting(CTX_APPLE, "lyrics_prefer_lrclib", True))
 
         track_obj = None
         try:
@@ -14197,7 +14333,7 @@ class WavesBridge(LibraryMixin, QObject):
         # file is on.
         word_lrc = ""
         syllable_ttml = ""
-        ttml_on = bool(getattr(data, "lyrics_ttml_file", False))
+        ttml_on = bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False))
         if (word_on or ttml_on) and track_obj is not None:
             try:
                 syllable_ttml = provider.fetch_syllable_ttml(track_obj) or ""
@@ -14293,14 +14429,13 @@ class WavesBridge(LibraryMixin, QObject):
         """Whether this job fetches cover art at all: embedded, or filed per
         the engine's own cover.jpg rule (collections always qualify; a lone
         track only with the single-track opt-in)."""
-        data = self.settings.data
-        if data.metadata_cover_embed:
+        if self._psetting(CTX_APPLE, "metadata_cover_embed", True):
             return True
         return bool(
             Download._want_cover_file(
-                bool(data.cover_album_file),
+                bool(self._psetting(CTX_APPLE, "cover_album_file", True)),
                 bool(collection),
-                bool(getattr(data, "cover_single_track_file", False)),
+                bool(self._psetting(CTX_APPLE, "cover_single_track_file", False)),
             )
         )
 
@@ -14315,7 +14450,7 @@ class WavesBridge(LibraryMixin, QObject):
         tag as jpeg; the png sniff in the sidecar writer only names the
         filed copy.
         """
-        dimension = self.settings.data.metadata_cover_dimension
+        dimension = self._psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
         is_origin = str(getattr(dimension, "value", dimension)) == "origin"
         if is_origin:
             try:
@@ -14367,26 +14502,31 @@ class WavesBridge(LibraryMixin, QObject):
         """
         from waves.lyrics import lyrics_sidecar_choices
 
-        data = self.settings.data
         for text, suffix in lyrics_sidecar_choices(
             synced=lyrics_synced,
             plain=lyrics_unsynced,
             ttml=ttml_verbatim,
-            lyrics_file=bool(data.lyrics_file),
-            synced_only=bool(getattr(data, "lyrics_file_synced_only", False)),
-            ttml_file=bool(getattr(data, "lyrics_ttml_file", False)),
+            lyrics_file=bool(self._psetting(CTX_APPLE, "lyrics_file", False)),
+            synced_only=bool(self._psetting(CTX_APPLE, "lyrics_file_synced_only", False)),
+            ttml_file=bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False)),
             is_apple=True,
         ):
             write_text_sidecar(dest.parent, dest.stem, suffix, text)
         # Same gate as the fetch decision above: a lone track files its cover
         # only with the single-track opt-in.
         want_cover_file = Download._want_cover_file(
-            bool(data.cover_album_file),
+            bool(self._psetting(CTX_APPLE, "cover_album_file", True)),
             bool(collection),
-            bool(getattr(data, "cover_single_track_file", False)),
+            bool(self._psetting(CTX_APPLE, "cover_single_track_file", False)),
         )
         if want_cover_file and cover_data:
-            write_cover_sidecar(dest.parent, cover_data, _cover_sidecar_format(data))
+            write_cover_sidecar(
+                dest.parent,
+                cover_data,
+                _cover_sidecar_format(
+                    getattr(getattr(self, "settings", None), "data", None), "apple_cover_file_format"
+                ),
+            )
 
     def _apple_gate_track(
         self, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
@@ -17235,16 +17375,16 @@ class WavesBridge(LibraryMixin, QObject):
             folder, stem = self._apple_standalone_dest(base, track_row, album_row, collection)
             if mode == "lyrics":
                 synced, plain, ttml = self._apple_lyrics_full(provider, track_row, facts)
-                if not (synced or plain or (ttml and bool(getattr(data, "lyrics_ttml_file", False)))):
+                if not (synced or plain or (ttml and bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False)))):
                     continue
                 wrote = False
                 for text, suffix in lyrics_sidecar_choices(
                     synced=synced,
                     plain=plain,
                     ttml=ttml,
-                    lyrics_file=bool(data.lyrics_file),
-                    synced_only=bool(getattr(data, "lyrics_file_synced_only", False)),
-                    ttml_file=bool(getattr(data, "lyrics_ttml_file", False)),
+                    lyrics_file=bool(self._psetting(CTX_APPLE, "lyrics_file", False)),
+                    synced_only=bool(self._psetting(CTX_APPLE, "lyrics_file_synced_only", False)),
+                    ttml_file=bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False)),
                     is_apple=True,
                 ):
                     if write_text_sidecar(folder, stem, suffix, text) is not None:
@@ -17253,11 +17393,11 @@ class WavesBridge(LibraryMixin, QObject):
                     served += 1
                 # Saved music gains the embed when the toggle is on and the
                 # audio file is already on disk.
-                if wrote and bool(data.lyrics_embed):
+                if wrote and bool(self._psetting(CTX_APPLE, "lyrics_embed", False)):
                     self._apple_standalone_embed_lyrics(folder, stem, synced, plain, track_row, facts)
             else:
                 want = self._apple_wants_cover(collection)
-                if not want and not bool(data.cover_album_file):
+                if not want and not bool(self._psetting(CTX_APPLE, "cover_album_file", True)):
                     continue
                 cover = None
                 try:
@@ -17266,9 +17406,12 @@ class WavesBridge(LibraryMixin, QObject):
                     cover = None
                 if not cover:
                     continue
-                if write_cover_sidecar(folder, cover, _cover_sidecar_format(data)) is not None:
+                if (
+                    write_cover_sidecar(folder, cover, _cover_sidecar_format(data, "apple_cover_file_format"))
+                    is not None
+                ):
                     served += 1
-                if bool(data.metadata_cover_embed):
+                if bool(self._psetting(CTX_APPLE, "metadata_cover_embed", True)):
                     self._apple_standalone_embed_cover(folder, stem, cover, track_row, facts)
         return served
 
@@ -17298,6 +17441,7 @@ class WavesBridge(LibraryMixin, QObject):
                     cover_data=cover,
                     mark_explicit=bool(self.settings.data.mark_explicit),
                     metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
+                    **self._tag_write_flags(),
                 )
             except Exception:
                 logger.debug("Standalone Apple embed failed", exc_info=True)
@@ -17373,8 +17517,8 @@ class WavesBridge(LibraryMixin, QObject):
                     synced=synced,
                     plain=unsynced,
                     ttml="",
-                    lyrics_file=bool(data.lyrics_file),
-                    synced_only=bool(getattr(data, "lyrics_file_synced_only", False)),
+                    lyrics_file=bool(self._psetting(CTX_TIDAL, "lyrics_file", False)),
+                    synced_only=bool(self._psetting(CTX_TIDAL, "lyrics_file_synced_only", False)),
                     ttml_file=False,
                     is_apple=False,
                 )
@@ -17393,14 +17537,14 @@ class WavesBridge(LibraryMixin, QObject):
                     served += 1
                     # Saved music gains the embed when the toggle is on and
                     # the audio file is already on disk (same rule as Apple).
-                    if bool(data.lyrics_embed):
+                    if bool(self._psetting(CTX_TIDAL, "lyrics_embed", False)):
                         self._tidal_standalone_embed(folder, stem, track_obj, collection)
             else:
                 try:
                     from waves.constants import CoverDimensions
 
                     album = getattr(track_obj, "album", None)
-                    dimension = data.metadata_cover_dimension
+                    dimension = self._psetting(CTX_TIDAL, "metadata_cover_dimension", CoverDimensions.Px320)
                     if album is not None:
                         if str(getattr(dimension, "value", dimension)) == "origin":
                             url = album.image(CoverDimensions.PxORIGIN)
@@ -17417,14 +17561,14 @@ class WavesBridge(LibraryMixin, QObject):
                 if not cover:
                     continue
                 folder, stem = self._tidal_standalone_dest(base, track_obj, collection)
-                fmt = _cover_sidecar_format(data)
+                fmt = _cover_sidecar_format(data, "tidal_cover_file_format")
                 name = "cover.png" if fmt == "png" else "cover.jpg"
                 try:
                     target = folder / name
                     if not target.exists():
                         target.write_bytes(bytes(cover))
                     served += 1
-                    if bool(data.metadata_cover_embed):
+                    if bool(self._psetting(CTX_TIDAL, "metadata_cover_embed", True)):
                         self._tidal_standalone_embed(folder, stem, track_obj, collection)
                 except OSError:
                     logger.debug("Standalone TIDAL cover write failed", exc_info=True)
@@ -18643,7 +18787,15 @@ class WavesBridge(LibraryMixin, QObject):
         # instead, which turned every comma in every description into a
         # semicolon ("16 Bit, 44,1 kHz" became "16 Bit; 44,1 kHz") and made
         # the delimiter fields advertise a default they do not have.
-        return str(getattr(self._help, key, "") or "").replace(" — ", "; ")
+        # Per-provider mirrors (issue #61) share their base key's wording;
+        # the Providers cards already name the provider.
+        text = str(getattr(self._help, key, "") or "")
+        if not text:
+            for prefix in ("tidal_", "apple_"):
+                if key.startswith(prefix):
+                    text = str(getattr(self._help, key[len(prefix) :], "") or "")
+                    break
+        return text.replace(" — ", "; ")
 
     @Slot(result="QVariant")
     def appleStatus(self) -> dict:
@@ -19614,38 +19766,58 @@ class WavesBridge(LibraryMixin, QObject):
 
         def get_field(key: str) -> dict:
             f = dict(waves_fields[key]) if key in waves_fields else auto_field(key)
-            if key == "metadata_cover_dimension":
+
+            def _provider_of(name: str) -> str:
+                for prefix in ("tidal_", "apple_"):
+                    if name.startswith(prefix):
+                        return prefix[:-1]
+                return ""
+
+            def _base_key(name: str) -> str:
+                provider = _provider_of(name)
+                return name[len(provider) + 1 :] if provider else name
+
+            def _prefixed(base: str, provider: str) -> str:
+                return f"{provider}_{base}" if provider else base
+
+            provider = _provider_of(key)
+            base = _base_key(key)
+            if base == "metadata_cover_dimension":
                 # Composite control: the embedded-cover size (this field's enum)
                 # plus an optional, progressively-disclosed size for the saved
-                # cover.jpg. Power users get a second size without a new row
+                # cover file. Power users get a second size without a new row
                 # appearing for everyone else. QML renders "cover_sizes" specially
-                # and writes both keys back through applySettings.
+                # and writes both keys back through applySettings. Per-provider
+                # mirrors (issue #61) carry their own file size the same way.
+                file_key = _prefixed("metadata_cover_file_dimension", provider)
                 f["type"] = "cover_sizes"
-                f["file_key"] = "metadata_cover_file_dimension"
-                f["file_value"] = getattr(d, "metadata_cover_file_dimension", "follow") or "follow"
-                f["file_label"] = "Separate cover.jpg size"
+                f["file_key"] = file_key
+                f["file_value"] = getattr(d, file_key, "follow") or "follow"
+                f["file_label"] = "Separate cover file size"
                 f["file_options"] = [
                     {"value": "follow", "label": "Same as embedded"},
                     *_enum_options("metadata_cover_dimension", _ENUM_BY_FIELD["metadata_cover_dimension"]),
                 ]
-            if key == "cover_album_file":
+            if base == "cover_album_file":
                 # Stays a normal on/off tile, but carries a nested child: a compact
                 # checkbox for single-track downloads that appears under the
-                # description while "Save cover.jpg" is on. The tile keeps its fixed
+                # description while "Save cover" is on. The tile keeps its fixed
                 # size, so the niche option adds no separate tile and the section
                 # keeps its compact 2-column grid.
-                f["child_key"] = "cover_single_track_file"
-                f["child_value"] = bool(getattr(d, "cover_single_track_file", False))
+                child_key = _prefixed("cover_single_track_file", provider)
+                f["child_key"] = child_key
+                f["child_value"] = bool(getattr(d, child_key, False))
                 f["child_label"] = "Also save for single tracks"
-                f["child_help"] = "Write cover.jpg for a single track downloaded on its own, not just full albums."
-            if key == "lyrics_file":
+                f["child_help"] = "Write the cover file for a single track downloaded on its own, not just full albums."
+            if base == "lyrics_file":
                 # "Only synced" is meaningless while no lyrics file is saved, so
                 # it rides inside this tile as a nested checkbox (same pattern
                 # as cover_album_file) instead of a free-floating toggle.
-                f["child_key"] = "lyrics_file_synced_only"
-                f["child_value"] = bool(getattr(d, "lyrics_file_synced_only", False))
+                child_key = _prefixed("lyrics_file_synced_only", provider)
+                f["child_key"] = child_key
+                f["child_value"] = bool(getattr(d, child_key, False))
                 f["child_label"] = "Only when lyrics are timed (skip the .txt)"
-                f["child_help"] = self._help_for("lyrics_file_synced_only")
+                f["child_help"] = self._help_for(child_key)
             if key == "video_download":
                 # Lives with the other 'Download discography' sources; the
                 # stock engine help ("Allow download of videos") no longer
@@ -19655,36 +19827,54 @@ class WavesBridge(LibraryMixin, QObject):
                     "The artist's music videos, saved with the video path template. "
                     "Downloading a single video yourself always works, with or without this."
                 )
-            if key == "lyrics_prefer_lrclib":
+            if base == "lyrics_prefer_lrclib":
                 # The source preference only matters while lyrics are fetched at
                 # all; the tile greys out (live, unsaved toggles included) when
-                # both lyrics switches are off.
+                # the provider's lyrics switches are all off.
                 f["requires_any"] = {
-                    "lyrics_embed": bool(getattr(d, "lyrics_embed", False)),
-                    "lyrics_file": bool(getattr(d, "lyrics_file", False)),
-                    "lyrics_ttml_file": bool(getattr(d, "lyrics_ttml_file", False)),
+                    _prefixed("lyrics_embed", provider): bool(getattr(d, _prefixed("lyrics_embed", provider), False)),
+                    _prefixed("lyrics_file", provider): bool(getattr(d, _prefixed("lyrics_file", provider), False)),
+                    _prefixed("lyrics_ttml_file", provider): bool(
+                        getattr(d, _prefixed("lyrics_ttml_file", provider), False)
+                    ),
                 }
                 f["requires_hint"] = "Turn on a lyrics option first"
-            if key in ("lyrics_word_timed", "lyrics_ttml_file"):
+            if base in ("lyrics_word_timed", "lyrics_ttml_file"):
                 # Same gate as the LRCLIB preference: word-timed sourcing and
                 # the verbatim TTML sidecar only matter while lyrics are
                 # fetched at all.
                 f["requires_any"] = {
-                    "lyrics_embed": bool(getattr(d, "lyrics_embed", False)),
-                    "lyrics_file": bool(getattr(d, "lyrics_file", False)),
-                    "lyrics_ttml_file": bool(getattr(d, "lyrics_ttml_file", False)),
+                    _prefixed("lyrics_embed", provider): bool(getattr(d, _prefixed("lyrics_embed", provider), False)),
+                    _prefixed("lyrics_file", provider): bool(getattr(d, _prefixed("lyrics_file", provider), False)),
+                    _prefixed("lyrics_ttml_file", provider): bool(
+                        getattr(d, _prefixed("lyrics_ttml_file", provider), False)
+                    ),
                 }
                 f["requires_hint"] = "Turn on a lyrics option first"
-            if key == "cover_file_format":
+            if base == "cover_file_format":
                 # Small enum rendered as a dropdown: jpg/png everywhere, raw
-                # as the Apple-only original-master sidecar.
+                # as the original-master sidecar (Apple-only; TIDAL treats raw
+                # as jpg, which the label says).
+                raw_label = "Original (Apple only)" if provider != "tidal" else "Original (jpg on TIDAL)"
                 f["type"] = "enum"
-                f["value"] = str(getattr(d, "cover_file_format", "jpg") or "jpg")
+                f["value"] = str(getattr(d, key, "jpg") or "jpg")
                 f["options"] = [
                     {"value": "jpg", "label": "JPG"},
                     {"value": "png", "label": "PNG"},
-                    {"value": "raw", "label": "Original (Apple only)"},
+                    {"value": "raw", "label": raw_label},
                 ]
+            if base in (
+                "metadata_tag_composer",
+                "metadata_tag_copyright",
+                "metadata_tag_isrc",
+                "metadata_tag_bpm",
+                "metadata_tag_initial_key",
+                "metadata_tag_upc",
+            ):
+                # Custom-template omit flags (issue #61): shown only while the
+                # Custom template is on (the page hides depends_on fields).
+                f["depends_on"] = "metadata_custom"
+                f["depends_on_value"] = bool(getattr(d, "metadata_custom", False))
             if key in ("auto_update", "update_cadence", "ffmpeg_auto_update", "ffmpeg_update_cadence"):
                 # Rendered inside the updater / FFmpeg cards (toggle + cadence
                 # segment), not as the generic tile/row controls.
@@ -19755,13 +19945,25 @@ class WavesBridge(LibraryMixin, QObject):
                 "desc": "Your music services. Each provider keeps its own session, quality default and setup.",
                 "providers": [
                     {
-                        # TIDAL is the only provider with a session today.
+                        # TIDAL is the only provider with a session today. Its
+                        # lyrics/artwork options (issue #61) ride this card, so
+                        # what TIDAL embeds need not match Apple. Word-timed
+                        # and TTML have no TIDAL source and stay off this card.
                         "name": "TIDAL",
                         "id": "providers_tidal",
-                        "desc": "Your TIDAL session and the audio quality its downloads ask for.",
+                        "desc": (
+                            "Your TIDAL session, the audio quality its downloads ask for, and its lyrics and cover options."
+                        ),
                         "fields": [
                             "provider_tidal_session",
                             "tidal_quality_audio",
+                            "tidal_lyrics_embed",
+                            "tidal_lyrics_file",
+                            "tidal_lyrics_prefer_lrclib",
+                            "tidal_metadata_cover_dimension",
+                            "tidal_metadata_cover_embed",
+                            "tidal_cover_album_file",
+                            "tidal_cover_file_format",
                         ],
                     },
                     {
@@ -19781,6 +19983,15 @@ class WavesBridge(LibraryMixin, QObject):
                             "provider_apple_status",
                             "apple_setup_wizard",
                             "apple_quality_audio",
+                            "apple_lyrics_embed",
+                            "apple_lyrics_file",
+                            "apple_lyrics_prefer_lrclib",
+                            "apple_lyrics_word_timed",
+                            "apple_lyrics_ttml_file",
+                            "apple_metadata_cover_dimension",
+                            "apple_metadata_cover_embed",
+                            "apple_cover_album_file",
+                            "apple_cover_file_format",
                             "apple_cookies_path",
                             "path_binary_nm3u8dlre",
                             "apple_apk_path",
@@ -19843,23 +20054,28 @@ class WavesBridge(LibraryMixin, QObject):
                 ],
             },
             {
-                "group": "Metadata & artwork",
+                # One tag template for every provider (issue #61): with the
+                # Custom switch off each file carries what its provider
+                # supplies; with it on, the tag groups switched off below are
+                # omitted. Lyrics and cover embedding live only in the
+                # Providers cards above, never as template tags.
+                "group": "Metadata",
                 "id": "metadata",
-                "desc": "Tags, cover art and lyrics written into your files, on every enabled provider.",
+                "desc": "The tag template every download is written with, no matter which provider saved it.",
                 "fields": [
-                    "metadata_cover_dimension",
-                    "metadata_cover_embed",
-                    "cover_album_file",
-                    "cover_file_format",
-                    "lyrics_embed",
-                    "lyrics_file",
-                    # lyrics_file_synced_only renders as a child inside the
-                    # lyrics_file tile, not as its own tile.
-                    "lyrics_prefer_lrclib",
-                    "lyrics_word_timed",
-                    "lyrics_ttml_file",
                     "mark_explicit",
                     "clean_album_artist",
+                    "metadata_replay_gain",
+                    "metadata_write_url",
+                    "metadata_target_upc",
+                    "initial_key_format",
+                    "metadata_custom",
+                    "metadata_tag_composer",
+                    "metadata_tag_copyright",
+                    "metadata_tag_isrc",
+                    "metadata_tag_bpm",
+                    "metadata_tag_initial_key",
+                    "metadata_tag_upc",
                 ],
             },
             {
@@ -19928,15 +20144,11 @@ class WavesBridge(LibraryMixin, QObject):
                     "downloads_simultaneous_per_track_max",
                     "download_delay_sec_min",
                     "download_delay_sec_max",
-                    "metadata_target_upc",
-                    "initial_key_format",
                     "api_rate_limit_batch_size",
                     "api_rate_limit_delay_sec",
                     "apple_integrity_retries",
                     "apple_integrity_retry_delay_sec",
                     "downsample_enabled",
-                    "metadata_replay_gain",
-                    "metadata_write_url",
                 ],
             },
         ]
