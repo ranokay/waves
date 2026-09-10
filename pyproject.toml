@@ -201,6 +201,9 @@ ignore = [
 # (S603, fixed argv: sys.executable -c with a literal probe).
 "tests/test_library_bridge.py" = ["S603"]
 "tests/test_apple_search_groups_qml.py" = ["S603"]
+# The startup picker scenario re-runs itself in a subprocess to isolate the
+# Qt boot (S603, fixed argv).
+"tests/test_startup_provider_picker_qml.py" = ["S603"]
 "tests/test_nav_seq_and_history_guards.py" = ["S603", "C901"]
 "tests/test_folder_badge_and_crumb_labels.py" = ["S603", "C901"]
 "tests/test_hover_swell_fade.py" = ["S603", "C901"]

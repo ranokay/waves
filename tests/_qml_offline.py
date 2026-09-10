@@ -25,7 +25,11 @@ def patch_offline() -> None:
     WavesTidal.login_token = lambda self: False  # type: ignore[method-assign]
 
 
-# The session resolves logged-out (instantly, via patch_offline), so the
-# login overlay is up and would swallow every synthetic click and hover.
+# The session resolves logged-out (instantly, via patch_offline), so a gate
+# overlay is up and would swallow every synthetic click and hover.
 # Scenarios that test other surfaces park it.
-PARK_LOGIN_QML = "loginPanel.visible = false"
+# Since issue #63 the gate is whichever of the provider picker (first run)
+# and the login panel is showing: the two are mutually exclusive by design,
+# so one statement parks both. Scenarios actually about login keep this
+# parked-out state away (see test_startup_provider_picker_qml).
+PARK_LOGIN_QML = "loginPanel.visible = false; providerPicker.visible = false"
