@@ -766,11 +766,16 @@ ApplicationWindow {
             waves.setWavesPref("search_provider_tidal_collapsed", tidalSearchGroupCollapsed)
         }
     }
+    // Provider badge (issue #69): drill pages carry namespaced ids
+    // ("apple:…" vs bare TIDAL ids), so a header reads its provider off
+    // the id it already shows. Unknown ids read TIDAL, the historic shape.
+    function providerOfId(id) {
+        return ("" + (id || "")).indexOf("apple:") === 0 ? "apple" : "tidal"
+    }
     // A provider header only makes sense while the active type filter can
     // still show one of its rows. Apple offers no videos or mixes in this
     // slice, so those filters never show its header.
-    function providerGroupVisible(apple) {
-        if (!appleSearchGrouped) return false
+    function providerGroupVisible(apple) {        if (!appleSearchGrouped) return false
         var models = apple ? ({ artists: appleArtistsModel, albums: appleAlbumsModel, tracks: appleTracksModel, playlists: applePlaylistsModel })
                            : ({ artists: artistsModel, albums: albumsModel, tracks: tracksModel, videos: videosModel, playlists: playlistsModel, mixes: mixesModel })
         if (filterType !== "all") {
@@ -7914,6 +7919,23 @@ ApplicationWindow {
         }
     }
 
+    // Provider badge (issue #69): the official logo chip overlaid top-right
+    // of drill header artwork, so a page names its provider at a glance.
+    // Logo sizes follow the Chooser provider segments (wide TIDAL mark,
+    // square Apple mark).
+    component ProviderBadge: Rectangle {
+        property string provider: "tidal"   // "tidal" | "apple"
+        readonly property bool isApple: provider === "apple"
+        width: 34; height: 24; radius: 7
+        color: "#cc101318"; border.color: root.outline
+        Image {
+            anchors.centerIn: parent
+            source: parent.isApple ? "assets/providers/apple-music.png" : "assets/providers/tidal.png"
+            width: parent.isApple ? 14 : 20; height: parent.isApple ? 14 : 13
+            fillMode: Image.PreserveAspectFit; smooth: true; cache: true
+        }
+    }
+
     // SHOW ALL / SHOW LESS label used beneath every capped list (top tracks,
     // search sections, artist strip). Mint green at rest (accentContTx, the
     // soft container green) so it reads as clickable without shouting; hover
@@ -13470,6 +13492,16 @@ ApplicationWindow {
                         readonly property bool skeleton: hd === null && keyKind !== ""
                                                          && root.browseHighlightId === ""
                                                          && (root.browseTitleHint !== "" || root.browseArtHint !== "")
+                        // Provider badge (issue #69): the payload id when it
+                        // has landed, else the key the page was opened with,
+                        // so the skeleton names its provider from the first
+                        // frame instead of flashing TIDAL.
+                        readonly property string provider: {
+                            var id = hd ? ("" + (hd.id || "")) : ""
+                            if (id === "" && root.browsePageKey.indexOf("item:") === 0)
+                                id = root.browsePageKey.split(":").slice(2).join(":")
+                            return root.providerOfId(id)
+                        }
                         visible: hd !== null || skeleton
                         width: parent.width; height: visible ? 224 : 0
                         radius: 14; clip: true
@@ -13529,6 +13561,13 @@ ApplicationWindow {
                                 url: browseItemHeader.hd ? (browseItemHeader.hd.art || "") : ""
                                 // The clicked card's cover, up from the first frame.
                                 underUrl: root.browseArtHint
+                                // Provider badge over the poster's top-right (issue #69).
+                                ProviderBadge {
+                                    id: bihProviderBadge
+                                    anchors.right: parent.right; anchors.top: parent.top
+                                    anchors.rightMargin: 8; anchors.topMargin: 8
+                                    provider: browseItemHeader.provider
+                                }
                             }
                             Column {
                                 spacing: 7
@@ -14394,6 +14433,16 @@ ApplicationWindow {
                             width: 150; height: 150; hoverFx: true
                             fxKind: "artist"; fxId: "" + (root.artistData.id || "")
                             url: root.artistData.art || ""
+                            // Provider badge over the photo's top-right (issue #69).
+                            // Hidden until the id is known, so a skeleton page
+                            // never flashes the wrong provider.
+                            ProviderBadge {
+                                id: artistProviderBadge
+                                anchors.right: parent.right; anchors.top: parent.top
+                                anchors.rightMargin: 8; anchors.topMargin: 8
+                                provider: root.providerOfId(root.artistData.id || "")
+                                visible: (root.artistData.id || "") !== ""
+                            }
                         }
                         // No idle Preview button on the artist's own page, but if a
                         // preview is already playing (e.g. started from a card), the
