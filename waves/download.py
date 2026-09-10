@@ -61,6 +61,7 @@ from waves.constants import (
     MediaType,
     MetadataTargetUPC,
     QualityVideo,
+    provider_folder_name,
 )
 from waves.helper.camelot import format_initial_key
 from waves.helper.exceptions import MediaMissing
@@ -1785,6 +1786,17 @@ class Download:
         """
         return safe_filename_replacement_map(getattr(self.settings.data, "filename_illegal_map", None))
 
+    def _provider_folder(self) -> str:
+        """This download's provider folder segment for the {provider_name}
+        token (issue #65). Unknown providers render "" so the segment drops
+        away (the pre-token layout), which is also what settings stubs
+        without a provider read as.
+        """
+        try:
+            return provider_folder_name(getattr(getattr(self, "provider", None), "id", ""))
+        except Exception:
+            return ""
+
     def _collection_dir(self, relative_template: str) -> pathlib.Path:
         """The folder a collection template points at.
 
@@ -1819,6 +1831,11 @@ class Download:
         one it was already in. Without probes (an empty collection, or a
         caller that has no item yet) the spellings are tested as they are,
         which is the older behaviour.
+
+        A shallower spelling (the pre-provider-split layout, issue #65) can
+        only win on file evidence: its probe is the item-relative path, so a
+        track file already sitting there counts, while a bare ancestor
+        directory never does (issue #16's rule).
         """
         spellings: list[str] = [tidied, *older]
         sources: list[str] = probes if probes and len(probes) == len(spellings) else spellings
@@ -1829,6 +1846,17 @@ class Download:
                 continue
             if len(older_dir.parts) == preferred_depth and older_dir.is_dir():
                 return older_relative
+        for older_relative, source in zip(spellings[1:], sources[1:], strict=True):
+            if older_relative == tidied:
+                continue
+            if len(self._collection_dir(source).parts) < preferred_depth:
+                # The probe carries no extension, and a track name with a dot
+                # ("01. Title") would lose its tail to stem-splitting, so hang
+                # a dummy suffix on it: the stem is then the whole file name
+                # and every audio extension counts as evidence.
+                probe_file = pathlib.Path(str(pathlib.Path(self.path_base).expanduser() / source) + ".x")
+                if check_file_exists(probe_file, extension_ignore=True):
+                    return older_relative
         return tidied
 
     def _keep_existing_layout(self, tidied: pathlib.Path, *older: pathlib.Path) -> pathlib.Path:
@@ -2299,9 +2327,12 @@ class Download:
             is_video=isinstance(media, Video),
         )
 
-        def build(tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None) -> pathlib.Path:
+        def build(
+            tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None, provider: bool = True
+        ) -> pathlib.Path:
+            template = file_template if provider else unprefixed_template
             relative = format_path_media(
-                file_template,
+                template,
                 media,
                 self.settings.data.album_track_num_pad_min,
                 list_position,
@@ -2312,6 +2343,7 @@ class Download:
                 tidy_spacing=tidy,
                 illegal_replacement=replacement,
                 illegal_map=mapping,
+                provider_name=self._provider_folder() if provider else "",
             )
             candidate = (pathlib.Path(self.path_base).expanduser() / (relative + file_extension_dummy)).absolute()
             # Sanitize final path_file to fit into OS boundaries.
@@ -2322,12 +2354,35 @@ class Download:
         # keeps its folders when overrides are added later); the two before it
         # predate the stand-in setting entirely, so they build with "" and
         # reproduce history exactly.
-        path_media_dst: pathlib.Path = self._keep_existing_layout(
+        spellings: list[pathlib.Path] = [
             build(True, self._illegal_replacement(), self._illegal_map()),
             build(True, self._illegal_replacement()),
             build(True),
             build(False),
-        )
+        ]
+        # The provider split (issue #65) is a new spelling era: a library
+        # built under the pre-split template keeps its folders, newest first,
+        # so a folder that exists in both spellings keeps the provider one.
+        # The split-off spelling is the template minus its leading provider
+        # segment, whether that segment is still the raw token (a single
+        # track formats its own template) or already baked literal text (a
+        # collection member's template arrives with the folder filled in).
+        # Templates with no provider opening render identically either way
+        # and need no extra candidates.
+        provider_folder = self._provider_folder()
+        unprefixed_template = file_template
+        if unprefixed_template.startswith("{provider_name}/"):
+            unprefixed_template = unprefixed_template[len("{provider_name}/") :]
+        elif provider_folder and unprefixed_template.startswith(provider_folder + "/"):
+            unprefixed_template = unprefixed_template[len(provider_folder) + 1 :]
+        if unprefixed_template != file_template:
+            spellings += [
+                build(True, self._illegal_replacement(), self._illegal_map(), False),
+                build(True, self._illegal_replacement(), None, False),
+                build(True, "", None, False),
+                build(False, "", None, False),
+            ]
+        path_media_dst: pathlib.Path = self._keep_existing_layout(*spellings)
         return path_media_dst, file_extension_dummy
 
     def _prepare_file_paths_and_skip_logic(
@@ -2381,6 +2436,7 @@ class Download:
                     use_primary_album_artist=self.settings.data.use_primary_album_artist,
                     illegal_replacement=self._illegal_replacement(),
                     illegal_map=self._illegal_map(),
+                    provider_name=self._provider_folder(),
                 )
                 path_media_track_dir: pathlib.Path = (
                     pathlib.Path(self.path_base).expanduser() / (file_name_track_dir_relative + file_extension_dummy)
@@ -3230,6 +3286,7 @@ class Download:
             use_primary_album_artist=self.settings.data.use_primary_album_artist,
             illegal_replacement=self._illegal_replacement(),
             illegal_map=self._illegal_map(),
+            provider_name=self._provider_folder(),
         )
         path_media_dst: pathlib.Path = (
             pathlib.Path(self.path_base).expanduser() / (file_name_relative + file_extension)
@@ -4337,7 +4394,9 @@ class Download:
         # spelling has to be preferred at THIS level too: by the time an item
         # is formatted the folder is literal text and the old name could no
         # longer be recovered (see _keep_existing_layout).
-        def build_collection(tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None) -> str:
+        def build_collection(
+            tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None, provider: bool = True
+        ) -> str:
             return format_path_media(
                 file_template,
                 media,
@@ -4347,6 +4406,7 @@ class Download:
                 tidy_spacing=tidy,
                 illegal_replacement=replacement,
                 illegal_map=mapping,
+                provider_name=self._provider_folder() if provider else "",
             )
 
         # The same spelling, finished off by a real item of this collection.
@@ -4356,9 +4416,11 @@ class Download:
         # folders compared have to be the ones items actually land in.
         sample = next((item for item in items if isinstance(item, Track | Video)), None)
 
-        def build_probe(tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None) -> str:
+        def build_probe(
+            tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None, provider: bool = True
+        ) -> str:
             return format_path_media(
-                build_collection(tidy, replacement, mapping),
+                build_collection(tidy, replacement, mapping, provider=provider),
                 sample,
                 self.settings.data.album_track_num_pad_min,
                 1,
@@ -4369,14 +4431,21 @@ class Download:
                 tidy_spacing=tidy,
                 illegal_replacement=replacement,
                 illegal_map=mapping,
+                provider_name=self._provider_folder() if provider else "",
             )
 
-        spellings: list[tuple[bool, str, dict[str, str] | None]] = [
-            (True, self._illegal_replacement(), self._illegal_map()),
-            (True, self._illegal_replacement(), None),
-            (True, "", None),
-            (False, "", None),
+        spellings: list[tuple[bool, str, dict[str, str] | None, bool]] = [
+            (True, self._illegal_replacement(), self._illegal_map(), True),
+            (True, self._illegal_replacement(), None, True),
+            (True, "", None, True),
+            (False, "", None, True),
         ]
+        if "{provider_name}" in file_template:
+            # The provider split (issue #65) is a new spelling era at bake
+            # level too: the pre-split spellings ride along (provider newest
+            # first), so a legacy folder can win the bake instead of leaving
+            # every item to divert one by one below.
+            spellings += [(tidy, replacement, mapping, False) for tidy, replacement, mapping, _ in spellings]
 
         # Older spellings (most recent first) win when their folder exists,
         # exactly as in _keep_existing_layout; the stand-in settings only name

@@ -3,6 +3,22 @@ from enum import StrEnum
 
 CTX_TIDAL: str = "tidal"
 CTX_APPLE: str = "apple"
+# Library folder segment per provider (issue #65): the {provider_name}
+# template token renders these, so the same song saved from both providers
+# coexists instead of colliding. Unknown ids render "" (the segment drops
+# away), so contexts that predate the token keep their old paths.
+PROVIDER_FOLDER_NAMES: dict[str, str] = {"tidal": "Tidal", "apple": "Apple Music"}
+
+
+def provider_folder_name(provider_id: object) -> str:
+    """One provider's library folder segment for the {provider_name} token.
+
+    Unknown ids render "" so the segment drops away (the pre-token layout),
+    never a literal unknown word in a folder name.
+    """
+    return PROVIDER_FOLDER_NAMES.get(str(provider_id or "").strip().lower(), "")
+
+
 # One page of the signed-in user's favorites (My Tidal windows and the
 # favorite-id sweep share the window, so a page size change moves both).
 LIBRARY_PAGE: int = 100

@@ -266,6 +266,16 @@ def _migrate_settings(data: ModelSettings) -> bool:
         data.format_playlist_folder_migrated = True
         changed = True
 
+    # Download paths split by provider (issue #65): the album and track
+    # template defaults grew a leading {provider_name} segment. Like the
+    # {folder_path} migration above, only stored values equal to the OLD
+    # defaults are rewritten; a customized template is the user's own layout
+    # and is never touched (existing files stay where they are either way:
+    # ownership records absolute paths and the library scan is recursive, so
+    # nothing is stranded by the new folder).
+    if _migrate_provider_segment(data):
+        changed = True
+
     # The two rate-limit fields sat in Advanced while nothing read them, and
     # they asked a different question then ("albums to process"), so a value on
     # disk is a guess about something else that never took effect. Now that
@@ -292,6 +302,23 @@ def _migrate_settings(data: ModelSettings) -> bool:
         changed = True
 
     return changed
+
+
+def _migrate_provider_segment(data: ModelSettings) -> bool:
+    """Prefix stored album/track templates with the {provider_name} segment."""
+    if data.format_provider_segment_migrated:
+        return False
+    old_default = (
+        "{artist_name}/[{album_year}] {album_title}{album_explicit}/{track_volume_num_optional}"
+        "{album_track_num}. {artist_name} - {track_title}{track_explicit}"
+    )
+    fresh = ModelSettings()
+    if data.format_album == old_default:
+        data.format_album = fresh.format_album
+    if data.format_track == old_default:
+        data.format_track = fresh.format_track
+    data.format_provider_segment_migrated = True
+    return True
 
 
 def _migrate_lyrics_art_providers(data: ModelSettings) -> bool:

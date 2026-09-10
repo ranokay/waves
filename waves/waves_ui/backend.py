@@ -72,6 +72,7 @@ from waves.constants import (
     MetadataTargetUPC,
     QualityTier,
     QualityVideo,
+    provider_folder_name,
     quality_rank,
     tier_from_word,
 )
@@ -840,6 +841,7 @@ _TEMPLATE_TOKENS = [
     ("playlist_name", "Names", "Playlist name (playlist paths)"),
     ("folder_path", "Names", "TIDAL playlist folder path, empty outside folders (playlist paths)"),
     ("mix_name", "Names", "Mix name (mix paths)"),
+    ("provider_name", "Names", "Provider folder: Tidal or Apple Music (keeps both providers' files apart)"),
     ("album_track_num", "Numbers", "Track number, zero-padded"),
     ("album_num_tracks", "Numbers", "Total tracks on the album"),
     ("list_pos", "Numbers", "Position in the playlist / mix"),
@@ -13651,6 +13653,7 @@ class WavesBridge(LibraryMixin, QObject):
             delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
             illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
             illegal_map=getattr(data, "filename_illegal_map", None),
+            provider_name=provider_folder_name(getattr(provider, "id", CTX_APPLE)),
         )
 
     def _apple_deliver_track(
@@ -17841,6 +17844,7 @@ class WavesBridge(LibraryMixin, QObject):
                 use_primary_album_artist=bool(getattr(data, "use_primary_album_artist", False)),
                 illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
                 illegal_map=dict(getattr(data, "filename_illegal_map", None) or {}),
+                provider_name=provider_folder_name(CTX_TIDAL),
             )
         except Exception:
             relative = str(getattr(track_obj, "name", "") or "track")
@@ -20469,6 +20473,9 @@ class WavesBridge(LibraryMixin, QObject):
             # values exactly the way the engine does.
             "illegal_replacement": safe_filename_replacement(d.filename_illegal_replacement),
             "illegal_map": safe_filename_replacement_map(getattr(d, "filename_illegal_map", None)),
+            # The samples are TIDAL-shaped objects, so the provider token
+            # previews as the TIDAL folder.
+            "provider_name": provider_folder_name(CTX_TIDAL),
         }
         pad = int(d.album_track_num_pad_min)
         try:
@@ -20516,7 +20523,7 @@ class WavesBridge(LibraryMixin, QObject):
                 groups[group].append({"token": "{" + tok + "}", "sample": _SAMPLE_FOLDER_PATH + "/", "desc": desc})
                 continue
             for media, lp, lt in ((trk, 4, 23), (alb, 0, 0), (pl, 0, 0), (mx, 0, 0), (vid, 0, 0)):
-                value = format_str_media(tok, media, 1, lp, lt)
+                value = format_str_media(tok, media, 1, lp, lt, provider_name=provider_folder_name(CTX_TIDAL))
                 if value != tok:
                     sample = value
                     break
