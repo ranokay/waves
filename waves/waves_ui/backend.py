@@ -19077,7 +19077,13 @@ class WavesBridge(LibraryMixin, QObject):
         if image_pulled:
             image_step: tuple[str, str, str] = ("done", "Pinned wrapper image is on this machine.", "")
         else:
-            image_step = ("todo", "Pull the exact Waves-built wrapper image the full tier runs.", "apple_pull_image")
+            image_step = (
+                "todo",
+                "Pull the exact Waves-built wrapper image the full tier runs. "
+                "Pulling needs registry access: if the pull is denied, run `docker login ghcr.io` "
+                "with an account that has access.",
+                "apple_pull_image",
+            )
         steps.append(
             {
                 "key": "image",
@@ -19103,9 +19109,13 @@ class WavesBridge(LibraryMixin, QObject):
         elif apk_path.strip():
             apk_step = ("attention", apk_error or "That APK could not be verified.", "")
         else:
+            from waves.apple_runtime import APK_PINNED_VERSION
+
             apk_step = (
                 "todo",
-                "You supply the pinned APK version yourself; Waves verifies it and scripts the extraction, never fetching it.",
+                f"Get the Apple Music APK at pinned version {APK_PINNED_VERSION} yourself (e.g. APKMirror's "
+                "Apple Music listing, the arm64 release matching that version) and set its path in the Apple "
+                "Music APK field below. Waves verifies it and scripts the extraction, never fetching it.",
                 "",
             )
         steps.append(
@@ -19305,6 +19315,41 @@ class WavesBridge(LibraryMixin, QObject):
                 logger.debug("Apple runtime signal emit failed", exc_info=True)
 
         self.threadpool.start(Worker(work))
+
+    @Slot()
+    def refreshAppleSetup(self) -> None:
+        """Re-probe the Apple setup state on a worker and refresh the wizard.
+
+        The Setup wizard pill calls this: schema re-reads alone serve cached
+        probe results, so a click that only re-reads looks dead. The worker
+        re-probes the container runtime live, then the status signals rebuild
+        the wizard steps, with visible checking/refreshed progress on the
+        runtime state channel in between.
+        """
+
+        def work() -> None:
+            self.appleRuntimeStateChanged.emit("downloading", "Checking Apple setup…")
+            try:
+                self._refresh_apple_container_cache(timeout=10)
+            except Exception:
+                logger.debug("Apple setup re-probe failed", exc_info=True)
+            try:
+                self.appleRuntimeStatusChanged.emit()
+            except Exception:
+                logger.debug("Apple runtime signal emit failed", exc_info=True)
+            try:
+                self.appleStatusChanged.emit()
+            except Exception:
+                logger.debug("Apple status signal emit failed", exc_info=True)
+            self.appleRuntimeStateChanged.emit("done", "Setup state refreshed")
+
+        try:
+            self.threadpool.start(Worker(work))
+        except Exception:
+            # No worker pool on bare stubs (and never in production): run
+            # inline rather than dropping the refresh.
+            logger.debug("Apple setup refresh runs inline", exc_info=True)
+            work()
 
     @Slot()
     def installAppleImage(self) -> None:

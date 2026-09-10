@@ -342,6 +342,25 @@ def verify_apk(path: str, expected_sha256: str = APK_SHA256) -> dict:
     }
 
 
+def describe_image_pull_error(exc: Exception, image: str = WRAPPER_V2_IMAGE) -> str:
+    """Plain-words guidance for a failed wrapper-image pull (issue #62).
+
+    A registry "denied"/"unauthorized" refusal almost always means access,
+    not a broken setup: the image is private to accounts without access, or
+    the runtime is not logged in. Say so with the next action instead of
+    surfacing the daemon's raw stderr alone.
+    """
+    raw = str(exc or "").strip() or "container runtime refused"
+    lowered = raw.lower()
+    if "denied" in lowered or "unauthorized" in lowered or "authentication required" in lowered:
+        return (
+            f"Image pull was denied by the registry ({image}). The Waves wrapper image is visible "
+            "only to accounts with access: run `docker login ghcr.io` with an account that has it, "
+            "or ask for the image to be made public. Original error: " + raw
+        )
+    return f"Could not pull {image}: {raw}"
+
+
 def apk_extract_plan(apk_path: str, hash_pinned: bool | None = None) -> list[str]:
     """The scripted .apkm extraction steps the wizard walks the user through.
 
@@ -356,10 +375,13 @@ def apk_extract_plan(apk_path: str, hash_pinned: bool | None = None) -> list[str
         else "SHA-256 check pending: no pinned hash is published yet, so only the version was checked."
     )
     return [
-        f"Confirm the pinned APK version ({APK_PINNED_VERSION}) at: {apk_path}",
+        f"Get the Apple Music APK at pinned version {APK_PINNED_VERSION} yourself (e.g. APKMirror's "
+        "Apple Music listing, the arm64 release matching that version) and set its path at: "
+        f"{apk_path}. Waves never downloads it for you.",
         hash_step,
-        "Unpack the .apkm (a zip of split APKs) into its base + config splits.",
-        "Copy the splits into the wrapper guest per wrapper-v2's LIBS setup notes.",
+        "Unpack the .apkm (a zip of split APKs: base + config/arch splits) into its parts.",
+        "Copy the splits into the wrapper guest per wrapper-v2's LIBS setup notes "
+        f"(guest libs {WRAPPER_LIBS_VERSION}).",
         "Restart the wrapper container and confirm its /health endpoint answers.",
     ]
 
@@ -758,9 +780,7 @@ class AppleRuntimeManager:
         logger.info("apple-runtime: pulling %s", WRAPPER_V2_IMAGE)
         proc = run([binary, "pull", WRAPPER_V2_IMAGE], capture_output=True, text=True, timeout=600)
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"Could not pull {WRAPPER_V2_IMAGE}: {(proc.stderr or proc.stdout or '').strip() or 'container runtime refused'}"
-            )
+            raise RuntimeError(describe_image_pull_error((proc.stderr or proc.stdout or "").strip(), WRAPPER_V2_IMAGE))
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         manifest = {"image": WRAPPER_V2_IMAGE, "libs": WRAPPER_LIBS_VERSION, "pulled_at": int(time.time())}
         tmp_fd, tmp_name = tempfile.mkstemp(dir=self.runtime_dir, prefix="wrapper-image.", suffix=".tmp")
