@@ -2645,10 +2645,12 @@ Item {
                                                         required property var modelData
                                                         readonly property string actKey: modelData.action !== undefined ? String(modelData.action) : ""
                                                         // The setup-wizard slice ships the actions behind
-                                                        // these pills: Setup wizard scrolls to the Apple
-                                                        // section's steps, Update installs the managed
-                                                        // runtime, Remove deletes it. A pill without an
-                                                        // action key stays inert (no MouseArea).
+                                                        // these pills: Setup wizard re-probes the live
+                                                        // setup state and rebuilds the steps below (a
+                                                        // bare re-read would serve cached probes and look
+                                                        // dead), Update installs the managed runtime,
+                                                        // Remove deletes it. A pill without an action key
+                                                        // stays inert (no MouseArea).
                                                         readonly property bool actLive: actPill.actKey !== ""
                                                         width: actTxt.implicitWidth + page.btnPadH * 2
                                                         height: actTxt.implicitHeight + page.btnPadV * 2
@@ -2658,7 +2660,7 @@ Item {
                                                         function runAppleAction() {
                                                             if (actPill.actKey === "apple_update_runtime") waves.installAppleRuntime()
                                                             else if (actPill.actKey === "apple_remove_runtime") waves.removeAppleRuntime()
-                                                            else if (actPill.actKey === "apple_setup") page.appleSetupLive = waves.appleSetupState()
+                                                            else if (actPill.actKey === "apple_setup") { page.appleSetupLive = waves.appleSetupState(); waves.refreshAppleSetup() }
                                                         }
                                                         Text {
                                                             id: actTxt
@@ -2705,7 +2707,7 @@ Item {
                                                 // the live mirror off its signals.
                                                 else if (actKey === "apple_start_container") waves.appleStartContainer()
                                                 else if (actKey === "apple_ensure_port") { waves.appleEnsurePort(); page.appleSetupLive = waves.appleSetupState() }
-                                                else if (actKey === "apple_setup") page.appleSetupLive = waves.appleSetupState()
+                                                else if (actKey === "apple_setup") { page.appleSetupLive = waves.appleSetupState(); waves.refreshAppleSetup() }
                                             }
                                             Text {
                                                 text: modelData.label; color: page.textHi
