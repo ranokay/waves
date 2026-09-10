@@ -16598,9 +16598,13 @@ ApplicationWindow {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                         anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
                         Image {
+                            id: tidalPickLogo
                             Layout.alignment: Qt.AlignVCenter
+                            // RowLayout sizes children from their implicit
+                            // size (the PNG pixels) unless told otherwise:
+                            // plain width/height are ignored here.
+                            Layout.preferredWidth: 30; Layout.preferredHeight: 20
                             source: "assets/providers/tidal.png"
-                            width: 30; height: 20
                             fillMode: Image.PreserveAspectFit
                             smooth: true; cache: true
                         }
@@ -16629,9 +16633,10 @@ ApplicationWindow {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                         anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
                         Image {
+                            id: applePickLogo
                             Layout.alignment: Qt.AlignVCenter
+                            Layout.preferredWidth: 22; Layout.preferredHeight: 22
                             source: "assets/providers/apple-music.png"
-                            width: 22; height: 22
                             fillMode: Image.PreserveAspectFit
                             smooth: true; cache: true
                         }

@@ -78,12 +78,15 @@ def _scenario() -> int:
     settle(100)
 
     # First run: the picker owns the screen, the TIDAL panel stays hidden,
-    # and no browser opened on its own.
+    # and no browser opened on its own. The card logos render at tile size,
+    # not source pixels (issue #84: RowLayout ignores width/height).
     picker_ok = (
         q("providerPicker.visible")
         and not q("loginPanel.visible")
         and not q("loginPanel.urlOpened")
         and not q("waves.appleEnabled")
+        and q("tidalPickLogo.width") == 30
+        and q("applePickLogo.width") == 22
     )
 
     # Choosing TIDAL lands on the login panel (still click-to-open).
