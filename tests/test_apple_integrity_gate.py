@@ -380,6 +380,9 @@ def _bind(stub):
         "_run_apple_job",
     ):
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+    # Per-provider option + template-flag readers used by the bound bodies.
+    for name in ("_psetting", "_tag_write_flags"):
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     # _is_integrity_failure is a staticmethod: bind without instance.
     stub._is_integrity_failure = WavesBridge._is_integrity_failure
     stub._apple_sleep_abortable = lambda *a: True

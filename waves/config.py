@@ -284,7 +284,34 @@ def _migrate_settings(data: ModelSettings) -> bool:
         data.api_rate_limit_wired_migrated = True
         changed = True
 
+    # Lyrics & artwork split per provider (issue #61): the shared toggles
+    # move into each provider's card. Copy the shared values into both
+    # mirrors once, so an existing install downloads exactly as configured
+    # while each provider's choices become its own from here on.
+    if _migrate_lyrics_art_providers(data):
+        changed = True
+
     return changed
+
+
+def _migrate_lyrics_art_providers(data: ModelSettings) -> bool:
+    """Copy the shared lyrics/artwork toggles into both provider mirrors."""
+    if data.lyrics_art_per_provider_migrated:
+        return False
+    from waves.model.cfg import LYRICS_ART_KEYS, PROVIDER_IDS
+
+    for base in LYRICS_ART_KEYS:
+        try:
+            value = getattr(data, base)
+        except AttributeError:
+            continue
+        for pid in PROVIDER_IDS:
+            try:
+                setattr(data, f"{pid}_{base}", value)
+            except Exception:
+                logger.debug("Could not migrate %s_%s", pid, base, exc_info=True)
+    data.lyrics_art_per_provider_migrated = True
+    return True
 
 
 class Settings(BaseConfig, metaclass=SingletonMeta):

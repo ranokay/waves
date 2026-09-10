@@ -87,6 +87,7 @@ from waves.helper.tidal import (
 )
 from waves.lyrics import fetch_lrclib_lyrics, lyrics_file_choice
 from waves.metadata import Metadata, MetadataUnreadable, read_item_id
+from waves.model.cfg import metadata_tag_write, provider_setting
 from waves.model.downloader import DownloadSegmentResult, TrackStreamInfo
 from waves.model.gui_data import ProgressBars
 from waves.poolgauge import PoolGauge
@@ -3080,6 +3081,35 @@ class Download:
 
         return tmp_path_lyrics, lyrics_suffix, tmp_path_cover
 
+    def _provider_id(self) -> str:
+        """This download's provider id for per-provider options (issue #61).
+
+        The pipeline is composed with a Provider (TIDAL by default); its
+        lyrics/artwork options live under that provider's mirrors. Unknown
+        or missing providers read as TIDAL, the historical behavior.
+        """
+        try:
+            pid = str(getattr(getattr(self, "provider", None), "id", "") or "").strip().lower()
+        except Exception:
+            pid = ""
+        return pid if pid in ("tidal", "apple") else "tidal"
+
+    def _psetting(self, key: str, default=None):
+        """One lyrics/artwork option for this download's provider."""
+        try:
+            data = self.settings.data
+        except Exception:
+            return default
+        return provider_setting(data, self._provider_id(), key, default)
+
+    def _tag_write(self, tag: str) -> bool:
+        """Whether the Custom template keeps one tag group on this download."""
+        try:
+            data = self.settings.data
+        except Exception:
+            return True
+        return metadata_tag_write(data, tag)
+
     def _move_extras(
         self,
         extras: tuple[pathlib.Path | None, str, pathlib.Path | None],
@@ -3094,11 +3124,11 @@ class Download:
         tmp_path_lyrics, lyrics_suffix, tmp_path_cover = extras
 
         # Move lyrics file
-        if self.settings.data.lyrics_file and tmp_path_lyrics:
+        if self._psetting("lyrics_file", False) and tmp_path_lyrics:
             self._move_lyrics(tmp_path_lyrics, path_media_dst, suffix=lyrics_suffix)
 
         # Move cover file
-        if self.settings.data.cover_album_file and tmp_path_cover:
+        if self._psetting("cover_album_file", True) and tmp_path_cover:
             self._move_cover(tmp_path_cover, path_media_dst)
 
     def _perform_post_processing(
@@ -3679,12 +3709,10 @@ class Download:
         """
         # Sidecar format (issue #34): jpg or png; raw is Apple-only
         # and falls back to jpg here so TIDAL behavior stays byte-for-byte.
+        # Per-provider (issue #61): this engine reads its own provider's mirror.
         fmt = (
             str(
-                (
-                    getattr(getattr(self, "settings", None), "data", None)
-                    and getattr(self.settings.data, "cover_file_format", "jpg")
-                )
+                (getattr(getattr(self, "settings", None), "data", None) and self._psetting("cover_file_format", "jpg"))
                 or "jpg"
             )
             .strip()
@@ -3851,7 +3879,7 @@ class Download:
         lyrics_synced: str = ""
         lyrics_unsynced: str = ""
 
-        if getattr(self.settings.data, "lyrics_prefer_lrclib", True):
+        if self._psetting("lyrics_prefer_lrclib", True):
             lyrics_synced, lyrics_unsynced = fetch_lrclib_lyrics(
                 self._shared_http(),
                 artist=track.artist.name if track.artist else "",
@@ -3926,30 +3954,30 @@ class Download:
         # AttributeError per unlucky track (issue #35).
         album = getattr(track, "album", None)
 
-        if self.settings.data.lyrics_embed or self.settings.data.lyrics_file:
+        if self._psetting("lyrics_embed", False) or self._psetting("lyrics_file", False):
             _lyrics, lyrics_synced, lyrics_unsynced = self._retrieve_lyrics(track)
 
-        if self.settings.data.lyrics_file:
+        if self._psetting("lyrics_file", False):
             file_lyrics, lyrics_suffix = lyrics_file_choice(
                 lyrics_synced,
                 lyrics_unsynced,
-                getattr(self.settings.data, "lyrics_file_synced_only", False),
+                self._psetting("lyrics_file_synced_only", False),
             )
             if file_lyrics:
                 path_lyrics = self.lyrics_to_file(path_media.parent, file_lyrics)
 
-        cover_dimension = self.settings.data.metadata_cover_dimension
+        cover_dimension = self._psetting("metadata_cover_dimension", CoverDimensions.Px320)
         # The separately-saved cover.jpg can use its own size (see the helpers
         # above); "follow" keeps the historical behaviour of matching embedded.
-        cover_file_pref = getattr(self.settings.data, "metadata_cover_file_dimension", "follow") or "follow"
+        cover_file_pref = self._psetting("metadata_cover_file_dimension", "follow") or "follow"
         cover_file_dimension = self._cover_file_dimension(cover_dimension, cover_file_pref)
         want_cover_file = self._want_cover_file(
-            self.settings.data.cover_album_file,
+            self._psetting("cover_album_file", True),
             is_parent_album,
-            getattr(self.settings.data, "cover_single_track_file", False),
+            self._psetting("cover_single_track_file", False),
         )
 
-        if album is not None and (self.settings.data.metadata_cover_embed or want_cover_file):
+        if album is not None and (self._psetting("metadata_cover_embed", True) or want_cover_file):
             # Do not write CoverDimensions.PxORIGIN to metadata, since it can exceed max metadata file size (>16Mb)
             url_cover = album.image(
                 int(cover_dimension) if cover_dimension != CoverDimensions.PxORIGIN else int(CoverDimensions.Px1280)
@@ -4007,7 +4035,7 @@ class Download:
                 totaltrack=album_facts.get("num_tracks") or 0,
                 totaldisc=album_facts.get("num_volumes") or 1,
                 discnumber=facts.get("volume_num") or 1,
-                cover_data=cover_data if self.settings.data.metadata_cover_embed else None,
+                cover_data=cover_data if self._psetting("metadata_cover_embed", True) else None,
                 album_replay_gain=replay_gain.get("album_replay_gain"),
                 album_peak_amplitude=replay_gain.get("album_peak_amplitude"),
                 track_replay_gain=replay_gain.get("track_replay_gain"),
@@ -4027,6 +4055,12 @@ class Download:
                 artist_ids=facts.get("artist_ids") or [],
                 album_artist_ids=facts.get("album_artist_ids") or [],
                 audio_type=audio_type,
+                write_composer=self._tag_write("composer"),
+                write_copyright=self._tag_write("copyright"),
+                write_isrc=self._tag_write("isrc"),
+                write_bpm=self._tag_write("bpm"),
+                write_initial_key=self._tag_write("initial_key"),
+                write_upc=self._tag_write("upc"),
             )
         except (MetadataUnreadable, MutagenError, OSError):
             # A truncated/unidentifiable file (e.g. a failed download) can't be tagged.
@@ -4079,7 +4113,7 @@ class Download:
         album_name: str = getattr(getattr(video, "album", None), "name", "") or ""
 
         cover_data: bytes | None = None
-        if self.settings.data.metadata_cover_embed and getattr(video, "cover", None):
+        if self._psetting("metadata_cover_embed", True) and getattr(video, "cover", None):
             try:
                 # 1080x720 is the largest thumbnail TIDAL serves for videos.
                 cover_data = self.cover_data_cached(video.image(1080, 720))
