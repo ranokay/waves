@@ -192,3 +192,10 @@ packaging/winget/
 # download tests: machine-local, never part of the repo.
 .DS_Store
 cookies.txt
+
+# Apple Music APK/.apkm bundles (maintainer-local, proprietary Apple binaries):
+# the setup wizard and image builds read them from disk, they must never be
+# committed.
+*.apk
+*.apkm
+*.apks

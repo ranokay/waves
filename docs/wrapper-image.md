@@ -10,7 +10,7 @@ image itself, and Apple ID sign-in happens inside the guest at first use.
 
 1. **Host the APK privately.** Recommended: a **private repo release
    asset**. Create a private repo (e.g. `ranokay/waves-assets`), upload
-   the pinned version's `.apkm` (currently **4.7.0**, arm64 — the setup
+   the pinned version's `.apkm` (currently **3.6.0-beta, build 1109**, arm64 — the setup
    wizard names the current pin) as a release asset, and note its
    `.../releases/download/<tag>/<file>` URL. The built-in
    `GITHUB_TOKEN` cannot cross into another private repo, so this needs
@@ -65,12 +65,12 @@ redesign where user-supplied libs mount at runtime instead of baking in.
 
 These four move together; bump them as one change:
 
-| Piece       | Where                                                            | Current   |
-| ----------- | ---------------------------------------------------------------- | --------- |
-| Image tag   | workflow `image_tag` input                                       | `0.2.3`   |
-| Image pin   | `WRAPPER_V2_IMAGE`, `waves/apple_runtime.py`                     | `…:0.2.3` |
-| APK version | `APK_PINNED_VERSION`, same file + `APK_URL` content              | `4.7.0`   |
-| Guest libs  | `WRAPPER_LIBS_VERSION`, same file + upstream `LIBS_VERSION.json` | `17.0.0`  |
+| Piece       | Where                                                            | Current                   |
+| ----------- | ---------------------------------------------------------------- | ------------------------- |
+| Image tag   | workflow `image_tag` input                                       | `0.2.3`                   |
+| Image pin   | `WRAPPER_V2_IMAGE`, `waves/apple_runtime.py`                     | `…:0.2.3`                 |
+| APK version | `APK_PINNED_VERSION`, same file + `APK_URL` content              | `3.6.0-beta` (build 1109) |
+| Guest libs  | `WRAPPER_LIBS_VERSION`, same file + upstream `LIBS_VERSION.json` | `17.0.0`                  |
 
 When upstream `wrapper-v2` fixes something you need (or Apple breaks
 something it must adapt to): pick the upstream SHA, rebuild with the same
