@@ -8,14 +8,28 @@ image itself, and Apple ID sign-in happens inside the guest at first use.
 
 ## One-time setup
 
-1. **Host the APK privately and set `APK_URL`.** The build needs an Apple
-   Music `.apk`/`.apkm` for the pinned version (currently **4.7.0**, arm64
-   release — the setup wizard names the current pin). Host it somewhere
-   private that `curl` can fetch: a private-repo release asset, private
-   file hosting, anything with a stable URL. Then add a repository secret
-   named **`APK_URL`** (Settings → Secrets and variables → Actions → New
-   repository secret). The URL is used inside CI only and is never
-   committed, logged, or baked into anything but the image's `.so` files.
+1. **Host the APK privately.** Recommended: a **private repo release
+   asset**. Create a private repo (e.g. `ranokay/waves-assets`), upload
+   the pinned version's `.apkm` (currently **4.7.0**, arm64 — the setup
+   wizard names the current pin) as a release asset, and note its
+   `.../releases/download/<tag>/<file>` URL. The built-in
+   `GITHUB_TOKEN` cannot cross into another private repo, so this needs
+   its own credential:
+   - Create a **fine-grained personal access token** with _Contents:
+     read-only_ on just that repo (Settings → Developer settings →
+     Personal access tokens → Fine-grained tokens). Note its expiry
+     (max one year) — set a calendar reminder; an expired token fails
+     the build at the download step with a 401.
+   - Add two repository secrets on **this** repo (Settings → Secrets and
+     variables → Actions): **`APK_URL`** = the release asset URL, and
+     **`APK_AUTH_HEADER`** = the full header line
+     `Authorization: Bearer <token>`. The header is sent only to fetch
+     the artifact and is masked in logs.
+   - Alternative without GitHub: a token-gated private bucket (R2/B2)
+     with its token in `APK_AUTH_HEADER`; same shape, another account.
+   - Not recommended: committing the APK anywhere, public hosting, or
+     scraping app-mirror sites at build time (fragile and against their
+     terms).
 2. **Nothing else.** Registry auth uses the built-in `GITHUB_TOKEN`;
    Docker, QEMU, and Buildx come with the runner.
 
