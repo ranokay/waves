@@ -269,6 +269,10 @@ Item {
     // with every section starting collapsed, a deep link to a shut card
     // would otherwise land on a bare header.
     function jumpToCard(cardId) {
+        // Provider deep-links land on the one Providers section (issue #60):
+        // its bands stay expanded while the section is open, so the TIDAL
+        // band's two rows are the only scroll between the header and Apple.
+        if (cardId === "providers_tidal" || cardId === "providers_apple") cardId = "providers"
         for (var i = 0; i < secRep.count; i++) {
             var it = secRep.itemAt(i)
             // Match a special card key (ffmpeg/updates) or a plain section id
@@ -438,6 +442,15 @@ Item {
     // else as labelled rows.
     function boolFields(fields) { return fields.filter(function(f){ return f.type === "bool" && f.embedded !== true }) }
     function rowFields(fields)  { return fields.filter(function(f){ return f.type !== "bool" && f.embedded !== true && f.third !== true && f.type !== "char_map" }) }
+    // The Providers section nests one field list per provider card (issue
+    // #60); its header chip counts those instead of the section's own
+    // (empty) field list.
+    function providerFieldCount(section) {
+        var n = 0
+        var ps = section.providers || []
+        for (var i = 0; i < ps.length; i++) n += ((ps[i] && ps[i].fields) || []).length
+        return n
+    }
     // The per-character stand-in table renders under the short-value row it
     // extends, so it is pulled out of the ordinary rows above them.
     function mapFields(fields)  { return fields.filter(function(f){ return f.type === "char_map" }) }
@@ -451,6 +464,12 @@ Item {
         for (var g = 0; g < groups.length; g++) {
             var fs = groups[g].fields
             for (var i = 0; i < fs.length; i++) if (fs[i].key === key) return fs[i]
+            // Provider cards nest their fields one level down (issue #60).
+            var ps = groups[g].providers || []
+            for (var p = 0; p < ps.length; p++) {
+                var pf = (ps[p] && ps[p].fields) || []
+                for (var j = 0; j < pf.length; j++) if (pf[j].key === key) return pf[j]
+            }
         }
         return null
     }
@@ -1825,7 +1844,12 @@ Item {
                             spacing: 12
                             Rectangle {
                                 id: glyphTile
-                                Layout.preferredWidth: 34; Layout.preferredHeight: 34; radius: 8
+                                // The Providers tile holds both provider marks
+                                // side by side, so it earns a wider tile (a
+                                // third provider reworks this row, note the
+                                // providerLogo helper beside iconPath).
+                                Layout.preferredWidth: glyphTile.dualLogo ? 56 : 34
+                                Layout.preferredHeight: 34; radius: 8
                                 color: page.surface3; Layout.alignment: Qt.AlignVCenter
                                 // The FFmpeg section's glyph doubles as a status light:
                                 // red = not found, yellow = found but unmanaged (system
@@ -1847,11 +1871,13 @@ Item {
                                 // still reads from the glyph colour (red/gold/green) below.
                                 border.width: 0
                                 // Provider sections show their official logo; every
-                                // other section keeps the line-art glyph.
+                                // other section keeps the line-art glyph. The
+                                // one Providers section holds both marks.
                                 readonly property string logoSrc: page.providerLogo(card.modelData.id !== undefined ? card.modelData.id : "")
+                                readonly property bool dualLogo: card.modelData.id === "providers"
                                 SectionIcon {
                                     anchors.centerIn: parent
-                                    visible: glyphTile.logoSrc === ""
+                                    visible: glyphTile.logoSrc === "" && !glyphTile.dualLogo
                                     glyph: card.modelData.id !== undefined ? card.modelData.id : ""
                                     stroke: glyphTile.statusColor
                                     px: 20
@@ -1867,6 +1893,24 @@ Item {
                                     fillMode: Image.PreserveAspectFit
                                     smooth: true
                                     cache: true
+                                }
+                                Row {
+                                    anchors.centerIn: parent; spacing: 5
+                                    visible: glyphTile.dualLogo
+                                    Image {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        source: "assets/providers/tidal.png"
+                                        width: 18; height: 12
+                                        fillMode: Image.PreserveAspectFit
+                                        smooth: true; cache: true
+                                    }
+                                    Image {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        source: "assets/providers/apple-music.png"
+                                        width: 14; height: 14
+                                        fillMode: Image.PreserveAspectFit
+                                        smooth: true; cache: true
+                                    }
                                 }
                             }
                             ColumnLayout {
@@ -1887,7 +1931,7 @@ Item {
                                 radius: 4; color: "transparent"; border.color: page.border1
                                 Layout.preferredHeight: 18; Layout.preferredWidth: cntT.implicitWidth + 16
                                 Layout.alignment: Qt.AlignVCenter
-                                Text { id: cntT; anchors.centerIn: parent; text: card.modelData.fields.length; color: page.textDim; font.family: page.mono; font.pixelSize: 11 }
+                                Text { id: cntT; anchors.centerIn: parent; text: card.modelData.providers !== undefined ? page.providerFieldCount(card.modelData) : card.modelData.fields.length; color: page.textDim; font.family: page.mono; font.pixelSize: 11 }
                             }
                             ExpandChevron { open: card.open; hovered: hdHover.containsMouse; Layout.alignment: Qt.AlignVCenter }
                         }
@@ -1966,6 +2010,85 @@ Item {
                                 width: inner.width
                                 height: (active && item) ? item.implicitHeight : 0
                                 sourceComponent: diagCardComp
+                            }
+
+                            // Provider cards, Providers section only: one
+                            // distinctive band per provider — logo tile + name
+                            // + its fields — instead of a flat mixed list.
+                            // Bands stay expanded while the section is open; a
+                            // third provider arrives as a third band. Field
+                            // rows reuse the same renderer as every other
+                            // section, and plain on/off switches reuse the
+                            // shared toggle tile; a provider band holding any
+                            // other field kind needs its renderer added here.
+                            Column {
+                                visible: card.modelData.providers !== undefined
+                                width: inner.width; spacing: 10
+                                Repeater {
+                                    model: card.modelData.providers !== undefined ? card.modelData.providers : []
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: parent.width; radius: 10
+                                        color: page.surface2; border.color: page.border1
+                                        implicitHeight: provCol.implicitHeight + 24
+                                        Column {
+                                            id: provCol
+                                            x: 14; y: 12; width: parent.width - 28; spacing: 10
+                                            Row {
+                                                width: parent.width; spacing: 12
+                                                Rectangle {
+                                                    width: 34; height: 34; radius: 8
+                                                    color: page.surface3
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    Image {
+                                                        anchors.centerIn: parent
+                                                        source: page.providerLogo(modelData.id)
+                                                        width: modelData.id.indexOf("tidal") !== -1 ? 24 : 20
+                                                        height: 20
+                                                        fillMode: Image.PreserveAspectFit
+                                                        smooth: true; cache: true
+                                                    }
+                                                }
+                                                Column {
+                                                    width: parent.width - 46; spacing: 2
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    Text {
+                                                        text: modelData.name; color: page.textHi
+                                                        font.pixelSize: 15; font.weight: Font.DemiBold
+                                                        elide: Text.ElideRight; width: parent.width
+                                                    }
+                                                    Text {
+                                                        visible: text !== ""
+                                                        text: modelData.desc !== undefined ? modelData.desc : ""
+                                                        color: page.textDim; font.pixelSize: 12
+                                                        wrapMode: Text.WordWrap; width: parent.width
+                                                    }
+                                                }
+                                            }
+                                            Repeater {
+                                                model: page.rowFields(modelData.fields)
+                                                delegate: rowFieldComp
+                                            }
+                                            Flow {
+                                                id: provFlagFlow
+                                                visible: page.boolFields(modelData.fields).length > 0
+                                                width: parent.width; spacing: 10
+                                                readonly property int nFlags: page.boolFields(modelData.fields).length
+                                                Repeater {
+                                                    model: page.boolFields(modelData.fields)
+                                                    delegate: FlagTile {
+                                                        required property var modelData
+                                                        width: provFlagFlow.nFlags === 1 ? provFlagFlow.width : (provFlagFlow.width - 10) / 2
+                                                        keyName: modelData.key
+                                                        checked: page.val(modelData) === true
+                                                        label: modelData.label
+                                                        help: modelData.help !== undefined ? modelData.help : ""
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
                             // The per-character stand-in table: one box for each
@@ -2307,7 +2430,13 @@ Item {
                                     required property var modelData
                                     visible: page.depOK(modelData)
                                     // Third fields sit three-up in the Flow below.
-                                    width: modelData.third === true ? (inner.width - 20) / 3 : inner.width
+                                    // Parent width, not the section column: row
+                                    // rows also render inside the narrower
+                                    // provider bands (issue #60), where the
+                                    // section width would overflow. Every
+                                    // direct repeater parent is section-width
+                                    // today, so this changes nothing there.
+                                    width: modelData.third === true ? (parent.width - 20) / 3 : parent.width
                                     radius: 10; color: page.surface; border.color: page.border1
                                     // Three-up cards hold a common height whatever their
                                     // help runs to, so a row of them reads as one band

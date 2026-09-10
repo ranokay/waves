@@ -19743,45 +19743,59 @@ class WavesBridge(LibraryMixin, QObject):
 
         sections = [
             {
-                # The two-axis layout's first axis (spec §9.2): one section
-                # per provider for what differs. TIDAL is the only provider
-                # with a session today; Apple's section carries the optional
-                # component's switch, light and placeholders.
-                "group": "Providers · TIDAL",
-                "id": "providers_tidal",
-                "desc": "Your TIDAL session and the audio quality its downloads ask for.",
-                "fields": [
-                    "provider_tidal_session",
-                    "tidal_quality_audio",
+                # The two-axis layout's first axis (spec §9.2), issue #60: ONE
+                # Providers section holding a distinctive card per provider
+                # for what differs (session, quality, runtime/pacing/setup).
+                # A third provider slots in as a third card; shared behavior
+                # stays in the shared sections below. The QML renders each
+                # entry with the provider's logo header and its fields, so a
+                # card is never a flat mixed field list.
+                "group": "Providers",
+                "id": "providers",
+                "desc": "Your music services. Each provider keeps its own session, quality default and setup.",
+                "providers": [
+                    {
+                        # TIDAL is the only provider with a session today.
+                        "name": "TIDAL",
+                        "id": "providers_tidal",
+                        "desc": "Your TIDAL session and the audio quality its downloads ask for.",
+                        "fields": [
+                            "provider_tidal_session",
+                            "tidal_quality_audio",
+                        ],
+                    },
+                    {
+                        # Always visible, per the optional-component decision: the
+                        # card renders while Apple is off, so the switch stays
+                        # discoverable and the light shows what is (not) set up.
+                        # The in-place setup wizard (issue #31, spec §2) lives here:
+                        # cookies export for the fallback tier, managed runtime plus
+                        # user-supplied APK for the full tier, wrapper port override.
+                        "name": "Apple Music",
+                        "id": "providers_apple",
+                        "desc": (
+                            "Turn on Apple Music catalog search here. A cookies export unlocks AAC 256 and Atmos "
+                            "downloads at once with no runtime; the managed runtime plus the APK you supply unlock the full tier."
+                        ),
+                        "fields": [
+                            "provider_apple_status",
+                            "apple_setup_wizard",
+                            "apple_quality_audio",
+                            "apple_cookies_path",
+                            "path_binary_nm3u8dlre",
+                            "apple_apk_path",
+                            "apple_wrapper_port",
+                            "apple_pacing_batch_size",
+                            "apple_pacing_delay_sec",
+                            "apple_wrapper_idle_sec",
+                            "apple_quarantine_dir",
+                            "apple_quarantine_keep",
+                        ],
+                    },
                 ],
-            },
-            {
-                # Always visible, per the optional-component decision: the
-                # section renders while Apple is off, so the switch stays
-                # discoverable and the light shows what is (not) set up.
-                # The in-place setup wizard (issue #31, spec §2) lives here:
-                # cookies export for the fallback tier, managed runtime plus
-                # user-supplied APK for the full tier, wrapper port override.
-                "group": "Providers · Apple Music",
-                "id": "providers_apple",
-                "desc": (
-                    "Turn on Apple Music catalog search here. A cookies export unlocks AAC 256 and Atmos "
-                    "downloads at once with no runtime; the managed runtime plus the APK you supply unlock the full tier."
-                ),
-                "fields": [
-                    "provider_apple_status",
-                    "apple_setup_wizard",
-                    "apple_quality_audio",
-                    "apple_cookies_path",
-                    "path_binary_nm3u8dlre",
-                    "apple_apk_path",
-                    "apple_wrapper_port",
-                    "apple_pacing_batch_size",
-                    "apple_pacing_delay_sec",
-                    "apple_wrapper_idle_sec",
-                    "apple_quarantine_dir",
-                    "apple_quarantine_keep",
-                ],
+                # No loose fields: everything provider-specific lives on the
+                # cards above, so the generic field filters render nothing here.
+                "fields": [],
             },
             {
                 "group": "Downloads",
@@ -19928,6 +19942,10 @@ class WavesBridge(LibraryMixin, QObject):
         ]
         for sec in sections:
             sec["fields"] = [get_field(k) for k in sec["fields"]]
+            # Provider cards resolve their fields the same way (issue #60):
+            # one Providers section, one card per provider.
+            for provider in sec.get("providers") or []:
+                provider["fields"] = [get_field(k) for k in provider["fields"]]
         return sections
 
     # ---- Path-template preview + token reference -------------------------
@@ -20585,7 +20603,12 @@ class WavesBridge(LibraryMixin, QObject):
         pref_defaults = self._default_waves_prefs()
         values: dict = {}
         for section in self.settingsSchema():
-            for field in section["fields"]:
+            fields = list(section["fields"])
+            # Provider cards nest their fields one level down (issue #60);
+            # factory reset must still reach every key they expose.
+            for provider in section.get("providers") or []:
+                fields.extend(provider["fields"])
+            for field in fields:
                 for key in (
                     field.get("key"),
                     field.get("enabled_key"),
