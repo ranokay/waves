@@ -859,9 +859,14 @@ class AppleProvider(Provider):
         )
         return StreamInfo(
             urls=[],
-            file_extension=".m4a",
+            # Lossless stereo lands as FLAC (issue #64): the staged bytes are
+            # ALAC-in-m4a and the caller converts them to FLAC (a lossless
+            # decode + FLAC encode, bit for bit identical since the FLAC
+            # container cannot hold ALAC packets) when its FLAC toggle is on;
+            # the flag names the delivery's container truth either way.
+            file_extension=".flac",
             codecs=codec or "alac",
-            requires_flac_extraction=False,
+            requires_flac_extraction=True,
             delivered={
                 "tier": tier_value,
                 "audio_type": str(AudioType.STEREO),

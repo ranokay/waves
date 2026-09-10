@@ -145,7 +145,7 @@ def _finalize_fracs(tmp_path, *, extract=False, suffix=".flac", is_bts=True):
     cls = backend._TrackedDownload
     with (
         patch.object(cls, "_download", return_value=(True, pathlib.Path(tmp_path / "raw"))),
-        patch.object(cls, "_extract_flac", side_effect=lambda p: p),
+        patch.object(cls, "_extract_flac", side_effect=lambda p, transcode=False: p),
         patch.object(cls, "_downsample_audio", side_effect=lambda p: p),
         patch.object(cls, "_faststart_remux", side_effect=lambda p, s: p),
         patch.object(cls, "_claim_destination", return_value=(dst, "reserved")),

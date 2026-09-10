@@ -343,6 +343,7 @@ _FLAG_FIELDS = [
     "apple_lyrics_ttml_file",
     "download_delay",
     "extract_flac",
+    "extract_flac_all",
     "metadata_cover_embed",
     "cover_album_file",
     # Child of cover_album_file, carried inside its "cover_scope" composite rather
@@ -817,7 +818,7 @@ def _shipped_default(key: str):
 
 _ENUM_BY_FIELD = dict(_CHOICE_FIELDS)
 # Flags that do nothing without FFmpeg, greyed out on the page when it's absent.
-_FFMPEG_DEPENDENT = {"video_convert_mp4", "extract_flac"}
+_FFMPEG_DEPENDENT = {"video_convert_mp4", "extract_flac", "extract_flac_all"}
 
 # ---- Path-template helper data (File organization) -------------------------
 # Every template token, grouped for the "Want to know more?" reference table.
@@ -4051,7 +4052,8 @@ class WavesBridge(LibraryMixin, QObject):
         # any Download init can disable them in-memory when ffmpeg is absent; we
         # restore these once ffmpeg gets installed (see _restore_ffmpeg_flags).
         self._ffmpeg_flag_prefs = {
-            k: bool(getattr(self.settings.data, k, False)) for k in ("video_convert_mp4", "extract_flac")
+            k: bool(getattr(self.settings.data, k, False))
+            for k in ("video_convert_mp4", "extract_flac", "extract_flac_all")
         }
         # The user's *explicit* ffmpeg override, snapshotted from disk here,
         # before login can trigger an in-memory injection into path_binary_ffmpeg
@@ -13711,10 +13713,14 @@ class WavesBridge(LibraryMixin, QObject):
             facts_isrc=str(facts.get("isrc") or ""),
         )
         base = pathlib.Path(str(self.settings.data.download_base_path)).expanduser()
+        # Lossless stereo lands as FLAC (issue #64); the true extension is
+        # only known after the fetch, so guess here and correct per attempt
+        # below (the TIDAL pipeline's guess-then-correct shape).
+        guess_ext = self._apple_guess_ext(provider, audio_type, requested_rank)
         # The skip check reads the REQUESTED destination: pick_destination
         # loops until it finds a free name, so asking it first would make the
         # exists check below permanently false and duplicate owned files.
-        exact = base / f"{relative}.m4a"
+        exact = base / f"{relative}{guess_ext}"
         exact.parent.mkdir(parents=True, exist_ok=True)
         if force:
             # Overwrite the copy THIS track owns, not the template path: two
@@ -13726,7 +13732,7 @@ class WavesBridge(LibraryMixin, QObject):
         elif self.settings.data.skip_existing and exact.exists():
             raise _AppleSkipped()
         else:
-            dest = pick_destination(base, relative, ".m4a")
+            dest = pick_destination(base, relative, guess_ext)
         # The Version this fetch verifies as, for the per-version skip-list.
         # resolve_stream decides Atmos from the raw + ask; the delivered word
         # confirms it per attempt below.
@@ -13769,16 +13775,56 @@ class WavesBridge(LibraryMixin, QObject):
                 if not staged.is_file():
                     raise AppleDownloadError("Apple download produced no file")  # noqa: TRY003, TRY301
                 atmos = str((info.delivered or {}).get("audio_type") or "") == str(AudioType.ATMOS)
+                # The true extension off the delivery: ALAC stereo becomes
+                # .flac when the FLAC toggle is on (and an ffmpeg binary is
+                # at hand); scope "all" additionally converts lossy stereo
+                # by re-encoding it. AAC (lossless-only scope) and Atmos
+                # always stay .m4a. A HI_RES ask can fall back to AAC on an
+                # AAC-only master, so this is decided per attempt, never
+                # from the ask alone.
+                flac_mode = self._apple_flac_mode(info, atmos=atmos)  # "lossless", "lossy", or ""
+                flac_tmpdir: str | None = None
+                if flac_mode and not self._apple_flac_ffmpeg():
+                    # "Continue anyway" past the ffmpeg gate (or a binary
+                    # that went away mid-job): keep the original .m4a rather
+                    # than fail a fetchable track.
+                    logger.debug("Apple FLAC extraction skipped (no ffmpeg); keeping the original file")
+                    flac_mode = ""
+                want_ext = ".flac" if flac_mode else ".m4a"
+                if dest.suffix != want_ext:
+                    if force and owned_path:
+                        owned = pathlib.Path(owned_path)
+                        dest = owned.with_suffix(want_ext) if owned.suffix != want_ext else owned
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                    else:
+                        exact_true = base / f"{relative}{want_ext}"
+                        if not force and self.settings.data.skip_existing and exact_true.exists():
+                            raise _AppleSkipped()  # noqa: TRY301
+                        dest = pick_destination(base, relative, want_ext)
                 self._apple_verify_staged(staged, expect_atmos=atmos)
                 if job_abort.is_set():
                     raise _AppleAborted()  # noqa: TRY301
-                self._apple_place_file(staged, dest)
+                if flac_mode:
+                    # Verified above, so conversion runs on known-good bytes
+                    # (spec §6: no conversion before verification passes).
+                    # The converted file lands outside the provider's workdir,
+                    # which discard_delivery removes below.
+                    staged, flac_tmpdir = self._apple_extract_flac(staged)
+                try:
+                    self._apple_place_file(staged, dest)
+                finally:
+                    if flac_tmpdir is not None:
+                        with contextlib.suppress(OSError):
+                            shutil.rmtree(flac_tmpdir, ignore_errors=True)
             except _AppleAborted:
                 if info is not None:
                     try:
                         provider.discard_delivery(str(info.local_file))
                     except Exception:
                         logger.debug("Could not discard the Apple staging area", exc_info=True)
+                if "flac_tmpdir" in locals() and flac_tmpdir is not None:
+                    with contextlib.suppress(OSError):
+                        shutil.rmtree(flac_tmpdir, ignore_errors=True)
                 _drop_hold()
                 raise
             except Exception as exc:
@@ -13817,6 +13863,9 @@ class WavesBridge(LibraryMixin, QObject):
                             provider.discard_delivery(str(info.local_file))
                         except Exception:
                             logger.debug("Could not discard the Apple staging area", exc_info=True)
+                    if "flac_tmpdir" in locals() and flac_tmpdir is not None:
+                        with contextlib.suppress(OSError):
+                            shutil.rmtree(flac_tmpdir, ignore_errors=True)
                     _drop_hold()
                     raise
                 # Integrity failure: sharpen the budget on outbreak-era bytes.
@@ -13998,12 +14047,17 @@ class WavesBridge(LibraryMixin, QObject):
             rate = None
         # A landed ALAC file re-derives its tier off its own bytes (a 24/96
         # master asked as HI_RES stays HI_RES with rate 96000; a 16/44.1
-        # master asked as HI_RES lands LOSSLESS, honestly).
+        # master asked as HI_RES lands LOSSLESS, honestly). A converted
+        # FLAC probes as "flac" and answers the same rungs (issue #64).
+        # Source-gated, never container-gated: a transcoded AAC also probes
+        # as FLAC, but it keeps its staged HIGH tier and must never promote
+        # off its new container.
         try:
             from waves.apple_engine import apple_tier_for_delivery as _honest_tier
 
             codecs_landed = str(landed_probe.get("codec") or delivered.get("codecs") or info.codecs or "")
-            if not atmos and "alac" in codecs_landed.lower().replace("-", ""):
+            source_codecs = str(getattr(info, "codecs", "") or delivered.get("codecs") or "")
+            if not atmos and "alac" in source_codecs.lower().replace("-", "").replace("_", ""):
                 tier = _honest_tier(codecs_landed, depth, rate or "", fallback=tier)
         except Exception:
             logger.debug("Apple honest-tier re-probe failed; keeping the staged tier", exc_info=True)
@@ -14044,6 +14098,173 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Apple ffprobe resolution failed", exc_info=True)
             return ""
+
+    def _apple_wants_flac(self) -> bool:
+        """Whether lossless Apple stereo should land as FLAC (issue #64).
+
+        The shared Processing toggle (``extract_flac``), off meaning the
+        original .m4a is kept. Plain test stubs without settings read as on,
+        the shipped default.
+        """
+        try:
+            return bool(getattr(self.settings.data, "extract_flac", True))
+        except Exception:
+            return True
+
+    def _apple_guess_ext(self, provider, audio_type, requested_rank: int) -> str:
+        """The destination extension guessed before the fetch (issue #64).
+
+        Stereo at a lossless-or-better ask with the wrapper tier up and the
+        FLAC toggle on guesses .flac (scope "all" guesses .flac for stereo
+        of any tier); everything else (Atmos, lossy asks under the
+        lossless-only scope, cookies tier alone) guesses .m4a. The
+        per-attempt correction below settles the truth off the delivery, so
+        a wrong guess only costs the re-check, never a wrong file.
+        """
+        try:
+            want_atmos = str(getattr(audio_type, "value", audio_type) or "").strip().lower() == "atmos"
+        except Exception:
+            want_atmos = False
+        if want_atmos or not self._apple_wants_flac():
+            return ".m4a"
+        if self._apple_flac_scope_all():
+            # Scope "all": stereo of any tier lands FLAC (lossy by
+            # re-encode); only Atmos keeps its container.
+            return ".flac"
+        try:
+            if int(requested_rank) < int(quality_rank(QualityTier.LOSSLESS)):
+                return ".m4a"
+        except (TypeError, ValueError):
+            return ".m4a"
+        try:
+            if not bool(getattr(provider, "wrapper_available", False)):
+                return ".m4a"
+        except Exception:
+            return ".m4a"
+        return ".flac"
+
+    def _apple_flac_scope_all(self) -> bool:
+        """Whether lossy stereo also converts to FLAC (issue #64).
+
+        The scope toggle beside the shared FLAC switch (``extract_flac_all``,
+        default off): on re-encodes AAC stereo into FLAC, off keeps lossy
+        originals as .m4a. Plain test stubs without settings read as off.
+        """
+        try:
+            return bool(getattr(self.settings.data, "extract_flac_all", False))
+        except Exception:
+            return False
+
+    def _apple_flac_mode(self, info, *, atmos: bool) -> str:
+        """How this delivery becomes FLAC: "lossless", "lossy", or "" (issue #64).
+
+        Stereo ALAC converts losslessly (the FLAC container cannot hold ALAC
+        packets, so the engine decodes and FLAC-encodes them: still bit for
+        bit identical, never a lossy step); with the scope toggle on, stereo
+        AAC re-encodes instead. AAC under the lossless-only scope, Atmos,
+        unknown codecs, and a switched-off FLAC toggle all answer "" (keep
+        the original .m4a). The provider flags ALAC with
+        ``requires_flac_extraction``; older fakes naming ``alac`` in codecs
+        read the same way. Only the lossless mode re-derives its tier off
+        the landed bytes; the lossy mode keeps its staged HIGH tier.
+        """
+        if atmos or not self._apple_wants_flac():
+            return ""
+        with contextlib.suppress(Exception):
+            if bool(getattr(info, "requires_flac_extraction", False)):
+                return "lossless"
+        try:
+            delivered = getattr(info, "delivered", None) or {}
+            codecs = str(getattr(info, "codecs", "") or delivered.get("codecs") or "")
+            norm = codecs.lower().replace("-", "").replace("_", "")
+        except Exception:
+            return ""
+        if "alac" in norm:
+            return "lossless"
+        if self._apple_flac_scope_all() and ("aac" in norm or "mp4a" in norm):
+            return "lossy"
+        return ""
+
+    def _apple_flac_ffmpeg(self) -> str:
+        """An ffmpeg binary for the Apple FLAC conversion, or "" to keep .m4a.
+
+        Precedence mirrors the probe: the provider's resolved path first,
+        then the saved override, then PATH.
+        """
+        try:
+            provider = self.providers.get(CTX_APPLE)
+            cand = str(getattr(provider, "ffmpeg_path", "") or "")
+            if cand and pathlib.Path(cand).is_file():
+                return cand
+        except Exception:
+            logger.debug("Apple FLAC ffmpeg resolve failed", exc_info=True)
+        try:
+            cand = str(getattr(getattr(self, "settings", None), "data", None).path_binary_ffmpeg or "")
+            if cand and pathlib.Path(cand).is_file():
+                return cand
+        except Exception:
+            logger.debug("Apple FLAC ffmpeg resolve failed", exc_info=True)
+        try:
+            return shutil.which("ffmpeg") or ""
+        except Exception:
+            return ""
+
+    def _apple_extract_flac(self, staged: pathlib.Path) -> tuple[pathlib.Path, str]:
+        """Convert staged audio into FLAC, losslessly where the source is (issue #64).
+
+        ALAC cannot stream-copy into a FLAC container (it holds FLAC packets
+        only), so the engine decodes and FLAC-encodes with no resampling and
+        no bit-depth change: out of ALAC the result is bit for bit identical
+        (pinned test-side by a PCM comparison); lossy stereo converts only
+        under the scope-"all" toggle. Runs only on bytes that already passed
+        verification. Returns the converted path plus its temp dir; the caller
+        removes the dir once the file is placed (or on failure). A converted
+        file that will not decode fails the track as a conversion failure
+        (plain AppleDownloadError), never as source corruption: the staged
+        original verified clean, so there is nothing to quarantine.
+        """
+        from waves.apple_engine import AppleDownloadError
+
+        ffmpeg = self._apple_flac_ffmpeg()
+        if not ffmpeg:
+            raise AppleDownloadError("Apple FLAC extraction needs FFmpeg")  # noqa: TRY003
+        import tempfile
+
+        tmpdir = tempfile.mkdtemp(prefix="waves-apple-flac-")
+        out = pathlib.Path(tmpdir) / (staged.stem + ".flac")
+        try:
+            from ffmpeg import FFmpeg
+
+            (
+                FFmpeg(executable=ffmpeg)
+                .option("hide_banner")
+                .option("nostdin")
+                .option("y")
+                .input(url=staged)
+                .output(url=out, map=0, acodec="flac", map_metadata="0:g", loglevel="quiet")
+                .execute()
+            )
+        except Exception as exc:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            raise AppleDownloadError(f"Could not extract FLAC from the Apple download: {exc}") from exc  # noqa: TRY003
+        if not out.is_file() or out.stat().st_size == 0:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            raise AppleDownloadError("Apple FLAC extraction produced no file")  # noqa: TRY003
+        try:
+            from waves.apple_engine import AppleIntegrityError, decode_check
+
+            decode_check(out, ffmpeg)
+        except AppleIntegrityError as exc:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            raise AppleDownloadError(f"Apple FLAC extraction failed its check: {exc}") from exc  # noqa: TRY003
+        except AppleDownloadError:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            raise
+        return out, tmpdir
 
     def _apple_place_file(self, staged: pathlib.Path, dest: pathlib.Path) -> None:
         """Land one staged file on its final path, atomically.
@@ -20136,6 +20357,7 @@ class WavesBridge(LibraryMixin, QObject):
                     "path_binary_ffmpeg",
                     "video_convert_mp4",
                     "extract_flac",
+                    "extract_flac_all",
                     "ffmpeg_auto_update",
                     "ffmpeg_update_cadence",
                 ],

@@ -589,7 +589,8 @@ def apple_tier_for_delivery(
 
     AAC 256 -> HIGH (Apple has no LOW); ALAC 16-bit -> LOSSLESS; ALAC
     24-bit -> HI_RES_LOSSLESS (24/96 and 24/192 are both this rung; the
-    "24/192" detail rides label text, never rank). Bit depth alone decides
+    "24/192" detail rides label text, never rank). A converted FLAC answers
+    the same rungs as the ALAC it was converted from (issue #64). Bit depth alone decides
     hi-res: a rate without a depth never promotes (a 16-bit 48 kHz master
     stays LOSSLESS). Atmos E-AC-3 answers HIGH: the drawer words it ATMOS,
     never a rung. Unknown stays on the fallback, never invented.
@@ -599,7 +600,9 @@ def apple_tier_for_delivery(
     norm = str(codec or "").lower().replace("-", "").replace("_", "")
     if norm in ("eac3", "ec3", "ac4"):
         return QualityTier.HIGH.value
-    if norm == "alac":
+    if norm in ("alac", "flac"):
+        # FLAC is the converted ALAC container (issue #64): same lossless
+        # ladder, decided by depth alone, never by rate.
         try:
             rate = int(str(sample_rate or "").strip())
         except (TypeError, ValueError):

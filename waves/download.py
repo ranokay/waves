@@ -738,6 +738,7 @@ class Download:
         if self.ffmpeg_missing and (self.settings.data.video_convert_mp4 or self.settings.data.extract_flac):
             self.settings.data.video_convert_mp4 = False
             self.settings.data.extract_flac = False
+            self.settings.data.extract_flac_all = False
 
             self.fn_logger.error(
                 "FFmpeg not found (not set and not on $PATH). FLAC extraction, video conversion, and MP4/M4A "
@@ -1272,6 +1273,14 @@ class Download:
 
         if is_video:
             result = AudioExtensions.MP4 if self.settings.data.video_convert_mp4 else VideoExtensions.TS
+        elif getattr(self.settings.data, "extract_flac", False) and getattr(
+            self.settings.data, "extract_flac_all", False
+        ):
+            # FLAC scope "all" (issue #64): every stereo track lands FLAC,
+            # lossless by stream copy, lossy by re-encode (decided post-fetch).
+            # getattr-read like the lossless branch below stays silent on
+            # settings stubs that predate the split (the gate-only doubles).
+            result = AudioExtensions.FLAC
         else:
             result = (
                 AudioExtensions.FLAC
@@ -2684,6 +2693,17 @@ class Download:
         ):
             file_extension = AudioExtensions.FLAC
             requires_flac_extraction = True
+        elif (
+            self.settings.data.extract_flac
+            and getattr(self.settings.data, "extract_flac_all", False)
+            and not want_atmos
+            and file_extension != AudioExtensions.FLAC
+        ):
+            # FLAC scope "all" (issue #64): lossy stereo is re-encoded to
+            # FLAC post-fetch. Atmos never converts (it stays .m4a), and a
+            # track already serving native FLAC needs no flag.
+            file_extension = AudioExtensions.FLAC
+            requires_flac_extraction = True
 
         return TrackStreamInfo(
             stream_manifest=stream_manifest,
@@ -2840,7 +2860,10 @@ class Download:
 
             # Extract FLAC from MP4 container using ffmpeg
             if isinstance(media, Track) and self.settings.data.extract_flac and stream_info.requires_flac_extraction:
-                tmp_path_file = self._extract_flac(tmp_path_file)
+                # Lossless arrives as FLAC-in-MP4 (stream copy); scope "all"
+                # re-encodes lossy sources instead (issue #64).
+                transcode = str(stream_info.codecs or "").upper() != Codec.FLAC
+                tmp_path_file = self._extract_flac(tmp_path_file, transcode=transcode)
 
             self._note_stage(media, cum["extract"])
 
@@ -4813,11 +4836,16 @@ class Download:
 
         return path_file_out
 
-    def _extract_flac(self, path_media_src: pathlib.Path) -> pathlib.Path:
+    def _extract_flac(self, path_media_src: pathlib.Path, transcode: bool = False) -> pathlib.Path:
         """Extract FLAC audio from a media file using ffmpeg.
+
+        Lossless sources move containers with a stream copy (no re-encode);
+        scope "all" (issue #64) re-encodes lossy sources instead, keeping
+        their rate and channels (``-c:a flac`` with no resample flags).
 
         Args:
             path_media_src (pathlib.Path): Path to the source media file.
+            transcode (bool): Re-encode into FLAC instead of copying the stream.
 
         Returns:
             pathlib.Path: Path to the extracted FLAC file.
@@ -4833,7 +4861,7 @@ class Download:
                 url=path_media_out,
                 map=0,
                 movflags="use_metadata_tags",
-                acodec="copy",
+                acodec="flac" if transcode else "copy",
                 map_metadata="0:g",
                 loglevel="quiet",
             )
