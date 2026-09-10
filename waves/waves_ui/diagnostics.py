@@ -603,6 +603,30 @@ def log_path() -> Path | None:
     return (_log_dir / LOG_FILENAME) if _log_dir else None
 
 
+def log_tail(max_lines: int = 500, max_bytes: int = 262144) -> str:
+    """The on-disk log's tail for the in-app console (issue #68).
+
+    Flushes the disk queue first so just-written lines show up, then reads
+    at most max_bytes off the end and keeps the last max_lines. Bounded both
+    ways so a runaway log cannot stall the GUI thread that asked; "" when
+    there is no log file yet.
+    """
+    try:
+        lines = max(1, min(int(max_lines), 2000))
+        cap = max(4096, min(int(max_bytes), 1_048_576))
+    except (TypeError, ValueError):
+        lines, cap = 500, 262144
+    flush_disk_log()
+    path = log_path()
+    if path is None:
+        return ""
+    text = _read_tail(path, cap)
+    if not text:
+        return ""
+    tail = text.splitlines()
+    return "\n".join(tail[-lines:])
+
+
 def install(log_dir: str) -> Path | None:
     """Wire redaction, breadcrumbs and the on-disk log. Idempotent.
 

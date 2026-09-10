@@ -204,6 +204,9 @@ ignore = [
 # The provider-collapse scenario re-runs itself in a subprocess to isolate
 # the Qt boot (S603, fixed argv).
 "tests/test_search_provider_collapse_qml.py" = ["S603"]
+# The logs-console scenario re-runs itself in a subprocess to isolate
+# the Qt boot (S603, fixed argv).
+"tests/test_logs_console_qml.py" = ["S603"]
 # The startup picker scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).
 "tests/test_startup_provider_picker_qml.py" = ["S603"]
