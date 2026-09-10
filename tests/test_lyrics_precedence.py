@@ -5,15 +5,15 @@ from waves.model.cfg import Settings
 
 def test_new_settings_defaults_match_spec():
     data = Settings()
-    # Existing TIDAL defaults unchanged.
+    # Best quality out of the box (issue #59): sidecars on, embed opt-in.
     assert data.lyrics_embed is False
-    assert data.lyrics_file is False
+    assert data.lyrics_file is True
     assert data.lyrics_file_synced_only is False
     assert data.lyrics_prefer_lrclib is True
-    # New toggles: word-timed on, .ttml off.
+    # Word-timed on, verbatim .ttml on; original-format cover sidecars.
     assert data.lyrics_word_timed is True
-    assert data.lyrics_ttml_file is False
-    assert data.cover_file_format == "jpg"
+    assert data.lyrics_ttml_file is True
+    assert data.cover_file_format == "raw"
 
 
 def test_word_timed_outranks_line_lrclib():

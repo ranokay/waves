@@ -135,7 +135,7 @@ def test_the_migration_touches_no_other_setting():
 
 def test_the_apple_setting_starts_at_its_own_default():
     data = _migrated('{"quality_audio": "LOW_320K"}')
-    assert data.apple_quality_audio == "LOSSLESS"
+    assert data.apple_quality_audio == "HI_RES_LOSSLESS"
 
 
 def test_the_legacy_key_never_reaches_disk_again():
@@ -156,8 +156,8 @@ def test_a_corrupt_legacy_value_falls_back_to_the_tidal_default():
 
 def test_the_stored_settings_are_tier_strings_by_default():
     fresh = ModelSettings()
-    assert fresh.tidal_quality_audio == "HIGH"
-    assert fresh.apple_quality_audio == "LOSSLESS"
+    assert fresh.tidal_quality_audio == "HI_RES_LOSSLESS"
+    assert fresh.apple_quality_audio == "HI_RES_LOSSLESS"
 
 
 # ---- session quality apply (the TIDAL mapping, engine boundary) ------------------
@@ -262,14 +262,14 @@ def test_the_tidal_choice_round_trips_tier_strings():
 
 def test_the_apple_choice_exists_with_honest_labels():
     # The shared ladder drives the options; Apple's labels name its own
-    # codecs and start at HIGH (Apple has no LOW rung), so LOW has no mapped
-    # label and would fall back to the raw name.
+    # codecs with "Up to" ceilings (issue #59) and start at HIGH (Apple has
+    # no LOW rung), so LOW has no mapped label and falls back to the raw name.
     options = _enum_options("apple_quality_audio", QualityTier)
     assert [o["value"] for o in options] == ["LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS"]
     by_value = {o["value"]: o["label"] for o in options}
-    assert by_value["HIGH"] == "High (AAC 256)"
-    assert by_value["LOSSLESS"] == "Lossless (ALAC 16-bit)"
-    assert by_value["HI_RES_LOSSLESS"] == "Max · Hi-Res (ALAC 24-bit)"
+    assert by_value["HIGH"] == "High · Up to 256 Kbps (AAC)"
+    assert by_value["LOSSLESS"] == "Lossless · Up to 16-bit / 44.1 kHz (ALAC)"
+    assert by_value["HI_RES_LOSSLESS"] == "Max · Hi-Res · Up to 24-bit / 192 kHz (ALAC)"
     assert by_value["LOW"] == "LOW"
 
 

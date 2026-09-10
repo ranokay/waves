@@ -10,7 +10,11 @@ from waves.constants import CoverDimensions, DownsampleTarget, InitialKey, Metad
 class Settings:
     skip_existing: bool = True
     lyrics_embed: bool = False
-    lyrics_file: bool = False
+    # Best-quality lyrics out of the box (issue #59): sidecars on, so a track
+    # keeps its finest timed source next to it -- .lrc on both providers, plus
+    # the verbatim .ttml on Apple (lyrics_ttml_file below). Embedding stays
+    # opt-in per provider.
+    lyrics_file: bool = True
     # When saving lyrics files: timed lyrics go to .lrc, untimed to .txt.
     # This switch skips the .txt entirely so only synced lyrics produce a file.
     lyrics_file_synced_only: bool = False
@@ -24,8 +28,8 @@ class Settings:
     lyrics_word_timed: bool = True
     # Verbatim Apple TTML sidecar (issue #34, spec section 9.1): saved exactly
     # as Apple serves it, zero conversion, sidecar-only (never embedded).
-    # Apple only; default off. TIDAL has no TTML source.
-    lyrics_ttml_file: bool = False
+    # Apple only; default on (issue #59: best quality). TIDAL has no TTML source.
+    lyrics_ttml_file: bool = True
     use_primary_album_artist: bool = (
         False  # When True, uses first album artist instead of track artists for folder paths
     )
@@ -57,11 +61,10 @@ class Settings:
     # The audio-quality settings, one per provider (issue #24, spec §9.2),
     # each stored as a Waves tier string (waves.constants.QualityTier values:
     # "LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS") -- never an engine enum.
-    # TIDAL's default keeps the exact meaning the old single setting's default
-    # carried (LOW_320K was the tier the UI calls HIGH). Apple has no LOW rung
-    # (AAC 256 starts at HIGH), so its default is the honest ALAC baseline.
-    tidal_quality_audio: str = "HIGH"
-    apple_quality_audio: str = "LOSSLESS"
+    # Both default to the highest rung (issue #59): anything the provider can
+    # serve is fetched. Apple has no LOW rung (AAC 256 starts at HIGH).
+    tidal_quality_audio: str = "HI_RES_LOSSLESS"
+    apple_quality_audio: str = "HI_RES_LOSSLESS"
     # Apple Music ships as a user-enabled provider (spec ground rule 3), off
     # by default and opt-in from Settings. Search reads this now. Setup,
     # Chooser and download routing join it in their own rollout slices.
@@ -146,17 +149,22 @@ class Settings:
     # on PATH) or "none". Lets a pasted config reveal the ffmpeg situation, since
     # path_binary_ffmpeg stays "" for both the managed and the absent cases.
     ffmpeg_source: str = "unknown"
-    metadata_cover_dimension: CoverDimensions = CoverDimensions.Px320
+    # Original quality by default (issue #59): the true master image on both
+    # providers (TIDAL's ORIGIN keeps its embedded cap; Apple's ORIGIN is the
+    # original-master image). The separately-saved file follows this size.
+    metadata_cover_dimension: CoverDimensions = CoverDimensions.PxORIGIN
     # Size of the separately-saved cover.jpg. The sentinel "follow" means "match
     # the embedded cover size above" (the historical behaviour); any other value
     # is a CoverDimensions member name (e.g. "Px640", "PxORIGIN") applied only to
     # the saved file, so the embedded art and the on-disk cover can differ.
     metadata_cover_file_dimension: str = "follow"
     metadata_cover_embed: bool = True
-    # Sidecar cover format (issue #34, spec section 9.1): "jpg" (default) or
-    # "png" on both providers, plus "raw" on Apple (the true original-master
-    # bytes, extension follows the served image). Embedded art stays jpg.
-    cover_file_format: str = "jpg"
+    # Sidecar cover format (issue #34, spec section 9.1): "raw" (default,
+    # issue #59) is the true original-master bytes on Apple, and plain jpg on
+    # TIDAL, which has no original-master sidecar (raw falls back to jpg
+    # there). "jpg" or "png" force that container on both. Embedded art stays
+    # jpg either way.
+    cover_file_format: str = "raw"
     mark_explicit: bool = False
     cover_album_file: bool = True
     # Also write cover.jpg when a single track is downloaded on its own (not just
@@ -250,7 +258,7 @@ class HelpSettings:
     use_primary_album_artist: str = "Use only the primary album artist for folder paths instead of track artists."
     lyrics_file: str = (
         "Save lyrics next to the track: timed lyrics as a *.lrc file, untimed ones as "
-        "*.txt. Applies to every enabled provider."
+        "*.txt. Applies to every enabled provider. Default on."
     )
     lyrics_file_synced_only: str = (
         "Only save a lyrics file when timed (synced) lyrics exist; untimed lyrics then produce no *.txt file."
@@ -268,7 +276,7 @@ class HelpSettings:
     )
     lyrics_ttml_file: str = (
         "Save Apple's verbatim TTML beside the track (zero conversion, sidecar-only, "
-        "never embedded). Apple only; default off."
+        "never embedded). Apple only; default on."
     )
     api_key_index: str = "Set the device API KEY."
     album_info_save: str = "Save album info to track?"
@@ -277,12 +285,14 @@ class HelpSettings:
     download_delay: str = "Activate randomized download delay to mimic human behaviour."
     download_base_path: str = "Where to store the downloaded media."
     tidal_quality_audio: str = (
-        'TIDAL audio download quality as a Waves tier string: "LOW" (96kbps), "HIGH" (320kbps), '
-        '"LOSSLESS" (16 Bit, 44,1 kHz), "HI_RES_LOSSLESS" (up to 24 Bit, 192 kHz)'
+        'TIDAL audio download quality as a Waves tier string: "LOW" (up to 96 Kbps), "HIGH" (up to '
+        '320 Kbps), "LOSSLESS" (up to 16-bit, 44.1 kHz), "HI_RES_LOSSLESS" (up to 24-bit, 192 kHz). '
+        "Default: the highest rung."
     )
     apple_quality_audio: str = (
-        'Apple Music audio download quality as a Waves tier string: "HIGH" (AAC 256, Apple has no '
-        'LOW), "LOSSLESS" (ALAC 16 Bit, 44,1 kHz), "HI_RES_LOSSLESS" (ALAC up to 24 Bit, 192 kHz)'
+        'Apple Music audio download quality as a Waves tier string: "HIGH" (up to 256 Kbps AAC, Apple '
+        'has no LOW), "LOSSLESS" (up to 16-bit, 44.1 kHz ALAC), "HI_RES_LOSSLESS" (up to 24-bit, '
+        "192 kHz ALAC). Default: the highest rung."
     )
     apple_cookies_path: str = (
         "Path to a cookies export (Netscape format) from a logged-in music.apple.com browser session. "
@@ -361,8 +371,8 @@ class HelpSettings:
     )
     metadata_cover_embed: str = "Embed album cover into file."
     cover_file_format: str = (
-        "Sidecar cover format: jpg (default) or png on both providers, plus raw on "
-        "Apple (the true original-master bytes). Embedded art stays jpg."
+        "Sidecar cover format: raw (default: the true original-master bytes on Apple, plain jpg on "
+        "TIDAL, which has no original-master sidecar), jpg, or png. Embedded art stays jpg."
     )
     mark_explicit: str = "Mark explicit tracks with '🅴' in track title (only applies to metadata)."
     cover_album_file: str = "Save cover to 'cover.jpg', if an album is downloaded."
