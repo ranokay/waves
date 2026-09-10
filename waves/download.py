@@ -3677,7 +3677,7 @@ class Download:
         Returns:
             bool: True if moved, False otherwise.
         """
-        # Sidecar format (issue #34): jpg (default) or png; raw is Apple-only
+        # Sidecar format (issue #34): jpg or png; raw is Apple-only
         # and falls back to jpg here so TIDAL behavior stays byte-for-byte.
         fmt = (
             str(

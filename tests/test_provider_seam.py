@@ -55,6 +55,11 @@ class _FakeTidal:
         self.settings = Mock()
         self.settings.data = Mock()
         self.settings.data.quality_audio = Quality.low_320k
+        # Deterministic tier word: settings_apply folds this onto the ladder,
+        # and an auto-mocked word would fold on the Mock's repr digits ("96"
+        # in a memory address parses as LOW), making session quality depend
+        # on allocation order instead of the code under test.
+        self.settings.data.tidal_quality_audio = "HIGH"
 
 
 def _provider(**kwargs) -> tuple[TidalProvider, _FakeTidal]:

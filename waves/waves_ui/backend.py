@@ -984,18 +984,20 @@ _FIELD_LABELS = {
 # name (the stored value). Unmapped members fall back to the raw name.
 _ENUM_LABELS = {
     # Per-provider audio quality (issue #24): the Waves rungs, each provider
-    # stating them in its own codecs. TIDAL keeps the wording it always had;
-    # Apple has no LOW rung (AAC 256 starts at HIGH), so its list starts there.
+    # stating them in its own codecs with "Up to" ceilings (issue #59), so the
+    # dropdown reads as a fidelity promise: bitrate for lossy rungs, bit depth
+    # and sample rate for lossless ones. Apple has no LOW rung (AAC 256 starts
+    # at HIGH), so its list starts there.
     "tidal_quality_audio": {
-        "LOW": "Low (96 kbps)",
-        "HIGH": "High (320 kbps)",
-        "LOSSLESS": "Lossless (16-bit)",
-        "HI_RES_LOSSLESS": "Max · Hi-Res (24-bit)",
+        "LOW": "Low · Up to 96 Kbps",
+        "HIGH": "High · Up to 320 Kbps",
+        "LOSSLESS": "Lossless · Up to 16-bit / 44.1 kHz",
+        "HI_RES_LOSSLESS": "Max · Hi-Res · Up to 24-bit / 192 kHz",
     },
     "apple_quality_audio": {
-        "HIGH": "High (AAC 256)",
-        "LOSSLESS": "Lossless (ALAC 16-bit)",
-        "HI_RES_LOSSLESS": "Max · Hi-Res (ALAC 24-bit)",
+        "HIGH": "High · Up to 256 Kbps (AAC)",
+        "LOSSLESS": "Lossless · Up to 16-bit / 44.1 kHz (ALAC)",
+        "HI_RES_LOSSLESS": "Max · Hi-Res · Up to 24-bit / 192 kHz (ALAC)",
     },
     "quality_video": {"P360": "360p", "P480": "480p", "P720": "720p", "P1080": "1080p"},
     "metadata_cover_dimension": {
@@ -1298,7 +1300,7 @@ def _record_names_a_broken_copy(rec: dict | None) -> bool:
 
 
 def _cover_sidecar_format(data) -> str:
-    """The sidecar cover format: jpg (default), png, or raw (Apple-only).
+    """The sidecar cover format: jpg, png, or raw (Apple-only).
 
     One normalizer for every writer so TIDAL and Apple agree on the
     spelling; unknown values fall back to jpg and TIDAL treats raw as jpg
