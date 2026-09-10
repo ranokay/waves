@@ -1,11 +1,13 @@
 """Official provider logos live in qml/assets/providers/ and are the marks in use.
 
-Issue #58. The user-supplied official logos (white-on-transparent artwork for
-the app's dark surfaces) moved from the repo root into
+Issue #58. The user-supplied official logos moved from the repo root into
 ``waves/waves_ui/qml/assets/providers/`` and replaced the invented vector
 glyphs: Settings section headers show the logo image, and so do the search
-group headers and the Chooser provider segments. This file pins the asset
-placement and every reference, so a future edit cannot silently fall back to
+group headers and the Chooser provider segments. Each provider ships a light
+(white-on-transparent, for the app's dark surfaces, the one in use) and a
+dark (black-on-transparent, reserved for light backdrops such as the album
+provider badge in issue #69) variant. This file pins the asset placement
+and every reference, so a future edit cannot silently fall back to
 text-only headers or reintroduce the tide-lines / beamed-note glyphs.
 """
 
@@ -18,16 +20,22 @@ QML = REPO / "waves" / "waves_ui" / "qml"
 PROVIDERS = QML / "assets" / "providers"
 TIDAL = PROVIDERS / "tidal.png"
 APPLE = PROVIDERS / "apple-music.png"
+TIDAL_DARK = PROVIDERS / "tidal-dark.png"
+APPLE_DARK = PROVIDERS / "apple-music-dark.png"
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
 
 def test_logos_live_in_the_providers_asset_dir_and_not_at_the_root():
-    assert TIDAL.is_file() and TIDAL.stat().st_size > 0
-    assert APPLE.is_file() and APPLE.stat().st_size > 0
-    assert TIDAL.read_bytes()[:8] == _PNG_SIG
-    assert APPLE.read_bytes()[:8] == _PNG_SIG
-    assert not (REPO / "tidal-logo.png").exists()
-    assert not (REPO / "apple-music-logo.png").exists()
+    for logo in (TIDAL, APPLE, TIDAL_DARK, APPLE_DARK):
+        assert logo.is_file() and logo.stat().st_size > 0
+        assert logo.read_bytes()[:8] == _PNG_SIG
+    for stray in (
+        "tidal-logo.png",
+        "apple-music-logo.png",
+        "tidal-logo-dark.png",
+        "apple-music-logo-dark.png",
+    ):
+        assert not (REPO / stray).exists()
 
 
 def test_settings_headers_use_the_logos_not_vector_glyphs():

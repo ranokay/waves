@@ -545,6 +545,8 @@ Item {
     // Official provider logo for a section id, or "" when the section keeps
     // its line-art glyph. The PNGs are white-on-transparent artwork, drawn
     // for the app's dark surfaces — never tinted, never used as a mask.
+    // Black-on-transparent twins (tidal-dark.png, apple-music-dark.png) sit
+    // alongside for light backdrops; nothing references them yet.
     function providerLogo(id) {
         switch (id) {
         case "providers_tidal": return "assets/providers/tidal.png"
