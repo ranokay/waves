@@ -644,7 +644,7 @@ class _GateSettingsData:
     filename_delimiter_album_artist = ", "
     filename_illegal_replacement = ""
     use_primary_album_artist = False
-    download_dolby_atmos = False
+    default_audio_type = "stereo"
 
 
 class _GateSettings:

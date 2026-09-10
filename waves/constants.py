@@ -165,6 +165,28 @@ class QualityVideo(StrEnum):
     P1080 = "1080"
 
 
+class DefaultAudio(StrEnum):
+    """The Chooser one-click audio default (issue #66): stereo, or both
+    Versions side by side. Atmos-alone has no Settings spelling; it stays a
+    per-click choice only."""
+
+    STEREO = "stereo"
+    BOTH = "both"
+
+
+def default_audio_is_both(value: object) -> bool:
+    """Whether a default-audio setting value means dual-download.
+
+    Accepts the stored word ("both"), the enum member, and anything
+    unreadable (missing stubs, hand-edited configs) as stereo: only an
+    explicit "both" fetches twice.
+    """
+    try:
+        return str(getattr(value, "value", value) or "").strip().lower() == "both"
+    except Exception:
+        return False
+
+
 class MediaType(StrEnum):
     TRACK = "track"
     VIDEO = "video"

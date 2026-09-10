@@ -311,7 +311,7 @@ def _settings(base: Path, **overrides):
         mark_explicit=False,
         metadata_target_upc="UPC",
         apple_quality_audio="HIGH",
-        download_dolby_atmos=False,
+        default_audio_type="stereo",
         apple_cookies_path="",
         path_binary_ffmpeg="",
         format_track="{artist_name}/{track_title}",
@@ -1122,9 +1122,9 @@ def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
     base = tmp_path / "lib"
     store = _SkipStore()
     stub = _bind(_stub(base, provider, _ownership_store=store))
-    # The Atmos toggle is ON (a legacy single row asks Atmos); the track
+    # The default is "both" (a legacy single row asks Atmos); the track
     # itself is stereo-only, so the delivery falls back to stereo.
-    stub.settings.data.download_dolby_atmos = True
+    stub.settings.data.default_audio_type = "both"
     orig_resolve = provider.resolve_stream
 
     def _fallback_resolve(raw, tier, audio_type):
@@ -1156,7 +1156,7 @@ def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
     # gate reads the effective Version, not the Atmos ask.
     provider2 = _FakeProvider([])
     stub2 = _bind(_stub(base, provider2, _ownership_store=store))
-    stub2.settings.data.download_dolby_atmos = False
+    stub2.settings.data.default_audio_type = "stereo"
     relay2 = _Relay()
     spec2 = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
     summary2 = WavesBridge._run_apple_job(
@@ -1210,7 +1210,7 @@ def test_resolve_stage_failure_files_under_effective_version(tmp_path, monkeypat
     base = tmp_path / "lib"
     store = _SkipStore()
     stub = _bind(_stub(base, provider, _ownership_store=store))
-    stub.settings.data.download_dolby_atmos = True
+    stub.settings.data.default_audio_type = "both"
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 

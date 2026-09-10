@@ -298,10 +298,27 @@ def _migrate_settings(data: ModelSettings) -> bool:
     # move into each provider's card. Copy the shared values into both
     # mirrors once, so an existing install downloads exactly as configured
     # while each provider's choices become its own from here on.
-    if _migrate_lyrics_art_providers(data):
-        changed = True
+    #
+    # The Atmos toggle became the Chooser default-audio dropdown (issue #66).
+    # Assignment form (not `if step(): changed = True`) to stay under the
+    # branch budget: both steps always run either way.
+    changed = _migrate_lyrics_art_providers(data) or changed
+    changed = _migrate_atmos_default(data) or changed
 
     return changed
+
+
+def _migrate_atmos_default(data: ModelSettings) -> bool:
+    """Fold the retired Atmos toggle into the default-audio dropdown."""
+    if data.download_dolby_atmos is None:
+        return False
+    # On means both Versions side by side; off was the default already, so
+    # only True writes. The carrier nulls either way, so the old key leaves
+    # settings.json on the next save.
+    if data.download_dolby_atmos:
+        data.default_audio_type = "both"
+    data.download_dolby_atmos = None
+    return True
 
 
 def _migrate_provider_segment(data: ModelSettings) -> bool:

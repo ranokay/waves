@@ -66,12 +66,14 @@ from waves.constants import (
     LIBRARY_PAGE,
     TIER_RANK,
     CoverDimensions,
+    DefaultAudio,
     DownsampleTarget,
     InitialKey,
     MediaType,
     MetadataTargetUPC,
     QualityTier,
     QualityVideo,
+    default_audio_is_both,
     provider_folder_name,
     quality_rank,
     tier_from_word,
@@ -362,7 +364,6 @@ _FLAG_FIELDS = [
     "playlist_create",
     "mark_explicit",
     "use_primary_album_artist",
-    "download_dolby_atmos",
     # Custom tag template (issue #61): the master switch plus one omit flag
     # per tag group, shown only while the switch is on.
     "metadata_custom",
@@ -378,7 +379,6 @@ _FLAG_FIELDS = [
     "playlist_create",
     "mark_explicit",
     "use_primary_album_artist",
-    "download_dolby_atmos",
     # Providers area: the Apple component's enable switch (issue #25). It is
     # never rendered as a flag tile: the Apple status row carries it as the
     # section's master switch, so it only needs the persistence coercion.
@@ -394,6 +394,7 @@ _FLAG_FIELDS = [
 _CHOICE_FIELDS = [
     ("tidal_quality_audio", QualityTier),
     ("apple_quality_audio", QualityTier),
+    ("default_audio_type", DefaultAudio),
     ("quality_video", QualityVideo),
     ("metadata_cover_dimension", CoverDimensions),
     # Per-provider mirrors (issue #61).
@@ -976,7 +977,7 @@ _FIELD_LABELS = {
     "apple_wrapper_idle_sec": "Wrapper idle stop (s, Apple)",
     "quality_video": "Video quality",
     "downloads_concurrent_max": "Concurrent track downloads",
-    "download_dolby_atmos": "Download Dolby Atmos",
+    "default_audio_type": "Default audio type",
     "confirm_category_download": "Confirm bulk downloads",
     # Discography & editions (a source toggle like the disco_* prefs)
     "video_download": "Music videos",
@@ -1072,6 +1073,9 @@ _ENUM_LABELS = {
         "HI_RES_LOSSLESS": "Max · Hi-Res · Up to 24-bit / 192 kHz (ALAC)",
     },
     "quality_video": {"P360": "360p", "P480": "480p", "P720": "720p", "P1080": "1080p"},
+    # Chooser one-click audio default (issue #66): stereo, or both Versions
+    # side by side where a track offers the choice.
+    "default_audio_type": {"STEREO": "Stereo", "BOTH": "Stereo + Atmos"},
     "metadata_cover_dimension": {
         "Px80": "80×80",
         "Px160": "160×160",
@@ -1286,6 +1290,20 @@ def _delivers_atmos(media, atmos_on: bool) -> bool:
     stereo target and every save re-fetches the identical file."""
     modes = getattr(media, "audio_modes", None) or []
     return bool(_ATMOS_MODE in modes and (atmos_on or all(str(m) == _ATMOS_MODE for m in modes)))
+
+
+def _wants_both_default(settings) -> bool:
+    """Whether the Chooser one-click default fetches both Versions (issue #66).
+
+    Module-level so engine-adjacent paths bound onto bare test stubs can ask
+    without the full bridge: only an explicit "both" fetches twice, and
+    anything unreadable (missing settings, hand-edited configs) reads stereo.
+    """
+    try:
+        data = getattr(settings, "data", None)
+        return default_audio_is_both(getattr(data, "default_audio_type", "stereo")) if data is not None else False
+    except Exception:
+        return False
 
 
 def _atmos_only(obj) -> bool:
@@ -1848,22 +1866,22 @@ class _TrackedDownload(Download):
         quality with nothing to say so."""
         prev = None
         pinned = getattr(self, "_pinned_quality", None)
-        # Dual-download stereo rows fetch stereo even though the toggle is on:
-        # the engine decides the session from the live setting, so hold it off
-        # for this fetch (serialised by the stream lock, restored after). Atmos
-        # rows need no override: toggle-on already takes the Atmos session for
-        # dual-mode tracks, and Atmos-only tracks take it via the engine's own
-        # "nothing else to fetch" clause.
+        # Dual-download stereo rows fetch stereo even though the default is
+        # both: the engine decides the session from the live setting, so hold
+        # it at stereo for this fetch (serialised by the stream lock, restored
+        # after). Atmos rows need no override: a "both" default already takes
+        # the Atmos session for dual-mode tracks, and Atmos-only tracks take
+        # it via the engine's own "nothing else to fetch" clause.
         atmos_flag_held = False
         prev_atmos_flag = None
         if getattr(self, "_audio_type", None) == "stereo":
             try:
-                prev_atmos_flag = bool(getattr(self.settings.data, "download_dolby_atmos", False))
-                if prev_atmos_flag:
-                    self.settings.data.download_dolby_atmos = False
+                prev_atmos_flag = str(getattr(self.settings.data, "default_audio_type", "stereo") or "stereo")
+                if default_audio_is_both(prev_atmos_flag):
+                    self.settings.data.default_audio_type = "stereo"
                     atmos_flag_held = True
             except Exception:
-                logger.debug("Could not hold the Atmos toggle off for a stereo fetch", exc_info=True)
+                logger.debug("Could not hold the Atmos default off for a stereo fetch", exc_info=True)
                 atmos_flag_held = False
         if pinned is not None:
             try:
@@ -1886,7 +1904,7 @@ class _TrackedDownload(Download):
                     self.session.audio_quality = prev
             if atmos_flag_held:
                 with contextlib.suppress(Exception):
-                    self.settings.data.download_dolby_atmos = prev_atmos_flag
+                    self.settings.data.default_audio_type = prev_atmos_flag
         mid = getattr(media, "id", None)
         if mid is not None and getattr(info, "media_stream", None) is not None:
             quality = _stream_quality(info)
@@ -1915,7 +1933,7 @@ class _TrackedDownload(Download):
         Dual-download rows pin their Version: stereo rows never want Atmos
         (Atmos-only tracks skip instead, the Atmos row covers them); Atmos
         rows want Atmos whenever the track offers it. Legacy single rows
-        (audio_type None, toggle off) keep the engine's own condition,
+        (audio_type None, stereo default) keep the engine's own condition,
         including its "nothing else to fetch" clause.
         """
         at = getattr(self, "_audio_type", None)
@@ -1923,7 +1941,12 @@ class _TrackedDownload(Download):
             return False
         if at == "atmos":
             return bool(_has_atmos(media))
-        return _delivers_atmos(media, bool(getattr(self.settings.data, "download_dolby_atmos", False)))
+        try:
+            data = getattr(getattr(self, "settings", None), "data", None)
+            atmos_default = default_audio_is_both(getattr(data, "default_audio_type", "stereo"))
+        except Exception:
+            atmos_default = False
+        return _delivers_atmos(media, atmos_default)
 
     def _get_media_urls(self, media, stream_info=None):
         """Capture that a video is really being fetched, as a side effect. Videos
@@ -8980,12 +9003,29 @@ class WavesBridge(LibraryMixin, QObject):
     def _chooser_default_audio(self) -> str:
         """The audio-type control's default from Settings.
 
-        download_dolby_atmos off means stereo, on means both (alongside).
-        Atmos-alone has no Settings spelling; it is a per-click choice only."""
-        data = getattr(getattr(self, "settings", None), "data", None)
-        if data is not None and bool(getattr(data, "download_dolby_atmos", False)):
-            return "both"
-        return "stereo"
+        "both" fetches stereo + Atmos side by side; anything else (including
+        an unreadable value) reads stereo. Atmos-alone has no Settings
+        spelling; it is a per-click choice only.
+        """
+        try:
+            data = getattr(getattr(self, "settings", None), "data", None)
+            value = getattr(data, "default_audio_type", "stereo") if data is not None else "stereo"
+        except Exception:
+            logger.debug("Could not read the Chooser default audio", exc_info=True)
+            return "stereo"
+        return "both" if default_audio_is_both(value) else "stereo"
+
+    def _default_wants_both(self) -> bool:
+        """Whether the Chooser one-click default fetches both Versions (issue #66).
+
+        The single source every plain (non-Chooser) click consults instead of
+        the retired Download-Dolby-Atmos toggle. Plain test stubs without
+        settings read as stereo, the shipped default.
+        """
+        try:
+            return _wants_both_default(getattr(self, "settings", None))
+        except Exception:
+            return False
 
     def _chooser_atmos_only(self, media_id: str, kind: str) -> bool:
         """Whether the audio-type control collapses to ATMOS ONLY.
@@ -9070,10 +9110,10 @@ class WavesBridge(LibraryMixin, QObject):
             else:
                 staged["tidal_quality_audio"] = str(tier.value)
         if audio in ("stereo", "both"):
-            staged["download_dolby_atmos"] = audio == "both"
-        # "atmos" alone has no Settings spelling (the toggle means alongside
-        # in v1, spec section 5): SET AS DEFAULTS leaves it unchanged rather
-        # than misrecording it as both.
+            staged["default_audio_type"] = audio
+        # "atmos" alone has no Settings spelling (it is a per-click choice
+        # only): SET AS DEFAULTS leaves the default unchanged rather than
+        # misrecording it as both.
         # Lyrics/art quick-toggles write back to the row's own provider
         # mirrors (issue #61); the shared keys stay legacy carriers. An
         # explicit mirror always wins over its shared spelling.
@@ -9259,7 +9299,7 @@ class WavesBridge(LibraryMixin, QObject):
         if ask_quality is None or ask_tier is None:
             ask_quality, ask_tier = self._queued_quality_value(), self._target_tier()
         # Which Version this row downloads (§5.2): None keeps the legacy
-        # single-row shape (toggle off, byte-identical); "stereo" / "atmos"
+        # single-row shape (stereo default, byte-identical); "stereo" / "atmos"
         # mark the two rows of a dual-download pair. Seeded so the drawer's
         # model fixes the role from the first row it is handed.
         atype = str(audio_type or "").strip().lower() or None
@@ -9848,14 +9888,14 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _dual_button_need(self, tid: str) -> str | None:
         """Which Versions a button must hold for ``tid``: "both" (dual,
-        toggle on, track offers stereo+Atmos), else None (legacy whole-track).
+        default-both, track offers stereo+Atmos), else None (legacy whole-track).
 
         Cache-only, never network: TIDAL via _objs, Apple via provider cache.
         Unknown objects answer None (legacy), so evicted rows never flip to
         DOWNLOAD for stereo-only tracks they cannot judge.
         """
         try:
-            atmos_on = bool(getattr(self.settings.data, "download_dolby_atmos", False))
+            atmos_on = _wants_both_default(self.settings)
         except Exception:
             return None
         if not atmos_on:
@@ -9898,7 +9938,7 @@ class WavesBridge(LibraryMixin, QObject):
         only answer _copy_is_current acts on is the one where the copy on disk
         IS Atmos, and such a copy is itself proof that the track offers Atmos.
         The setting supplies the rest."""
-        return bool(_record_is_atmos(rec) and getattr(self.settings.data, "download_dolby_atmos", False))
+        return bool(_record_is_atmos(rec) and _wants_both_default(self.settings))
 
     @Slot(str, result="QVariant")
     def collectionMemberIds(self, collection_id: str):
@@ -10180,13 +10220,13 @@ class WavesBridge(LibraryMixin, QObject):
         if media_id in self._redownload_overrides or media_id in self._merge_plans:
             return marks
         target = self._target_quality_rank(self._job_quality(qid))
-        atmos_on = bool(getattr(self.settings.data, "download_dolby_atmos", False))
+        atmos_on = _wants_both_default(self.settings)
         # Dual-download rows predict only their own Version (§5.2-5.3, worker
         # thread, no network beyond the ownership store): stereo rows skip
         # Atmos-only tracks (the Atmos row covers them), Atmos rows skip
         # stereo-only tracks, and neither consults the version-blind library
         # claim (a stereo file does not satisfy an Atmos row). Legacy single
-        # rows keep today's whole-track + claim prediction (toggle-off,
+        # rows keep today's whole-track + claim prediction (stereo default,
         # byte-identical).
         row_atype = (
             str(item.get("audioType") or (self._job_audio_type(qid) if hasattr(self, "_job_audio_type") else "") or "")
@@ -12214,19 +12254,16 @@ class WavesBridge(LibraryMixin, QObject):
             ask, ask_tier = self._ask_quality_for(obj, type_media, media_id)
             keep_ver = None
         chooser_ver = self._chooser_normalize_audio(chooser_audio) if chooser_ask is not None or chooser_audio else None
-        # Dual-download Versions (§5.1-5.2): toggle on means alongside (two
-        # rows, two files) where a real choice exists; toggle off stays
-        # byte-identical single rows. Merges and videos never dual (v1). A
-        # retry (keep_ask) re-queues only its own Version, and a Chooser
-        # click (chooser_audio) pins its own Versions for that click only.
-        # Test stubs without settings read as toggle-off (single legacy,
-        # existing behavior).
+        # Dual-download Versions (§5.1-5.2): the "both" default means
+        # alongside (two rows, two files) where a real choice exists; the
+        # stereo default stays byte-identical single rows. Merges and videos
+        # never dual (v1). A retry (keep_ask) re-queues only its own Version,
+        # and a Chooser click (chooser_audio) pins its own Versions for that
+        # click only. Test stubs without settings read as stereo (single
+        # legacy, existing behavior).
         versions: list[str | None]
         try:
-            _atmos_on = bool(
-                getattr(getattr(self, "settings", None), "data", None)
-                and getattr(self.settings.data, "download_dolby_atmos", False)
-            )
+            _atmos_on = _wants_both_default(self.settings)
         except Exception:
             _atmos_on = False
         if keep_ver is not None:
@@ -12541,10 +12578,10 @@ class WavesBridge(LibraryMixin, QObject):
             keep_ver = None
         chooser_ver = self._chooser_normalize_audio(chooser_audio) if chooser_ask is not None or chooser_audio else None
         provider = self.providers.get(CTX_APPLE)
-        # Dual-download Versions (§5.1-5.2): toggle on means alongside where a
-        # track carries Atmos; toggle off stays single stereo rows. A retry
-        # re-queues only its own Version, and a Chooser click pins its own
-        # Versions for that click only.
+        # Dual-download Versions (§5.1-5.2): the "both" default means
+        # alongside where a track carries Atmos; the stereo default stays
+        # single stereo rows. A retry re-queues only its own Version, and a
+        # Chooser click pins its own Versions for that click only.
         versions: list[str | None]
         if keep_ver is not None:
             versions = [keep_ver]
@@ -12746,8 +12783,12 @@ class WavesBridge(LibraryMixin, QObject):
             return
 
     def _apple_wants_atmos(self) -> bool:
-        """The instead-of Atmos toggle, read live per job like the engine's."""
-        return bool(getattr(self.settings.data, "download_dolby_atmos", False))
+        """Whether the one-click default fetches the Atmos Version alongside
+        stereo, read live per job like the engine's."""
+        try:
+            return _wants_both_default(getattr(self, "settings", None))
+        except Exception:
+            return False
 
     def _apple_audio_type(self):
         return AudioType.ATMOS if self._apple_wants_atmos() else AudioType.STEREO
@@ -12816,9 +12857,9 @@ class WavesBridge(LibraryMixin, QObject):
         else:
             audio_type = self._apple_audio_type()
         # The Version this job fetches as, for the per-version skip-list.
-        # Legacy single rows (None) resolve to the concrete fetch (stereo when
-        # the toggle is off, Atmos when on): an Atmos quarantine never skips a
-        # stereo fetch, and vice versa. Ownership keeps its own legacy
+        # Legacy single rows (None) resolve to the concrete fetch (stereo on
+        # the stereo default, Atmos on "both"): an Atmos quarantine never
+        # skips a stereo fetch, and vice versa. Ownership keeps its own legacy
         # whole-track query above; the skip-list is always per-version.
         try:
             job_version = str(getattr(audio_type, "value", audio_type) or "").strip().lower()
@@ -17102,8 +17143,8 @@ class WavesBridge(LibraryMixin, QObject):
                 self.downloadState.emit(artist_id, "")
                 self._set_status("Could not load the full discography, try again")
                 return
-            if not bool(getattr(self.settings.data, "download_dolby_atmos", False)):
-                # The setting decides which of a release's two rows a bulk
+            if not _wants_both_default(self.settings):
+                # The default decides which of a release's two rows a bulk
                 # sweep downloads; see _drop_spatial_editions.
                 albums, guest, left_out = _drop_spatial_editions(albums, guest)
                 if left_out:
@@ -17949,7 +17990,7 @@ class WavesBridge(LibraryMixin, QObject):
             stop_check()
             # From here the sweep is the discography's, minus guest tracks
             # and videos; see downloadArtist for the why of each step.
-            if not bool(getattr(self.settings.data, "download_dolby_atmos", False)):
+            if not _wants_both_default(self.settings):
                 albums, _guest, left_out = _drop_spatial_editions(albums, [])
                 if left_out:
                     devlog.event("playlist_albums", atmos_editions_left_out=left_out)
@@ -20286,7 +20327,7 @@ class WavesBridge(LibraryMixin, QObject):
                     "download_base_path",
                     "quality_video",
                     "downloads_concurrent_max",
-                    "download_dolby_atmos",
+                    "default_audio_type",
                     "skip_existing",
                     "confirm_category_download",
                     "download_delay",
@@ -20956,6 +20997,11 @@ class WavesBridge(LibraryMixin, QObject):
             # No Apple copies exist to refresh and no queue row pins an Apple
             # tier yet; the side effect is the provider session's alone.
             self._reapply_provider_quality(CTX_APPLE, values["apple_quality_audio"])
+        if "default_audio_type" in values:
+            # A new one-click audio default changes which Versions a button
+            # must hold (both vs whole-track), so every button re-asks, the
+            # same broadcast a quality change sends.
+            self.ownershipChanged.emit("")
         if (
             "apple_cookies_path" in values
             or "path_binary_ffmpeg" in values

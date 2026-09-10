@@ -40,7 +40,7 @@ def _dl(monkeypatch, quality="LOSSLESS"):
     dl._target_rank = 3
     dl._delivered = {}
     dl._delivered_lock = threading.Lock()
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=False))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo"))
     info = SimpleNamespace(
         media_stream=SimpleNamespace(audio_quality=quality, audio_mode="STEREO", bit_depth=16, sample_rate=44100),
         stream_manifest=SimpleNamespace(codecs="flac"),

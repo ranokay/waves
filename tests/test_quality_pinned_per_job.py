@@ -73,7 +73,7 @@ def _tracked(pinned, session, *, atmos_setting=False):
     dl._delivered_lock = Lock()
     dl.tidal = _Tidal(session)
     dl.session = session
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=atmos_setting))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both" if atmos_setting else "stereo"))
     return dl
 
 
@@ -162,7 +162,7 @@ def _run(pinned, session, media_list, *, setting="HI_RES_LOSSLESS", dl_out=None)
     dl._delivered_lock = Lock()
     dl.tidal = _SwitchingTidal(session, setting)
     dl.session = session
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=True))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both"))
 
     asked: list = []
 
@@ -321,7 +321,7 @@ def _stereo_after_atmos(pinned, setting, relogin_script):
     dl._delivered_lock = Lock()
     dl.tidal = _FlakyRestoreTidal(session, setting, relogin_script)
     dl.session = session
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=True, extract_flac=False))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both", extract_flac=False))
     dl.fn_logger = SimpleNamespace(error=lambda *a, **k: None, info=lambda *a, **k: None)
     asked: list = []
     stream = SimpleNamespace(get_stream_manifest=lambda: SimpleNamespace(file_extension=".flac", codecs="FLAC"))

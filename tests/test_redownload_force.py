@@ -66,7 +66,7 @@ def _upgrade_gate(rec: dict | None, target_rank: int) -> backend._TrackedDownloa
     dl = backend._TrackedDownload.__new__(backend._TrackedDownload)
     dl._ownership_of = lambda mid: rec
     dl._target_rank = target_rank
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=False))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo"))
     return dl
 
 
@@ -134,7 +134,7 @@ class _OwnBridge:
         self._ownAnnounceArm = self._Sig()
         self._downloads_running = lambda: False
         self.settings = SimpleNamespace(
-            data=SimpleNamespace(tidal_quality_audio=tidal_quality_audio, download_dolby_atmos=False)
+            data=SimpleNamespace(tidal_quality_audio=tidal_quality_audio, default_audio_type="stereo")
         )
         for name in (
             "ownershipOf",

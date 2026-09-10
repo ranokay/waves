@@ -174,7 +174,7 @@ class _Stub:
         self.ownershipChanged = MagicMock()
         self.settings = SimpleNamespace(
             data=SimpleNamespace(
-                quality_audio="LOSSLESS", symlink_to_track=symlink_to_track, download_dolby_atmos=False
+                quality_audio="LOSSLESS", symlink_to_track=symlink_to_track, default_audio_type="stereo"
             )
         )
         for name in ("ownershipOf", "_would_refetch_atmos", "_record_ownership"):

@@ -93,7 +93,7 @@ def test_per_version_gates_close_the_second_path_gap(tmp_path):
         dl._ownership_of = store.ownership_of
         dl._target_rank = quality_rank(target)
         dl._audio_type = audio_type
-        dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=True))
+        dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both"))
         return dl
 
     # Stereo half below target upgrades.
@@ -141,7 +141,10 @@ def _bridge_for_button(store, *, atmos_on, tracks):
     b._announce_ownership = lambda tid: None
     b._downloads_running = lambda: False
     b.settings = SimpleNamespace(
-        data=SimpleNamespace(tidal_quality_audio=Quality.high_lossless.value, download_dolby_atmos=atmos_on)
+        data=SimpleNamespace(
+            tidal_quality_audio=Quality.high_lossless.value,
+            default_audio_type="both" if atmos_on else "stereo",
+        )
     )
     b._objs = {"track": dict(tracks)}
     for name in (
@@ -177,7 +180,7 @@ def test_button_settles_only_when_every_enabled_version_is_owned(tmp_path):
     assert b.ownershipOf("101")["up_to_date"] is True
 
 
-def test_button_stays_single_when_toggle_off(tmp_path):
+def test_button_stays_single_when_default_is_stereo(tmp_path):
     store = OwnershipStore(str(tmp_path / "own.db"))
     dual = _track("101", modes=[ATMOS, "STEREO"])
     b = _bridge_for_button(store, atmos_on=False, tracks={"101": dual})
@@ -186,13 +189,13 @@ def test_button_stays_single_when_toggle_off(tmp_path):
     assert b.ownershipOf("101")["up_to_date"] is True
 
 
-def test_dual_button_need_is_cache_only_and_toggle_gated():
+def test_dual_button_need_is_cache_only_and_default_gated():
     b = backend.WavesBridge.__new__(backend.WavesBridge)
-    b.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=True))
+    b.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both"))
     b._objs = {"track": {"1": _track("1", modes=[ATMOS, "STEREO"])}}
     b.providers = {}
     assert b._dual_button_need("1") == "both"
-    b.settings.data.download_dolby_atmos = False
+    b.settings.data.default_audio_type = "stereo"
     assert b._dual_button_need("1") is None
     # Direct helper (no bridge needed for the pure question).
     assert backend._offers_both(_track("1", modes=[ATMOS, "STEREO"])) is True

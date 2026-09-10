@@ -48,7 +48,7 @@ def _settings(**over):
     base = {
         "tidal_quality_audio": "HIGH",
         "apple_quality_audio": "LOSSLESS",
-        "download_dolby_atmos": False,
+        "default_audio_type": "stereo",
         "apple_enabled": False,
         "lyrics_embed": False,
         "lyrics_file": False,
@@ -186,10 +186,10 @@ def test_chooser_defaults_come_from_settings_per_provider():
     assert [e["word"] for e in d_apple["tiers"]] == ["HI-RES", "LOSSLESS", "HIGH"]
 
 
-def test_chooser_defaults_audio_follows_the_dolby_toggle_and_atmos_only_collapses(monkeypatch):
-    b = _bridge(download_dolby_atmos=True)
+def test_chooser_defaults_audio_follows_the_default_and_atmos_only_collapses(monkeypatch):
+    b = _bridge(default_audio_type="both")
     assert b.chooserDefaults("t1", "track")["audioType"] == "both"
-    b.settings.data.download_dolby_atmos = False
+    b.settings.data.default_audio_type = "stereo"
     assert b.chooserDefaults("t1", "track")["audioType"] == "stereo"
     b._objs["track"]["tA"] = _atmos_only_track("tA")
     monkeypatch.setattr(backend, "_atmos_only", lambda obj: getattr(obj, "audio_modes", []) == ["DOLBY_ATMOS"])
@@ -208,11 +208,11 @@ def test_save_chooser_defaults_stages_through_apply_settings():
     b.applySettings = lambda vals: staged.update(vals)
     b.saveChooserDefaults({"provider": "tidal", "tier": "HI-RES", "audioType": "both"})
     assert staged["tidal_quality_audio"] == "HI_RES_LOSSLESS"
-    assert staged["download_dolby_atmos"] is True
+    assert staged["default_audio_type"] == "both"
     staged.clear()
     b.saveChooserDefaults({"provider": "apple", "tier": "LOSSLESS", "audioType": "stereo"})
     assert staged["apple_quality_audio"] == "LOSSLESS"
-    assert staged["download_dolby_atmos"] is False
+    assert staged["default_audio_type"] == "stereo"
     # Apple has no LOW rung: refused, nothing staged for quality.
     staged.clear()
     b.saveChooserDefaults({"provider": "apple", "tier": "LOW", "audioType": ""})

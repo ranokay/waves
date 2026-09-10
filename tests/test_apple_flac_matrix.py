@@ -175,7 +175,9 @@ def _tidal_dl(*, extract=True, scope_all=False, atmos_on=False):
     dl.tidal = _Tidal()
     dl.session = SimpleNamespace(track=lambda tid: SimpleNamespace(get_stream=lambda: _TRACK_STREAMS["atmos"]))
     dl.settings = SimpleNamespace(
-        data=SimpleNamespace(download_dolby_atmos=atmos_on, extract_flac=extract, extract_flac_all=scope_all)
+        data=SimpleNamespace(
+            default_audio_type="both" if atmos_on else "stereo", extract_flac=extract, extract_flac_all=scope_all
+        )
     )
     dl.fn_logger = SimpleNamespace(error=lambda *a, **k: None, info=lambda *a, **k: None)
     # The _TrackedDownload override stamps the delivered snapshot; give it
@@ -297,7 +299,7 @@ def _apple_stub(base: Path, provider, **overrides):
         metadata_target_upc="UPC",
         metadata_custom=False,
         apple_quality_audio="HI_RES_LOSSLESS",
-        download_dolby_atmos=False,
+        default_audio_type="stereo",
         path_binary_ffmpeg="",
         format_track="{artist_name}/{track_title}",
         album_track_num_pad_min=1,

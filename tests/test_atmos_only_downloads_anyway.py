@@ -60,7 +60,9 @@ def _session_reached(media, atmos_on: bool) -> str:
     reached: list[str] = []
     stream = SimpleNamespace(get_stream_manifest=lambda: SimpleNamespace(file_extension=".m4a", codecs="EAC3"))
     dl = Download.__new__(Download)
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=atmos_on, extract_flac=False))
+    dl.settings = SimpleNamespace(
+        data=SimpleNamespace(default_audio_type="both" if atmos_on else "stereo", extract_flac=False)
+    )
     dl.fn_logger = SimpleNamespace(error=lambda *a, **k: None, info=lambda *a, **k: None)
     dl.tidal = SimpleNamespace(
         switch_to_atmos_session=lambda: (reached.append("atmos"), True)[1],
@@ -112,7 +114,7 @@ def _gate(store, *, target, atmos_on):
     dl = _TrackedDownload.__new__(_TrackedDownload)
     dl._ownership_of = store.ownership_of
     dl._target_rank = quality_rank(target)
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=atmos_on))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both" if atmos_on else "stereo"))
     return dl
 
 

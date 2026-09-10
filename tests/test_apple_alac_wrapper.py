@@ -331,7 +331,7 @@ def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path, monkeypat
 def test_expected_word_caps_by_ceiling():
     from waves.waves_ui.backend import WavesBridge
 
-    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=False)))
+    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo")))
     stub._apple_wants_atmos = WavesBridge._apple_wants_atmos.__get__(stub, SimpleNamespace)
     stub._apple_expected_word = WavesBridge._apple_expected_word.__get__(stub, SimpleNamespace)
     assert (

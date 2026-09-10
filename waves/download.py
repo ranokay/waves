@@ -61,6 +61,7 @@ from waves.constants import (
     MediaType,
     MetadataTargetUPC,
     QualityVideo,
+    default_audio_is_both,
     provider_folder_name,
 )
 from waves.helper.camelot import format_initial_key
@@ -2727,7 +2728,9 @@ class Download:
         modes = getattr(media, "audio_modes", None) or []
         has_atmos = AudioMode.dolby_atmos.value in modes
         atmos_only = bool(modes) and all(mode == AudioMode.dolby_atmos.value for mode in modes)
-        want_atmos = has_atmos and (self.settings.data.download_dolby_atmos or atmos_only)
+        want_atmos = has_atmos and (
+            default_audio_is_both(getattr(self.settings.data, "default_audio_type", "stereo")) or atmos_only
+        )
 
         if want_atmos:
             if not self.tidal.switch_to_atmos_session():
