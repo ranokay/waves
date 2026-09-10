@@ -442,6 +442,7 @@ def format_path_media(
     tidy_spacing: bool = True,
     illegal_replacement: str = "",
     illegal_map: dict[str, str] | None = None,
+    provider_name: str = "",
 ) -> str:
     """Formats a media path string using a template and media attributes.
 
@@ -491,6 +492,7 @@ def format_path_media(
             delimiter_artist=delimiter_artist,
             delimiter_album_artist=delimiter_album_artist,
             use_primary_album_artist=use_primary_album_artist,
+            provider_name=provider_name,
         )
 
         if result_fmt != match.group(1):
@@ -572,6 +574,7 @@ def format_str_media(
     delimiter_artist: str = ", ",
     delimiter_album_artist: str = ", ",
     use_primary_album_artist: bool = False,
+    provider_name: str = "",
 ) -> str:
     """Formats a string for media attributes based on the provided name.
 
@@ -586,6 +589,9 @@ def format_str_media(
         delimiter_artist (str, optional): Delimiter for artist names. Defaults to ", ".
         delimiter_album_artist (str, optional): Delimiter for album artist names. Defaults to ", ".
         use_primary_album_artist (bool, optional): If True, uses first album artist for folder paths. Defaults to False.
+        provider_name (str, optional): The {provider_name} token's value
+            ("Tidal", "Apple Music"). Empty renders the token as "" so the
+            segment drops away (the pre-token layout).
 
     Returns:
         str: The formatted string for the media attribute, or the original name if no formatter matches.
@@ -593,6 +599,7 @@ def format_str_media(
     try:
         # Try each formatter function in sequence
         for formatter in (
+            _format_provider,
             _format_names,
             _format_numbers,
             _format_ids,
@@ -611,6 +618,7 @@ def format_str_media(
                 delimiter_artist=delimiter_artist,
                 delimiter_album_artist=delimiter_album_artist,
                 use_primary_album_artist=use_primary_album_artist,
+                provider_name=provider_name,
             )
             if result is not None:
                 return result
@@ -623,6 +631,21 @@ def format_str_media(
         logger.warning("path: could not format the '%s' token: %s", name, e)
 
     return name
+
+
+def _format_provider(
+    name: str, media: Track | Album | Playlist | UserPlaylist | Video | Mix, *_args, provider_name: str = "", **kwargs
+) -> str | None:
+    """Handle the provider-separation token (issue #65).
+
+    Returns "" (my token, empty value) rather than None ("not my token")
+    when the name asks but no provider was passed, so the segment collapses
+    away instead of leaving a literal {provider_name} in the folder name
+    (the {isrc} token's contract).
+    """
+    if name == "provider_name":
+        return provider_name or ""
+    return None
 
 
 def _format_artist_names(

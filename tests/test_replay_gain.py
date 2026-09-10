@@ -97,6 +97,7 @@ def test_migration_is_a_noop_once_marked():
     data = Settings()
     data.replay_gain_default_migrated = True
     data.format_playlist_folder_migrated = True
+    data.format_provider_segment_migrated = True
     data.api_rate_limit_wired_migrated = True
     data.lyrics_art_per_provider_migrated = True
     data.metadata_replay_gain = False

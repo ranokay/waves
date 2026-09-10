@@ -162,8 +162,10 @@ class Settings:
     # Artist > Album > Track, the shape a music library (and Plex) expects.
     # Playlists / mixes keep their own parent folder: they are platform
     # constructs a library manager can't model, but stay downloadable.
+    # {provider_name} keeps each provider's files apart (issue #65: "Tidal",
+    # "Apple Music"), so the same song saved from both coexists.
     format_album: str = (
-        "{artist_name}/[{album_year}] {album_title}{album_explicit}/{track_volume_num_optional}"
+        "{provider_name}/{artist_name}/[{album_year}] {album_title}{album_explicit}/{track_volume_num_optional}"
         "{album_track_num}. {artist_name} - {track_title}{track_explicit}"
     )
     # {folder_path} mirrors the playlist's TIDAL folder tree on disk (empty for
@@ -171,7 +173,7 @@ class Settings:
     format_playlist: str = "Playlists/{folder_path}{playlist_name}/{list_pos}. {artist_name} - {track_title}"
     format_mix: str = "Mix/{mix_name}/{artist_name} - {track_title}"
     format_track: str = (
-        "{artist_name}/[{album_year}] {album_title}{album_explicit}/{track_volume_num_optional}"
+        "{provider_name}/{artist_name}/[{album_year}] {album_title}{album_explicit}/{track_volume_num_optional}"
         "{album_track_num}. {artist_name} - {track_title}{track_explicit}"
     )
     # Where Dolby Atmos Versions land (§5.4, issue #29): a folder fragment
@@ -248,6 +250,12 @@ class Settings:
     # equal to the OLD default is rewritten; a customized template is left
     # exactly as the user wrote it.
     format_playlist_folder_migrated: bool = False
+    # Internal upgrade marker (not a user setting): records the one-time
+    # rewrite that prefixed format_album and format_track with the
+    # {provider_name} segment (issue #65). Only stored values equal to the OLD
+    # defaults are rewritten; customized templates are left exactly as the
+    # user wrote them (the token is available for them to add by hand).
+    format_provider_segment_migrated: bool = False
     # Internal upgrade marker (not a user setting): records the one-time reset
     # of the two api_rate_limit fields. They were editable in Advanced while
     # nothing read them, so any value on disk was a guess that never took

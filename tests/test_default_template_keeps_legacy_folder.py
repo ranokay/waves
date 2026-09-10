@@ -41,7 +41,11 @@ _ALBUM_TITLE = "The Better Life / Dead Love"
 _LEGACY_DIR = "[2011] The Better Life  Dead Love"
 _TIDY_DIR = "[2011] The Better Life Dead Love"
 _DEFAULT_ALBUM_TEMPLATE = Settings.format_album
-_ALBUM_ARTIST_TEMPLATE = _DEFAULT_ALBUM_TEMPLATE.replace("{artist_name}/", "{album_artist}/", 1)
+# The artist-token question, isolated from the provider segment (issue #65):
+# this template keeps the shipped shape minus the provider folder.
+_ALBUM_ARTIST_TEMPLATE = _DEFAULT_ALBUM_TEMPLATE.replace("{provider_name}/", "", 1).replace(
+    "{artist_name}/", "{album_artist}/", 1
+)
 
 
 def _album() -> Album:
@@ -123,11 +127,17 @@ class TestTheShippedTemplateFindsTheOldFolder:
     def test_the_default_template_still_carries_the_artist_token_at_album_level(self):
         # The premise, pinned so the tests below cannot quietly stop testing
         # anything: an album cannot answer {artist_name}, so the album-level
-        # spelling is not a usable path on its own.
-        assert _DEFAULT_ALBUM_TEMPLATE.startswith("{artist_name}/")
+        # spelling is not a usable path on its own. The {provider_name}
+        # opening (issue #65) answers at every level; the artist segment
+        # behind it still needs the item probe.
+        assert _DEFAULT_ALBUM_TEMPLATE.startswith("{provider_name}/{artist_name}/")
 
     def test_a_legacy_album_folder_keeps_receiving_downloads(self, tmp_path, monkeypatch):
         (tmp_path / _ARTIST / _LEGACY_DIR).mkdir(parents=True)
+        # File evidence: the pre-split folder is one level shallower than the
+        # provider spelling, so (issue #16's rule) only a file already sitting
+        # there counts, never the bare directory.
+        (tmp_path / _ARTIST / _LEGACY_DIR / "01. Bright Eyes - One.flac").write_bytes(b"audio")
 
         assert _first_item_folder(tmp_path, _DEFAULT_ALBUM_TEMPLATE, monkeypatch) == pathlib.Path(_ARTIST, _LEGACY_DIR)
 
@@ -144,7 +154,9 @@ class TestTheShippedTemplateFindsTheOldFolder:
     def test_a_fresh_library_gets_the_tidy_folder(self, tmp_path, monkeypatch):
         (tmp_path / _ARTIST).mkdir()
 
-        assert _first_item_folder(tmp_path, _DEFAULT_ALBUM_TEMPLATE, monkeypatch) == pathlib.Path(_ARTIST, _TIDY_DIR)
+        assert _first_item_folder(tmp_path, _DEFAULT_ALBUM_TEMPLATE, monkeypatch) == pathlib.Path(
+            "Tidal", _ARTIST, _TIDY_DIR
+        )
 
     def test_an_artist_folder_alone_is_not_read_as_an_old_layout(self, tmp_path, monkeypatch):
         # Issue #16: an ancestor exists as soon as anything by the artist was
@@ -173,7 +185,9 @@ class TestTheShippedTemplateFindsTheOldFolder:
         )
 
         assert items == []
-        assert relative.startswith("{artist_name}/")
+        # The provider segment is already literal text at bake level (only
+        # the artist token still needs an item); the tidy folder survives it.
+        assert relative.startswith("Tidal/{artist_name}/")
         assert _TIDY_DIR in relative
 
 
@@ -202,6 +216,9 @@ class TestTheArtistFolderIsChosenTheSameWay:
             track.artists = [SimpleNamespace(name="Bright / Eyes")]
             track.artist = SimpleNamespace(name="Bright / Eyes")
         (tmp_path / self._LEGACY_ARTIST / _LEGACY_DIR).mkdir(parents=True)
+        # File evidence, as above: the pre-split spelling is shallower, so
+        # the bare directory alone diverts nothing.
+        (tmp_path / self._LEGACY_ARTIST / _LEGACY_DIR / "01. Bright  Eyes - One.flac").write_bytes(b"audio")
         monkeypatch.setattr(download_module, "items_results_all", lambda *_a, **_k: items)
         dl = _make_download(tmp_path, _DEFAULT_ALBUM_TEMPLATE)
 
@@ -266,8 +283,10 @@ class TestTheFolderTestReadsTheProbes:
 
 
 @pytest.mark.parametrize("template_name", ["format_album", "format_track"])
-def test_the_shipped_templates_open_with_a_track_only_token(template_name):
-    # The reason this defect reached the default settings at all. If a future
-    # default opens with an album-answerable token instead, this test is the
-    # place that says the folder choice no longer depends on the item probe.
-    assert getattr(Settings, template_name).startswith("{artist_name}/")
+def test_the_shipped_templates_open_with_provider_then_a_track_only_token(template_name):
+    # The reason this defect reached the default settings at all. The
+    # {provider_name} opening (issue #65) answers at every level, but the
+    # artist segment behind it is still a track-only token: if a future
+    # default opened with an album-answerable token in second place instead,
+    # the folder choice would no longer depend on the item probe.
+    assert getattr(Settings, template_name).startswith("{provider_name}/{artist_name}/")

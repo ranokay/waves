@@ -58,6 +58,7 @@ def format_apple_path(
     delimiter_album_artist: str = ", ",
     illegal_replacement: str = "",
     illegal_map: dict[str, str] | None = None,
+    provider_name: str = "Apple Music",
 ) -> str:
     """A settings template rendered for one Apple track, sanitized per token."""
 
@@ -115,6 +116,9 @@ def format_apple_path(
         "album_explicit": FORMAT_TEMPLATE_EXPLICIT if (album or {}).get("explicit") else "",
         "media_type": "",
         "folder_path": "",
+        # Provider separation (issue #65): "" renders the token as "" so the
+        # segment collapses away (the pre-token layout).
+        "provider_name": provider_name,
     }
 
     def replace(match: re.Match) -> str:
