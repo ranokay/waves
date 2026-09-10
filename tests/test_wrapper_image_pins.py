@@ -56,3 +56,18 @@ def test_runbook_names_the_current_pins():
     tag = WRAPPER_V2_IMAGE.rsplit(":", 1)[1]
     assert tag in doc and APK_PINNED_VERSION in doc and WRAPPER_LIBS_VERSION in doc
     assert "APK_URL" in doc and "Public" in doc
+
+
+def test_upstream_pin_file_is_a_valid_sha_and_the_watcher_uses_it():
+    import re
+
+    text = (REPO / ".github" / "wrapper-upstream.sha").read_text()
+    sha = text.strip().splitlines()[-1].strip()
+    assert re.fullmatch(r"[0-9a-f]{40}", sha), "pin file must end with one full commit SHA"
+    watcher = (REPO / ".github" / "workflows" / "wrapper-upstream-check.yml").read_text()
+    assert "wrapper-upstream.sha" in watcher
+    assert "glomatico/wrapper-v2" in watcher
+    assert "schedule" in watcher and "cron" in watcher
+    assert "issues: write" in watcher
+    # Human-gated: watches and files issues, never builds or publishes.
+    assert "build-push-action" not in watcher and "docker push" not in watcher.lower()

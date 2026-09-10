@@ -1,0 +1,78 @@
+# Watch upstream wrapper-v2 for changes (issue #88).
+#
+# Upstream moves independently of Waves: fixes we want, or breaking changes
+# we must adapt to (the wrapper API pin gamdl carries is one example).
+# This job polls upstream main weekly and opens a single deduped issue when
+# it moves past the tracked pin (.github/wrapper-upstream.sha). It never
+# builds or publishes by itself: shipping new decryption code is always a
+# human decision (rebuild via the wrapper-image workflow, verify, then move
+# the pin, image tag, and app pin together per docs/wrapper-image.md).
+# Forks inherit the same watch against upstream, which is what they want.
+name: wrapper-upstream-check
+
+on:
+  schedule:
+    - cron: "0 9 * * MON"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: wrapper-upstream-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: compare upstream main with the tracked pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read tracked pin and upstream HEAD
+        id: compare
+        run: |
+          pinned="$(tr -d '[:space:]' < .github/wrapper-upstream.sha)"
+          if ! [[ "$pinned" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::.github/wrapper-upstream.sha is not a full commit SHA."
+            exit 1
+          fi
+          head="$(git ls-remote https://github.com/glomatico/wrapper-v2 HEAD | awk '{print $1}')"
+          if [[ -z "$head" ]]; then
+            echo "::error::could not reach upstream; will retry next week, no issue opened."
+            exit 1
+          fi
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          if [[ "$pinned" == "$head" ]]; then
+            echo "Upstream is at the tracked pin; nothing to do."
+          else
+            echo "Upstream moved: $pinned -> $head"
+          fi
+
+      - name: Open an issue unless one is already open
+        if: steps.compare.outputs.pinned != steps.compare.outputs.head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PINNED: ${{ steps.compare.outputs.pinned }}
+          HEAD_SHA: ${{ steps.compare.outputs.head }}
+        run: |
+          title="Upstream wrapper-v2 moved past the tracked pin"
+          open="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq length)"
+          if [[ "$open" != "0" ]]; then
+            echo "An update issue is already open; leaving it alone."
+            exit 0
+          fi
+          gh issue create --title "$title" --body "Upstream \`glomatico/wrapper-v2\` moved past the SHA the live image was built from.
+
+          - Tracked pin: \`$PINNED\`
+          - Upstream HEAD: \`$HEAD_SHA\`
+          - Compare: https://github.com/glomatico/wrapper-v2/compare/$PINNED...$HEAD_SHA
+
+          Checklist before publishing (see docs/wrapper-image.md, version lockstep):
+          1. Review the upstream diff (API changes? loader changes? new lib requirements?).
+          2. Dispatch the **wrapper-image** workflow with \`wrapper_ref\` = \`$HEAD_SHA\`.
+          3. Smoke-test, then Apple-ID login + one ALAC download against the new image.
+          4. In one change: new image tag, \`WRAPPER_V2_IMAGE\` pin, this pin file, runbook table.
+          5. Close this issue with the publish note."

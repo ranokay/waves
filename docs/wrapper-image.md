@@ -120,6 +120,16 @@ move the `WRAPPER_V2_IMAGE` pin to it in the same release. Never retag a
 published tag in place: machines that already pulled it would keep the
 old bytes.
 
+## Staying current (upstream watch)
+
+A weekly scheduled workflow (`wrapper-upstream-check`, Mondays) compares
+upstream `main` against the tracked pin (`.github/wrapper-upstream.sha`,
+currently the `0.2.3` build SHA) and opens one deduped issue when it moves,
+with the compare link and the checklist above. It never builds or publishes
+on its own — shipping new decryption code stays a human decision. The same
+watch runs on forks, against the same upstream, which is what they want.
+After publishing from a new ref, move the pin file forward in that change.
+
 ## Troubleshooting
 
 - **`denied` on pull (end users):** the package flipped back to private,
