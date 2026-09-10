@@ -6,7 +6,10 @@
 # APK_URL secret (an .apk/.apkm you host privately), are extracted and
 # hash-verified against the source tree's LIBS_VERSION.json, and only then
 # baked into the pushed image. The secret is unreadable from forks, so fork
-# PRs can read this file but never run the publish path.
+# PRs can read this file but never run the publish path. Private hosting
+# needs auth: set the optional APK_AUTH_HEADER secret to the full header
+# line (e.g. "Authorization: Bearer <token>"); it is sent only to fetch
+# the artifact and never printed (secret values are masked in logs).
 #
 # What gets published: linux/arm64 only (the Apple-silicon native path; the
 # compile stage stays linux/amd64 because Google ships the NDK as x86_64
@@ -43,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       APK_URL: ${{ secrets.APK_URL }}
+      APK_AUTH_HEADER: ${{ secrets.APK_AUTH_HEADER }}
       IMAGE: ghcr.io/ranokay/waves-wrapper-v2
       TAG: ${{ inputs.image_tag }}
       TARGET_ARCH: arm64-v8a
@@ -111,7 +115,14 @@ jobs:
           if [[ "${APK_URL,,}" == *.apkm* ]]; then
             artifact=".tmp/apple-music.apkm"
           fi
-          curl -fL --retry 3 --retry-delay 2 -o "${artifact}" "${APK_URL}"
+          # Private hosting (a private-repo release asset, a token-gated
+          # bucket) authenticates through APK_AUTH_HEADER; the header value
+          # is a masked secret and never appears in logs.
+          auth_args=()
+          if [[ -n "${APK_AUTH_HEADER}" ]]; then
+            auth_args=(-H "${APK_AUTH_HEADER}")
+          fi
+          curl -fL --retry 3 --retry-delay 2 "${auth_args[@]}" -o "${artifact}" "${APK_URL}"
           echo "APPLE_MUSIC_ARTIFACT=${artifact}" >> "$GITHUB_ENV"
           ls -lh "${artifact}"
 

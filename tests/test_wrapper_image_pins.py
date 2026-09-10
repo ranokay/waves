@@ -37,6 +37,8 @@ def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
     assert "arm64-v8a" in text and "linux/arm64" in text
     assert "glomatico/wrapper-v2" in text
     assert "secrets.APK_URL" in text
+    # Private hosting authenticates through an optional masked header.
+    assert "secrets.APK_AUTH_HEADER" in text
     assert "push: true" in text
     # The APK arrives at build time only: never checked out, never committed.
     assert "extract-libs.sh" in text and "LIBS_VERSION" in text
