@@ -6757,11 +6757,14 @@ ApplicationWindow {
             anchors.rightMargin: db.showChooser ? 28 : 0
             cursorShape: Qt.PointingHandCursor
             acceptedButtons: Qt.LeftButton | Qt.RightButton
-            onPressed: function(m) { if (m.button === Qt.LeftButton) db.scale = 0.96 }
+            onPressed: function(m) { if (!m || m.button === Qt.LeftButton) db.scale = 0.96 }
             onReleased: db.scale = 1.0
             onCanceled: db.scale = 1.0
             onClicked: function(m) {
-                if (m.button === Qt.RightButton) { db.openChooser(); return }
+                // m is null when the signal is emitted programmatically
+                // (the scenario tests drive this tap area directly); treat
+                // that as a plain left click, the pre-Chooser behavior.
+                if (m && m.button === Qt.RightButton) { db.openChooser(); return }
                 // A library claim is a guess, so it answers instead of ignoring.
                 if (db.libClaim) { db.openLibraryClaim(); return }
                 if (db.st === "running" || db.st === "done" || db.waiting) return
@@ -6823,14 +6826,22 @@ ApplicationWindow {
                                 width: 140; height: 26; radius: 6
                                 color: db.chooserProvider === "tidal" ? root.accentCont : root.surface3
                                 border.color: db.chooserProvider === "tidal" ? root.accentDim : root.outline; border.width: 1
-                                Text { textFormat: Text.PlainText; text: "TIDAL"; color: db.chooserProvider === "tidal" ? root.accentContTx : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
+                                Row {
+                                    anchors.centerIn: parent; spacing: 6
+                                    Image { anchors.verticalCenter: parent.verticalCenter; source: "assets/providers/tidal.png"; width: 20; height: 13; fillMode: Image.PreserveAspectFit; smooth: true; cache: true }
+                                    Text { textFormat: Text.PlainText; text: "TIDAL"; color: db.chooserProvider === "tidal" ? root.accentContTx : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                                }
                                 MouseArea { anchors.fill: parent; enabled: false; cursorShape: Qt.PointingHandCursor }
                             }
                             Rectangle {
                                 width: 140; height: 26; radius: 6
                                 color: db.chooserProvider === "apple" ? root.surfaceHi : root.surface3
                                 border.color: db.chooserProvider === "apple" ? root.textHi : root.outline; border.width: 1
-                                Text { textFormat: Text.PlainText; text: "APPLE MUSIC"; color: db.chooserProvider === "apple" ? root.textHi : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
+                                Row {
+                                    anchors.centerIn: parent; spacing: 6
+                                    Image { anchors.verticalCenter: parent.verticalCenter; source: "assets/providers/apple-music.png"; width: 14; height: 14; fillMode: Image.PreserveAspectFit; smooth: true; cache: true }
+                                    Text { textFormat: Text.PlainText; text: "APPLE MUSIC"; color: db.chooserProvider === "apple" ? root.textHi : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                                }
                                 MouseArea { anchors.fill: parent; enabled: false; cursorShape: Qt.PointingHandCursor }
                             }
                         }
@@ -13768,10 +13779,21 @@ ApplicationWindow {
                     id: tidalGroupHead
                     visible: root.providerGroupVisible(false)
                     width: parent.width; height: 42
-                    Text {
+                    Row {
                         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
-                        textFormat: Text.PlainText; text: "TIDAL"
-                        color: root.accent; font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
+                        spacing: 8
+                        Image {
+                            anchors.verticalCenter: parent.verticalCenter
+                            source: "assets/providers/tidal.png"
+                            width: 22; height: 15
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true; cache: true
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            textFormat: Text.PlainText; text: "TIDAL"
+                            color: root.accent; font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
+                        }
                     }
                     Text {
                         anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.bottomMargin: 11
@@ -14083,10 +14105,21 @@ ApplicationWindow {
                     id: appleGroupHead
                     visible: root.providerGroupVisible(true)
                     width: parent.width; height: 50
-                    Text {
+                    Row {
                         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
-                        textFormat: Text.PlainText; text: "APPLE MUSIC"
-                        color: root.textHi; font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
+                        spacing: 8
+                        Image {
+                            anchors.verticalCenter: parent.verticalCenter
+                            source: "assets/providers/apple-music.png"
+                            width: 18; height: 18
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true; cache: true
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            textFormat: Text.PlainText; text: "APPLE MUSIC"
+                            color: root.textHi; font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
+                        }
                     }
                     Text {
                         anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.bottomMargin: 11

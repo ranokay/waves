@@ -18,6 +18,7 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from waves.constants import CTX_TIDAL
 from waves.waves_ui.backend import WavesBridge
 
 
@@ -49,6 +50,15 @@ def _stub(session_video):
     stub._browse_gen = 1
     stub._browse_lock = Lock()
     stub.tidal = SimpleNamespace(session=SimpleNamespace(video=session_video))
+    # The Provider seam (and the Chooser's parked-click drop) are the only
+    # roads the real method travels now: route get_object through the same
+    # session callable, looked up late so the account-switch test's
+    # reassignment still takes effect, and bind the real drop (a no-op
+    # without parked pins).
+    stub.providers = {
+        CTX_TIDAL: SimpleNamespace(get_object=lambda bucket, media_id: stub.tidal.session.video(media_id))
+    }
+    stub._chooser_drop_refetch = _bind(stub, "_chooser_drop_refetch")
     stub.threadpool = _InlinePool()
     stub.downloadState = _Sig()
     stub.downloadProgress = _Sig()

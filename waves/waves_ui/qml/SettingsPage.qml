@@ -526,11 +526,8 @@ Item {
     function iconPath(id) {
         switch (id) {
         case "downloads":   return "M8 2.5V9.3 M5.2 6.6 L8 9.4 L10.8 6.6 M3.4 12.6H12.6"
-        // Two tide lines for the TIDAL provider section; a beamed note for
-        // the Apple Music one (a plain "provider" glyph would say nothing
-        // about which service the card belongs to).
-        case "providers_tidal": return "M2.6 5.4A2.7 2.7 0 0 1 8 5.4A2.7 2.7 0 0 0 13.4 5.4 M2.6 10.6A2.7 2.7 0 0 1 8 10.6A2.7 2.7 0 0 0 13.4 10.6"
-        case "providers_apple": return "M6.7 12.1V4.3L11.9 3.4V11.1 M4.9 12.1A1.8 1.8 0 1 0 8.5 12.1A1.8 1.8 0 1 0 4.9 12.1Z M10.1 11.1A1.8 1.8 0 1 0 13.7 11.1A1.8 1.8 0 1 0 10.1 11.1Z"
+        // Provider sections show their official logo (see `providerLogo`)
+        // instead of line art, so they carry no iconPath case here.
         case "files":       return "M2.6 5.4H6.2L7.4 6.7H13.4V11.9H2.6Z"
         case "metadata":    return "M8.6 2.6H3.1V8L9 13.9L14.4 8.5Z M5.7 4.9A0.55 0.55 0 1 1 4.6 4.9A0.55 0.55 0 1 1 5.7 4.9Z"
         case "processing":  return "M5.2 5.2H10.8V10.8H5.2Z M6.7 5.2V3.6 M9.3 5.2V3.6 M6.7 10.8V12.4 M9.3 10.8V12.4 M5.2 6.7H3.6 M5.2 9.3H3.6 M10.8 6.7H12.4 M10.8 9.3H12.4"
@@ -542,6 +539,19 @@ Item {
         // Pulse/heartbeat trace: diagnostics watch the app's vitals.
         case "diagnostics": return "M2.6 8H5.4L6.8 4.6L9.2 11.4L10.6 8H13.4"
         default:            return "M3 5.4H13 M3 10.6H13 M5.4 5.4A1.5 1.5 0 1 0 8.4 5.4A1.5 1.5 0 1 0 5.4 5.4Z M7.6 10.6A1.5 1.5 0 1 0 10.6 10.6A1.5 1.5 0 1 0 7.6 10.6Z"
+        }
+    }
+
+    // Official provider logo for a section id, or "" when the section keeps
+    // its line-art glyph. The PNGs are white-on-transparent artwork, drawn
+    // for the app's dark surfaces — never tinted, never used as a mask.
+    // Black-on-transparent twins (tidal-dark.png, apple-music-dark.png) sit
+    // alongside for light backdrops; nothing references them yet.
+    function providerLogo(id) {
+        switch (id) {
+        case "providers_tidal": return "assets/providers/tidal.png"
+        case "providers_apple": return "assets/providers/apple-music.png"
+        default:                return ""
         }
     }
 
@@ -1836,11 +1846,27 @@ Item {
                                 // only outlined section, which looked out of place. The status
                                 // still reads from the glyph colour (red/gold/green) below.
                                 border.width: 0
+                                // Provider sections show their official logo; every
+                                // other section keeps the line-art glyph.
+                                readonly property string logoSrc: page.providerLogo(card.modelData.id !== undefined ? card.modelData.id : "")
                                 SectionIcon {
                                     anchors.centerIn: parent
+                                    visible: glyphTile.logoSrc === ""
                                     glyph: card.modelData.id !== undefined ? card.modelData.id : ""
                                     stroke: glyphTile.statusColor
                                     px: 20
+                                }
+                                Image {
+                                    anchors.centerIn: parent
+                                    visible: glyphTile.logoSrc !== ""
+                                    source: glyphTile.logoSrc
+                                    // TIDAL artwork is wider than tall; fit the
+                                    // tile without stretching either logo.
+                                    width: glyphTile.logoSrc.indexOf("tidal") !== -1 ? 24 : 20
+                                    height: 20
+                                    fillMode: Image.PreserveAspectFit
+                                    smooth: true
+                                    cache: true
                                 }
                             }
                             ColumnLayout {

@@ -11,9 +11,12 @@ spatial-only single, and a hole is worse than a song you cannot play today.
 So the engine downloads it either way, through the Atmos session, because the
 normal session has nothing to offer for it. The whole exclusion apparatus that
 skip built (the pre-path bail-out, the _note_excluded hook, excluded_count,
-the "excluded" track status and the ATMOS ONLY word) is retired with it, and
-this file pins both halves: the download happens, and the apparatus is gone,
-so it cannot half-return and report albums finished over files never fetched.
+the "excluded" track status) is retired with it, and this file pins both
+halves: the download happens, and the apparatus is gone, so it cannot
+half-return and report albums finished over files never fetched. ("ATMOS ONLY"
+as a word is back since the Chooser, where spec 7.2 mandates it as the
+audio-type collapse label on Atmos-only tracks; the retired thing is the
+exclusion reporting, and the last test below pins exactly that boundary.)
 
 WHAT IS REAL
 ------------
@@ -168,4 +171,12 @@ def test_the_exclusion_apparatus_is_fully_retired():
     assert "excluded_count" not in inspect.signature(backend._collection_incomplete_reason).parameters
     assert "excluded" not in inspect.getsource(backend.WavesBridge._download_merge_plan)
     qml = (backend.pathlib.Path(backend.__file__).parent / "qml" / "Main.qml").read_text()
-    assert "ATMOS ONLY" not in qml
+    # The exclusion apparatus stays retired, but "ATMOS ONLY" itself is back
+    # with a new, spec-mandated meaning: the Chooser's audio-type control
+    # collapses to it on Atmos-only tracks (spec 5.1, 7.2). Pin that it
+    # appears exactly once, as that collapse label, and nowhere else.
+    first = qml.find("ATMOS ONLY")
+    assert first != -1, "the Chooser's ATMOS ONLY collapse label (spec 7.2) is missing"
+    assert qml.find("ATMOS ONLY", first + 1) == -1, "ATMOS ONLY appears outside the Chooser collapse label"
+    window = qml[max(0, first - 500) : first + 200]
+    assert "chooserAtmosOnly" in window, "ATMOS ONLY must only be the Chooser audio-type collapse (spec 7.2)"
