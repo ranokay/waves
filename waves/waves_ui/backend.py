@@ -11023,6 +11023,36 @@ class WavesBridge(LibraryMixin, QObject):
         target = pathlib.Path(path).parent if path else pathlib.Path(os.path.dirname(self.settings.file_path))
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(target)))
 
+    @Slot(int, result=str)
+    def logTail(self, max_lines: int = 500) -> str:
+        """The on-disk log's tail for the in-app console (issue #68).
+
+        Bounded (see diagnostics.log_tail); "" when there is no log file
+        yet. The console polls this while open, so it stays cheap by
+        construction instead of by discipline at each call site.
+        """
+        try:
+            return diagnostics.log_tail(int(max_lines or 500))
+        except Exception:
+            logger.debug("Could not read the log tail", exc_info=True)
+            return ""
+
+    @Slot()
+    def copyLogs(self) -> None:
+        """Copy the recent log tail to the clipboard (issue #68)."""
+        try:
+            text = diagnostics.log_tail()
+        except Exception:
+            text = ""
+            logger.debug("Could not read the logs to copy", exc_info=True)
+        try:
+            QtGui.QGuiApplication.clipboard().setText(text or "")
+        except Exception:
+            logger.debug("Could not copy the logs", exc_info=True)
+            self._set_status("Could not copy the logs")
+            return
+        self._set_status("Logs copied")
+
     def _album_key(self, album):
         # Group by normalised title + normalised primary-artist NAME + track count.
         # We use the artist *name* from a single consistent source, mixing an id

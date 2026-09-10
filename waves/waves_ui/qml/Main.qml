@@ -15262,6 +15262,22 @@ ApplicationWindow {
                     Layout.maximumWidth: root.previewKind !== "" ? Math.max(60, nowPlaying.x - 51) : statusBar.width - 260
                 }
                 Item { Layout.fillWidth: true }
+                // Logs console (issue #68): realtime tail of the dev log for
+                // debugging. Opens the drawer below; always on duty, update
+                // notice or not.
+                Text {
+                    id: logsBtn
+                    textFormat: Text.PlainText; text: "LOGS"
+                    color: logsBtnMa.containsMouse ? root.textHi : root.textDim
+                    font.family: root.mono; font.pixelSize: 11; font.letterSpacing: 0.5
+                    Behavior on color { ColorAnimation { duration: 140 } }
+                    MouseArea {
+                        id: logsBtnMa
+                        anchors.fill: parent; anchors.margins: -4
+                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: logsDrawer.open()
+                    }
+                }
                 // Update notice: the right slot goes gold when a newer release is
                 // waiting. Full line when the bar is idle; compacts to LED +
                 // version while the mini player is up so the centre stays clear
@@ -15460,7 +15476,7 @@ ApplicationWindow {
                     // The right slot is no longer guaranteed empty while playing:
                     // the update notice stays up (compacted). Guard on whichever
                     // side claims more so the centred row stays clear of both.
-                    readonly property real rightGuard: 22 + (statusUpdate.visible ? statusUpdate.implicitWidth + 24 : 0)
+                    readonly property real rightGuard: 22 + logsBtn.implicitWidth + 10 + (statusUpdate.visible ? statusUpdate.implicitWidth + 24 : 0)
                     readonly property real fixedParts: 20 + 18 + stopMetrics.width + 27
                     // Docked right (no update notice) the row spans from the
                     // status text's guard to the bar's right margin; centred
@@ -16491,6 +16507,177 @@ ApplicationWindow {
                     if (!pressed) { queueGrip.handY = m.y; return }
                     var want = startWidth + (startScene - mapToItem(null, m.x, m.y).x)
                     root.queueWidth = Math.max(420, Math.min(root.width - 80, want))
+                }
+            }
+        }
+    }
+
+    // ====================================================================
+    // Logs drawer
+    // ====================================================================
+    // Realtime console (issue #68): tail of the dev log for debugging. The
+    // poll runs while open only (1s, capped lines), so a quiet app stays
+    // quiet; level filter + follow live in QML over the returned text, and
+    // copy/export ride the existing backend slots (copyLogs reuses the tail,
+    // exportDiagnostics the redacted bundle).
+    Drawer {
+        id: logsDrawer
+        edge: Qt.RightEdge; height: root.height
+        width: Math.max(480, Math.min(root.width - 80, 640))
+        background: Rectangle { color: root.surface; border.color: root.line1 }
+        property string logsRaw: ""
+        // Minimum level shown: 0 all, 1 info+, 2 warning+, 3 error only.
+        // Lines without a level token (traceback continuations) follow the
+        // previous line's level.
+        property int logsMinLevel: 0
+        property bool logsFollow: true
+        property bool logsExportBusy: false
+        property string logsExportPath: ""
+        property bool logsExportFailed: false
+        function logsRefresh() { logsRaw = waves.logTail(500) }
+        function logsLevelOf(line) {
+            var m = /^\d\d:\d\d:\d\d\.\d+\s+([A-Z]+)\s/.exec(line)
+            var lv = m ? m[1] : ""
+            if (lv === "DEBUG") return 0
+            if (lv === "INFO") return 1
+            if (lv === "WARN" || lv === "WARNING") return 2
+            if (lv === "ERROR" || lv === "CRITICAL") return 3
+            return -1
+        }
+        function logsFiltered() {
+            if (logsMinLevel <= 0) return logsRaw
+            var lines = logsRaw.split("\n")
+            var out = []
+            var carry = 1
+            for (var i = 0; i < lines.length; i++) {
+                var lv = logsLevelOf(lines[i])
+                if (lv >= 0) carry = lv
+                if (carry >= logsMinLevel) out.push(lines[i])
+            }
+            return out.join("\n")
+        }
+        function logsLineCount() { return logsRaw === "" ? 0 : logsRaw.split("\n").length }
+        onOpenedChanged: if (opened) { logsExportFailed = false; logsRefresh() }
+        Timer { id: logsPoll; interval: 1000; repeat: true; running: logsDrawer.opened; onTriggered: logsDrawer.logsRefresh() }
+        Connections {
+            target: waves
+            function onDiagnosticsExported(path) {
+                if (!logsDrawer.opened) return
+                logsDrawer.logsExportBusy = false
+                logsDrawer.logsExportPath = path
+                logsDrawer.logsExportFailed = (path === "")
+            }
+        }
+        ColumnLayout {
+            anchors.fill: parent; anchors.margins: 16; spacing: 12
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: "Logs"; color: root.textHi; font.pixelSize: 16; font.bold: true }
+                Item { Layout.fillWidth: true }
+                SpecBtn {
+                    id: logsCloseBtn
+                    icon: "close"
+                    onClicked: logsDrawer.close()
+                }
+            }
+            // Level filter chips: minimum level shown.
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                Repeater {
+                    model: [[0, "ALL"], [1, "INFO"], [2, "WARNING"], [3, "ERROR"]]
+                    delegate: Rectangle {
+                        required property var modelData
+                        readonly property bool on: logsDrawer.logsMinLevel === modelData[0]
+                        radius: 8; implicitHeight: 26; implicitWidth: logChipTx.implicitWidth + 20
+                        color: on ? root.accentCont : "transparent"
+                        border.color: on ? root.accentDim : root.border1
+                        Text {
+                            id: logChipTx; anchors.centerIn: parent
+                            textFormat: Text.PlainText; text: modelData[1]
+                            color: on ? root.accent : root.textLo; font.pixelSize: 11; font.bold: true
+                        }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: logsDrawer.logsMinLevel = modelData[0] }
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Rectangle {
+                    radius: 8; implicitHeight: 26; implicitWidth: logFollowTx.implicitWidth + 20
+                    color: logsDrawer.logsFollow ? root.accentCont : "transparent"
+                    border.color: logsDrawer.logsFollow ? root.accentDim : root.border1
+                    Text {
+                        id: logFollowTx; anchors.centerIn: parent
+                        textFormat: Text.PlainText; text: "FOLLOW"
+                        color: logsDrawer.logsFollow ? root.accent : root.textLo; font.pixelSize: 11; font.bold: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            logsDrawer.logsFollow = !logsDrawer.logsFollow
+                            if (logsDrawer.logsFollow) logsFlick.contentY = Math.max(0, logsFlick.contentHeight - logsFlick.height)
+                        }
+                    }
+                }
+            }
+            Flickable {
+                id: logsFlick
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                contentWidth: logsText.width; contentHeight: logsText.height
+                ScrollBar.vertical: ScrollBar {}
+                TextEdit {
+                    id: logsText
+                    width: logsFlick.width
+                    readOnly: true; selectByMouse: true; selectByKeyboard: true
+                    textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap
+                    color: root.textLo; selectionColor: root.accentDim; selectedTextColor: root.textHi
+                    font.family: root.mono; font.pixelSize: 11
+                    text: logsDrawer.logsRaw === "" ? "No log lines yet — they appear here as the app works."
+                                                    : logsDrawer.logsFiltered()
+                }
+                // New lines stick to the bottom while following; a manual
+                // scroll up takes over (FOLLOW unchecks) until re-enabled.
+                onContentHeightChanged: if (logsDrawer.logsFollow) contentY = Math.max(0, contentHeight - height)
+                onContentYChanged: {
+                    if (logsDrawer.logsFollow && contentY < contentHeight - height - 40) logsDrawer.logsFollow = false
+                }
+            }
+            Text {
+                textFormat: Text.PlainText
+                text: "waves_dev.log · " + logsDrawer.logsLineCount() + " lines"
+                color: root.textDim; font.family: root.mono; font.pixelSize: 10
+            }
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                SpecBtn {
+                    label: logsDrawer.logsExportBusy ? "EXPORTING…" : "EXPORT"
+                    enabled: !logsDrawer.logsExportBusy
+                    onClicked: {
+                        logsDrawer.logsExportFailed = false
+                        logsDrawer.logsExportPath = ""
+                        logsDrawer.logsExportBusy = true
+                        waves.exportDiagnostics()
+                    }
+                }
+                SpecBtn {
+                    visible: logsDrawer.logsExportPath !== "" && !logsDrawer.logsExportBusy
+                    label: "SHOW FILE"
+                    onClicked: waves.revealDiagnostics(logsDrawer.logsExportPath)
+                }
+                SpecBtn {
+                    label: "COPY"
+                    onClicked: waves.copyLogs()
+                }
+                Item { Layout.fillWidth: true }
+                Text {
+                    visible: logsDrawer.logsExportPath !== "" && !logsDrawer.logsExportBusy
+                    textFormat: Text.PlainText; text: "✓ Saved"
+                    color: root.green; font.pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
+                }
+                Text {
+                    visible: logsDrawer.logsExportFailed
+                    textFormat: Text.PlainText; text: "Export failed"
+                    color: root.red; font.pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
                 }
             }
         }
