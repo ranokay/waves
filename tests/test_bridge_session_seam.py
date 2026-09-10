@@ -593,6 +593,7 @@ class TestTheCatalogRoads:
         stub._mediaRefetched = _Signal()
         bumps: list = []
         stub._bump_download_groups = lambda *args: bumps.append(args)
+        stub._chooser_drop_refetch = WavesBridge._chooser_drop_refetch.__get__(stub, type(stub))
         stub._remember = lambda *args: None
         stub._set_status = lambda text: stub.statuses.append(text)
 
