@@ -220,6 +220,11 @@ class Settings:
     # saved cover.jpg for album/collection downloads.
     cover_single_track_file: bool = False
     extract_flac: bool = True
+    # FLAC scope (issue #64): off (default) converts lossless sources only and
+    # keeps lossy originals as *.m4a; on also converts lossy (AAC) sources to
+    # FLAC by re-encoding them (bigger files, no quality gain). Dolby Atmos
+    # always stays *.m4a either way. Needs FFmpeg like extract_flac.
+    extract_flac_all: bool = False
     downsample_enabled: bool = False
     downsample_target: DownsampleTarget = DownsampleTarget.BIT16_48
     # Values above the shared HTTP pool size (10 connections) are clamped at
@@ -506,6 +511,12 @@ class HelpSettings:
     cover_album_file: str = "Save cover to 'cover.jpg', if an album is downloaded."
     cover_single_track_file: str = "Also save cover.jpg when downloading a single track on its own."
     extract_flac: str = "Extract FLAC audio tracks from MP4 containers and save them as `*.flac` (uses FFmpeg)."
+    extract_flac_all: str = (
+        "Also convert lossy tracks to FLAC, not just lossless ones. Lossless converts without quality loss "
+        "(bit for bit identical); lossy sources are re-encoded, so the files grow with no quality gain. Off "
+        "(default) converts lossless only and keeps lossy originals as `*.m4a`. Dolby Atmos always "
+        "stays `*.m4a`. Uses FFmpeg."
+    )
     downsample_enabled: str = (
         "Downsample FLAC files toward a fixed target rate/bit-depth using ffmpeg. "
         "Each dimension is reduced independently and never upsampled, a 24-bit/44.1 kHz "
