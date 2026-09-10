@@ -47,7 +47,9 @@ jobs:
     env:
       APK_URL: ${{ secrets.APK_URL }}
       APK_AUTH_HEADER: ${{ secrets.APK_AUTH_HEADER }}
-      IMAGE: ghcr.io/ranokay/waves-wrapper-v2
+      # Your own namespace by default, so forks publish under their own name
+      # with zero edits (the app pin stays the maintainer's; see docs).
+      IMAGE: ghcr.io/${{ github.repository_owner }}/waves-wrapper-v2
       TAG: ${{ inputs.image_tag }}
       TARGET_ARCH: arm64-v8a
       RUNTIME_PLATFORM: linux/arm64

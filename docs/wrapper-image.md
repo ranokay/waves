@@ -1,10 +1,51 @@
 # Publishing the Waves wrapper image
 
 Upstream `wrapper-v2` ships source only, so Waves publishes its own pinned
-image (`ghcr.io/ranokay/waves-wrapper-v2`) for end-user pulls. This page is
-the maintainer runbook: one-time setup, how to publish, and the version
-lockstep. End users do nothing here — Waves pulls, runs, and stops the
-image itself, and Apple ID sign-in happens inside the guest at first use.
+image (`ghcr.io/ranokay/waves-wrapper-v2:0.2.3`, digest
+`sha256:1aac416aae06995095fac19a12d180d869a3bc615b83d31b0773281a9801be15`)
+for end-user pulls. This page covers who uses what, then the maintainer
+runbook: one-time setup, how to publish, and the version lockstep.
+
+## Who uses what
+
+- **You just use Waves.** Nothing to do, nothing to host. The app pulls
+  the public image on demand, runs it while downloading, stops it when
+  idle. Apple ID sign-in happens inside the guest at first use; the APK
+  _you_ supply in Settings stays a local path — it is verified, never
+  uploaded. Trust note, stated plainly: the image contains Apple's native
+  `.so` files (that is what makes ALAC decryption possible). It was built
+  from the pinned upstream source plus the blessed APK below; the publish
+  summary in Actions records the exact source SHA and guest-lib pins, so
+  anyone can audit what went in.
+- **You fork or clone Waves to hack on it.** Still nothing to do: the app
+  pin points at the public image, which pulls anonymously. Develop, run,
+  test Apple downloads — no secrets, no builds.
+- **You maintain a fork (or upstream) with your own image.** Run the same
+  `wrapper-image` workflow in _your_ repo: it publishes to
+  `ghcr.io/<your-name>/waves-wrapper-v2` automatically (set your own
+  `APK_URL`/`APK_AUTH_HEADER` secrets there the same way), flip _your_
+  package public, then move this repo's `WRAPPER_V2_IMAGE` pin
+  (`waves/apple_runtime.py`) to your path. That one-line pin edit is the
+  only code change a private image ever needs. Version lockstep below
+  applies to you exactly as written.
+- **You send Apple work upstream as a PR.** The workflow is
+  `workflow_dispatch`-only: it never runs on PRs, needs no secrets from
+  contributors, and never bundles binaries — so a fork PR stays green and
+  legal. Never commit an `.apk`/`.apkm` (git-ignored) or paste tokens.
+  Upstream publishes from its own secrets when it ships Apple work, the
+  same way this fork does.
+- **Reproducibility.** Same inputs (upstream SHA + APK bytes) yield the
+  same staged libs (hash-verified at build); image bytes may still differ
+  (timestamps), so provenance is the Actions run summary, not digest
+  equality.
+
+## Secrets matrix
+
+| Secret            | Where (repo settings) | Used by           | Who needs it               |
+| ----------------- | --------------------- | ----------------- | -------------------------- |
+| `APK_URL`         | image-publishing repo | wrapper-image job | maintainer only            |
+| `APK_AUTH_HEADER` | image-publishing repo | wrapper-image job | maintainer only            |
+| Apple ID + 2FA    | never stored anywhere | local guest login | whoever runs the downloads |
 
 ## One-time setup
 
