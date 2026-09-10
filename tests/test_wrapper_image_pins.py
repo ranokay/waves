@@ -28,7 +28,10 @@ def test_workflow_defaults_publish_exactly_the_pinned_image():
     wf = _workflow()
     inputs = wf[True]["workflow_dispatch"]["inputs"]  # YAML reads `on:` as boolean True
     tag = inputs["image_tag"]["default"]
-    assert f"ghcr.io/ranokay/waves-wrapper-v2:{tag}" == WRAPPER_V2_IMAGE
+    # The tag must equal the app pin; the registry path defaults to the
+    # publishing owner's namespace (issue #86), so forks need no edits.
+    assert WRAPPER_V2_IMAGE.rsplit(":", 1)[1] == tag
+    assert "ghcr.io/${{ github.repository_owner }}/waves-wrapper-v2" in WORKFLOW.read_text()
     assert inputs["wrapper_ref"]["default"]
 
 
