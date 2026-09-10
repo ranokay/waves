@@ -10585,6 +10585,11 @@ class WavesBridge(LibraryMixin, QObject):
             "search_sec_videos_expanded": False,
             "search_sec_playlists_expanded": False,
             "search_sec_mixes_expanded": False,
+            # Search-page provider groups (issue #67): a collapsed provider
+            # group stays collapsed on the next search and across restarts,
+            # per provider, alongside the section memory above.
+            "search_provider_tidal_collapsed": False,
+            "search_provider_apple_collapsed": False,
             # The search sort control, remembered across launches: the order
             # by name (relevance, date, name, popularity; a name rather than
             # an index so the option list can change) and the direction.

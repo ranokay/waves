@@ -749,6 +749,23 @@ ApplicationWindow {
     }
     function toggleSearchSection(which) { toggleProviderSearchSection(which, false) }
     function toggleAppleSearchSection(which) { toggleProviderSearchSection(which, true) }
+    // Provider groups in Search (issue #67): each provider header collapses
+    // its whole result group, so users need not scroll through one provider
+    // to reach the next. Default expanded; the fold persists per session and
+    // across restarts via prefs, per provider, alongside the section SHOW ALL
+    // memory above. Filter chips keep working: they filter rows, never the
+    // fold, so a collapsed group stays collapsed under any chip.
+    property bool tidalSearchGroupCollapsed: waves.wavesPref("search_provider_tidal_collapsed") === true
+    property bool appleSearchGroupCollapsed: waves.wavesPref("search_provider_apple_collapsed") === true
+    function toggleSearchProviderGroup(apple) {
+        if (apple) {
+            appleSearchGroupCollapsed = !appleSearchGroupCollapsed
+            waves.setWavesPref("search_provider_apple_collapsed", appleSearchGroupCollapsed)
+        } else {
+            tidalSearchGroupCollapsed = !tidalSearchGroupCollapsed
+            waves.setWavesPref("search_provider_tidal_collapsed", tidalSearchGroupCollapsed)
+        }
+    }
     // A provider header only makes sense while the active type filter can
     // still show one of its rows. Apple offers no videos or mixes in this
     // slice, so those filters never show its header.
@@ -7942,8 +7959,11 @@ ApplicationWindow {
     component SearchSectionMore: ShowAllLabel {
         property string section: ""
         property int cap: 5
+        // Provider-group fold (issue #67): the caller passes its group's
+        // open state; a collapsed group hides its SHOW ALL with its rows.
+        property bool groupOpen: true
         opacity: root.searchReveal
-        visible: root.filterType === "all" && count > cap
+        visible: groupOpen && root.filterType === "all" && count > cap
         onToggled: root.toggleSearchSection(section)
     }
 
@@ -13782,6 +13802,12 @@ ApplicationWindow {
                     Row {
                         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
                         spacing: 8
+                        ExpandChevron {
+                            anchors.verticalCenter: parent.verticalCenter
+                            open: !root.tidalSearchGroupCollapsed; hovered: tidalHeadMa.containsMouse
+                            tile: 20; glyph: 14; showTile: false
+                            stroke: tidalHeadMa.containsMouse ? root.accent : root.textLo
+                        }
                         Image {
                             anchors.verticalCenter: parent.verticalCenter
                             source: "assets/providers/tidal.png"
@@ -13792,7 +13818,8 @@ ApplicationWindow {
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             textFormat: Text.PlainText; text: "TIDAL"
-                            color: root.accent; font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
+                            color: tidalHeadMa.containsMouse ? root.textHi : root.accent
+                            font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
                         }
                     }
                     Text {
@@ -13804,6 +13831,12 @@ ApplicationWindow {
                     Rectangle {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                         height: 2; color: root.accentDim
+                    }
+                    MouseArea {
+                        id: tidalHeadMa
+                        anchors.fill: parent
+                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: root.toggleSearchProviderGroup(false)
                     }
                 }
 
@@ -13820,13 +13853,13 @@ ApplicationWindow {
                 // a pointer, not a move. A one-item Repeater rather than a
                 // lone Loader so each search rebuilds the row and its build
                 // veil tick lands exactly once, like every section row.
-                SectionHeader { id: topHead; opacity: root.searchReveal; visible: root.filterType === "all" && root.searchTop !== null; label: "TOP RESULT" }
+                SectionHeader { id: topHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.filterType === "all" && root.searchTop !== null; label: "TOP RESULT" }
                 Repeater {
                     model: root.searchTop ? [root.searchTop] : []
                     delegate: Loader {
                         id: topLd
                         required property var modelData
-                        visible: root.filterType === "all"
+                        visible: !root.tidalSearchGroupCollapsed && root.filterType === "all"
                         width: contentCol.width
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
@@ -13862,7 +13895,7 @@ ApplicationWindow {
                 }
 
                 // ARTISTS
-                SectionHeader { id: artistsHead; opacity: root.searchReveal; visible: root.sectionVisible("artists", artistsModel.count); label: "ARTISTS"; count: artistsModel.count }
+                SectionHeader { id: artistsHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("artists", artistsModel.count); label: "ARTISTS"; count: artistsModel.count }
                 // Collapsed default (the mixed All view): a horizontal strip of
                 // fixed-width cards that scrolls left/right, like the browse
                 // shelves. A window resize reveals more or fewer cards but never
@@ -13873,7 +13906,7 @@ ApplicationWindow {
                 // build-veil tick; only ~12 artist cards, so that is cheap.
                 Flickable {
                     id: artistStrip
-                    visible: root.searchArtistsStripMode && root.sectionVisible("artists", artistsModel.count)
+                    visible: !root.tidalSearchGroupCollapsed && root.searchArtistsStripMode && root.sectionVisible("artists", artistsModel.count)
                     width: parent.width; height: artistRow.height
                     contentWidth: artistRow.width; contentHeight: artistRow.height
                     clip: true
@@ -13920,7 +13953,7 @@ ApplicationWindow {
                 // posters so tall their buttons sat below the fold.
                 Flow {
                     id: artistFlow
-                    visible: !root.searchArtistsStripMode && root.sectionVisible("artists", artistsModel.count)
+                    visible: !root.tidalSearchGroupCollapsed && !root.searchArtistsStripMode && root.sectionVisible("artists", artistsModel.count)
                     width: parent.width; spacing: 12
                     property int cols: Math.max(1, Math.floor((width + spacing) / (190 + spacing)))
                     property real cardW: (width - (cols - 1) * spacing) / cols
@@ -13952,7 +13985,7 @@ ApplicationWindow {
                     // this label on screen, and that flag is pref-backed, so a
                     // launch with no search at all drew a lone SHOW LESS over an
                     // empty page.
-                    visible: root.filterType === "all" && artistsModel.count > 0
+                    visible: !root.tidalSearchGroupCollapsed && root.filterType === "all" && artistsModel.count > 0
                              && (root.searchArtistsExpanded || artistStrip.contentWidth > artistStrip.width + 1)
                     expanded: root.searchArtistsExpanded
                     count: artistsModel.count
@@ -13960,7 +13993,7 @@ ApplicationWindow {
                 }
 
                 // ALBUMS
-                SectionHeader { id: albumsHead; opacity: root.searchReveal; visible: root.sectionVisible("albums", albumsModel.count); label: "ALBUMS"; count: albumsModel.count }
+                SectionHeader { id: albumsHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("albums", albumsModel.count); label: "ALBUMS"; count: albumsModel.count }
                 Repeater {
                     // Named so a scenario can ask whether a refresh KEPT these
                     // delegates or rebuilt them: that is the whole difference
@@ -13975,7 +14008,7 @@ ApplicationWindow {
                         // first 5 show until SHOW ALL; the delegate still loads
                         // (and fires its build-veil tick) while hidden, so the
                         // one-tick-per-item count stays exact.
-                        visible: root.searchRowVisible("albums", albumsModel.count, index, root.searchAlbumsExpanded)
+                        visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("albums", albumsModel.count, index, root.searchAlbumsExpanded)
                         width: contentCol.width
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
@@ -13986,14 +14019,14 @@ ApplicationWindow {
                         }
                     }
                 }
-                SearchSectionMore { section: "albums"; sectionTop: albumsHead; count: albumsModel.count; expanded: root.searchAlbumsExpanded }
+                SearchSectionMore { section: "albums"; sectionTop: albumsHead; count: albumsModel.count; expanded: root.searchAlbumsExpanded; groupOpen: !root.tidalSearchGroupCollapsed }
 
                 // TRACKS
-                SectionHeader { id: tracksHead; opacity: root.searchReveal; visible: root.sectionVisible("tracks", tracksModel.count); label: "TRACKS"; count: tracksModel.count }
+                SectionHeader { id: tracksHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("tracks", tracksModel.count); label: "TRACKS"; count: tracksModel.count }
                 Repeater {
                     model: tracksModel
                     delegate: Loader {
-                        visible: root.searchRowVisible("tracks", tracksModel.count, index, root.searchTracksExpanded)
+                        visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("tracks", tracksModel.count, index, root.searchTracksExpanded)
                         width: contentCol.width
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
@@ -14005,10 +14038,10 @@ ApplicationWindow {
                         }
                     }
                 }
-                SearchSectionMore { section: "tracks"; sectionTop: tracksHead; count: tracksModel.count; expanded: root.searchTracksExpanded }
+                SearchSectionMore { section: "tracks"; sectionTop: tracksHead; count: tracksModel.count; expanded: root.searchTracksExpanded; groupOpen: !root.tidalSearchGroupCollapsed }
 
                 // VIDEOS
-                SectionHeader { id: videosHead; opacity: root.searchReveal; visible: root.sectionVisible("videos", videosModel.count); label: "VIDEOS"; count: videosModel.count }
+                SectionHeader { id: videosHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("videos", videosModel.count); label: "VIDEOS"; count: videosModel.count }
                 // Art-first video results: 16:9 thumbnails at grid size, with
                 // the title, artist, release date and a full download button
                 // reading underneath. Cells are sized from the section width,
@@ -14027,7 +14060,7 @@ ApplicationWindow {
                     Repeater {
                         model: videosModel
                         delegate: Loader {
-                            visible: root.searchRowVisible("videos", videosModel.count, index, root.searchVideosExpanded, videoGrid.cap)
+                            visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("videos", videosModel.count, index, root.searchVideosExpanded, videoGrid.cap)
                             width: videoGrid.cellW
                             height: Math.round(videoGrid.cellW * 9 / 16) + 54
                             asynchronous: root.searchBuilding
@@ -14045,14 +14078,14 @@ ApplicationWindow {
                         }
                     }
                 }
-                SearchSectionMore { section: "videos"; sectionTop: videosHead; count: videosModel.count; expanded: root.searchVideosExpanded; cap: videoGrid.cap }
+                SearchSectionMore { section: "videos"; sectionTop: videosHead; count: videosModel.count; expanded: root.searchVideosExpanded; groupOpen: !root.tidalSearchGroupCollapsed; cap: videoGrid.cap }
 
                 // PLAYLISTS
-                SectionHeader { id: playlistsHead; opacity: root.searchReveal; visible: root.sectionVisible("playlists", playlistsModel.count); label: "PLAYLISTS"; count: playlistsModel.count }
+                SectionHeader { id: playlistsHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("playlists", playlistsModel.count); label: "PLAYLISTS"; count: playlistsModel.count }
                 Repeater {
                     model: playlistsModel
                     delegate: Loader {
-                        visible: root.searchRowVisible("playlists", playlistsModel.count, index, root.searchPlaylistsExpanded)
+                        visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("playlists", playlistsModel.count, index, root.searchPlaylistsExpanded)
                         width: contentCol.width
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
@@ -14068,14 +14101,14 @@ ApplicationWindow {
                         }
                     }
                 }
-                SearchSectionMore { section: "playlists"; sectionTop: playlistsHead; count: playlistsModel.count; expanded: root.searchPlaylistsExpanded }
+                SearchSectionMore { section: "playlists"; sectionTop: playlistsHead; count: playlistsModel.count; expanded: root.searchPlaylistsExpanded; groupOpen: !root.tidalSearchGroupCollapsed }
 
                 // MIXES
-                SectionHeader { id: mixesHead; opacity: root.searchReveal; visible: root.sectionVisible("mixes", mixesModel.count); label: "MIXES"; count: mixesModel.count }
+                SectionHeader { id: mixesHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("mixes", mixesModel.count); label: "MIXES"; count: mixesModel.count }
                 Repeater {
                     model: mixesModel
                     delegate: Loader {
-                        visible: root.searchRowVisible("mixes", mixesModel.count, index, root.searchMixesExpanded)
+                        visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("mixes", mixesModel.count, index, root.searchMixesExpanded)
                         width: contentCol.width; height: 66
                         asynchronous: root.searchBuilding
                         opacity: root.searchReveal
@@ -14099,7 +14132,7 @@ ApplicationWindow {
                         }
                     }
                 }
-                SearchSectionMore { section: "mixes"; sectionTop: mixesHead; count: mixesModel.count; expanded: root.searchMixesExpanded }
+                SearchSectionMore { section: "mixes"; sectionTop: mixesHead; count: mixesModel.count; expanded: root.searchMixesExpanded; groupOpen: !root.tidalSearchGroupCollapsed }
 
                 Item {
                     id: appleGroupHead
@@ -14108,6 +14141,12 @@ ApplicationWindow {
                     Row {
                         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
                         spacing: 8
+                        ExpandChevron {
+                            anchors.verticalCenter: parent.verticalCenter
+                            open: !root.appleSearchGroupCollapsed; hovered: appleHeadMa.containsMouse
+                            tile: 20; glyph: 14; showTile: false
+                            stroke: appleHeadMa.containsMouse ? root.accent : root.textLo
+                        }
                         Image {
                             anchors.verticalCenter: parent.verticalCenter
                             source: "assets/providers/apple-music.png"
@@ -14131,6 +14170,12 @@ ApplicationWindow {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                         height: 2; color: root.outline
                     }
+                    MouseArea {
+                        id: appleHeadMa
+                        anchors.fill: parent
+                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: root.toggleSearchProviderGroup(true)
+                    }
                 }
 
                 // Apple catalog rows open full pages and preview 30-second clips
@@ -14138,19 +14183,19 @@ ApplicationWindow {
                 SectionHeader {
                     id: appleArtistsHead
                     opacity: root.searchReveal
-                    visible: root.appleSearchGrouped && root.sectionVisible("artists", appleArtistsModel.count)
+                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("artists", appleArtistsModel.count)
                     label: "ARTISTS"; count: appleArtistsModel.count
                 }
                 Flow {
                     id: appleArtistFlow
-                    visible: root.appleSearchGrouped && root.sectionVisible("artists", appleArtistsModel.count)
+                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("artists", appleArtistsModel.count)
                     width: parent.width; spacing: 12
                     property int cols: Math.max(1, Math.floor((width + spacing) / (190 + spacing)))
                     property real cardW: (width - (cols - 1) * spacing) / cols
                     Repeater {
                         model: appleArtistsModel
                         delegate: Loader {
-                            visible: root.searchRowVisible("artists", appleArtistsModel.count, index, root.appleSearchArtistsExpanded)
+                            visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.searchRowVisible("artists", appleArtistsModel.count, index, root.appleSearchArtistsExpanded)
                             width: appleArtistFlow.cardW
                             height: item ? item.implicitHeight : width + 142
                             asynchronous: root.searchBuilding
@@ -14165,20 +14210,20 @@ ApplicationWindow {
                 ShowAllLabel {
                     sectionTop: appleArtistsHead; opacity: root.searchReveal
                     count: appleArtistsModel.count; expanded: root.appleSearchArtistsExpanded
-                    visible: root.appleSearchGrouped && root.filterType === "all" && appleArtistsModel.count > 5
+                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.filterType === "all" && appleArtistsModel.count > 5
                     onToggled: root.toggleAppleSearchSection("artists")
                 }
 
                 SectionHeader {
                     id: appleAlbumsHead
                     opacity: root.searchReveal
-                    visible: root.appleSearchGrouped && root.sectionVisible("albums", appleAlbumsModel.count)
+                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("albums", appleAlbumsModel.count)
                     label: "ALBUMS"; count: appleAlbumsModel.count
                 }
                 Repeater {
                     model: appleAlbumsModel
                     delegate: Loader {
-                        visible: root.appleSearchGrouped
+                        visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed
                                  && root.searchRowVisible("albums", appleAlbumsModel.count, index, root.appleSearchAlbumsExpanded)
                         width: contentCol.width
                         asynchronous: root.searchBuilding
@@ -14194,20 +14239,20 @@ ApplicationWindow {
                 ShowAllLabel {
                     sectionTop: appleAlbumsHead; opacity: root.searchReveal
                     count: appleAlbumsModel.count; expanded: root.appleSearchAlbumsExpanded
-                    visible: root.appleSearchGrouped && root.filterType === "all" && appleAlbumsModel.count > 5
+                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.filterType === "all" && appleAlbumsModel.count > 5
                     onToggled: root.toggleAppleSearchSection("albums")
                 }
 
                 SectionHeader {
                     id: appleTracksHead
                     opacity: root.searchReveal
-                    visible: root.appleSearchGrouped && root.sectionVisible("tracks", appleTracksModel.count)
+                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("tracks", appleTracksModel.count)
                     label: "TRACKS"; count: appleTracksModel.count
                 }
                 Repeater {
                     model: appleTracksModel
                     delegate: Loader {
-                        visible: root.appleSearchGrouped
+                        visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed
                                  && root.searchRowVisible("tracks", appleTracksModel.count, index, root.appleSearchTracksExpanded)
                         width: contentCol.width
                         asynchronous: root.searchBuilding
@@ -14224,20 +14269,20 @@ ApplicationWindow {
                 ShowAllLabel {
                     sectionTop: appleTracksHead; opacity: root.searchReveal
                     count: appleTracksModel.count; expanded: root.appleSearchTracksExpanded
-                    visible: root.appleSearchGrouped && root.filterType === "all" && appleTracksModel.count > 5
+                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.filterType === "all" && appleTracksModel.count > 5
                     onToggled: root.toggleAppleSearchSection("tracks")
                 }
 
                 SectionHeader {
                     id: applePlaylistsHead
                     opacity: root.searchReveal
-                    visible: root.appleSearchGrouped && root.sectionVisible("playlists", applePlaylistsModel.count)
+                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("playlists", applePlaylistsModel.count)
                     label: "PLAYLISTS"; count: applePlaylistsModel.count
                 }
                 Repeater {
                     model: applePlaylistsModel
                     delegate: Loader {
-                        visible: root.appleSearchGrouped
+                        visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed
                                  && root.searchRowVisible("playlists", applePlaylistsModel.count, index, root.appleSearchPlaylistsExpanded)
                         width: contentCol.width
                         height: item ? item.implicitHeight : 64
@@ -14253,7 +14298,7 @@ ApplicationWindow {
                 ShowAllLabel {
                     sectionTop: applePlaylistsHead; opacity: root.searchReveal
                     count: applePlaylistsModel.count; expanded: root.appleSearchPlaylistsExpanded
-                    visible: root.appleSearchGrouped && root.filterType === "all" && applePlaylistsModel.count > 5
+                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.filterType === "all" && applePlaylistsModel.count > 5
                     onToggled: root.toggleAppleSearchSection("playlists")
                 }
             }
