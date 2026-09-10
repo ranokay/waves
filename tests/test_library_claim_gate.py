@@ -46,7 +46,7 @@ def _gate(*, claim, ownership_of=None, target_rank=3, identity=None):
     dl._force_redownload = False
     # The ownership half of the gate asks whether this job would fetch Dolby
     # Atmos for the track; these tests are about the claim half, so it is off.
-    dl.settings = types.SimpleNamespace(data=types.SimpleNamespace(download_dolby_atmos=False))
+    dl.settings = types.SimpleNamespace(data=types.SimpleNamespace(default_audio_type="stereo"))
     return dl, _media(identity=identity)
 
 

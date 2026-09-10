@@ -87,7 +87,7 @@ class _BridgeStub:
                 tidal_quality_audio=tidal_quality_audio,
                 download_base_path="",
                 symlink_to_track=False,
-                download_dolby_atmos=atmos,
+                default_audio_type="both" if atmos else "stereo",
             )
         )
         for name in (
@@ -145,7 +145,7 @@ def _new_tracked():
     td._skip_existing_base = False
     # The gate asks whether THIS job would fetch Dolby Atmos for the track, so
     # it can rank the owned copy on the scale that copy was delivered on.
-    td.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=False))
+    td.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo"))
     # Library bulk claim: not injected, like any single-item job, so these
     # ownership tests exercise the ownership gate alone.
     td._library_claim = None

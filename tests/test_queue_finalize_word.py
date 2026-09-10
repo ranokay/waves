@@ -213,7 +213,7 @@ def _run_item(tmp_path, *, success):
     download, the delivery announcement and post-processing happened in."""
     dl = Download.__new__(Download)
     dl.event_abort = Event()
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=True))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both"))
     media = Track.__new__(Track)
     media.audio_modes = None
     calls: list[str] = []

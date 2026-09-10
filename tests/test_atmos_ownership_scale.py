@@ -95,7 +95,7 @@ def _gate(store, *, target, atmos_on):
     dl = _TrackedDownload.__new__(_TrackedDownload)
     dl._ownership_of = store.ownership_of
     dl._target_rank = quality_rank(target)
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=atmos_on))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both" if atmos_on else "stereo"))
     return dl
 
 
@@ -114,7 +114,9 @@ def _bridge(store, *, quality, atmos_on):
     b._own_pool = _InlinePool()
     b._announce_ownership = lambda tid: None
     b._downloads_running = lambda: False
-    b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=quality.value, download_dolby_atmos=atmos_on))
+    b.settings = SimpleNamespace(
+        data=SimpleNamespace(tidal_quality_audio=quality.value, default_audio_type="both" if atmos_on else "stereo")
+    )
     for name in (
         "ownershipOf",
         "_would_refetch_atmos",
@@ -153,7 +155,9 @@ def _engine_took_the_atmos_session(media, atmos_on: bool) -> bool:
     reached: list[str] = []
     stream = SimpleNamespace(get_stream_manifest=lambda: SimpleNamespace(file_extension=".m4a", codecs="EAC3"))
     dl = Download.__new__(Download)
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=atmos_on, extract_flac=False))
+    dl.settings = SimpleNamespace(
+        data=SimpleNamespace(default_audio_type="both" if atmos_on else "stereo", extract_flac=False)
+    )
     dl.fn_logger = SimpleNamespace(error=lambda *a, **k: None, info=lambda *a, **k: None)
     dl.tidal = SimpleNamespace(
         switch_to_atmos_session=lambda: (reached.append("atmos"), True)[1],
@@ -350,7 +354,9 @@ def _predictor(store, *, quality, atmos_on):
     b._merge_plans = {}
     b._objs = {"album": {}}
     b._queue_index = {}
-    b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=quality.value, download_dolby_atmos=atmos_on))
+    b.settings = SimpleNamespace(
+        data=SimpleNamespace(tidal_quality_audio=quality.value, default_audio_type="both" if atmos_on else "stereo")
+    )
     b._library_claim_media = lambda media, album=None: False
     for name in ("_predict_skips", "_target_quality_rank", "_job_quality", "_job_library_skip", "_queue_item"):
         setattr(b, name, getattr(WavesBridge, name).__get__(b, WavesBridge))

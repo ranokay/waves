@@ -137,7 +137,7 @@ def _bridge(store, *, quality):
     b._announce_ownership = lambda tid: None
     b._downloads_running = lambda: False
     b.settings = SimpleNamespace(
-        data=SimpleNamespace(tidal_quality_audio=getattr(quality, "value", quality), download_dolby_atmos=False)
+        data=SimpleNamespace(tidal_quality_audio=getattr(quality, "value", quality), default_audio_type="stereo")
     )
     for name in (
         "ownershipOf",

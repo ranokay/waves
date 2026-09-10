@@ -162,7 +162,7 @@ def _gate(store, *, target):
     dl = _TrackedDownload.__new__(_TrackedDownload)
     dl._ownership_of = store.ownership_of
     dl._target_rank = quality_rank(target)
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=False))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo"))
     return dl
 
 
@@ -284,7 +284,7 @@ def _capture_dl(monkeypatch, *, target_rank, stream_quality="LOSSLESS"):
     dl._target_rank = target_rank
     dl._delivered = {}
     dl._delivered_lock = Lock()
-    dl.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=False))
+    dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo"))
     info = SimpleNamespace(
         media_stream=SimpleNamespace(
             audio_quality=stream_quality, audio_mode="STEREO", bit_depth=16, sample_rate=44100

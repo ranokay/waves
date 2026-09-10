@@ -124,7 +124,7 @@ def test_the_tidals_quality_default_no_longer_sits_under_downloads():
     # The rest of Downloads survives the move untouched, video quality
     # included (a TIDAL-only capability that keeps its section, spec §9.2.2).
     assert _keys(sections["downloads"])[:2] == ["download_base_path", "quality_video"]
-    assert "download_dolby_atmos" in _keys(sections["downloads"])
+    assert "default_audio_type" in _keys(sections["downloads"])
 
 
 def test_the_apple_card_holds_the_switch_row_and_the_quality():
@@ -343,7 +343,7 @@ def test_factory_reset_resets_the_apple_switch():
 
 def test_shared_help_text_names_both_providers():
     help_settings = HelpSettings()
-    assert "every enabled provider" in help_settings.download_dolby_atmos
+    assert "every enabled provider" in help_settings.default_audio_type
     assert "every enabled provider" in help_settings.lyrics_embed
     assert "every enabled provider" in help_settings.lyrics_file
     assert "every enabled provider" in help_settings.lyrics_prefer_lrclib

@@ -57,7 +57,7 @@ def _track(track_id: int, audio_modes) -> Track:
 
 
 class TestAtmosOnlyTracksAlwaysDownload:
-    """The toggle prefers stereo where there is a choice. An Atmos-only track
+    """The stereo default prefers stereo where there is a choice. An Atmos-only track
     has no choice, so it downloads under either setting (2026-08-18); the old
     behaviour skipped it and left a hole in the album."""
 
@@ -71,7 +71,7 @@ class TestAtmosOnlyTracksAlwaysDownload:
 
     def test_atmos_only_track_downloads_when_atmos_is_off(self):
         dl = _make_download()
-        dl.settings.data.download_dolby_atmos = False
+        dl.settings.data.default_audio_type = "stereo"
         media = _track(123, [AudioMode.dolby_atmos.value])
 
         ok, path = self._run_item(dl, media)
@@ -82,7 +82,7 @@ class TestAtmosOnlyTracksAlwaysDownload:
 
     def test_atmos_only_track_proceeds_when_atmos_is_on(self):
         dl = _make_download()
-        dl.settings.data.download_dolby_atmos = True
+        dl.settings.data.default_audio_type = "both"
         media = _track(123, [AudioMode.dolby_atmos.value])
 
         ok, path = self._run_item(dl, media)
@@ -93,7 +93,7 @@ class TestAtmosOnlyTracksAlwaysDownload:
 
     def test_normal_track_is_untouched_by_the_guard(self):
         dl = _make_download()
-        dl.settings.data.download_dolby_atmos = False
+        dl.settings.data.default_audio_type = "stereo"
         media = _track(123, ["STEREO"])
 
         ok, path = self._run_item(dl, media)
@@ -104,7 +104,7 @@ class TestAtmosOnlyTracksAlwaysDownload:
     def test_stereo_and_atmos_track_still_downloads_without_atmos(self):
         # A track offering BOTH modes has a normal stream to fall back to.
         dl = _make_download()
-        dl.settings.data.download_dolby_atmos = False
+        dl.settings.data.default_audio_type = "stereo"
         media = _track(123, ["STEREO", AudioMode.dolby_atmos.value])
 
         ok, path = self._run_item(dl, media)

@@ -236,7 +236,7 @@ def _settings(base: Path, **overrides):
         mark_explicit=False,
         metadata_target_upc="UPC",
         apple_quality_audio="HIGH",
-        download_dolby_atmos=False,
+        default_audio_type="stereo",
         apple_cookies_path="",
         path_binary_ffmpeg="",
         format_track="{artist_name}/{track_title}",
@@ -413,7 +413,7 @@ def test_gate_without_a_store_never_gates():
 
 
 @needs_ffmpeg
-def test_atmos_toggle_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
+def test_both_default_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
     from waves import apple_engine
 
     monkeypatch.setattr(
@@ -423,7 +423,7 @@ def test_atmos_toggle_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
     _tone(staged)
     provider = _FakeProvider(fixture=staged)
     base = tmp_path / "lib"
-    settings = _settings(base, download_dolby_atmos=True)
+    settings = _settings(base, default_audio_type="both")
     stub = _bind(_stub(base, provider))
     stub.settings = settings
     relay = _Relay()

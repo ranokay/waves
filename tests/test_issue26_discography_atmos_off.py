@@ -133,7 +133,7 @@ class _AtmosDiscoStub(_DiscoStub):
 
     def __init__(self, releases, *, atmos_on: bool):
         super().__init__(_VideoArtist([]), video_download=False)
-        self.settings.data.download_dolby_atmos = atmos_on
+        self.settings.data.default_audio_type = "both" if atmos_on else "stereo"
         self._releases = releases
 
     def _artist_releases(self, artist):

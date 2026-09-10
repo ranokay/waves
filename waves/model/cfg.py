@@ -158,7 +158,11 @@ class Settings:
     # the skip-list; it just keeps no bytes.
     apple_quarantine_keep: bool = True
     quality_video: QualityVideo = QualityVideo.P480
-    download_dolby_atmos: bool = False
+    # The Chooser one-click audio default (issue #66, spec §7.2): "stereo", or
+    # "both" for stereo + Atmos side by side where a track offers the choice.
+    # Replaces the old Download-Dolby-Atmos toggle one for one (on = both);
+    # Atmos-alone has no Settings spelling and stays per-click only.
+    default_audio_type: str = "stereo"
     # Artist > Album > Track, the shape a music library (and Plex) expects.
     # Playlists / mixes keep their own parent folder: they are platform
     # constructs a library manager can't model, but stay downloadable.
@@ -303,6 +307,12 @@ class Settings:
     # serialization, so the key leaves settings.json on the first save and the
     # migration is one-time by construction (nothing left to read).
     quality_audio: str | None = field(default=None, metadata=config(exclude=lambda v: True))
+    # Legacy carrier for the toggle this replaced (issue #66). from_json reads
+    # the old key from a pre-change config; _migrate_settings folds True into
+    # default_audio_type "both" (False was the default already) and nulls it.
+    # Excluded from every serialization like quality_audio above, so the key
+    # leaves settings.json on the first save.
+    download_dolby_atmos: bool | None = field(default=None, metadata=config(exclude=lambda v: True))
 
 
 @dataclass_json
@@ -479,8 +489,10 @@ class HelpSettings:
         "Off deletes them instead; the skip-list still marks them either way."
     )
     quality_video: str = 'Desired video download quality: "360", "480", "720", "1080"'
-    download_dolby_atmos: str = (
-        "Download Dolby Atmos audio streams if available, on every enabled provider that offers Atmos."
+    default_audio_type: str = (
+        "The Chooser one-click audio default, on every enabled provider that offers Atmos: "
+        "stereo, or both versions side by side where a track offers the choice. "
+        "Atmos on its own stays a per-click choice in the Chooser."
     )
     # TODO: Describe possible variables.
     format_album: str = "Where to download albums and how to name the items."

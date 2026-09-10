@@ -101,7 +101,7 @@ class _Stub:
         self.settings = SimpleNamespace(
             data=SimpleNamespace(
                 tidal_quality_audio="LOSSLESS",
-                download_dolby_atmos=False,
+                default_audio_type="stereo",
                 download_base_path="/tmp/waves-out",
                 download_delay=False,
                 downloads_concurrent_max=2,

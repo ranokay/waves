@@ -65,7 +65,7 @@ class _SettingsData:
     filename_illegal_replacement = ""
     filename_illegal_map = None
     use_primary_album_artist = False
-    download_dolby_atmos = False
+    default_audio_type = "stereo"
     extract_flac = False
     video_convert_mp4 = False
     symlink_to_track = False
