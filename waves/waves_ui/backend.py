@@ -14084,12 +14084,15 @@ class WavesBridge(LibraryMixin, QObject):
             lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts)
             lyrics_ttml = ""
         cover_data = self._apple_cover_bytes(provider, raw) if self._apple_wants_cover(collection) else None
+        # The embed toggle is the single source for embedding; the sidecars
+        # below still receive the fetched text.
+        embed_lyrics = bool(self._psetting(CTX_APPLE, "lyrics_embed", False))
         if not tag_apple_file(
             dest,
             title=str(row.get("title") or ""),
             facts=facts,
-            lyrics_synced=lyrics_synced,
-            lyrics_unsynced=lyrics_unsynced,
+            lyrics_synced=lyrics_synced if embed_lyrics else "",
+            lyrics_unsynced=lyrics_unsynced if embed_lyrics else "",
             cover_data=cover_data if self._psetting(CTX_APPLE, "metadata_cover_embed", True) else None,
             mark_explicit=bool(self.settings.data.mark_explicit),
             metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
