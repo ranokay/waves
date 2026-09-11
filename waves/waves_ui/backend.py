@@ -17497,10 +17497,10 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadLyricsOnly(self, media_id: str) -> None:
-        """Fetch lyrics only, no audio: LYRICS ONLY beside DOWNLOAD.
+        """Fetch lyrics only, no audio: LYRICS beside DOWNLOAD.
 
         First-class action on album and artist pages plus the per-track
-        hover affordance, on found and saved music alike, both providers.
+        pair, on found and saved music alike, both providers.
         Honors the embed/sidecar matrix independently of audio: sidecars per
         the lyrics toggles, and an existing audio file gains the embed when
         the embed toggle is on.
@@ -17509,7 +17509,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadArtOnly(self, media_id: str) -> None:
-        """Fetch cover art only, no audio: ART ONLY beside DOWNLOAD.
+        """Fetch cover art only, no audio: COVER beside DOWNLOAD.
 
         Same placement and provider coverage as :meth:`downloadLyricsOnly`.
         Honors the art side of the matrix independently of audio.

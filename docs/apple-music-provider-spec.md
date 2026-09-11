@@ -179,7 +179,7 @@ Every download control is a **split button**: main face = one click with saved d
 
 ### 7.3 Standalone lyrics/art actions
 
-First-class buttons beside DOWNLOAD on album and artist pages ("LYRICS ONLY", "ART ONLY"); per-track as a compact hover affordance beside the track's split button. Both providers; they honor the embed/sidecar matrix (§9 of the [lyrics & art ticket](https://github.com/ranokay/waves/issues/10)) independently of audio, on found music and already-saved music alike.
+First-class buttons beside DOWNLOAD on album and artist pages ("LYRICS", "COVER"); per-track as a compact always-visible pair beside the track's split button (issue #70: appearing on hover reflowed the row). Both providers; they honor the embed/sidecar matrix (§9 of the [lyrics & art ticket](https://github.com/ranokay/waves/issues/10)) independently of audio, on found music and already-saved music alike.
 
 ### 7.4 Preview playback (decided during spec synthesis)
 
