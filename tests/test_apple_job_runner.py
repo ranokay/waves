@@ -145,6 +145,7 @@ class _FakeProvider:
     def __init__(self, fixture: Path | None = None):
         self.fixture = fixture
         self.fetched: list = []
+        self.tiers: list = []
         self.discarded: list = []
 
     def row_for(self, kind, item):
@@ -210,6 +211,7 @@ class _FakeProvider:
         staged = Path(str(self.fixture))
         assert staged.is_file()
         self.fetched.append(audio_type)
+        self.tiers.append(tier)
         return SimpleNamespace(
             local_file=str(staged),
             delivered={"tier": QualityTier.HIGH.value, "audio_type": str(audio_type)},
@@ -355,6 +357,42 @@ def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
     assert not any("WAVES_TIDAL" in key for key in tags)
     assert relay.pcts[-1] == 100.0
     assert provider.discarded == [str(staged)]
+
+
+@needs_ffmpeg
+def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkeypatch):
+    """The row's pinned ask reaches resolve_stream even when Settings disagree."""
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+
+    def _run(tag, settings_word, queued_word):
+        provider = _FakeProvider(fixture=staged)
+        stub = _bind(_stub(tmp_path / tag, provider))
+        stub.settings = _settings(tmp_path / tag, apple_quality_audio=settings_word)
+        stub._queue_index = {1: {"askQuality": queued_word, "quality": queued_word}}
+        relay = _Relay()
+        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+        summary = WavesBridge._run_apple_job(
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+        assert summary == ""
+        return provider
+
+    pinned_high = _run("a", "HI_RES_LOSSLESS", "HIGH")
+    assert pinned_high.tiers == [QualityTier.HIGH]
+    pinned_hires = _run("b", "HIGH", "HI_RES_LOSSLESS")
+    assert pinned_hires.tiers == [QualityTier.HI_RES_LOSSLESS]
 
 
 @needs_ffmpeg
