@@ -410,7 +410,9 @@ def test_wrapper_auth_state_is_never_an_exception():
     base = "http://127.0.0.1:51234"
     state = wrapper_auth_state(base, session=_WrapperSession())
     assert state["reachable"] is False and state["state"] == "" and state["error"]
+    assert state["logged_in"] is False
     assert wrapper_auth_state("", session=_WrapperSession())["reachable"] is False
+    assert wrapper_auth_state("", session=_WrapperSession())["logged_in"] is False
 
 
 def test_wrapper_auth_state_reports_logged_out_and_rejects_malformed():
@@ -426,6 +428,11 @@ def test_wrapper_auth_state_reports_logged_out_and_rejects_malformed():
     malformed = _WrapperSession(get={f"{base}/me": _WrapperResp(payload="not a dict")})
     result = wrapper_auth_state(base, session=malformed)
     assert result["reachable"] is True and result["state"] == "" and result["error"]
+    assert result["logged_in"] is False
+    absent = _WrapperSession(get={f"{base}/me": _WrapperResp(payload={})})
+    missing = wrapper_auth_state(base, session=absent)
+    assert missing["reachable"] is True and missing["state"] == ""
+    assert missing["logged_in"] is False
 
 
 def test_refresh_wrapper_auth_mirrors_onto_the_provider(tmp_path, monkeypatch):
@@ -453,6 +460,29 @@ def test_refresh_wrapper_auth_mirrors_onto_the_provider(tmp_path, monkeypatch):
     assert result["state"] == "authenticated"
     assert provider.wrapper_logged_in is True
     assert emitted, "the wizard's form re-read signal fires on a state change"
+
+
+def test_refresh_wrapper_auth_signals_error_text_changes(tmp_path, monkeypatch):
+    # Error text, not just the signed-in flip, drives the form's last-probe line.
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.providers["apple"] = SimpleNamespace(wrapper_logged_in=False)
+    stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
+    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
+    emitted = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+    results = iter(
+        [
+            {"reachable": False, "state": "", "logged_in": False, "account": "", "error": "Connection refused"},
+            {"reachable": False, "state": "", "logged_in": False, "account": "", "error": "timed out"},
+        ]
+    )
+    monkeypatch.setattr("waves.apple_runtime.wrapper_auth_state", lambda url, **kwargs: next(results))
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
+
+    stub._refresh_apple_wrapper_auth()
+    stub._refresh_apple_wrapper_auth()
+
+    assert len(emitted) == 2, "a changed probe error still re-reads the form"
 
 
 def test_wrapper_login_covers_success_two_factor_and_failure():
@@ -685,6 +715,7 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     stub._apple_runtime_ready = WavesBridge._apple_runtime_ready.__get__(stub, SimpleNamespace)
     stub._apple_needs_attention = WavesBridge._apple_needs_attention.__get__(stub, SimpleNamespace)
     stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
+    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub, SimpleNamespace)
     stub._apple_live_flags = WavesBridge._apple_live_flags.__get__(stub, SimpleNamespace)
     # GUI-thread callers read the cached probe, never a live subprocess:
     # tests pin a fresh absent cache instead of touching the machine's
@@ -1107,6 +1138,7 @@ def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):
     )
     stub._set_status = lambda text: seen.append(text)
     stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
+    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub, SimpleNamespace)
     stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub, SimpleNamespace)
     WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
     assert "setup" in seen
@@ -1149,6 +1181,7 @@ def test_wrapper_only_account_passes_the_setup_gate(tmp_path):
     )
     stub._set_status = lambda text: seen.append(text)
     stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
+    stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub, SimpleNamespace)
     stub.apple_wrapper_auth_state = lambda *a, **k: {
         "reachable": True,
         "state": "authenticated",

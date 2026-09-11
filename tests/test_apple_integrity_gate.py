@@ -377,6 +377,8 @@ def _bind(stub):
         "_apple_cover_bytes",
         "_apple_write_sidecars",
         "_apple_cookies_ready",
+        "_apple_account_ready",
+        "_apple_wrapper_signed_in",
         "_apple_quarantine_root",
         "_apple_quarantine_keep",
         "_apple_skiplist_get",

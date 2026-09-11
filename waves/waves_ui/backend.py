@@ -21052,6 +21052,17 @@ class WavesBridge(LibraryMixin, QObject):
         """Probe the wrapper guest's /me and store it for GUI-thread readers."""
         from waves.apple_runtime import wrapper_auth_state
 
+        def snapshot(payload) -> tuple:
+            """The /me fields a form re-read: any change re-signals."""
+            payload = payload if isinstance(payload, dict) else {}
+            return (
+                bool(payload.get("reachable")),
+                str(payload.get("state") or ""),
+                bool(payload.get("logged_in")),
+                str(payload.get("account") or ""),
+                str(payload.get("error") or ""),
+            )
+
         url = self._apple_wrapper_base()
         try:
             result = wrapper_auth_state(url, timeout=timeout)
@@ -21059,9 +21070,9 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Apple wrapper auth probe failed", exc_info=True)
             result = {"reachable": False, "state": "", "logged_in": False, "account": "", "error": ""}
         previous = getattr(self, "_apple_wrapper_auth_cache", None)
-        previous_signed_in = False
+        previous_snapshot = None
         if isinstance(previous, dict) and isinstance(previous.get("result"), dict):
-            previous_signed_in = bool(previous["result"].get("logged_in"))
+            previous_snapshot = snapshot(previous["result"])
         try:
             self._apple_wrapper_auth_cache = {"at": time.time(), "result": result}
         except Exception:
@@ -21070,7 +21081,7 @@ class WavesBridge(LibraryMixin, QObject):
         if provider is not None:
             with contextlib.suppress(Exception):
                 provider.wrapper_logged_in = bool(result.get("logged_in"))
-        if bool(result.get("logged_in")) != previous_signed_in:
+        if snapshot(result) != previous_snapshot:
             with contextlib.suppress(Exception):
                 self.appleWrapperAuthChanged.emit()
         return result
@@ -21245,13 +21256,7 @@ class WavesBridge(LibraryMixin, QObject):
                     needs_attention = True
         # The full tier's sign-in: a wrapper guest that answers /me as
         # authenticated needs no cookies file at all.
-        wrapper_ready = False
-        probe = getattr(self, "apple_wrapper_auth_state", None)
-        if callable(probe):
-            try:
-                wrapper_ready = bool((probe() or {}).get("logged_in"))
-            except Exception:
-                wrapper_ready = False
+        wrapper_ready = bool(self._apple_wrapper_signed_in())
         if not signed_in and wrapper_ready and self._apple_fetch_binary_ready():
             signed_in = True
         return {
@@ -21272,14 +21277,8 @@ class WavesBridge(LibraryMixin, QObject):
             path = str(getattr(data, "apple_cookies_path", "") or "")
         return bool(path) and pathlib.Path(path).expanduser().is_file()
 
-    def _apple_account_ready(self) -> bool:
-        """Whether an Apple download has an account to start with.
-
-        The cookies tier alone, or a wrapper guest that answered /me as
-        authenticated (the full tier needs no cookies file).
-        """
-        if self._apple_cookies_ready():
-            return True
+    def _apple_wrapper_signed_in(self) -> bool:
+        """Whether the cached wrapper probe says the guest is authenticated."""
         probe = getattr(self, "apple_wrapper_auth_state", None)
         if not callable(probe):
             return False
@@ -21288,6 +21287,16 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Apple wrapper auth read failed", exc_info=True)
             return False
+
+    def _apple_account_ready(self) -> bool:
+        """Whether an Apple download has an account to start with.
+
+        The cookies tier alone, or a wrapper guest that answered /me as
+        authenticated (the full tier needs no cookies file).
+        """
+        if self._apple_cookies_ready():
+            return True
+        return self._apple_wrapper_signed_in()
 
     @Slot("QVariant")
     def applySettings(self, values) -> None:

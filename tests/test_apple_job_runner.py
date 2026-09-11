@@ -303,6 +303,7 @@ def _bind(stub):
         "_apple_write_sidecars",
         "_apple_cookies_ready",
         "_apple_account_ready",
+        "_apple_wrapper_signed_in",
         "_run_apple_job",
     ):
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
