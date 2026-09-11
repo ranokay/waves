@@ -172,6 +172,9 @@ class _FakeProvider:
     def has_atmos(self, item):
         return True
 
+    def fetch_lyrics(self, track):
+        return "[00:01.00]timed", "plain"
+
     def track_facts(self, raw):
         return {
             "item_id": "apple:song-1",
@@ -292,6 +295,7 @@ def _bind(stub):
         "_apple_probe",
         "_apple_place_file",
         "_apple_lyrics",
+        "_apple_lyrics_full",
         "_apple_wants_cover",
         "_apple_cover_bytes",
         "_apple_write_sidecars",
@@ -396,6 +400,55 @@ def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkey
     assert pinned_hires.tiers == [QualityTier.HI_RES_LOSSLESS]
     agreed = _run("c", "HIGH", "HIGH")
     assert agreed.tiers == [QualityTier.HIGH]
+
+
+@needs_ffmpeg
+def test_embed_toggle_governs_lyrics_embedding(tmp_path, monkeypatch):
+    """Sidecar-only lyrics land as files; the audio embeds only when on."""
+    import mutagen.mp4
+
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+
+    def _run(tag, *, embed, sidecar):
+        provider = _FakeProvider(fixture=staged)
+        stub = _bind(_stub(tmp_path / tag, provider))
+        stub.settings = _settings(
+            tmp_path / tag,
+            apple_lyrics_embed=embed,
+            apple_lyrics_file=sidecar,
+            apple_lyrics_word_timed=False,
+            apple_lyrics_ttml_file=False,
+            apple_lyrics_prefer_lrclib=False,
+        )
+        relay = _Relay()
+        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+        summary = WavesBridge._run_apple_job(
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+        assert summary == ""
+        return tmp_path / tag / "Aphex Twin" / "Xtal.m4a"
+
+    filed_only = _run("a", embed=False, sidecar=True)
+    tags = mutagen.mp4.MP4(str(filed_only)).tags
+    assert not tags or "\xa9lyr" not in tags
+    assert (filed_only.parent / "Xtal.lrc").read_text() == "[00:01.00]timed"
+
+    embedded_only = _run("b", embed=True, sidecar=False)
+    tags = mutagen.mp4.MP4(str(embedded_only)).tags
+    assert tags["\xa9lyr"][0] == "[00:01.00]timed"
+    assert not (embedded_only.parent / "Xtal.lrc").exists()
 
 
 @needs_ffmpeg
