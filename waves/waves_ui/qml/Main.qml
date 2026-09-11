@@ -12937,7 +12937,8 @@ ApplicationWindow {
                     // ---- Search + sort ---------------------------------------------
                     RowLayout {
                         Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 10; spacing: 10
-                        enabled: root.signedIn; opacity: root.signedIn ? 1 : 0.5
+                        enabled: root.signedIn || root.appleEnabled
+                        opacity: (root.signedIn || root.appleEnabled) ? 1 : 0.5
                         Rectangle {
                             id: searchBox
                             Layout.fillWidth: true; implicitHeight: 44; radius: 8; color: root.surface2
@@ -12997,7 +12998,7 @@ ApplicationWindow {
                                 TextField {
                                     id: searchField
                                     Layout.fillWidth: true
-                                    placeholderText: "Search, or paste a TIDAL link…"
+                                    placeholderText: "Search, or paste a TIDAL or Apple Music link…"
                                     color: searchDecoder.decoding ? root.accent : root.textHi
                                     placeholderTextColor: root.textLo; font.pixelSize: 15
                                     background: Rectangle { color: "transparent" }
