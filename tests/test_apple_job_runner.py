@@ -212,9 +212,10 @@ class _FakeProvider:
         assert staged.is_file()
         self.fetched.append(audio_type)
         self.tiers.append(tier)
+        delivered_tier = str(getattr(tier, "value", tier) or QualityTier.HIGH.value)
         return SimpleNamespace(
             local_file=str(staged),
-            delivered={"tier": QualityTier.HIGH.value, "audio_type": str(audio_type)},
+            delivered={"tier": delivered_tier, "audio_type": str(audio_type)},
             codecs="mp4a.40.2",
         )
 
@@ -393,6 +394,8 @@ def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkey
     assert pinned_high.tiers == [QualityTier.HIGH]
     pinned_hires = _run("b", "HIGH", "HI_RES_LOSSLESS")
     assert pinned_hires.tiers == [QualityTier.HI_RES_LOSSLESS]
+    agreed = _run("c", "HIGH", "HIGH")
+    assert agreed.tiers == [QualityTier.HIGH]
 
 
 @needs_ffmpeg
@@ -782,9 +785,11 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     _tone(staged)
     provider = _FakeProvider(fixture=staged)
     calls = []
+    tiers = []
 
     def flaky_resolve(raw, tier, audio_type):
         calls.append(audio_type)
+        tiers.append(tier)
         if len(calls) == 1:
             raise RuntimeError("HTTP 429 too many requests")
         return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
@@ -793,6 +798,10 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     provider.classify_refusal = lambda exc: _RealProvider.classify_refusal(provider, exc)
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
+    # The queue pinned HIGH while Settings asks hi-res: both the first
+    # attempt and the throttle retry must ask the pinned tier.
+    stub.settings = _settings(base, apple_quality_audio="HI_RES_LOSSLESS")
+    stub._queue_index = {1: {"askQuality": "HIGH", "quality": "HIGH"}}
     stub._apple_sleep_abortable = lambda *a: True
     stub.statuses = []
     stub._set_status = stub.statuses.append
@@ -805,6 +814,7 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
 
     assert summary == ""
     assert len(calls) == 2
+    assert tiers == [QualityTier.HIGH, QualityTier.HIGH]
     assert next(ev for ev in relay.events if ev.get("status") == "done")
 
 

@@ -12836,6 +12836,10 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_audio_type(self):
         return AudioType.ATMOS if self._apple_wants_atmos() else AudioType.STEREO
 
+    def _apple_setting_tier(self):
+        """The Apple quality setting folded onto the ladder, or None."""
+        return tier_from_word(str(self.settings.data.apple_quality_audio))
+
     def _apple_target_rank(self, pinned=None) -> int:
         """Rank of the audio quality an Apple run targets: the row's pinned
         rung, else the Apple setting. Mirrors _target_quality_rank, which
@@ -12915,7 +12919,7 @@ class WavesBridge(LibraryMixin, QObject):
         if ask_tier is None:
             # A row that pinned nothing (legacy or unreadable) fetches at the
             # setting, read once so the whole run shares one request.
-            ask_tier = tier_from_word(str(self.settings.data.apple_quality_audio))
+            ask_tier = self._apple_setting_tier()
         try:
             ceiling_probe = provider.advertised_ceiling(None)
         except Exception:
@@ -13744,7 +13748,7 @@ class WavesBridge(LibraryMixin, QObject):
         num_volumes: int,
         audio_type,
         requested_rank: int,
-        requested_tier=None,
+        requested_tier: QualityTier | None,
         ceiling_rank: int,
         force: bool,
         owned_path: str | None,
@@ -13831,18 +13835,12 @@ class WavesBridge(LibraryMixin, QObject):
                         shutil.rmtree(last_staged.parent, ignore_errors=True)
                 last_staged = None
 
-        # The pinned ask is the request for the whole job; the setting stands
-        # only for a caller that pinned none.
-        tier = (
-            requested_tier
-            if requested_tier is not None
-            else tier_from_word(str(self.settings.data.apple_quality_audio))
-        )
+        # Every attempt fetches at the row's pinned ask, never the live setting.
         while True:
             info = None
             try:
                 try:
-                    info = provider.resolve_stream(raw, tier, audio_type)
+                    info = provider.resolve_stream(raw, requested_tier, audio_type)
                 except Exception as resolve_exc:
                     # A refusal is TIDAL-vocabulary for "gone": kept out of the fail
                     # count so one delisted track cannot fail its whole album.
