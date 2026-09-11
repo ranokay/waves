@@ -281,6 +281,7 @@ def _bind(stub):
         "_apple_audio_type",
         "_apple_wants_atmos",
         "_apple_target_rank",
+        "_apple_options",
         "_apple_emit_progress",
         "_apple_gate_track",
         "_apple_track_relative",
@@ -449,6 +450,81 @@ def test_embed_toggle_governs_lyrics_embedding(tmp_path, monkeypatch):
     tags = mutagen.mp4.MP4(str(embedded_only)).tags
     assert tags["\xa9lyr"][0] == "[00:01.00]timed"
     assert not (embedded_only.parent / "Xtal.lrc").exists()
+
+
+@needs_ffmpeg
+def test_chooser_toggles_layer_over_settings_for_one_job(tmp_path, monkeypatch):
+    """A job spec's per-click toggles win over the contradicting Settings."""
+    import mutagen.mp4
+
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    # Settings file the sidecar and skip the embed; the click asks the opposite.
+    stub.settings = _settings(
+        base,
+        apple_lyrics_embed=False,
+        apple_lyrics_file=True,
+        apple_lyrics_word_timed=False,
+        apple_lyrics_ttml_file=False,
+        apple_lyrics_prefer_lrclib=False,
+    )
+    relay = _Relay()
+    spec = SimpleNamespace(
+        kind="track",
+        collection=False,
+        media_id="apple:song-1",
+        chooser_toggles={"lyrics_embed": True, "lyrics_file": False},
+    )
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    landed = base / "Aphex Twin" / "Xtal.m4a"
+    assert mutagen.mp4.MP4(str(landed)).tags["\xa9lyr"][0] == "[00:01.00]timed"
+    assert not (landed.parent / "Xtal.lrc").exists()
+
+
+def test_apple_folder_hold_replays_with_the_same_toggle_pins():
+    """A held Apple job replays the click's toggles, not Settings (S15)."""
+    calls: list = []
+    provider = SimpleNamespace(row_for=lambda kind, obj: {"id": "apple:song-1", "title": "Xtal"})
+    stub = SimpleNamespace(
+        providers={CTX_APPLE: provider},
+        _download_apple=lambda *a, **k: calls.append(k),
+        # The gate stashes the replay and reports a hold.
+        _gate_reachability=lambda retry, media_id: (retry(), False)[1],
+        downloadState=_Signal(),
+        _set_queue_status=lambda *a, **k: None,
+        _bump_download_groups=lambda *a, **k: None,
+        _job_aborts={7: Event()},
+        _release_job_signals=lambda qid: None,
+        _job_dls={7: object()},
+        _remove_row=lambda qid: None,
+        _emit_queue=lambda: None,
+    )
+    stub._apple_job_body = WavesBridge._apple_job_body.__get__(stub)
+    spec = SimpleNamespace(
+        kind="track",
+        file_template="{artist_name}/{track_title}",
+        collection=False,
+        media_id="apple:song-1",
+        is_retry=False,
+        chooser_toggles={"lyrics_embed": True},
+    )
+
+    WavesBridge._apple_job_body(stub, 7, spec, object(), signals=None, job_abort=Event(), row_ask=None, name="Xtal")
+
+    assert calls and calls[0]["chooser_toggles"] == {"lyrics_embed": True}
 
 
 @needs_ffmpeg

@@ -122,6 +122,7 @@ def _bridge(**over):
         "_chooser_take_refetch",
         "_chooser_drop_refetch",
         "_chooser_ask_for",
+        "_chooser_toggle_pins",
         "downloadWithChooser",
         "_chooser_confirm_status",
         "_download_apple_with_chooser",
@@ -323,14 +324,21 @@ def test_download_with_chooser_parks_pins_across_a_refetch(monkeypatch):
     b = _bridge(tidal_quality_audio="HIGH")
     _bind(b, "_on_media_refetched")
     # Cold cache: the click parks instead of queueing.
-    b.downloadWithChooser("t1", "track", "LOSSLESS", "stereo")
+    b.downloadWithChooser("t1", "track", "LOSSLESS", "stereo", {"lyrics_embed": True, "cover_album_file": False})
     assert b._queue == []
-    assert b._chooser_refetch_pins[("track", "t1")] == ("track", "LOSSLESS", "stereo")
+    assert b._chooser_refetch_pins[("track", "t1")] == (
+        "track",
+        "LOSSLESS",
+        "stereo",
+        {"lyrics_embed": True, "cover_album_file": False},
+    )
     # The fetch lands: replay queues at the parked pins, not Settings.
     b._objs["track"]["t1"] = _track("t1")
     b._refetch_inflight.discard(("track", "t1"))
     b._on_media_refetched("track", "t1")
     assert (b._queue[-1]["askQuality"], b._queue[-1]["quality"]) == ("LOSSLESS", "LOSSLESS")
+    assert b._queue[-1]["askToggles"] == {"lyrics_embed": True, "cover_album_file": False}
+    assert b._job_specs[b._queue[-1]["qid"]].chooser_toggles == {"lyrics_embed": True, "cover_album_file": False}
     assert ("track", "t1") not in b._chooser_refetch_pins
 
 
@@ -341,9 +349,9 @@ def test_download_with_chooser_apple_parks_pins_across_a_refetch():
     refetched = []
     b._refetch_apple_for_download = lambda bucket, mid: refetched.append((bucket, mid))
     _bind(b, "_download_apple_with_chooser")
-    b.downloadWithChooser("apple:456", "track", "HI-RES", "both")
+    b.downloadWithChooser("apple:456", "track", "HI-RES", "both", {"lyrics_embed": True})
     assert refetched == [("track", "apple:456")]
-    assert b._chooser_refetch_pins[("track", "apple:456")] == ("track", "HI-RES", "both")
+    assert b._chooser_refetch_pins[("track", "apple:456")] == ("track", "HI-RES", "both", {"lyrics_embed": True})
 
 
 def test_download_with_chooser_keeps_the_gate_message_when_nothing_queued(monkeypatch):
@@ -365,3 +373,82 @@ def test_download_with_chooser_keeps_the_gate_message_when_nothing_queued(monkey
     assert getattr(b, "_last_status", "") != ""
     assert "Queued" not in str(getattr(b, "_last_status", ""))
     assert b.downloadState.calls[-1] == ("t1", "")
+
+
+def test_download_with_chooser_carries_toggles_into_the_job(monkeypatch):
+    monkeypatch.setattr(backend, "_image", lambda obj, size: "")
+    monkeypatch.setattr(backend, "_quality_label", lambda obj, provider=None: "HI-RES")
+    monkeypatch.setattr(backend, "_primary_artist_name", lambda obj: "Artist")
+    monkeypatch.setattr(backend, "_track_count", lambda obj: 1)
+    monkeypatch.setattr(backend, "_offers_both", lambda obj: False)
+    monkeypatch.setattr(backend, "_atmos_only", lambda obj: False)
+    monkeypatch.setattr(backend, "_has_atmos", lambda obj: False)
+    monkeypatch.setattr(backend, "name_builder_title", lambda obj: "Song")
+    b = _bridge(tidal_quality_audio="HIGH")
+    b._objs["track"]["t1"] = _track("t1")
+    b.downloadWithChooser(
+        "t1", "track", "HIGH", "stereo", {"lyrics_embed": True, "lyrics_file": False, "cover_album_file": False}
+    )
+    row = b._queue[-1]
+    assert row["askToggles"] == {"lyrics_embed": True, "lyrics_file": False, "cover_album_file": False}
+    assert b._job_specs[row["qid"]].chooser_toggles == row["askToggles"]
+    assert b._chooser_toggle_pins({"lyrics_embed": True, "bogus": True}) == {"lyrics_embed": True}
+    assert b._chooser_toggle_pins("nonsense") == {}
+
+
+def test_chooser_toggle_pins_win_over_provider_settings_for_the_job():
+    from waves.download import Download
+
+    dl = Download.__new__(Download)
+    dl.settings = SimpleNamespace(data=_settings(lyrics_embed=False, cover_album_file=True))
+    dl.provider = SimpleNamespace(id=CTX_TIDAL)
+    dl._chooser_toggles = {"lyrics_embed": True, "cover_album_file": False}
+
+    assert dl._psetting("lyrics_embed", False) is True
+    assert dl._psetting("cover_album_file", True) is False
+    assert dl._psetting("lyrics_file", False) is False, "an unpinned option still reads Settings"
+
+    dl._chooser_toggles = {}
+    assert dl._psetting("lyrics_embed", False) is False
+
+
+def test_a_second_click_differing_only_in_toggles_is_not_a_duplicate(monkeypatch):
+    monkeypatch.setattr(backend, "_image", lambda obj, size: "")
+    monkeypatch.setattr(backend, "_quality_label", lambda obj, provider=None: "HI-RES")
+    monkeypatch.setattr(backend, "_primary_artist_name", lambda obj: "Artist")
+    monkeypatch.setattr(backend, "_track_count", lambda obj: 1)
+    monkeypatch.setattr(backend, "_offers_both", lambda obj: False)
+    monkeypatch.setattr(backend, "_atmos_only", lambda obj: False)
+    monkeypatch.setattr(backend, "_has_atmos", lambda obj: False)
+    monkeypatch.setattr(backend, "name_builder_title", lambda obj: "Song")
+    b = _bridge(tidal_quality_audio="HIGH")
+    b._objs["track"]["t1"] = _track("t1")
+
+    b.downloadWithChooser("t1", "track", "HIGH", "stereo", {"lyrics_embed": True})
+    b.downloadWithChooser("t1", "track", "HIGH", "stereo", {"lyrics_embed": False})
+    assert len(b._queue) == 2, "a different per-click ask keeps its own row"
+
+    b.downloadWithChooser("t1", "track", "HIGH", "stereo", {"lyrics_embed": True})
+    assert len(b._queue) == 2, "the identical ask is still a duplicate"
+
+
+def test_retry_reenters_with_the_rows_toggle_pins():
+    b = _bridge()
+    _bind(b, "_start_retry")
+    seen = {}
+    b._download = lambda *a, **k: seen.update(k)
+    item = {
+        "type": "track",
+        "name": "Song",
+        "template": "{tmpl}",
+        "collection": False,
+        "media_id": "t1",
+        "askQuality": "HIGH",
+        "quality": "HIGH",
+        "audioType": "",
+        "askToggles": {"lyrics_embed": True},
+    }
+
+    b._start_retry(item, _track("t1"))
+
+    assert seen.get("chooser_toggles") == {"lyrics_embed": True}

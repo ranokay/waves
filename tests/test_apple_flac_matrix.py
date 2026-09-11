@@ -317,6 +317,7 @@ def _apple_stub(base: Path, provider, **overrides):
     )
     for name in (
         "_apple_guess_ext",
+        "_apple_options",
         "_apple_wants_flac",
         "_apple_flac_scope_all",
         "_apple_flac_mode",

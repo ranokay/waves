@@ -2607,6 +2607,16 @@ def _date_added(obj) -> str:
         return str(dt)
 
 
+# The lyrics/art quick toggles the Chooser pins per click and SET AS DEFAULTS
+# writes to the row provider's mirrors, as the providers' base keys.
+_CHOOSER_TOGGLE_KEYS = (
+    "lyrics_embed",
+    "lyrics_file",
+    "lyrics_ttml_file",
+    "metadata_cover_embed",
+    "cover_album_file",
+)
+
 # A per-item quality choice can also hold "DEFAULT": the one non-tier that
 # pins the Settings tier on a track whose album carries a different choice
 # (see _ask_quality_for). Every real spelling a choice, row or setting can
@@ -3211,10 +3221,32 @@ class _JobSpec:
     # counting or releasing is needed and a dispatch that never runs a job
     # leaks nothing (the flag dies with its spec).
     is_retry: bool = False
+    # Per-click Chooser lyrics/art pins (base keys, booleans), or None for a
+    # plain click: the job reads these over the provider's stored options.
+    chooser_toggles: dict | None = None
 
     def raw_object_id(self) -> str:
         """The id inside the namespace, as the provider's get_object wants it."""
         return self.object_id.partition(":")[2]
+
+
+class _JobOptions:
+    """The lyrics/art options one job runs with: per-click pins over Settings.
+
+    A Chooser click pins its quick toggles for that click only; every other
+    job leaves the pins empty and reads the provider's stored options. The
+    fallback is the bridge's ``_psetting``, so one reader serves both.
+    """
+
+    def __init__(self, fallback, provider_id: str, pinned: dict | None = None) -> None:
+        self._fallback = fallback
+        self._provider_id = str(provider_id or "")
+        self._pinned = {str(key): value for key, value in dict(pinned or {}).items()}
+
+    def option(self, key: str, default=None):
+        if key in self._pinned:
+            return self._pinned[key]
+        return self._fallback(self._provider_id, key, default)
 
 
 def _norm_track_title(name: str) -> str:
@@ -9126,19 +9158,12 @@ class WavesBridge(LibraryMixin, QObject):
         # mirrors (issue #61); the shared keys stay legacy carriers. An
         # explicit mirror always wins over its shared spelling.
         provider_prefix = "apple_" if provider_id == CTX_APPLE else "tidal_"
-        _toggle_bases = (
-            "lyrics_embed",
-            "lyrics_file",
-            "lyrics_ttml_file",
-            "metadata_cover_embed",
-            "cover_album_file",
-        )
         for _prefix in ("tidal_", "apple_"):
-            for _base in _toggle_bases:
+            for _base in _CHOOSER_TOGGLE_KEYS:
                 _key = _prefix + _base
                 if _key in incoming and _key not in staged:
                     staged[_key] = bool(incoming[_key])
-        for _base in _toggle_bases:
+        for _base in _CHOOSER_TOGGLE_KEYS:
             _mirror = provider_prefix + _base
             if _mirror not in staged and _base in incoming:
                 staged[_mirror] = bool(incoming[_base])
@@ -9161,7 +9186,9 @@ class WavesBridge(LibraryMixin, QObject):
         text = str(audio_type or "").strip().lower()
         return text if text in ("stereo", "atmos", "both") else None
 
-    def _chooser_park_refetch(self, bucket: str, media_id: str, kind: str, tier: str, audio_type: str) -> None:
+    def _chooser_park_refetch(
+        self, bucket: str, media_id: str, kind: str, tier: str, audio_type: str, toggles: dict | None = None
+    ) -> None:
         """Park one Chooser click while its object re-fetches.
 
         Keyed (bucket, id) so _on_media_refetched replays this click instead
@@ -9175,6 +9202,7 @@ class WavesBridge(LibraryMixin, QObject):
                 str(kind or ""),
                 str(tier or ""),
                 str(audio_type or ""),
+                dict(toggles or {}),
             )
         except Exception:
             logger.debug("Could not park a Chooser refetch", exc_info=True)
@@ -9210,22 +9238,42 @@ class WavesBridge(LibraryMixin, QObject):
             return None
         return (str(tier.value), _tier_word(str(tier.value)))
 
-    @Slot(str, str, str, str)
-    def downloadWithChooser(self, media_id: str, kind: str, tier: str = "", audio_type: str = "") -> None:
+    def _chooser_toggle_pins(self, values) -> dict:
+        """The five lyrics/art quick toggles from a Chooser click, base-keyed.
+
+        Unknown keys are ignored and each present toggle is coerced to a
+        boolean, so an empty mapping means the click pinned nothing.
+        """
+        if hasattr(values, "toVariant"):
+            try:
+                values = values.toVariant()
+            except Exception:
+                values = None
+        incoming = values if isinstance(values, dict) else {}
+        pins: dict = {}
+        for key in _CHOOSER_TOGGLE_KEYS:
+            if key in incoming:
+                pins[key] = bool(incoming[key])
+        return pins
+
+    @Slot(str, str, str, str, "QVariant")
+    def downloadWithChooser(self, media_id: str, kind: str, tier: str = "", audio_type: str = "", toggles=None) -> None:
         """DOWNLOAD from the Chooser popover: that click only, never stored.
 
         tier is a UI word (HI-RES/LOSSLESS/HIGH/LOW); audio_type is
-        stereo/atmos/both ("" follows Settings). Unsupported kinds fall back
+        stereo/atmos/both ("" follows Settings); toggles are the five
+        lyrics/art quick choices for this click. Unsupported kinds fall back
         to the row's plain download slot."""
         mid = str(media_id or "")
         k = str(kind or "").strip().lower()
         if not mid or not k:
             return
+        pins = self._chooser_toggle_pins(toggles)
         provider_id = self._chooser_provider_of(mid)
         ask = self._chooser_ask_for(provider_id, tier)
         audio = self._chooser_normalize_audio(audio_type)
         if provider_id == CTX_APPLE:
-            self._download_apple_with_chooser(mid, k, ask, audio)
+            self._download_apple_with_chooser(mid, k, ask, audio, pins)
             return
         # TIDAL kinds with per-click support; bulk sweeps keep Settings.
         templates = {
@@ -9239,7 +9287,7 @@ class WavesBridge(LibraryMixin, QObject):
             collection, template = templates[k]
             obj = (getattr(self, "_objs", None) or {}).get(k, {}).get(mid)
             if obj is None:
-                self._chooser_park_refetch(k, mid, k, tier, audio_type)
+                self._chooser_park_refetch(k, mid, k, tier, audio_type, pins)
                 self._refetch_for_download(k, mid)
                 return
             plan = (getattr(self, "_merge_plans", None) or {}).get(mid) if k == "album" else None
@@ -9253,6 +9301,7 @@ class WavesBridge(LibraryMixin, QObject):
                 merge_plan=plan,
                 chooser_ask=ask,
                 chooser_audio=audio,
+                chooser_toggles=pins,
             )
             if queued:
                 files = 1 if (audio != "both" or k == "video") else 2
@@ -9300,6 +9349,7 @@ class WavesBridge(LibraryMixin, QObject):
         ask_quality: str | None = None,
         ask_tier: str | None = None,
         audio_type: str | None = None,
+        ask_toggles: dict | None = None,
     ) -> int:
         # A per-item quality choice arrives as both halves of the ask (the
         # Waves tier string the job pins, the word the drawer states); without
@@ -9377,6 +9427,11 @@ class WavesBridge(LibraryMixin, QObject):
             # badged ATMOS from its expected/quality words; both rows carry
             # their own progress, cancel, retry and file link via their qids.
             "audioType": atype or "",
+            # The per-click Chooser lyrics/art pins this row was queued with
+            # (base keys, booleans). Empty for a plain click: the job then
+            # reads the provider's stored options. Pinned like the quality so
+            # a retry asks with the same options.
+            "askToggles": dict(ask_toggles or {}),
         }
         with self._queue_lock:
             self._queue.append(row)
@@ -11468,6 +11523,7 @@ class WavesBridge(LibraryMixin, QObject):
         pinned_quality=None,
         audio_type: str | None = None,
         base_template: str | None = None,
+        chooser_toggles: dict | None = None,
     ) -> Download:
         self._resolve_ffmpeg()
         progress_gui = ProgressBars(
@@ -11505,6 +11561,7 @@ class WavesBridge(LibraryMixin, QObject):
             force_redownload=force_redownload,
             audio_type=audio_type,
             base_template=base_template,
+            chooser_toggles=chooser_toggles,
         )
         self._warn_if_ffmpeg_missing(dl)
         return dl
@@ -12201,15 +12258,17 @@ class WavesBridge(LibraryMixin, QObject):
         keep_ask: tuple | None = None,
         chooser_ask: tuple | None = None,
         chooser_audio: str | None = None,
+        chooser_toggles: dict | None = None,
     ) -> bool:
         """``keep_ask`` = (askQuality, tier word) of a row being RETRIED: the
         retry asks at what that row asked, not at a choice or setting that
         has moved since, and spends no choice (the row already had its own
         ask). Every fresh click leaves it None.
 
-        ``chooser_ask``/``chooser_audio`` pin one Chooser click (issue #35):
-        that click only, never stored. ``chooser_ask`` is (askQuality, tier
-        word) like keep_ask; ``chooser_audio`` is stereo/atmos/both.
+        ``chooser_ask``/``chooser_audio``/``chooser_toggles`` pin one Chooser
+        click: that click only, never stored. ``chooser_ask`` is (askQuality,
+        tier word) like keep_ask; ``chooser_audio`` is stereo/atmos/both;
+        ``chooser_toggles`` are the lyrics/art pins.
 
         Returns True when a row was queued (or the identical row was already
         on its way and acknowledged); False when a gate held or blocked the
@@ -12247,6 +12306,7 @@ class WavesBridge(LibraryMixin, QObject):
                     keep_ask=keep_ask,
                     chooser_ask=chooser_ask,
                     chooser_audio=chooser_audio,
+                    chooser_toggles=chooser_toggles,
                 ),
             )
             return False
@@ -12263,6 +12323,7 @@ class WavesBridge(LibraryMixin, QObject):
                 keep_ask=keep_ask,
                 chooser_ask=chooser_ask,
                 chooser_audio=chooser_audio,
+                chooser_toggles=chooser_toggles,
             ),
         ):
             return False
@@ -12366,6 +12427,7 @@ class WavesBridge(LibraryMixin, QObject):
                         and it.get("template") == row_template
                         and it.get("askQuality") == ask
                         and str(it.get("audioType") or "") == (row_atype or "")
+                        and dict(it.get("askToggles") or {}) == dict(chooser_toggles or {})
                         for it in self._queue
                     )
                 if dup:
@@ -12383,6 +12445,7 @@ class WavesBridge(LibraryMixin, QObject):
                 ask_quality=ask,
                 ask_tier=row_tier_word,
                 audio_type=row_atype,
+                ask_toggles=chooser_toggles,
             )
             queued_any = True
             # Acknowledge the click on the button itself, immediately: behind a
@@ -12424,6 +12487,7 @@ class WavesBridge(LibraryMixin, QObject):
                 merge_plan=merge_plan,
                 audio_type=row_atype,
                 base_template=base_for_spec,
+                chooser_toggles=dict(chooser_toggles or {}),
             )
             self._pending_qids.append(qid)
         if not queued_any:
@@ -12516,6 +12580,7 @@ class WavesBridge(LibraryMixin, QObject):
         is_retry: bool = False,
         chooser_ask: tuple | None = None,
         chooser_audio: str | None = None,
+        chooser_toggles: dict | None = None,
     ) -> bool:
         """Queue one Apple track or collection. The TIDAL _download's shape
         for the parts that are provider-blind (folder gate, ffmpeg gate,
@@ -12581,6 +12646,7 @@ class WavesBridge(LibraryMixin, QObject):
                     is_retry=is_retry,
                     chooser_ask=chooser_ask,
                     chooser_audio=chooser_audio,
+                    chooser_toggles=chooser_toggles,
                 ),
             )
             return False
@@ -12597,6 +12663,7 @@ class WavesBridge(LibraryMixin, QObject):
                 is_retry=is_retry,
                 chooser_ask=chooser_ask,
                 chooser_audio=chooser_audio,
+                chooser_toggles=chooser_toggles,
             ),
         ):
             return False
@@ -12718,6 +12785,7 @@ class WavesBridge(LibraryMixin, QObject):
                         and it.get("template") == row_template
                         and it.get("askQuality") == ask
                         and str(it.get("audioType") or "") == (row_atype or "")
+                        and dict(it.get("askToggles") or {}) == dict(chooser_toggles or {})
                         for it in self._queue
                     )
                 if dup:
@@ -12735,6 +12803,7 @@ class WavesBridge(LibraryMixin, QObject):
                 ask_quality=ask,
                 ask_tier=row_tier_word,
                 audio_type=row_atype,
+                ask_toggles=chooser_toggles,
             )
             queued_any = True
             # The row's kept object for retries: Apple rows never enter _objs,
@@ -12752,6 +12821,7 @@ class WavesBridge(LibraryMixin, QObject):
                 audio_type=row_atype,
                 base_template=base_for_spec,
                 is_retry=is_retry,
+                chooser_toggles=dict(chooser_toggles or {}),
             )
             self._pending_qids.append(qid)
         if not queued_any:
@@ -12761,12 +12831,13 @@ class WavesBridge(LibraryMixin, QObject):
         self._pump_queue()
         return True
 
-    def _download_apple_with_chooser(self, media_id: str, kind: str, ask: tuple | None, audio: str | None) -> None:
+    def _download_apple_with_chooser(
+        self, media_id: str, kind: str, ask: tuple | None, audio: str | None, toggles: dict | None = None
+    ) -> None:
         """Route a Chooser Apple click to the cached row, then _download_apple.
 
         Unknown rows re-fetch first (the _download_apple_collection dance);
-        the ask/audio pins ride as chooser_ask/chooser_audio for that click
-        only."""
+        the ask/audio/toggle pins ride for that click only."""
         provider = self.providers.get(CTX_APPLE)
         if provider is None:
             return
@@ -12776,7 +12847,7 @@ class WavesBridge(LibraryMixin, QObject):
         if raw_kind == "track":
             raw = provider.cached("track", media_id) if hasattr(provider, "cached") else None
             if raw is None:
-                self._chooser_park_refetch("track", media_id, raw_kind, tier_word, audio_word)
+                self._chooser_park_refetch("track", media_id, raw_kind, tier_word, audio_word, toggles)
                 self._refetch_apple_for_download("track", media_id)
                 return
             row = provider.row_for("track", raw)
@@ -12789,6 +12860,7 @@ class WavesBridge(LibraryMixin, QObject):
                 media_id,
                 chooser_ask=ask,
                 chooser_audio=audio,
+                chooser_toggles=toggles,
             )
             if queued:
                 files = 1 if audio != "both" else 2
@@ -12797,7 +12869,7 @@ class WavesBridge(LibraryMixin, QObject):
         elif raw_kind in ("album", "playlist"):
             raw = provider.cached(raw_kind, media_id) if hasattr(provider, "cached") else None
             if raw is None:
-                self._chooser_park_refetch(raw_kind, media_id, raw_kind, tier_word, audio_word)
+                self._chooser_park_refetch(raw_kind, media_id, raw_kind, tier_word, audio_word, toggles)
                 self._refetch_apple_for_download(raw_kind, media_id)
                 return
             row = provider.row_for(raw_kind, raw)
@@ -12811,6 +12883,7 @@ class WavesBridge(LibraryMixin, QObject):
                 media_id,
                 chooser_ask=ask,
                 chooser_audio=audio,
+                chooser_toggles=toggles,
             )
             if queued:
                 files = 1 if audio != "both" else 2
@@ -12839,6 +12912,11 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_setting_tier(self):
         """The Apple quality setting folded onto the ladder, or None."""
         return tier_from_word(str(self.settings.data.apple_quality_audio))
+
+    def _apple_options(self, pinned: dict | None = None) -> _JobOptions:
+        """The lyrics/art options one Apple job runs with: per-click Chooser
+        pins over the provider's stored options."""
+        return _JobOptions(self._psetting, CTX_APPLE, pinned)
 
     def _apple_target_rank(self, pinned=None) -> int:
         """Rank of the audio quality an Apple run targets: the row's pinned
@@ -12976,6 +13054,9 @@ class WavesBridge(LibraryMixin, QObject):
         ok = fail = skipped = unavailable = quarantined = 0
         failed_names: list[str] = []
         landed: list = []
+        # The lyrics/art options this job runs with: the row's per-click
+        # Chooser pins when it has any, the provider's stored options otherwise.
+        options = self._apple_options(getattr(spec, "chooser_toggles", None))
         # Session supervision (issue #33, spec §3): the sidecar starts lazily
         # on the first Apple download that needs it. Cookies-tier asks (HIGH)
         # never touch it; only a LOSSLESS-or-better ask waits here.
@@ -13105,6 +13186,7 @@ class WavesBridge(LibraryMixin, QObject):
                             owned_path=owned_path,
                             job_abort=job_abort,
                             signals=signals,
+                            options=options,
                         )
                         break
                     except Exception as exc:
@@ -13754,6 +13836,7 @@ class WavesBridge(LibraryMixin, QObject):
         owned_path: str | None,
         job_abort,
         signals=None,
+        options: _JobOptions | None = None,
     ) -> dict:
         """Fetch, verify, place, tag and sidecar one Apple track.
 
@@ -13779,6 +13862,7 @@ class WavesBridge(LibraryMixin, QObject):
             parse_encoded_date,
         )
 
+        options = options or self._apple_options()
         track_id = str(row.get("id"))
         raw_id = track_id.removeprefix(f"{CTX_APPLE}:")
         raw = provider.get_object("track", raw_id)
@@ -14078,22 +14162,24 @@ class WavesBridge(LibraryMixin, QObject):
                 break
         full = getattr(self, "_apple_lyrics_full", None)
         if callable(full):
-            lyrics_synced, lyrics_unsynced, lyrics_ttml = full(provider, row, facts)
+            lyrics_synced, lyrics_unsynced, lyrics_ttml = full(provider, row, facts, options=options)
         else:
             # Old test stubs predate the TTML verbatim: two-tuple only.
-            lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts)
+            lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts, options=options)
             lyrics_ttml = ""
-        cover_data = self._apple_cover_bytes(provider, raw) if self._apple_wants_cover(collection) else None
+        cover_data = (
+            self._apple_cover_bytes(provider, raw) if self._apple_wants_cover(collection, options=options) else None
+        )
         # The embed toggle is the single source for embedding; the sidecars
         # below still receive the fetched text.
-        embed_lyrics = bool(self._psetting(CTX_APPLE, "lyrics_embed", False))
+        embed_lyrics = bool(options.option("lyrics_embed", False))
         if not tag_apple_file(
             dest,
             title=str(row.get("title") or ""),
             facts=facts,
             lyrics_synced=lyrics_synced if embed_lyrics else "",
             lyrics_unsynced=lyrics_unsynced if embed_lyrics else "",
-            cover_data=cover_data if self._psetting(CTX_APPLE, "metadata_cover_embed", True) else None,
+            cover_data=cover_data if options.option("metadata_cover_embed", True) else None,
             mark_explicit=bool(self.settings.data.mark_explicit),
             metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
             audio_type="atmos" if atmos else "stereo",
@@ -14101,7 +14187,13 @@ class WavesBridge(LibraryMixin, QObject):
         ):
             logger.debug("Apple tagging reported failure for %s", diagnostics.content(track_id))
         self._apple_write_sidecars(
-            dest, lyrics_synced, lyrics_unsynced, cover_data, collection, ttml_verbatim=lyrics_ttml
+            dest,
+            lyrics_synced,
+            lyrics_unsynced,
+            cover_data,
+            collection,
+            ttml_verbatim=lyrics_ttml,
+            options=options,
         )
         # Honest delivered tier (issue #32): the provider probed the staged
         # bytes (ALAC 24/96 where the master tops out stays 24/96 in the
@@ -14563,7 +14655,7 @@ class WavesBridge(LibraryMixin, QObject):
             return None
         return parsed.isoformat() if parsed is not None else None
 
-    def _apple_lyrics(self, provider, row: dict, facts: dict) -> tuple[str, str]:
+    def _apple_lyrics(self, provider, row: dict, facts: dict, options: _JobOptions | None = None) -> tuple[str, str]:
         """LRCLIB-first lyrics for one Apple track, or ("", "").
 
         Legacy two-tuple kept for old test stubs that override it; new code
@@ -14572,13 +14664,14 @@ class WavesBridge(LibraryMixin, QObject):
         """
         from waves.lyrics import fetch_lrclib_lyrics
 
+        options = options or self._apple_options()
         if not (
-            self._psetting(CTX_APPLE, "lyrics_embed", False)
-            or self._psetting(CTX_APPLE, "lyrics_file", False)
-            or self._psetting(CTX_APPLE, "lyrics_ttml_file", False)
+            options.option("lyrics_embed", False)
+            or options.option("lyrics_file", False)
+            or options.option("lyrics_ttml_file", False)
         ):
             return "", ""
-        if not self._psetting(CTX_APPLE, "lyrics_prefer_lrclib", True):
+        if not options.option("lyrics_prefer_lrclib", True):
             return "", ""
         try:
             session = _waves_download.pooled_session()
@@ -14593,7 +14686,9 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Apple LRCLIB lookup failed", exc_info=True)
             return "", ""
 
-    def _apple_lyrics_full(self, provider, row: dict, facts: dict) -> tuple[str, str, str]:
+    def _apple_lyrics_full(
+        self, provider, row: dict, facts: dict, options: _JobOptions | None = None
+    ) -> tuple[str, str, str]:
         """Lyrics for one Apple track as (synced, plain, ttml_verbatim).
 
         Source precedence (issue #34, spec section 9.1), both providers in
@@ -14616,14 +14711,15 @@ class WavesBridge(LibraryMixin, QObject):
         """
         from waves.lyrics import fetch_lrclib_lyrics
 
+        options = options or self._apple_options()
         if not (
-            self._psetting(CTX_APPLE, "lyrics_embed", False)
-            or self._psetting(CTX_APPLE, "lyrics_file", False)
-            or self._psetting(CTX_APPLE, "lyrics_ttml_file", False)
+            options.option("lyrics_embed", False)
+            or options.option("lyrics_file", False)
+            or options.option("lyrics_ttml_file", False)
         ):
             return "", "", ""
-        word_on = bool(self._psetting(CTX_APPLE, "lyrics_word_timed", True))
-        prefer_lrclib = bool(self._psetting(CTX_APPLE, "lyrics_prefer_lrclib", True))
+        word_on = bool(options.option("lyrics_word_timed", True))
+        prefer_lrclib = bool(options.option("lyrics_prefer_lrclib", True))
 
         track_obj = None
         try:
@@ -14638,7 +14734,7 @@ class WavesBridge(LibraryMixin, QObject):
         # file is on.
         word_lrc = ""
         syllable_ttml = ""
-        ttml_on = bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False))
+        ttml_on = bool(options.option("lyrics_ttml_file", False))
         if (word_on or ttml_on) and track_obj is not None:
             try:
                 syllable_ttml = provider.fetch_syllable_ttml(track_obj) or ""
@@ -14730,17 +14826,18 @@ class WavesBridge(LibraryMixin, QObject):
 
         return "", "", syllable_ttml
 
-    def _apple_wants_cover(self, collection: bool) -> bool:
+    def _apple_wants_cover(self, collection: bool, options: _JobOptions | None = None) -> bool:
         """Whether this job fetches cover art at all: embedded, or filed per
         the engine's own cover.jpg rule (collections always qualify; a lone
         track only with the single-track opt-in)."""
-        if self._psetting(CTX_APPLE, "metadata_cover_embed", True):
+        options = options or self._apple_options()
+        if options.option("metadata_cover_embed", True):
             return True
         return bool(
             Download._want_cover_file(
-                bool(self._psetting(CTX_APPLE, "cover_album_file", True)),
+                bool(options.option("cover_album_file", True)),
                 bool(collection),
-                bool(self._psetting(CTX_APPLE, "cover_single_track_file", False)),
+                bool(options.option("cover_single_track_file", False)),
             )
         )
 
@@ -14797,6 +14894,7 @@ class WavesBridge(LibraryMixin, QObject):
         cover_data: bytes | None,
         collection: bool,
         ttml_verbatim: str = "",
+        options: _JobOptions | None = None,
     ) -> None:
         """Lyrics and cover sidecars per the shared toggles.
 
@@ -14807,22 +14905,23 @@ class WavesBridge(LibraryMixin, QObject):
         """
         from waves.lyrics import lyrics_sidecar_choices
 
+        options = options or self._apple_options()
         for text, suffix in lyrics_sidecar_choices(
             synced=lyrics_synced,
             plain=lyrics_unsynced,
             ttml=ttml_verbatim,
-            lyrics_file=bool(self._psetting(CTX_APPLE, "lyrics_file", False)),
-            synced_only=bool(self._psetting(CTX_APPLE, "lyrics_file_synced_only", False)),
-            ttml_file=bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False)),
+            lyrics_file=bool(options.option("lyrics_file", False)),
+            synced_only=bool(options.option("lyrics_file_synced_only", False)),
+            ttml_file=bool(options.option("lyrics_ttml_file", False)),
             is_apple=True,
         ):
             write_text_sidecar(dest.parent, dest.stem, suffix, text)
         # Same gate as the fetch decision above: a lone track files its cover
         # only with the single-track opt-in.
         want_cover_file = Download._want_cover_file(
-            bool(self._psetting(CTX_APPLE, "cover_album_file", True)),
+            bool(options.option("cover_album_file", True)),
             bool(collection),
-            bool(self._psetting(CTX_APPLE, "cover_single_track_file", False)),
+            bool(options.option("cover_single_track_file", False)),
         )
         if want_cover_file and cover_data:
             write_cover_sidecar(
@@ -14940,6 +15039,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # tracks skip again instead of fetching on a folder hiccup.
                 keep_ask=row_ask,
                 is_retry=bool(getattr(spec, "is_retry", False)),
+                chooser_toggles=getattr(spec, "chooser_toggles", None),
             ),
             media_id,
         ):
@@ -14999,6 +15099,7 @@ class WavesBridge(LibraryMixin, QObject):
                     media_id,
                     keep_ask=row_ask,
                     is_retry=bool(getattr(spec, "is_retry", False)),
+                    chooser_toggles=getattr(spec, "chooser_toggles", None),
                 ),
                 media_id,
                 qid,
@@ -15120,6 +15221,7 @@ class WavesBridge(LibraryMixin, QObject):
                 pinned_quality=self._job_quality(qid),
                 audio_type=getattr(spec, "audio_type", None),
                 base_template=getattr(spec, "base_template", None) or None,
+                chooser_toggles=getattr(spec, "chooser_toggles", None),
             )
         if (collection or merge_plan is not None) and not is_apple:
             self._job_tracks.setdefault(qid, {})
@@ -15212,7 +15314,15 @@ class WavesBridge(LibraryMixin, QObject):
             # the download never started (matching the pre-probe contract).
             if not self._gate_reachability(
                 lambda: self._download(
-                    obj, type_media, name, file_template, collection, media_id, merge_plan, keep_ask=row_ask
+                    obj,
+                    type_media,
+                    name,
+                    file_template,
+                    collection,
+                    media_id,
+                    merge_plan,
+                    keep_ask=row_ask,
+                    chooser_toggles=getattr(spec, "chooser_toggles", None),
                 ),
                 media_id,
             ):
@@ -15413,7 +15523,15 @@ class WavesBridge(LibraryMixin, QObject):
                     self._set_status(f"Cancelled {name}")
                 elif self._download_failed_with_folder(
                     lambda: self._download(
-                        obj, type_media, name, file_template, collection, media_id, merge_plan, keep_ask=row_ask
+                        obj,
+                        type_media,
+                        name,
+                        file_template,
+                        collection,
+                        media_id,
+                        merge_plan,
+                        keep_ask=row_ask,
+                        chooser_toggles=getattr(spec, "chooser_toggles", None),
                     ),
                     media_id,
                     qid,
@@ -16523,8 +16641,8 @@ class WavesBridge(LibraryMixin, QObject):
         self._refetch_inflight.discard((bucket, media_id))
         parked = self._chooser_take_refetch(bucket, media_id)
         if parked is not None:
-            kind, tier_word, audio_word = parked
-            self.downloadWithChooser(media_id, kind, tier_word, audio_word)
+            kind, tier_word, audio_word, toggles = parked
+            self.downloadWithChooser(media_id, kind, tier_word, audio_word, toggles)
             return
         dispatch = {
             "album": self.downloadAlbum,
@@ -18932,6 +19050,7 @@ class WavesBridge(LibraryMixin, QObject):
                     str(item.get("quality") or ""),
                     str(item.get("audioType") or "") or None,
                 ),
+                chooser_toggles=dict(item.get("askToggles") or {}),
                 is_retry=True,
             )
             return
@@ -18951,6 +19070,7 @@ class WavesBridge(LibraryMixin, QObject):
                 str(item.get("quality") or ""),
                 str(item.get("audioType") or "") or None,
             ),
+            chooser_toggles=dict(item.get("askToggles") or {}),
         )
 
     @Slot(int)

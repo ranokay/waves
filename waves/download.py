@@ -548,6 +548,7 @@ class Download:
         event_run: Event | None = None,
         provider: Provider | None = None,
         album_artist_tag_clean: Callable[[], bool] | None = None,
+        chooser_toggles: dict | None = None,
     ) -> None:
         """Initialize the Download object and its dependencies.
 
@@ -574,6 +575,10 @@ class Download:
                 tag-write time so a settings change applies without a
                 restart. Defaults to None (the pref is off; every main-credit
                 album artist is written).
+            chooser_toggles (dict | None, optional): The per-click Chooser
+                lyrics/art pins (base keys, booleans). They win over the
+                provider's stored options for this job only. Defaults to None
+                (every option reads Settings).
         """
         self.settings = Settings()
         self.tidal = tidal_obj
@@ -603,6 +608,9 @@ class Download:
         self.event_abort = event_abort
         self.event_run = event_run
         self._album_artist_tag_clean = album_artist_tag_clean or (lambda: False)
+        # Per-click Chooser pins for this job's lyrics/art options; empty for
+        # every click that kept the stored defaults.
+        self._chooser_toggles = {str(key): value for key, value in dict(chooser_toggles or {}).items()}
 
         # Destination directories already ensured by this instance (one
         # instance = one queued item, so this resets naturally per album).
@@ -3177,7 +3185,14 @@ class Download:
         return pid if pid in ("tidal", "apple") else "tidal"
 
     def _psetting(self, key: str, default=None):
-        """One lyrics/artwork option for this download's provider."""
+        """One lyrics/artwork option for this download's provider.
+
+        A per-click Chooser pin wins over the stored options for this job
+        only; nothing is persisted.
+        """
+        pinned = getattr(self, "_chooser_toggles", None) or {}
+        if key in pinned:
+            return pinned[key]
         try:
             data = self.settings.data
         except Exception:
