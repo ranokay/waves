@@ -453,11 +453,10 @@ class HelpSettings:
         "on $PATH; the setup wizard provisions it later."
     )
     apple_apk_path: str = (
-        "Path to the Apple Music APK you supply for the full Apple tier: get the pinned version named in "
-        "the setup wizard yourself (e.g. APKMirror's Apple Music listing, the arm64 release matching that "
-        "version). The wizard checks the version, verifies the SHA-256 once Waves publishes the pinned "
-        "hash, and walks you through unpacking the .apkm splits into the wrapper guest. Waves never "
-        "downloads this file for you."
+        "Optional Apple Music APK path for custom wrapper image builds. The published image already "
+        "carries the guest libraries, so the normal setup never asks for one; set this only when you "
+        "build your own image and want Waves to verify the APK you used. Waves never downloads this "
+        "file for you."
     )
     apple_wrapper_port: str = (
         "Port the Apple wrapper's HTTP API runs on. 0 (the default) means Waves picks a free high port "

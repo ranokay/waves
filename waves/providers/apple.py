@@ -108,6 +108,10 @@ class AppleProvider(Provider):
         self.wrapper_url: str = ""
         self.wrapper_decrypt_host: str = "127.0.0.1"
         self.wrapper_decrypt_port: int = 10020
+        # The guest's account state, mirrored here by the bridge from its
+        # /me probe or a completed sign-in. The guest owns the session;
+        # Waves stores no Apple ID secret.
+        self.wrapper_logged_in: bool = False
         # Staged deliveries by their file path: resolve_stream decrypts into
         # a workdir the caller moves out of, then releases here so the temp
         # tree is removed. Never global: one entry per in-flight track.
@@ -389,7 +393,12 @@ class AppleProvider(Provider):
 
     @property
     def is_logged_in(self) -> bool:
-        return False
+        """Whether the wrapper guest reports an authenticated session.
+
+        The cookies tier is a separate fallback and never sets this; the
+        bridge mirrors its /me probe or a completed sign-in here.
+        """
+        return bool(self.wrapper_logged_in)
 
     def apply_quality(self, tier: QualityTier, audio_type: AudioType) -> None:
         return None

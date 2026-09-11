@@ -763,8 +763,8 @@ _PATH_FIELDS = [
     # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
     # through; the wizard provisions it later.
     "path_binary_nm3u8dlre",
-    # Setup wizard (issue #31): the user-supplied APK path, browsed like a
-    # file. Waves never fetches it; the wizard verifies the pinned version.
+    # Optional APK override for custom wrapper image builds; the published
+    # image carries its own guest libraries, so the wizard does not ask.
     "apple_apk_path",
     # Integrity gate (issue #30): quarantine folder override, browsed like a
     # download folder. Empty means the default inside the download folder.
@@ -974,7 +974,7 @@ _FIELD_LABELS = {
     "apple_quality_audio": "Audio quality (Apple)",
     "apple_cookies_path": "Cookies file (Apple)",
     "path_binary_nm3u8dlre": "N_m3u8DL-RE binary path",
-    "apple_apk_path": "Apple Music APK (you supply)",
+    "apple_apk_path": "Apple Music APK (custom builds)",
     "apple_wrapper_port": "Wrapper port (Apple)",
     "apple_quarantine_dir": "Quarantine folder (Apple)",
     "apple_quarantine_keep": "Keep quarantined files",
@@ -1181,6 +1181,8 @@ _APPLE_STEP_ACTION_LABELS = {
     "apple_start_container": "Start",
     "apple_ensure_port": "Set port",
     "apple_setup": "Refresh",
+    "apple_import_cookies": "Import file",
+    "apple_wrapper_login": "Sign in",
 }
 
 
@@ -3912,6 +3914,11 @@ class WavesBridge(LibraryMixin, QObject):
     # Emitted when a save actually moves the apple_enabled switch, so the
     # page's live mirror re-reads appleStatus() without a schema rebuild.
     appleStatusChanged = Signal()
+    # The wrapper guest's account state moved (a login probe landed, a
+    # sign-in succeeded or a 2FA code was accepted). SEPARATE from
+    # appleStatusChanged so the wizard's login form re-reads without a
+    # schema rebuild.
+    appleWrapperAuthChanged = Signal()
     # Managed Apple runtime (Settings → Providers · Apple Music, issue #31).
     appleRuntimeStatusChanged = Signal()
     appleRuntimeProgress = Signal(float)
@@ -4149,6 +4156,12 @@ class WavesBridge(LibraryMixin, QObject):
         # held from schedule until the worker finishes, never touched by
         # inline stub probes.
         self._apple_container_refresh_lock = Lock()
+        # The wrapper guest's account state (the full tier's sign-in), read
+        # off its /me endpoint. Same cached-probe shape as the container:
+        # GUI readers never block on the HTTP reach.
+        self._apple_wrapper_auth_cache: dict = {"at": 0.0, "result": None}
+        self._apple_wrapper_auth_refresh_lock = Lock()
+        self._apple_wrapper_login_inflight = False
         # Session supervision (issue #33, spec §3): the lazy sidecar's
         # health/idle lifecycle. The supervisor is pure (injectable runner
         # and HTTP probe) so workers drive it without touching Qt; the
@@ -4170,6 +4183,13 @@ class WavesBridge(LibraryMixin, QObject):
         # The Apple provider reads the resolved FFmpeg path, so this runs
         # after the manager above exists.
         self._configure_apple_provider()
+        # A configured wrapper gets its account probed at startup, so the
+        # wizard's first open reads a settled state instead of "checking".
+        try:
+            if str(self._resolve_apple_wrapper_url() or ""):
+                self.threadpool.start(Worker(self._refresh_apple_wrapper_auth))
+        except Exception:
+            logger.debug("Apple wrapper auth warm-up probe failed", exc_info=True)
         # _save_settings swaps a sanitised copy of settings.data in for the
         # length of one write. Saves come from the GUI thread, from download
         # workers and from the keep-warm daemon, so the swap is serialised.
@@ -12620,12 +12640,13 @@ class WavesBridge(LibraryMixin, QObject):
         (spec §7.1): the affordance stays live and opens the path to making
         it work, instead of failing silently.
         """
-        if not self._apple_cookies_ready():
+        if not self._apple_account_ready():
             self._set_status(
-                "Apple downloads need a cookies export: open Settings, Providers, Apple Music to continue setup"
+                "Apple downloads need a sign-in: open Settings, Providers, Apple Music to add a cookies "
+                "export or sign in to the wrapper"
             )
             try:
-                self.appleSetupRequested.emit("cookies")
+                self.appleSetupRequested.emit("setup")
             except Exception:
                 logger.debug("Apple setup route emit failed", exc_info=True)
             self.downloadState.emit(media_id, "")
@@ -19273,18 +19294,14 @@ class WavesBridge(LibraryMixin, QObject):
         word, tier, next_step), the ``steps`` list (each with key, label,
         state ``done``/``todo``/``attention``, detail, and the action slot
         key QML calls, ``""`` when the step needs no click), plus the raw
-        blocks behind them (cookies, runtime, container, apk with its
-        scripted extraction plan, wrapper image/port). Pure reads, no
-        network, safe on the GUI thread.
+        blocks behind them (cookies, runtime, container, wrapper image/
+        port/account). Pure reads, no network, safe on the GUI thread.
         """
         from waves.apple_runtime import (
-            APK_PINNED_VERSION,
             WRAPPER_LIBS_VERSION,
             WRAPPER_V2_IMAGE,
-            apk_extract_plan,
             describe_setup,
             detect_container_runtime,
-            verify_apk,
             verify_cookies_file,
             wrapper_url,
         )
@@ -19300,6 +19317,7 @@ class WavesBridge(LibraryMixin, QObject):
             signed_in=bool(flags.get("signed_in", False)),
             needs_attention=bool(flags.get("needs_attention", False)),
             cookies_ready=bool(flags.get("cookies_ready", False)),
+            wrapper_ready=bool(flags.get("wrapper_ready", False)),
         )
         cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         try:
@@ -19310,6 +19328,11 @@ class WavesBridge(LibraryMixin, QObject):
             cookies_error = str(exc)
         else:
             cookies_error = ""
+        auth_probe = getattr(self, "apple_wrapper_auth_state", None)
+        try:
+            wrapper_auth = auth_probe() if callable(auth_probe) else {}
+        except Exception:
+            wrapper_auth = {}
         manager = getattr(self, "_apple_runtime", None)
         try:
             runtime = (
@@ -19326,20 +19349,6 @@ class WavesBridge(LibraryMixin, QObject):
             container = probe() if callable(probe) else detect_container_runtime()
         except Exception:
             container = {"name": "", "available": False, "running": False, "hint": ""}
-        apk_path = str(getattr(data, "apple_apk_path", "") or "")
-        try:
-            apk_check = verify_apk(apk_path) if apk_path.strip() else None
-            apk_ok = bool(apk_check and apk_check.get("ok", False))
-            apk_hash_pending = bool(apk_check and apk_check.get("hash_pending", False))
-            # Fail-closed presentation: without a pinned hash no surface may
-            # claim the APK verified, however good the file looks.
-            apk_verified = bool(apk_ok and not apk_hash_pending)
-            apk_error = ""
-        except Exception as exc:
-            apk_verified = False
-            apk_hash_pending = False
-            apk_error = str(exc)
-            apk_check = None
         try:
             image_pulled = bool(manager is not None and manager.image_pulled())
         except Exception:
@@ -19366,10 +19375,7 @@ class WavesBridge(LibraryMixin, QObject):
             cookies_error=cookies_error,
             runtime_state=str(runtime.get("state") or "missing"),
             container=container,
-            apk_path=apk_path,
-            apk_verified=apk_verified,
-            apk_hash_pending=apk_hash_pending,
-            apk_error=apk_error,
+            wrapper_auth=wrapper_auth,
             image_pulled=image_pulled,
             port=port,
             port_dirty=port_dirty,
@@ -19386,23 +19392,16 @@ class WavesBridge(LibraryMixin, QObject):
             },
             "runtime": runtime,
             "container": container,
-            "apk": {
-                "path": apk_path,
-                "pinned_version": APK_PINNED_VERSION,
-                "verified": apk_verified,
-                "hash_pending": apk_hash_pending,
-                "error": apk_error,
-                "extract_plan": apk_extract_plan(apk_path or "the APK you supply"),
-            },
             "wrapper": {
                 "image": WRAPPER_V2_IMAGE,
                 "libs": WRAPPER_LIBS_VERSION,
                 "image_pulled": image_pulled,
                 "port": port,
                 "url": wrapper_url(port) if port else "",
+                "auth": dict(wrapper_auth or {}),
                 "login_hint": (
                     "Apple ID sign-in plus 2FA happens once inside the wrapper guest; "
-                    "its tokens persist across container restarts. This step unlocks when the full tier runs."
+                    "its tokens persist across container restarts."
                 ),
             },
         }
@@ -19416,10 +19415,7 @@ class WavesBridge(LibraryMixin, QObject):
         cookies_error: str,
         runtime_state: str,
         container: dict,
-        apk_path: str,
-        apk_verified: bool,
-        apk_hash_pending: bool,
-        apk_error: str,
+        wrapper_auth: dict | None = None,
         image_pulled: bool,
         port: int,
         port_dirty: bool = False,
@@ -19464,8 +19460,8 @@ class WavesBridge(LibraryMixin, QObject):
                 "label": "Cookies tier (no container runtime)",
                 "state": cookies_state,
                 "detail": cookies_detail,
-                "action": "",
-                "action_label": "",
+                "action": "apple_import_cookies",
+                "action_label": _APPLE_STEP_ACTION_LABELS.get("apple_import_cookies", ""),
             }
         )
         if runtime_state == "managed":
@@ -19522,13 +19518,17 @@ class WavesBridge(LibraryMixin, QObject):
             }
         )
         if image_pulled:
-            image_step: tuple[str, str, str] = ("done", "Pinned wrapper image is on this machine.", "")
+            image_step: tuple[str, str, str] = (
+                "done",
+                "Pinned wrapper image is on this machine; it carries the guest libraries, so no APK is needed.",
+                "",
+            )
         else:
             image_step = (
                 "todo",
-                "Pull the exact Waves-built wrapper image the full tier runs. "
-                "Pulling needs registry access: if the pull is denied, run `docker login ghcr.io` "
-                "with an account that has access.",
+                "Pull the exact Waves-built wrapper image the full tier runs; it carries the guests' "
+                "Apple libraries, so there is no APK to supply. Pulling needs registry access: if the "
+                "pull is denied, run `docker login ghcr.io` with an account that has access.",
                 "apple_pull_image",
             )
         steps.append(
@@ -19541,38 +19541,36 @@ class WavesBridge(LibraryMixin, QObject):
                 "action_label": _APPLE_STEP_ACTION_LABELS.get(image_step[2], ""),
             }
         )
-        if apk_verified:
-            apk_detail = "APK SHA-256 verified against the pinned version. Follow the extraction plan below inside the wrapper guest."
-            apk_step = ("done", apk_detail, "")
-        elif apk_path.strip() and apk_hash_pending:
-            # The file checks out as far as can be checked, but no pinned
-            # hash exists yet: fail-closed presentation keeps the step open
-            # until Waves publishes the hash, then it completes.
-            apk_step = (
-                "todo",
-                "Version checked; the SHA-256 check unlocks once Waves publishes the pinned hash, then this step completes.",
-                "",
+        auth = wrapper_auth if isinstance(wrapper_auth, dict) else {}
+        auth_state = str(auth.get("state") or "").strip().lower()
+        auth_account = str(auth.get("account") or "").strip()
+        auth_error = str(auth.get("error") or "").strip()
+        if auth_state == "logged_in":
+            login_step: tuple[str, str, str] = (
+                "done",
+                f"The wrapper guest is signed in{(' as ' + auth_account) if auth_account else ''}; ALAC is unlocked.",
+                "apple_wrapper_login",
             )
-        elif apk_path.strip():
-            apk_step = ("attention", apk_error or "That APK could not be verified.", "")
-        else:
-            from waves.apple_runtime import APK_PINNED_VERSION
-
-            apk_step = (
+        elif auth_error:
+            login_step = (
                 "todo",
-                f"Get the Apple Music APK at pinned version {APK_PINNED_VERSION} yourself (e.g. APKMirror's "
-                "Apple Music listing, the arm64 release matching that version) and set its path in the Apple "
-                "Music APK field below. Waves verifies it and scripts the extraction, never fetching it.",
-                "",
+                f"Sign in to the wrapper guest with your Apple ID and 2FA. Last probe: {auth_error}",
+                "apple_wrapper_login",
+            )
+        else:
+            login_step = (
+                "todo",
+                "Sign in to the wrapper guest with your Apple ID and 2FA. Its tokens persist across restarts.",
+                "apple_wrapper_login",
             )
         steps.append(
             {
-                "key": "apk",
-                "label": "Your APK (never fetched by Waves)",
-                "state": apk_step[0],
-                "detail": apk_step[1],
-                "action": apk_step[2],
-                "action_label": _APPLE_STEP_ACTION_LABELS.get(apk_step[2], ""),
+                "key": "login",
+                "label": "Apple ID sign-in (full tier)",
+                "state": login_step[0],
+                "detail": login_step[1],
+                "action": login_step[2],
+                "action_label": _APPLE_STEP_ACTION_LABELS.get(login_step[2], ""),
             }
         )
         steps.append(
@@ -20226,7 +20224,8 @@ class WavesBridge(LibraryMixin, QObject):
                         "Apple Music ships off by default. Turn it on to add Apple Music "
                         "catalog results to search. Search needs no Apple account or runtime. "
                         "Downloads need setup below: a cookies export unlocks AAC 256 and Atmos "
-                        "at once (no runtime), while the managed runtime plus your APK unlock the full tier."
+                        "at once (no runtime), while the managed runtime plus the wrapper sign-in "
+                        "unlock the full tier."
                     ),
                     "type": "status",
                     "value": apple_status["state"],
@@ -20248,7 +20247,7 @@ class WavesBridge(LibraryMixin, QObject):
                     "label": "Setup wizard",
                     "help": (
                         "Walks the setup in order: cookies unlock AAC 256 and Atmos at once, "
-                        "then the managed runtime, container, wrapper image, your APK, and port "
+                        "then the managed runtime, container, wrapper image, and Apple ID sign-in "
                         "unlock the full tier. Steps refresh live as each lands."
                     ),
                     "type": "apple_setup",
@@ -20472,12 +20471,12 @@ class WavesBridge(LibraryMixin, QObject):
                         # discoverable and the light shows what is (not) set up.
                         # The in-place setup wizard (issue #31, spec §2) lives here:
                         # cookies export for the fallback tier, managed runtime plus
-                        # user-supplied APK for the full tier, wrapper port override.
+                        # wrapper sign-in for the full tier, wrapper port override.
                         "name": "Apple Music",
                         "id": "providers_apple",
                         "desc": (
                             "Turn on Apple Music catalog search here. A cookies export unlocks AAC 256 and Atmos "
-                            "downloads at once with no runtime; the managed runtime plus the APK you supply unlock the full tier."
+                            "downloads at once with no runtime; the managed runtime plus wrapper sign-in unlock the full tier."
                         ),
                         "fields": [
                             "provider_apple_status",
@@ -21040,6 +21039,172 @@ class WavesBridge(LibraryMixin, QObject):
                 with contextlib.suppress(Exception):
                     lock.release()
 
+    # ----- wrapper guest account (the full tier's sign-in) ------------------ #
+    def _apple_wrapper_base(self) -> str:
+        """The configured wrapper HTTP API URL, or "" when no tier is set up."""
+        try:
+            return str(self._resolve_apple_wrapper_url() or "")
+        except Exception:
+            logger.debug("Apple wrapper URL resolve failed", exc_info=True)
+            return ""
+
+    def _refresh_apple_wrapper_auth(self, timeout: int = 10) -> dict:
+        """Probe the wrapper guest's /me and store it for GUI-thread readers."""
+        from waves.apple_runtime import wrapper_auth_state
+
+        url = self._apple_wrapper_base()
+        try:
+            result = wrapper_auth_state(url, timeout=timeout)
+        except Exception:
+            logger.debug("Apple wrapper auth probe failed", exc_info=True)
+            result = {"reachable": False, "state": "", "account": "", "error": ""}
+        previous = getattr(self, "_apple_wrapper_auth_cache", None)
+        previous_state = ""
+        if isinstance(previous, dict) and isinstance(previous.get("result"), dict):
+            previous_state = str(previous["result"].get("state") or "")
+        try:
+            self._apple_wrapper_auth_cache = {"at": time.time(), "result": result}
+        except Exception:
+            logger.debug("Apple wrapper auth cache store failed", exc_info=True)
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+        if provider is not None:
+            with contextlib.suppress(Exception):
+                provider.wrapper_logged_in = str(result.get("state") or "").lower() == "logged_in"
+        if str(result.get("state") or "") != previous_state:
+            with contextlib.suppress(Exception):
+                self.appleWrapperAuthChanged.emit()
+        return result
+
+    def apple_wrapper_auth_state(self, max_age_s: float = 30.0) -> dict:
+        """The wrapper guest's account state for GUI-thread callers (cached).
+
+        Same contract as the container probe: a fresh cache wins, a stale
+        cache is served while a worker refreshes underneath, and a cold cache
+        answers "checking" while a worker probes (stub bridges probe inline).
+        """
+        cache = getattr(self, "_apple_wrapper_auth_cache", None)
+        if isinstance(cache, dict) and isinstance(cache.get("result"), dict):
+            try:
+                fresh = time.time() - float(cache.get("at") or 0) < max_age_s
+            except (TypeError, ValueError):
+                fresh = False
+            if not fresh:
+                self._schedule_apple_wrapper_auth_refresh()
+            return dict(cache["result"])
+        if self._schedule_apple_wrapper_auth_refresh():
+            return {"reachable": False, "state": "", "account": "", "error": "Checking the wrapper…"}
+        return self._refresh_apple_wrapper_auth(timeout=3)
+
+    def _schedule_apple_wrapper_auth_refresh(self) -> bool:
+        """Refresh the wrapper auth probe on a worker; False when no pool."""
+        pool = getattr(self, "threadpool", None)
+        start = getattr(pool, "start", None)
+        if not callable(start):
+            return False
+        lock = getattr(self, "_apple_wrapper_auth_refresh_lock", None)
+        if lock is not None and not lock.acquire(blocking=False):
+            return True
+        try:
+            start(Worker(self._scheduled_apple_wrapper_auth_refresh))
+        except Exception:
+            if lock is not None:
+                with contextlib.suppress(Exception):
+                    lock.release()
+            logger.debug("Apple wrapper auth refresh schedule failed", exc_info=True)
+            return False
+        return True
+
+    def _scheduled_apple_wrapper_auth_refresh(self) -> None:
+        """Worker body for a scheduled refresh: probe, then release the lock."""
+        try:
+            self._refresh_apple_wrapper_auth()
+        finally:
+            lock = getattr(self, "_apple_wrapper_auth_refresh_lock", None)
+            if lock is not None:
+                with contextlib.suppress(Exception):
+                    lock.release()
+
+    def _run_apple_wrapper_login(self, callback) -> None:
+        """Run one wrapper login call on a worker and signal the form.
+
+        ``callback`` returns the result dict; stub bridges without a worker
+        pool run it inline so the wizard tests stay pool-free.
+        """
+        if getattr(self, "_apple_wrapper_login_inflight", False):
+            return
+        self._apple_wrapper_login_inflight = True
+        # A new attempt clears the last error; the form goes back to busy.
+        self._apple_wrapper_login_result = {"ok": None, "needs_2fa": False, "error": ""}
+
+        def work() -> None:
+            try:
+                result = callback()
+                self._apple_wrapper_login_result = dict(result or {})
+                if result and result.get("ok") and not result.get("needs_2fa"):
+                    self._refresh_apple_wrapper_auth()
+            except Exception as exc:
+                logger.debug("Apple wrapper login call failed", exc_info=True)
+                self._apple_wrapper_login_result = {"ok": False, "needs_2fa": False, "error": str(exc)}
+            finally:
+                self._apple_wrapper_login_inflight = False
+                with contextlib.suppress(Exception):
+                    self.appleWrapperAuthChanged.emit()
+
+        pool = getattr(self, "threadpool", None)
+        start = getattr(pool, "start", None)
+        if callable(start):
+            start(Worker(work))
+        else:
+            work()
+
+    @Slot(str, str)
+    def appleWrapperLogin(self, username: str, password: str) -> None:
+        """Sign the wrapper guest in with Apple ID credentials."""
+        from waves.apple_runtime import wrapper_login
+
+        url = self._apple_wrapper_base()
+        if not url:
+            self._apple_wrapper_login_result = {
+                "ok": False,
+                "needs_2fa": False,
+                "error": "The wrapper tier is not set up.",
+            }
+            self.appleWrapperAuthChanged.emit()
+            return
+        self._run_apple_wrapper_login(lambda: wrapper_login(url, username, password))
+
+    @Slot(str)
+    def appleWrapperSubmit2fa(self, code: str) -> None:
+        """Finish the wrapper guest sign-in with the two-factor code."""
+        from waves.apple_runtime import wrapper_login_2fa
+
+        url = self._apple_wrapper_base()
+        if not url:
+            self._apple_wrapper_login_result = {
+                "ok": False,
+                "needs_2fa": False,
+                "error": "The wrapper tier is not set up.",
+            }
+            self.appleWrapperAuthChanged.emit()
+            return
+        self._run_apple_wrapper_login(lambda: wrapper_login_2fa(url, code))
+
+    @Slot(result="QVariant")
+    def appleWrapperAuth(self) -> dict:
+        """The cached wrapper account state for the wizard's login form."""
+        state = self.apple_wrapper_auth_state(max_age_s=5.0)
+        result = dict(getattr(self, "_apple_wrapper_login_result", None) or {})
+        return {
+            "reachable": bool(state.get("reachable", False)),
+            "state": str(state.get("state") or ""),
+            "account": str(state.get("account") or ""),
+            "error": str(state.get("error") or ""),
+            "busy": bool(getattr(self, "_apple_wrapper_login_inflight", False)),
+            "login_ok": result.get("ok"),
+            "needs_2fa": bool(result.get("needs_2fa", False)),
+            "login_error": str(result.get("error") or ""),
+        }
+
     def _apple_live_flags(self) -> dict:
         """Live inputs for the Apple status light, read off current state."""
         data = getattr(getattr(self, "settings", None), "data", None)
@@ -21071,12 +21236,24 @@ class WavesBridge(LibraryMixin, QObject):
                 # Mark attention only if a path was explicitly saved.
                 if str(getattr(data, "apple_cookies_path", "") or "").strip():
                     needs_attention = True
+        # The full tier's sign-in: a wrapper guest that answers /me as
+        # authenticated needs no cookies file at all.
+        wrapper_ready = False
+        probe = getattr(self, "apple_wrapper_auth_state", None)
+        if callable(probe):
+            try:
+                wrapper_ready = str((probe() or {}).get("state") or "") == "logged_in"
+            except Exception:
+                wrapper_ready = False
+        if not signed_in and wrapper_ready and self._apple_fetch_binary_ready():
+            signed_in = True
         return {
             "enabled": enabled,
             "runtime_ready": runtime_ready,
             "signed_in": signed_in,
             "needs_attention": needs_attention,
             "cookies_ready": cookies_ready and signed_in,
+            "wrapper_ready": wrapper_ready,
         }
 
     def _apple_cookies_ready(self) -> bool:
@@ -21087,6 +21264,23 @@ class WavesBridge(LibraryMixin, QObject):
             data = getattr(getattr(self, "settings", None), "data", None)
             path = str(getattr(data, "apple_cookies_path", "") or "")
         return bool(path) and pathlib.Path(path).expanduser().is_file()
+
+    def _apple_account_ready(self) -> bool:
+        """Whether an Apple download has an account to start with.
+
+        The cookies tier alone, or a wrapper guest that answered /me as
+        authenticated (the full tier needs no cookies file).
+        """
+        if self._apple_cookies_ready():
+            return True
+        probe = getattr(self, "apple_wrapper_auth_state", None)
+        if not callable(probe):
+            return False
+        try:
+            return str((probe() or {}).get("state") or "") == "logged_in"
+        except Exception:
+            logger.debug("Apple wrapper auth read failed", exc_info=True)
+            return False
 
     @Slot("QVariant")
     def applySettings(self, values) -> None:

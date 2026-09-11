@@ -212,6 +212,13 @@ Item {
     property string appleRuntimeState: ""
     property string appleRuntimeMsg: ""
     property real appleRuntimePct: 0
+    // The full tier's sign-in form (the wizard's login step): the fields
+    // stay local, the bridge makes the call and the guest owns the session.
+    property bool appleLoginOpen: false
+    property var appleWrapperLive: ({})
+    property string appleLoginUser: ""
+    property string appleLoginPass: ""
+    property string appleLogin2fa: ""
     Connections {
         target: waves
         function onAppleStatusChanged() {
@@ -227,6 +234,10 @@ Item {
             page.appleSetupLive = waves.appleSetupState()
         }
         function onAppleRuntimeProgress(pct) { page.appleRuntimePct = pct }
+        function onAppleWrapperAuthChanged() {
+            page.appleWrapperLive = waves.appleWrapperAuth()
+            page.appleSetupLive = waves.appleSetupState()
+        }
     }
 
     // ---- In-app updater state ----
@@ -882,6 +893,8 @@ Item {
         // What an empty box stands for, greyed (the per-character stand-ins
         // show the value the character falls back to).
         property alias placeholderText: tf.placeholderText
+        // Password entry (the wrapper sign-in form) uses TextInput.Password.
+        property alias echoMode: tf.echoMode
         property bool focused: tf.activeFocus
         // Red outline while the value carries something the field cannot keep.
         property bool invalid: false
@@ -2710,6 +2723,20 @@ Item {
                                                 // the live mirror off its signals.
                                                 else if (actKey === "apple_start_container") waves.appleStartContainer()
                                                 else if (actKey === "apple_ensure_port") { waves.appleEnsurePort(); page.appleSetupLive = waves.appleSetupState() }
+                                                else if (actKey === "apple_import_cookies") {
+                                                    // The wizard's own import action: the
+                                                    // same file picker the path field uses,
+                                                    // aimed at the cookies setting.
+                                                    fileDlg.targetKey = "apple_cookies_path"
+                                                    var cv = String(page.val({ key: "apple_cookies_path" }) || "")
+                                                    var cu = page.dirUrlOf(cv)
+                                                    if (cu !== "") fileDlg.currentFolder = cu
+                                                    fileDlg.open()
+                                                }
+                                                else if (actKey === "apple_wrapper_login") {
+                                                    page.appleLoginOpen = !page.appleLoginOpen
+                                                    page.appleWrapperLive = waves.appleWrapperAuth()
+                                                }
                                                 else if (actKey === "apple_setup") { page.appleSetupLive = waves.appleSetupState(); waves.refreshAppleSetup() }
                                             }
                                             Text {
@@ -2766,6 +2793,75 @@ Item {
                                                             onClicked: setupCol.runStepAction(String(modelData.action))
                                                         }
                                                     }
+                                                    // The full tier's sign-in form: the
+                                                    // login step's button toggles it, the
+                                                    // bridge makes the call and the guest
+                                                    // owns the session.
+                                                    Column {
+                                                        id: appleLoginForm
+                                                        visible: String(modelData.key) === "login" && page.appleLoginOpen
+                                                        x: 16; width: parent.width - 16; spacing: 6
+                                                        readonly property bool busy: page.appleWrapperLive.busy === true
+                                                        readonly property bool needs2fa: page.appleWrapperLive.needs_2fa === true
+                                                        readonly property bool signedIn: String(page.appleWrapperLive.state) === "logged_in"
+                                                        Text {
+                                                            visible: appleLoginForm.signedIn
+                                                            width: parent.width
+                                                            text: "Signed in" + (String(page.appleWrapperLive.account || "") !== "" ? " as " + page.appleWrapperLive.account : "") + "."
+                                                            color: page.accent; font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                            textFormat: Text.PlainText
+                                                        }
+                                                        SText {
+                                                            visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
+                                                            width: parent.width
+                                                            text: page.appleLoginUser
+                                                            placeholderText: "Apple ID"
+                                                            onEdited: function(t){ page.appleLoginUser = t }
+                                                        }
+                                                        SText {
+                                                            visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
+                                                            width: parent.width
+                                                            text: page.appleLoginPass
+                                                            placeholderText: "Password"
+                                                            echoMode: TextInput.Password
+                                                            onEdited: function(t){ page.appleLoginPass = t }
+                                                        }
+                                                        SText {
+                                                            visible: !appleLoginForm.signedIn && appleLoginForm.needs2fa
+                                                            width: parent.width
+                                                            text: page.appleLogin2fa
+                                                            placeholderText: "Two-factor code"
+                                                            onEdited: function(t){ page.appleLogin2fa = t }
+                                                        }
+                                                        Rectangle {
+                                                            visible: !appleLoginForm.signedIn
+                                                            width: appleSignTxt.width + page.btnPadH * 2; height: appleSignTxt.height + page.btnPadV * 2
+                                                            radius: page.btnRad; color: page.accentCont; border.color: page.accentDim; border.width: 1
+                                                            opacity: appleLoginForm.busy ? 0.45 : 1.0
+                                                            Text {
+                                                                id: appleSignTxt
+                                                                anchors.centerIn: parent
+                                                                text: appleLoginForm.busy ? "SIGNING IN…" : (appleLoginForm.needs2fa ? "VERIFY CODE" : "SIGN IN")
+                                                                textFormat: Text.PlainText
+                                                                color: page.accent; font.family: page.uiFont; font.pixelSize: 12; font.bold: true; font.letterSpacing: page.btnTrack
+                                                            }
+                                                            MouseArea {
+                                                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                                enabled: !appleLoginForm.busy
+                                                                onClicked: {
+                                                                    if (appleLoginForm.needs2fa) waves.appleWrapperSubmit2fa(page.appleLogin2fa)
+                                                                    else waves.appleWrapperLogin(page.appleLoginUser, page.appleLoginPass)
+                                                                }
+                                                            }
+                                                        }
+                                                        Text {
+                                                            visible: String(page.appleWrapperLive.login_error || "") !== ""
+                                                            width: parent.width
+                                                            text: String(page.appleWrapperLive.login_error || "")
+                                                            color: page.red; font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                            textFormat: Text.PlainText
+                                                        }
+                                                    }
                                                 }
                                             }
                                             // Runtime operation readout: progress while a
@@ -2783,22 +2879,13 @@ Item {
                                                 font.pixelSize: 12; wrapMode: Text.WordWrap
                                                 textFormat: Text.PlainText
                                             }
-                                            // The human half of the full tier: the APK
-                                            // extraction plan and the Apple ID sign-in
-                                            // note the backend ships with the mirror.
-                                            // Rendered, not stashed: the APK step points
-                                            // here, and sign-in has no step of its own.
-                                            Text {
-                                                readonly property var plan: (page.appleSetupLive && page.appleSetupLive.apk && page.appleSetupLive.apk.extract_plan) ? page.appleSetupLive.apk.extract_plan : []
-                                                visible: plan.length > 0
-                                                width: parent.width
-                                                text: "APK extraction plan:\n" + plan.map(function(s, i) { return (i + 1) + ". " + s }).join("\n")
-                                                color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
-                                                textFormat: Text.PlainText
-                                            }
+                                            // The published-image workflow carries
+                                            // the guest libraries, so the wizard has no
+                                            // APK extraction block; the sign-in note
+                                            // stays as the form's own context.
                                             Text {
                                                 readonly property string hint: (page.appleSetupLive && page.appleSetupLive.wrapper && page.appleSetupLive.wrapper.login_hint) ? String(page.appleSetupLive.wrapper.login_hint) : ""
-                                                visible: hint !== ""
+                                                visible: hint !== "" && !page.appleLoginOpen
                                                 width: parent.width
                                                 text: "Sign-in: " + hint
                                                 color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
