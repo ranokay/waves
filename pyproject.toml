@@ -213,6 +213,10 @@ ignore = [
 # The startup picker scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).
 "tests/test_startup_provider_picker_qml.py" = ["S603"]
+# The TIDAL sign-in reachability scenario re-runs itself in a subprocess to
+# isolate the Qt boot (S603, fixed argv), and its build -> click -> assert
+# scenario is one deliberately linear function (C901).
+"tests/test_tidal_signin_reachable_qml.py" = ["S603", "C901"]
 "tests/test_nav_seq_and_history_guards.py" = ["S603", "C901"]
 "tests/test_folder_badge_and_crumb_labels.py" = ["S603", "C901"]
 "tests/test_hover_swell_fade.py" = ["S603", "C901"]

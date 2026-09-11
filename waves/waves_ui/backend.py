@@ -20042,17 +20042,19 @@ class WavesBridge(LibraryMixin, QObject):
                     "options": _enum_options("update_cadence", ["launch", "daily"]),
                 },
                 {
-                    # Bridge-computed status row, not a pref (issue #25): the
-                    # TIDAL session the app is running on. Sign-in and
-                    # sign-out live on the landing page, so this row stages
-                    # no edit; it only reports, with the same state/word
-                    # vocabulary the Apple light below uses.
+                    # Bridge-computed status row, not a pref: the TIDAL
+                    # session the app is running on. Sign-in and sign-out
+                    # live on the landing page, so the row stages no edit;
+                    # it only reports, with the same state/word vocabulary
+                    # the Apple light below uses. A sign-in action is
+                    # attached below while signed out, so the flow survives
+                    # the landing panel being hidden.
                     "key": "provider_tidal_session",
                     "label": "Session",
                     "help": (
-                        "The TIDAL account Waves is working from. Signing in "
-                        "and out happen on the landing page; this row only "
-                        "reports the session."
+                        "The TIDAL account Waves is working from. This row "
+                        "reports the session and offers sign-in while signed "
+                        "out; sign-out lives in the top bar."
                     ),
                     "type": "status",
                     "value": "signed_in" if logged_in else "not_signed_in",
@@ -20109,6 +20111,12 @@ class WavesBridge(LibraryMixin, QObject):
                 },
             ]
         }
+        # The TIDAL card carries a sign-in action only while signed out: with
+        # no session the landing panel can be hidden by the Apple provider or
+        # a dismissed first-run picker, so the card is the entry point that
+        # always exists. The action starts the same flow the panel does.
+        if not logged_in:
+            waves_fields["provider_tidal_session"]["actions"] = [{"label": "Sign in", "action": "tidal_signin"}]
 
         def get_field(key: str) -> dict:
             f = dict(waves_fields[key]) if key in waves_fields else auto_field(key)
