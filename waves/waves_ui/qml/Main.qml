@@ -6016,21 +6016,22 @@ ApplicationWindow {
     }
 
     // First-class standalone lyrics/art actions (issue #34, spec section 7.3):
-    // LYRICS ONLY / ART ONLY beside DOWNLOAD on album and artist pages, plus
-    // the per-track hover affordance. Both providers; found and saved music
-    // alike (the provider resolves rows, not files).
+    // LYRICS / COVER beside DOWNLOAD on album and artist pages, plus the
+    // per-track pair. Both providers; found and saved music alike (the
+    // provider resolves rows, not files). Always visible, even per track
+    // (issue #70): appearing on hover reflowed the row.
     component StandalonePair: Row {
         id: sp
         property string mediaId: ""
         property bool compact: false
         spacing: compact ? 10 : 12
         Text {
-            text: "LYRICS ONLY"; color: root.textLo; font.pixelSize: compact ? 11 : 12
+            text: "LYRICS"; color: root.textLo; font.pixelSize: compact ? 11 : 12
             font.bold: true; font.letterSpacing: 0.8; anchors.verticalCenter: parent.verticalCenter
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: waves.downloadLyricsOnly(sp.mediaId) }
         }
         Text {
-            text: "ART ONLY"; color: root.textLo; font.pixelSize: compact ? 11 : 12
+            text: "COVER"; color: root.textLo; font.pixelSize: compact ? 11 : 12
             font.bold: true; font.letterSpacing: 0.8; anchors.verticalCenter: parent.verticalCenter
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: waves.downloadArtOnly(sp.mediaId) }
         }
@@ -9506,13 +9507,13 @@ ApplicationWindow {
                                    duration_sec: trow.durationSec })
                     onTap: function(){ trow.kind === "video" ? waves.downloadVideo(tId) : waves.downloadTrack(tId) }
                 }
-                // Per-track hover affordance (issue #34): compact standalone
-                // pair beside the track's split button. Visible on hover so
-                // the row stays quiet at rest.
+                // Per-track standalone pair (issue #34) beside the track's
+                // split button: always visible, so hovering never reflows
+                // the row (issue #70). Videos have no standalone lyrics/art.
                 StandalonePair {
                     Layout.alignment: Qt.AlignVCenter
                     mediaId: tId; compact: true
-                    visible: trow.kind !== "video" && trowMa.containsMouse
+                    visible: trow.kind !== "video"
                 }
             }
         }
