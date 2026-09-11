@@ -358,6 +358,7 @@ def _bind(stub):
         "_apple_audio_type",
         "_apple_wants_atmos",
         "_apple_target_rank",
+        "_apple_options",
         "_apple_emit_progress",
         "_apple_gate_track",
         "_apple_track_relative",

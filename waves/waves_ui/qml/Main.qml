@@ -6139,8 +6139,15 @@ ApplicationWindow {
             }
             var tier = db.chooserAtmosOnly ? "" : ("" + (db.chooserTier || ""))
             var audio = db.chooserAtmosOnly ? "atmos" : ("" + (db.chooserAudio || ""))
+            var toggles = {
+                lyrics_embed: db.chooserLyricsEmbed,
+                lyrics_file: db.chooserLyricsFile,
+                lyrics_ttml_file: db.chooserLyricsTtml,
+                metadata_cover_embed: db.chooserCoverEmbed,
+                cover_album_file: db.chooserCoverFile
+            }
             try {
-                waves.downloadWithChooser(db.mediaId, k, tier, audio)
+                waves.downloadWithChooser(db.mediaId, k, tier, audio, toggles)
             } catch (e) {
                 try { waves.uiLog("chooser", "downloadWithChooser failed: " + e, -1) } catch (e2) {}
                 try { db.onTap() } catch (e3) {}
@@ -6924,14 +6931,14 @@ ApplicationWindow {
                                 color: db.chooserLyricsEmbed ? root.accentCont : root.surface3
                                 border.color: db.chooserLyricsEmbed ? root.accentDim : root.outline; border.width: 1
                                 Text { textFormat: Text.PlainText; text: db.chooserLyricsEmbed ? "EMBED ON" : "EMBED OFF"; color: db.chooserLyricsEmbed ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsEmbed = !db.chooserLyricsEmbed; try { waves.applySettings({lyrics_embed: db.chooserLyricsEmbed}) } catch (e) {} } }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsEmbed = !db.chooserLyricsEmbed } }
                             }
                             Rectangle {
                                 width: 70; height: 24; radius: 5
                                 color: db.chooserLyricsFile ? root.accentCont : root.surface3
                                 border.color: db.chooserLyricsFile ? root.accentDim : root.outline; border.width: 1
                                 Text { textFormat: Text.PlainText; text: db.chooserLyricsFile ? ".LRC ON" : ".LRC OFF"; color: db.chooserLyricsFile ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsFile = !db.chooserLyricsFile; try { waves.applySettings({lyrics_file: db.chooserLyricsFile}) } catch (e) {} } }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsFile = !db.chooserLyricsFile } }
                             }
                             Rectangle {
                                 width: 80; height: 24; radius: 5
@@ -6939,7 +6946,7 @@ ApplicationWindow {
                                 border.color: db.chooserLyricsTtml ? root.accentDim : root.outline; border.width: 1
                                 opacity: db.chooserProvider === "apple" ? 1 : 0.4
                                 Text { textFormat: Text.PlainText; text: db.chooserLyricsTtml ? ".TTML ON" : ".TTML OFF"; color: db.chooserLyricsTtml ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; enabled: db.chooserProvider === "apple"; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsTtml = !db.chooserLyricsTtml; try { waves.applySettings({lyrics_ttml_file: db.chooserLyricsTtml}) } catch (e) {} } }
+                                MouseArea { anchors.fill: parent; enabled: db.chooserProvider === "apple"; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsTtml = !db.chooserLyricsTtml } }
                             }
                         }
                     }
@@ -6953,14 +6960,14 @@ ApplicationWindow {
                                 color: db.chooserCoverFile ? root.accentCont : root.surface3
                                 border.color: db.chooserCoverFile ? root.accentDim : root.outline; border.width: 1
                                 Text { textFormat: Text.PlainText; text: db.chooserCoverFile ? "SIDECAR ON" : "SIDECAR OFF"; color: db.chooserCoverFile ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserCoverFile = !db.chooserCoverFile; try { waves.applySettings({cover_album_file: db.chooserCoverFile}) } catch (e) {} } }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserCoverFile = !db.chooserCoverFile } }
                             }
                             Rectangle {
                                 width: 110; height: 24; radius: 5
                                 color: db.chooserCoverEmbed ? root.accentCont : root.surface3
                                 border.color: db.chooserCoverEmbed ? root.accentDim : root.outline; border.width: 1
                                 Text { textFormat: Text.PlainText; text: db.chooserCoverEmbed ? "EMBED ON" : "EMBED OFF"; color: db.chooserCoverEmbed ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserCoverEmbed = !db.chooserCoverEmbed; try { waves.applySettings({metadata_cover_embed: db.chooserCoverEmbed}) } catch (e) {} } }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserCoverEmbed = !db.chooserCoverEmbed } }
                             }
                         }
                     }
@@ -6978,7 +6985,7 @@ ApplicationWindow {
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.confirmChooser() }
                         }
                     }
-                    Text { textFormat: Text.PlainText; text: "Defaults come from Settings. Tier and audio apply to this click only. Lyrics and art save to Settings at once."; color: root.textDim; font.pixelSize: 9; wrapMode: Text.WordWrap; width: 296 }
+                    Text { textFormat: Text.PlainText; text: "Defaults come from Settings. Tier, audio, lyrics and art apply to this click only. SET AS DEFAULTS saves them."; color: root.textDim; font.pixelSize: 9; wrapMode: Text.WordWrap; width: 296 }
                 }
                 enter: Transition {
                     ParallelAnimation {
