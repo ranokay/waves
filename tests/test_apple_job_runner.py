@@ -145,6 +145,7 @@ class _FakeProvider:
     def __init__(self, fixture: Path | None = None):
         self.fixture = fixture
         self.fetched: list = []
+        self.tiers: list = []
         self.discarded: list = []
 
     def row_for(self, kind, item):
@@ -210,9 +211,11 @@ class _FakeProvider:
         staged = Path(str(self.fixture))
         assert staged.is_file()
         self.fetched.append(audio_type)
+        self.tiers.append(tier)
+        delivered_tier = str(getattr(tier, "value", tier) or QualityTier.HIGH.value)
         return SimpleNamespace(
             local_file=str(staged),
-            delivered={"tier": QualityTier.HIGH.value, "audio_type": str(audio_type)},
+            delivered={"tier": delivered_tier, "audio_type": str(audio_type)},
             codecs="mp4a.40.2",
         )
 
@@ -355,6 +358,44 @@ def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
     assert not any("WAVES_TIDAL" in key for key in tags)
     assert relay.pcts[-1] == 100.0
     assert provider.discarded == [str(staged)]
+
+
+@needs_ffmpeg
+def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkeypatch):
+    """The row's pinned ask reaches resolve_stream even when Settings disagree."""
+    from waves import apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+
+    def _run(tag, settings_word, queued_word):
+        provider = _FakeProvider(fixture=staged)
+        stub = _bind(_stub(tmp_path / tag, provider))
+        stub.settings = _settings(tmp_path / tag, apple_quality_audio=settings_word)
+        stub._queue_index = {1: {"askQuality": queued_word, "quality": queued_word}}
+        relay = _Relay()
+        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+        summary = WavesBridge._run_apple_job(
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+        assert summary == ""
+        return provider
+
+    pinned_high = _run("a", "HI_RES_LOSSLESS", "HIGH")
+    assert pinned_high.tiers == [QualityTier.HIGH]
+    pinned_hires = _run("b", "HIGH", "HI_RES_LOSSLESS")
+    assert pinned_hires.tiers == [QualityTier.HI_RES_LOSSLESS]
+    agreed = _run("c", "HIGH", "HIGH")
+    assert agreed.tiers == [QualityTier.HIGH]
 
 
 @needs_ffmpeg
@@ -744,9 +785,11 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     _tone(staged)
     provider = _FakeProvider(fixture=staged)
     calls = []
+    tiers = []
 
     def flaky_resolve(raw, tier, audio_type):
         calls.append(audio_type)
+        tiers.append(tier)
         if len(calls) == 1:
             raise RuntimeError("HTTP 429 too many requests")
         return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
@@ -755,6 +798,10 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     provider.classify_refusal = lambda exc: _RealProvider.classify_refusal(provider, exc)
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
+    # The queue pinned HIGH while Settings asks hi-res: both the first
+    # attempt and the throttle retry must ask the pinned tier.
+    stub.settings = _settings(base, apple_quality_audio="HI_RES_LOSSLESS")
+    stub._queue_index = {1: {"askQuality": "HIGH", "quality": "HIGH"}}
     stub._apple_sleep_abortable = lambda *a: True
     stub.statuses = []
     stub._set_status = stub.statuses.append
@@ -767,6 +814,7 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
 
     assert summary == ""
     assert len(calls) == 2
+    assert tiers == [QualityTier.HIGH, QualityTier.HIGH]
     assert next(ev for ev in relay.events if ev.get("status") == "done")
 
 
