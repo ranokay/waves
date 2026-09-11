@@ -62,8 +62,9 @@ _UA = "Waves-apple-runtime"
 # flow pulls this exact tag.
 WRAPPER_V2_IMAGE = "ghcr.io/ranokay/waves-wrapper-v2:0.2.3"
 # The wrapper's guest-lib set this image was built against, mirrored from
-# wrapper-v2's LIBS_VERSION.json. The wizard shows this version when it asks
-# the user to supply the APK, so the APK and the image can never disagree.
+# wrapper-v2's LIBS_VERSION.json. Surfaced in the wizard's image detail and
+# in the custom-build extraction plan, so an image and an APK can never
+# silently disagree.
 WRAPPER_LIBS_VERSION = "17.0.0"
 # The N_m3u8DL-RE release the managed install provisions: the latest
 # published upstream tag at pin time. Pinned so every machine fetches the
@@ -100,12 +101,12 @@ NM3U8DLRE_SHA256 = {
     ("windows", "amd64"): "3825fd42ee502f98a9378f6fdddb2f7822709f521806214f466db6935c950f1a",
     ("windows", "arm64"): "3a13527812a5f18b9981b3cd6f7f36bd17cd7d76b5f3273281a58354e5fcebd6",
 }
-# Pinned APK the wizard asks the user to supply. 3.6.0-beta (build 1109) is
+# Pinned APK for custom wrapper image builds. 3.6.0-beta (build 1109) is
 # the proven combo: its native libs carry DT_HASH, export the symbols the
 # wrapper resolves, and need nothing newer than the chroot's libc. (4.7.0
 # fails all three: GNU-hash-only main lib, hidden make_shared, API-23+
 # imports.) Waves never fetches it; this version string and SHA-256 only
-# verify what the user brings and script the .apkm extraction.
+# verify a user's own copy and script the .apkm extraction.
 APK_PINNED_VERSION = "3.6.0-beta"
 # SHA-256 of the blessed APKMirror bundle
 # (com.apple.android.music_3.6.0-beta-1109_2arch_2dpi_*.apkm). With a hash
@@ -305,7 +306,119 @@ def wrapper_url(port: int) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# APK: user-supplied, SHA-verified, extraction scripted, never fetched
+# Wrapper guest account: /me state plus the one-time login + 2FA handshake
+# --------------------------------------------------------------------------- #
+
+
+def _wrapper_error(exc: Exception) -> str:
+    """One readable line off a wrapper request failure."""
+    text = str(exc or "").strip()
+    return text or type(exc).__name__
+
+
+def _wrapper_status_error(response, fallback: str) -> str:
+    """A failure line off a non-OK wrapper reply, with its status."""
+    try:
+        detail = str(response.text or "").strip()
+    except Exception:
+        detail = ""
+    status = getattr(response, "status_code", "")
+    if detail:
+        detail = detail[:200]
+        return f"{fallback} ({status}: {detail})" if status else f"{fallback} ({detail})"
+    return f"{fallback} ({status})" if status else fallback
+
+
+def _wrapper_account_label(payload: dict, auth: dict) -> str:
+    """A human account label off a /me reply, or ""."""
+    for candidate in (payload.get("account"), auth.get("account"), payload.get("email")):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+        if isinstance(candidate, dict):
+            for key in ("email", "name", "displayName"):
+                value = candidate.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return ""
+
+
+def wrapper_auth_state(base_url: str, session=None, timeout: int = 10) -> dict:
+    """The wrapper guest's account state from its ``/me`` endpoint.
+
+    Returns ``{"reachable", "state", "account", "error"}``: ``state`` is
+    ``logged_in`` or ``logged_out`` when the guest answered, "" when it did
+    not. Never raises: the caller reads the dict.
+    """
+    base = str(base_url or "").strip().rstrip("/")
+    if not base:
+        return {"reachable": False, "state": "", "account": "", "error": "The wrapper tier is not set up."}
+    client = session if session is not None else _session()
+    try:
+        response = client.get(f"{base}/me", timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return {"reachable": False, "state": "", "account": "", "error": _wrapper_error(exc)}
+    if not isinstance(payload, dict):
+        return {"reachable": True, "state": "", "account": "", "error": "The wrapper sent an unexpected reply."}
+    auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
+    return {
+        "reachable": True,
+        "state": str(auth.get("state") or "").strip().lower(),
+        "account": _wrapper_account_label(payload, auth),
+        "error": "",
+    }
+
+
+def wrapper_login(base_url: str, username: str, password: str, session=None, timeout: int = 30) -> dict:
+    """Start a wrapper guest sign-in with Apple ID credentials.
+
+    ``{"ok", "needs_2fa", "error"}``: the guest answers 200 when the
+    session is authenticated and 202 when it wants a two-factor code.
+    """
+    base = str(base_url or "").strip().rstrip("/")
+    if not base:
+        return {"ok": False, "needs_2fa": False, "error": "The wrapper tier is not set up."}
+    user = str(username or "").strip()
+    secret = str(password or "")
+    if not user or not secret:
+        return {"ok": False, "needs_2fa": False, "error": "Apple ID and password are both required."}
+    client = session if session is not None else _session()
+    try:
+        response = client.post(f"{base}/login", json={"username": user, "password": secret}, timeout=timeout)
+    except Exception as exc:
+        return {"ok": False, "needs_2fa": False, "error": _wrapper_error(exc)}
+    status = int(getattr(response, "status_code", 0) or 0)
+    if status == 200:
+        return {"ok": True, "needs_2fa": False, "error": ""}
+    if status == 202:
+        return {"ok": True, "needs_2fa": True, "error": ""}
+    return {
+        "ok": False,
+        "needs_2fa": False,
+        "error": _wrapper_status_error(response, "The wrapper refused the sign-in."),
+    }
+
+
+def wrapper_login_2fa(base_url: str, code: str, session=None, timeout: int = 30) -> dict:
+    """Finish a wrapper guest sign-in with the two-factor code."""
+    base = str(base_url or "").strip().rstrip("/")
+    if not base:
+        return {"ok": False, "error": "The wrapper tier is not set up."}
+    value = str(code or "").strip()
+    if not value:
+        return {"ok": False, "error": "Enter the two-factor code."}
+    client = session if session is not None else _session()
+    try:
+        response = client.post(f"{base}/login/2fa", json={"code": value}, timeout=timeout)
+        response.raise_for_status()
+    except Exception as exc:
+        return {"ok": False, "error": _wrapper_error(exc)}
+    return {"ok": True, "error": ""}
+
+
+# --------------------------------------------------------------------------- #
+# APK (custom image builds only): SHA-verified, extraction scripted, never fetched
 # --------------------------------------------------------------------------- #
 
 
@@ -367,10 +480,12 @@ def describe_image_pull_error(exc: Exception, image: str = WRAPPER_V2_IMAGE) -> 
 
 
 def apk_extract_plan(apk_path: str, hash_pinned: bool | None = None) -> list[str]:
-    """The scripted .apkm extraction steps the wizard walks the user through.
+    """The .apkm extraction steps for custom wrapper image builds.
 
-    The hash step says what actually ran: with no pinned hash published yet
-    it must not claim a SHA-256 check happened.
+    The published image already carries the guest libraries, so this plan
+    serves only the custom-build path. The hash step says what actually ran:
+    with no pinned hash published yet it must not claim a SHA-256 check
+    happened.
     """
     if hash_pinned is None:
         hash_pinned = bool(APK_SHA256)
@@ -447,6 +562,7 @@ def describe_setup(
     signed_in: bool = False,
     needs_attention: bool = False,
     cookies_ready: bool = False,
+    wrapper_ready: bool = False,
 ) -> dict:
     """Describe the Apple setup wizard state for the status light.
 
@@ -454,7 +570,8 @@ def describe_setup(
     not_set_up. ``signed_in`` covers both tiers: a verified cookies export
     or a live wrapper session. ``cookies_ready`` without ``signed_in``
     still counts as signed in for the light (the cookies tier unlocks
-    AAC 256 + Atmos with no runtime at all).
+    AAC 256 + Atmos with no runtime at all). ``wrapper_ready`` names the
+    full tier once the wrapper guest reports an authenticated session.
     """
     if not enabled:
         state = "off"
@@ -471,7 +588,7 @@ def describe_setup(
         # The cookies tier: AAC 256 + Atmos unlocked. The fetch binary is
         # shared download plumbing, not a tier upgrade; the full tier
         # (wrapper ALAC) names itself once a wrapper session exists.
-        tier = "cookies"
+        tier = "full" if wrapper_ready else "cookies"
     elif state == "runtime_ready":
         tier = "runtime"
     next_step = {

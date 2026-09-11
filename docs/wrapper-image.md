@@ -10,13 +10,13 @@ runbook: one-time setup, how to publish, and the version lockstep.
 
 - **You just use Waves.** Nothing to do, nothing to host. The app pulls
   the public image on demand, runs it while downloading, stops it when
-  idle. Apple ID sign-in happens inside the guest at first use; the APK
-  _you_ supply in Settings stays a local path — it is verified, never
-  uploaded. Trust note, stated plainly: the image contains Apple's native
-  `.so` files (that is what makes ALAC decryption possible). It was built
-  from the pinned upstream source plus the blessed APK below; the publish
-  summary in Actions records the exact source SHA and guest-lib pins, so
-  anyone can audit what went in.
+  idle. Apple ID sign-in happens inside the guest at first use, from the
+  setup wizard's login step; you never supply the APK yourself — the image
+  carries the guest libraries. Trust note, stated plainly: the image
+  contains Apple's native `.so` files (that is what makes ALAC decryption
+  possible). It was built from the pinned upstream source plus the blessed
+  APK below; the publish summary in Actions records the exact source SHA
+  and guest-lib pins, so anyone can audit what went in.
 - **You fork or clone Waves to hack on it.** Still nothing to do: the app
   pin points at the public image, which pulls anonymously. Develop, run,
   test Apple downloads — no secrets, no builds.

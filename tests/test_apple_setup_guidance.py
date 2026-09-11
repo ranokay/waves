@@ -2,8 +2,8 @@
 
 The Setup wizard pill re-probes the live setup state instead of serving
 cached reads that look dead; a denied wrapper-image pull says plainly that
-registry access is the problem and what to do; the APK step names the
-pinned version, where to get it, and the extraction walk-through.
+registry access is the problem and what to do; the image step states that
+the published image carries the guest libraries, so no APK is asked for.
 """
 
 from __future__ import annotations
@@ -61,10 +61,7 @@ def _wizard_steps(**over):
         "cookies_error": "",
         "runtime_state": "missing",
         "container": {"name": "", "available": False, "running": False, "hint": "Install Docker Desktop"},
-        "apk_path": "",
-        "apk_verified": False,
-        "apk_hash_pending": False,
-        "apk_error": "",
+        "wrapper_auth": {},
         "image_pulled": False,
         "port": 0,
     }
@@ -78,11 +75,11 @@ def test_image_step_warns_about_registry_access_up_front():
     assert "docker login ghcr.io" in detail
 
 
-def test_apk_step_names_version_and_source_before_a_path_exists():
-    detail = _wizard_steps()["apk"]["detail"]
-    assert APK_PINNED_VERSION in detail
-    assert "APKMirror" in detail
-    assert "never fetching it" in detail
+def test_image_step_names_the_baked_libraries_not_an_apk():
+    detail = _wizard_steps()["image"]["detail"]
+    assert "no APK" in detail
+    steps = _wizard_steps()
+    assert "apk" not in steps
 
 
 def test_refresh_setup_reprobes_and_rebuilds_the_wizard():

@@ -302,6 +302,7 @@ def _bind(stub):
         "_apple_cover_bytes",
         "_apple_write_sidecars",
         "_apple_cookies_ready",
+        "_apple_account_ready",
         "_run_apple_job",
     ):
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
@@ -708,6 +709,31 @@ def test_track_slot_queues_from_provider_cache_without_network(tmp_path):
     cookies.write_text("# Netscape\n")
     stub = _entry_stub(base, provider, cookies)
     stub.threadpool = _InlinePool()
+    stub.downloadTrack = lambda tid: WavesBridge.downloadTrack(stub, tid)
+    stub._download_apple_track = lambda tid: WavesBridge._download_apple_track(stub, tid)
+    stub._download_apple = lambda *a, **k: WavesBridge._download_apple(stub, *a, **k)
+    stub._objs = {"track": {}}
+    stub._refetch_apple_for_download = lambda *a: (_ for _ in ()).throw(AssertionError("no refetch expected"))
+
+    stub.downloadTrack("apple:song-1")
+
+    assert len(stub._queue) == 1
+    assert stub._queue[0]["media_id"] == "apple:song-1"
+
+
+def test_wrapper_only_account_queues_without_a_cookies_file(tmp_path):
+    """The full tier's sign-in needs no cookies export (S01)."""
+    provider = _FakeProvider()
+    provider.cached = lambda kind, raw_id: _song_resource() if kind == "track" else None
+    base = tmp_path / "lib"
+    stub = _entry_stub(base, provider, None)
+    stub.threadpool = _InlinePool()
+    stub.apple_wrapper_auth_state = lambda *a, **k: {
+        "reachable": True,
+        "state": "logged_in",
+        "account": "me@example.com",
+        "error": "",
+    }
     stub.downloadTrack = lambda tid: WavesBridge.downloadTrack(stub, tid)
     stub._download_apple_track = lambda tid: WavesBridge._download_apple_track(stub, tid)
     stub._download_apple = lambda *a, **k: WavesBridge._download_apple(stub, *a, **k)
