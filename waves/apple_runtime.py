@@ -330,8 +330,20 @@ def _wrapper_status_error(response, fallback: str) -> str:
 
 
 def _wrapper_account_label(payload: dict, auth: dict) -> str:
-    """A human account label off a /me reply, or ""."""
-    for candidate in (payload.get("account"), auth.get("account"), payload.get("email")):
+    """A human account label off a /me reply, or "".
+
+    The live guest names an authenticated account under ``apple_id`` /
+    ``username`` inside ``auth``; other wrapper builds may use an
+    ``account`` block or a top-level email. First non-empty wins.
+    """
+    for candidate in (
+        payload.get("account"),
+        auth.get("account"),
+        auth.get("apple_id"),
+        payload.get("email"),
+        auth.get("username"),
+        payload.get("username"),
+    ):
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
         if isinstance(candidate, dict):

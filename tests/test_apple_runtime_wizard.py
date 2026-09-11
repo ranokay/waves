@@ -394,6 +394,16 @@ def test_wrapper_auth_state_reads_the_guest_me():
         "account": "me@example.com",
         "error": "",
     }
+    # The live guest names the account under auth.apple_id / auth.username.
+    live = _WrapperSession(
+        get={
+            f"{base}/me": _WrapperResp(
+                payload={"auth": {"state": "authenticated", "apple_id": "me@example.com", "username": "me@example.com"}}
+            )
+        }
+    )
+    assert wrapper_auth_state(base, session=live)["account"] == "me@example.com"
+    assert wrapper_auth_state(base, session=live)["logged_in"] is True
 
 
 def test_wrapper_auth_state_is_never_an_exception():
