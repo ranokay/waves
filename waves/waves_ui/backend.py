@@ -13544,28 +13544,12 @@ class WavesBridge(LibraryMixin, QObject):
         if not wrapper_url and not port_probe:
             return True
         # Poll until the supervised port exists and answers, or STOP lands.
-        # The wizard may pick the port concurrently; the fast path below
-        # covers the already-running case without ever sleeping.
+        # The wizard may pick the port concurrently; ensure_started probes
+        # first, so a healthy sidecar returns without sleeping, and it also
+        # migrates a sidecar still publishing on a wildcard host address.
         while not job_abort.is_set():
             port = self._apple_wrapper_port_for_job()
             if sup is not None and port:
-                try:
-                    if sup.is_ready(port):
-                        with contextlib.suppress(Exception):
-                            sup.note_activity()
-                        with contextlib.suppress(Exception):
-                            self._apple_note_activity()
-                        # A row held on an earlier poll resumes visibly: the
-                        # held reason clears the same way the started branch
-                        # below clears it, or it would read "Held" while
-                        # downloading normally.
-                        with contextlib.suppress(Exception):
-                            set_status = getattr(self, "_set_queue_status", None)
-                            if callable(set_status):
-                                set_status(int(qid), "running", "")
-                        return True
-                except Exception:
-                    logger.debug("Wrapper health probe failed", exc_info=True)
                 try:
                     started = sup.ensure_started(http_port=port)
                 except Exception:
@@ -13574,6 +13558,7 @@ class WavesBridge(LibraryMixin, QObject):
                 if started:
                     with contextlib.suppress(Exception):
                         self._apple_note_activity()
+                    # A row held on an earlier poll resumes visibly.
                     with contextlib.suppress(Exception):
                         set_status = getattr(self, "_set_queue_status", None)
                         if callable(set_status):

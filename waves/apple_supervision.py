@@ -21,6 +21,7 @@ slots/signals that drive the queue rows live in
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -69,6 +70,11 @@ WRAPPER_CONTAINER_NAME = "waves-wrapper-v2"
 # picks at setup time and passes explicitly everywhere, never port 80.
 WRAPPER_CONTAINER_HTTP_PORT = 80
 WRAPPER_CONTAINER_DECRYPT_PORT = 10020
+
+# The sidecar carries the Apple session, so its published ports must bind
+# loopback only. Docker's empty HostIp means every interface.
+_LOOPBACK_BIND = "127.0.0.1"
+_LOOPBACK_HOSTS = {_LOOPBACK_BIND, "::1"}
 
 # Where the guest's Apple session persists inside the container (compose.yaml
 # volume shape). The host side lives under the managed runtime dir so the
@@ -400,9 +406,11 @@ def container_run_args(
     """The `docker run` that starts the supervised sidecar.
 
     Maps the picked high HTTP port onto the container's :80 and the decrypt
-    TCP port onto :10020, mounts the persistent session dir, and carries the
-    chroot capabilities the compose file documents. Never port 80 on the
-    host: the caller passes the explicitly picked high ports.
+    TCP port onto :10020, both bound to loopback (the sidecar carries the
+    Apple session and is never reached from another machine), mounts the
+    persistent session dir, and carries the chroot capabilities the compose
+    file documents. Never port 80 on the host: the caller passes the
+    explicitly picked high ports.
     """
     args = [
         str(binary),
@@ -421,9 +429,9 @@ def container_run_args(
         "--security-opt",
         "apparmor:unconfined",
         "-p",
-        f"{int(http_port)}:{WRAPPER_CONTAINER_HTTP_PORT}",
+        f"{_LOOPBACK_BIND}:{int(http_port)}:{WRAPPER_CONTAINER_HTTP_PORT}",
         "-p",
-        f"{int(decrypt_port)}:{WRAPPER_CONTAINER_DECRYPT_PORT}",
+        f"{_LOOPBACK_BIND}:{int(decrypt_port)}:{WRAPPER_CONTAINER_DECRYPT_PORT}",
         "-v",
         f"{data_dir}:{_WRAPPER_DATA_CONTAINER_PATH}",
         "-e",
@@ -433,6 +441,51 @@ def container_run_args(
         str(image),
     ]
     return args
+
+
+def _port_number(value, default: int = 0) -> int:
+    """A TCP port from an untyped value, or the default when unreadable."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def port_bindings_are_private(payload: str, http_port: int, decrypt_port: int) -> bool:
+    """Whether a container's `HostConfig.PortBindings` is loopback-only.
+
+    The payload is `docker inspect --format '{{json .HostConfig.PortBindings}}'`
+    stdout. Both mappings must exist, point at the given host ports, and bind
+    only loopback addresses; an unreadable, missing, extra or wildcard
+    binding is not private.
+    """
+    try:
+        bindings = json.loads(payload or "")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(bindings, dict):
+        return False
+    wanted = {
+        f"{WRAPPER_CONTAINER_HTTP_PORT}/tcp": int(http_port),
+        f"{WRAPPER_CONTAINER_DECRYPT_PORT}/tcp": int(decrypt_port),
+    }
+    seen: set[str] = set()
+    for key, entries in bindings.items():
+        if key not in wanted:
+            if isinstance(entries, list) and entries:
+                return False
+            continue
+        if not isinstance(entries, list) or not entries:
+            return False
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return False
+            host = str(entry.get("HostIp") or "").strip()
+            port = str(entry.get("HostPort") or "").strip()
+            if host not in _LOOPBACK_HOSTS or port != str(wanted[key]):
+                return False
+        seen.add(key)
+    return seen == set(wanted)
 
 
 def container_start_args(name: str = WRAPPER_CONTAINER_NAME, binary: str = "docker") -> list[str]:
@@ -592,6 +645,26 @@ class SidecarSupervisor:
         """Whether a sidecar container exists to restart by name (any state)."""
         return bool(self._container_state())
 
+    def _container_bindings_private(self, http_port: int, decrypt_port: int) -> bool:
+        """Whether the existing sidecar publishes both ports on loopback only."""
+        try:
+            proc = self._run(
+                [
+                    self._binary,
+                    "inspect",
+                    "--format",
+                    "{{json .HostConfig.PortBindings}}",
+                    self._container,
+                ],
+                timeout=15,
+            )
+        except Exception:
+            logger.debug("Wrapper port bindings could not be read", exc_info=True)
+            return False
+        if getattr(proc, "returncode", 1) != 0:
+            return False
+        return port_bindings_are_private(getattr(proc, "stdout", "") or "", http_port, decrypt_port)
+
     def _run_fresh(self, *, image: str, port: int, decrypt_port: int, host_data: str, start_timeout: int) -> None:
         """Run a fresh sidecar from the image with the current port mapping."""
         try:
@@ -616,12 +689,14 @@ class SidecarSupervisor:
                 or "container runtime refused",
             )
 
-    def _remove_container(self) -> None:
+    def _remove_container(self) -> bool:
         """Remove the named sidecar so a fresh one can take its ports."""
         try:
-            self._run(container_remove_args(self._container, self._binary), timeout=60)
+            proc = self._run(container_remove_args(self._container, self._binary), timeout=60)
         except Exception:
             logger.debug("Wrapper sidecar remove failed", exc_info=True)
+            return False
+        return bool(getattr(proc, "returncode", 1) == 0)
 
     def _start_container(
         self, *, state: str, image: str, port: int, decrypt_port: int, host_data: str, start_timeout: int
@@ -669,11 +744,23 @@ class SidecarSupervisor:
         the probe answers afterwards. Never pulls or provisions: the runtime
         is the setup wizard's artifact.
         """
-        try:
-            port = int(http_port)
-        except (TypeError, ValueError):
+        port = _port_number(http_port)
+        if port <= 0:
             return False
-        if self.is_ready(port):
+        host_decrypt = _port_number(decrypt_port or WRAPPER_CONTAINER_DECRYPT_PORT, WRAPPER_CONTAINER_DECRYPT_PORT)
+        # A sidecar left by an earlier release can still publish on every
+        # host address; remove it so the run below rebinds both mappings to
+        # loopback. The session lives in the host data dir, so recreation
+        # preserves it. A removal that fails holds the row instead of
+        # trusting the exposed container's health.
+        state = self._container_state()
+        migrated = False
+        if state and not self._container_bindings_private(port, host_decrypt):
+            if not self._remove_container():
+                return False
+            state = ""
+            migrated = True
+        if not migrated and self.is_ready(port):
             self.note_activity()
             return True
         img = self._resolve_image(image)
@@ -683,12 +770,11 @@ class SidecarSupervisor:
         if not host_data:
             return False
         # Either way the probe afterwards decides, never the exit code alone.
-        state = self._container_state()
         self._start_container(
             state=state,
             image=img,
             port=port,
-            decrypt_port=decrypt_port,
+            decrypt_port=host_decrypt,
             host_data=host_data,
             start_timeout=start_timeout,
         )
@@ -703,7 +789,7 @@ class SidecarSupervisor:
         # the image with the current mapping and probe once more.
         self._remove_container()
         self._run_fresh(
-            image=img, port=port, decrypt_port=decrypt_port, host_data=host_data, start_timeout=start_timeout
+            image=img, port=port, decrypt_port=host_decrypt, host_data=host_data, start_timeout=start_timeout
         )
         ready = self.is_ready(port)
         if ready:

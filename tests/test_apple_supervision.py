@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -24,12 +25,18 @@ from waves.apple_supervision import (
     pacing_due,
     pacing_policy,
     parse_retry_after,
+    port_bindings_are_private,
     probe_health,
     throttle_delay,
     throttled_message,
 )
 from waves.model.cfg import HelpSettings, Settings
 from waves.waves_ui.backend import WavesBridge
+
+
+def _published_mappings(args: list) -> list:
+    """The host:container port mappings in a generated docker run/start argv."""
+    return [args[i + 1] for i, value in enumerate(args) if value == "-p"]
 
 
 def test_settings_carry_the_supervision_defaults():
@@ -128,12 +135,52 @@ def test_container_run_args_map_high_ports_and_mount_the_session():
     args = container_run_args(image="img:1", http_port=51234, decrypt_port=51235, data_dir="/tmp/wd")
     assert args[:3] == ["docker", "run", "-d"]
     assert "--name" in args and WRAPPER_CONTAINER_NAME in args
-    assert "51234:80" in args and "51235:10020" in args
+    mappings = _published_mappings(args)
+    assert set(mappings) == {"127.0.0.1:51234:80", "127.0.0.1:51235:10020"}
+    assert all(not mapping.startswith(("0.0.0.0", "[::]")) for mapping in mappings)  # noqa: S104
     assert "/tmp/wd:/app/rootfs/data/data/com.apple.android.music/files" in args
     assert args[-1] == "img:1"
     assert "SYS_ADMIN" in args
     assert container_start_args() == ["docker", "start", WRAPPER_CONTAINER_NAME]
     assert container_stop_args() == ["docker", "stop", WRAPPER_CONTAINER_NAME]
+
+
+def test_port_bindings_are_private_only_for_loopback_both_ports():
+    def payload(host_ip, http="51234", decrypt="51235"):
+        return json.dumps(
+            {
+                "80/tcp": [{"HostIp": host_ip, "HostPort": http}],
+                "10020/tcp": [{"HostIp": host_ip, "HostPort": decrypt}],
+            }
+        )
+
+    assert port_bindings_are_private(payload("127.0.0.1"), 51234, 51235) is True
+    assert port_bindings_are_private(payload("::1"), 51234, 51235) is True
+    assert port_bindings_are_private(payload(""), 51234, 51235) is False
+    assert port_bindings_are_private(payload("0.0.0.0"), 51234, 51235) is False  # noqa: S104
+    assert port_bindings_are_private(payload("192.168.1.10"), 51234, 51235) is False
+    assert port_bindings_are_private(payload("127.0.0.1", http="80"), 51234, 51235) is False
+    assert port_bindings_are_private(payload("127.0.0.1", decrypt="10020"), 51234, 51235) is False
+    assert (
+        port_bindings_are_private(json.dumps({"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "51234"}]}), 51234, 51235)
+        is False
+    )
+    mixed = json.dumps(
+        {
+            "80/tcp": [
+                {"HostIp": "127.0.0.1", "HostPort": "51234"},
+                {"HostIp": "0.0.0.0", "HostPort": "51234"},  # noqa: S104
+            ],
+            "10020/tcp": [{"HostIp": "127.0.0.1", "HostPort": "51235"}],
+        }
+    )
+    assert port_bindings_are_private(mixed, 51234, 51235) is False
+    extra = json.loads(payload("127.0.0.1"))
+    extra["9000/tcp"] = [{"HostIp": "", "HostPort": "9000"}]
+    assert port_bindings_are_private(json.dumps(extra), 51234, 51235) is False
+    assert port_bindings_are_private("garbage", 51234, 51235) is False
+    assert port_bindings_are_private("", 51234, 51235) is False
+    assert port_bindings_are_private("null", 51234, 51235) is False
 
 
 def test_health_probe_shape():
@@ -188,14 +235,18 @@ def test_supervisor_ready_and_ensure_paths():
     )
     assert sup.is_ready(1) is True
 
-    # Healthy already: no subprocess at all.
+    # Healthy already: no lifecycle churn (the state probe still runs so a
+    # stale mapping can be migrated before the sidecar is trusted).
     calls: list = []
     sup2 = SidecarSupervisor(
-        runner=lambda *a, **k: (calls.append(a[0]), SimpleNamespace(returncode=0))[1],
+        runner=lambda *a, **k: (calls.append(list(a[0])), SimpleNamespace(returncode=0))[1],
         http_get=ok_probe,
     )
     assert sup2.ensure_started(http_port=1, image="img:1", data_dir="/tmp/nowhere-supervision") is True
-    assert calls == []
+    kinds = [cmd[:2] for cmd in calls]
+    assert ["docker", "start"] not in kinds
+    assert ["docker", "rm"] not in kinds
+    assert ["docker", "run"] not in kinds
 
     # Down then started: lists containers (none), runs fresh, then healthy.
     probes = {"n": 0}
@@ -248,6 +299,111 @@ def test_supervisor_recreates_a_running_but_unhealthy_container(tmp_path):
     assert ["docker", "start"] not in kinds
     assert ["docker", "rm"] in kinds
     assert ["docker", "run"] in kinds
+
+
+def test_supervisor_migrates_a_healthy_wildcard_container_to_loopback(tmp_path):
+    seen: list = []
+    session_dir = tmp_path / "wd"
+
+    def _runner(args, **kwargs):
+        seen.append(list(args))
+        if args[:2] == ["docker", "ps"]:
+            return SimpleNamespace(returncode=0, stdout="waves-wrapper-v2 running\n", stderr="")
+        if args[1:3] == ["inspect", "--format"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "80/tcp": [{"HostIp": "", "HostPort": "51234"}],
+                        "10020/tcp": [{"HostIp": "0.0.0.0", "HostPort": "10020"}],  # noqa: S104
+                    }
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    # The exposed container answers health, so the migration cannot ride on a
+    # failed probe: the bindings alone must force the recreate.
+    def _healthy(url, timeout=5):
+        return SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
+
+    sup = SidecarSupervisor(runner=_runner, http_get=_healthy, monotonic=lambda: 0.0)
+    assert sup.ensure_started(http_port=51234, image="img:1", data_dir=str(session_dir)) is True
+    kinds = [cmd[:2] for cmd in seen]
+    assert ["docker", "start"] not in kinds
+    assert ["docker", "rm"] in kinds
+    run = next(cmd for cmd in seen if cmd[:2] == ["docker", "run"])
+    assert set(_published_mappings(run)) == {"127.0.0.1:51234:80", "127.0.0.1:10020:10020"}
+    assert f"{session_dir}:/app/rootfs/data/data/com.apple.android.music/files" in run
+
+
+def test_supervisor_holds_when_the_wildcard_container_will_not_remove(tmp_path):
+    seen: list = []
+
+    def _runner(args, **kwargs):
+        seen.append(list(args))
+        if args[:2] == ["docker", "ps"]:
+            return SimpleNamespace(returncode=0, stdout="waves-wrapper-v2 running\n", stderr="")
+        if args[1:3] == ["inspect", "--format"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "80/tcp": [{"HostIp": "", "HostPort": "51234"}],
+                        "10020/tcp": [{"HostIp": "", "HostPort": "10020"}],
+                    }
+                ),
+                stderr="",
+            )
+        if args[:2] == ["docker", "rm"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="device or resource busy")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def _healthy(url, timeout=5):
+        return SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
+
+    sup = SidecarSupervisor(runner=_runner, http_get=_healthy, monotonic=lambda: 0.0)
+    assert sup.ensure_started(http_port=51234, image="img:1", data_dir=str(tmp_path / "wd")) is False
+    kinds = [cmd[:2] for cmd in seen]
+    assert ["docker", "rm"] in kinds
+    assert ["docker", "run"] not in kinds
+
+
+def test_supervisor_starts_a_private_stopped_container_without_recreating(tmp_path):
+    seen: list = []
+    ready = {"yes": False}
+
+    def _runner(args, **kwargs):
+        seen.append(list(args))
+        if args[:2] == ["docker", "ps"]:
+            return SimpleNamespace(returncode=0, stdout="waves-wrapper-v2 exited\n", stderr="")
+        if args[1:3] == ["inspect", "--format"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "51234"}],
+                        "10020/tcp": [{"HostIp": "127.0.0.1", "HostPort": "10020"}],
+                    }
+                ),
+                stderr="",
+            )
+        if args[:2] == ["docker", "start"]:
+            ready["yes"] = True
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def _probe(url, timeout=5):
+        if not ready["yes"]:
+            raise ConnectionError("down")
+        return SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
+
+    sup = SidecarSupervisor(runner=_runner, http_get=_probe, monotonic=lambda: 0.0)
+    assert sup.ensure_started(http_port=51234, image="img:1", data_dir=str(tmp_path / "wd")) is True
+    kinds = [cmd[:2] for cmd in seen]
+    assert ["docker", "start"] in kinds
+    assert ["docker", "rm"] not in kinds
+    assert ["docker", "run"] not in kinds
 
 
 def _bridge_stub(**settings_overrides):
