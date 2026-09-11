@@ -345,26 +345,42 @@ def _wrapper_account_label(payload: dict, auth: dict) -> str:
 def wrapper_auth_state(base_url: str, session=None, timeout: int = 10) -> dict:
     """The wrapper guest's account state from its ``/me`` endpoint.
 
-    Returns ``{"reachable", "state", "account", "error"}``: ``state`` is
-    ``logged_in`` or ``logged_out`` when the guest answered, "" when it did
-    not. Never raises: the caller reads the dict.
+    Returns ``{"reachable", "state", "logged_in", "account", "error"}``.
+    ``state`` keeps the guest's own spelling (the live guest answers
+    ``authenticated``); ``logged_in`` folds it to one boolean, true whenever
+    the guest answered with a state that is not ``logged_out`` (the same
+    rule gamdl uses). Never raises: the caller reads the dict.
     """
     base = str(base_url or "").strip().rstrip("/")
     if not base:
-        return {"reachable": False, "state": "", "account": "", "error": "The wrapper tier is not set up."}
+        return {
+            "reachable": False,
+            "state": "",
+            "logged_in": False,
+            "account": "",
+            "error": "The wrapper tier is not set up.",
+        }
     client = session if session is not None else _session()
     try:
         response = client.get(f"{base}/me", timeout=timeout)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
-        return {"reachable": False, "state": "", "account": "", "error": _wrapper_error(exc)}
+        return {"reachable": False, "state": "", "logged_in": False, "account": "", "error": _wrapper_error(exc)}
     if not isinstance(payload, dict):
-        return {"reachable": True, "state": "", "account": "", "error": "The wrapper sent an unexpected reply."}
+        return {
+            "reachable": True,
+            "state": "",
+            "logged_in": False,
+            "account": "",
+            "error": "The wrapper sent an unexpected reply.",
+        }
     auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
+    state = str(auth.get("state") or "").strip().lower()
     return {
         "reachable": True,
-        "state": str(auth.get("state") or "").strip().lower(),
+        "state": state,
+        "logged_in": bool(state and state != "logged_out"),
         "account": _wrapper_account_label(payload, auth),
         "error": "",
     }

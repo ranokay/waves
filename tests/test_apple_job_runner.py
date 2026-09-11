@@ -730,7 +730,8 @@ def test_wrapper_only_account_queues_without_a_cookies_file(tmp_path):
     stub.threadpool = _InlinePool()
     stub.apple_wrapper_auth_state = lambda *a, **k: {
         "reachable": True,
-        "state": "logged_in",
+        "state": "authenticated",
+        "logged_in": True,
         "account": "me@example.com",
         "error": "",
     }

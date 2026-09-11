@@ -382,12 +382,15 @@ def test_wrapper_auth_state_reads_the_guest_me():
     base = "http://127.0.0.1:51234"
     session = _WrapperSession(
         get={
-            f"{base}/me": _WrapperResp(payload={"auth": {"state": "logged_in"}, "account": {"email": "me@example.com"}})
+            f"{base}/me": _WrapperResp(
+                payload={"auth": {"state": "authenticated"}, "account": {"email": "me@example.com"}}
+            )
         }
     )
     assert wrapper_auth_state(base, session=session) == {
         "reachable": True,
-        "state": "logged_in",
+        "state": "authenticated",
+        "logged_in": True,
         "account": "me@example.com",
         "error": "",
     }
@@ -406,6 +409,7 @@ def test_wrapper_auth_state_reports_logged_out_and_rejects_malformed():
     assert wrapper_auth_state(base, session=out) == {
         "reachable": True,
         "state": "logged_out",
+        "logged_in": False,
         "account": "",
         "error": "",
     }
@@ -424,13 +428,19 @@ def test_refresh_wrapper_auth_mirrors_onto_the_provider(tmp_path, monkeypatch):
     stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append(True))
     monkeypatch.setattr(
         "waves.apple_runtime.wrapper_auth_state",
-        lambda url, **kwargs: {"reachable": True, "state": "logged_in", "account": "me@example.com", "error": ""},
+        lambda url, **kwargs: {
+            "reachable": True,
+            "state": "authenticated",
+            "logged_in": True,
+            "account": "me@example.com",
+            "error": "",
+        },
     )
     stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
 
     result = stub._refresh_apple_wrapper_auth()
 
-    assert result["state"] == "logged_in"
+    assert result["state"] == "authenticated"
     assert provider.wrapper_logged_in is True
     assert emitted, "the wizard's form re-read signal fires on a state change"
 
@@ -731,7 +741,8 @@ def test_live_flags_read_the_wrapper_session_without_cookies(tmp_path):
     stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
     stub.apple_wrapper_auth_state = lambda *a, **k: {
         "reachable": True,
-        "state": "logged_in",
+        "state": "authenticated",
+        "logged_in": True,
         "account": "me@example.com",
         "error": "",
     }
@@ -935,7 +946,13 @@ def test_container_running_and_runtime_managed_are_done():
         cookies_verified=True,
         runtime_state="managed",
         container={"name": "docker", "available": True, "running": True, "hint": ""},
-        wrapper_auth={"reachable": True, "state": "logged_in", "account": "me@example.com", "error": ""},
+        wrapper_auth={
+            "reachable": True,
+            "state": "authenticated",
+            "logged_in": True,
+            "account": "me@example.com",
+            "error": "",
+        },
         image_pulled=True,
         port=51234,
     )
@@ -1124,7 +1141,8 @@ def test_wrapper_only_account_passes_the_setup_gate(tmp_path):
     stub._apple_cookies_ready = WavesBridge._apple_cookies_ready.__get__(stub, SimpleNamespace)
     stub.apple_wrapper_auth_state = lambda *a, **k: {
         "reachable": True,
-        "state": "logged_in",
+        "state": "authenticated",
+        "logged_in": True,
         "account": "me@example.com",
         "error": "",
     }
