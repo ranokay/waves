@@ -16766,16 +16766,18 @@ ApplicationWindow {
         // sessionResolved gates the overlay so an already-signed-in launch
         // doesn't flash the logged-out screen while the cached-token network
         // check is still in flight.
-        // The provider picker (issue #63) owns the first run: this panel only
-        // shows once the picker was answered, and never while Apple Music is
-        // the chosen provider (an Apple-only user is not signed out of
-        // anything). Nothing here ever starts a login on its own: the
-        // browser opens solely on the button click below.
-        visible: waves.sessionResolved && !root.signedIn && !waves.appleEnabled && setupSettings.providerPickerDone
+        // The provider picker owns the first run: the panel shows once the
+        // picker was answered with Apple off, and whenever a login is in
+        // progress no matter which provider is enabled, so a sign-in started
+        // from Settings keeps its paste field. Nothing here starts a login
+        // on its own: the browser opens solely on a button click. No
+        // MouseArea covers the window, so the nav underneath stays clickable;
+        // the dim is paint only.
+        visible: waves.sessionResolved && !root.signedIn
+                 && (loginPanel.urlOpened || (!waves.appleEnabled && setupSettings.providerPickerDone))
         // A logged-out cold launch fades in with the rest of the interface.
         opacity: root.bootContentShown
         color: "#d606070e"
-        MouseArea { anchors.fill: parent }
         Rectangle {
             anchors.centerIn: parent; width: 460; radius: 14; color: root.surface2; border.color: root.outline
             implicitHeight: loginCol.implicitHeight + 40

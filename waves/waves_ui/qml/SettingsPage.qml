@@ -2644,21 +2644,24 @@ Item {
                                                         id: actPill
                                                         required property var modelData
                                                         readonly property string actKey: modelData.action !== undefined ? String(modelData.action) : ""
-                                                        // The setup-wizard slice ships the actions behind
-                                                        // these pills: Setup wizard re-probes the live
-                                                        // setup state and rebuilds the steps below (a
-                                                        // bare re-read would serve cached probes and look
-                                                        // dead), Update installs the managed runtime,
-                                                        // Remove deletes it. A pill without an action key
-                                                        // stays inert (no MouseArea).
+                                                        // Action pills dispatch to the bridge by
+                                                        // action key: the setup-wizard actions
+                                                        // re-probe the live setup state and rebuild
+                                                        // the steps below (a bare re-read would serve
+                                                        // cached probes and look dead), install or
+                                                        // remove the managed runtime, and the TIDAL
+                                                        // session's sign-in starts the same login
+                                                        // flow the landing panel uses. A pill without
+                                                        // an action key stays inert (no MouseArea).
                                                         readonly property bool actLive: actPill.actKey !== ""
                                                         width: actTxt.implicitWidth + page.btnPadH * 2
                                                         height: actTxt.implicitHeight + page.btnPadV * 2
                                                         radius: page.btnRad
                                                         color: "transparent"; border.color: page.border1
                                                         opacity: actPill.actLive ? 1.0 : 0.45
-                                                        function runAppleAction() {
-                                                            if (actPill.actKey === "apple_update_runtime") waves.installAppleRuntime()
+                                                        function runAction() {
+                                                            if (actPill.actKey === "tidal_signin") waves.beginLogin()
+                                                            else if (actPill.actKey === "apple_update_runtime") waves.installAppleRuntime()
                                                             else if (actPill.actKey === "apple_remove_runtime") waves.removeAppleRuntime()
                                                             else if (actPill.actKey === "apple_setup") { page.appleSetupLive = waves.appleSetupState(); waves.refreshAppleSetup() }
                                                         }
@@ -2673,7 +2676,7 @@ Item {
                                                         MouseArea {
                                                             visible: actPill.actLive
                                                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                            onClicked: actPill.runAppleAction()
+                                                            onClicked: actPill.runAction()
                                                         }
                                                     }
                                                 }

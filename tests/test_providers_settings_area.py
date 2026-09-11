@@ -204,6 +204,22 @@ def test_the_status_light_flips_with_the_switch_and_the_session():
     assert session["value"] == "not_signed_in" and session["word"] == "Not signed in"
 
 
+def test_the_tidal_card_offers_sign_in_only_while_signed_out():
+    unsigned = _providers(_schema(logged_in=False))["providers_tidal"]["fields"][0]
+    assert unsigned["key"] == "provider_tidal_session"
+    assert unsigned["value"] == "not_signed_in"
+    assert unsigned["actions"] == [{"label": "Sign in", "action": "tidal_signin"}]
+
+    # The action does not depend on the Apple switch: an Apple-enabled,
+    # TIDAL-signed-out install is exactly the state that lost its entry point.
+    apple_on = _providers(_schema(apple_enabled=True))["providers_tidal"]["fields"][0]
+    assert apple_on["actions"] == [{"label": "Sign in", "action": "tidal_signin"}]
+
+    signed = _providers(_schema(logged_in=True))["providers_tidal"]["fields"][0]
+    assert signed["value"] == "signed_in"
+    assert "actions" not in signed
+
+
 def test_one_helper_serves_the_slot_and_the_schema():
     assert _apple_status(False) == {"state": "off", "word": "Off"}
     assert _apple_status(True) == {"state": "not_set_up", "word": "Not set up"}
