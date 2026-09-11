@@ -111,7 +111,15 @@ from waves.model.gui_data import ProgressBars
 from waves.ownership import OwnershipStore
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress
-from waves.providers import AppleProvider, AudioType, Capability, Provider, RefusalKind, TidalProvider
+from waves.providers import (
+    AppleCollectionIncomplete,
+    AppleProvider,
+    AudioType,
+    Capability,
+    Provider,
+    RefusalKind,
+    TidalProvider,
+)
 from waves.waves_ui import proc
 from waves.waves_ui.session import WavesTidal
 from waves.worker import Worker
@@ -6269,7 +6277,7 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             t0 = devlog.clock()
-            failed = False
+            failure: str | None = None
             try:
                 provider = self.providers[CTX_APPLE]
                 raw_id = str(artist_id).removeprefix(f"{CTX_APPLE}:")
@@ -6293,9 +6301,13 @@ class WavesBridge(LibraryMixin, QObject):
                 # artist with no catalogue: never cached.
                 if gen == self._browse_gen and (payload["albums"] or payload["eps"] or payload["tracks"]):
                     self._remember_artist_page(artist_id, payload)
+            except AppleCollectionIncomplete as exc:
+                failure = str(exc)
+                logger.warning("Apple artist fetch stopped partway: %s", artist_id)
+                return
             except Exception:
+                failure = "Could not open that artist"
                 logger.exception("Could not load Apple artist %s", artist_id)
-                failed = True
                 return
             finally:
                 # Same claim breath as _start_artist_build's: free the hover
@@ -6312,14 +6324,14 @@ class WavesBridge(LibraryMixin, QObject):
                     else:
                         claimed = False
                 quiet = silent and not claimed  # nobody is watching this build
-                if failed:
+                if failure is not None:
                     if quiet:
                         _prefetch_log.debug("prefetch Apple artist %s failed", artist_id)
                     elif gen == self._browse_gen:
-                        self._set_status("Could not open that artist")
+                        self._set_status(failure)
                         self._set_busy(False)
                         self.artistLoadFailed.emit(artist_id)
-            if failed:
+            if failure is not None:
                 return
             if gen != self._browse_gen:
                 return  # logged out mid-fetch; the rows belong to the dead session
@@ -12546,10 +12558,15 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             obj = None
+            failure = ""
             try:
                 provider = self.providers.get(CTX_APPLE)
                 if provider is not None:
                     obj = provider.get_object(bucket, str(media_id).removeprefix(f"{CTX_APPLE}:"))
+            except AppleCollectionIncomplete as exc:
+                # A partway collection never downloads as if it were complete.
+                failure = str(exc)
+                logger.warning("Apple %s fetch stopped partway: %s", bucket, failure)
             except Exception:
                 logger.exception("Could not re-fetch Apple %s %s for download", bucket, media_id)
             if gen != self._browse_gen:
@@ -12561,7 +12578,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self._refetch_inflight.discard(key)
                 self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "failed")
-                self._set_status("That item is no longer available")
+                self._set_status(failure or "That item is no longer available")
                 self._bump_download_groups(media_id, None, "failed")
                 return
             self._mediaRefetched.emit(bucket, media_id)
@@ -15279,7 +15296,7 @@ class WavesBridge(LibraryMixin, QObject):
                     stopped_before_it_started()
                     return
                 reason = ""
-                if isinstance(exc, DownloadIncomplete):
+                if isinstance(exc, (DownloadIncomplete, AppleCollectionIncomplete)):
                     reason = str(exc)
                 else:
                     verdict = self.providers[spec.provider_id].classify_refusal(exc)
@@ -19115,10 +19132,14 @@ class WavesBridge(LibraryMixin, QObject):
 
             def apple_work() -> None:
                 obj = None
+                failure = ""
                 try:
                     provider = self.providers.get(CTX_APPLE)
                     if provider is not None:
                         obj = provider.get_object(bucket, str(media_id).removeprefix(f"{CTX_APPLE}:"))
+                except AppleCollectionIncomplete as exc:
+                    failure = str(exc)
+                    logger.warning("Apple %s retry fetch stopped partway: %s", bucket, failure)
                 except Exception:
                     logger.exception("Could not re-fetch Apple %s %s for retry", bucket, media_id)
                 if gen != self._browse_gen:
@@ -19126,7 +19147,7 @@ class WavesBridge(LibraryMixin, QObject):
                     return
                 if obj is None:
                     self._refetch_inflight.discard(key)
-                    self._set_status("That item is no longer available")
+                    self._set_status(failure or "That item is no longer available")
                     return
                 self._queueRetryRefetched.emit(bucket, media_id, qid)
 

@@ -12,6 +12,7 @@ import pytest
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
 from waves.helper.exceptions import DownloadIncomplete
+from waves.providers import AppleCollectionIncomplete
 from waves.providers.base import AudioType
 from waves.waves_ui.backend import WavesBridge
 
@@ -737,6 +738,52 @@ def test_track_slot_refetches_a_cache_miss_on_a_worker(tmp_path):
 
     assert stub._mediaRefetched.emits == [("track", "apple:song-1")]
     assert ("track", "apple:song-1") in stub._refetch_inflight
+
+
+def test_incomplete_apple_collection_refetch_reports_the_partial_failure(tmp_path):
+    """A refetch that stops partway fails with the provider's words (S04)."""
+    provider = _FakeProvider()
+
+    def _partway(kind, raw_id):
+        raise AppleCollectionIncomplete(kind)
+
+    provider.get_object = _partway
+    base = tmp_path / "lib"
+    stub = _entry_stub(base, provider, None)
+    stub.threadpool = _InlinePool()
+    stub._refetch_inflight = set()
+    stub._browse_gen = 0
+    stub._mediaRefetched = _Signal()
+    stub._bump_download_groups = lambda *a: None
+    stub._chooser_drop_refetch = lambda *a: None
+    stub._refetch_apple_for_download = lambda *a, **k: WavesBridge._refetch_apple_for_download(stub, *a, **k)
+
+    stub._refetch_apple_for_download("playlist", "apple:pl.1")
+
+    assert any("part of this playlist" in status for status in stub.statuses)
+    assert ("apple:pl.1", "failed") in stub.downloadState.emits
+    assert ("playlist", "apple:pl.1") not in stub._refetch_inflight
+
+
+def test_incomplete_apple_collection_retry_refetch_reports_the_partial_failure(tmp_path):
+    """The RETRY refetch keeps the provider's words too (S04)."""
+    provider = _FakeProvider()
+
+    def _partway(kind, raw_id):
+        raise AppleCollectionIncomplete(kind)
+
+    provider.get_object = _partway
+    stub = _entry_stub(tmp_path / "lib", provider, None)
+    stub.threadpool = _InlinePool()
+    stub._refetch_inflight = set()
+    stub._browse_gen = 0
+    stub._queueRetryRefetched = _Signal()
+    stub._retry_queue_refetch = WavesBridge._retry_queue_refetch.__get__(stub)
+
+    stub._retry_queue_refetch({"type": "playlist", "media_id": "apple:pl.1", "qid": 3})
+
+    assert any("part of this playlist" in status for status in stub.statuses)
+    assert ("playlist", "apple:pl.1") not in stub._refetch_inflight
 
 
 def test_configure_apple_provider_reads_settings(tmp_path):

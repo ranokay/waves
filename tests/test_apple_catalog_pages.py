@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from waves.providers.apple import AppleProvider
+import pytest
+
+from waves.providers.apple import AppleCollectionIncomplete, AppleProvider
 
 
 def _song_resource(song_id="song-1", with_preview=True):
@@ -292,3 +294,147 @@ def test_rendering_a_fetched_empty_album_preserves_completeness():
 
     assert provider.get_object("album", "apple:album-9") is fetched
     assert provider._catalog.calls == [("album", "album-9")]
+
+
+class _PagingCatalog(_Catalog):
+    """A catalog whose continuation replies are scripted by URI."""
+
+    def __init__(self, pages=None, fail=(), **kwargs):
+        super().__init__(**kwargs)
+        self.pages = dict(pages or {})
+        self.fail = set(fail or ())
+
+    async def _amp_request(self, uri, params=None):
+        self.calls.append(("page", uri))
+        if uri in self.fail:
+            raise RuntimeError("network died")
+        return self.pages[uri]
+
+
+def _named_song(song_id, name):
+    res = _song_resource(song_id)
+    res["attributes"]["name"] = name
+    return res
+
+
+def _named_album(album_id, name):
+    res = _album_resource()
+    res["id"] = album_id
+    res["attributes"]["name"] = name
+    return res
+
+
+def test_playlist_fetch_follows_every_page_in_order_and_keeps_repeats():
+    page1 = {
+        "id": "pl.1",
+        "type": "playlists",
+        "attributes": {"name": "Long list"},
+        "relationships": {
+            "tracks": {
+                "data": [_named_song("song-1", "One"), _named_song("song-2", "Two")],
+                "next": "/v1/catalog/us/playlists/pl.1/tracks?offset=2&limit=2",
+            }
+        },
+    }
+    page2 = {"data": [_named_song("song-3", "Three"), _named_song("song-2", "Two")]}
+    catalog = _PagingCatalog(
+        playlist=page1,
+        pages={"/v1/catalog/us/playlists/pl.1/tracks?offset=2&limit=2": page2},
+    )
+    provider = AppleProvider(catalog=catalog)
+
+    item = provider.get_object("playlist", "pl.1")
+    rows = provider.collection_items(item)
+
+    assert [(row["id"], row["title"]) for row in rows] == [
+        ("apple:song-1", "One"),
+        ("apple:song-2", "Two"),
+        ("apple:song-3", "Three"),
+        ("apple:song-2", "Two"),
+    ]
+    assert ("playlist", "pl.1") in provider._complete
+
+
+def test_artist_fetch_follows_view_and_relationship_pages():
+    artist = {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
+        "relationships": {
+            "albums": {
+                "data": [_named_album("album-1", "First")],
+                "next": "https://amp-api.music.apple.com/v1/catalog/us/artists/artist-1/albums?offset=1",
+                "views": {
+                    "full-albums": {
+                        "data": [_named_album("album-3", "Third")],
+                        "next": "/v1/catalog/us/artists/artist-1/views/full-albums?offset=1",
+                    }
+                },
+            }
+        },
+        "views": {
+            "top-songs": {
+                "data": [_named_song("song-1", "One")],
+                "next": "/v1/catalog/us/artists/artist-1/views/top-songs?offset=1",
+            }
+        },
+    }
+    catalog = _PagingCatalog(
+        artist=artist,
+        pages={
+            "/v1/catalog/us/artists/artist-1/albums?offset=1": {"data": [_named_album("album-2", "Second")]},
+            "/v1/catalog/us/artists/artist-1/views/full-albums?offset=1": {"data": [_named_album("album-4", "Fourth")]},
+            "/v1/catalog/us/artists/artist-1/views/top-songs?offset=1": {"data": [_named_song("song-2", "Two")]},
+        },
+    )
+    provider = AppleProvider(catalog=catalog)
+
+    page = provider.artist_page(provider.get_object("artist", "artist-1"))
+
+    assert [row["title"] for row in page["albums"]] == ["Third", "Fourth", "First", "Second"]
+    assert [row["title"] for row in page["tracks"]] == ["One", "Two"]
+
+
+def test_a_failed_continuation_raises_and_caches_nothing_partial():
+    page1 = {
+        "id": "pl.1",
+        "type": "playlists",
+        "attributes": {"name": "Long list"},
+        "relationships": {
+            "tracks": {
+                "data": [_named_song("song-1", "One")],
+                "next": "/v1/catalog/us/playlists/pl.1/tracks?offset=1",
+            }
+        },
+    }
+    catalog = _PagingCatalog(playlist=page1, fail={"/v1/catalog/us/playlists/pl.1/tracks?offset=1"})
+    provider = AppleProvider(catalog=catalog)
+
+    with pytest.raises(AppleCollectionIncomplete) as first:
+        provider.get_object("playlist", "pl.1")
+    assert "playlist" in str(first.value)
+
+    assert ("playlist", "pl.1") not in provider._complete
+    assert provider._objects["playlist"] == {}
+
+    with pytest.raises(AppleCollectionIncomplete):
+        provider.get_object("playlist", "pl.1")
+    assert [call for call in catalog.calls if call[0] == "playlist"] == [("playlist", "pl.1")] * 2
+
+
+def test_a_listed_track_that_cannot_be_resolved_fails_loudly():
+    id_only = {"id": "song-2", "type": "songs"}
+    album = _album_resource()
+    album["relationships"]["tracks"]["data"] = [_named_song("song-1", "One"), id_only]
+    catalog = _PagingCatalog(album=album)
+
+    async def _gone(song_id):
+        raise RuntimeError("gone")
+
+    catalog.get_song = _gone
+    provider = AppleProvider(catalog=catalog)
+    item = provider.get_object("album", "album-1")
+
+    with pytest.raises(AppleCollectionIncomplete) as excinfo:
+        provider.collection_items(item)
+    assert "album" in str(excinfo.value)

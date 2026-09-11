@@ -26,7 +26,34 @@ class AppleCatalogUnavailable(RuntimeError):
         super().__init__("Apple changed its web app. A Waves update is needed.")
 
 
+class AppleCollectionIncomplete(RuntimeError):
+    """A collection's continuation pages did not all arrive.
+
+    Raised before a partial set is cached or handed to a page or download,
+    so a truncated collection is never presented as complete.
+    """
+
+    def __init__(self, collection: str = "") -> None:
+        label = str(collection or "collection").strip() or "collection"
+        super().__init__(f"Apple sent only part of this {label}. Try again.")
+
+
 logger = logging.getLogger("waves.providers.apple")
+
+
+def _relative_amp_uri(raw: str) -> str:
+    """An AMP request path from a continuation value.
+
+    Apple's ``next`` is usually already relative; an absolute form is
+    stripped to its path and query, the shape ``_amp_request`` accepts.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme or parsed.netloc:
+        text = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    return text
 
 
 def _song_query_id(query: str) -> str | None:
@@ -478,25 +505,98 @@ class AppleProvider(Provider):
             return cls._has_view_data(item.get("views"))
         return False
 
-    async def _fetch_album(self, raw_id: str) -> dict:
+    async def _ensure_catalog(self):
+        """The shared catalog client, created lazily on first use."""
         if self._catalog is None:
             self._catalog = await self._catalog_factory()
-        return await self._catalog.get_album(raw_id)
+        return self._catalog
+
+    async def _fetch_album(self, raw_id: str) -> dict:
+        catalog = await self._ensure_catalog()
+        response = await catalog.get_album(raw_id)
+        await self._exhaust_response(response, "album")
+        return response
 
     async def _fetch_artist(self, raw_id: str) -> dict:
-        if self._catalog is None:
-            self._catalog = await self._catalog_factory()
-        return await self._catalog.get_artist(raw_id)
+        catalog = await self._ensure_catalog()
+        response = await catalog.get_artist(raw_id)
+        await self._exhaust_response(response, "artist")
+        return response
 
     async def _fetch_playlist(self, raw_id: str) -> dict:
-        if self._catalog is None:
-            self._catalog = await self._catalog_factory()
-        return await self._catalog.get_playlist(raw_id)
+        catalog = await self._ensure_catalog()
+        response = await catalog.get_playlist(raw_id)
+        await self._exhaust_response(response, "playlist")
+        return response
 
     async def _fetch_song(self, raw_id: str) -> dict:
-        if self._catalog is None:
-            self._catalog = await self._catalog_factory()
-        return await self._catalog.get_song(raw_id)
+        catalog = await self._ensure_catalog()
+        return await catalog.get_song(raw_id)
+
+    async def _exhaust_response(self, response: dict, label: str) -> None:
+        """Append every continuation page of a fetched resource in place."""
+        if not isinstance(response, dict):
+            return
+        data = response.get("data")
+        resources = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+        for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+            for bucket in self._resource_buckets(resource):
+                await self._exhaust_pages(bucket, label)
+
+    @staticmethod
+    def _resource_buckets(resource: dict) -> list[dict]:
+        """Every relationship/view bucket one resource carries.
+
+        A relationship may nest its own ``views`` (an artist's albums
+        relationship carries named views); those buckets paginate too.
+        """
+        buckets: list[dict] = []
+        for key in ("relationships", "views"):
+            group = resource.get(key)
+            if not isinstance(group, dict):
+                continue
+            for bucket in group.values():
+                if not isinstance(bucket, dict):
+                    continue
+                buckets.append(bucket)
+                views = bucket.get("views")
+                if isinstance(views, dict):
+                    buckets.extend(view for view in views.values() if isinstance(view, dict))
+        return buckets
+
+    @staticmethod
+    def _page_next(bucket: dict) -> str:
+        """A bucket's continuation URI, under ``next`` or ``links.next``."""
+        if not isinstance(bucket, dict):
+            return ""
+        links = bucket.get("links") if isinstance(bucket.get("links"), dict) else {}
+        return _relative_amp_uri(bucket.get("next") or links.get("next") or "")
+
+    async def _exhaust_pages(self, bucket: dict, label: str) -> None:
+        """Append every continuation page of one relationship/view in place.
+
+        Order is preserved and repeated entries are kept (Apple playlists may
+        list one song twice). A continuation that fails raises
+        :class:`AppleCollectionIncomplete`, never a short list.
+        """
+        entries = bucket.get("data")
+        if not isinstance(entries, list):
+            return
+        next_uri = self._page_next(bucket)
+        while next_uri:
+            catalog = await self._ensure_catalog()
+            try:
+                page = await catalog._amp_request(next_uri)
+            except Exception as exc:
+                raise AppleCollectionIncomplete(label) from exc
+            if not isinstance(page, dict):
+                raise AppleCollectionIncomplete(label)
+            data = page.get("data")
+            if isinstance(data, list):
+                entries.extend(entry for entry in data if isinstance(entry, dict))
+            next_uri = self._page_next(page)
 
     @staticmethod
     def _first_data(response: dict) -> dict:
@@ -530,9 +630,16 @@ class AppleProvider(Provider):
         if not isinstance(item, dict):
             return []
         tracks = self._relationship_items(item, "tracks")
-        return self._track_rows(tracks)
+        label = str(item.get("type") or "collection").removesuffix("s") or "collection"
+        return self._track_rows(tracks, label)
 
-    def _track_rows(self, resources: list[dict]) -> list[dict]:
+    def _track_rows(self, resources: list[dict], label: str = "collection") -> list[dict]:
+        """Listed track entries as Waves rows; an unresolvable one fails loudly.
+
+        Most entries already carry attributes. An id-only entry is re-fetched,
+        and a failure raises AppleCollectionIncomplete: a collection missing
+        an item it listed is never handed on as complete.
+        """
         rows: list[dict] = []
         for res in resources:
             if not isinstance(res, dict) or not res.get("id"):
@@ -540,21 +647,21 @@ class AppleProvider(Provider):
             if not self._attributes(res).get("name"):
                 try:
                     res = self.get_object("track", str(res.get("id")))
-                except Exception:
-                    logger.debug("Skipping an Apple track refetch that failed", exc_info=True)
-                    continue
+                except Exception as exc:
+                    logger.warning("Apple could not resolve a listed track: %s", res.get("id"))
+                    raise AppleCollectionIncomplete(label) from exc
                 if not isinstance(res, dict):
-                    continue
+                    raise AppleCollectionIncomplete(label)
             rows.append(self._track_row(res, {}))
         return rows
 
     @classmethod
-    def _relationship_items(
-        cls, item: dict, kind: str
-    ) -> list[dict]:  # One window only: a playlist longer than the fetch window carries a
-        # `next` continuation that v1 does not follow (no seam exists for
-        # arbitrary continuation URLs; the fetch asks for 300 tracks, which
-        # covers the realistic range, and albums are complete by definition).
+    def _relationship_items(cls, item: dict, kind: str) -> list[dict]:
+        """One relationship's data entries as (possibly empty) dicts.
+
+        Fetched resources have every continuation page appended already (see
+        _exhaust_response), so this reader never sees a first-window slice.
+        """
         relationships = item.get("relationships") or {}
         related = relationships.get(kind) or {}
         data = related.get("data") or []
