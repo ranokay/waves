@@ -43,10 +43,26 @@ def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
     # Private hosting authenticates through an optional masked header.
     assert "secrets.APK_AUTH_HEADER" in text
     assert "push: true" in text
+    # Pins regenerate deterministically from the blessed APK (issue #82)
+    # instead of trusting upstream's file to track it; the strict
+    # extraction then proves the staged tree matches.
+    assert "--ignore-hash" in text
+    assert "LIBS_VERSION.json" in text
     # The APK arrives at build time only: never checked out, never committed.
     assert "extract-libs.sh" in text and "LIBS_VERSION" in text
     # Smoke test gates the push: /health plus the TCP decrypt port.
     assert "/health" in text and "11020" in text
+
+
+def test_blessed_apk_inputs_match_the_app_pins():
+    import yaml
+
+    from waves.apple_runtime import APK_PINNED_VERSION
+
+    wf = yaml.safe_load(WORKFLOW.read_text())
+    inputs = wf[True]["workflow_dispatch"]["inputs"]  # YAML reads `on:` as boolean True
+    assert inputs["apk_version"]["default"] == APK_PINNED_VERSION
+    assert inputs["apk_build"]["default"] == "1109"
 
 
 def test_runbook_names_the_current_pins():

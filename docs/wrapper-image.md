@@ -106,12 +106,12 @@ redesign where user-supplied libs mount at runtime instead of baking in.
 
 These four move together; bump them as one change:
 
-| Piece       | Where                                                            | Current                   |
-| ----------- | ---------------------------------------------------------------- | ------------------------- |
-| Image tag   | workflow `image_tag` input                                       | `0.2.3`                   |
-| Image pin   | `WRAPPER_V2_IMAGE`, `waves/apple_runtime.py`                     | `…:0.2.3`                 |
-| APK version | `APK_PINNED_VERSION`, same file + `APK_URL` content              | `3.6.0-beta` (build 1109) |
-| Guest libs  | `WRAPPER_LIBS_VERSION`, same file + upstream `LIBS_VERSION.json` | `17.0.0`                  |
+| Piece       | Where                                                                                                                                                                                                                                                                                                | Current                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| Image tag   | workflow `image_tag` input                                                                                                                                                                                                                                                                           | `0.2.3`                   |
+| Image pin   | `WRAPPER_V2_IMAGE`, `waves/apple_runtime.py`                                                                                                                                                                                                                                                         | `…:0.2.3`                 |
+| APK version | `APK_PINNED_VERSION`, same file + `APK_URL` content                                                                                                                                                                                                                                                  | `3.6.0-beta` (build 1109) |
+| Guest libs  | regenerated from the blessed APK at build time (issue #82): upstream's pin file matched 3.6.0-1109 when last checked, but nothing guarantees it tracks the blessed APK, so CI pins deterministically from the file itself; `WRAPPER_LIBS_VERSION` (`17.0.0`) is still recorded in the image manifest | 18 arm64 libs             |
 
 When upstream `wrapper-v2` fixes something you need (or Apple breaks
 something it must adapt to): pick the upstream SHA, rebuild with the same

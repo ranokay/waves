@@ -3,13 +3,16 @@
 # Upstream wrapper-v2 ships source only, so Waves publishes its own pinned
 # image for end-user pulls. The build needs Apple's native libraries, which
 # must never enter this repo: they arrive at build time through the private
-# APK_URL secret (an .apk/.apkm you host privately), are extracted and
-# hash-verified against the source tree's LIBS_VERSION.json, and only then
-# baked into the pushed image. The secret is unreadable from forks, so fork
-# PRs can read this file but never run the publish path. Private hosting
-# needs auth: set the optional APK_AUTH_HEADER secret to the full header
-# line (e.g. "Authorization: Bearer <token>"); it is sent only to fetch
-# the artifact and never printed (secret values are masked in logs).
+# APK_URL secret (an .apk/.apkm you host privately). The lib pins are
+# regenerated deterministically from that blessed APK (issue #82) instead
+# of trusting upstream's pin file to track it, then strictly verified; the
+# blessed APK identity (version/build inputs) is recorded, not trusted
+# blindly.
+# The secrets are unreadable from forks, so fork PRs can read this file
+# but never run the publish path. Private hosting needs auth: set the
+# optional APK_AUTH_HEADER secret to the full header line (e.g.
+# "Authorization: Bearer <token>"); it is sent only to fetch the artifact
+# and never printed (secret values are masked in logs).
 #
 # What gets published: linux/arm64 only (the Apple-silicon native path; the
 # compile stage stays linux/amd64 because Google ships the NDK as x86_64
@@ -29,6 +32,16 @@ on:
         description: "Tag to push (must equal the WRAPPER_V2_IMAGE pin)"
         required: false
         default: "0.2.3"
+        type: string
+      apk_version:
+        description: "Blessed APK version (must equal APK_PINNED_VERSION)"
+        required: false
+        default: "3.6.0-beta"
+        type: string
+      apk_build:
+        description: "Blessed APK build number (lib pins are generated from it)"
+        required: false
+        default: "1109"
         type: string
 
 permissions:
@@ -51,6 +64,8 @@ jobs:
       # with zero edits (the app pin stays the maintainer's; see docs).
       IMAGE: ghcr.io/${{ github.repository_owner }}/waves-wrapper-v2
       TAG: ${{ inputs.image_tag }}
+      APK_VERSION: ${{ inputs.apk_version }}
+      APK_BUILD: ${{ inputs.apk_build }}
       TARGET_ARCH: arm64-v8a
       RUNTIME_PLATFORM: linux/arm64
 
@@ -128,7 +143,41 @@ jobs:
           echo "APPLE_MUSIC_ARTIFACT=${artifact}" >> "$GITHUB_ENV"
           ls -lh "${artifact}"
 
-      - name: Extract Apple native libs (hash-verified against LIBS_VERSION.json)
+      - name: Regenerate lib pins from the blessed APK
+        working-directory: wrapper-v2
+        run: |
+          # Upstream's LIBS_VERSION.json is not guaranteed to track the
+          # blessed APK (issue #82), so the blessed file is the source of
+          # truth: extract once ignoring hashes, rewrite this arch's pins
+          # plus the APK identity, and let the strict extraction below prove
+          # the tree matches. The APK file itself is authenticated by the
+          # app's APK_SHA256 on the user side, never here.
+          blessed_out="${RUNNER_TEMP}/blessed-libs"
+          ./tools/extract-libs.sh \
+            --bundle "${GITHUB_WORKSPACE}/${APPLE_MUSIC_ARTIFACT}" \
+            --arch "${TARGET_ARCH}" \
+            --out "${blessed_out}" \
+            --ignore-hash
+          python3 - "${blessed_out}" "${APK_VERSION}" "${APK_BUILD}" <<'EOF'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          out_dir, apk_version, apk_build = sys.argv[1], sys.argv[2], sys.argv[3]
+          libs = {}
+          for f in sorted(Path(out_dir).glob("*.so")):
+              libs[f.name] = hashlib.sha256(f.read_bytes()).hexdigest()
+          pins = Path("LIBS_VERSION.json")
+          data = json.loads(pins.read_text())
+          data["libs"]["arm64-v8a"] = libs
+          data["apple_music"]["version"] = apk_version
+          data["apple_music"]["build"] = apk_build
+          pins.write_text(json.dumps(data, indent=2) + "\n")
+          print(f"pinned {len(libs)} arm64-v8a libs from APK {apk_version} build {apk_build}")
+          EOF
+
+      - name: Extract Apple native libs, strict against regenerated pins
         working-directory: wrapper-v2
         run: |
           ./tools/extract-libs.sh \
@@ -206,6 +255,7 @@ jobs:
             echo "| ---- | ----- |"
             echo "| Image | \`${IMAGE}:${TAG}\` |"
             echo "| Upstream ref | \`${{ inputs.wrapper_ref }}\` (\`${WRAPPER_SHA}\`) |"
+            echo "| Blessed APK | \`${APK_VERSION}\` build \`${APK_BUILD}\` (pins regenerated from it) |"
             echo "| Arch | \`${TARGET_ARCH}\` / \`${RUNTIME_PLATFORM}\` |"
             echo ""
             echo "Guest libs pinned by the source tree:"
