@@ -296,6 +296,82 @@ def test_search_with_apple_disabled_keeps_the_tidal_payload_unchanged():
     ]
 
 
+def test_search_with_tidal_signed_out_and_apple_enabled_asks_only_apple():
+    # J2: the picker's "Search works with no account" promise. The signed-out
+    # TIDAL provider is never touched; the Apple rows ride the Apple group
+    # while the ungrouped TIDAL buckets stay empty.
+    tidal = _provider(search=AssertionError("TIDAL search ran without a session"))
+    apple_payload = {
+        "artists": [],
+        "albums": [{"id": "apple:album-1", "title": "A"}],
+        "tracks": [],
+        "videos": [],
+        "playlists": [],
+        "mixes": [],
+        "top": None,
+    }
+    apple = _provider(search=apple_payload)
+    stub = _SearchStub(tidal)
+    stub.providers["apple"] = apple
+    stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
+    stub._logged_in = False
+
+    stub.search("aphex twin")
+
+    assert tidal.calls == []
+    assert apple.calls == [("search", "aphex twin")]
+    assert stub.searchResults.emits == [
+        {
+            "artists": [],
+            "albums": [],
+            "tracks": [],
+            "videos": [],
+            "playlists": [],
+            "mixes": [],
+            "top": None,
+            "apple": apple_payload,
+        }
+    ]
+    assert stub.statuses[-1] == "1 results"
+    assert stub.busy == [True, False]
+
+
+def test_search_with_no_provider_available_refuses_unchanged():
+    tidal = _provider(search=AssertionError("TIDAL search ran without a session"))
+    apple = _provider(search=AssertionError("Apple search ran while disabled"))
+    stub = _SearchStub(tidal)
+    stub.providers["apple"] = apple
+    stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=False))
+    stub._logged_in = False
+
+    stub.search("aphex twin")
+
+    assert tidal.calls == [] and apple.calls == []
+    assert stub.statuses == ["Sign in to search"]
+    assert stub.searchResults.emits == []
+    assert stub.busy == []
+
+
+def test_an_apple_only_page_never_serves_a_signed_in_search():
+    # The enabled set is part of the cache key: a page built with no TIDAL
+    # rows must not paint over a later signed-in search with the same needle.
+    tidal = _provider(search={"albums": [object()], "top_hit": None})
+    apple = _provider(search={"tracks": [{"id": "apple:song-1", "title": "Xtal"}], "top_hit": None})
+    stub = _SearchStub(tidal)
+    stub.providers["apple"] = apple
+    stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
+    stub._logged_in = False
+
+    stub.search("aphex twin")
+    stub._logged_in = True
+    stub.search("aphex twin")
+
+    assert tidal.calls == [("search", "aphex twin")]
+    first, second = stub.searchResults.emits
+    assert first["albums"] == [] and first["apple"]["tracks"] == [{"id": "apple:song-1", "title": "Xtal"}]
+    assert second["albums"] == [{"id": "al1", "title": "A"}]
+
+
 def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
     tidal = _provider(search={"albums": [object()], "top_hit": None})
     apple = _provider(search=AppleCatalogUnavailable())

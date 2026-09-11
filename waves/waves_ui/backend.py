@@ -5656,7 +5656,10 @@ class WavesBridge(LibraryMixin, QObject):
         needle = (needle or "").strip()
         if not needle:
             return
-        if not self._logged_in:
+        settings = getattr(self, "settings", None)
+        apple_enabled = bool(settings is not None and settings.data.apple_enabled and CTX_APPLE in self.providers)
+        tidal_enabled = bool(self._logged_in and CTX_TIDAL in self.providers)
+        if not tidal_enabled and not apple_enabled:
             self._set_status("Sign in to search")
             return
         if "tidal.com" in needle or "music.apple.com" in needle or needle.startswith("http"):
@@ -5666,9 +5669,12 @@ class WavesBridge(LibraryMixin, QObject):
         # newer one's results (or re-fire its busy/status) once it finally returns.
         self._search_gen += 1
         gen = self._search_gen
-        settings = getattr(self, "settings", None)
-        apple_enabled = bool(settings is not None and settings.data.apple_enabled and CTX_APPLE in self.providers)
-        cache_key = f"{'apple' if apple_enabled else 'tidal'}:{needle.lower()}"
+        enabled_ids = [
+            provider_id for provider_id, on in ((CTX_TIDAL, tidal_enabled), (CTX_APPLE, apple_enabled)) if on
+        ]
+        # The enabled set is part of the key: an Apple-only page and a
+        # TIDAL+Apple page carry different rows and must not serve each other.
+        cache_key = f"{'+'.join(enabled_ids)}:{needle.lower()}"
         hit = self._search_cache.get(cache_key)
         if hit is not None and time.monotonic() - hit[0] < self._SEARCH_TTL:
             # An identical recent search: repaint from the cached payload, no
@@ -5703,7 +5709,6 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             t0 = devlog.clock()
-            enabled_ids = {CTX_TIDAL, *([CTX_APPLE] if apple_enabled else [])}
             provider_ids = [
                 provider_id
                 for provider_id, provider in self.providers.items()
@@ -5719,9 +5724,10 @@ class WavesBridge(LibraryMixin, QObject):
                     return provider_id, {}, exc
 
             if len(provider_ids) == 1:
-                _, results, error = fetch(CTX_TIDAL)
-                provider_results = {CTX_TIDAL: results}
-                provider_errors = {CTX_TIDAL: error} if error is not None else {}
+                provider_id = provider_ids[0]
+                _, fetched, error = fetch(provider_id)
+                provider_results = {provider_id: fetched}
+                provider_errors = {provider_id: error} if error is not None else {}
             else:
                 # TIDAL and Apple have independent clients. Waiting for one
                 # before starting the other doubles the search's network time.
@@ -5731,7 +5737,9 @@ class WavesBridge(LibraryMixin, QObject):
                     ]
                 provider_results = {provider_id: result for provider_id, result, _error in fetched}
                 provider_errors = {provider_id: error for provider_id, _result, error in fetched if error is not None}
-                results = provider_results.get(CTX_TIDAL, {})
+            # Only TIDAL feeds the ungrouped buckets; an Apple-only search
+            # leaves them empty and carries its rows in the Apple group.
+            results = provider_results.get(CTX_TIDAL, {})
             api = devlog.clock() - t0
             if gen != self._search_gen:
                 return  # a newer search superseded this one; drop its results
