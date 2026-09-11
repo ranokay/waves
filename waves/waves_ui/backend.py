@@ -19542,10 +19542,10 @@ class WavesBridge(LibraryMixin, QObject):
             }
         )
         auth = wrapper_auth if isinstance(wrapper_auth, dict) else {}
-        auth_state = str(auth.get("state") or "").strip().lower()
+        auth_signed_in = bool(auth.get("logged_in"))
         auth_account = str(auth.get("account") or "").strip()
         auth_error = str(auth.get("error") or "").strip()
-        if auth_state == "logged_in":
+        if auth_signed_in:
             login_step: tuple[str, str, str] = (
                 "done",
                 f"The wrapper guest is signed in{(' as ' + auth_account) if auth_account else ''}; ALAC is unlocked.",
@@ -21052,16 +21052,27 @@ class WavesBridge(LibraryMixin, QObject):
         """Probe the wrapper guest's /me and store it for GUI-thread readers."""
         from waves.apple_runtime import wrapper_auth_state
 
+        def snapshot(payload) -> tuple:
+            """The /me fields a form re-read: any change re-signals."""
+            payload = payload if isinstance(payload, dict) else {}
+            return (
+                bool(payload.get("reachable")),
+                str(payload.get("state") or ""),
+                bool(payload.get("logged_in")),
+                str(payload.get("account") or ""),
+                str(payload.get("error") or ""),
+            )
+
         url = self._apple_wrapper_base()
         try:
             result = wrapper_auth_state(url, timeout=timeout)
         except Exception:
             logger.debug("Apple wrapper auth probe failed", exc_info=True)
-            result = {"reachable": False, "state": "", "account": "", "error": ""}
+            result = {"reachable": False, "state": "", "logged_in": False, "account": "", "error": ""}
         previous = getattr(self, "_apple_wrapper_auth_cache", None)
-        previous_state = ""
+        previous_snapshot = None
         if isinstance(previous, dict) and isinstance(previous.get("result"), dict):
-            previous_state = str(previous["result"].get("state") or "")
+            previous_snapshot = snapshot(previous["result"])
         try:
             self._apple_wrapper_auth_cache = {"at": time.time(), "result": result}
         except Exception:
@@ -21069,8 +21080,8 @@ class WavesBridge(LibraryMixin, QObject):
         provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
         if provider is not None:
             with contextlib.suppress(Exception):
-                provider.wrapper_logged_in = str(result.get("state") or "").lower() == "logged_in"
-        if str(result.get("state") or "") != previous_state:
+                provider.wrapper_logged_in = bool(result.get("logged_in"))
+        if snapshot(result) != previous_snapshot:
             with contextlib.suppress(Exception):
                 self.appleWrapperAuthChanged.emit()
         return result
@@ -21092,7 +21103,13 @@ class WavesBridge(LibraryMixin, QObject):
                 self._schedule_apple_wrapper_auth_refresh()
             return dict(cache["result"])
         if self._schedule_apple_wrapper_auth_refresh():
-            return {"reachable": False, "state": "", "account": "", "error": "Checking the wrapper…"}
+            return {
+                "reachable": False,
+                "state": "",
+                "logged_in": False,
+                "account": "",
+                "error": "Checking the wrapper…",
+            }
         return self._refresh_apple_wrapper_auth(timeout=3)
 
     def _schedule_apple_wrapper_auth_refresh(self) -> bool:
@@ -21197,6 +21214,7 @@ class WavesBridge(LibraryMixin, QObject):
         return {
             "reachable": bool(state.get("reachable", False)),
             "state": str(state.get("state") or ""),
+            "logged_in": bool(state.get("logged_in", False)),
             "account": str(state.get("account") or ""),
             "error": str(state.get("error") or ""),
             "busy": bool(getattr(self, "_apple_wrapper_login_inflight", False)),
@@ -21238,13 +21256,7 @@ class WavesBridge(LibraryMixin, QObject):
                     needs_attention = True
         # The full tier's sign-in: a wrapper guest that answers /me as
         # authenticated needs no cookies file at all.
-        wrapper_ready = False
-        probe = getattr(self, "apple_wrapper_auth_state", None)
-        if callable(probe):
-            try:
-                wrapper_ready = str((probe() or {}).get("state") or "") == "logged_in"
-            except Exception:
-                wrapper_ready = False
+        wrapper_ready = bool(self._apple_wrapper_signed_in())
         if not signed_in and wrapper_ready and self._apple_fetch_binary_ready():
             signed_in = True
         return {
@@ -21265,6 +21277,17 @@ class WavesBridge(LibraryMixin, QObject):
             path = str(getattr(data, "apple_cookies_path", "") or "")
         return bool(path) and pathlib.Path(path).expanduser().is_file()
 
+    def _apple_wrapper_signed_in(self) -> bool:
+        """Whether the cached wrapper probe says the guest is authenticated."""
+        probe = getattr(self, "apple_wrapper_auth_state", None)
+        if not callable(probe):
+            return False
+        try:
+            return bool((probe() or {}).get("logged_in"))
+        except Exception:
+            logger.debug("Apple wrapper auth read failed", exc_info=True)
+            return False
+
     def _apple_account_ready(self) -> bool:
         """Whether an Apple download has an account to start with.
 
@@ -21273,14 +21296,7 @@ class WavesBridge(LibraryMixin, QObject):
         """
         if self._apple_cookies_ready():
             return True
-        probe = getattr(self, "apple_wrapper_auth_state", None)
-        if not callable(probe):
-            return False
-        try:
-            return str((probe() or {}).get("state") or "") == "logged_in"
-        except Exception:
-            logger.debug("Apple wrapper auth read failed", exc_info=True)
-            return False
+        return self._apple_wrapper_signed_in()
 
     @Slot("QVariant")
     def applySettings(self, values) -> None:

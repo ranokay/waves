@@ -2803,7 +2803,11 @@ Item {
                                                         x: 16; width: parent.width - 16; spacing: 6
                                                         readonly property bool busy: page.appleWrapperLive.busy === true
                                                         readonly property bool needs2fa: page.appleWrapperLive.needs_2fa === true
-                                                        readonly property bool signedIn: String(page.appleWrapperLive.state) === "logged_in"
+                                                        readonly property bool signedIn: page.appleWrapperLive.logged_in === true
+                                                        // The guest answers "authenticated"; the bridge folds
+                                                        // that to logged_in. A signed-in form drops the
+                                                        // typed secret from its local fields.
+                                                        onSignedInChanged: if (signedIn) { page.appleLoginPass = ""; page.appleLogin2fa = "" }
                                                         Text {
                                                             visible: appleLoginForm.signedIn
                                                             width: parent.width
