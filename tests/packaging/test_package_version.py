@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import re
 import tomllib
-from pathlib import Path
+
+from support.paths import REPO_ROOT
 
 from waves.waves_ui import __version__
 
-PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 
 def test_pyproject_version_matches_app_version():

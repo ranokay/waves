@@ -30,12 +30,11 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from support.paths import QML_DIR, REPO_ROOT, TESTS_ROOT
 
 _EXIT_OK = 0
 _EXIT_BROKEN = 1
 _EXIT_NO_QT = 77
-
-QML_DIR = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml"
 
 
 def test_main_qml_loads_without_errors_or_warnings():
@@ -44,6 +43,7 @@ def test_main_qml_loads_without_errors_or_warnings():
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-qml-load-test-")
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(TESTS_ROOT), str(REPO_ROOT), env.get("PYTHONPATH", "")) if p)
     proc = subprocess.run(
         [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
         env=env,
@@ -61,8 +61,8 @@ def test_main_qml_loads_without_errors_or_warnings():
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.insert(0, str(REPO_ROOT))
+    sys.path.insert(0, str(TESTS_ROOT))
     try:
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QGuiApplication

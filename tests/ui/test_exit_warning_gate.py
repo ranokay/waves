@@ -22,9 +22,8 @@ WHAT THIS FENCES OFF
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+from support.paths import QML_MAIN
 
 
 def _src() -> str:

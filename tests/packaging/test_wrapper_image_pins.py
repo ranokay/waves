@@ -9,13 +9,11 @@ APK and guest-lib pins, so a pin bump without a runbook update fails here.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import yaml
+from support.paths import REPO_ROOT
 
-REPO = Path(__file__).resolve().parent.parent
-WORKFLOW = REPO / ".github" / "workflows" / "wrapper-image.yml"
-RUNBOOK = REPO / "docs" / "wrapper-image.md"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "wrapper-image.yml"
+RUNBOOK = REPO_ROOT / "docs" / "wrapper-image.md"
 
 
 def _workflow() -> dict:
@@ -77,10 +75,10 @@ def test_runbook_names_the_current_pins():
 def test_upstream_pin_file_is_a_valid_sha_and_the_watcher_uses_it():
     import re
 
-    text = (REPO / ".github" / "wrapper-upstream.sha").read_text()
+    text = (REPO_ROOT / ".github" / "wrapper-upstream.sha").read_text()
     sha = text.strip().splitlines()[-1].strip()
     assert re.fullmatch(r"[0-9a-f]{40}", sha), "pin file must end with one full commit SHA"
-    watcher = (REPO / ".github" / "workflows" / "wrapper-upstream-check.yml").read_text()
+    watcher = (REPO_ROOT / ".github" / "workflows" / "wrapper-upstream-check.yml").read_text()
     assert "wrapper-upstream.sha" in watcher
     assert "glomatico/wrapper-v2" in watcher
     assert "schedule" in watcher and "cron" in watcher

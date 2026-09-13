@@ -16,11 +16,11 @@ reference, and asserts each one is a real member of the bridge's meta object.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+
+from support.paths import QML_DIR
 
 from waves.waves_ui.backend import WavesBridge
 
-_QML_DIR = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml"
 _REFERENCE = re.compile(r"\bwaves\.([A-Za-z_]\w*)")
 
 
@@ -77,7 +77,7 @@ def _bridge_members() -> set[str]:
 def test_every_qml_call_into_the_bridge_resolves():
     members = _bridge_members()
     missing: dict[str, set[str]] = {}
-    for qml in sorted(_QML_DIR.rglob("*.qml")):
+    for qml in sorted(QML_DIR.rglob("*.qml")):
         used = set(_REFERENCE.findall(_code_only(qml.read_text(encoding="utf-8"))))
         absent = used - members
         if absent:

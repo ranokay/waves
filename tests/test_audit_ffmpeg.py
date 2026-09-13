@@ -1,7 +1,7 @@
 """Audit-remediation regression tests for the Waves FFmpeg manager.
 
 These cover the specific failures fixed in the audit and are independent of
-``tests/test_ffmpeg_manager.py`` (no shared state, no network, no real
+``tests/packaging/test_ffmpeg_manager.py`` (no shared state, no network, no real
 subprocess execution; the smoke test is monkeypatched).
 """
 

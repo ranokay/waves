@@ -25,12 +25,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from support.paths import QML_MAIN, REPO_ROOT, TESTS_ROOT
+
 _EXIT_OK = 0
 _EXIT_REGRESSED = 1
 _EXIT_NO_QT = 77
 _EXIT_PRECONDITION = 78
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
 GATES = ("exitGate", "updateOptInGate")
 
@@ -39,6 +39,7 @@ def test_gates_are_in_the_overlay_layer_not_the_page():
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-gate-layer-test-")
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(TESTS_ROOT), str(REPO_ROOT), env.get("PYTHONPATH", "")) if p)
     proc = subprocess.run(
         [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
         env=env,
@@ -60,7 +61,8 @@ def test_gates_are_in_the_overlay_layer_not_the_page():
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.path.insert(0, str(REPO_ROOT))
+    sys.path.insert(0, str(TESTS_ROOT))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
