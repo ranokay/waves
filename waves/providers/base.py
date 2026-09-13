@@ -444,3 +444,46 @@ class Provider(ABC):
         A provider answering through :meth:`preview_url` alone never needs
         this hook."""
         return StreamInfo()
+
+    # ----- catalog helpers the row-rendering paths call
+
+    def cached(self, kind: str, raw_id: str) -> object | None:
+        """A previously fetched catalog object for (kind, raw_id), or None.
+
+        The re-dispatch paths ask whether a download whose object was evicted
+        can be rebuilt without the network; the neutral answer is "nothing
+        cached", and the provider's own cache stays its business.
+        """
+        return None
+
+    def row_for(self, kind: str, item) -> dict:
+        """The app's row dict for one catalog item of ``kind``.
+
+        Providers that own their row translation answer here; the neutral
+        answer is an empty row, which callers treat as "cannot render".
+        """
+        return {}
+
+    def collection_has_tracks(self, obj) -> bool:
+        """Whether a collection object carries playable tracks (the download
+        entry's "refetch before queueing" check). The neutral answer is no."""
+        return False
+
+    def has_atmos(self, item) -> bool:
+        """Whether one catalog item carries a Dolby Atmos delivery. The
+        neutral answer is no: a missing fact never promises a Version."""
+        return False
+
+    def artist_page(self, artist_item) -> dict:
+        """The artist-page payload for one item; the neutral answer is an
+        empty payload."""
+        return {}
+
+    def discard_delivery(self, local_file: str) -> None:
+        """Drop a provider's staged delivery after it was placed or failed.
+
+        The neutral default is a no-op: providers that stage outside their
+        caller's control (a fetch tool's workdir, a temporary decrypt tree)
+        override this so a landed or abandoned fetch leaves nothing behind.
+        """
+        return None

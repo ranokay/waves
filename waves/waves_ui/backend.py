@@ -12890,7 +12890,7 @@ class WavesBridge(LibraryMixin, QObject):
         tier_word = str(ask[1]) if ask is not None and len(ask) > 1 else ""
         audio_word = str(audio or "")
         if raw_kind == "track":
-            raw = provider.cached("track", media_id) if hasattr(provider, "cached") else None
+            raw = provider.cached("track", media_id)
             if raw is None:
                 self._chooser_park_refetch("track", media_id, raw_kind, tier_word, audio_word, toggles)
                 self._refetch_apple_for_download("track", media_id)
@@ -12912,7 +12912,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self._chooser_confirm_status(CTX_APPLE, ask, audio, files)
             return
         elif raw_kind in ("album", "playlist"):
-            raw = provider.cached(raw_kind, media_id) if hasattr(provider, "cached") else None
+            raw = provider.cached(raw_kind, media_id)
             if raw is None:
                 self._chooser_park_refetch(raw_kind, media_id, raw_kind, tier_word, audio_word, toggles)
                 self._refetch_apple_for_download(raw_kind, media_id)

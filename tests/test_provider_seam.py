@@ -1361,3 +1361,30 @@ class TestRefusals:
                 assert refusal.kind.value == "throttled", exc
             else:
                 assert refusal.kind.value == "failure", exc
+
+
+# ---------------------------------------------------------------- provider hooks
+
+
+class TestProviderHooks:
+    """The catalog helpers the row-rendering paths call sit on the interface
+    with neutral defaults, so a provider that does not serve one needs no code
+    and the bridge needs no duck-typing guard."""
+
+    HOOKS = ("cached", "row_for", "collection_has_tracks", "has_atmos", "artist_page", "discard_delivery")
+
+    def test_a_bare_provider_answers_every_hook_neutrally(self):
+        provider = _BareProvider()
+
+        assert provider.cached("track", "1") is None
+        assert provider.row_for("track", {}) == {}
+        assert provider.collection_has_tracks({}) is False
+        assert provider.has_atmos({}) is False
+        assert provider.artist_page({}) == {}
+        assert provider.discard_delivery("/tmp/whatever") is None
+
+    def test_apple_overrides_every_hook(self):
+        from waves.providers.apple import AppleProvider
+
+        for name in self.HOOKS:
+            assert getattr(AppleProvider, name) is not getattr(Provider, name), name
