@@ -1,39 +1,62 @@
-"""Opt-in live account checks (item 22 of the audit remediation).
+"""Opt-in live account checks.
 
 Run explicitly:
 
-    WAVES_ACCOUNT_TESTS=1 .venv/bin/python -m pytest -q tests/account -m account
+    WAVES_ACCOUNT_TESTS=1 .venv/bin/python -m pytest -q tests/account
 
-The gate does two things: account-marked tests are skipped without it, and
-with it the root conftest leaves ``XDG_CONFIG_HOME`` alone, so the app's real
-profile is the subject. These tests reach real services with the user's own
-credentials and are never part of the default suite. No credential value,
-cookie or signed URL is recorded anywhere; assertions name codecs, sizes and
-state words only.
+Without the gate every account test is skipped at collection. With it, the
+module's ``real_profile`` fixture points the config path at the app's real
+profile for this module only; every other test keeps the throwaway home the
+root conftest installed. These tests reach real services with the user's own
+credentials and never belong to the default suite. No credential value, cookie
+or signed URL is written down: assertions name codecs, sizes and state words,
+and the evidence records only those.
 
-The TIDAL re-login (J1-J3) and the expiry/throttle/held-recovery states are
-manual/live conditions rather than scripted ones: the suite reports them as
-skips with the exact gap until they can be observed.
+Live states that cannot be scripted (account expiry, throttling, held
+recovery, the TIDAL UI journey) are recorded as gaps with the condition each
+one needs, not pretended as coverage.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import ORIGINAL_XDG_CONFIG_HOME
 
 pytestmark = pytest.mark.account
 
-# The short Apple track the audit's live runs used (Xtal).
+# Xtal on Selected Ambient Works 85-92: short, and the track the earlier
+# wrapper-tier evidence used, so both tiers can be compared on one song.
 SONG_ID = "1668862649"
 
 
 @pytest.fixture(scope="module")
-def profile():
-    from waves.config import Settings
+def real_profile():
+    """The app's real Settings, for this module only.
 
-    return Settings()
+    The root conftest points ``XDG_CONFIG_HOME`` at a throwaway home for every
+    test; here the original value (or the platform-native default when it was
+    unset) is restored around the fixture, and the Settings singleton is reset
+    so it really re-reads the profile. The variable is put back before any
+    other module runs.
+    """
+    from waves import config
+    from waves.helper.decorator import SingletonMeta
+
+    with pytest.MonkeyPatch.context() as mp:
+        if ORIGINAL_XDG_CONFIG_HOME:
+            mp.setenv("XDG_CONFIG_HOME", ORIGINAL_XDG_CONFIG_HOME)
+        else:
+            mp.delenv("XDG_CONFIG_HOME", raising=False)
+        SingletonMeta._instances.pop(config.Settings, None)
+        try:
+            yield config.Settings()
+        finally:
+            SingletonMeta._instances.pop(config.Settings, None)
 
 
 def _cookies_path(profile) -> str:
@@ -52,45 +75,83 @@ def _apple_provider(profile):
     return provider
 
 
-def _track() -> dict:
+def _xtal_track() -> dict:
     return {"id": SONG_ID, "title": "Xtal", "artist": "Aphex Twin"}
 
 
-def test_the_real_profile_verifies_its_cookies_export(profile):
+def _staged(stream, *, min_bytes: int) -> bytes:
+    """Read the staged bytes so the assertions rest on the file, not the dict."""
+    path = Path(str(stream.local_file))
+    assert path.is_file()
+    data = path.read_bytes()
+    assert len(data) >= min_bytes, f"staged file is {len(data)} bytes"
+    return data
+
+
+def _probe_codec(path: Path) -> tuple[str, int]:
+    """The staged file's real codec and bit rate, from ffprobe."""
+    ffprobe = shutil.which("ffprobe") or ""
+    assert ffprobe, "no ffprobe on PATH"
+    out = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name,bit_rate",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    stream = json.loads(out.stdout)["streams"][0]
+    return str(stream.get("codec_name") or ""), int(stream.get("bit_rate") or 0)
+
+
+def test_the_real_profile_verifies_its_cookies_export(real_profile):
     from waves.providers.apple.runtime import verify_cookies_file
 
-    path = _cookies_path(profile)
+    path = _cookies_path(real_profile)
     assert path, "no Apple cookies export configured in the real profile"
     verdict = verify_cookies_file(path)
     assert verdict["ok"] is True
     assert verdict["has_token"] is True
 
 
-def test_cookies_tier_fetches_aac_live(profile):
-    """The cookies tier (AAC 256 stereo, no runtime) end to end."""
+def test_cookies_tier_fetches_aac_live(real_profile):
+    """The cookies tier (AAC stereo, no runtime) end to end."""
     from waves.constants import QualityTier
 
-    if not _cookies_path(profile):
+    if not _cookies_path(real_profile):
         pytest.skip("no Apple cookies export configured in the real profile")
-    provider = _apple_provider(profile)
-    stream = provider.resolve_stream(_track(), QualityTier.HIGH, "stereo")
-    staged = Path(str(stream.local_file))
+    provider = _apple_provider(real_profile)
+    stream = provider.resolve_stream(_xtal_track(), QualityTier.HIGH, "stereo")
+    path = Path(str(stream.local_file))
     try:
-        assert staged.is_file()
-        assert staged.stat().st_size > 1_000_000, f"staged file is {staged.stat().st_size} bytes"
-        assert stream.codecs == "mp4a.40.2", f"cookies tier delivered {stream.codecs}"
+        _staged(stream, min_bytes=1_000_000)
+        codec, bit_rate = _probe_codec(path)
+        assert codec == "aac", f"cookies tier probe says {codec}"
+        assert 200_000 <= bit_rate <= 340_000, f"cookies tier bit rate {bit_rate} is not AAC 256k"
+        assert stream.delivered["probe"]["codec"] == "aac"
+        assert stream.delivered["probe"]["sample_rate"] == "44100"
         assert stream.delivered["audio_type"] == "stereo"
-        assert stream.delivered["tier"] == QualityTier.HIGH.value
     finally:
-        provider.discard_delivery(str(staged))
+        provider.discard_delivery(str(path))
 
 
-def test_wrapper_tier_fetches_alac_live(profile):
+def test_wrapper_tier_fetches_alac_live(real_profile):
     """The managed wrapper tier (ALAC stereo) end to end.
 
-    The sidecar is started through the same supervisor the app uses; the
-    guest's session volume is the real one. Skipped with the exact reason
-    when the port, the container runtime or the image is unavailable.
+    The tier is reachable only through the managed sidecar with the guest's
+    real session volume, so the supervisor readies it first. Readiness is the
+    precondition; a sidecar already up counts, which is what the app itself
+    would accept. Skipped with the exact reason when the port, the container
+    runtime or the image is unavailable.
     """
     from waves.constants import QualityTier
     from waves.helper.path import path_config_base
@@ -108,28 +169,29 @@ def test_wrapper_tier_fetches_alac_live(profile):
     if not supervisor.ensure_started(http_port=port, image=WRAPPER_V2_IMAGE, data_dir=wrapper_data_host_dir(app_dir)):
         pytest.skip("the wrapper sidecar would not come up")
 
-    provider = _apple_provider(profile)
+    provider = _apple_provider(real_profile)
     provider.wrapper_url = wrapper_url(port)
-    stream = provider.resolve_stream(_track(), QualityTier.LOSSLESS, "stereo")
-    staged = Path(str(stream.local_file))
+    stream = provider.resolve_stream(_xtal_track(), QualityTier.LOSSLESS, "stereo")
+    path = Path(str(stream.local_file))
     try:
-        assert staged.is_file()
-        assert staged.stat().st_size > 5_000_000, f"staged file is {staged.stat().st_size} bytes"
-        assert stream.codecs == "alac", f"wrapper tier delivered {stream.codecs}"
+        _staged(stream, min_bytes=5_000_000)
+        codec, _bit_rate = _probe_codec(path)
+        assert codec == "alac", f"wrapper tier probe says {codec}"
+        assert stream.codecs == "alac"
         assert stream.delivered["audio_type"] == "stereo"
         assert int(stream.delivered["bit_depth"] or 0) >= 16
         assert int(stream.delivered["sample_rate"] or 0) >= 44100
     finally:
-        provider.discard_delivery(str(staged))
+        provider.discard_delivery(str(path))
 
 
-def test_tidal_session_resumes_and_searches_live(profile):
+def test_tidal_session_resumes_and_searches_live(real_profile):
     """The saved TIDAL session resumes and answers a search.
 
     The J1-J3 UI journey (sign in from the card with Apple on, both providers
     reachable, sign out, reverse order, relaunch) needs the credential typed in
-    a browser and is recorded as manual evidence; this test proves the
-    resumable session half once a sign-in exists.
+    a browser; it is recorded as manual evidence in the run notes. This test
+    proves the resumable session half once a sign-in exists.
     """
     from waves.helper.path import path_file_token
 
@@ -138,7 +200,7 @@ def test_tidal_session_resumes_and_searches_live(profile):
     from waves.providers.tidal import TidalProvider
     from waves.waves_ui.session import WavesTidal
 
-    provider = TidalProvider(WavesTidal(profile))
+    provider = TidalProvider(WavesTidal(real_profile))
     if not provider.login_resume():
         pytest.skip("the saved TIDAL session did not resume; sign in again")
     account = provider.account_id()
