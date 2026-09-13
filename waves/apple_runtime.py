@@ -4,10 +4,8 @@ The full Apple tier needs two provisioned pieces Waves owns end to end,
 FFmpeg-manager style: the N_m3u8DL-RE fetch binary (pinned release,
 downloaded as tar.gz or zip per platform, checksum-verified, extracted,
 chmod'd) and the wrapper-v2 container image (Waves-built, pinned) running
-on a free high port. The Apple Music APK stays user-supplied: the published
-image already carries the guest libraries, so normal setup needs none. The
-APK helpers here serve custom image builds; Waves never fetches, bundles,
-mirrors, or proxies the file.
+on a free high port. The image carries the guest libraries, so no APK is
+provisioned or supplied at runtime; image publishing owns that step.
 
 The cookies-only fallback tier needs none of this: a Netscape cookies
 export from a logged-in music.apple.com session unlocks AAC 256 and
@@ -99,18 +97,13 @@ NM3U8DLRE_SHA256 = {
     ("windows", "amd64"): "3825fd42ee502f98a9378f6fdddb2f7822709f521806214f466db6935c950f1a",
     ("windows", "arm64"): "3a13527812a5f18b9981b3cd6f7f36bd17cd7d76b5f3273281a58354e5fcebd6",
 }
-# Pinned APK for custom wrapper image builds. 3.6.0-beta (build 1109) is
-# the proven combo: its native libs carry DT_HASH, export the symbols the
-# wrapper resolves, and need nothing newer than the chroot's libc. (4.7.0
-# fails all three: GNU-hash-only main lib, hidden make_shared, API-23+
-# imports.) Waves never fetches it; this version string and SHA-256 only
-# verify a user's own copy and script the .apkm extraction.
+# The APK version the published wrapper image is built from. 3.6.0-beta
+# (build 1109) is the proven combo: its native libs carry DT_HASH, export
+# the symbols the wrapper resolves, and need nothing newer than the chroot's
+# libc. (4.7.0 fails all three: GNU-hash-only main lib, hidden make_shared,
+# API-23+ imports.) Image publishing owns fetching and extraction; the pin
+# test checks the workflow inputs and the runbook against this constant.
 APK_PINNED_VERSION = "3.6.0-beta"
-# SHA-256 of the blessed APKMirror bundle
-# (com.apple.android.music_3.6.0-beta-1109_2arch_2dpi_*.apkm). With a hash
-# published, verify_apk fail-closes on mismatch; empty would mean
-# "version check only".
-APK_SHA256 = "5be907af370a7f6bd73344e646dcfebe2e64c2da3b9ad71192110c91950f3f67"
 
 # Wrapper HTTP API: never port 80 on a desktop (collision-prone). The
 # manager picks a free high port and passes it explicitly everywhere.
@@ -437,47 +430,6 @@ def wrapper_login_2fa(base_url: str, code: str, session=None, timeout: int = 30)
     return {"ok": True, "error": ""}
 
 
-# APK (custom image builds only): SHA-verified, extraction scripted, never fetched.
-
-
-def verify_apk(path: str, expected_sha256: str | None = None) -> dict:
-    """Verify a user-supplied APK/.apkm file against the pinned version.
-
-    Returns ``{"ok", "path", "sha256", "hash_pending", "note"}``. Raises
-    FileNotFoundError when missing and ValueError on a hash mismatch
-    (fail-closed: an unverified APK never reaches the wrapper). While no
-    pinned hash is published (``APK_SHA256`` empty) the check covers
-    presence, extension, and version only, and reports
-    ``hash_pending: True`` so the wizard never claims a SHA check it did
-    not perform; filling in the published hash turns the full check on
-    with no other change. The default resolves at call time so tests (and
-    future pins) can override the module constant.
-    """
-    if expected_sha256 is None:
-        expected_sha256 = APK_SHA256
-    p = Path(str(path or "").strip()).expanduser()
-    if not str(path or "").strip() or not p.is_file():
-        raise FileNotFoundError(f"APK not found: {path or '(no path given)'}")
-    suffix = p.suffix.lower()
-    if suffix not in (".apk", ".apkm", ".apks"):
-        raise ValueError(f"Expected an .apk/.apkm file, got '{p.name}'")
-    digest = _sha256_file(p)
-    if expected_sha256 and digest.lower() != expected_sha256.lower():
-        raise ValueError(f"APK checksum mismatch: expected {expected_sha256}, got {digest}")
-    hash_pending = not bool(expected_sha256)
-    return {
-        "ok": True,
-        "path": str(p),
-        "sha256": digest,
-        "hash_pending": hash_pending,
-        "note": (
-            f"Pinned Apple Music APK {APK_PINNED_VERSION}: "
-            + ("version checked; SHA-256 check pending the published hash. " if hash_pending else "SHA-256 verified. ")
-            + "Extract inside the wrapper per wrapper-v2's documented .apkm steps; Waves never fetches this file."
-        ),
-    }
-
-
 def describe_image_pull_error(exc: Exception, image: str = WRAPPER_V2_IMAGE) -> str:
     """Plain-words guidance for a failed wrapper-image pull.
 
@@ -495,33 +447,6 @@ def describe_image_pull_error(exc: Exception, image: str = WRAPPER_V2_IMAGE) -> 
             "or ask for the image to be made public. Original error: " + raw
         )
     return f"Could not pull {image}: {raw}"
-
-
-def apk_extract_plan(apk_path: str, hash_pinned: bool | None = None) -> list[str]:
-    """The .apkm extraction steps for custom wrapper image builds.
-
-    The published image already carries the guest libraries, so this plan
-    serves only the custom-build path. The hash step says what actually ran:
-    with no pinned hash published yet it must not claim a SHA-256 check
-    happened.
-    """
-    if hash_pinned is None:
-        hash_pinned = bool(APK_SHA256)
-    hash_step = (
-        "Verify its SHA-256 against the pinned hash (done above, fail-closed)."
-        if hash_pinned
-        else "SHA-256 check pending: no pinned hash is published yet, so only the version was checked."
-    )
-    return [
-        f"Get the Apple Music APK at pinned version {APK_PINNED_VERSION} yourself (e.g. APKMirror's "
-        "Apple Music listing, the arm64 release matching that version) and set its path at: "
-        f"{apk_path}. Waves never downloads it for you.",
-        hash_step,
-        "Unpack the .apkm (a zip of split APKs: base + config/arch splits) into its parts.",
-        "Copy the splits into the wrapper guest per wrapper-v2's LIBS setup notes "
-        f"(guest libs {WRAPPER_LIBS_VERSION}).",
-        "Restart the wrapper container and confirm its /health endpoint answers.",
-    ]
 
 
 # Cookies fallback: Netscape export carrying a signed-in session.

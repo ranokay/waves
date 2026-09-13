@@ -144,7 +144,6 @@ def test_the_apple_card_holds_the_switch_row_and_the_quality():
         "apple_cover_file_format",
         "apple_cookies_path",
         "path_binary_nm3u8dlre",
-        "apple_apk_path",
         "apple_wrapper_port",
         "apple_pacing_batch_size",
         "apple_pacing_delay_sec",

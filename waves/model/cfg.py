@@ -119,12 +119,6 @@ class Settings:
     # managed, pinned copy the setup wizard provisions; when none is installed
     # the fetch falls back to PATH. A set path wins over both.
     path_binary_nm3u8dlre: str = ""
-    # Optional Apple Music APK path for custom wrapper image builds (spec
-    # section 10): the published image already carries the guest libraries, so
-    # the setup wizard never needs one. Image publishing owns version pinning
-    # and the .apkm extraction; Waves never fetches, bundles, mirrors, or
-    # proxies this file.
-    apple_apk_path: str = ""
     # Wrapper HTTP API port (spec section 2 wizard fuel): 0 means Waves picks
     # a free high port at setup time and passes it explicitly everywhere.
     # Never 80: that default is collision-prone on a desktop. A nonzero
@@ -263,10 +257,6 @@ class Settings:
     # whole set; the dialog's "Don't ask again" flips this off.
     confirm_category_download: bool = True
     metadata_write_url: bool = True
-    window_x: int = 50
-    window_y: int = 50
-    window_w: int = 1200
-    window_h: int = 800
     filename_delimiter_artist: str = ", "
     filename_delimiter_album_artist: str = ", "
     # What to write where a character a filesystem rejects (/, :, ?, ...) is
@@ -444,12 +434,6 @@ class HelpSettings:
         "Path to the N_m3u8DL-RE binary Apple downloads fetch through. Only necessary if it is not "
         "on $PATH; the setup wizard provisions it later."
     )
-    apple_apk_path: str = (
-        "Optional Apple Music APK path for custom wrapper image builds. The published image already "
-        "carries the guest libraries, so the normal setup never asks for one; set this only when you "
-        "build your own image and want Waves to verify the APK you used. Waves never downloads this "
-        "file for you."
-    )
     apple_wrapper_port: str = (
         "Port the Apple wrapper's HTTP API runs on. 0 (the default) means Waves picks a free high port "
         "at setup time; the port-80 default is never used because it collides on desktops."
@@ -555,10 +539,6 @@ class HelpSettings:
     playlist_create: str = "Creates a '_playlist.m3u8' file for downloaded albums, playlists and mixes."
     metadata_replay_gain: str = "Replay gain information will be written to metadata."
     metadata_write_url: str = "URL of the media file will be written to metadata."
-    window_x: str = "X-Coordinate of saved window location."
-    window_y: str = "Y-Coordinate of saved window location."
-    window_w: str = "Width of saved window size."
-    window_h: str = "Height of saved window size."
     filename_delimiter_artist: str = "Filename delimiter for multiple artists. Default: ', '"
     filename_delimiter_album_artist: str = "Filename delimiter for multiple album artists. Default: ', '"
     filename_illegal_replacement: str = (

@@ -766,9 +766,6 @@ _PATH_FIELDS = [
     # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
     # through; the wizard provisions it later.
     "path_binary_nm3u8dlre",
-    # Optional APK override for custom wrapper image builds; the published
-    # image carries its own guest libraries, so the wizard does not ask.
-    "apple_apk_path",
     # Integrity gate: quarantine folder override, browsed like a
     # download folder. Empty means the default inside the download folder.
     "apple_quarantine_dir",
@@ -778,7 +775,6 @@ _BROWSE = {
     "path_binary_ffmpeg": "file",
     "apple_cookies_path": "file",
     "path_binary_nm3u8dlre": "file",
-    "apple_apk_path": "file",
     "apple_quarantine_dir": "dir",
 }
 # String fields whose value is a character or two: they render as a compact
@@ -976,7 +972,6 @@ _FIELD_LABELS = {
     "apple_quality_audio": "Audio quality (Apple)",
     "apple_cookies_path": "Cookies file (Apple)",
     "path_binary_nm3u8dlre": "N_m3u8DL-RE binary path",
-    "apple_apk_path": "Apple Music APK (custom builds)",
     "apple_wrapper_port": "Wrapper port (Apple)",
     "apple_quarantine_dir": "Quarantine folder (Apple)",
     "apple_quarantine_keep": "Keep quarantined files",
@@ -19991,16 +19986,6 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception as exc:
             return {"ok": False, "path": str(path or ""), "error": str(exc)}
 
-    @Slot(str, result="QVariant")
-    def appleVerifyApk(self, path: str) -> dict:
-        """Verify a user-supplied APK against the pinned version."""
-        from waves.apple_runtime import verify_apk
-
-        try:
-            return verify_apk(path)
-        except Exception as exc:
-            return {"ok": False, "path": str(path or ""), "error": str(exc)}
-
     @Slot(result="QVariant")
     def appleEnsurePort(self) -> dict:
         """Persist and return the wrapper port: override when free, else picked."""
@@ -20955,7 +20940,6 @@ class WavesBridge(LibraryMixin, QObject):
                             "apple_cover_file_format",
                             "apple_cookies_path",
                             "path_binary_nm3u8dlre",
-                            "apple_apk_path",
                             "apple_wrapper_port",
                             "apple_pacing_batch_size",
                             "apple_pacing_delay_sec",
@@ -21986,7 +21970,6 @@ class WavesBridge(LibraryMixin, QObject):
             or "path_binary_ffmpeg" in values
             or "path_binary_nm3u8dlre" in values
             or "apple_quarantine_dir" in values
-            or "apple_apk_path" in values
             or "apple_wrapper_port" in values
         ):
             # The cookies-tier paths the Apple provider resolves against (the

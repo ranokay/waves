@@ -11,10 +11,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from waves.apple_runtime import (
-    APK_PINNED_VERSION,
-    WRAPPER_LIBS_VERSION,
     WRAPPER_V2_IMAGE,
-    apk_extract_plan,
     describe_image_pull_error,
 )
 
@@ -40,15 +37,6 @@ def test_generic_pull_failure_keeps_the_old_shape():
     msg = describe_image_pull_error(RuntimeError("no such image"))
     assert msg.startswith(f"Could not pull {WRAPPER_V2_IMAGE}:")
     assert "no such image" in msg
-
-
-def test_apk_plan_names_version_source_splits_and_libs():
-    plan = apk_extract_plan("/m.apkm", hash_pinned=True)
-    assert any(APK_PINNED_VERSION in step for step in plan)
-    assert any("APKMirror" in step for step in plan)
-    assert any("Waves never downloads" in step for step in plan)
-    assert any("split" in step for step in plan)
-    assert any(WRAPPER_LIBS_VERSION in step for step in plan)
 
 
 def _wizard_steps(**over):
