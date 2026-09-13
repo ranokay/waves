@@ -81,7 +81,7 @@ def _run_scenario() -> int:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
 
-    from tests._qml_offline import PARK_LOGIN_QML, patch_offline
+    from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()  # BEFORE the bridge: its __init__ fires the sign-in check
     # Bridge BEFORE engine: constructing WavesBridge with a live

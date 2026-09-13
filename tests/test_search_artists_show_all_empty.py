@@ -87,7 +87,7 @@ def _run_scenario() -> int:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
 
-    from _qml_offline import PARK_LOGIN_QML, patch_offline
+    from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
     app = QGuiApplication.instance() or QGuiApplication([])

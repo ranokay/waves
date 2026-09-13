@@ -150,6 +150,11 @@ ignore = [
 # One deliberately linear end-to-end journey (pick a provider -> Settings ->
 # sign in -> sign out -> relaunch); the branching is the journey (C901).
 "tests/ui/test_account_journey.py" = ["C901"]
+# The boot scenarios replay one launch sequence start to finish; the
+# branching is the sequence (C901).
+"tests/ui/test_boot_fade_landing_park.py" = ["C901"]
+"tests/ui/test_boot_shield_cursor_release.py" = ["C901"]
+"tests/ui/test_boot_version_drain_order.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
 "tests/metadata/test_apple_double_cleanup.py" = ["S603"]
@@ -180,17 +185,10 @@ ignore = [
 "tests/test_search_scroll_reset.py" = ["S603", "C901"]
 "tests/test_search_top_result.py" = ["S603", "C901"]
 "tests/test_breadcrumb_navigation.py" = ["S603", "C901"]
-"tests/test_boot_handover_gate.py" = ["S603", "C901"]
-"tests/test_boot_fade_landing_park.py" = ["S603", "C901"]
-"tests/test_boot_shield_cursor_release.py" = ["S603", "C901"]
 "tests/test_browse_card_library_state.py" = ["S603", "C901"]
 "tests/test_browse_strip_fits_the_card.py" = ["S603", "C901"]
 "tests/test_library_track_claim.py" = ["S603", "C901"]
-"tests/test_boot_version_drain_order.py" = ["S603", "C901"]
-"tests/test_boot_scroll_dressing_hidden.py" = ["S603", "C901"]
 "tests/test_search_tab_artist_restore.py" = ["S603", "C901"]
-"tests/test_boot_input_shield.py" = ["S603", "C901"]
-"tests/test_boot_reveal_prewarm.py" = ["S603", "C901"]
 "tests/test_search_paste_autosearch.py" = ["S603", "C901"]
 "tests/test_queue_failed_section.py" = ["S603", "C901"]
 "tests/test_queue_row_index.py" = ["S603", "C901"]
@@ -261,7 +259,6 @@ ignore = [
 "tests/test_progress_jump_ramp.py" = ["S603", "C901"]
 "tests/test_progress_pad_cells.py" = ["S603", "C901"]
 "tests/test_search_artists_show_all_empty.py" = ["S603", "C901"]
-"tests/test_boot_library_scan_deferral.py" = ["S603", "C901"]
 # Drives the real release.sh (bash) and git against throwaway sandbox repos;
 # both are resolved from PATH on purpose (S603/S607, fixed argv).
 "tests/test_release_star_history.py" = ["S603", "S607"]

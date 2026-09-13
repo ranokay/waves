@@ -102,7 +102,7 @@ def _run_scenario() -> int:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
 
-    from tests._qml_offline import PARK_LOGIN_QML, patch_offline
+    from support.offline import PARK_LOGIN_QML, patch_offline
 
     # Local cover files: the page's art must actually reach Ready offline.
     art_dir = Path(tempfile.mkdtemp(prefix="waves-hover-art-"))

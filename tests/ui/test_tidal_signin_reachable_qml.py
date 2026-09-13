@@ -101,7 +101,7 @@ def _run_scenario() -> int:
         print(f"PySide6 unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
 
-    from _qml_offline import patch_offline
+    from support.offline import patch_offline
     from support.qml import sandbox_qml_settings
 
     patch_offline()
@@ -224,7 +224,7 @@ def _run_signout_scenario() -> int:
         print(f"PySide6 unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
 
-    from _qml_offline import patch_offline
+    from support.offline import patch_offline
     from support.qml import sandbox_qml_settings
 
     patch_offline()

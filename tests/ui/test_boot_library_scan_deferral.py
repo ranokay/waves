@@ -22,70 +22,45 @@ directly, which is exactly what the overlay's zoom tail does.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
+from support.offline import patch_offline
+from support.qml import EXIT_NO_QT, EXIT_OK, run_scenario, sandbox_qml_settings
 
-_EXIT_OK = 0
 _EXIT_SCANNED_AT_BOOT = 1  # the constructor claimed the sweep itself
 _EXIT_NOT_ARMED = 2  # nothing pending and no failsafe: the sweep is simply lost
 _EXIT_NOT_RELEASED = 3  # bootRevealed left the sweep parked
 _EXIT_RERELEASED = 4  # a second release dispatched a second sweep
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
 
 
+@pytest.mark.qml
 def test_the_launch_sweep_waits_for_the_reveal():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    sandbox = tempfile.mkdtemp(prefix="waves-boot-scan-defer-")
-    env["XDG_CONFIG_HOME"] = sandbox
-    env["HOME"] = sandbox
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
+        sandbox_prefix="waves-boot-scan-defer-",
+        failure_message="the boot sweep deferral regressed",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-10:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    if proc.returncode == _EXIT_SCANNED_AT_BOOT:
-        pytest.fail(f"the constructor started the sweep the boot water pays for:\n{tail}")
-    if proc.returncode == _EXIT_NOT_ARMED:
-        pytest.fail(f"the deferred sweep has no pending flag and no failsafe; it would never run:\n{tail}")
-    if proc.returncode == _EXIT_NOT_RELEASED:
-        pytest.fail(f"bootRevealed did not release the parked sweep:\n{tail}")
-    if proc.returncode == _EXIT_RERELEASED:
-        pytest.fail(f"the release is not one-shot; a second reveal dispatched a second sweep:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the boot sweep deferral regressed:\n{tail}"
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     try:
         from PySide6.QtGui import QGuiApplication
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
-
-    from _qml_offline import patch_offline
+        return EXIT_NO_QT
 
     patch_offline()
     QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     bridge = WavesBridge(tidal=None)
 
@@ -121,8 +96,8 @@ def _run_scenario() -> int:
     if len(releases) != 1:
         print(f"a second release dispatched again: releases={len(releases)}", file=sys.stderr)
         return _EXIT_RERELEASED
-    return _EXIT_OK
+    return EXIT_OK
 
 
 if __name__ == "__main__" and "--run-scenario" in sys.argv:
-    sys.exit(_run_scenario())
+    raise SystemExit(_run_scenario())

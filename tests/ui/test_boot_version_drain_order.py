@@ -27,66 +27,48 @@ into the rest of the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 # The zoom must start promptly once the readout is clear: the drain's
 # closing tick, plus a generous allowance for sampling and a loaded CI box.
 _MAX_GAP_MS = 300
 _SAMPLE_MS = 25
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
-
+@pytest.mark.qml
 def test_the_version_drains_before_the_wordmark_zooms():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-boot-drain-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert (
-        proc.returncode == _EXIT_OK
-    ), f"the launch handover's two beats overlap again. Scenario exit={proc.returncode}:\n{tail}"
+    run_scenario(Path(__file__), "--run-scenario", timeout=120, sandbox_prefix="waves-boot-drain-test-")
 
 
 def _run_scenario() -> int:
-    # THIS checkout's waves, not the venv's editable install.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -97,7 +79,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -131,7 +113,7 @@ def _run_scenario() -> int:
     settle(120)
     if not q("bootVer.text").strip() or q("bootTitle.zoom") != 1:
         print("could not restore the launch frame", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # Sample the whole handover: does the readout still carry ink (any cell
     # not yet blanked), and has the wordmark started growing?
@@ -148,7 +130,7 @@ def _run_scenario() -> int:
     zoomed = [i for i, (_, z) in enumerate(samples) if z]
     if not inked or not zoomed:
         print(f"the handover did not play: ink={len(inked)} zoom={len(zoomed)}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # The order is the whole point: every frame with ink in the readout comes
     # before every frame of zoom.
@@ -160,8 +142,8 @@ def _run_scenario() -> int:
         f"ordered={ordered} prompt={prompt} last_ink={inked[-1]} first_zoom={zoomed[0]} gap<={gap_ms}ms",
         flush=True,
     )
-    return _EXIT_OK if (ordered and prompt) else _EXIT_REGRESSED
+    return EXIT_OK if (ordered and prompt) else EXIT_REGRESSED
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())
