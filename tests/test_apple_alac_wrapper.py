@@ -13,7 +13,7 @@ from waves.apple_engine import (
 )
 from waves.constants import QualityTier, quality_rank
 from waves.providers.apple import AppleProvider
-from waves.providers.base import AudioType
+from waves.providers.base import AudioType, RefusalKind
 
 
 def _song_resource(song_id="song-1", traits=("lossless",)):
@@ -82,6 +82,120 @@ def test_wrapper_tier_advertises_lossless_rungs():
     assert (QualityTier.HIGH, AudioType.STEREO) in deliveries
     assert (QualityTier.LOSSLESS, AudioType.STEREO) in deliveries
     assert (QualityTier.HI_RES_LOSSLESS, AudioType.STEREO) in deliveries
+
+
+def test_audio_variants_alone_advertise_the_lossless_rungs():
+    def variants_only(variants):
+        resource = _song_resource(traits=())
+        attributes = resource["attributes"]
+        attributes.pop("audioTraits")
+        attributes["audioVariants"] = list(variants)
+        return resource
+
+    provider = AppleProvider(catalog=None)
+    provider.wrapper_url = "http://127.0.0.1:51234"
+
+    lossless = variants_only(["lossless"])
+    assert provider.advertised_tier(lossless) == QualityTier.LOSSLESS
+    assert provider.advertised_ceiling(lossless) == quality_rank(QualityTier.LOSSLESS)
+    assert (QualityTier.LOSSLESS, AudioType.STEREO) in provider.advertised_deliveries(lossless)
+
+    hires = variants_only(["hi-res-lossless", "lossless"])
+    assert provider.advertised_tier(hires) == QualityTier.HI_RES_LOSSLESS
+    assert provider.advertised_ceiling(hires) == quality_rank(QualityTier.HI_RES_LOSSLESS)
+    assert (QualityTier.HI_RES_LOSSLESS, AudioType.STEREO) in provider.advertised_deliveries(hires)
+
+    # The two list forms are one union; the higher rung wins when both appear.
+    mixed = _song_resource(traits=("lossless",))
+    mixed["attributes"]["audioVariants"] = ["hi-res-lossless"]
+    assert provider.advertised_tier(mixed) == QualityTier.HI_RES_LOSSLESS
+    assert provider.advertised_ceiling(mixed) == quality_rank(QualityTier.HI_RES_LOSSLESS)
+
+    # An AAC-only item stays HIGH through every reader.
+    aac_only = variants_only(["lossy-stereo"])
+    assert provider.advertised_tier(aac_only) == QualityTier.HIGH
+    assert provider.advertised_ceiling(aac_only) == quality_rank(QualityTier.HIGH)
+    assert provider.advertised_deliveries(aac_only) == [(QualityTier.HIGH, AudioType.STEREO)]
+
+    # Atmos rides the same union.
+    assert provider.has_atmos(variants_only(["dolby-atmos"])) is True
+
+
+def test_unservable_rendition_surfaces_as_a_typed_refusal():
+    import asyncio
+
+    from gamdl.interface.exceptions import GamdlInterfaceFormatNotAvailableError
+
+    import waves.apple_engine as engine
+
+    class _Interface:
+        async def _get_song_media(self, song_id):
+            yield SimpleNamespace(
+                error=GamdlInterfaceFormatNotAvailableError(media_id=song_id, codec=["alac"]),
+                partial=False,
+                stream_info=None,
+            )
+
+    with pytest.raises(engine.AppleVariantUnavailable) as raised:
+        asyncio.run(engine._fetch_song_staged(interface=_Interface(), song_downloader=None, song_id="song-1"))
+
+    # The provider's fallback gate reads the typed refusal, not error text.
+    provider = AppleProvider(catalog=None)
+    refusal = provider.classify_refusal(raised.value)
+    assert refusal.kind is RefusalKind.UNAVAILABLE
+
+
+def test_alac_playlist_choice_honors_the_ceiling():
+    import waves.apple_engine as engine
+
+    cd = {"uri": "16-441.m3u8", "stream_info": {"audio": "audio-alac-stereo-44100-16", "average_bandwidth": 900000}}
+    cd48 = {"uri": "16-48.m3u8", "stream_info": {"audio": "audio-alac-stereo-48000-16"}}
+    hires = {"uri": "24-96.m3u8", "stream_info": {"audio": "audio-alac-stereo-96000-24", "average_bandwidth": 2800000}}
+    hires192 = {"uri": "24-192.m3u8", "stream_info": {"audio": "audio-alac-stereo-192000-24"}}
+
+    # LOSSLESS caps at 16-bit and prefers the highest rate under the cap;
+    # HI_RES takes the best rendition the master holds.
+    assert engine._choose_alac_playlist([cd, cd48, hires, hires192], 16) is cd48
+    assert engine._choose_alac_playlist([cd, cd48, hires, hires192], None) is hires192
+    # A 24-bit-only master cannot satisfy the LOSSLESS cap.
+    assert engine._choose_alac_playlist([hires], 16) is None
+    # A suffixed tag still parses (gamdl's own ALAC family is permissive).
+    suffixed = {"uri": "16-b.m3u8", "stream_info": {"audio": "audio-alac-stereo-44100-16-binaural"}}
+    assert engine._choose_alac_playlist([suffixed], 16) is suffixed
+    # Non-ALAC, unparseable and empty lists never qualify.
+    aac = {"uri": "aac.m3u8", "stream_info": {"audio": "audio-stereo-256"}}
+    unknown = {"uri": "x.m3u8", "stream_info": {"audio": "audio-alac-unknown"}}
+    assert engine._choose_alac_playlist([aac, unknown], None) is None
+    assert engine._choose_alac_playlist([], 16) is None
+
+
+def test_resolve_stream_asks_the_alac_fetch_at_the_pinned_tier(tmp_path, monkeypatch):
+    import waves.apple_engine as engine
+
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"fake-alac")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    asked: list = []
+
+    def fake_alac(**kwargs):
+        asked.append(kwargs["max_tier"])
+        return SimpleNamespace(staged_path=staged, workdir=workdir, is_atmos=False, codec="alac")
+
+    monkeypatch.setattr(engine, "download_song_alac_file", fake_alac)
+    monkeypatch.setattr(
+        engine,
+        "probe_audio_file",
+        lambda path, ffprobe_path="": {"codec": "alac", "sample_rate": "44100", "bit_depth": 16},
+    )
+    provider = AppleProvider(catalog=None)
+    provider.wrapper_url = "http://127.0.0.1:51234"
+
+    provider.resolve_stream(_song_resource(), QualityTier.LOSSLESS, AudioType.STEREO)
+    provider.resolve_stream(_song_resource(), QualityTier.HI_RES_LOSSLESS, AudioType.STEREO)
+
+    assert asked == [QualityTier.LOSSLESS.value, QualityTier.HI_RES_LOSSLESS.value]
+    provider.discard_delivery(str(staged))
 
 
 def test_resolve_stream_alac_reports_honest_tier(tmp_path, monkeypatch):
@@ -181,6 +295,7 @@ def test_resolve_stream_without_wrapper_stays_aac(tmp_path, monkeypatch):
 
 def test_alac_fallback_to_aac_when_no_alac_variant(tmp_path, monkeypatch):
     import waves.apple_engine as engine
+    from waves.apple_engine import AppleVariantUnavailable
 
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"fake-aac")
@@ -188,7 +303,7 @@ def test_alac_fallback_to_aac_when_no_alac_variant(tmp_path, monkeypatch):
     workdir.mkdir()
 
     def _no_alac(**kwargs):
-        raise RuntimeError("GamdlInterfaceFormatNotAvailableError: no alac playlist")
+        raise AppleVariantUnavailable("Apple holds no rendition at the requested quality for song song-1")
 
     monkeypatch.setattr(engine, "download_song_alac_file", _no_alac)
     monkeypatch.setattr(

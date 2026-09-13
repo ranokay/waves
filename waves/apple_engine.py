@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -68,6 +69,14 @@ class AppleIntegrityError(AppleDownloadError):
 
 class AppleTrackUnavailable(Exception):
     """Apple knows the song but will not serve a stream for it."""
+
+
+class AppleVariantUnavailable(AppleDownloadError):
+    """Apple holds no rendition at the requested quality (or none at all).
+
+    The provider classifies this as an unavailable refusal, so the ceiling's
+    fallback rules apply (AAC only when cookies exist; never a higher ALAC).
+    """
 
 
 class _AppleSkipped(Exception):
@@ -188,15 +197,24 @@ def _verify_delivery(
 async def _fetch_song_staged(*, interface, song_downloader, song_id: str) -> tuple[Path, str]:
     """The decrypted song file plus its stream-advertised codec, or a refusal.
 
-    Raises AppleTrackUnavailable-shaped AppleDownloadError when Apple knows
-    the song but will not serve a stream for it (kept out of the fail count
-    upstream); every other fetch problem raises AppleDownloadError.
+    A rendition Apple cannot serve for this ask raises AppleVariantUnavailable
+    (gamdl parks its format/streamable refusals on ``media.error``; the
+    provider's refusal vocabulary needs them typed, not as text). Every other
+    fetch problem raises AppleDownloadError.
     """
     medias = [media async for media in interface._get_song_media(song_id)]
     media = medias[-1] if medias else None
-    if media is None or getattr(media, "error", None) is not None:
+    if media is None:
+        raise AppleDownloadError(f"Apple would not serve song {song_id}: unknown error")  # noqa: TRY003
+    error = getattr(media, "error", None)
+    if error is not None:
+        text = str(error).lower()
+        if "format is not available" in text or "not streamable" in text:
+            raise AppleVariantUnavailable(  # noqa: TRY003 (user-facing words by design)
+                f"Apple holds no rendition at the requested quality for song {song_id}"
+            )
         raise AppleDownloadError(  # noqa: TRY003 (user-facing words by design)
-            f"Apple would not serve song {song_id}: {getattr(media, 'error', 'unknown error')}"
+            f"Apple would not serve song {song_id}: {error}"
         )
     if getattr(media, "partial", False) or getattr(media, "stream_info", None) is None:
         raise AppleDownloadError(f"Apple served an incomplete stream for song {song_id}")  # noqa: TRY003
@@ -309,8 +327,39 @@ async def _open_wrapper_session(*, base_url: str, decrypt_host: str, decrypt_por
         raise AppleWrapperDown(f"Apple wrapper is unreachable at {base_url}: {exc}") from exc  # noqa: TRY003
 
 
+_ALAC_AUDIO_RE = re.compile(r"^audio-alac-.*?-(\d{4,6})-(\d{1,2})(?:-.*)?$")
+
+
+def _choose_alac_playlist(playlists: list, max_bit_depth: int | None) -> dict | None:
+    """The best ALAC playlist at or below a bit-depth ceiling, or None.
+
+    Enhanced-HLS masters label each rendition's audio group
+    ``audio-alac-stereo-<sampleRate>-<bitDepth>``; the tier map decides
+    hi-res by depth alone, so a LOSSLESS ask caps at 16-bit while a HI_RES
+    ask takes the best the master holds. None means nothing qualified,
+    which gamdl surfaces as a format refusal; ``_fetch_song_staged`` turns
+    that into AppleVariantUnavailable, classified unavailable upstream so
+    the ceiling's fallback rules still apply.
+    """
+    candidates: list[tuple[int, int, dict]] = []
+    for playlist in playlists:
+        if not isinstance(playlist, dict):
+            continue
+        stream_info = playlist.get("stream_info") or {}
+        match = _ALAC_AUDIO_RE.fullmatch(str(stream_info.get("audio") or ""))
+        if match is None:
+            continue
+        rate, depth = int(match.group(1)), int(match.group(2))
+        if max_bit_depth is not None and depth > max_bit_depth:
+            continue
+        candidates.append((depth, rate, playlist))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: (candidate[0], candidate[1]))[2]
+
+
 async def _fetch_alac_staged(
-    *, song_id: str, workdir: str, nm3u8dlre_path: str, ffmpeg_path: str, wrapper_api
+    *, song_id: str, workdir: str, nm3u8dlre_path: str, ffmpeg_path: str, wrapper_api, max_tier: str = ""
 ) -> AppleDelivery:
     """One ALAC fetch through an open wrapper session, verified fail-fast."""
     from gamdl.api.apple_music import AppleMusicApi
@@ -324,13 +373,24 @@ async def _fetch_alac_staged(
     from gamdl.interface.song import AppleMusicSongInterface
     from gamdl.interface.uploaded_video import AppleMusicUploadedVideoInterface
 
+    from waves.constants import QualityTier
+
     try:
         api = await AppleMusicApi.create_from_wrapper(wrapper_api=wrapper_api)
     except Exception as exc:
         raise AppleDownloadError(f"Apple wrapper session failed for song {song_id}: {exc}") from exc  # noqa: TRY003
     try:
         base_interface = await AppleMusicBaseInterface.create(apple_music_api=api, wrapper_api=wrapper_api)
-        song_interface = AppleMusicSongInterface(base=base_interface, codec_priority=[SongCodec.ALAC])
+        # One chooser for both asks: LOSSLESS caps the choice at 16-bit (the
+        # tier map decides hi-res by depth alone), a HI_RES ask takes the
+        # best rendition the master holds. The rendition decision is ours
+        # either way, so a hi-res master can never satisfy a LOSSLESS ask.
+        max_bit_depth = 16 if str(max_tier) == QualityTier.LOSSLESS.value else None
+        song_interface = AppleMusicSongInterface(
+            base=base_interface,
+            codec_priority=[SongCodec.ASK],
+            ask_codec_function=lambda playlists: _choose_alac_playlist(playlists, max_bit_depth),
+        )
         interface = AppleMusicInterface(
             song=song_interface,
             music_video=AppleMusicMusicVideoInterface(base=base_interface),
@@ -384,6 +444,7 @@ async def _download_song_via_wrapper_async(
     ffmpeg_path: str,
     decrypt_host: str = "127.0.0.1",
     decrypt_port: int = 10020,
+    max_tier: str = "",
 ) -> AppleDelivery:
     """Fetch one ALAC song through the managed wrapper-v2 guest (issue #32).
 
@@ -406,6 +467,7 @@ async def _download_song_via_wrapper_async(
             nm3u8dlre_path=nm3u8dlre_path,
             ffmpeg_path=ffmpeg_path,
             wrapper_api=wrapper_api,
+            max_tier=max_tier,
         )
     finally:
         close_wrapper = getattr(getattr(wrapper_api, "client", None), "aclose", None)
@@ -424,13 +486,16 @@ def download_song_alac_file(
     ffmpeg_path: str = "",
     decrypt_host: str = "127.0.0.1",
     decrypt_port: int = 10020,
+    max_tier: str = "",
 ) -> AppleDelivery:
     """Fetch one ALAC song through the managed wrapper into a fresh workdir.
 
-    Session persistence is the wrapper's own property (tokens survive a
-    container restart): a second call with the same URL needs no re-login.
-    Raises AppleCredentialsError when the guest is logged out or unreachable
-    as a login problem, AppleDownloadError otherwise.
+    ``max_tier`` caps the rendition (a Waves tier value): LOSSLESS picks an
+    ALAC at or below 16-bit, anything else the best the master holds. Session
+    persistence is the wrapper's own property (tokens survive a container
+    restart): a second call with the same URL needs no re-login. Raises
+    AppleCredentialsError when the guest is logged out or unreachable as a
+    login problem, AppleDownloadError otherwise.
     """
     url = str(wrapper_url or "").strip()
     if not url:
@@ -454,6 +519,7 @@ def download_song_alac_file(
                 ffmpeg_path=ffmpeg,
                 decrypt_host=decrypt_host,
                 decrypt_port=int(decrypt_port or 10020),
+                max_tier=str(max_tier or ""),
             )
         )
     except AppleIntegrityError:
