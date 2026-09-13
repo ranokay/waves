@@ -3,7 +3,8 @@
 The switch means "stop using Apple", so its queued and running rows stop with
 it; rows that keep fetching behind a vanished search group mislead. Nothing is
 lost: the rows stay in Stopped with the reason, RETRY / RETRY ALL picks them
-up after the switch is back on, and no TIDAL work (including TIDAL work held
+up after the switch is back on, and a retry attempted while it is still off is
+refused with the row left in place. No TIDAL work (including TIDAL work held
 for the download folder to return) is touched. The running row's worker
 settles itself as cancelled, so the stop's words must survive that wordless
 settle without leaking into ordinary settles.
@@ -85,6 +86,73 @@ def test_an_empty_provider_queue_stops_nothing_and_emits_nothing():
     assert stub._stop_provider_downloads(CTX_APPLE, _REASON) == 0
     assert stub._queue_index[2]["status"] == "queued"
     assert stub.queue_emits == 0
+
+
+def _retry_stub(item: dict) -> SimpleNamespace:
+    stub = SimpleNamespace()
+    stub._queue_index = {item["qid"]: item}
+    stub._merge_plans = {}
+    stub.removed = []
+    stub._queue_item = WavesBridge._queue_item.__get__(stub, SimpleNamespace)
+    stub._row_object = lambda it: object()
+    stub._download_apple = lambda *a, **k: False
+    stub._remove_row = lambda qid, withdrawn=None: stub.removed.append(qid) or True
+    stub._emit_queue = lambda: None
+    stub._start_retry = WavesBridge._start_retry.__get__(stub, SimpleNamespace)
+    stub.retryQueueItem = WavesBridge.retryQueueItem.__get__(stub, SimpleNamespace)
+    return stub
+
+
+def test_a_refused_retry_keeps_the_stopped_row():
+    item = {
+        "qid": 1,
+        "media_id": "apple:album:a",
+        "status": "cancelled",
+        "reason": _REASON,
+        "type": "album",
+        "name": "A",
+        "template": "T",
+        "collection": True,
+        "quality": "HIGH",
+        "askQuality": "HIGH",
+    }
+    stub = _retry_stub(item)
+
+    stub.retryQueueItem(1)
+
+    assert stub.removed == []
+    assert stub._queue_index[1]["status"] == "cancelled"
+    assert stub._queue_index[1]["reason"] == _REASON
+
+
+def test_retry_all_keeps_rows_a_refused_provider_did_not_requeue():
+    rows = [
+        {"qid": 1, "media_id": "apple:album:a", "status": "cancelled", "reason": _REASON, "type": "album"},
+        {"qid": 2, "media_id": "apple:album:b", "status": "cancelled", "reason": _REASON, "type": "album"},
+    ]
+    stub = SimpleNamespace(
+        _queue=rows,
+        _queue_index={row["qid"]: row for row in rows},
+        _queue_lock=Lock(),
+        _queue_emit_suspended=False,
+        _merge_plans={},
+        _redownload_overrides=set(),
+        _library_claim_overrides=set(),
+        _pending_lock=Lock(),
+        _pending_downloads=[],
+        _qdirty_removed=[],
+        _row_object=lambda item: object(),
+        _start_retry=lambda item, obj: False,
+        _emit_queue=lambda: None,
+    )
+    stub._reindex_queue = lambda: None
+    stub._remove_rows_where = WavesBridge._remove_rows_where.__get__(stub, SimpleNamespace)
+    stub._queue_batch = WavesBridge._queue_batch.__get__(stub, SimpleNamespace)
+    stub._retry_all_with_status = WavesBridge._retry_all_with_status.__get__(stub, SimpleNamespace)
+
+    stub._retry_all_with_status("cancelled")
+
+    assert [row["status"] for row in rows] == ["cancelled", "cancelled"]
 
 
 def _status_stub(item: dict) -> SimpleNamespace:

@@ -9540,9 +9540,11 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _set_queue_status(self, qid: int, status: str, reason: str = "") -> None:
         """Move a row to its new status, optionally with the reason it got
-        there. The reason is cleared by every status that is not carrying one,
-        so a row that fails, is retried in place and then finishes cannot keep
-        explaining a failure that no longer stands."""
+        there. A status that carries no reason clears the one the row had --
+        a row retried in place and finished cannot keep explaining a failure
+        that no longer stands -- except a wordless cancel settle on a row a
+        stop already worded: the provider-disable reason survives the
+        worker's own settle."""
         item = self._queue_item(qid)
         if item is None:
             return
@@ -19403,9 +19405,13 @@ class WavesBridge(LibraryMixin, QObject):
         with self._queue_batch():
             for item, obj in retries:
                 try:
-                    self._start_retry(item, obj)
+                    started = self._start_retry(item, obj)
                 except Exception:
                     logger.exception("queue: could not restart a retried row")
+                    continue
+                if started is False:
+                    # Refused (a gate, or the provider is off): the row keeps
+                    # its place in the Stopped section with its RETRY.
                     continue
                 restarted.append(item["qid"])
             # The old rows go once their retries are in, and only the ones
@@ -19477,7 +19483,7 @@ class WavesBridge(LibraryMixin, QObject):
                     obj = None
         return obj
 
-    def _start_retry(self, item: dict, obj) -> None:
+    def _start_retry(self, item: dict, obj) -> bool:
         # Preserve a failed 'best of both' merge as a merge on retry, its plan
         # is kept stashed (only dropped on success), so a retried album isn't
         # silently degraded to a plain download.
@@ -19487,7 +19493,7 @@ class WavesBridge(LibraryMixin, QObject):
             # below (which would build a TIDAL spec for an Apple id). The
             # explicit is_retry marks this re-entry a retry, and the queued
             # spec carries that flag to the skip-list gate (spec §6.4).
-            self._download_apple(
+            return self._download_apple(
                 item["type"],
                 obj,
                 obj if item["collection"] else None,
@@ -19502,9 +19508,8 @@ class WavesBridge(LibraryMixin, QObject):
                 chooser_toggles=dict(item.get("askToggles") or {}),
                 is_retry=True,
             )
-            return
         plan = self._merge_plans.get(item["media_id"]) if item["type"] == "album" else None
-        self._download(
+        return self._download(
             obj,
             item["type"],
             item["name"],
@@ -19541,7 +19546,11 @@ class WavesBridge(LibraryMixin, QObject):
         # row's REDOWNLOAD force when the withdrawal release looks for it (a
         # retry of a forced download stays forced). A terminal row is
         # invisible to the duplicate guard, so the two never collide.
-        self._start_retry(item, obj)
+        if self._start_retry(item, obj) is False:
+            # The re-entry refused (a gate, or the provider's switch is off):
+            # the row keeps its place in its section with its RETRY, and the
+            # gate's own message is the one the status line shows.
+            return
         self._remove_row(qid)
         self._emit_queue()
 

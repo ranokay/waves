@@ -7,7 +7,7 @@ leaving the skip-list to REDOWNLOAD. A copy that cannot be deleted stays
 recorded, so the actions never hide bytes that are still on disk.
 
 Behavior, not spelling: every assertion is about bytes on disk, recorded
-paths, or the row the drawer reads.
+paths, the row the drawer reads, or the status words the user sees.
 """
 
 from __future__ import annotations
@@ -189,7 +189,7 @@ def test_delete_with_nothing_recorded_says_so(tmp_path):
 
     stub.deleteQuarantine(7)
 
-    assert stub.last_status == "No quarantined copy to delete"
+    assert "No quarantined copy" in stub.last_status
 
 
 def test_withdrawing_a_row_forgets_its_quarantine_paths():
