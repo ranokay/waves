@@ -679,7 +679,9 @@ def place_file(staged: pathlib.Path, dest: pathlib.Path) -> None:
         raise
 
 
-def verify_staged(hooks: AppleJobHooks, staged: pathlib.Path, *, expect_atmos: bool) -> None:
+def verify_staged(
+    hooks: AppleJobHooks, staged: pathlib.Path, *, expect_atmos: bool, verified_probe: dict | None = None
+) -> None:
     """Pre-swap verification of one Apple delivery (spec §6.1).
 
     Always-on structural behavior, never a setting; TIDAL downloads never
@@ -690,10 +692,14 @@ def verify_staged(hooks: AppleJobHooks, staged: pathlib.Path, *, expect_atmos: b
     the integrity wording, so the retry policy and quarantine treat both
     identically. No conversion runs before this passes; there is no patching.
 
-    No ffprobe/ffmpeg anywhere means trust (their absence already fails
-    louder paths via the ffmpeg gate); a wrong codec or a decode error fails
-    the track, never the job.
+    A delivery that carries the engine's verified probe already passed both
+    checks on exactly these bytes, so the probe is reused instead of spending
+    a second ffprobe and decode. No ffprobe/ffmpeg anywhere means trust (their
+    absence already fails louder paths via the ffmpeg gate); a wrong codec or
+    a decode error fails the track, never the job.
     """
+    if isinstance(verified_probe, dict) and verified_probe:
+        return
     ffprobe = probe_binary(hooks)
     if ffprobe:
         probe = apple_engine.probe_audio_file(staged, ffprobe)
@@ -1591,6 +1597,7 @@ def deliver_track(
     last_encoded: str | None = None
     last_staged: pathlib.Path | None = None
     outbreak_seen = False
+    carried_probe: dict | None = None
 
     def _drop_hold() -> None:
         """Delete the superseded retry hold, if any, and forget it."""
@@ -1623,6 +1630,11 @@ def deliver_track(
             if not staged.is_file():
                 raise AppleDownloadError("Apple download produced no file")  # noqa: TRY301
             atmos = str((info.delivered or {}).get("audio_type") or "") == str(AudioType.ATMOS)
+            # The engine's verified probe rides the delivery (codec family +
+            # full decode on exactly these bytes); the verification gate and
+            # the honest-tier read below reuse it instead of re-probing.
+            probe_value = (info.delivered or {}).get("probe")
+            carried_probe = dict(probe_value) if isinstance(probe_value, dict) and probe_value else None
             # The true extension off the delivery: ALAC stereo becomes
             # .flac when the FLAC toggle is on (and an ffmpeg binary is
             # at hand); scope "all" additionally converts lossy stereo
@@ -1648,7 +1660,7 @@ def deliver_track(
                     if not force and data.skip_existing and exact_true.exists():
                         raise _AppleSkipped()  # noqa: TRY301
                     dest = pick_destination(base, relative, want_ext)
-            verify_staged(hooks, staged, expect_atmos=atmos)
+            verify_staged(hooks, staged, expect_atmos=atmos, verified_probe=carried_probe)
             if job_abort.is_set():
                 raise _AppleAborted()  # noqa: TRY301
             if mode:
@@ -1857,15 +1869,22 @@ def deliver_track(
         ttml_verbatim=lyrics_ttml,
         options=options,
     )
-    # Honest delivered tier: the provider probed the staged
-    # bytes (ALAC 24/96 where the master tops out stays 24/96 in the
-    # record); the landed file re-probes for depth/rate so the ownership
-    # row carries reality, not the ask. Detail rides bit_depth/
-    # sample_rate/codecs label text, never rank.
-    try:
-        landed_probe = apple_engine.probe_audio_file(dest, probe_binary(hooks)) or {}
-    except Exception:
-        landed_probe = {}
+    # Honest delivered tier: the engine probed the staged bytes (ALAC 24/96
+    # where the master tops out stays 24/96 in the record), and that verified
+    # read rides the delivery, so depth/rate come from it rather than another
+    # ffprobe of the landed copy. Live conversions change the container only
+    # (extract_flac never resamples): the carried probe still holds. A
+    # delivery without one re-probes the landed file. Detail rides
+    # bit_depth/sample_rate/codecs label text, never rank.
+    if carried_probe is not None:
+        landed_probe = dict(carried_probe)
+        if mode:
+            landed_probe["codec"] = "flac"
+    else:
+        try:
+            landed_probe = apple_engine.probe_audio_file(dest, probe_binary(hooks)) or {}
+        except Exception:
+            landed_probe = {}
     try:
         delivered = dict(getattr(info, "delivered", None) or {})
     except Exception:
@@ -2387,9 +2406,16 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
     hooks.devlog_event("download", "start", type=type_media, id=media_id, qid=qid)
     started_at = hooks.devlog_clock()
     try:
-        summary = run_apple_job(
-            hooks, qid, spec, obj, signals=signals, job_abort=job_abort, file_template=file_template
-        )
+        with contextlib.ExitStack() as stack:
+            # One engine stack and event loop per job: the provider opens its
+            # session scope here, fetches every track through it, and the
+            # scope releases the gamdl clients and the loop even on failure.
+            opener = getattr(provider, "fetch_job_session", None)
+            if callable(opener):
+                stack.enter_context(opener())
+            summary = run_apple_job(
+                hooks, qid, spec, obj, signals=signals, job_abort=job_abort, file_template=file_template
+            )
         if job_abort.is_set():
             hooks.download_state(media_id, "")
             hooks.queue_status(qid, "cancelled")

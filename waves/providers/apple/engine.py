@@ -23,7 +23,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger("waves.providers.apple.engine")
@@ -95,6 +95,12 @@ class AppleDelivery:
     workdir: Path
     is_atmos: bool
     codec: str  # "mp4a.40.2" stereo or "ec-3" Atmos, as requested
+    # The engine's fail-fast read of the staged bytes (codec/sample_rate/
+    # bit_depth), empty when no ffprobe was available.
+    probe: dict = field(default_factory=dict)
+    # Whether the probe and the full decode both ran on exactly these
+    # bytes. False means the caller still owns verification.
+    verified: bool = False
 
 
 def _require_cookies(cookies_path: str) -> str:
@@ -165,6 +171,14 @@ def _require_binary(name: str, override: str = "") -> str:
     )
 
 
+def _require_yt_dlp() -> None:
+    """The direct-URL fallback shells through yt-dlp; fail with its name."""
+    try:
+        import yt_dlp  # noqa: F401  (direct-URL fallback shells through it)
+    except ImportError as exc:
+        raise AppleDownloadError("Apple downloads need the yt-dlp package installed.") from exc  # noqa: TRY003
+
+
 def _verify_delivery(
     *,
     staged: Path,
@@ -172,14 +186,15 @@ def _verify_delivery(
     atmos: bool,
     resolved_probe: str,
     ffmpeg_path: str,
-) -> str:
+) -> dict:
     """Fail-fast verification of one fetched delivery, inside the engine fetch.
 
     A wrong delivery (an AAC file for an Atmos ask would otherwise be reported
     as E-AC-3 downstream) and an undecodable file both raise
-    AppleIntegrityError carrying the staged path; the job runner verifies
-    again per track. Stereo accepts AAC (cookies tier) and ALAC (wrapper
-    tier). Returns the picked codec. The workdir is stamped by the caller.
+    AppleIntegrityError carrying the staged path. Stereo accepts AAC (cookies
+    tier) and ALAC (wrapper tier). Returns the probe (codec/sample_rate/
+    bit_depth), which the caller carries onward as the verified read. The
+    workdir is stamped by the caller.
     """
     probe = probe_audio_file(staged, resolved_probe)
     picked = str(probe.get("codec") or "")
@@ -191,7 +206,7 @@ def _verify_delivery(
             staged_path=str(staged),
         )
     decode_check(staged, ffmpeg_path)
-    return picked
+    return probe
 
 
 async def _fetch_song_staged(*, interface, song_downloader, song_id: str) -> tuple[Path, str]:
@@ -227,27 +242,22 @@ async def _fetch_song_staged(*, interface, song_downloader, song_id: str) -> tup
     return staged, codec
 
 
-async def _download_song_async(
-    *,
-    song_id: str,
-    atmos: bool,
-    cookies_path: str,
-    workdir: str,
-    nm3u8dlre_path: str,
-    ffmpeg_path: str,
-) -> AppleDelivery:
-    from gamdl.api.apple_music import AppleMusicApi
-    from gamdl.downloader.base import AppleMusicBaseDownloader
-    from gamdl.downloader.downloader import DownloadMode
-    from gamdl.downloader.song import AppleMusicSongDownloader
-    from gamdl.interface.base import AppleMusicBaseInterface
-    from gamdl.interface.enums import SongCodec
-    from gamdl.interface.interface import AppleMusicInterface
-    from gamdl.interface.music_video import AppleMusicMusicVideoInterface
-    from gamdl.interface.song import AppleMusicSongInterface
-    from gamdl.interface.uploaded_video import AppleMusicUploadedVideoInterface
+async def _close_client(owner, label: str = "Apple API session") -> None:
+    """Best-effort close of an owner's aclose-able HTTP client, if any."""
+    close = getattr(getattr(owner, "client", None), "aclose", None)
+    if close is None:
+        return
+    try:
+        await close()
+    except Exception:
+        logger.debug("Could not close the %s", label, exc_info=True)
 
-    api = None
+
+async def _create_cookies_stack(cookies_path: str):
+    """The cookies tier's API and base interface, built once per session."""
+    from gamdl.api.apple_music import AppleMusicApi
+    from gamdl.interface.base import AppleMusicBaseInterface
+
     try:
         api = await AppleMusicApi.create_from_netscape_cookies(cookies_path)
     except (OSError, ValueError) as exc:
@@ -258,6 +268,215 @@ async def _download_song_async(
         ) from exc
     try:
         base_interface = await AppleMusicBaseInterface.create(apple_music_api=api)
+    except BaseException:
+        await _close_client(api)
+        raise
+    return api, base_interface
+
+
+async def _create_wrapper_stack(*, base_url: str, decrypt_host: str, decrypt_port: int):
+    """The wrapper guest session, its API and base interface, once per session.
+
+    A failure after the guest session opened closes that client before
+    raising, so a retried session never leaks a connection pool.
+    """
+    from gamdl.api.apple_music import AppleMusicApi
+    from gamdl.interface.base import AppleMusicBaseInterface
+
+    wrapper_api = await _open_wrapper_session(base_url=base_url, decrypt_host=decrypt_host, decrypt_port=decrypt_port)
+    try:
+        api = await AppleMusicApi.create_from_wrapper(wrapper_api=wrapper_api)
+        base_interface = await AppleMusicBaseInterface.create(apple_music_api=api, wrapper_api=wrapper_api)
+    except BaseException:
+        await _close_client(wrapper_api, "wrapper session")
+        raise
+    return wrapper_api, api, base_interface
+
+
+_CONNECTION_FAILURE_TYPES = (
+    "connecterror",
+    "connecttimeout",
+    "readtimeout",
+    "readerror",
+    "remoteprotocolerror",
+    "networkerror",
+)
+_CONNECTION_FAILURE_PHRASES = (
+    "connection refused",
+    "all connection attempts failed",
+    "server disconnected",
+    "connection reset",
+    "connection aborted",
+    "network is unreachable",
+    "timed out",
+)
+
+
+def _is_connection_failure(exc: BaseException) -> bool:
+    """Whether a failed wrapper fetch is the guest's connection dying.
+
+    A session keeps its HTTP client across tracks, so a sidecar that dies
+    mid-job surfaces as the client's own connection error; the one-shot
+    shape re-opened the session per track and typed that as a held-not-failed
+    wrapper outage. The session maps it back to AppleWrapperDown so the row
+    still holds instead of failing its track.
+    """
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if any(token in text for token in _CONNECTION_FAILURE_TYPES):
+        return True
+    return any(phrase in text for phrase in _CONNECTION_FAILURE_PHRASES)
+
+
+def _verify_fetched(
+    *, staged: Path, song_id: str, atmos: bool, workdir: str, ffmpeg_path: str, picked: str
+) -> tuple[dict, str, bool]:
+    """The verified probe for one staged fetch, or an unverified answer.
+
+    Verification needs an ffprobe; without one the bytes are handed on with
+    ``verified`` False and the caller resolves the same binaries and checks
+    them itself. Returns (probe, codec, verified); a rejected delivery
+    carries its workdir and staged path on the raised integrity error.
+    """
+    resolved_probe = ffprobe_for(ffmpeg_path)
+    if not resolved_probe:
+        return {}, str(picked or ""), False
+    try:
+        probe = _verify_delivery(
+            staged=staged,
+            song_id=str(song_id),
+            atmos=atmos,
+            resolved_probe=resolved_probe,
+            ffmpeg_path=ffmpeg_path,
+        )
+    except AppleIntegrityError as integrity_exc:
+        # The rejected bytes stay for the caller (retry, date read,
+        # quarantine): ownership of the workdir transfers outward.
+        if not integrity_exc.workdir:
+            integrity_exc.workdir = str(workdir)
+        if not integrity_exc.staged_path:
+            integrity_exc.staged_path = str(staged)
+        raise
+    return probe, str(probe.get("codec") or picked or ""), True
+
+
+class AppleFetchSession:
+    """One job's reused gamdl stack: one event loop, one API per tier.
+
+    A job fetches its tracks sequentially. The cookies API (cookie parse,
+    dev token, account info), the base interface (iTunes API, CDM) and the
+    wrapper guest session (HTTP client, wrapper tokens) are job-scoped
+    costs; building them per track repeats work no track boundary needs.
+    The per-track song interface and downloader sit on top of the shared
+    base, and the session's event loop serves the whole job. ``close``
+    releases every client and the loop; a credential failure should close
+    the session so the retry rebuilds it from the fresh export or guest.
+    """
+
+    def __init__(
+        self,
+        *,
+        cookies_path: str = "",
+        wrapper_url: str = "",
+        nm3u8dlre_path: str = "",
+        ffmpeg_path: str = "",
+        decrypt_host: str = "127.0.0.1",
+        decrypt_port: int = 10020,
+    ) -> None:
+        self.cookies_path = str(cookies_path or "")
+        self.wrapper_url = str(wrapper_url or "").strip().rstrip("/")
+        self.nm3u8dlre_path = str(nm3u8dlre_path or "")
+        self.ffmpeg_path = str(ffmpeg_path or "")
+        self.decrypt_host = str(decrypt_host or "127.0.0.1")
+        self.decrypt_port = int(decrypt_port or 10020)
+        self._loop = asyncio.new_event_loop()
+        self._cookies: tuple | None = None
+        self._wrapper: tuple | None = None
+        self._closed = False
+
+    def __enter__(self) -> AppleFetchSession:
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release both stacks' clients and the session's event loop."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._loop.run_until_complete(self._aclose_stacks())
+        except Exception:
+            logger.debug("Could not close the Apple fetch session", exc_info=True)
+        finally:
+            self._loop.close()
+
+    async def _aclose_stacks(self) -> None:
+        if self._cookies is not None:
+            await _close_client(self._cookies[0])
+        if self._wrapper is not None:
+            wrapper_api, api, _base = self._wrapper
+            await _close_client(wrapper_api, "wrapper session")
+            await _close_client(api)
+
+    async def _cookies_stack(self):
+        if self._cookies is None:
+            self._cookies = await _create_cookies_stack(self.cookies_path)
+        return self._cookies
+
+    async def _wrapper_stack(self):
+        if self._wrapper is None:
+            self._wrapper = await _create_wrapper_stack(
+                base_url=self.wrapper_url,
+                decrypt_host=self.decrypt_host,
+                decrypt_port=self.decrypt_port,
+            )
+        return self._wrapper
+
+    def download_song(self, *, song_id: str, atmos: bool) -> AppleDelivery:
+        """Fetch and locally decrypt one song on the shared cookies stack.
+
+        Validation and the workdir are per fetch; the gamdl stack and the
+        event loop persist for the session. An integrity failure keeps the
+        workdir for the caller (retry, date read, quarantine).
+        """
+        _require_cookies(self.cookies_path)
+        nm3u8dlre = _require_binary("N_m3u8DL-RE", self.nm3u8dlre_path)
+        ffmpeg = _require_binary("ffmpeg", self.ffmpeg_path)
+        _require_yt_dlp()
+        workdir = Path(tempfile.mkdtemp(prefix="waves-apple-"))
+        try:
+            return self._loop.run_until_complete(
+                self._download_song_async(
+                    song_id=str(song_id),
+                    atmos=bool(atmos),
+                    workdir=str(workdir),
+                    nm3u8dlre_path=nm3u8dlre,
+                    ffmpeg_path=ffmpeg,
+                )
+            )
+        except AppleIntegrityError:
+            raise
+        except (AppleCredentialsError, AppleDownloadError):
+            shutil.rmtree(workdir, ignore_errors=True)
+            raise
+        except Exception as exc:
+            shutil.rmtree(workdir, ignore_errors=True)
+            raise AppleDownloadError(f"Apple download failed for song {song_id}: {exc}") from exc  # noqa: TRY003
+
+    async def _download_song_async(
+        self, *, song_id: str, atmos: bool, workdir: str, nm3u8dlre_path: str, ffmpeg_path: str
+    ) -> AppleDelivery:
+        from gamdl.downloader.base import AppleMusicBaseDownloader
+        from gamdl.downloader.downloader import DownloadMode
+        from gamdl.downloader.song import AppleMusicSongDownloader
+        from gamdl.interface.enums import SongCodec
+        from gamdl.interface.interface import AppleMusicInterface
+        from gamdl.interface.music_video import AppleMusicMusicVideoInterface
+        from gamdl.interface.song import AppleMusicSongInterface
+        from gamdl.interface.uploaded_video import AppleMusicUploadedVideoInterface
+
+        _api, base_interface = await self._cookies_stack()
         song_interface = AppleMusicSongInterface(
             base=base_interface,
             codec_priority=[SongCodec.ATMOS] if atmos else [SongCodec.AAC_WEB, SongCodec.AAC],
@@ -277,35 +496,126 @@ async def _download_song_async(
             silent=True,
         )
         song_downloader = AppleMusicSongDownloader(base=base_downloader)
-
         staged, picked = await _fetch_song_staged(interface=interface, song_downloader=song_downloader, song_id=song_id)
-        resolved_probe = ffprobe_for(ffmpeg_path)
-        if resolved_probe:
-            # Fail fast on a wrong delivery; the job runner verifies again per
-            # track. The rejected bytes stay for the caller (retry, date read,
-            # quarantine): ownership of the workdir transfers outward.
-            try:
-                picked = _verify_delivery(
-                    staged=staged,
+        probe, codec, verified = _verify_fetched(
+            staged=staged,
+            song_id=song_id,
+            atmos=atmos,
+            workdir=workdir,
+            ffmpeg_path=ffmpeg_path,
+            picked=picked,
+        )
+        return AppleDelivery(
+            staged_path=staged, workdir=Path(workdir), is_atmos=atmos, codec=codec, probe=probe, verified=verified
+        )
+
+    def download_alac(self, *, song_id: str, max_tier: str = "") -> AppleDelivery:
+        """Fetch one ALAC song through the shared wrapper stack.
+
+        The wrapper holds the Apple ID session itself: its tokens persist
+        across container restarts, so this opens the guest session without
+        credentials and succeeds while the guest is still signed in. A
+        logged-out guest raises AppleCredentialsError with the wizard's
+        login step as the fix; every other fetch problem raises
+        AppleDownloadError.
+        """
+        if not self.wrapper_url:
+            raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
+                "Apple hi-res downloads need the managed wrapper: finish setup in Settings under Providers, Apple Music."
+            )
+        nm3u8dlre = _require_binary("N_m3u8DL-RE", self.nm3u8dlre_path)
+        ffmpeg = _require_binary("ffmpeg", self.ffmpeg_path)
+        _require_yt_dlp()
+        workdir = Path(tempfile.mkdtemp(prefix="waves-apple-alac-"))
+        try:
+            return self._loop.run_until_complete(
+                self._fetch_alac_async(
                     song_id=str(song_id),
-                    atmos=atmos,
-                    resolved_probe=resolved_probe,
-                    ffmpeg_path=ffmpeg_path,
+                    workdir=str(workdir),
+                    max_tier=str(max_tier or ""),
+                    nm3u8dlre_path=nm3u8dlre,
+                    ffmpeg_path=ffmpeg,
                 )
-            except AppleIntegrityError as integrity_exc:
-                if not integrity_exc.workdir:
-                    integrity_exc.workdir = str(workdir)
-                if not integrity_exc.staged_path:
-                    integrity_exc.staged_path = str(staged)
-                raise
-        return AppleDelivery(staged_path=staged, workdir=Path(workdir), is_atmos=atmos, codec=picked)
-    finally:
-        close = getattr(getattr(api, "client", None), "aclose", None)
-        if close is not None:
-            try:
-                await close()
-            except Exception:
-                logger.debug("Could not close the Apple API session", exc_info=True)
+            )
+        except AppleIntegrityError:
+            raise
+        except (AppleCredentialsError, AppleDownloadError):
+            shutil.rmtree(workdir, ignore_errors=True)
+            raise
+        except Exception as exc:
+            shutil.rmtree(workdir, ignore_errors=True)
+            raise AppleDownloadError(f"Apple ALAC download failed for song {song_id}: {exc}") from exc  # noqa: TRY003
+
+    async def _fetch_alac_async(
+        self, *, song_id: str, workdir: str, max_tier: str, nm3u8dlre_path: str, ffmpeg_path: str
+    ) -> AppleDelivery:
+        from gamdl.downloader.base import AppleMusicBaseDownloader
+        from gamdl.downloader.downloader import DownloadMode
+        from gamdl.downloader.song import AppleMusicSongDownloader
+        from gamdl.interface.enums import SongCodec
+        from gamdl.interface.interface import AppleMusicInterface
+        from gamdl.interface.music_video import AppleMusicMusicVideoInterface
+        from gamdl.interface.song import AppleMusicSongInterface
+        from gamdl.interface.uploaded_video import AppleMusicUploadedVideoInterface
+
+        from waves.constants import QualityTier
+
+        try:
+            _wrapper_api, _api, base_interface = await self._wrapper_stack()
+        except (AppleCredentialsError, AppleWrapperDown):
+            raise
+        except Exception as exc:
+            raise AppleDownloadError(f"Apple wrapper session failed for song {song_id}: {exc}") from exc  # noqa: TRY003
+        # One chooser for both asks: LOSSLESS caps the choice at 16-bit (the
+        # tier map decides hi-res by depth alone), a HI_RES ask takes the
+        # best rendition the master holds. The rendition decision is ours
+        # either way, so a hi-res master can never satisfy a LOSSLESS ask.
+        max_bit_depth = 16 if str(max_tier) == QualityTier.LOSSLESS.value else None
+        song_interface = AppleMusicSongInterface(
+            base=base_interface,
+            codec_priority=[SongCodec.ASK],
+            ask_codec_function=lambda playlists: _choose_alac_playlist(playlists, max_bit_depth),
+        )
+        interface = AppleMusicInterface(
+            song=song_interface,
+            music_video=AppleMusicMusicVideoInterface(base=base_interface),
+            uploaded_video=AppleMusicUploadedVideoInterface(base=base_interface),
+        )
+        base_downloader = AppleMusicBaseDownloader(
+            interface=interface,
+            output_path=workdir,
+            temp_path=workdir,
+            nm3u8dlre_path=nm3u8dlre_path,
+            ffmpeg_path=ffmpeg_path,
+            download_mode=DownloadMode.NM3U8DLRE,
+            silent=True,
+        )
+        song_downloader = AppleMusicSongDownloader(base=base_downloader)
+        try:
+            staged, picked = await _fetch_song_staged(
+                interface=interface, song_downloader=song_downloader, song_id=str(song_id)
+            )
+        except (AppleCredentialsError, AppleVariantUnavailable, AppleIntegrityError, AppleDownloadError):
+            raise
+        except Exception as exc:
+            if _is_connection_failure(exc):
+                # The cached guest client outlived the sidecar: held, never
+                # a failed track (the runner re-ensures and retries).
+                raise AppleWrapperDown(  # noqa: TRY003 (user-facing words by design)
+                    f"Apple wrapper is unreachable at {self.wrapper_url}: {exc}"
+                ) from exc
+            raise AppleDownloadError(f"Apple wrapper session failed for song {song_id}: {exc}") from exc  # noqa: TRY003
+        probe, codec, verified = _verify_fetched(
+            staged=staged,
+            song_id=str(song_id),
+            atmos=False,
+            workdir=workdir,
+            ffmpeg_path=ffmpeg_path,
+            picked=picked,
+        )
+        return AppleDelivery(
+            staged_path=staged, workdir=Path(workdir), is_atmos=False, codec=codec, probe=probe, verified=verified
+        )
 
 
 async def _open_wrapper_session(*, base_url: str, decrypt_host: str, decrypt_port: int):
@@ -358,126 +668,6 @@ def _choose_alac_playlist(playlists: list, max_bit_depth: int | None) -> dict | 
     return max(candidates, key=lambda candidate: (candidate[0], candidate[1]))[2]
 
 
-async def _fetch_alac_staged(
-    *, song_id: str, workdir: str, nm3u8dlre_path: str, ffmpeg_path: str, wrapper_api, max_tier: str = ""
-) -> AppleDelivery:
-    """One ALAC fetch through an open wrapper session, verified fail-fast."""
-    from gamdl.api.apple_music import AppleMusicApi
-    from gamdl.downloader.base import AppleMusicBaseDownloader
-    from gamdl.downloader.downloader import DownloadMode
-    from gamdl.downloader.song import AppleMusicSongDownloader
-    from gamdl.interface.base import AppleMusicBaseInterface
-    from gamdl.interface.enums import SongCodec
-    from gamdl.interface.interface import AppleMusicInterface
-    from gamdl.interface.music_video import AppleMusicMusicVideoInterface
-    from gamdl.interface.song import AppleMusicSongInterface
-    from gamdl.interface.uploaded_video import AppleMusicUploadedVideoInterface
-
-    from waves.constants import QualityTier
-
-    try:
-        api = await AppleMusicApi.create_from_wrapper(wrapper_api=wrapper_api)
-    except Exception as exc:
-        raise AppleDownloadError(f"Apple wrapper session failed for song {song_id}: {exc}") from exc  # noqa: TRY003
-    try:
-        base_interface = await AppleMusicBaseInterface.create(apple_music_api=api, wrapper_api=wrapper_api)
-        # One chooser for both asks: LOSSLESS caps the choice at 16-bit (the
-        # tier map decides hi-res by depth alone), a HI_RES ask takes the
-        # best rendition the master holds. The rendition decision is ours
-        # either way, so a hi-res master can never satisfy a LOSSLESS ask.
-        max_bit_depth = 16 if str(max_tier) == QualityTier.LOSSLESS.value else None
-        song_interface = AppleMusicSongInterface(
-            base=base_interface,
-            codec_priority=[SongCodec.ASK],
-            ask_codec_function=lambda playlists: _choose_alac_playlist(playlists, max_bit_depth),
-        )
-        interface = AppleMusicInterface(
-            song=song_interface,
-            music_video=AppleMusicMusicVideoInterface(base=base_interface),
-            uploaded_video=AppleMusicUploadedVideoInterface(base=base_interface),
-        )
-        base_downloader = AppleMusicBaseDownloader(
-            interface=interface,
-            output_path=workdir,
-            temp_path=workdir,
-            nm3u8dlre_path=nm3u8dlre_path,
-            ffmpeg_path=ffmpeg_path,
-            download_mode=DownloadMode.NM3U8DLRE,
-            silent=True,
-        )
-        song_downloader = AppleMusicSongDownloader(base=base_downloader)
-        staged, picked = await _fetch_song_staged(
-            interface=interface, song_downloader=song_downloader, song_id=str(song_id)
-        )
-        resolved_probe = ffprobe_for(ffmpeg_path)
-        if resolved_probe:
-            try:
-                picked = _verify_delivery(
-                    staged=staged,
-                    song_id=str(song_id),
-                    atmos=False,
-                    resolved_probe=resolved_probe,
-                    ffmpeg_path=ffmpeg_path,
-                )
-            except AppleIntegrityError as integrity_exc:
-                if not integrity_exc.workdir:
-                    integrity_exc.workdir = str(workdir)
-                if not integrity_exc.staged_path:
-                    integrity_exc.staged_path = str(staged)
-                raise
-        return AppleDelivery(staged_path=staged, workdir=Path(workdir), is_atmos=False, codec=picked)
-    finally:
-        close = getattr(getattr(api, "client", None), "aclose", None)
-        if close is not None:
-            try:
-                await close()
-            except Exception:
-                logger.debug("Could not close the Apple API session", exc_info=True)
-
-
-async def _download_song_via_wrapper_async(
-    *,
-    song_id: str,
-    wrapper_url: str,
-    workdir: str,
-    nm3u8dlre_path: str,
-    ffmpeg_path: str,
-    decrypt_host: str = "127.0.0.1",
-    decrypt_port: int = 10020,
-    max_tier: str = "",
-) -> AppleDelivery:
-    """Fetch one ALAC song through the managed wrapper-v2 guest.
-
-    The wrapper holds the Apple ID session itself: its tokens persist across
-    container restarts (verified live, spec §2), so this creates the session
-    without credentials and succeeds whenever the guest is still signed in.
-    A logged-out guest raises AppleCredentialsError with the wizard's login
-    step as the fix; every other fetch problem raises AppleDownloadError.
-    """
-    base_url = str(wrapper_url or "").strip().rstrip("/")
-    if not base_url:
-        raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
-            "Apple hi-res downloads need the managed wrapper: finish setup in Settings under Providers, Apple Music."
-        )
-    wrapper_api = await _open_wrapper_session(base_url=base_url, decrypt_host=decrypt_host, decrypt_port=decrypt_port)
-    try:
-        return await _fetch_alac_staged(
-            song_id=str(song_id),
-            workdir=str(workdir),
-            nm3u8dlre_path=nm3u8dlre_path,
-            ffmpeg_path=ffmpeg_path,
-            wrapper_api=wrapper_api,
-            max_tier=max_tier,
-        )
-    finally:
-        close_wrapper = getattr(getattr(wrapper_api, "client", None), "aclose", None)
-        if close_wrapper is not None:
-            try:
-                await close_wrapper()
-            except Exception:
-                logger.debug("Could not close the wrapper session", exc_info=True)
-
-
 def download_song_alac_file(
     *,
     song_id: str,
@@ -495,41 +685,17 @@ def download_song_alac_file(
     persistence is the wrapper's own property (tokens survive a container
     restart): a second call with the same URL needs no re-login. Raises
     AppleCredentialsError when the guest is logged out or unreachable as a
-    login problem, AppleDownloadError otherwise.
+    login problem, AppleDownloadError otherwise. One call builds and closes
+    its own stack; a job reusing a stack goes through AppleFetchSession.
     """
-    url = str(wrapper_url or "").strip()
-    if not url:
-        raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
-            "Apple hi-res downloads need the managed wrapper: finish setup in Settings under Providers, Apple Music."
-        )
-    nm3u8dlre = _require_binary("N_m3u8DL-RE", nm3u8dlre_path)
-    ffmpeg = _require_binary("ffmpeg", ffmpeg_path)
-    try:
-        import yt_dlp  # noqa: F401  (direct-URL fallback shells through it)
-    except ImportError as exc:
-        raise AppleDownloadError("Apple downloads need the yt-dlp package installed.") from exc  # noqa: TRY003
-    workdir = Path(tempfile.mkdtemp(prefix="waves-apple-alac-"))
-    try:
-        return asyncio.run(
-            _download_song_via_wrapper_async(
-                song_id=str(song_id),
-                wrapper_url=url,
-                workdir=str(workdir),
-                nm3u8dlre_path=nm3u8dlre,
-                ffmpeg_path=ffmpeg,
-                decrypt_host=decrypt_host,
-                decrypt_port=int(decrypt_port or 10020),
-                max_tier=str(max_tier or ""),
-            )
-        )
-    except AppleIntegrityError:
-        raise
-    except (AppleCredentialsError, AppleDownloadError):
-        shutil.rmtree(workdir, ignore_errors=True)
-        raise
-    except Exception as exc:
-        shutil.rmtree(workdir, ignore_errors=True)
-        raise AppleDownloadError(f"Apple ALAC download failed for song {song_id}: {exc}") from exc  # noqa: TRY003
+    with AppleFetchSession(
+        wrapper_url=wrapper_url,
+        nm3u8dlre_path=nm3u8dlre_path,
+        ffmpeg_path=ffmpeg_path,
+        decrypt_host=decrypt_host,
+        decrypt_port=decrypt_port,
+    ) as session:
+        return session.download_alac(song_id=str(song_id), max_tier=str(max_tier or ""))
 
 
 def download_song_file(
@@ -544,38 +710,14 @@ def download_song_file(
 
     Raises AppleCredentialsError when the cookies export cannot be used and
     AppleDownloadError for every fetch, decrypt or binary failure, so the
-    caller can word rows and statuses without knowing gamdl.
+    caller can word rows and statuses without knowing gamdl. One call builds
+    and closes its own stack; a job reusing a stack goes through
+    AppleFetchSession.
     """
-    cookies = _require_cookies(cookies_path)
-    nm3u8dlre = _require_binary("N_m3u8DL-RE", nm3u8dlre_path)
-    ffmpeg = _require_binary("ffmpeg", ffmpeg_path)
-    try:
-        import yt_dlp  # noqa: F401  (direct-URL fallback shells through it)
-    except ImportError as exc:
-        raise AppleDownloadError("Apple downloads need the yt-dlp package installed.") from exc  # noqa: TRY003
-    workdir = Path(tempfile.mkdtemp(prefix="waves-apple-"))
-    try:
-        return asyncio.run(
-            _download_song_async(
-                song_id=str(song_id),
-                atmos=bool(atmos),
-                cookies_path=cookies,
-                workdir=str(workdir),
-                nm3u8dlre_path=nm3u8dlre,
-                ffmpeg_path=ffmpeg,
-            )
-        )
-    except AppleIntegrityError:
-        # Verification rejected the delivery: the workdir (with the bad bytes)
-        # transfers to the caller for the Encoded-date read and quarantine.
-        # The caller owns cleanup from here.
-        raise
-    except (AppleCredentialsError, AppleDownloadError):
-        shutil.rmtree(workdir, ignore_errors=True)
-        raise
-    except Exception as exc:
-        shutil.rmtree(workdir, ignore_errors=True)
-        raise AppleDownloadError(f"Apple download failed for song {song_id}: {exc}") from exc  # noqa: TRY003
+    with AppleFetchSession(
+        cookies_path=cookies_path, nm3u8dlre_path=nm3u8dlre_path, ffmpeg_path=ffmpeg_path
+    ) as session:
+        return session.download_song(song_id=str(song_id), atmos=bool(atmos))
 
 
 def cleanup_delivery(delivery: AppleDelivery) -> None:

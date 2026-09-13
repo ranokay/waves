@@ -664,6 +664,33 @@ def test_verify_runs_before_conversion(tmp_path, monkeypatch):
     assert delivered["path"].endswith(".flac")
 
 
+@needs_ffmpeg
+def test_carried_probe_answers_the_landed_tier_after_flac_conversion(tmp_path, monkeypatch):
+    """A carried probe survives the FLAC step: no landed re-probe, and the
+    converted file's own decode check stays the only decode."""
+    import waves.providers.apple.engine as engine
+
+    staged = tmp_path / "staged.m4a"
+    _tone(staged, codec="alac")
+    info = _alac_info(str(staged))
+    info.delivered["probe"] = {"codec": "alac", "sample_rate": "44100", "bit_depth": 16}
+    provider = _Provider(info)
+    stub = _apple_stub(tmp_path / "lib", provider)
+    decodes: list = []
+    monkeypatch.setattr(
+        engine, "probe_audio_file", lambda path, ffprobe_path="": pytest.fail("re-probed the landed file")
+    )
+    monkeypatch.setattr(engine, "decode_check", lambda staged, ffmpeg_path="": decodes.append(str(staged)))
+
+    delivered = _deliver(stub, provider)
+
+    assert delivered["path"].endswith(".flac")
+    assert delivered["quality"]["tier"] == QualityTier.LOSSLESS.value
+    assert delivered["quality"]["bit_depth"] == 16
+    assert delivered["quality"]["sample_rate"] == 44100
+    assert decodes and decodes[0].endswith("staged.flac"), "the converted temp file is the only decode"
+
+
 def test_stream_info_matrix_pins_all_four_cells():
     alac = StreamInfo(urls=[], file_extension=".flac", codecs="alac", requires_flac_extraction=True)
     assert (alac.file_extension, alac.requires_flac_extraction) == (".flac", True)
