@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from support.paths import QML_DIR
+
 from waves.providers.apple.runtime import (
     WRAPPER_V2_IMAGE,
     describe_image_pull_error,
@@ -88,7 +90,5 @@ def test_refresh_setup_reprobes_and_rebuilds_the_wizard():
 
 
 def test_setup_pill_and_step_action_refresh_instead_of_rereading():
-    from pathlib import Path
-
-    qml = (Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "SettingsPage.qml").read_text()
+    qml = (QML_DIR / "SettingsPage.qml").read_text()
     assert qml.count("waves.refreshAppleSetup()") >= 2  # status pill + wizard step action

@@ -110,7 +110,7 @@ def test_ffmpeg_marker_skips_when_no_binary_is_on_path():
             sys.executable,
             "-m",
             "pytest",
-            "tests/test_apple_download_seam.py",
+            "tests/providers/apple/test_apple_download_seam.py",
             "-q",
             "-k",
             "decode_check_accepts_clean_audio",
