@@ -22,17 +22,24 @@ _METHODS = (
     "_emit_from_worker",
     "_rebuild_library_index",
     "_invalidate_library_index",
-    # Every publish precomputes the artist rollup off the GUI thread before
-    # the presence signal fires (the slot keeps a lazy derive as fallback).
-    "_publish_artist_rollup",
+    "_library_scan_once",
+    "_library_worker_scan",
+    "_library_worker_probe",
+    # Every publish swaps the index and the artist rollup derived from it
+    # together, off the GUI thread; the slot keeps a lazy derive only for the
+    # case where a publish lands between its two reads.
+    "_publish_index",
+    "_bump_library_stamp",
+    "_artist_rollup",
     # The scan's index builder and the launch badge seed, extracted from
     # _rebuild_library_index so the seed can run at construction while the
     # sweep itself waits for the boot reveal; the rebuild's closures delegate
     # to them, so every scan in the library tests needs them bound.
     "_build_presence_indexes",
+    "_sql_presence_indexes",
+    "_dict_presence_indexes",
     "_seed_library_badges_job",
     "_seed_library_badges",
-    "_start_boot_library_scan",
     "libraryAlbumPresence",
     "libraryTrackPresence",
     "artistLibraryPresence",
@@ -41,6 +48,7 @@ _METHODS = (
     # (tests/library/test_library_probe_fallback.py binds them).
     "_library_probe_miss",
     "libraryIndexReady",
+    "libraryStamp",
     "_library_root",
     "_waves_pref_bool",
     "rescanLibrary",
@@ -49,6 +57,7 @@ _METHODS = (
     "libraryDownloadFolder",
     "_library_bulk_skip_on",
     "downloadsInsideLibrary",
+    "_path_inside_library",
     "_library_claims_album",
     "_library_claims_track",
     "_library_track_claim",

@@ -211,20 +211,19 @@ def test_a_cached_search_never_reaches_the_provider_twice():
     assert stub.busy[-1] is False
 
 
-def test_a_failed_provider_search_degrades_to_an_empty_payload():
-    # The old fetch-failure semantics, byte-identical: results = {} builds an
-    # all-empty payload, the status reads 0 results, and nothing is cached
-    # (an all-empty payload is more likely a failed fetch than an empty
-    # catalog). A BUILD failure is the path that says "Search failed".
+def test_a_failed_provider_search_reports_failure_not_an_empty_payload():
+    # An all-failed fetch is a failure, never "0 results" (which reads as a
+    # search that found nothing): nothing is emitted or cached, so a stale
+    # page already painted stays. A BUILD failure is the other "Search
+    # failed" road (tests/downloads/test_worker_latch_and_logout.py).
     provider = _provider(search=RuntimeError("network died"))
     stub = _SearchStub(provider)
 
     stub.search("aphex")
 
     assert stub.busy == [True, False]
-    assert stub.statuses[-1] == "0 results"
-    (payload,) = stub.searchResults.emits
-    assert payload["albums"] == [] and payload["tracks"] == []
+    assert stub.statuses[-1] == "Search failed"
+    assert stub.searchResults.emits == []
     assert stub._search_cache == {}
 
 

@@ -226,6 +226,12 @@ class _AuthStub:
     def _set_status(self, msg: str) -> None:
         self.statuses.append(msg)
 
+    def _emit_dressed(self, signal, payload, gen: int) -> None:
+        # Card dressing itself is covered by test_browse_card_dressing; here
+        # it must only apply the same staleness gate the real seam does.
+        if gen == getattr(self, "_browse_gen", gen):
+            signal.emit(payload)
+
     def _set_busy(self, value: bool) -> None:
         self.busy.append(value)
 

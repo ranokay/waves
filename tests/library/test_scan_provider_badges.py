@@ -48,10 +48,20 @@ def _index(tmp_path, tagmap, audiomap=None):
 
 
 def _presence_for(lib, placement=None):
-    stub = type("S", (), {})()
+    stub = type(
+        "S",
+        (),
+        {
+            "_sql_presence_indexes": WavesBridge._sql_presence_indexes,
+            "_dict_presence_indexes": WavesBridge._dict_presence_indexes,
+        },
+    )()
     if placement is not None:
         stub._atmos_placement = lambda: _atmos_fragments(placement)
-    return WavesBridge._build_presence_indexes(stub, lib)
+    # These tests pin the fold-aware dict build itself; forcing it keeps an
+    # all-unknown tree (no proven Atmos row, so no sqlite shortcut) readable
+    # as the same structure as every other case here.
+    return WavesBridge._dict_presence_indexes(stub, lib)
 
 
 # --------------------------------------------------------------------------- #

@@ -4,7 +4,7 @@ authors = [{ name = "iamprivacy" }]
 # Kept equal to waves.waves_ui.__version__, which is the version the app and
 # the updater actually report; tests/packaging/test_package_version.py fails the build if
 # the two drift. Bump both in the same commit that cuts a release.
-version = "0.1.28"
+version = "0.1.29"
 description = "Waves: a native desktop app for saving music from your own TIDAL account for offline listening"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -223,6 +223,16 @@ ignore = [
 # Same subprocess-isolation + linear-scenario shape as the scroll guard.
 "tests/ui/test_gates_sit_above_drawers.py" = ["S603", "C901"]
 "tests/ui/test_qml_loads.py" = ["S603", "C901"]
+# The launch probe runs a fixed-argv subprocess the same way (S603).
+"tools/launch_probe.py" = ["S603"]
+# The ported launch/search/queue scenarios keep their boot -> drive -> assert
+# child as one deliberately linear function (C901); the subprocess call
+# itself lives in support.qml's runner.
+"tests/ui/test_boot_quiet_window.py" = ["C901"]
+"tests/ui/test_new_release_mark.py" = ["C901"]
+"tests/ui/test_queue_section_pulse.py" = ["C901"]
+"tests/ui/test_queue_single_row_has_nothing_to_expand.py" = ["C901"]
+"tests/ui/test_search_query_collapse_qml.py" = ["C901"]
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
 "tests/library/test_library_bridge.py" = ["S603"]

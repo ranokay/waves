@@ -15,117 +15,22 @@ from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from conftest import _InlinePool, _Signal
+from support.search_fakes import (
+    SearchStub as _Stub,
+)
+from support.search_fakes import (
+    search_payload as _payload,
+)
+from support.search_fakes import (
+    search_payloads as _payloads,
+)
+from support.search_fakes import (
+    wire_search as _wire,
+)
 
 from waves.providers import Capability
 from waves.waves_ui import backend
 from waves.waves_ui.backend import _SEARCH_DISK_MAX, _STALE_STAMP, WavesBridge, _search_same
-
-
-class _Stub:
-    search = WavesBridge.search
-    _search_total = staticmethod(WavesBridge._search_total)
-    _pop_cached = WavesBridge._pop_cached
-    _remember_capped = WavesBridge._remember_capped
-    _remember_search = WavesBridge._remember_search
-    _SEARCH_TTL = WavesBridge._SEARCH_TTL
-    _SEARCH_CACHE_MAX = WavesBridge._SEARCH_CACHE_MAX
-    _ARTIST_POP_TTL = WavesBridge._ARTIST_POP_TTL
-    _ARTIST_POP_MAX = WavesBridge._ARTIST_POP_MAX
-
-    def __init__(self):
-        self.threadpool = _InlinePool()
-        self.statuses: list[str] = []
-        self.busy: list[bool] = []
-        self.saves = 0
-        self._logged_in = True
-        self._search_gen = 0
-        self._search_cache: dict = {}
-        self._evict_lock = Lock()
-        self._artist_pop_cache: dict = {}
-        self._objs_lock = Lock()
-        self._objs: dict = {"artist": {}, "album": {}, "track": {}, "video": {}, "playlist": {}, "mix": {}}
-        self.tidal = SimpleNamespace(session=object())
-        self.searchResults = _Signal()
-        self.artistMetaLoaded = _Signal()
-
-    def _set_status(self, text):
-        self.statuses.append(text)
-
-    def _set_busy(self, on):
-        self.busy.append(bool(on))
-
-    def _save_page_cache(self):
-        self.saves += 1
-
-    def _remember(self, kind, key, obj):
-        self._objs[kind][key] = obj
-
-    def _dedup_albums(self, albums):
-        return list(albums)
-
-    def _dedup_tracks(self, tracks):
-        return list(tracks)
-
-    def _dedup_videos(self, videos):
-        return list(videos)
-
-    def _album_dict(self, a):
-        return {"id": getattr(a, "id", "")}
-
-    def _track_dict(self, t):
-        return {"id": getattr(t, "id", "")}
-
-    def _video_dict(self, v):
-        return {"id": getattr(v, "id", "")}
-
-    def _playlist_dict(self, p):
-        return {"id": getattr(p, "id", "")}
-
-    def _mix_dict(self, m):
-        return {"id": getattr(m, "id", "")}
-
-    def _top_hit_dict(self, hit):
-        return None
-
-
-def _payloads(stub):
-    """The emitted payload dicts, whatever shape the signal stub keeps."""
-    return [e[0] if isinstance(e, tuple) else e for e in stub.searchResults.emits]
-
-
-def _payload(album_ids=("al1",), pop=-1):
-    return {
-        "artists": [{"id": "a1", "name": "Artist 1", "art": "", "roles": "", "popularity": pop}],
-        "albums": [{"id": i} for i in album_ids],
-        "tracks": [],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-    }
-
-
-def _wire(monkeypatch, stub, album_ids=("al1",), pop=50):
-    """The catalog behind a search: a fake TIDAL provider serving the old
-    engine-object shape, plus the meter helpers. The search pipeline reads
-    the wire exclusively through the Provider seam (it no longer calls a
-    backend-module ``search_results_all``), so the fake lives on the stub's
-    providers dict, where the real TidalProvider would sit."""
-    artist = SimpleNamespace(id="a1", name="Artist 1")
-    monkeypatch.setattr(backend, "_image", lambda obj, dimension=320: "")
-    monkeypatch.setattr(backend, "_artist_roles", lambda a: "")
-    monkeypatch.setattr(backend, "_artist_popularity", lambda a: pop)
-    stub.providers = {
-        "tidal": SimpleNamespace(
-            name="TIDAL",
-            capabilities=frozenset({Capability.SEARCH}),
-            search=lambda needle: {
-                "artists": [artist],
-                "albums": [SimpleNamespace(id=i) for i in album_ids],
-            },
-        )
-    }
 
 
 def test_a_restored_search_paints_first_and_the_wire_corrects_it_in_place(monkeypatch):
@@ -220,6 +125,7 @@ def _cache_bridge(tmp_path):
     b._search_cache = {}
     b._home_cache = None
     b._page_cache_path = str(tmp_path / "page_cache.json")
+    b._search_cache_path = str(tmp_path / "search_cache.json")
     b._page_cache_lock = Lock()
     b.tidal = MagicMock()
     b.tidal.session.user.id = "42"
@@ -231,13 +137,18 @@ def test_the_newest_searches_outlive_the_process_and_come_back_stale(tmp_path):
     for i in range(_SEARCH_DISK_MAX + 3):
         saver._search_cache[f"needle {i}"] = (float(i), _payload((f"al{i}",)))
     saver._save_page_cache()
+    # Their own file: the launch-time page cache load must not pay for them.
     with open(saver._page_cache_path) as fh:
+        assert "searches" not in json.load(fh)
+    with open(saver._search_cache_path) as fh:
         on_disk = json.load(fh)["searches"]
     assert len(on_disk) == _SEARCH_DISK_MAX and "needle 0" not in on_disk and "needle 14" in on_disk
     assert on_disk["needle 14"] == _payload(("al14",)), "the payload alone, no stamp"
 
     loader = _cache_bridge(tmp_path)
     loader._load_page_cache()
+    assert loader._search_cache == {}, "the page cache load leaves the searches to their own loader"
+    loader._load_search_cache()
     assert len(loader._search_cache) == _SEARCH_DISK_MAX
     stamp, page = loader._search_cache["needle 14"]
     assert stamp == _STALE_STAMP and page == _payload(("al14",))
@@ -249,5 +160,5 @@ def test_a_live_search_is_never_clobbered_by_the_snapshot(tmp_path):
     saver._save_page_cache()
     loader = _cache_bridge(tmp_path)
     loader._search_cache["needle"] = (5.0, _payload(("live",)))
-    loader._load_page_cache()
+    loader._load_search_cache()
     assert loader._search_cache["needle"] == (5.0, _payload(("live",)))
