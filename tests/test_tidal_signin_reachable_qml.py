@@ -17,6 +17,11 @@ WHAT THIS FENCES OFF
    shows whenever a login is in progress, even with Apple enabled, and the
    paste field comes with it.
 
+4. Sign-out only living in the top bar. The TIDAL session row carries a
+   SIGN OUT action while signed in; a real click must end the session and
+   fall back to the SIGN IN action through the schema refresh the logout
+   signal drives.
+
 Drives the REAL Main.qml with REAL mouse events, so the wiring is what is
 under test, not the function behind it.
 
@@ -53,24 +58,26 @@ _SETTINGS_TAB_POINT = (
     "})()"
 )
 
-# The TIDAL session row's sign-in pill, found by its action key through the
+
+# A provider card's action pill, found by its action key through the
 # settings tree, mapped to window coordinates for a real click.
-_SIGN_IN_PILL_POINT = (
-    "(function () {"
-    "  function find(it) {"
-    "    if (it.actKey !== undefined && String(it.actKey) === 'tidal_signin') return it;"
-    "    var kids = it.children || [];"
-    "    for (var i = 0; i < kids.length; i++) {"
-    "      var hit = find(kids[i]);"
-    "      if (hit) return hit;"
-    "    }"
-    "    return null;"
-    "  }"
-    "  var pill = find(settingsPage);"
-    "  if (!pill) return null;"
-    "  return pill.mapToItem(null, pill.width / 2, pill.height / 2);"
-    "})()"
-)
+def _pill_point(key: str) -> str:
+    return (
+        "(function () {"
+        "  function find(it) {"
+        f"    if (it.actKey !== undefined && String(it.actKey) === '{key}') return it;"
+        "    var kids = it.children || [];"
+        "    for (var i = 0; i < kids.length; i++) {"
+        "      var hit = find(kids[i]);"
+        "      if (hit) return hit;"
+        "    }"
+        "    return null;"
+        "  }"
+        "  var pill = find(settingsPage);"
+        "  if (!pill) return null;"
+        "  return pill.mapToItem(null, pill.width / 2, pill.height / 2);"
+        "})()"
+    )
 
 
 def test_tidal_signin_stays_reachable_under_the_overlay_and_with_apple_on():
@@ -94,6 +101,27 @@ def test_tidal_signin_stays_reachable_under_the_overlay_and_with_apple_on():
     assert (
         proc.returncode == _EXIT_OK
     ), f"TIDAL sign-in reachability regressed. Scenario exit={proc.returncode}:\n{tail}"
+
+
+def test_tidal_signout_pill_ends_the_session_and_flips_the_card():
+    env = dict(os.environ)
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-tidal-signout-test-")
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--run-signout-scenario"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
+    import pytest
+
+    if proc.returncode == _EXIT_NO_QT:
+        pytest.skip("PySide6 / offscreen Qt unavailable")
+    if proc.returncode == _EXIT_PRECONDITION:
+        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
+    assert proc.returncode == _EXIT_OK, f"TIDAL sign-out regressed. Scenario exit={proc.returncode}:\n{tail}"
 
 
 def _run_scenario() -> int:
@@ -183,7 +211,7 @@ def _run_scenario() -> int:
 
     q('settingsPage.jumpToCard("providers_tidal")')
     settle(350)
-    point = q(_SIGN_IN_PILL_POINT)
+    point = q(_pill_point("tidal_signin"))
     if point is None:
         print("the TIDAL card exposes no sign-in action", file=sys.stderr)
         return _EXIT_PRECONDITION
@@ -206,7 +234,128 @@ def _run_scenario() -> int:
     return _EXIT_REGRESSED if bad else _EXIT_OK
 
 
+def _run_signout_scenario() -> int:
+    # THIS checkout's waves, not the venv's editable install.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    try:
+        from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer, QUrl
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
+        from PySide6.QtTest import QTest
+    except Exception as exc:
+        print(f"Qt unavailable: {exc}", file=sys.stderr)
+        return _EXIT_NO_QT
+
+    from _qml_offline import patch_offline
+
+    patch_offline()
+
+    app = QGuiApplication.instance() or QGuiApplication([])
+    try:
+        from waves.waves_ui.app import _load_mono
+        from waves.waves_ui.backend import WavesBridge
+    except Exception as exc:
+        print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
+        return _EXIT_NO_QT
+
+    engine = QQmlApplicationEngine()
+    bridge = WavesBridge(tidal=None)
+    # The sign-in flip makes Main re-fetch Browse; keep the scenario offline.
+    bridge._browse_root = lambda: {"sections": [], "genres": [], "moods": [], "decades": [], "error": True}
+    engine.rootContext().setContextProperty("waves", bridge)
+    engine.rootContext().setContextProperty("monoFont", _load_mono())
+    engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
+    engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
+    roots = engine.rootObjects()
+    if not roots:
+        print("Main.qml failed to load", file=sys.stderr)
+        return _EXIT_PRECONDITION
+    root = roots[0]
+
+    def q(expr: str):
+        e = QQmlExpression(QQmlEngine.contextForObject(root), root, expr)
+        r = e.evaluate()
+        if e.hasError():
+            raise RuntimeError(e.error().toString())
+        return r[0] if isinstance(r, tuple) else r
+
+    def settle(ms: int = 150) -> None:
+        loop = QEventLoop()
+        QTimer.singleShot(ms, loop.quit)
+        loop.exec()
+
+    q("root.width = 1200")
+    q("root.height = 900")
+    q("root.visible = true")
+    settle(200)
+    q("bootOverlay.done = true")
+    q("bootContentShown = 1")
+    # Let the cached-token check resolve before faking a signed-in state, so
+    # the scenario is not racing the bridge's own session worker.
+    for _ in range(40):
+        if bridge._session_resolved:
+            break
+        settle(50)
+    # A resolved install that is signed in, with the first-run picker
+    # answered: no login overlay, and the session card offers sign-out.
+    q("setupSettings.providerPickerDone = true")
+    bridge._logged_in = True
+    bridge.loggedInChanged.emit()
+    settle(150)
+    # A signed-in returning user meets the terms gate and the first-run
+    # FFmpeg gate (both full-window overlays); this session has already
+    # walked past them.
+    q("legalSettings.termsAcceptedVersion = root.termsVersion")
+    q("legalSettings.termsAccepted = true")
+    q("setupSettings.ffmpegSetupDone = true")
+    q("ffmpegGate.sessionSnoozed = true")
+
+    # Open Settings directly: this scenario is about the session pill, and
+    # the nav click is covered by the reachability scenario above.
+    q("root.settingsOpen = true")
+    settle(250)
+    if not bool(q("root.settingsOpen")) or bool(q("loginPanel.visible")):
+        print(
+            "the scenario needs Settings open with no login overlay"
+            f" (settingsOpen={bool(q('root.settingsOpen'))} loginPanel={bool(q('loginPanel.visible'))}"
+            f" signedIn={bool(q('root.signedIn'))} picker={bool(q('providerPicker.visible'))})",
+            file=sys.stderr,
+        )
+        return _EXIT_PRECONDITION
+    q('settingsPage.jumpToCard("providers_tidal")')
+    settle(350)
+
+    point = q(_pill_point("tidal_signout"))
+    if point is None:
+        print("REGRESSED: the signed-in TIDAL card exposes no sign-out action", file=sys.stderr)
+        return _EXIT_REGRESSED
+    q("root.requestActivate()")
+    settle(100)
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())))
+    settle(600)
+
+    bad: list[str] = []
+    if bridge._logged_in:
+        bad.append("clicking the card's sign-out action did not sign out")
+    if q(_pill_point("tidal_signin")) is None:
+        bad.append("the card did not fall back to the sign-in action after sign-out")
+
+    # The Apple row's pill follows the live light: a wrapper sign-in landing
+    # while Settings is open adds SIGN OUT without a schema rebuild.
+    bridge._apple_live_flags = lambda: {"enabled": True, "signed_in": True, "cookies_ready": True}
+    bridge.appleStatusChanged.emit()
+    settle(250)
+    if q(_pill_point("apple_signout")) is None:
+        bad.append("the live Apple light did not add the sign-out action")
+
+    for line in bad:
+        print(f"REGRESSED: {line}", file=sys.stderr)
+    return _EXIT_REGRESSED if bad else _EXIT_OK
+
+
 if __name__ == "__main__":
     if "--run-scenario" in sys.argv:
         raise SystemExit(_run_scenario())
+    if "--run-signout-scenario" in sys.argv:
+        raise SystemExit(_run_signout_scenario())
     raise SystemExit(_EXIT_PRECONDITION)

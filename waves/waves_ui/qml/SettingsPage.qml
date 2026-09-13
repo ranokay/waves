@@ -2652,7 +2652,30 @@ Item {
                                                 visible: modelData.actions !== undefined && modelData.actions.length > 0
                                                 width: parent.width; spacing: 8
                                                 Repeater {
-                                                    model: modelData.actions !== undefined ? modelData.actions : []
+                                                    model: {
+                                                        var acts = modelData.actions !== undefined ? modelData.actions : []
+                                                        // The live light, not the baked schema, decides
+                                                        // the Apple sign-out pill: the mirror flips on
+                                                        // appleStatusChanged, while a sign-in or
+                                                        // sign-out only moves the mirror.
+                                                        if (modelData.key === "provider_apple_status") {
+                                                            var signedIn = statusCol.stateKey === "signed_in"
+                                                            var kept = []
+                                                            var hasSignOut = false
+                                                            for (var i = 0; i < acts.length; i++) {
+                                                                if (String(acts[i].action) === "apple_signout") {
+                                                                    hasSignOut = true
+                                                                    if (signedIn) kept.push(acts[i])
+                                                                } else {
+                                                                    kept.push(acts[i])
+                                                                }
+                                                            }
+                                                            if (!hasSignOut && signedIn)
+                                                                kept.push({"label": "Sign out", "action": "apple_signout"})
+                                                            acts = kept
+                                                        }
+                                                        return acts
+                                                    }
                                                     delegate: Rectangle {
                                                         id: actPill
                                                         required property var modelData
@@ -2662,10 +2685,12 @@ Item {
                                                         // re-probe the live setup state and rebuild
                                                         // the steps below (a bare re-read would serve
                                                         // cached probes and look dead), install or
-                                                        // remove the managed runtime, and the TIDAL
+                                                        // remove the managed runtime, the TIDAL
                                                         // session's sign-in starts the same login
-                                                        // flow the landing panel uses. A pill without
-                                                        // an action key stays inert (no MouseArea).
+                                                        // flow the landing panel uses and its sign-out
+                                                        // the same logout the top bar runs, and the
+                                                        // Apple sign-out clears the account session.
+                                                        // A pill without an action key stays inert.
                                                         readonly property bool actLive: actPill.actKey !== ""
                                                         width: actTxt.implicitWidth + page.btnPadH * 2
                                                         height: actTxt.implicitHeight + page.btnPadV * 2
@@ -2674,6 +2699,8 @@ Item {
                                                         opacity: actPill.actLive ? 1.0 : 0.45
                                                         function runAction() {
                                                             if (actPill.actKey === "tidal_signin") waves.beginLogin()
+                                                            else if (actPill.actKey === "tidal_signout") waves.logout()
+                                                            else if (actPill.actKey === "apple_signout") waves.appleSignOut()
                                                             else if (actPill.actKey === "apple_update_runtime") waves.installAppleRuntime()
                                                             else if (actPill.actKey === "apple_remove_runtime") waves.removeAppleRuntime()
                                                             else if (actPill.actKey === "apple_setup") { page.appleSetupLive = waves.appleSetupState(); waves.refreshAppleSetup() }
