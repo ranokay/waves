@@ -777,10 +777,31 @@ class AppleProvider(Provider):
     def favorite_ids(self, kind: str) -> set[str]:
         return set()
 
+    @staticmethod
+    def _audio_signals(item: dict) -> set[str]:
+        """The song's quality flags from both catalog list forms.
+
+        Apple carries the lossless / hi-res / Atmos flags as audioTraits on
+        most reads and as audioVariants on others; both are valid inputs.
+        """
+        attrs = AppleProvider._attributes(item)
+        traits = [str(signal).lower() for signal in attrs.get("audioTraits") or []]
+        variants = [str(signal).lower() for signal in attrs.get("audioVariants") or []]
+        return set(traits) | set(variants)
+
+    @staticmethod
+    def _lossless_rung(signals: set[str]) -> QualityTier | None:
+        """The highest lossless rung a master's flags carry, or None."""
+        if "hi-res-lossless" in signals:
+            return QualityTier.HI_RES_LOSSLESS
+        if "lossless" in signals:
+            return QualityTier.LOSSLESS
+        return None
+
     def advertised_tier(self, obj) -> QualityTier | None:
         # Servable ceiling, not catalog prose: without the wrapper only AAC
-        # 256 serves (HIGH whatever the traits say); with the wrapper the
-        # catalog's own traits decide (ALAC 16/44.1 LOSSLESS, 24-bit hi-res
+        # 256 serves (HIGH whatever the flags say); with the wrapper the
+        # catalog's own flags decide (ALAC 16/44.1 LOSSLESS, 24-bit hi-res
         # HI_RES_LOSSLESS). The row words already name the master; this tier
         # is what a download at this object would actually serve.
         if not self.wrapper_available:
@@ -788,12 +809,7 @@ class AppleProvider(Provider):
         item = self._unwrap(obj)
         if not isinstance(item, dict):
             return QualityTier.HIGH
-        traits = {str(trait).lower() for trait in self._attributes(item).get("audioTraits") or []}
-        if "hi-res-lossless" in traits:
-            return QualityTier.HI_RES_LOSSLESS
-        if "lossless" in traits:
-            return QualityTier.LOSSLESS
-        return QualityTier.HIGH
+        return self._lossless_rung(self._audio_signals(item)) or QualityTier.HIGH
 
     def advertised_deliveries(self, obj) -> list[tuple[QualityTier, AudioType]]:
         deliveries = [(QualityTier.HIGH, AudioType.STEREO)]
@@ -801,22 +817,21 @@ class AppleProvider(Provider):
         if isinstance(item, dict) and self._has_atmos(item):
             deliveries.append((QualityTier.HIGH, AudioType.ATMOS))
         if self.wrapper_available and isinstance(item, dict):
-            traits = {str(trait).lower() for trait in self._attributes(item).get("audioTraits") or []}
             # The wrapper unlocks the lossless rungs the master actually
             # holds; detail ("ALAC 24/192") rides Chooser label text, never
             # rank, so both hi-res sample rates share the one rung.
-            if "hi-res-lossless" in traits:
-                if (QualityTier.LOSSLESS, AudioType.STEREO) not in deliveries:
-                    deliveries.append((QualityTier.LOSSLESS, AudioType.STEREO))
+            rung = self._lossless_rung(self._audio_signals(item))
+            if rung is QualityTier.HI_RES_LOSSLESS:
+                deliveries.append((QualityTier.LOSSLESS, AudioType.STEREO))
                 deliveries.append((QualityTier.HI_RES_LOSSLESS, AudioType.STEREO))
-            elif "lossless" in traits:
+            elif rung is QualityTier.LOSSLESS:
                 deliveries.append((QualityTier.LOSSLESS, AudioType.STEREO))
         return deliveries
 
     def advertised_ceiling(self, obj) -> int | None:
         # Servable ceiling, per-track when the object is known (issue #32).
         # Cookies tier alone: HIGH always. Wrapper tier: the master's own
-        # traits (HI_RES for hi-res, LOSSLESS for lossless, HIGH otherwise),
+        # flags (HI_RES for hi-res, LOSSLESS for lossless, HIGH otherwise),
         # so an AAC-only master never over-promises HI_RES. None when the
         # object is unknown and the wrapper is up (never a guess; the gate
         # settles off the stored ranks then, per _copy_is_current).
@@ -827,20 +842,13 @@ class AppleProvider(Provider):
         item = self._unwrap(obj)
         if not isinstance(item, dict):
             return None
-        traits = {str(trait).lower() for trait in self._attributes(item).get("audioTraits") or []}
-        if "hi-res-lossless" in traits:
-            return quality_rank(QualityTier.HI_RES_LOSSLESS)
-        if "lossless" in traits:
-            return quality_rank(QualityTier.LOSSLESS)
-        return quality_rank(QualityTier.HIGH)
+        return quality_rank(self._lossless_rung(self._audio_signals(item)) or QualityTier.HIGH)
 
     @staticmethod
     def _has_atmos(item: dict) -> bool:
         """Whether a song resource carries a Dolby Atmos variant."""
-        attrs = AppleProvider._attributes(item)
-        traits = {str(trait).lower() for trait in attrs.get("audioTraits") or []}
-        variants = {str(variant).lower() for variant in attrs.get("audioVariants") or []}
-        return "dolby-atmos" in traits or "dolby-atmos" in variants or "atmos" in traits
+        signals = AppleProvider._audio_signals(item)
+        return "dolby-atmos" in signals or "atmos" in signals
 
     def has_atmos(self, item) -> bool:
         """Whether a song resource carries a Dolby Atmos variant."""
@@ -934,7 +942,12 @@ class AppleProvider(Provider):
         )
 
     def _resolve_via_wrapper(self, item: dict, want: QualityTier) -> StreamInfo:
-        """One stereo song through the managed wrapper's ALAC path."""
+        """One stereo song through the managed wrapper's ALAC path.
+
+        ``want`` caps the rendition: LOSSLESS takes an ALAC at or below
+        16-bit, HI_RES the best the master holds (the delivered tier is
+        probed off the bytes either way).
+        """
         from waves.apple_engine import (
             apple_delivery_detail,
             apple_tier_for_delivery,
@@ -949,6 +962,7 @@ class AppleProvider(Provider):
             ffmpeg_path=self.ffmpeg_path,
             decrypt_host=self.wrapper_decrypt_host,
             decrypt_port=self.wrapper_decrypt_port,
+            max_tier=want.value,
         )
         self._staged[str(delivery.staged_path)] = delivery
         # Honest tier off the staged bytes: the master may top out at 24/96
@@ -1255,10 +1269,14 @@ class AppleProvider(Provider):
 
     def classify_refusal(self, exc) -> Refusal:
         """Apple engine errors into the shared refusal vocabulary."""
-        from waves.apple_engine import AppleCredentialsError, AppleWrapperDown
+        from waves.apple_engine import AppleCredentialsError, AppleVariantUnavailable, AppleWrapperDown
 
         if isinstance(exc, AppleCredentialsError):
             return Refusal(RefusalKind.FAILURE, str(exc))
+        if isinstance(exc, AppleVariantUnavailable):
+            # No rendition at the asked ceiling (or none at all): the
+            # provider's fallback rules decide what actually serves.
+            return Refusal(RefusalKind.UNAVAILABLE, "this item is not available on Apple Music")
         if isinstance(exc, AppleWrapperDown):
             # The sidecar being down is HELD at the runner (presentation, not
             # a state); inside the refusal vocabulary it stays retryable
