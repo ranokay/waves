@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 
 from conftest import _InlinePool, _Signal
 
+from waves.providers import Capability
 from waves.waves_ui import backend
 from waves.waves_ui.backend import _SEARCH_DISK_MAX, _STALE_STAMP, WavesBridge, _search_same
 
@@ -118,6 +119,7 @@ def _wire(monkeypatch, stub, album_ids=("al1",), pop=50):
     stub.providers = {
         "tidal": SimpleNamespace(
             name="TIDAL",
+            capabilities=frozenset({Capability.SEARCH}),
             search=lambda needle: {
                 "artists": [artist],
                 "albums": [SimpleNamespace(id=i) for i in album_ids],
@@ -168,7 +170,11 @@ def test_a_fresh_hit_is_still_served_without_the_wire(monkeypatch):
     calls = []
     stub = _Stub()
     stub.providers = {
-        "tidal": SimpleNamespace(name="TIDAL", search=lambda needle: calls.append(1) or {"artists": [], "albums": []})
+        "tidal": SimpleNamespace(
+            name="TIDAL",
+            capabilities=frozenset({Capability.SEARCH}),
+            search=lambda needle: calls.append(1) or {"artists": [], "albums": []},
+        )
     }
     monkeypatch.setattr(backend.time, "monotonic", lambda: 1000.0)
     stub._search_cache["tidal:needle"] = (999.0, _payload())
@@ -178,7 +184,9 @@ def test_a_fresh_hit_is_still_served_without_the_wire(monkeypatch):
 
 def test_a_failed_wire_never_replaces_the_page_that_had_rows(monkeypatch):
     stub = _Stub()
-    stub.providers = {"tidal": SimpleNamespace(name="TIDAL", search=lambda needle: {})}
+    stub.providers = {
+        "tidal": SimpleNamespace(name="TIDAL", capabilities=frozenset({Capability.SEARCH}), search=lambda needle: {})
+    }
     stale = _payload(("al1",))
     stub._search_cache["tidal:needle"] = (_STALE_STAMP, stale)
     stub.search("needle")

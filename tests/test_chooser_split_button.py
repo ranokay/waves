@@ -28,7 +28,23 @@ from threading import Lock
 from types import SimpleNamespace
 
 from waves.constants import CTX_APPLE, CTX_TIDAL
+from waves.providers.apple import AppleProvider
+from waves.providers.tidal import TidalProvider
 from waves.waves_ui import backend
+
+
+def _metadata(cls, **over):
+    """Provider metadata a stub answers with, read from the real provider."""
+    fields = {
+        "name": cls.name,
+        "capabilities": cls.capabilities,
+        "quality_options": cls.quality_options,
+        "quality_setting": cls.quality_setting,
+        "audio_types": cls.audio_types,
+        "settings_card": cls.settings_card,
+    }
+    fields.update(over)
+    return SimpleNamespace(**fields)
 
 
 class _Emit:
@@ -98,7 +114,7 @@ def _bridge(**over):
     b._set_status = lambda msg: setattr(b, "_last_status", msg)
     b._last_status = ""
     b._playlist_template = lambda pid: "{tmpl}"
-    b.providers = {CTX_TIDAL: SimpleNamespace(), CTX_APPLE: SimpleNamespace()}
+    b.providers = {CTX_TIDAL: _metadata(TidalProvider), CTX_APPLE: _metadata(AppleProvider)}
     b._refetch_for_download = lambda bucket, mid: setattr(b, "_refetched", (bucket, mid))
     b._refetched = None
     b._chooser_refetch_pins = {}
@@ -107,6 +123,7 @@ def _bridge(**over):
         b,
         "_get_apple_enabled",
         "isAppleEnabled",
+        "_provider_meta",
         "_chooser_provider_of",
         "_chooser_is_collection_kind",
         "_chooser_tier_entries",
@@ -187,13 +204,17 @@ def test_chooser_defaults_come_from_settings_per_provider():
     assert [e["word"] for e in d_apple["tiers"]] == ["HI-RES", "LOSSLESS", "HIGH"]
 
 
-def test_chooser_defaults_audio_follows_the_default_and_atmos_only_collapses(monkeypatch):
+def test_chooser_defaults_audio_follows_the_default_and_atmos_only_collapses():
     b = _bridge(default_audio_type="both")
     assert b.chooserDefaults("t1", "track")["audioType"] == "both"
     b.settings.data.default_audio_type = "stereo"
     assert b.chooserDefaults("t1", "track")["audioType"] == "stereo"
+    # The collapse reads the provider's own advertised deliveries: an
+    # Atmos-only track advertises no stereo delivery.
+    tidal = b.providers[CTX_TIDAL]
+    tidal.advertised_tier = TidalProvider.advertised_tier.__get__(tidal, SimpleNamespace)
+    tidal.advertised_deliveries = TidalProvider.advertised_deliveries.__get__(tidal, SimpleNamespace)
     b._objs["track"]["tA"] = _atmos_only_track("tA")
-    monkeypatch.setattr(backend, "_atmos_only", lambda obj: getattr(obj, "audio_modes", []) == ["DOLBY_ATMOS"])
     d = b.chooserDefaults("tA", "track")
     assert d["atmosOnly"] is True
 
@@ -298,7 +319,8 @@ def test_download_with_chooser_apple_routes_with_pins(monkeypatch):
         seen["mid"] = mid
 
     b = _bridge(apple_enabled=True, apple_quality_audio="LOSSLESS")
-    provider = SimpleNamespace(
+    provider = _metadata(
+        AppleProvider,
         cached=lambda kind, mid: {"id": mid},
         row_for=lambda kind, raw: {"title": "Apple Song", "artist": "Artist", "art": ""},
     )
@@ -344,7 +366,7 @@ def test_download_with_chooser_parks_pins_across_a_refetch(monkeypatch):
 
 def test_download_with_chooser_apple_parks_pins_across_a_refetch():
     b = _bridge(apple_enabled=True)
-    provider = SimpleNamespace(cached=lambda kind, mid: None)
+    provider = _metadata(AppleProvider, cached=lambda kind, mid: None)
     b.providers[CTX_APPLE] = provider
     refetched = []
     b._refetch_apple_for_download = lambda bucket, mid: refetched.append((bucket, mid))

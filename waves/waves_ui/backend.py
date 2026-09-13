@@ -5784,8 +5784,7 @@ class WavesBridge(LibraryMixin, QObject):
             provider_ids = [
                 provider_id
                 for provider_id, provider in self.providers.items()
-                if provider_id in enabled_ids
-                and (not hasattr(provider, "capabilities") or Capability.SEARCH in provider.capabilities)
+                if provider_id in enabled_ids and Capability.SEARCH in provider.capabilities
             ]
 
             def fetch(provider_id: str) -> tuple[str, dict, Exception | None]:
@@ -9020,11 +9019,26 @@ class WavesBridge(LibraryMixin, QObject):
         keep today's single-face behavior unchanged."""
         return self._get_apple_enabled()
 
+    def _provider_meta(self, provider_id: str):
+        """The registered provider a chooser word names, or None when the
+        word names none.
+
+        A None keeps the legacy free-form answers the old identity branches
+        gave (the stereo/atmos/both audio options) and answers empty where a
+        provider names its own options (its tiers, its default tier); a
+        resolved provider is gated by its metadata, so one declaring no audio
+        type offers stereo alone.
+        """
+        providers = getattr(self, "providers", None) or {}
+        return providers.get(str(provider_id or "").strip().lower())
+
     def _chooser_provider_of(self, media_id: str) -> str:
-        """The row's provider from its id prefix (apple: or tidal)."""
+        """The row's provider from its id prefix, every registered provider
+        checked; a bare legacy id is TIDAL's."""
         mid = str(media_id or "")
-        if mid.startswith(f"{CTX_APPLE}:"):
-            return CTX_APPLE
+        for provider_id in getattr(self, "providers", None) or {}:
+            if mid.startswith(f"{provider_id}:"):
+                return provider_id
         return CTX_TIDAL
 
     def _chooser_is_collection_kind(self, kind: str) -> bool:
@@ -9034,20 +9048,13 @@ class WavesBridge(LibraryMixin, QObject):
     def _chooser_tier_entries(self, provider_id: str) -> list:
         """The provider's tiers with detail text for the Chooser popover.
 
-        TIDAL renders its four rungs; Apple renders its three (no LOW) with
-        the ALAC/AAC detail from the spec. Detail is label text, never rank."""
-        pid = str(provider_id or "").strip().lower()
-        if pid == CTX_APPLE:
-            return [
-                {"value": "HI_RES_LOSSLESS", "word": "HI-RES", "detail": "ALAC 24/192"},
-                {"value": "LOSSLESS", "word": "LOSSLESS", "detail": "ALAC 16/44.1"},
-                {"value": "HIGH", "word": "HIGH", "detail": "AAC 256"},
-            ]
+        Each entry carries the Waves tier value, its UI word and the
+        provider's own detail text. Detail is label text, never rank."""
+        provider = self._provider_meta(provider_id)
+        options = provider.quality_options if provider is not None else ()
         return [
-            {"value": "HI_RES_LOSSLESS", "word": "HI-RES", "detail": "FLAC 24-bit up to 192 kHz"},
-            {"value": "LOSSLESS", "word": "LOSSLESS", "detail": "FLAC 16-bit/44.1 kHz"},
-            {"value": "HIGH", "word": "HIGH", "detail": "AAC 320"},
-            {"value": "LOW", "word": "LOW", "detail": "AAC 96"},
+            {"value": str(option.tier.value), "word": _tier_word(str(option.tier.value)), "detail": option.detail}
+            for option in options
         ]
 
     @Slot(str, result="QVariant")
@@ -9064,11 +9071,10 @@ class WavesBridge(LibraryMixin, QObject):
         """The Settings tier word for one provider."""
         try:
             data = getattr(getattr(self, "settings", None), "data", None)
-            if data is None:
+            provider = self._provider_meta(provider_id)
+            if data is None or provider is None or not provider.quality_setting:
                 return ""
-            if str(provider_id or "") == CTX_APPLE:
-                return _tier_word(str(getattr(data, "apple_quality_audio", "") or ""))
-            return _tier_word(str(getattr(data, "tidal_quality_audio", "") or ""))
+            return _tier_word(str(getattr(data, provider.quality_setting, "") or ""))
         except Exception:
             logger.debug("Could not read the Chooser default tier", exc_info=True)
             return ""
@@ -9103,10 +9109,13 @@ class WavesBridge(LibraryMixin, QObject):
     def _chooser_atmos_only(self, media_id: str, kind: str) -> bool:
         """Whether the audio-type control collapses to ATMOS ONLY.
 
-        TIDAL lists some tracks as their own Atmos-only ids; Apple tracks
-        always carry stereo, so only the TIDAL path can answer True here."""
+        Only a track the provider itself advertises as Atmos alone (TIDAL
+        ships its Atmos-only releases as separate ids) collapses; a provider
+        whose every advertised delivery carries stereo answers False through
+        its own delivery list."""
         try:
-            if self._chooser_provider_of(media_id) == CTX_APPLE:
+            provider = self._provider_meta(self._chooser_provider_of(media_id))
+            if provider is None or AudioType.ATMOS not in provider.audio_types:
                 return False
             if str(kind or "").strip().lower() != "track":
                 return False
@@ -9114,7 +9123,8 @@ class WavesBridge(LibraryMixin, QObject):
             obj = (objs.get("track") or {}).get(str(media_id or ""))
             if obj is None:
                 return False
-            return bool(_atmos_only(obj))
+            deliveries = provider.advertised_deliveries(obj)
+            return bool(deliveries) and all(audio_type == AudioType.ATMOS for _tier, audio_type in deliveries)
         except Exception:
             return False
 
@@ -9128,18 +9138,32 @@ class WavesBridge(LibraryMixin, QObject):
         Settings; atmosOnly: collapse the audio control; tiers: the
         provider's tier entries; lyrics/art: the shared quick-toggles."""
         provider_id = self._chooser_provider_of(media_id)
+        provider = self._provider_meta(provider_id)
+        capabilities = provider.capabilities if provider is not None else frozenset()
         try:
             # Per-provider quick toggles: the Chooser stages the
             # row's own provider options, and SET AS DEFAULTS writes them back
-            # to that provider's mirrors.
-            lyrics_embed = bool(self._psetting(provider_id, "lyrics_embed", False))
-            lyrics_file = bool(self._psetting(provider_id, "lyrics_file", False))
-            lyrics_ttml = bool(self._psetting(provider_id, "lyrics_ttml_file", False))
-            cover_embed = bool(self._psetting(provider_id, "metadata_cover_embed", True))
-            cover_file = bool(self._psetting(provider_id, "cover_album_file", True))
+            # to that provider's mirrors. A provider that does not declare the
+            # capability offers no such toggle.
+            lyrics_embed = Capability.LYRICS in capabilities and bool(
+                self._psetting(provider_id, "lyrics_embed", False)
+            )
+            lyrics_file = Capability.LYRICS in capabilities and bool(self._psetting(provider_id, "lyrics_file", False))
+            lyrics_ttml = Capability.LYRICS in capabilities and bool(
+                self._psetting(provider_id, "lyrics_ttml_file", False)
+            )
+            cover_embed = Capability.ART in capabilities and bool(
+                self._psetting(provider_id, "metadata_cover_embed", True)
+            )
+            cover_file = Capability.ART in capabilities and bool(self._psetting(provider_id, "cover_album_file", True))
         except Exception:
             lyrics_embed = lyrics_file = lyrics_ttml = False
             cover_embed = cover_file = True
+        # The control always carries its stereo baseline; the Atmos words
+        # appear only for a provider that serves the type.
+        audio_options = ["stereo"]
+        if provider is None or AudioType.ATMOS in provider.audio_types:
+            audio_options += ["atmos", "both"]
         return {
             "provider": provider_id,
             "providerFixed": bool(self._chooser_is_collection_kind(kind)),
@@ -9147,7 +9171,7 @@ class WavesBridge(LibraryMixin, QObject):
             "audioType": self._chooser_default_audio(),
             "atmosOnly": bool(self._chooser_atmos_only(media_id, kind)),
             "tiers": self._chooser_tier_entries(provider_id),
-            "audioOptions": ["stereo", "atmos", "both"],
+            "audioOptions": audio_options,
             "lyricsEmbed": lyrics_embed,
             "lyricsFile": lyrics_file,
             "lyricsTtml": lyrics_ttml,
@@ -9171,26 +9195,31 @@ class WavesBridge(LibraryMixin, QObject):
                 return
         incoming = dict(values or {})
         provider_id = str(incoming.get("provider") or "").strip().lower()
+        provider = self._provider_meta(provider_id)
         tier_word = str(incoming.get("tier") or "").strip()
         audio = str(incoming.get("audioType") or incoming.get("audio_type") or "").strip().lower()
         staged: dict = {}
         tier = tier_from_word(tier_word) if tier_word else None
-        if tier is not None:
-            if provider_id == CTX_APPLE and tier == QualityTier.LOW:
-                pass
-            elif provider_id == CTX_APPLE:
-                staged["apple_quality_audio"] = str(tier.value)
-            else:
-                staged["tidal_quality_audio"] = str(tier.value)
+        # A tier the provider does not offer (Apple has no LOW rung) is
+        # refused: SET AS DEFAULTS leaves the stored tier alone.
+        if (
+            tier is not None
+            and provider is not None
+            and provider.quality_setting
+            and tier in {option.tier for option in provider.quality_options}
+        ):
+            staged[provider.quality_setting] = str(tier.value)
         if audio in ("stereo", "both"):
             staged["default_audio_type"] = audio
         # "atmos" alone has no Settings spelling (it is a per-click choice
         # only): SET AS DEFAULTS leaves the default unchanged rather than
         # misrecording it as both.
         # Lyrics/art quick-toggles write back to the row's own provider
-        # mirrors; the shared keys are fallbacks. An explicit mirror always
-        # wins over its shared spelling.
-        provider_prefix = "apple_" if provider_id == CTX_APPLE else "tidal_"
+        # mirrors (its settings card, or the id an unregistered word still
+        # namespaces); the shared keys are fallbacks. An explicit mirror
+        # always wins over its shared spelling.
+        card = getattr(provider, "settings_card", "") if provider is not None else ""
+        provider_prefix = f"{card or provider_id}_" if provider_id else ""
         for _prefix in ("tidal_", "apple_"):
             for _base in _CHOOSER_TOGGLE_KEYS:
                 _key = _prefix + _base
@@ -9214,9 +9243,15 @@ class WavesBridge(LibraryMixin, QObject):
         if staged:
             self.applySettings(staged)
 
-    def _chooser_normalize_audio(self, audio_type: str | None) -> str | None:
-        """Normalize a Chooser audio word, or None to follow Settings."""
+    def _chooser_normalize_audio(self, audio_type: str | None, provider_id: str = "") -> str | None:
+        """Normalize a Chooser audio word, or None to follow Settings.
+
+        A provider that does not serve Atmos falls back to Settings for the
+        Atmos words instead of pinning a Version it cannot fetch."""
         text = str(audio_type or "").strip().lower()
+        provider = self._provider_meta(provider_id) if provider_id else None
+        if provider is not None and AudioType.ATMOS not in provider.audio_types:
+            return "stereo" if text == "stereo" else None
         return text if text in ("stereo", "atmos", "both") else None
 
     def _chooser_park_refetch(
@@ -9259,15 +9294,17 @@ class WavesBridge(LibraryMixin, QObject):
     def _chooser_ask_for(self, provider_id: str, tier_word: str | None) -> tuple | None:
         """The pinned ask for a Chooser click, or None to follow Settings.
 
-        Returns (askQuality value, tier word) like _ask_quality_for; Apple
-        has no LOW rung so LOW there falls back to Settings."""
+        Returns (askQuality value, tier word) like _ask_quality_for; a tier
+        the provider does not offer (Apple has no LOW rung) falls back to
+        Settings."""
         word = str(tier_word or "").strip()
         if not word:
             return None
         tier = tier_from_word(word)
         if tier is None:
             return None
-        if str(provider_id or "") == CTX_APPLE and tier == QualityTier.LOW:
+        provider = self._provider_meta(provider_id)
+        if provider is not None and tier not in {option.tier for option in provider.quality_options}:
             return None
         return (str(tier.value), _tier_word(str(tier.value)))
 
@@ -9304,7 +9341,7 @@ class WavesBridge(LibraryMixin, QObject):
         pins = self._chooser_toggle_pins(toggles)
         provider_id = self._chooser_provider_of(mid)
         ask = self._chooser_ask_for(provider_id, tier)
-        audio = self._chooser_normalize_audio(audio_type)
+        audio = self._chooser_normalize_audio(audio_type, provider_id)
         if provider_id == CTX_APPLE:
             self._download_apple_with_chooser(mid, k, ask, audio, pins)
             return
@@ -9357,7 +9394,8 @@ class WavesBridge(LibraryMixin, QObject):
                 tier_word = str(ask[1])
             else:
                 tier_word = self._chooser_default_tier_word(provider_id)
-            name = "APPLE MUSIC" if str(provider_id or "") == CTX_APPLE else "TIDAL"
+            provider = self._provider_meta(provider_id)
+            name = str(provider.name if provider is not None else "TIDAL").upper()
             if audio == "both":
                 files_word = "2 files: stereo + Atmos"
             elif audio == "atmos":
@@ -12390,7 +12428,11 @@ class WavesBridge(LibraryMixin, QObject):
         else:
             ask, ask_tier = self._ask_quality_for(obj, type_media, media_id)
             keep_ver = None
-        chooser_ver = self._chooser_normalize_audio(chooser_audio) if chooser_ask is not None or chooser_audio else None
+        chooser_ver = (
+            self._chooser_normalize_audio(chooser_audio, CTX_TIDAL)
+            if chooser_ask is not None or chooser_audio
+            else None
+        )
         # Dual-download Versions (§5.1-5.2): the "both" default means
         # alongside (two rows, two files) where a real choice exists; the
         # stereo default stays byte-identical single rows. Merges and videos
@@ -12731,7 +12773,11 @@ class WavesBridge(LibraryMixin, QObject):
             ask = str(self.settings.data.apple_quality_audio or "HIGH")
             ask_tier = _tier_word(ask)
             keep_ver = None
-        chooser_ver = self._chooser_normalize_audio(chooser_audio) if chooser_ask is not None or chooser_audio else None
+        chooser_ver = (
+            self._chooser_normalize_audio(chooser_audio, CTX_APPLE)
+            if chooser_ask is not None or chooser_audio
+            else None
+        )
         provider = self.providers.get(CTX_APPLE)
         # Dual-download Versions (§5.1-5.2): the "both" default means
         # alongside where a track carries Atmos; the stereo default stays
@@ -13444,13 +13490,15 @@ class WavesBridge(LibraryMixin, QObject):
     def _psetting(self, provider_id: str, key: str, default=None):
         """One lyrics/artwork option for one provider.
 
-        Reads the provider's mirror with the shared key as fallback,
-        defensively (old unit-test stubs bind the bridge without these
-        fields; they read as the default).
+        Reads the registered provider's settings card with the shared key as
+        legacy fallback, so configs and stubs that predate the split keep
+        their meaning; an unreadable card reads as the default.
         """
         try:
             data = getattr(getattr(self, "settings", None), "data", None)
-            return provider_setting(data, provider_id, key, default)
+            provider = (getattr(self, "providers", None) or {}).get(str(provider_id or "").strip().lower())
+            card = getattr(provider, "settings_card", "") or str(provider_id or "").strip().lower()
+            return provider_setting(data, card, key, default)
         except Exception:
             return default
 
@@ -13462,19 +13510,23 @@ class WavesBridge(LibraryMixin, QObject):
             data = None
         return {f"write_{tag}": metadata_tag_write(data, tag) for tag in METADATA_TAG_FLAGS}
 
-    def _apple_setting(self, name: str, default):
-        """One Apple supervision setting off the live config, defensively.
+    def _apple_setting(self, key: str, default):
+        """One Apple supervision setting, read through the provider's card.
 
-        Old unit-test stubs bind the runner without these fields; they read
-        as the default (pacing/idle off) so they never pause or stop.
+        ``key`` is card-local (``pacing_batch_size``); the answer comes off
+        the Apple provider's settings card with the shared key as fallback,
+        so the namespacing lives on the provider. A missing provider or field
+        reads as the default, and the pacing knobs default off so they never
+        pause or stop a download.
         """
         try:
             data = getattr(getattr(self, "settings", None), "data", None)
-            value = getattr(data, name, default)
+            provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
+            card = getattr(provider, "settings_card", "") or CTX_APPLE
+            value = provider_setting(data, card, key, default)
         except Exception:
             return default
-        else:
-            return value if value is not None else default
+        return value if value is not None else default
 
     def _apple_pacing_policy(self) -> tuple[int, float]:
         """Proactive Apple pacing: pause after N songs for N seconds.
@@ -13491,8 +13543,8 @@ class WavesBridge(LibraryMixin, QObject):
             return 0, 0.0
         try:
             return pacing_policy(
-                self._apple_setting("apple_pacing_batch_size", 0),
-                self._apple_setting("apple_pacing_delay_sec", 0.0),
+                self._apple_setting("pacing_batch_size", 0),
+                self._apple_setting("pacing_delay_sec", 0.0),
             )
         except Exception:
             return 0, 0.0
@@ -13834,7 +13886,7 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_idle_timeout(self) -> float:
         """The supervised idle stop delay, or 0 when it never stops."""
         try:
-            return max(0.0, float(self._apple_setting("apple_wrapper_idle_sec", 0.0) or 0.0))
+            return max(0.0, float(self._apple_setting("wrapper_idle_sec", 0.0) or 0.0))
         except (TypeError, ValueError, AttributeError):
             return 0.0
 

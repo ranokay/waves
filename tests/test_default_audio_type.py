@@ -98,6 +98,7 @@ def test_plain_clicks_consult_the_single_source():
 def test_save_defaults_writes_the_dropdown_word():
     staged: dict = {}
     stub = SimpleNamespace(applySettings=staged.update)
+    stub._provider_meta = WavesBridge._provider_meta.__get__(stub, type(stub))
     stub.saveChooserDefaults = WavesBridge.saveChooserDefaults.__get__(stub)
     stub.saveChooserDefaults({"provider": "tidal", "tier": "", "audioType": "both"})
     assert staged == {"default_audio_type": "both"}

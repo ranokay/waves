@@ -125,6 +125,18 @@ class Capability(StrEnum):
     PREVIEW = "preview"
 
 
+@dataclass(frozen=True)
+class QualityOption:
+    """One rung a provider's Chooser offers.
+
+    ``detail`` is the provider's own label text ("ALAC 24/192"), shown beside
+    the tier word; it is never ranked. The neutral shape states no detail.
+    """
+
+    tier: QualityTier
+    detail: str = ""
+
+
 class RefusalKind(StrEnum):
     """How to read an engine error, shared across providers.
 
@@ -228,6 +240,28 @@ class Provider(ABC):
     id: str
     name: str
     capabilities: frozenset[Capability]
+
+    # ----- chooser metadata (what a provider offers before an object exists)
+
+    quality_options: tuple[QualityOption, ...] = ()
+    """The rungs this provider's Chooser offers, in the order it presents
+    them. The neutral default is no rungs: a provider that declares none
+    lists none, never another provider's ladder."""
+
+    quality_setting: str = ""
+    """The Settings field holding this provider's default tier. The neutral
+    default is "": a provider that stores no default opens the Chooser with
+    no tier stated."""
+
+    audio_types: frozenset[AudioType] = frozenset()
+    """The audio types this provider can deliver for one item on its own.
+    The neutral default is none: the per-click Atmos choices stay off and the
+    Chooser's Atmos-only collapse cannot fire."""
+
+    settings_card: str = ""
+    """The settings-card namespace this provider's per-provider mirrors live
+    under (``apple_lyrics_embed``). The neutral default is "": the provider's
+    mirrors stay under its id namespace, with the shared keys as fallback."""
 
     # ----- session / auth
 

@@ -23,6 +23,7 @@ from waves.model.cfg import (
     metadata_tag_write,
     provider_setting,
 )
+from waves.providers import AudioType, Capability
 
 pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
 
@@ -231,6 +232,15 @@ def test_chooser_defaults_read_the_row_provider_mirrors():
             apple_cover_album_file=True,
         )
     )
+    stub.providers = {
+        provider_id: SimpleNamespace(
+            capabilities=frozenset({Capability.LYRICS, Capability.ART}),
+            settings_card=provider_id,
+            audio_types=frozenset({AudioType.STEREO, AudioType.ATMOS}),
+        )
+        for provider_id in ("tidal", "apple")
+    }
+    stub._provider_meta = WavesBridge._provider_meta.__get__(stub, type(stub))
     stub._chooser_provider_of = WavesBridge._chooser_provider_of.__get__(stub, type(stub))
     stub._chooser_is_collection_kind = WavesBridge._chooser_is_collection_kind.__get__(stub, type(stub))
     stub._chooser_default_tier_word = lambda pid: "HI-RES"
