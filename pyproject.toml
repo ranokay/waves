@@ -215,9 +215,6 @@ ignore = [
 # The exit-time cancel of the freeze-watchdog countdown can only be observed
 # in a fresh interpreter: this one runs a literal probe script (S603, fixed argv).
 "tests/test_freeze_watchdog_quit.py" = ["S603"]
-# The quality badge menu scenario re-runs itself in a subprocess to isolate the
-# Qt boot (S603, fixed argv).
-"tests/test_quality_pick_qml.py" = ["S603"]
 # The library scanner's directory walk (_walk_album_dirs) is a small state
 # machine over each folder's probe result (unchanged / relist / transient error /
 # vanished / root offline); the branching is the point and the function was kept
@@ -229,13 +226,6 @@ ignore = [
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
 "tests/library/test_library_bridge.py" = ["S603"]
-"tests/test_apple_search_groups_qml.py" = ["S603"]
-# The Apple-only search row scenario re-runs itself in a subprocess to isolate
-# the Qt boot (S603, fixed argv).
-"tests/test_apple_only_search_qml.py" = ["S603"]
-# The provider-badge scenario re-runs itself in a subprocess to isolate
-# the Qt boot (S603, fixed argv).
-"tests/test_provider_badge_qml.py" = ["S603"]
 # The startup picker scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).
 "tests/ui/test_startup_provider_picker_qml.py" = ["S603"]
@@ -247,9 +237,6 @@ ignore = [
 # Runs the bundle size report for real, on a root wide enough to fill the pipe
 # buffer, through the shell it is written for (S603/S607, fixed argv).
 "tests/test_final_audit_updater.py" = ["S603", "S607"]
-# The quarantine-row scenario re-runs itself in a subprocess to isolate the
-# Qt boot (S603, fixed argv).
-"tests/test_apple_quarantine_row_qml.py" = ["S603"]
 # Drives the real release.sh (bash) and git against throwaway sandbox repos;
 # both are resolved from PATH on purpose (S603/S607, fixed argv).
 "tests/test_release_star_history.py" = ["S603", "S607"]

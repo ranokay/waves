@@ -10,11 +10,10 @@ acknowledging), and the version stamp that says WHICH terms were agreed to.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-QML_MAIN = ROOT / "waves" / "waves_ui" / "qml" / "Main.qml"
-README = ROOT / "README.md"
+from support.paths import QML_MAIN, REPO_ROOT
+
+README = REPO_ROOT / "README.md"
 
 TERMS_VERSION = "1.0"
 TERMS_STAMP = "Terms v1.0 (10 August 2026)"
@@ -172,7 +171,7 @@ def test_no_takedown_address_is_published():
     """GitHub issues is the only published contact channel, deliberately: a
     takedown-specific address implies wrongdoing is anticipated. It must not
     come back in the README, the app, or any repo metadata."""
-    for path in (README, QML_MAIN, ROOT / "CHANGELOG.md"):
+    for path in (README, QML_MAIN, REPO_ROOT / "CHANGELOG.md"):
         text = path.read_text(encoding="utf-8").lower()
         for banned in ("legal@", "abuse@", "dmca@", "takedown@"):
             assert banned not in text, f"{path.name} publishes a {banned} address"

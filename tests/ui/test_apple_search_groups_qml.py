@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import run_scenario
+from support.qml import run_scenario, sandbox_qml_settings
 
 
 def _video(media_id: str) -> dict:
@@ -67,12 +67,12 @@ def _payload(grouped: bool) -> dict:
 
 
 def _scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from PySide6.QtCore import QEventLoop, QTimer, QUrl
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()

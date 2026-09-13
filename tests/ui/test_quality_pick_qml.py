@@ -21,39 +21,32 @@ installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
-
+@pytest.mark.qml
 def test_the_quality_badge_menu_follows_the_choice_on_every_row():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-quality-pick-test-")
-    proc = subprocess.run(  # (fixed argv: this file, one flag)
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-quality-pick-test-",
+        failure_message="the quality badge menu regressed.",
+        drop=("waves.qt",),
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-16:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the quality badge menu regressed. Scenario exit={proc.returncode}:\n{tail}"
 
 
 _ROW = {
@@ -146,14 +139,13 @@ _FIND_PICKS = """
 
 
 def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from types import SimpleNamespace
 
@@ -161,13 +153,14 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
 
     patch_offline()
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui import backend
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     WavesBridge._library_root = lambda self: ""  # type: ignore[method-assign]
     WavesBridge.loadBrowse = lambda self: None  # type: ignore[method-assign]
@@ -193,7 +186,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -233,7 +226,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     keys = sorted(q("Object.keys(root._qp)"))
     if not {"t1/", "t2/", "t3/", "t4/", "a1/"}.issubset(set(keys)):
         print("did not find every row badge:", keys, file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     check(bool(q("root._qp['t1/'].canPick")), "a HI-RES track badge offers no menu")
     check(not bool(q("root._qp['t4/'].canPick")), "an ATMOS pill offers a menu")
     check(
@@ -447,7 +440,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     settle()
     if q("root.dlSt('t1')") != "done" or q("root.dlSt('t3')") != "queued":
         print("the session states did not reach the page", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     bridge.setQualityOverride("t1", other)
     settle()
     check(q("root.dlSt('t1')") == "", "a track's choice left its DOWNLOADED button inert")
@@ -511,11 +504,10 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     if failures:
         for f in failures:
             print("REGRESSED:", f, file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
     print("quality badge menu: OK")
-    return _EXIT_OK
+    return EXIT_OK
 
 
-if __name__ == "__main__":
-    if "--run-scenario" in sys.argv:
-        raise SystemExit(_run_scenario())
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())
