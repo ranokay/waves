@@ -14,13 +14,12 @@ requests+certifi session (RequestsClient / the pooled probe session), which
 carries its own CA bundle on every platform.
 """
 
-import pathlib
 import re
 from unittest.mock import MagicMock, patch
 
-from waves.download import Download, RequestsClient
+from support.paths import REPO_ROOT
 
-REPO = pathlib.Path(__file__).resolve().parent.parent
+from waves.download import Download, RequestsClient
 
 MASTER = """#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=6372000,RESOLUTION=1920x1080,CODECS="avc1.640028"
@@ -31,10 +30,10 @@ hls/480.m3u8
 
 
 def _iter_source_files():
-    files = list((REPO / "waves").rglob("*.py"))
+    files = list((REPO_ROOT / "waves").rglob("*.py"))
     # A wrong package path makes the glob empty and every scan below pass
     # vacuously; fail loudly instead.
-    assert files, f"source sweep found no files under {REPO / 'waves'}"
+    assert files, f"source sweep found no files under {REPO_ROOT / 'waves'}"
     for path in files:
         yield path, path.read_text(encoding="utf-8")
 
@@ -47,7 +46,7 @@ def test_no_bare_m3u8_load_anywhere():
         # immediately closed argument list.
         for m in re.finditer(r"m3u8\.load\(\s*([^)\s][^\n]*)", src):
             if "http_client=" not in m.group(1):
-                offenders.append(f"{path.relative_to(REPO)}: {m.group(0)}")
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {m.group(0)}")
     assert not offenders, f"m3u8.load without http_client= (urllib fetch, breaks in packaged builds): {offenders}"
 
 

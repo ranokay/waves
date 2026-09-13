@@ -81,7 +81,7 @@ class _RecordingDownload:
 
 class _Stub:
     """Just what _download and its worker touch on the happy path; every gate
-    answers "go". Mirrors tests/test_download_start_readout.py's stand-in."""
+    answers "go". Mirrors tests/downloads/test_download_start_readout.py's stand-in."""
 
     def __init__(self, delay: bool) -> None:
         self._logged_in = True
