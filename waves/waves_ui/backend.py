@@ -9021,7 +9021,14 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _provider_meta(self, provider_id: str):
         """The registered provider a chooser word names, or None when the
-        word names none; callers treat that as "nothing offered"."""
+        word names none.
+
+        A None keeps the legacy free-form answers the old identity branches
+        gave (the stereo/atmos/both audio options) and answers empty where a
+        provider names its own options (its tiers, its default tier); a
+        resolved provider is gated by its metadata, so one declaring no audio
+        type offers stereo alone.
+        """
         providers = getattr(self, "providers", None) or {}
         return providers.get(str(provider_id or "").strip().lower())
 
