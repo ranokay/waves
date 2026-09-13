@@ -1,5 +1,10 @@
 """Lyrics & art matrix (issue #34, spec section 9.1)."""
 
+import shutil
+import subprocess
+
+import pytest
+
 from waves.lyrics import lyrics_sidecar_choices
 from waves.ttml_lyrics import (
     format_lrc_timestamp,
@@ -111,3 +116,60 @@ def test_apple_cover_url_clamps_to_5000():
     template = "https://example.com/{w}x{h}bb.jpg"
     url = AppleProvider._art({"artwork": {"url": template}}, 99999)
     assert "5000x5000" in url
+
+
+needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+
+
+@needs_ffmpeg
+def test_tidal_standalone_art_converts_to_the_selected_format(tmp_path):
+    """The standalone action never writes JPEG bytes into a .png (S08)."""
+    from types import SimpleNamespace
+
+    from waves.metadata import sniff_image_format
+    from waves.model.cfg import Settings
+    from waves.waves_ui.backend import WavesBridge
+
+    jpeg = tmp_path / "src.jpg"
+    subprocess.run(  # noqa: S603 (fixed argv: a local fixture, no user input)
+        [
+            shutil.which("ffmpeg"),
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=32x32",
+            "-frames:v",
+            "1",
+            "-c:v",
+            "mjpeg",
+            str(jpeg),
+        ],
+        check=True,
+    )
+    data = Settings()
+    data.tidal_cover_file_format = "png"
+    track = SimpleNamespace(album=SimpleNamespace(image=lambda size: "http://img/320.jpg"))
+
+    class _Download:
+        def cover_data_cached(self, url):
+            return jpeg.read_bytes()
+
+    stub = SimpleNamespace(settings=SimpleNamespace(data=data), _dl=_Download())
+    stub._standalone_base_dir = lambda: tmp_path
+    stub._standalone_tidal_tracks = lambda media_id: [(track, None, False)]
+    stub._tidal_standalone_dest = lambda base, track_obj, collection: (tmp_path, "S1")
+    stub._cover_convert_ffmpeg = lambda: shutil.which("ffmpeg")
+    stub._psetting = lambda provider, name, default: {
+        "metadata_cover_dimension": 320,
+        "metadata_cover_embed": False,
+        "cover_album_file": True,
+    }.get(name, default)
+    stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub, SimpleNamespace)
+
+    assert stub._standalone_tidal("123", "art") == 1
+    target = tmp_path / "cover.png"
+    assert target.is_file()
+    assert sniff_image_format(target.read_bytes()) == "png"

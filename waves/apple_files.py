@@ -17,6 +17,8 @@ import contextlib
 import logging
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from pathvalidate import sanitize_filename
@@ -34,7 +36,7 @@ from waves.helper.path import (
     path_file_sanitize,
     sanitize_name_component,
 )
-from waves.metadata import Metadata
+from waves.metadata import Metadata, sniff_image_format
 
 logger = logging.getLogger("waves.apple_files")
 
@@ -176,27 +178,66 @@ def write_text_sidecar(directory: str | Path, stem: str, suffix: str, content: s
     return target
 
 
-def write_cover_sidecar(directory: str | Path, image: bytes, file_format: str = "jpg") -> Path | None:
+def convert_image(image: bytes, target_format: str, ffmpeg_path: str = "") -> bytes | None:
+    """Re-encode one image to png or jpg through ffmpeg, or None.
+
+    ffmpeg only (no new dependency). None when no binary is found or the
+    conversion fails; callers then keep the served bytes under their true
+    extension rather than faking one.
+    """
+    ffmpeg = str(ffmpeg_path or "").strip() or shutil.which("ffmpeg") or ""
+    if not ffmpeg:
+        return None
+    codec = "png" if str(target_format or "").strip().lower() == "png" else "mjpeg"
+    try:
+        proc = subprocess.run(  # noqa: S603 (resolved binary, fixed argv, piped bytes)
+            [ffmpeg, "-v", "error", "-i", "pipe:0", "-f", "image2pipe", "-c:v", codec, "pipe:1"],
+            input=bytes(image),
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception:
+        logger.debug("Cover conversion failed", exc_info=True)
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        logger.debug("Cover conversion refused: %s", bytes(proc.stderr or b"")[:200])
+        return None
+    return bytes(proc.stdout)
+
+
+def write_cover_sidecar(
+    directory: str | Path, image: bytes, file_format: str = "jpg", ffmpeg_path: str = ""
+) -> Path | None:
     """Cover sidecar beside the track, written atomically, or None.
 
     ``file_format`` is ``jpg`` (default) or ``png`` on both providers, plus
     ``raw`` on Apple (the true original-master bytes, whose extension follows
-    the served image). The format only names the file; the bytes are already
-    in that format (embedded art stays jpg per spec section 9.1).
+    the served image). jpg/png convert the served bytes when they differ
+    (embedded art stays jpg per spec section 9.1); when no converter is
+    available the bytes keep their own extension instead of faking the
+    requested one.
     """
     if not image:
         return None
     fmt = str(file_format or "jpg").strip().lower()
     if fmt not in ("jpg", "jpeg", "png", "raw"):
         fmt = "jpg"
+    served = sniff_image_format(image)
     if fmt == "raw":
-        # The raw master arrives as jpg or png; sniff the magic rather than
-        # trusting the setting. PNG magic first, else jpg.
-        name = "cover.png" if bytes(image[:8]).startswith(b"\x89PNG\r\n\x1a\n") else "cover.jpg"
-    elif fmt == "png":
-        name = "cover.png"
-    else:
-        name = "cover.jpg"
+        return _write_cover_sidecar_file(directory, image, "cover.png" if served == "png" else "cover.jpg")
+    target = "png" if fmt == "png" else "jpg"
+    if served != target:
+        converted = convert_image(image, target, ffmpeg_path)
+        if converted:
+            image = converted
+            served = target
+    if served != target:
+        # No converter: the served bytes keep their true extension.
+        target = "png" if served == "png" else "jpg"
+    return _write_cover_sidecar_file(directory, image, f"cover.{target}")
+
+
+def _write_cover_sidecar_file(directory: str | Path, image: bytes, name: str) -> Path | None:
     target = Path(directory) / name
     if target.exists():
         return target
@@ -205,7 +246,7 @@ def write_cover_sidecar(directory: str | Path, image: bytes, file_format: str = 
         tmp.write_bytes(image)
         os.replace(tmp, target)
     except OSError:
-        logger.debug("Could not write the Apple cover sidecar", exc_info=True)
+        logger.debug("Could not write the cover sidecar", exc_info=True)
         return None
     return target
 
