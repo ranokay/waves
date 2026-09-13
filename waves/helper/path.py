@@ -1355,9 +1355,10 @@ def path_file_numbered_candidate(path_file: pathlib.Path) -> pathlib.Path:
     """The first free ``stem_NN`` sibling of ``path_file``.
 
     Returns ``path_file`` itself when nothing is there, else the same name
-    with "_01", "_02"... before the suffix: the collision step-aside the
-    Apple providers write for downloads and quarantine copies. The parent
-    directory must exist.
+    with "_01", "_02"... before its final suffix, the collision step-aside the
+    Apple providers write for downloads and quarantine copies. Both callers
+    assemble the path from a single-part extension, so the final suffix is the
+    caller's extension. The parent directory must exist.
     """
     candidate = path_file
     index = 0

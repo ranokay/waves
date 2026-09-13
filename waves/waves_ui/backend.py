@@ -13943,13 +13943,13 @@ class WavesBridge(LibraryMixin, QObject):
         list_total: int = 0,
         num_volumes: int = 1,
         isrc: str = "",
-        provider=None,
     ) -> str:
         """One Apple destination from the settings' template.
 
         The single formatter behind both the download job's relative path and
-        the standalone actions' folder/stem split, so a sidecar lands wherever
-        the audio of the same track would.
+        the standalone actions' folder/stem split, so apart from playlist
+        collections (which reconstruct the album template) both render the
+        same vocabulary.
         """
         data = self.settings.data
         return format_apple_path(
@@ -13966,12 +13966,11 @@ class WavesBridge(LibraryMixin, QObject):
             delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
             illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
             illegal_map=getattr(data, "filename_illegal_map", None),
-            provider_name=provider_folder_name(getattr(provider, "id", CTX_APPLE)),
+            provider_name=provider_folder_name(CTX_APPLE),
         )
 
     def _apple_track_relative(
         self,
-        provider,
         row: dict,
         header: dict | None,
         type_media: str,
@@ -13997,7 +13996,6 @@ class WavesBridge(LibraryMixin, QObject):
             list_total=list_total if type_media == "playlist" else 0,
             num_volumes=num_volumes,
             isrc=facts_isrc,
-            provider=provider,
         )
 
     def _apple_deliver_track(
@@ -14053,7 +14051,6 @@ class WavesBridge(LibraryMixin, QObject):
         raw = provider.get_object("track", raw_id)
         facts = provider.track_facts(raw)
         relative = self._apple_track_relative(
-            provider,
             row,
             header,
             type_media,
@@ -18083,11 +18080,8 @@ class WavesBridge(LibraryMixin, QObject):
         template = str(data.format_album if collection and album else data.format_track)
         replacement = str(getattr(data, "filename_illegal_replacement", "") or "")
         illegal_map = dict(getattr(data, "filename_illegal_map", None) or {})
-        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
         try:
-            relative = self._apple_relative_path(
-                track=track, album=album, playlist=None, file_template=template, provider=provider
-            )
+            relative = self._apple_relative_path(track=track, album=album, playlist=None, file_template=template)
         except Exception:
             # A template failure falls back to the title, sanitized exactly
             # like a rendered token: the raw title can carry a separator.

@@ -10,6 +10,7 @@ lands wherever the audio of the same track would (provider segment included).
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import waves.waves_ui.backend as backend
@@ -34,24 +35,27 @@ def _stub(**data_overrides) -> SimpleNamespace:
     return stub
 
 
-def test_a_standalone_dest_matches_the_audio_layout(tmp_path):
-    stub = _stub(format_track="{provider_name}/{track_title}")
+def test_a_standalone_dest_matches_the_audio_relative_path(tmp_path):
+    template = "{provider_name}/{track_title}"
+    stub = _stub(format_track=template)
+    track = {"title": "Xtal"}
 
-    folder, stem = stub._apple_standalone_dest(tmp_path, {"title": "Xtal"}, None, False)
+    relative = stub._apple_relative_path(track=track, album=None, playlist=None, file_template=template)
+    folder, stem = stub._apple_standalone_dest(tmp_path, track, None, False)
 
-    assert folder == tmp_path / "Apple Music"
-    assert stem == "Xtal"
+    assert (folder / f"{stem}.m4a").relative_to(tmp_path) == Path(relative).with_suffix(".m4a")
 
 
-def test_a_collection_standalone_dest_uses_the_album_template(tmp_path):
-    stub = _stub(format_album="{provider_name}/{artist_name}/{album_title}/{track_title}")
+def test_a_collection_standalone_dest_matches_the_album_relative_path(tmp_path):
+    template = "{provider_name}/{artist_name}/{album_title}/{track_title}"
+    stub = _stub(format_album=template)
     track = {"title": "Xtal", "artist": "Aphex Twin", "num": 1, "vol": 1}
     album = {"title": "Selected Ambient Works", "artist": "Aphex Twin"}
 
+    relative = stub._apple_relative_path(track=track, album=album, playlist=None, file_template=template)
     folder, stem = stub._apple_standalone_dest(tmp_path, track, album, True)
 
-    assert folder == tmp_path / "Apple Music" / "Aphex Twin" / "Selected Ambient Works"
-    assert stem == "Xtal"
+    assert (folder / f"{stem}.m4a").relative_to(tmp_path) == Path(relative).with_suffix(".m4a")
 
 
 def test_a_template_failure_writes_one_sanitized_name(tmp_path, monkeypatch):
