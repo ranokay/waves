@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from test_discography_video_source import _Artist as _VideoArtist
-from test_discography_video_source import _DiscoStub
+from support.discography_fakes import DiscoStub as _DiscoStub
+from support.discography_fakes import VideoArtist as _VideoArtist
 from tidalapi.album import Album
 from tidalapi.media import AudioMode, Quality
 
@@ -127,9 +127,9 @@ def test_stereo_and_dual_mode_releases_pass_through_untouched():
 # The wiring: downloadArtist itself makes the choice
 # --------------------------------------------------------------------------- #
 class _AtmosDiscoStub(_DiscoStub):
-    """The video-source file's discography stub, handed releases that carry
-    real audio modes, so the sweep's Atmos choice runs against the real
-    downloadArtist body."""
+    """The shared discography stub, handed releases that carry real audio
+    modes, so the sweep's Atmos choice runs against the real downloadArtist
+    body."""
 
     def __init__(self, releases, *, atmos_on: bool):
         super().__init__(_VideoArtist([]), video_download=False)

@@ -18,10 +18,11 @@ Two things are easy to lose in a later edit and are pinned here:
 
 from __future__ import annotations
 
-import pathlib
 import re
 
-_QML = pathlib.Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "SettingsPage.qml"
+from support.paths import QML_DIR
+
+_QML = QML_DIR / "SettingsPage.qml"
 
 
 def _source() -> str:

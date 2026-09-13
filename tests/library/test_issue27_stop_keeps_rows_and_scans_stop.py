@@ -32,9 +32,11 @@ from collections import deque
 from threading import Event, Lock
 from types import SimpleNamespace
 
+from conftest import _Signal
+from support.discography_fakes import DiscoStub as _DiscoStub
+from support.discography_fakes import VideoArtist as _VideoArtist
 from support.dispatch_stub import arm_queue
-from test_discography_video_source import _Artist as _VideoArtist
-from test_discography_video_source import _DiscoStub, _Signal
+from support.paths import QML_MAIN
 
 from waves.waves_ui.backend import _RETRYABLE, WavesBridge, _stop_check_for
 
@@ -208,9 +210,8 @@ def test_two_scans_in_flight_announce_once_each_way():
 def test_the_drawer_stop_button_reads_scanning():
     # The binding itself: STOP shows for active rows OR a scan in flight.
     import re
-    from pathlib import Path
 
-    src = (Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml").read_text()
+    src = QML_MAIN.read_text()
     stop = re.search(r'visible: ([^\n]*)\n\s*danger: true; label: "STOP"', src)
     assert stop, "the drawer's STOP button"
     assert "waves.scanning" in stop.group(1) and "activeQueueCount > 0" in stop.group(1)
@@ -625,7 +626,7 @@ def test_the_help_says_the_sweep_follows_the_switch():
     # are pinned to the FIELDS they belong to: a substring search over the
     # whole bridge source passed with them moved into a comment or onto the
     # wrong field.
-    from test_discography_video_source import _schema_stub
+    from support.discography_fakes import schema_stub as _schema_stub
 
     fields = {f["key"]: f for s in WavesBridge.settingsSchema(_schema_stub()) for f in s["fields"]}
     conflict = fields["edition_conflict"]["help"]

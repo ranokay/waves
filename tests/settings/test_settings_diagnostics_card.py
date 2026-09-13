@@ -26,9 +26,10 @@ one.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-QML = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "SettingsPage.qml"
+from support.paths import QML_DIR
+
+QML = QML_DIR / "SettingsPage.qml"
 
 _DIAG_PREFS = ("verbose_diagnostics", "diagnostics_redact_content")
 

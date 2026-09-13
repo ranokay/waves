@@ -28,9 +28,10 @@ assignment to a settings field's ``text`` must go through ``Qt.binding``.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-SETTINGS_QML = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "SettingsPage.qml"
+from support.paths import QML_DIR
+
+SETTINGS_QML = QML_DIR / "SettingsPage.qml"
 
 
 def _source() -> str:
