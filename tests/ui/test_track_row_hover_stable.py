@@ -1,62 +1,168 @@
-"""Track-row hover stability (issue #70): hover must never reflow the row.
+"""Track-row hover stability: hover must never reflow the row.
 
-Hovering a track's download options used to shift the layout: the
-standalone LYRICS/COVER pair only existed while hovered, so its RowLayout
-slot opened and closed under the pointer. Hover may tint and overlay, but
-no `visible:` binding inside TrackRow may read hover state. The pair is
-always visible (compact) instead, labelled LYRICS / COVER.
+Hovering a track's download options used to shift the layout: the standalone
+LYRICS/COVER pair only existed while hovered, so its RowLayout slot opened and
+closed under the pointer. Hover may tint and overlay, but the row's inner
+geometry must not move.
+
+Proved on the real Main.qml offscreen: a search track row is seeded, its
+geometry recorded, the pointer moved onto the row, and the row's own MouseArea
+must report hover while the row's height, the download button and the
+standalone pair's slot are identical and the pair still shows LYRICS / COVER.
+Source parsing could pass with the pair hidden or the row reflowing; the
+rendered tree cannot.
 """
 
 from __future__ import annotations
 
-import re
+import json
+import sys
 
-from support.paths import QML_MAIN
+import pytest
+from support.qml import (
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    boot_main_qml,
+    run_scenario,
+)
+from support.qml_probe import scene_js
+
+_TRACK_JS = """
+    var row = findFirst(root.contentItem, function (o) {
+        return o.tId !== undefined && ("" + o.tId) === "t1" && o.durationSec !== undefined;
+    });
+"""
+
+_GEOMETRY_BODY = _TRACK_JS + """
+    if (!row) return "";
+    var pair = findFirst(row, function (o) {
+        if (o.compact !== true) return false;
+        var kids = o.children || [];
+        for (var i = 0; i < kids.length; i++) if (kids[i].text === "LYRICS") return true;
+        return false;
+    });
+    var dl = findFirst(row, function (o) { return o.chooserKind !== undefined; });
+    var hoverArea = findFirst(row, function (o) {
+        return o.containsMouse !== undefined && o.width >= row.width - 2;
+    });
+    return JSON.stringify({
+        rowH: row.height,
+        rowW: row.width,
+        pairVisible: pair ? !!pair.visible : false,
+        pairX: pair ? pair.x : -1,
+        pairY: pair ? pair.y : -1,
+        pairW: pair ? pair.width : -1,
+        lyrics: pair ? !!findFirst(pair, function (o) { return o.text === "LYRICS"; }) : false,
+        cover: pair ? !!findFirst(pair, function (o) { return o.text === "COVER"; }) : false,
+        dlX: dl ? dl.x : -1,
+        dlY: dl ? dl.y : -1,
+        dlW: dl ? dl.width : -1,
+        hovered: hoverArea ? !!hoverArea.containsMouse : false
+    });
+"""
+
+_ROW_CENTER_BODY = _TRACK_JS + "    return row ? row.mapToItem(null, row.width / 2, row.height / 2) : null;"
 
 
-def _strip_strings_and_comments(line: str) -> str:
-    """A line with string literals and // comments blanked, for brace counting."""
-    line = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
-    return line.split("//", 1)[0]
+@pytest.mark.qml
+def test_hover_never_reflows_the_track_row():
+    run_scenario(
+        __file__,
+        "--run-scenario",
+        timeout=180,
+        sandbox_prefix="waves-track-row-hover-test-",
+        failure_message="the track row reflowed under the pointer",
+    )
 
 
-def _track_row_block() -> str:
-    """The `component TrackRow` block, brace-matched from its opening line."""
-    lines = QML_MAIN.read_text(encoding="utf-8").splitlines()
-    start = next(i for i, line in enumerate(lines) if line.strip().startswith("component TrackRow:"))
-    depth = 0
-    for i in range(start, len(lines)):
-        cleaned = _strip_strings_and_comments(lines[i])
-        depth += cleaned.count("{") - cleaned.count("}")
-        if depth == 0 and i > start:
-            return "\n".join(lines[start : i + 1])
-    raise AssertionError("TrackRow block never closes")
+def _run_scenario() -> int:
+    booted = boot_main_qml()
+    if isinstance(booted, int):
+        return booted
+    _root, q, settle, bridge = booted
+
+    q("openSearch()")
+    settle(200)
+    track = {
+        "id": "t1",
+        "kind": "track",
+        "title": "Track",
+        "artist": "Artist",
+        "artist_id": "a1",
+        "album": "Album",
+        "album_id": "al1",
+        "num": 1,
+        "vol": 1,
+        "art": "",
+        "year": "2026",
+        "date": "2026-09-01",
+        "duration": "3:00",
+        "duration_sec": 180,
+        "quality": "LOSSLESS",
+        "popularity": 1,
+        "explicit": False,
+        "added": "",
+    }
+    payload = {
+        "artists": [],
+        "albums": [],
+        "tracks": [track],
+        "videos": [],
+        "playlists": [],
+        "mixes": [],
+        "top": None,
+    }
+    q("root._searchSeq = root._navSeq")
+    bridge.searchResults.emit(payload)
+    settle(500)
+
+    before = str(q(scene_js(_GEOMETRY_BODY)))
+    if not before:
+        print("the search track row never rendered", file=sys.stderr)
+        return EXIT_PRECONDITION
+    before = json.loads(before)
+
+    center = q(scene_js(_ROW_CENTER_BODY))
+    if center is None:
+        print("the track row has no scene position", file=sys.stderr)
+        return EXIT_PRECONDITION
+
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QGuiApplication, QMouseEvent
+
+    point = QPointF(float(center.x()), float(center.y()))
+    QGuiApplication.instance().sendEvent(
+        _root,
+        QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            point,
+            point,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+    settle(300)
+
+    after = json.loads(str(q(scene_js(_GEOMETRY_BODY))))
+    failures = []
+    if not after["hovered"]:
+        failures.append("the pointer never engaged the row's own hover area")
+    for field in ("rowH", "rowW", "pairX", "pairY", "pairW", "dlX", "dlY", "dlW"):
+        if after[field] != before[field]:
+            failures.append(f"{field} moved under hover: {before[field]} -> {after[field]}")
+    if not after["pairVisible"]:
+        failures.append("the standalone pair is hidden")
+    if not (after["lyrics"] and after["cover"]):
+        failures.append(f"the standalone pair lost its LYRICS / COVER labels: {after}")
+    if failures:
+        for line in failures:
+            print(line, file=sys.stderr)
+        return EXIT_REGRESSED
+    print("ok")
+    return EXIT_OK
 
 
-def test_hover_never_toggles_visibility_inside_track_row():
-    block = _track_row_block()
-    # The extractor really scoped the row, not a fragment of it.
-    assert "StandalonePair" in block and "id: trowMa" in block
-    # Only the visible binding's own expression counts: a sibling prop on
-    # the same line (PlayBadge's hover-lit overlay) paints, never reflows.
-    offenders = []
-    for line in block.splitlines():
-        if "visible:" not in line:
-            continue
-        binding = line.split("visible:", 1)[1].split(";", 1)[0]
-        if "containsMouse" in binding or ".hovered" in binding:
-            offenders.append(line.strip())
-    assert offenders == [], f"hover-gated layout would reflow the row: {offenders}"
-
-
-def test_standalone_pair_is_always_visible_and_renamed():
-    text = QML_MAIN.read_text(encoding="utf-8")
-    assert '"LYRICS ONLY"' not in text and '"ART ONLY"' not in text
-    pair = re.search(r"component StandalonePair: Row \{(.*?)\n    \}", text, re.DOTALL)
-    assert pair is not None
-    assert 'text: "LYRICS"' in pair.group(1) and 'text: "COVER"' in pair.group(1)
-    block = _track_row_block()
-    instance = re.search(r"StandalonePair \{(.*?)\}", block, re.DOTALL)
-    assert instance is not None
-    assert "containsMouse" not in instance.group(1)
-    assert "compact: true" in instance.group(1)
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    sys.exit(_run_scenario())

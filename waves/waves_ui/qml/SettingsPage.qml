@@ -2764,7 +2764,6 @@ Item {
                                                     page.appleLoginOpen = !page.appleLoginOpen
                                                     page.appleWrapperLive = waves.appleWrapperAuth()
                                                 }
-                                                else if (actKey === "apple_setup") { page.appleSetupLive = waves.appleSetupState(); waves.refreshAppleSetup() }
                                             }
                                             Text {
                                                 text: modelData.label; color: page.textHi

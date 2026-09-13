@@ -13,14 +13,13 @@ matrix silently cuts off its bottom row).
 
 HOW THIS STAYS FIXED
 --------------------
-Static: the row's DotMatrix (objectName queueRowMatrix) declares rows 4, dot 3,
-gap 1, and is the only site that shades its outer rows (edgeSoft). Live: the
-real Main.qml is booted offscreen, a running row is seeded through the bridge,
+On the real Main.qml offscreen: a running row is seeded through the bridge,
 and the row's matrix must be exactly as tall as its slot, span the row (its
 width is the row's content width, not a fixed number), fade its ends over 28px
 (rounds 2-4 of the lab: the download face's conveyor fade, a shade shorter
 than a shelf's) and shade its top and bottom rows' cells from 15% at their
-outer edge (a gradient on those cells only; the middle rows stay flat).
+outer edge (a gradient on those cells only; the middle rows stay flat). The
+geometry is read off the rendered matrix, never off the QML source.
 
 Runs in a SUBPROCESS like the other Main.qml scenarios (shares
 ``support.qml.boot_main_qml``).
@@ -28,12 +27,11 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares
 
 from __future__ import annotations
 
-import re
+import json
 import sys
 from pathlib import Path
 
 import pytest
-from support.paths import QML_MAIN
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 
 _WALK = """
@@ -49,16 +47,21 @@ _WALK = """
  function mx(){ return walk(queueDrawer.contentItem, function(it){ return it.objectName === 'queueRowMatrix' }) }
 """
 
-
-def test_queue_row_bar_is_the_dense_grid():
-    src = QML_MAIN.read_text()
-    m = re.search(r'objectName: "queueRowMatrix"\s*\n.*\n\s*rows: (\d+); dot: (\d+); gap: (\d+)', src)
-    assert m, "the queue row's DotMatrix (queueRowMatrix) moved or lost its geometry line"
-    assert (m.group(1), m.group(2), m.group(3)) == ("4", "3", "1"), m.groups()
-    assert src.count("edgeSoft: 0.15") == 1, "exactly one site (the queue row) shades its outer rows"
-    a = src.index("component DotMatrix:")
-    dm = src[a : src.index("component ", a + 1)]
-    assert "property real edgeSoft: -1" in dm, "DotMatrix.edgeSoft must default to off"
+# Every DotMatrix in the drawer with its edgeSoft: only the queue row may
+# shade its outer rows, so every other matrix must keep the off default.
+_SOFTS = """
+ function softs(it){
+  var out = [];
+  function walk(o){
+   if (!o) return;
+   if (o.edgeSoft !== undefined) out.push([o.objectName, o.edgeSoft]);
+   var kids = o.children || [];
+   for (var i = 0; i < kids.length; i++) walk(kids[i].item || kids[i]);
+  }
+  walk(it);
+  return out;
+ }
+"""
 
 
 @pytest.mark.qml
@@ -131,6 +134,16 @@ def _scenario() -> int:
         failures.append(f"edgeSoft {soft}, wanted 0.15")
     if (tg, mg, bg) != (1, 0, 1):
         failures.append(f"outer-row shading gradients top/mid/bottom = {tg}/{mg}/{bg}, wanted 1/0/1")
+    shaded = [
+        entry
+        for entry in json.loads(
+            str(q("(function(){" + _SOFTS + " return JSON.stringify(softs(queueDrawer.contentItem)) })()"))
+        )
+        if entry[0] != "queueRowMatrix"
+    ]
+    for name, soft in shaded:
+        if abs(float(soft) + 1.0) > 1e-6:
+            failures.append(f"{name or 'another matrix'} shades its outer rows ({soft}); only the queue row may")
     for f in failures:
         print(f, file=sys.stderr)
     return EXIT_REGRESSED if failures else EXIT_OK

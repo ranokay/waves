@@ -236,6 +236,10 @@ ignore = [
 # The provider-logo scenario is the same boot -> drive -> assert shape: one
 # deliberately linear function (C901).
 "tests/providers/test_provider_logos.py" = ["C901"]
+# The setup-guidance and track-row scenarios keep the same shape: boot the real
+# Main.qml, drive one flow, assert on the rendered tree (C901).
+"tests/providers/apple/test_apple_setup_guidance.py" = ["C901"]
+"tests/ui/test_track_row_hover_stable.py" = ["C901"]
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
 "tests/library/test_library_bridge.py" = ["S603"]
