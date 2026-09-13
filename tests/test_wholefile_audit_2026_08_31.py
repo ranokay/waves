@@ -9,7 +9,7 @@ Each test states the user-visible sequence it prevents, and each was checked
 against the unfixed code first: reverting its fix turns the test red.
 
   A  a copy at its release's ceiling read as not-owned once the setting rose
-     (pinned in tests/test_ownership_ceiling.py, beside the rest of that
+     (pinned in tests/library/test_ownership_ceiling.py, beside the rest of that
      function's matrix)
   B  an honest delivery counted as a degraded attempt, freezing the upgrade
   D  a playlist entry listed twice landed a second, numbered copy

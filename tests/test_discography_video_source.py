@@ -167,7 +167,7 @@ class _DiscoStub:
 
     def _library_bulk_skip_on(self):
         # The bulk claim gate is off here, like a library-less install; its
-        # own filtering is covered by test_library_bridge.py.
+        # own filtering is covered by tests/library/test_library_bridge.py.
         return False
 
     def _remember(self, bucket, key, obj):

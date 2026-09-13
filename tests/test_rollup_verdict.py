@@ -17,7 +17,7 @@ Two layers:
     (not a dict the test invented).
 
 These import WavesBridge, so they collect only in the full runtime venv
-(PySide6 present), like tests/test_ownership_bridge.py.
+(PySide6 present), like tests/library/test_ownership_bridge.py.
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ class _InlinePool:
 
 def _bridge(store, *, quality):
     """The real ownershipOf/_rollup_verdict on a WavesBridge carcass (the same
-    shape tests/test_atmos_ownership_scale.py builds), so up_to_date is
+    shape tests/library/test_atmos_ownership_scale.py builds), so up_to_date is
     computed by production against the real _target_quality_rank."""
     b = WavesBridge.__new__(WavesBridge)
     b._ownership = store

@@ -109,7 +109,7 @@ def test_ownership_verdict_at_every_tier_boundary(rec, target_rank, verdict):
 
 class _OwnBridge:
     """The slice of WavesBridge that ownershipOf touches, bound onto a real
-    OwnershipStore (the shape tests/test_ownership_bridge.py uses), with the
+    OwnershipStore (the shape tests/library/test_ownership_bridge.py uses), with the
     refresh pool run inline so the second query serves the refreshed cache."""
 
     class _Pool:
