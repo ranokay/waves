@@ -1,19 +1,20 @@
 """Official provider logos live in qml/assets/providers/ and are the marks in use.
 
-Issue #58. The user-supplied official logos moved from the repo root into
-``waves/waves_ui/qml/assets/providers/`` and replaced the invented vector
-glyphs: Settings section headers show the logo image, and so do the search
-group headers and the Chooser provider segments. Each provider ships a light
-(white-on-transparent, for the app's dark surfaces, the one in use) and a
-dark (black-on-transparent, reserved for light backdrops such as the album
-provider badge in issue #69) variant. This file pins the asset placement
-and every reference, so a future edit cannot silently fall back to
-text-only headers or reintroduce the tide-lines / beamed-note glyphs.
+The asset placement test stays; the rendered scenario drives the real
+Main.qml and asserts each mark is a visible image with a real size on its own
+surface: the Settings Providers card's dual-logo tile, both search group
+headers and the Chooser's provider segments. A mark that is hidden,
+zero-sized or left off its surface fails.
 """
 
 from __future__ import annotations
 
-from support.paths import QML_DIR, QML_MAIN, REPO_ROOT
+import json
+import sys
+
+import pytest
+from support.paths import QML_DIR, REPO_ROOT
+from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 
 PROVIDERS = QML_DIR / "assets" / "providers"
 TIDAL = PROVIDERS / "tidal.png"
@@ -36,20 +37,202 @@ def test_logos_live_in_the_providers_asset_dir_and_not_at_the_root():
         assert not (REPO_ROOT / stray).exists()
 
 
-def test_settings_headers_use_the_logos_not_vector_glyphs():
-    src = (QML_DIR / "SettingsPage.qml").read_text()
-    assert '"assets/providers/tidal.png"' in src
-    assert '"assets/providers/apple-music.png"' in src
-    assert "function providerLogo(id)" in src
-    assert "logoSrc" in src
-    # The invented glyphs are retired: no provider case may remain in iconPath,
-    # or a section would have two competing marks.
-    assert "providers_tidal" not in src.split("function providerLogo(id)")[0].split("function iconPath(id)")[1]
-    assert "providers_apple" not in src.split("function providerLogo(id)")[0].split("function iconPath(id)")[1]
+@pytest.mark.qml
+def test_provider_marks_render_in_settings_search_and_chooser():
+    run_scenario(
+        __file__,
+        "--run-scenario",
+        timeout=180,
+        sandbox_prefix="waves-provider-logos-test-",
+        failure_message="a provider mark is not rendered where it belongs",
+    )
 
 
-def test_search_headers_and_chooser_segments_use_the_logos():
-    src = QML_MAIN.read_text()
-    # One reference per search group header plus one per Chooser segment.
-    assert src.count('"assets/providers/tidal.png"') >= 2
-    assert src.count('"assets/providers/apple-music.png"') >= 2
+# One scene walker for every query below: findObject matches an objectName,
+# findFirst matches a property predicate, and both descend through a Loader's
+# item and a Popup's contentItem.
+_FINDER_JS = """
+function findFirst(it, predicate) {
+    if (!it) return null;
+    if (predicate(it)) return it;
+    if (it.item) {
+        var loaded = findFirst(it.item, predicate);
+        if (loaded) return loaded;
+    }
+    if (it.contentItem) {
+        var content = findFirst(it.contentItem, predicate);
+        if (content) return content;
+    }
+    var kids = it.children || [];
+    for (var i = 0; i < kids.length; i++) {
+        var hit = findFirst(kids[i], predicate);
+        if (hit) return hit;
+    }
+    return null;
+}
+function findObject(it, name) {
+    return findFirst(it, function (o) { return o.objectName === name; });
+}
+"""
+
+# Every Image under the scope expression whose source names a provider asset,
+# as [source, visible, width, height]. Walking the live tree means a surface
+# that stopped drawing its mark cannot pass on the source string alone.
+_MARKS_BODY = """
+    function marks(it) {
+        var out = [];
+        function walk(o) {
+            if (!o) return;
+            if (o.source !== undefined) {
+                var s = "" + o.source;
+                if (s.indexOf("assets/providers/") !== -1)
+                    out.push([s, !!o.visible, o.width, o.height]);
+            }
+            if (o.contentItem) walk(o.contentItem);
+            if (o.item) walk(o.item);
+            var kids = o.children || [];
+            for (var i = 0; i < kids.length; i++) walk(kids[i]);
+        }
+        walk(it);
+        return JSON.stringify(out);
+    }
+    return marks(SCOPE);
+"""
+
+# The Providers card's dual-logo tile: the one Rectangle carrying both marks.
+_SETTINGS_TILE_JS = "findFirst(settingsPage, function (o) { return o.dualLogo === true; })"
+
+# The search row's Chooser button, opened through the control's own action. No
+# other state is set up here: openChooser() builds and refreshes the chooser
+# itself, exactly as the chevron's click does.
+_OPEN_CHOOSER_BODY = """
+    var db = findFirst(root.contentItem, function (o) {
+        return o.chooserKind !== undefined && ("" + o.mediaId) === "t1";
+    });
+    if (!db) return "no-button";
+    if (!db.showChooser) return "hidden:" + db.st + ":" + db.waiting;
+    db.openChooser();
+    return "opened";
+"""
+
+_POPOVER_JS = "findObject(root.contentItem, 'chooserPopover')"
+
+
+def _js(body: str) -> str:
+    return "(function () {" + _FINDER_JS + body + "})()"
+
+
+def _marks_expr(scope: str) -> str:
+    return _js(_MARKS_BODY.replace("SCOPE", scope))
+
+
+def _run_scenario() -> int:
+    booted = boot_main_qml()
+    if isinstance(booted, int):
+        return booted
+    _, q, settle, bridge = booted
+
+    q("legalSettings.termsAcceptedVersion = root.termsVersion")
+    q("legalSettings.termsAccepted = true")
+    q("setupSettings.providerPickerDone = true")
+    settle(200)
+
+    # Apple on: the Apple search group and the Chooser only exist with it.
+    q("waves.applySettings({'apple_enabled': true})")
+    q("root.refreshAppleEnabled()")
+    settle(300)
+
+    problems: list[str] = []
+
+    def visible_mark(scope: str, asset: str) -> list:
+        found = [m for m in json.loads(q(_marks_expr(scope))) if asset in m[0]]
+        return [m for m in found if m[1] and m[2] > 0 and m[3] > 0]
+
+    # 1. Settings: the Providers card's dual-logo tile, scoped to the tile so
+    # the card's provider bands cannot stand in for it.
+    q("settingsOpen = true")
+    settle(300)
+    q("settingsPage.jumpToCard('providers')")
+    settle(500)
+    for name, asset in (("TIDAL", "tidal.png"), ("APPLE MUSIC", "apple-music.png")):
+        if not visible_mark(_SETTINGS_TILE_JS, asset):
+            problems.append(f"the Settings Providers tile shows no visible {name} mark")
+
+    # 2. Search group headers, one per provider.
+    q("openSearch()")
+    settle(200)
+    track = {
+        "id": "t1",
+        "kind": "track",
+        "title": "Track",
+        "artist": "Artist",
+        "artist_id": "a1",
+        "album": "Album",
+        "album_id": "al1",
+        "num": 1,
+        "vol": 1,
+        "art": "",
+        "year": "2026",
+        "date": "2026-09-01",
+        "duration": "3:00",
+        "duration_sec": 180,
+        "quality": "LOSSLESS",
+        "popularity": 1,
+        "explicit": False,
+        "added": "",
+    }
+    payload = {
+        "artists": [],
+        "albums": [],
+        "tracks": [track],
+        "videos": [],
+        "playlists": [],
+        "mixes": [],
+        "top": None,
+        "apple": {
+            "artists": [],
+            "albums": [],
+            "tracks": [{**track, "id": "apple:t1"}],
+            "videos": [],
+            "playlists": [],
+            "mixes": [],
+            "top": None,
+        },
+    }
+    q("root._searchSeq = root._navSeq")
+    bridge.searchResults.emit(payload)
+    settle(500)
+    if not bool(q("tidalGroupHead.visible")):
+        problems.append("the TIDAL search group header did not appear")
+    if not bool(q("appleGroupHead.visible")):
+        problems.append("the Apple search group header did not appear")
+    for scope, name, asset in (
+        ("tidalGroupHead", "TIDAL", "tidal.png"),
+        ("appleGroupHead", "APPLE MUSIC", "apple-music.png"),
+    ):
+        if not visible_mark(scope, asset):
+            problems.append(f"the {name} search header shows no visible mark")
+
+    # 3. The Chooser's provider segments.
+    chooser = str(q(_js(_OPEN_CHOOSER_BODY)))
+    if chooser != "opened":
+        problems.append(f"the Chooser button would not open ({chooser})")
+    else:
+        settle(400)
+        if q(_js("    return findObject(root.contentItem, 'chooserPopover');")) is None:
+            problems.append("the Chooser popover did not open")
+        else:
+            for name, asset in (("TIDAL", "tidal.png"), ("APPLE MUSIC", "apple-music.png")):
+                if not visible_mark(_POPOVER_JS, asset):
+                    problems.append(f"the Chooser shows no visible {name} mark")
+
+    if problems:
+        for line in problems:
+            print(f"REGRESSED: {line}", file=sys.stderr)
+        return EXIT_REGRESSED
+    print("ok")
+    return EXIT_OK
+
+
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    sys.exit(_run_scenario())
