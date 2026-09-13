@@ -13,6 +13,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from support.provider_fakes import BareProvider
+
 from waves.constants import CTX_APPLE, CTX_TIDAL, QualityTier
 from waves.providers import AudioType, Capability, QualityOption
 from waves.providers.apple import AppleProvider
@@ -106,9 +108,7 @@ _QOBUZ = SimpleNamespace(
 # The declared metadata
 # --------------------------------------------------------------------------- #
 def test_the_base_metadata_defaults_are_neutral():
-    from tests.test_provider_seam import _BareProvider
-
-    bare = _BareProvider()
+    bare = BareProvider()
     assert bare.quality_options == ()
     assert bare.quality_setting == ""
     assert bare.audio_types == frozenset()
