@@ -39,7 +39,13 @@ import pytest
 # conftest import, before any test module is imported and before any path is
 # resolved from it. The subprocess scenarios copy this environment, so they
 # land in the same throwaway home unless they name one of their own.
+#
+# Nothing here ever un-sandboxes the session. The live account suite is the
+# exception that proves it: its module switches the variable back around its
+# own fixture only (see tests/account/test_live_account.py), so an ordinary
+# test can never touch the real profile, whatever the gate says.
 _TEST_CONFIG_HOME = tempfile.mkdtemp(prefix="waves-test-config-")
+ORIGINAL_XDG_CONFIG_HOME = os.environ.get("XDG_CONFIG_HOME")
 os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
 atexit.register(shutil.rmtree, _TEST_CONFIG_HOME, True)
 
@@ -125,17 +131,20 @@ def pytest_configure(config) -> None:
         raise pytest.UsageError("--require-qml was given but PySide6 is not importable")
 
 
+def _skip_marked(items, marker: str, reason: str) -> None:
+    skip = pytest.mark.skip(reason=reason)
+    for item in items:
+        if item.get_closest_marker(marker):
+            item.add_marker(skip)
+
+
 def pytest_collection_modifyitems(config, items) -> None:
     """Auto-skip marked tests only for a positively missing dependency."""
     from support import qml as qml_support
 
+    if os.environ.get("WAVES_ACCOUNT_TESTS") != "1":
+        _skip_marked(items, "account", "live account tests; set WAVES_ACCOUNT_TESTS=1 to run")
     if shutil.which("ffmpeg") is None:
-        skip_ffmpeg = pytest.mark.skip(reason="ffmpeg is not on PATH")
-        for item in items:
-            if item.get_closest_marker("ffmpeg"):
-                item.add_marker(skip_ffmpeg)
+        _skip_marked(items, "ffmpeg", "ffmpeg is not on PATH")
     if qml_support.missing_qt() and not qml_support.require_qml():
-        skip_qml = pytest.mark.skip(reason="PySide6 is not importable")
-        for item in items:
-            if item.get_closest_marker("qml"):
-                item.add_marker(skip_qml)
+        _skip_marked(items, "qml", "PySide6 is not importable")

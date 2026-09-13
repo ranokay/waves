@@ -81,6 +81,7 @@ markers = [
   "ffmpeg: uses a real ffmpeg/ffprobe binary (skipped when none is on PATH)",
   "integration: crosses a real process, disk store or service boundary (opt-in groups)",
   "platform: behavior that depends on the host platform",
+  "account: runs against the real Apple/TIDAL accounts (opt-in via WAVES_ACCOUNT_TESTS=1)",
 ]
 
 [tool.ruff]
@@ -236,6 +237,8 @@ ignore = [
 # The provider-logo scenario is the same boot -> drive -> assert shape: one
 # deliberately linear function (C901).
 "tests/providers/test_provider_logos.py" = ["C901"]
+# The live account suite probes a downloaded file with a fixed-argv ffprobe.
+"tests/account/test_live_account.py" = ["S603"]
 # The scenario files added for the T6 pass and the remaining item-21
 # additions keep the same shape: boot the real Main.qml, drive one flow and
 # assert on the rendered tree, as one deliberately linear function (C901).
