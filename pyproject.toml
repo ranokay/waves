@@ -239,6 +239,8 @@ ignore = [
 # The setup-guidance and track-row scenarios keep the same shape: boot the real
 # Main.qml, drive one flow, assert on the rendered tree (C901).
 "tests/providers/apple/test_apple_setup_guidance.py" = ["C901"]
+"tests/providers/apple/test_apple_probe_responsive.py" = ["C901"]
+"tests/ui/test_dual_version_queue_scenario.py" = ["C901"]
 "tests/ui/test_track_row_hover_stable.py" = ["C901"]
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
