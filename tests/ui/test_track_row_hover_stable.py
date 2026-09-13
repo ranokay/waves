@@ -43,15 +43,20 @@ _GEOMETRY_BODY = _TRACK_JS + """
         return false;
     });
     var dl = findFirst(row, function (o) { return o.chooserKind !== undefined; });
-    var hoverArea = findFirst(row, function (o) { return o.containsMouse !== undefined; });
+    var hoverArea = findFirst(row, function (o) {
+        return o.containsMouse !== undefined && o.width >= row.width - 2;
+    });
     return JSON.stringify({
         rowH: row.height,
+        rowW: row.width,
         pairVisible: pair ? !!pair.visible : false,
         pairX: pair ? pair.x : -1,
+        pairY: pair ? pair.y : -1,
         pairW: pair ? pair.width : -1,
         lyrics: pair ? !!findFirst(pair, function (o) { return o.text === "LYRICS"; }) : false,
         cover: pair ? !!findFirst(pair, function (o) { return o.text === "COVER"; }) : false,
         dlX: dl ? dl.x : -1,
+        dlY: dl ? dl.y : -1,
         dlW: dl ? dl.width : -1,
         hovered: hoverArea ? !!hoverArea.containsMouse : false
     });
@@ -144,7 +149,7 @@ def _run_scenario() -> int:
     failures = []
     if not after["hovered"]:
         failures.append("the pointer never engaged the row's own hover area")
-    for field in ("rowH", "pairX", "pairW", "dlX", "dlW"):
+    for field in ("rowH", "rowW", "pairX", "pairY", "pairW", "dlX", "dlY", "dlW"):
         if after[field] != before[field]:
             failures.append(f"{field} moved under hover: {before[field]} -> {after[field]}")
     if not after["pairVisible"]:

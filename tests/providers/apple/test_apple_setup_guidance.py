@@ -205,10 +205,9 @@ def _run_scenario() -> int:
         expected = [str(s.get("label", "")) for s in steps]
         rendered = str(q(scene_js(_STEPS_BODY)))
         shown = json.loads(rendered) if rendered else []
-        if not any(label in shown for label in expected):
-            failures.append(
-                f"the rebuilt wizard column renders none of its step labels (wanted {expected}, saw {shown})"
-            )
+        missing = [label for label in expected if label not in shown]
+        if missing:
+            failures.append(f"the wizard column renders no step(s) {missing} (saw {shown[:12]})")
 
     if failures:
         for line in failures:

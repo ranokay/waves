@@ -27,6 +27,7 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -44,6 +45,22 @@ _WALK = """
   return null;
  }
  function mx(){ return walk(queueDrawer.contentItem, function(it){ return it.objectName === 'queueRowMatrix' }) }
+"""
+
+# Every DotMatrix in the drawer with its edgeSoft: only the queue row may
+# shade its outer rows, so every other matrix must keep the off default.
+_SOFTS = """
+ function softs(it){
+  var out = [];
+  function walk(o){
+   if (!o) return;
+   if (o.edgeSoft !== undefined) out.push([o.objectName, o.edgeSoft]);
+   var kids = o.children || [];
+   for (var i = 0; i < kids.length; i++) walk(kids[i].item || kids[i]);
+  }
+  walk(it);
+  return out;
+ }
 """
 
 
@@ -117,6 +134,16 @@ def _scenario() -> int:
         failures.append(f"edgeSoft {soft}, wanted 0.15")
     if (tg, mg, bg) != (1, 0, 1):
         failures.append(f"outer-row shading gradients top/mid/bottom = {tg}/{mg}/{bg}, wanted 1/0/1")
+    shaded = [
+        entry
+        for entry in json.loads(
+            str(q("(function(){" + _SOFTS + " return JSON.stringify(softs(queueDrawer.contentItem)) })()"))
+        )
+        if entry[0] != "queueRowMatrix"
+    ]
+    for name, soft in shaded:
+        if abs(float(soft) + 1.0) > 1e-6:
+            failures.append(f"{name or 'another matrix'} shades its outer rows ({soft}); only the queue row may")
     for f in failures:
         print(f, file=sys.stderr)
     return EXIT_REGRESSED if failures else EXIT_OK

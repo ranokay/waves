@@ -25,9 +25,9 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+from support.provider_fakes import BareProvider
 
 import waves.waves_ui.backend as backend
-from waves.providers import Provider
 from waves.waves_ui.backend import WavesBridge
 
 # --------------------------------------------------------------------------- #
@@ -97,8 +97,7 @@ class TestTheStaticContract:
 
     def test_the_credential_event_stays_wired_to_the_redactor(self):
         # The one allowed touch: the engine's session credential event feeds
-        # the diagnostics redactor. The engine hand-off count is deliberately
-        # unpinned; the next test proves no account road depends on it.
+        # the diagnostics redactor.
         source = BACKEND_PATH.read_text(encoding="utf-8")
         assert "self.tidal.on_session_credentials = self._register_session_secrets" in source
 
@@ -204,14 +203,14 @@ class _FakeProvider:
         return self._answer("user_collections", "user_collections")
 
 
-class _ThirdProvider(Provider):
+class _ThirdProvider(BareProvider):
     """A provider that is neither the TIDAL nor the Apple implementation: it
-    satisfies only the declared ``Provider`` contract and records every verb
-    the bridge calls. Any account road that works here needs no
-    provider-shaped branch."""
+    inherits the bare contract's whole fused interface and overrides the
+    account verbs to record what the bridge calls. Any account road that
+    works here needs no provider-shaped branch."""
 
-    name = "third"
-    capabilities = frozenset()
+    id = "third"
+    name = "Third"
 
     def __init__(self):
         self.calls: list[tuple] = []
@@ -219,120 +218,31 @@ class _ThirdProvider(Provider):
     def _call(self, verb, *args):
         self.calls.append((verb, *args))
 
-    def login_begin(self) -> str:
+    def login_begin(self):
         self._call("login_begin")
         return "https://third.test/authorize"
 
-    def login_complete(self, payload: str) -> bool:
+    def login_complete(self, payload):
         self._call("login_complete", payload)
         return True
 
-    def logout(self) -> None:
+    def logout(self):
         self._call("logout")
 
-    def login_resume(self) -> bool:
+    def login_resume(self):
         self._call("login_resume")
         return False
 
-    def reset_session(self) -> None:
+    def reset_session(self):
         self._call("reset_session")
 
-    def account_id(self) -> str:
+    def account_id(self):
         self._call("account_id")
         return "3"
 
-    def credential_facts(self) -> dict[str, str]:
+    def credential_facts(self):
         self._call("credential_facts")
-        return {}
-
-    def is_logged_in(self) -> bool:
-        self._call("is_logged_in")
-        return False
-
-    def apply_quality(self, tier, audio_type) -> None:
-        self._call("apply_quality", tier, audio_type)
-
-    def search(self, needle: str) -> dict:
-        self._call("search", needle)
-        return {}
-
-    def open_url(self, url: str):
-        self._call("open_url", url)
-        return None
-
-    def get_object(self, kind: str, raw_id: str):
-        self._call("get_object", kind, raw_id)
-        return None
-
-    def collection_items(self, obj, include_videos: bool = True) -> list:
-        self._call("collection_items", obj, include_videos)
-        return []
-
-    def user_collections(self) -> dict | None:
-        self._call("user_collections")
-        return {}
-
-    # The rest of the declared interface: neutral answers, recorded like the
-    # account verbs, so the fake stays a full Provider as more roads grow.
-    def advertised_tier(self, *args, **kwargs):
-        self._call("advertised_tier", *args)
-        return None
-
-    def advertised_ceiling(self, *args, **kwargs):
-        self._call("advertised_ceiling", *args)
-        return None
-
-    def advertised_deliveries(self, *args, **kwargs):
-        self._call("advertised_deliveries", *args)
-        return ()
-
-    def browse_home(self, *args, **kwargs):
-        self._call("browse_home", *args)
-        return None
-
-    def browse_page(self, *args, **kwargs):
-        self._call("browse_page", *args)
-        return None
-
-    def browse_window(self, *args, **kwargs):
-        self._call("browse_window", *args)
-        return None
-
-    def classify_refusal(self, *args, **kwargs):
-        self._call("classify_refusal", *args)
-        return None
-
-    def cover_url(self, *args, **kwargs):
-        self._call("cover_url", *args)
-        return ""
-
-    def favorite_ids(self, *args, **kwargs):
-        self._call("favorite_ids", *args)
-        return set()
-
-    def favorites_page(self, *args, **kwargs):
-        self._call("favorites_page", *args)
-        return ([], False)
-
-    def fetch_lyrics(self, *args, **kwargs):
-        self._call("fetch_lyrics", *args)
-        return None
-
-    def folder_tree(self, *args, **kwargs):
-        self._call("folder_tree", *args)
-        return None
-
-    def resolve_stream(self, *args, **kwargs):
-        self._call("resolve_stream", *args)
-        return None
-
-    def search_tracks(self, *args, **kwargs):
-        self._call("search_tracks", *args)
-        return []
-
-    def track_facts(self, *args, **kwargs):
-        self._call("track_facts", *args)
-        return None
+        return {"access_token": "third-token"}
 
 
 class _InlinePool:
@@ -380,6 +290,51 @@ class _AuthStub:
 
     def _prefetch_tile_art(self) -> None:
         self.prefetch_called = True
+
+
+def _seed_session_state(stub) -> None:
+    """The cache-clearing state logout's own policy walks."""
+    for name, value in {
+        "_logged_in": True,
+        "_lib_cache": {},
+        "_lib_loading": {},
+        "_lib_sort": {},
+        "_fav_ids": {},
+        "_pending_lock": threading.Lock(),
+        "_pending_downloads": [],
+        "_lib_gen": 0,
+        "_browse_root_cache": None,
+        "_browse_pages": {},
+        "_browse_loading": set(),
+        "_category_pl": {},
+        "_browse_gen": 0,
+        "_browse_reval_ts": 1.0,
+        "_prefetch_lock": threading.Lock(),
+        "_prefetch_key": None,
+        "_prefetch_claimed": False,
+        "_prefetch_unrecorded": set(),
+        "_album_tracks_inflight": {},
+        "_album_tracks_unrecorded": set(),
+        "_item_fetch_ts": {},
+        "_artist_cache": {},
+        "_artist_loading": {},
+        "_album_tracks_cache": {},
+        "_edition_tracks_cache": {},
+        "_home_cache": None,
+        "_home_loading": False,
+        "_home_reval_ts": 1.0,
+        "_lib_reval_ts": {},
+        "_media_lists_cache": None,
+        "_folder_tree": None,
+        "_tree_warm_waiting": [],
+        "_search_cache": {},
+        "_search_gen": 0,
+        "_artist_pop_cache": {},
+        "_objs_lock": threading.Lock(),
+        "_objs": {"artist": {}, "album": {}, "track": {}, "video": {}, "playlist": {}, "mix": {}},
+        "_page_cache_path": "/nonexistent/page_cache.json",
+    }.items():
+        setattr(stub, name, value)
 
 
 class TestTheSessionLifecycle:
@@ -470,48 +425,7 @@ class TestTheSessionLifecycle:
     def test_logout_signs_out_through_the_provider_and_rebuilds(self):
         stub = self._stub(logout=None, reset_session=None)
         stub.stopAll = lambda: None
-        # The cache-clearing half is logout's own policy; give it the state.
-        for name, value in {
-            "_logged_in": True,
-            "_lib_cache": {},
-            "_lib_loading": {},
-            "_lib_sort": {},
-            "_fav_ids": {},
-            "_pending_lock": threading.Lock(),
-            "_pending_downloads": [],
-            "_lib_gen": 0,
-            "_browse_root_cache": None,
-            "_browse_pages": {},
-            "_browse_loading": set(),
-            "_category_pl": {},
-            "_browse_gen": 0,
-            "_browse_reval_ts": 1.0,
-            "_prefetch_lock": threading.Lock(),
-            "_prefetch_key": None,
-            "_prefetch_claimed": False,
-            "_prefetch_unrecorded": set(),
-            "_album_tracks_inflight": {},
-            "_album_tracks_unrecorded": set(),
-            "_item_fetch_ts": {},
-            "_artist_cache": {},
-            "_artist_loading": {},
-            "_album_tracks_cache": {},
-            "_edition_tracks_cache": {},
-            "_home_cache": None,
-            "_home_loading": False,
-            "_home_reval_ts": 1.0,
-            "_lib_reval_ts": {},
-            "_media_lists_cache": None,
-            "_folder_tree": None,
-            "_tree_warm_waiting": [],
-            "_search_cache": {},
-            "_search_gen": 0,
-            "_artist_pop_cache": {},
-            "_objs_lock": threading.Lock(),
-            "_objs": {"artist": {}, "album": {}, "track": {}, "video": {}, "playlist": {}, "mix": {}},
-            "_page_cache_path": "/nonexistent/page_cache.json",
-        }.items():
-            setattr(stub, name, value)
+        _seed_session_state(stub)
 
         self._run(stub, "logout")
 
@@ -529,29 +443,41 @@ class TestTheSessionLifecycle:
 
         assert WavesBridge._cache_user_id.__get__(stub, type(stub))() == ""
 
-    def test_a_third_provider_that_satisfies_the_contract_drives_the_roads(self):
-        """The capability check the exact-hand-off count could not give: a
-        provider implementing only the declared ``Provider`` interface drives
-        the account roads, so no road needs a TIDAL- or Apple-shaped
-        branch. The guard ``tidal`` object proves the bridge never fell back
-        to the concrete session either."""
+    def test_a_third_provider_that_satisfies_the_contract_drives_the_roads(self, monkeypatch):
+        """A provider that inherits the whole declared ``Provider`` interface
+        drives every account road, so no road branches on the TIDAL or Apple
+        identity. The guard ``tidal`` object proves the bridge never fell
+        back to the concrete session either."""
+        registered: list[tuple[str, str]] = []
+        monkeypatch.setattr(backend.diagnostics, "register_secret", lambda val, tag: registered.append((val, tag)))
         provider = _ThirdProvider()
         stub = _AuthStub(provider)
         stub.logged_in_calls = []
         stub.page_cache_loaded = False
         stub.init_download_called = False
         stub.prefetch_called = False
+        stub._session_resolved = False
+        stub.sessionResolvedChanged = _Signal()
 
         self._run(stub, "beginLogin")
         self._run(stub, "completeLogin", "https://third.test/redirect?code=1")
+        self._run(stub, "_try_token_login")
+        self._run(stub, "_register_session_secrets")
         assert WavesBridge._cache_user_id.__get__(stub, type(stub))() == "3"
+        _seed_session_state(stub)
+        stub.stopAll = lambda: None
+        self._run(stub, "logout")
 
         assert provider.calls == [
             ("login_begin",),
             ("login_complete", "https://third.test/redirect?code=1"),
+            ("login_resume",),
+            ("credential_facts",),
             ("account_id",),
+            ("logout",),
+            ("reset_session",),
         ]
-        assert stub.statuses[-1] == "Signed in"
+        assert ("third-token", "‹token›") in registered
 
 
 class TestTheRedactorRegistration:
