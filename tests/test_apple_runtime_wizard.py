@@ -935,9 +935,10 @@ def test_no_apple_module_touches_user_gamdl_config():
     # Waves owns its engine config surface: no Apple path may resolve a file
     # under the user's home gamdl config. Mentions in comments/docstrings
     # (documenting the ban) are fine; filesystem access is not.
-    root = Path(__file__).resolve().parent.parent / "waves"
+    root = Path(__file__).resolve().parent.parent / "waves" / "providers" / "apple"
+    assert list(root.rglob("*.py")), "no Apple modules found: point this guard at the package's new home"
     hits = []
-    for path in [*(root).rglob("apple*.py"), root / "providers" / "apple.py"]:
+    for path in sorted(root.rglob("*.py")):
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
@@ -946,7 +947,7 @@ def test_no_apple_module_touches_user_gamdl_config():
             if marker in text:
                 # The runtime module names the banned path only to say it
                 # never touches it; that is the one allowed mention.
-                if path.name == "apple_runtime.py" and marker in ("config.ini", ".gamdl/config"):
+                if path.name == "runtime.py" and marker in ("config.ini", ".gamdl/config"):
                     continue
                 hits.append(f"{path.name}: {marker}")
     assert hits == []

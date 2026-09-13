@@ -27,12 +27,12 @@ import re
 import time
 from pathlib import Path
 
-logger = logging.getLogger("waves.providers.apple.supervision")
-
 # The held-not-failed verdicts are canonical in the engine (the sidecar's own
 # errors subclass them there); this module re-exports them so callers read
 # one hierarchy, never two same-named ones.
-from waves.providers.apple.engine import AppleHeld, AppleWrapperDown  # noqa: E402
+from waves.providers.apple.engine import AppleHeld, AppleWrapperDown
+
+logger = logging.getLogger("waves.providers.apple.supervision")
 
 __all__ = [
     "AppleHeld",
