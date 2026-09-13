@@ -8,17 +8,14 @@ provider from the page key, so no wrong badge flashes before the payload.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
+from support.qml import run_scenario
 
 QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 _EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
 
 
 def _scenario() -> int:
@@ -27,18 +24,16 @@ def _scenario() -> int:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
-    except Exception:
+    except ImportError as exc:
+        print(f"PySide6 unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
-    try:
-        from _qml_offline import PARK_LOGIN_QML, patch_offline
+    from _qml_offline import PARK_LOGIN_QML, patch_offline
 
-        patch_offline()
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
-    except Exception:
-        return _EXIT_NO_QT
+    patch_offline()
+    from waves.waves_ui.app import _load_mono
+    from waves.waves_ui.backend import WavesBridge
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -47,7 +42,7 @@ def _scenario() -> int:
     engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
     if not engine.rootObjects():
-        return _EXIT_PRECONDITION
+        raise RuntimeError("Main.qml loaded no root object")
     root = engine.rootObjects()[0]
     root.setProperty("width", 1100)
     root.setProperty("height", 900)
@@ -126,22 +121,9 @@ def _scenario() -> int:
     return 0 if ok and artist_hidden_ok else 1
 
 
+@pytest.mark.qml
 def test_provider_badge_on_drill_headers():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-provider-badge-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip("could not load Main.qml in this environment")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    run_scenario(Path(__file__), "--run-scenario", timeout=120, sandbox_prefix="waves-provider-badge-test-")
 
 
 if __name__ == "__main__" and "--run-scenario" in sys.argv:

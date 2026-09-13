@@ -27,8 +27,6 @@ from waves.providers.apple.integrity import (
 )
 from waves.waves_ui.backend import WavesBridge
 
-needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-
 
 def _ffmpeg() -> str:
     path = shutil.which("ffmpeg")
@@ -542,7 +540,7 @@ def test_ownership_skiplist_is_per_version(tmp_path):
 # ----- verification + retry + quarantine ------------------------------------
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_corrupt_staged_file_fails_verification(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
     from waves.providers.apple.engine import AppleIntegrityError
@@ -560,7 +558,7 @@ def test_corrupt_staged_file_fails_verification(tmp_path, monkeypatch):
         runner.verify_staged(stub._apple_job_hooks(), bad, expect_atmos=False)
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_known_bad_fixture_quarantines_and_fails_in_plain_words(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -602,7 +600,7 @@ def test_known_bad_fixture_quarantines_and_fails_in_plain_words(tmp_path, monkey
     assert not (base / "Aphex Twin" / "Xtal.m4a").exists()
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_outbreak_era_file_quarantines_after_one_retry(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -636,7 +634,7 @@ def test_outbreak_era_file_quarantines_after_one_retry(tmp_path, monkeypatch):
     assert len(provider.fetched) == 2
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_clean_album_downloads_normally_after_a_quarantine(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -665,7 +663,7 @@ def test_clean_album_downloads_normally_after_a_quarantine(tmp_path, monkeypatch
     assert (base / "Aphex Twin" / "Xtal.m4a").is_file()
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_skiplisted_track_autoskips_bulk_runs_plainly(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -697,7 +695,7 @@ def test_skiplisted_track_autoskips_bulk_runs_plainly(tmp_path, monkeypatch):
     assert any(ev.get("status") == "skipped" for ev in relay.events)
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_redownload_reattempts_and_clears_when_apple_reencodes(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -730,7 +728,7 @@ def test_redownload_reattempts_and_clears_when_apple_reencodes(tmp_path, monkeyp
     assert store.is_quarantined("apple:song-1", "stereo") is None
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_corrupt_atmos_never_blocks_its_stereo_sibling(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -783,7 +781,7 @@ def test_stereo_verification_accepts_alac_for_the_wrapper_tier(tmp_path, monkeyp
     runner.verify_staged(stub._apple_job_hooks(), good, expect_atmos=False)
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_retry_spec_bypasses_the_skiplist(tmp_path, monkeypatch):
     """A retried row carries is_retry on its spec and bypasses the auto-skip;
     a fresh click afterwards skips again (REDOWNLOAD stays the way back)."""
@@ -819,7 +817,7 @@ def test_retry_spec_bypasses_the_skiplist(tmp_path, monkeypatch):
     assert store.is_quarantined("apple:song-1", "stereo") is None
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_resolve_stage_integrity_failure_retries_and_marks_the_skiplist(tmp_path, monkeypatch):
     """The engine's own decode check can raise from resolve_stream (no staged
     file): the retry/quarantine path still applies, minus the quarantine bytes."""
@@ -860,7 +858,7 @@ def test_resolve_stage_integrity_failure_retries_and_marks_the_skiplist(tmp_path
     assert not list((base / QUARANTINE_DIR_NAME).rglob("*.m4a"))
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_retry_bypass_covers_every_track_of_a_collection(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -914,7 +912,7 @@ def test_retry_bypass_covers_every_track_of_a_collection(tmp_path, monkeypatch):
     assert len(provider.fetched) == 2
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_atmos_rejects_plain_ac3(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
     from waves.providers.apple.engine import AppleDownloadError
@@ -933,7 +931,7 @@ def test_atmos_rejects_plain_ac3(tmp_path, monkeypatch):
         runner.verify_staged(stub._apple_job_hooks(), bad, expect_atmos=True)
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_success_after_a_retry_leaves_no_hold_dirs(tmp_path, monkeypatch):
 
     from waves.providers.apple import engine as apple_engine
@@ -969,7 +967,7 @@ def test_success_after_a_retry_leaves_no_hold_dirs(tmp_path, monkeypatch):
     assert leftovers == []
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_engine_rejected_bytes_are_quarantined_with_their_date(tmp_path, monkeypatch):
     """An integrity failure raised from resolve_stream carries the rejected
     bytes on the exception (the engine transfers workdir ownership outward):
@@ -1023,7 +1021,7 @@ def test_engine_rejected_bytes_are_quarantined_with_their_date(tmp_path, monkeyp
     assert (base / "Aphex Twin" / "Xtal.m4a").is_file()
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
     from waves.providers.apple.engine import AppleIntegrityError
@@ -1093,7 +1091,7 @@ def test_custom_quarantine_cached_rows_retire_on_rescan(tmp_path):
         idx.close()
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
     """Two failed rows sharing one media_id each carry is_retry on their own
     spec, so both Version jobs bypass on their own with nothing counted,
@@ -1146,7 +1144,7 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
     assert store.is_quarantined("apple:song-1", "atmos") is None
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
 
     from waves.providers.apple import engine as apple_engine
@@ -1207,7 +1205,7 @@ def test_quarantine_sidecar_remembers_previous_roots(tmp_path):
     assert known_quarantine_dirs(config) == [str(tmp_path / "Q1"), str(tmp_path / "Q2")]
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
     """An Atmos ask for a stereo-only track falls back: the failure is filed
     under stereo, so the next stereo run sees the mark instead of refetching."""
@@ -1285,7 +1283,7 @@ def test_quarantine_sidecar_keeps_every_root(tmp_path):
     assert len(known_quarantine_dirs(config)) == 12
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_resolve_stage_failure_files_under_effective_version(tmp_path, monkeypatch):
     """An engine-raised integrity failure (no StreamInfo) still files under
     the effective Version: an Atmos ask for a stereo-only track lands under

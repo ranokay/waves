@@ -164,16 +164,13 @@ def test_ffprobe_prefers_the_ffmpeg_sibling(tmp_path, monkeypatch):
     assert engine.ffprobe_for(str(tmp_path / "nowhere" / "ffmpeg")) == ""
 
 
-needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-
-
 def _ffmpeg() -> str:
     path = shutil.which("ffmpeg")
-    assert path is not None  # guarded by needs_ffmpeg
+    assert path is not None  # guarded by the ffmpeg marker
     return path
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_decode_check_accepts_clean_audio_and_rejects_garbage(tmp_path):
     import subprocess
 

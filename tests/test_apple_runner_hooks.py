@@ -19,8 +19,6 @@ import pytest
 from waves.constants import QualityTier, quality_rank
 from waves.providers.apple import runner
 
-needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-
 
 def _tone(path: Path) -> None:
     subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
@@ -153,7 +151,7 @@ def _settings(base: Path):
     )
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_one_job_lands_through_a_minimal_hooks_object(tmp_path):
     staged = tmp_path / "staged.m4a"
     _tone(staged)

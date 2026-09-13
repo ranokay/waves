@@ -18,12 +18,10 @@ from waves.providers.apple import runner
 from waves.providers.base import AudioType
 from waves.waves_ui.backend import WavesBridge
 
-needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-
 
 def _ffmpeg() -> str:
     path = shutil.which("ffmpeg")
-    assert path is not None  # guarded by needs_ffmpeg
+    assert path is not None  # guarded by the ffmpeg marker
     return path
 
 
@@ -336,7 +334,7 @@ def _tone(path: Path):
     )
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -378,7 +376,7 @@ def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
     assert provider.discarded == [str(staged)]
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkeypatch):
     """The row's pinned ask reaches resolve_stream even when Settings disagree."""
     from waves.providers.apple import engine as apple_engine
@@ -416,7 +414,7 @@ def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkey
     assert agreed.tiers == [QualityTier.HIGH]
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_embed_toggle_governs_lyrics_embedding(tmp_path, monkeypatch):
     """Sidecar-only lyrics land as files; the audio embeds only when on."""
     import mutagen.mp4
@@ -465,7 +463,7 @@ def test_embed_toggle_governs_lyrics_embedding(tmp_path, monkeypatch):
     assert not (embedded_only.parent / "Xtal.lrc").exists()
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_chooser_toggles_layer_over_settings_for_one_job(tmp_path, monkeypatch):
     """A job spec's per-click toggles win over the contradicting Settings."""
     import mutagen.mp4
@@ -549,7 +547,7 @@ def test_apple_folder_hold_replays_with_the_same_toggle_pins():
     assert calls and calls[0]["chooser_toggles"] == {"lyrics_embed": True}
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_owned_track_skips_without_fetching(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -616,7 +614,7 @@ def test_gate_without_a_store_never_gates():
     )
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_both_default_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -904,7 +902,7 @@ def test_second_click_on_a_queued_row_acknowledges_without_requeueing(tmp_path):
     assert ("apple:album-1", "queued") in stub.downloadState.emits
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_stale_owned_copy_forces_an_in_place_overwrite(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -986,7 +984,7 @@ def test_row_object_falls_back_to_the_provider_cache(tmp_path):
     assert row["id"] == "apple:album-1"
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_lone_track_files_no_cover_without_the_single_track_option(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -1015,7 +1013,7 @@ def test_lone_track_files_no_cover_without_the_single_track_option(tmp_path, mon
     assert not (base / "Aphex Twin" / "cover.jpg").exists()
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_album_job_writes_the_promised_playlist_file(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -1048,7 +1046,7 @@ def test_album_job_writes_the_promised_playlist_file(tmp_path, monkeypatch):
     assert playlist.read_text().splitlines() == ["Xtal.m4a"]
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     from waves.providers.apple import AppleProvider as _RealProvider
     from waves.providers.apple import engine as apple_engine
@@ -1099,7 +1097,7 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     assert next(ev for ev in relay.events if ev.get("status") == "done")
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
 
@@ -1155,7 +1153,7 @@ def test_place_file_leaves_no_partials(tmp_path):
     assert list(tmp_path.rglob("*.part-*")) == []
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_a_long_throttle_keeps_retrying_instead_of_failing(tmp_path, monkeypatch):
     from waves.providers.apple import AppleProvider as _RealProvider
     from waves.providers.apple import engine as apple_engine
@@ -1200,7 +1198,7 @@ def test_a_long_throttle_keeps_retrying_instead_of_failing(tmp_path, monkeypatch
     assert not any(ev.get("status") == "failed" for ev in relay.events)
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
     from waves.providers.apple.engine import AppleCredentialsError
@@ -1254,7 +1252,7 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     assert not any(ev.get("status") == "failed" for ev in relay.events)
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
     from waves.providers.apple.engine import AppleCredentialsError
@@ -1408,7 +1406,7 @@ def _run_three_track_album(provider, base: Path):
     return summary, relay
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_album_job_reuses_a_carried_probe_without_probing_or_decoding(tmp_path, monkeypatch):
     """A delivery carrying the engine's verified probe costs the runner zero
     ffprobe and zero decode calls, for every track of the album."""
@@ -1437,7 +1435,7 @@ def test_album_job_reuses_a_carried_probe_without_probing_or_decoding(tmp_path, 
     assert sorted(path.name for path in base.rglob("*.m4a")) == ["Track 1.m4a", "Track 2.m4a", "Track 3.m4a"]
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_album_job_still_verifies_tracks_without_a_carried_probe(tmp_path, monkeypatch):
     """Probe-less deliveries keep the pre-swap verification and the landed
     read: one ffprobe each per track, one decode for the verification."""
@@ -1548,7 +1546,7 @@ def test_job_body_closes_the_fetch_session_when_the_job_fails(tmp_path):
     assert events == ["enter", "exit"]
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_atmos_album_reuses_a_carried_atmos_probe(tmp_path, monkeypatch):
     """An Atmos delivery's carried eac3 probe answers the runner's checks."""
     from waves.providers.apple import engine as apple_engine

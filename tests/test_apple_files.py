@@ -147,16 +147,13 @@ def test_sidecars_land_beside_the_track(tmp_path):
     assert write_cover_sidecar(tmp_path, b"") is None
 
 
-needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-
-
 def _ffmpeg() -> str:
     path = shutil.which("ffmpeg")
-    assert path is not None  # guarded by needs_ffmpeg
+    assert path is not None  # guarded by the ffmpeg marker
     return path
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_tag_apple_file_writes_generic_only_tags(tmp_path):
     src = tmp_path / "src.m4a"
     subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
@@ -223,7 +220,7 @@ def test_sniff_image_format_reads_magic_bytes():
     assert sniff_image_format(b"") == ""
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_cover_sidecar_converts_to_the_selected_format(tmp_path):
     from waves.metadata import sniff_image_format
 
@@ -259,7 +256,7 @@ def test_sidecar_without_a_converter_keeps_the_true_extension(tmp_path, monkeypa
     assert target.read_bytes() == jpeg, "the served bytes are never relabelled"
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_embedded_png_cover_keeps_its_true_format(tmp_path):
     import mutagen.flac
 
@@ -295,7 +292,7 @@ def test_embedded_png_cover_keeps_its_true_format(tmp_path):
     assert mutagen.flac.FLAC(str(flac_src)).pictures[0].mime == "image/png"
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_embed_cover_bytes_converts_png_for_the_tag(tmp_path):
     from types import SimpleNamespace
 
