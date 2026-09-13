@@ -1541,6 +1541,15 @@ def _apple_provision_port(data, manager) -> int:
     return int(manager.ensure_port(preferred) or 0)
 
 
+class _AppleSetupRequired(Exception):
+    """The wrapper tier cannot start without the user finishing setup.
+
+    Raised by the sidecar ensure when repeated start attempts fail, so the
+    job fails with the setup words and the wizard can open instead of a row
+    holding forever with nowhere to go.
+    """
+
+
 def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int | None = None) -> bool:
     """Is the copy already on disk as good as what a download queued now would
     write, so that fetching it again would achieve nothing?
@@ -4474,6 +4483,10 @@ class WavesBridge(LibraryMixin, QObject):
         # them) and never has to re-fetch it, which across a STOPPED
         # discography would be one request per album.
         self._job_objs: dict[int, object] = {}
+        # Quarantined copies one failed row produced (qid -> paths). The row
+        # carries a count so the drawer can offer open/delete; the paths stay
+        # here so removing or retrying the row cannot strand them in QML.
+        self._apple_quarantine_paths: dict[int, list[str]] = {}
         # (base path, monotonic stamp) of the last write known to have landed
         # in the download folder: a finished track's file or a passed probe.
         # _gate_reachability skips the write probe inside this freshness
@@ -8593,6 +8606,12 @@ class WavesBridge(LibraryMixin, QObject):
             self._queue = [it for it in self._queue if not pred(it)]
             self._reindex_queue()
             self._qdirty_removed.extend(gone)
+            # A withdrawn row's quarantine paths are unreachable from the UI
+            # with it; the bytes stay on disk for the skip-list's account.
+            paths = getattr(self, "_apple_quarantine_paths", None)
+            if paths:
+                for qid in gone:
+                    paths.pop(qid, None)
             forced = self._redownload_overrides
             # registerRedownload marks BOTH sets, so releasing only the first
             # left the withdrawn item exempt from the library scan's bulk
@@ -9499,6 +9518,10 @@ class WavesBridge(LibraryMixin, QObject):
             # reads the provider's stored options. Pinned like the quality so
             # a retry asks with the same options.
             "askToggles": dict(ask_toggles or {}),
+            # How many quarantined copies this row's job wrote (Apple
+            # integrity failures only). The drawer shows open/delete actions
+            # while it is nonzero; the paths themselves stay bridge-side.
+            "quarantineCount": 0,
         }
         with self._queue_lock:
             self._queue.append(row)
@@ -9525,6 +9548,11 @@ class WavesBridge(LibraryMixin, QObject):
             return
         reason = str(reason or "")
         if item["status"] == status and item.get("reason", "") == reason:
+            return
+        if status == "cancelled" and not reason and item["status"] == "cancelled" and item.get("reason", ""):
+            # A stop that already gave the row its words (the provider was
+            # disabled) is the one the user reads: the worker's wordless
+            # settle that follows must not erase them.
             return
         item["status"] = status
         item["reason"] = reason
@@ -13140,6 +13168,11 @@ class WavesBridge(LibraryMixin, QObject):
         if need_wrapper:
             try:
                 ensured = self._apple_ensure_sidecar(qid, job_abort, need_wrapper=True)
+            except _AppleSetupRequired as exc:
+                # The runtime cannot come back on its own: fail with the setup
+                # words so the row is retryable once setup works, never a
+                # forever hold.
+                _raise_download_incomplete(str(exc))
             except Exception:
                 logger.debug("Apple sidecar ensure failed; proceeding to fetch", exc_info=True)
                 ensured = True
@@ -13260,6 +13293,7 @@ class WavesBridge(LibraryMixin, QObject):
                             job_abort=job_abort,
                             signals=signals,
                             options=options,
+                            qid=qid,
                         )
                         break
                     except Exception as exc:
@@ -13278,8 +13312,10 @@ class WavesBridge(LibraryMixin, QObject):
                             if not self._apple_wait_for_session(provider, job_abort):
                                 raise _AppleAborted() from exc
                             continue
-                        # A dead sidecar holds the row, never fails it: one
-                        # clear message, automatic resume when it returns.
+                        # A dead sidecar holds the row while a return is
+                        # plausible: one clear message, automatic resume. A
+                        # runtime that will not start ends the run through
+                        # the ensure's setup verdict instead of holding on.
                         try:
                             from waves.apple_supervision import is_wrapper_down_error
                         except Exception:
@@ -13294,6 +13330,11 @@ class WavesBridge(LibraryMixin, QObject):
                                 self._apple_set_held(qid)
                             try:
                                 ensured = self._apple_ensure_sidecar(qid, job_abort, need_wrapper=True)
+                            except _AppleSetupRequired:
+                                # The runtime cannot come back on its own: the
+                                # track handler below ends the run with the
+                                # setup words instead of holding again.
+                                raise
                             except Exception:
                                 logger.debug("Apple sidecar re-ensure failed", exc_info=True)
                                 ensured = False
@@ -13339,6 +13380,10 @@ class WavesBridge(LibraryMixin, QObject):
                 continue
             except _AppleAborted:
                 break
+            except _AppleSetupRequired as exc:
+                # The runtime cannot come back on its own: end the whole run
+                # with the setup words rather than failing track after track.
+                _raise_download_incomplete(str(exc))
             except Exception as exc:
                 fail += 1
                 failed_names.append(str(row.get("title") or track_id))
@@ -13741,11 +13786,12 @@ class WavesBridge(LibraryMixin, QObject):
 
         Search, browsing and link resolution never call here (they ride the
         dev token alone). Returns True when the job may proceed, False when
-        STOP landed while held. When the runtime is missing or dies, the row
-        is HELD with one clear message and re-probed until it returns; the
-        wait is the HELD_POLL tick, never a failure, and manual retry covers
-        a manual stop. Never re-provisions: the runtime is the setup wizard's
-        artifact.
+        STOP landed while held. One failed start is a blip the next poll may
+        heal, so the row is HELD with the setup words and re-probed; a runtime
+        that fails to start repeatedly cannot come back on its own, so the
+        row stops waiting, setup opens, and the job fails with those words
+        (RETRY is the way back once the runtime works). Never re-provisions:
+        the runtime is the setup wizard's artifact.
         """
         if not need_wrapper:
             return True
@@ -13767,9 +13813,10 @@ class WavesBridge(LibraryMixin, QObject):
         if manager is None and not wrapper_url:
             return True
         try:
-            from waves.apple_supervision import HELD_POLL_SEC
+            from waves.apple_supervision import HELD_POLL_SEC, HELD_START_FAILURES
         except Exception:
             HELD_POLL_SEC = 5.0
+            HELD_START_FAILURES = 2
         sup = self._apple_supervisor_for_job()
         # The wrapper tier was never set up (no URL and no persisted port):
         # the cookies path serves alone, exactly as before supervision.
@@ -13781,6 +13828,7 @@ class WavesBridge(LibraryMixin, QObject):
         # The wizard may pick the port concurrently; ensure_started probes
         # first, so a healthy sidecar returns without sleeping, and it also
         # migrates a sidecar still publishing on a wildcard host address.
+        failures = 0
         while not job_abort.is_set():
             port = self._apple_wrapper_port_for_job()
             if sup is not None and port:
@@ -13798,14 +13846,24 @@ class WavesBridge(LibraryMixin, QObject):
                         if callable(set_status):
                             set_status(int(qid), "running", "")
                     return True
-                # Still down: stay held with the same one message, never a
-                # wall of failures.
-                self._apple_set_held(qid)
+                # Still down: hold with the setup words rather than fail a
+                # blip, but bounded: a start that keeps failing needs the
+                # wizard, and a held row cannot wait forever.
+                self._apple_set_held(qid, "Finish setup in Settings, Providers, Apple Music if it does not return.")
+                failures += 1
             else:
                 # Configured for the wrapper tier but no supervised port yet:
                 # the wizard has not picked one. Hold with the setup words
                 # instead of failing the wall.
                 self._apple_set_held(qid, "Finish setup in Settings under Providers, Apple Music.")
+                failures += 1
+            if failures >= max(1, int(HELD_START_FAILURES)):
+                message = "Apple's runtime did not start. Finish setup in Settings, Providers, Apple Music, then retry."
+                with contextlib.suppress(Exception):
+                    self.appleSetupRequested.emit("setup")
+                with contextlib.suppress(Exception):
+                    self._set_status(message)
+                raise _AppleSetupRequired(message)
             if not self._apple_sleep_abortable(HELD_POLL_SEC, job_abort):
                 return False
         return False
@@ -13980,6 +14038,7 @@ class WavesBridge(LibraryMixin, QObject):
         job_abort,
         signals=None,
         options: _JobOptions | None = None,
+        qid: int = 0,
     ) -> dict:
         """Fetch, verify, place, tag and sidecar one Apple track.
 
@@ -14250,7 +14309,7 @@ class WavesBridge(LibraryMixin, QObject):
                     if last_staged is not None and last_staged.is_file():
                         try:
                             self._apple_quarantine_file(
-                                last_staged, relative=relative, track_id=track_id, audio_type=version
+                                last_staged, relative=relative, track_id=track_id, audio_type=version, qid=qid
                             )
                         except Exception:
                             logger.debug("Could not quarantine the Apple file", exc_info=True)
@@ -14777,15 +14836,22 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Could not clear the Apple skip-list", exc_info=True)
 
     def _apple_quarantine_file(
-        self, staged: pathlib.Path, *, relative: str, track_id: str, audio_type: str | None = None
+        self,
+        staged: pathlib.Path,
+        *,
+        relative: str,
+        track_id: str,
+        audio_type: str | None = None,
+        qid: int = 0,
     ) -> pathlib.Path | None:
         """Keep a persistently-bad staged file in Quarantine, or None.
 
         Honors the keep-vs-delete toggle (delete keeps no bytes but still
         marks the skip-list via the caller). Files keep their intended names
         under the quarantine root, so a later verified copy replaces them by
-        name. Never raises: quarantine must not fail a download that already
-        failed.
+        name. A kept copy is recorded against the queue row that produced it,
+        so the drawer can offer to reveal or delete it. Never raises:
+        quarantine must not fail a download that already failed.
         """
         if not self._apple_quarantine_keep():
             return None
@@ -14803,7 +14869,94 @@ class WavesBridge(LibraryMixin, QObject):
         else:
             # A quarantined file was never swapped in, so ownership stays
             # honest by construction: nothing is owned that isn't on disk.
+            self._apple_record_quarantine(qid, dest)
             return dest
+
+    def _apple_record_quarantine(self, qid: int, dest: pathlib.Path | str) -> None:
+        """Remember one quarantined copy on its queue row (open/delete actions)."""
+        text = str(dest or "")
+        if not text:
+            return
+        try:
+            qid = int(qid)
+        except (TypeError, ValueError):
+            return
+        try:
+            paths = self._apple_quarantine_paths.setdefault(qid, [])
+            if text in paths:
+                return
+            paths.append(text)
+        except Exception:
+            logger.debug("Could not record a quarantined copy for qid %s", qid, exc_info=True)
+            return
+        item = self._queue_item(qid)
+        if item is not None:
+            item["quarantineCount"] = len(paths)
+            self._queue_mark_changed(qid)
+            self._emit_queue()
+
+    @Slot(int)
+    def openQuarantine(self, qid: int) -> None:
+        """Reveal the folder holding one failed row's quarantined copies."""
+        folder = self._apple_quarantine_folder(qid)
+        if not folder:
+            return
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(folder)))
+
+    @Slot(int)
+    def deleteQuarantine(self, qid: int) -> None:
+        """Delete one failed row's quarantined copies and prune emptied folders.
+
+        The per-version skip-list mark stays: the source is still bad, and
+        REDOWNLOAD is the explicit way back, not a silent retry.
+        """
+        try:
+            qid = int(qid)
+        except (TypeError, ValueError):
+            return
+        paths = list(getattr(self, "_apple_quarantine_paths", {}).get(qid, []))
+        if not paths:
+            self._set_status("No quarantined copy to delete")
+            return
+        removed = 0
+        for text in paths:
+            try:
+                path = pathlib.Path(str(text)).expanduser()
+                if path.is_file():
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                logger.debug("Could not delete a quarantined copy", exc_info=True)
+        try:
+            from waves.apple_integrity import prune_empty_quarantine_dirs
+
+            prune_empty_quarantine_dirs(paths, self._apple_quarantine_root())
+        except Exception:
+            logger.debug("Could not prune emptied quarantine folders", exc_info=True)
+        try:
+            self._apple_quarantine_paths.pop(qid, None)
+        except Exception:
+            logger.debug("Could not forget the quarantine paths for qid %s", qid, exc_info=True)
+        item = self._queue_item(qid)
+        if item is not None:
+            item["quarantineCount"] = 0
+            self._queue_mark_changed(qid)
+        self._emit_queue()
+        self._set_status("Quarantined copy deleted" if removed else "No quarantined copy to delete")
+
+    def _apple_quarantine_folder(self, qid: int) -> pathlib.Path | None:
+        """The folder that holds one row's quarantined copies, or None."""
+        try:
+            paths = list(getattr(self, "_apple_quarantine_paths", {}).get(int(qid), []))
+        except (TypeError, ValueError):
+            return None
+        for text in paths:
+            if not text:
+                continue
+            parent = pathlib.Path(str(text)).expanduser().parent
+            if parent.is_dir():
+                return parent
+        return None
 
     def _apple_staged_encoded_date(self, staged: pathlib.Path) -> str | None:
         """A staged file's Encoded date as "YYYY-MM-DD", or None when unknown."""
@@ -18504,6 +18657,9 @@ class WavesBridge(LibraryMixin, QObject):
             stopped = [it for it in self._queue if it.get("status") in ("queued", "running")]
             for it in stopped:
                 it["status"] = "cancelled"
+                # A held or throttled row's presentation words described a
+                # wait STOP just ended: the Stopped section says "Stopped".
+                it["reason"] = ""
                 self._qdirty_changed[it["qid"]] = None
         for it in stopped:
             mid = str(it.get("media_id", ""))
@@ -18524,6 +18680,73 @@ class WavesBridge(LibraryMixin, QObject):
             self.downloadState.emit(fid, "")
         self._emit_queue()
         self._set_status("Downloads stopped")
+
+    def _stop_provider_queue(self, provider_id: str, reason: str) -> int:
+        """Stop one provider's queued and running rows, keeping them retryable.
+
+        Used when a provider is disabled: the switch means its work stops,
+        and the rows stay in Stopped carrying the reason, so RETRY / RETRY ALL
+        picks them up after it is switched back on. Other providers' rows are
+        untouched, including work held for the download folder to return.
+        Returns how many rows were stopped.
+        """
+        prefix = f"{str(provider_id or '').strip()}:"
+        reason = str(reason or "")
+        if prefix == ":":
+            return 0
+        stopped: list[int] = []
+        with self._queue_lock:
+            items = [it for it in self._queue if it.get("status") in ("queued", "running")]
+            for item in items:
+                mid = str(item.get("media_id", "") or "")
+                if not mid.startswith(prefix):
+                    continue
+                qid = int(item["qid"])
+                item["status"] = "cancelled"
+                item["reason"] = reason
+                self._qdirty_changed[qid] = None
+                stopped.append(qid)
+        for qid in stopped:
+            # A queued row's spec must go with it, or its turn starts it
+            # anyway; a running row's abort ends the fetch in place and its
+            # worker settles without erasing the reason above.
+            self._job_specs.pop(qid, None)
+            with contextlib.suppress(ValueError):
+                self._pending_qids.remove(qid)
+            ev = self._job_aborts.get(qid)
+            if ev is not None:
+                ev.set()
+            mid = str((self._queue_index.get(qid) or {}).get("media_id", "") or "")
+            if mid:
+                self.downloadState.emit(mid, "")
+        # Work held for the download folder to return is the queue's shadow:
+        # a disabled provider must not replay by itself when the share does.
+        dropped: list[str] = []
+        pending = getattr(self, "_pending_downloads", None)
+        if pending:
+            with self._pending_lock:
+                kept = []
+                for mid, fn in self._pending_downloads:
+                    text = str(mid or "")
+                    if text.startswith(prefix):
+                        dropped.append(text)
+                    else:
+                        kept.append((mid, fn))
+                if len(kept) != len(self._pending_downloads):
+                    self._pending_downloads = kept
+                    if not kept:
+                        with contextlib.suppress(Exception):
+                            self._recovery_poll.stop()
+        if dropped:
+            release = getattr(self, "_release_abandoned_hold", None)
+            if callable(release):
+                release(dropped)
+            for mid in dropped:
+                if mid:
+                    self.downloadState.emit(mid, "")
+        if stopped or dropped:
+            self._emit_queue()
+        return len(stopped)
 
     def shutdown(self) -> None:
         """Abort downloads and drain the worker pools so the app can exit.
@@ -20477,7 +20700,8 @@ class WavesBridge(LibraryMixin, QObject):
                         "catalog results to search. Search needs no Apple account or runtime. "
                         "Downloads need setup below: a cookies export unlocks AAC 256 and Atmos "
                         "at once (no runtime), while the managed runtime plus the wrapper sign-in "
-                        "unlock the full tier."
+                        "unlock the full tier. Turning it off stops its queued downloads; RETRY "
+                        "brings them back after it is switched on again."
                     ),
                     "type": "status",
                     "value": apple_status["state"],
@@ -21693,6 +21917,9 @@ class WavesBridge(LibraryMixin, QObject):
         # unchanged, and resubmitting is not a flip.
         apple_enabled_before = bool(getattr(data, "apple_enabled", False))
         cookies_before = str(getattr(data, "apple_cookies_path", "") or "")
+        # Rows a provider disable stopped during this save, reported on the
+        # save's own status line instead of a message the save overwrites.
+        stopped_note = ""
         for key, value in values.items():
             if key in self._waves_prefs:
                 self.setWavesPref(key, value)
@@ -21808,6 +22035,16 @@ class WavesBridge(LibraryMixin, QObject):
                 # §2): Main.qml routes this into Settings at the Apple
                 # section, so the switch flip lands on the next step.
                 self.appleSetupRequested.emit("setup")
+            else:
+                # Turning Apple off stops its work: the switch means "stop
+                # using Apple", and rows that keep fetching behind a vanished
+                # search group read as a lie. The rows stay in Stopped with
+                # the reason, so RETRY ALL brings them back after a re-enable.
+                stop = getattr(self, "_stop_provider_queue", None)
+                if callable(stop):
+                    count = int(stop(CTX_APPLE, "Apple Music was disabled") or 0)
+                    if count:
+                        stopped_note = f" · stopped {count} Apple download" + ("s" if count != 1 else "")
         # Under the same lock _save_settings holds, for the same reason. This
         # region does the restores explicitly instead of going through the
         # helper, but the values it restores are the ones the helper borrows and
@@ -21897,7 +22134,7 @@ class WavesBridge(LibraryMixin, QObject):
         # Quality / path / ffmpeg changes only take effect on a fresh Download.
         if self._logged_in:
             self._init_download()
-        self._set_status("Settings saved")
+        self._set_status("Settings saved" + stopped_note)
         devlog.done("save", f"{len(values)} keys", devlog.clock() - t0, keys=",".join(values))
 
     def _factory_default_values(self) -> dict:

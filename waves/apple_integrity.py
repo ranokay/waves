@@ -185,6 +185,35 @@ def quarantine_dest(quarantine_root: str | Path, relative: str, extension: str =
     return candidate
 
 
+def prune_empty_quarantine_dirs(paths, root: str | Path) -> None:
+    """Remove quarantine folders left empty after their bytes were deleted.
+
+    Each path's parent walks up toward (but never past) ``root``, removing
+    only folders that are empty; a folder that still holds anything stops the
+    walk. Never raises: bytes are already gone, and a folder that cannot be
+    removed is harmless.
+    """
+    root_norm = _norm_dir(root)
+    visited: set[str] = set()
+    for path in paths:
+        text = str(path or "")
+        if not text:
+            continue
+        parent = Path(text).expanduser().parent
+        while True:
+            parent_norm = _norm_dir(parent)
+            if _same_dir(parent_norm, root_norm) or not _is_within(parent_norm, root_norm):
+                break
+            if parent_norm in visited:
+                break
+            visited.add(parent_norm)
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+
+
 def parse_encoded_date(text: str | None) -> datetime.date | None:
     """An Encoded/creation date string onto a date, or None when unreadable.
 

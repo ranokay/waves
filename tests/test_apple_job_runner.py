@@ -1207,3 +1207,40 @@ def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkey
 
     assert held, "the boundary held the row before the stop landed"
     assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path):
+    """A sidecar that cannot start ends the fetch with the wizard words.
+
+    The ensure's terminal verdict must become the job's failure reason (the
+    row repeats it), never an abort (which reads as a user stop) and never a
+    fetch that goes ahead against a dead wrapper.
+    """
+    from waves.waves_ui.backend import _AppleSetupRequired
+
+    provider = _FakeProvider()
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    stub.settings = _settings(tmp_path / "lib", apple_quality_audio="LOSSLESS")
+    stub._queue_index = {1: {"askQuality": "LOSSLESS", "quality": "LOSSLESS"}}
+    stub._apple_needs_wrapper = lambda requested_rank: True
+    message = "Apple's runtime did not start. Finish setup in Settings, Providers, Apple Music, then retry."
+
+    def _refuse(qid, job_abort, *, need_wrapper):
+        raise _AppleSetupRequired(message)
+
+    stub._apple_ensure_sidecar = _refuse
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        WavesBridge._run_apple_job(
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert str(excinfo.value) == message

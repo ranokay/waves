@@ -11924,6 +11924,7 @@ ApplicationWindow {
                  collection: it.collection, artist: it.artist || "", tracks: it.tracks || 0,
                  art: it.art || "", quality: it.quality || "", expected: it.expected || "",
                  landed: it.landed || "", mixJson: it.mixJson || JSON.stringify(it.mix || []),
+                 quarantineCount: it.quarantineCount || 0,
                  uiGroup: root.groupForStatus(it.status), moved: false,
                  doneAt: (it.status === "done" ? Date.now() : 0), leaving: false }
     }
@@ -11978,6 +11979,8 @@ ApplicationWindow {
         if (row.landed !== ld) m.setProperty(i, "landed", ld)
         var mx = it.mixJson || JSON.stringify(it.mix || [])
         if (row.mixJson !== mx) m.setProperty(i, "mixJson", mx)
+        var qc = it.quarantineCount || 0
+        if (row.quarantineCount !== qc) m.setProperty(i, "quarantineCount", qc)
         var grp = row.moved ? "completed" : root.groupForStatus(it.status)
         if (grp === wasGrp) return
         m.setProperty(i, "uiGroup", grp)
@@ -16049,7 +16052,7 @@ ApplicationWindow {
                                             // a run that saved 495 songs from one that
                                             // saved none.
                                             if (qrow.st === "failed") return a + (model.reason ? model.reason : "Failed")
-                                            if (qrow.st === "cancelled") return a + "Stopped"
+                                            if (qrow.st === "cancelled") return a + (model.reason ? model.reason : "Stopped")
                                             // A throttled row states its countdown inside
                                             // its normal downloading state.
                                             if (qrow.st === "running" && model.reason) return a + model.reason
@@ -16062,6 +16065,24 @@ ApplicationWindow {
                                             return a + (qrow.st === "done" ? "Done" : qrow.st)
                                         }
                                         color: root.textLo; font.family: root.mono; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true
+                                    }
+                                    // Integrity quarantine: the bad bytes live
+                                    // in the quarantine folder with no other
+                                    // way in, so the failed row carries the
+                                    // two actions. OPEN reveals the folder;
+                                    // DELETE removes the copies (the skip-list
+                                    // mark stays until a verified REDOWNLOAD).
+                                    RowLayout {
+                                        visible: qrow.st === "failed" && Number(model.quarantineCount || 0) > 0
+                                        spacing: 6; Layout.topMargin: 2
+                                        SpecBtn {
+                                            compact: true; label: "OPEN QUARANTINE"
+                                            onClicked: waves.openQuarantine(model.qid)
+                                        }
+                                        SpecBtn {
+                                            compact: true; danger: true; label: "DELETE COPY"
+                                            onClicked: waves.deleteQuarantine(model.qid)
+                                        }
                                     }
                                 }
                                 Rectangle {

@@ -7,8 +7,11 @@ from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 
+import pytest
+
 from waves.apple_supervision import (
     HELD_POLL_SEC,
+    HELD_START_FAILURES,
     IDLE_TIMEOUT_DEFAULT,
     PACING_BATCH_DEFAULT,
     PACING_DELAY_DEFAULT,
@@ -30,6 +33,7 @@ from waves.apple_supervision import (
     throttle_delay,
     throttled_message,
 )
+from waves.constants import CTX_APPLE
 from waves.model.cfg import HelpSettings, Settings
 from waves.waves_ui.backend import WavesBridge
 
@@ -102,6 +106,9 @@ def test_parse_retry_after_accepts_an_http_date():
 def test_presentations_carry_one_clear_message_with_countdown():
     held = held_message()
     assert "Held" in held and "runtime" in held.lower()
+    # A held row is the user's only clue when the runtime stays down, so the
+    # message names the repair path.
+    assert "Settings" in held and "Apple Music" in held
     assert "Apple" in throttled_message(20) and "20s" in throttled_message(20)
     assert "Retrying now" in throttled_message(0)
 
@@ -567,3 +574,31 @@ def test_queue_drawer_shows_held_and_throttled_presentations():
 
 def test_held_poll_tick_is_sane():
     assert 1.0 <= float(HELD_POLL_SEC) <= 30.0
+
+
+def test_ensure_stops_holding_and_hands_the_click_to_setup():
+    """A runtime that will not start fails to the wizard, never holds forever."""
+    from waves.waves_ui import backend as backend_mod
+
+    stub = _bridge_stub()
+    stub._apple_runtime = SimpleNamespace(read_port=lambda: 51234, app_dir="/tmp/waves-test")
+    stub.providers = {CTX_APPLE: SimpleNamespace(wrapper_url="http://127.0.0.1:51234")}
+    starts: list = []
+    stub._apple_supervisor = SimpleNamespace(
+        ensure_started=lambda **kwargs: starts.append(kwargs) or False, note_activity=lambda: None
+    )
+    stub._apple_sleep_abortable = lambda secs, abort: True
+    requested: list = []
+    stub.appleSetupRequested = SimpleNamespace(emit=lambda reason: requested.append(reason))
+    stub._queue_index[9] = {"status": "running", "reason": ""}
+
+    with pytest.raises(backend_mod._AppleSetupRequired) as excinfo:
+        stub._apple_ensure_sidecar(9, Event(), need_wrapper=True)
+
+    assert len(starts) == HELD_START_FAILURES  # one held blip, then the verdict
+    assert requested == ["setup"]
+    message = str(excinfo.value)
+    assert "Settings" in message and "Apple Music" in message
+    assert "Settings" in stub.last_status
+    row = stub._queue_index[9]
+    assert row["status"] == "queued" and "Held" in row["reason"] and "Settings" in row["reason"]

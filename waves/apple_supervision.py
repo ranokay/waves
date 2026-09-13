@@ -61,6 +61,12 @@ THROTTLE_CAP_SEC = 180.0
 # How often a held job re-probes the runtime while it waits for it to return.
 HELD_POLL_SEC = 5.0
 
+# How many consecutive failed start attempts a held job tolerates before it
+# stops waiting and hands the click to setup. One failure is a blip the next
+# poll may heal; a runtime that will not come up on its own needs the wizard,
+# and a row that holds forever cannot say so.
+HELD_START_FAILURES = 2
+
 # The supervised container's fixed name: one sidecar per install, so ensure
 # and stop are idempotent across restarts and retries.
 WRAPPER_CONTAINER_NAME = "waves-wrapper-v2"
@@ -88,8 +94,15 @@ _WRAPPER_DATA_CONTAINER_PATH = "/app/rootfs/data/data/com.apple.android.music/fi
 
 
 def held_message(detail: str = "") -> str:
-    """One clear held row reason. Stays under Queued with this reason."""
-    base = "Held: the Apple runtime is not running. Waiting for it to return."
+    """One clear held row reason. Stays under Queued with this reason.
+
+    The words name the setup path, because a held row is the user's only clue
+    when the runtime does not come back on its own.
+    """
+    base = (
+        "Held: the Apple runtime is not running. Waiting for it to return; "
+        "finish setup in Settings, Providers, Apple Music if it does not."
+    )
     detail = str(detail or "").strip()
     return f"{base} {detail}".strip() if detail else base
 
