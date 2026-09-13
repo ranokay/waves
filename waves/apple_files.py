@@ -118,8 +118,8 @@ def format_apple_path(
         "album_explicit": FORMAT_TEMPLATE_EXPLICIT if (album or {}).get("explicit") else "",
         "media_type": "",
         "folder_path": "",
-        # Provider separation (issue #65): "" renders the token as "" so the
-        # segment collapses away (the pre-token layout).
+        # Provider separation: "" renders the token as "" so the segment
+        # collapses away for templates that omit it.
         "provider_name": provider_name,
     }
 
@@ -140,7 +140,7 @@ def pick_destination(base_dir: str | Path, relative: str, extension: str) -> Pat
     """A free file path under the library: numbered suffix on collision.
 
     Mirrors the engine's "X_01" step-aside so two same-named tracks never
-    share a name (issue #19's lesson), without consulting anything but disk.
+    share a name, without consulting anything but disk.
     The relative path must stay relative (format_apple_path drops empty and
     dot segments); an absolute or empty one fails loudly instead of escaping
     the library root.
@@ -299,7 +299,7 @@ def tag_apple_file(
     mark_explicit: bool = False,
     metadata_target_upc: str = "UPC",
     audio_type: str | None = None,
-    # Custom-template omit flags (issue #61): all written by default.
+    # Custom-template omit flags: all written by default.
     write_composer: bool = True,
     write_copyright: bool = True,
     write_isrc: bool = True,

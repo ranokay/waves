@@ -10,9 +10,9 @@ from waves.constants import CoverDimensions, DownsampleTarget, InitialKey, Metad
 class Settings:
     skip_existing: bool = True
     lyrics_embed: bool = False
-    # Best-quality lyrics out of the box (issue #59): sidecars on, so a track
-    # keeps its finest timed source next to it -- .lrc on both providers, plus
-    # the verbatim .ttml on Apple (lyrics_ttml_file below). Embedding stays
+    # Best-quality lyrics out of the box: sidecars on, so a track keeps its
+    # finest timed source next to it -- .lrc on both providers, plus the
+    # verbatim .ttml on Apple (lyrics_ttml_file below). Embedding stays
     # opt-in per provider.
     lyrics_file: bool = True
     # When saving lyrics files: timed lyrics go to .lrc, untimed to .txt.
@@ -22,15 +22,15 @@ class Settings:
     # lyrics, which are machine-transcribed for tracks nobody has submitted
     # text for yet. TIDAL remains the fallback when LRCLIB has no match.
     lyrics_prefer_lrclib: bool = True
-    # Word-timed source (issue #34, spec section 9.1): on Apple, syllable TTML
+    # Word-timed source (spec section 9.1): on Apple, syllable TTML
     # outranks a line-timed LRCLIB hit when on (default on). TIDAL has no
     # word-timed source, so this is a no-op there.
     lyrics_word_timed: bool = True
-    # Verbatim Apple TTML sidecar (issue #34, spec section 9.1): saved exactly
+    # Verbatim Apple TTML sidecar (spec section 9.1): saved exactly
     # as Apple serves it, zero conversion, sidecar-only (never embedded).
-    # Apple only; default on (issue #59: best quality). TIDAL has no TTML source.
+    # Apple only; default on (best quality). TIDAL has no TTML source.
     lyrics_ttml_file: bool = True
-    # Per-provider lyrics & artwork (issue #61): each provider keeps its own
+    # Per-provider lyrics & artwork: each provider keeps its own
     # options inside its Providers card, so what TIDAL embeds need not match
     # what Apple files. Fresh installs start both mirrors at the shared best
     # defaults; existing installs are migrated once (config._migrate_settings
@@ -65,7 +65,7 @@ class Settings:
     # One-time marker for the shared-to-mirror migration above. Once set, the
     # migration leaves both mirrors alone, so each provider's choices stand.
     lyrics_art_per_provider_migrated: bool = False
-    # One tag template for every provider (issue #61): with the custom switch
+    # One tag template for every provider: with the custom switch
     # off ("Provider default") every file carries what its provider supplies
     # (plus the long-standing gates below); with it on, the tag groups
     # switched off here are omitted. Lyrics and cover embedding are NOT
@@ -81,13 +81,7 @@ class Settings:
     use_primary_album_artist: bool = (
         False  # When True, uses first album artist instead of track artists for folder paths
     )
-    # TODO: Implement API KEY selection.
-    # api_key_index: bool = 0
-    # TODO: Implement album info download to separate file.
-    # album_info_save: bool = False
     video_download: bool = True
-    # TODO: Implement multi threading for downloads.
-    # multi_thread: bool = False
     download_delay: bool = True
     # No default download folder: the user must choose one explicitly. A fresh
     # install starts blank and the first download is gated until a folder is set
@@ -106,42 +100,43 @@ class Settings:
     # URLs are identity (host, maybe user): internal only, never shown in the
     # settings UI, registered as diagnostics secrets on load and on record.
     network_mount_origins: dict[str, str] = field(default_factory=dict)
-    # The audio-quality settings, one per provider (issue #24, spec §9.2),
-    # each stored as a Waves tier string (waves.constants.QualityTier values:
-    # "LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS") -- never an engine enum.
-    # Both default to the highest rung (issue #59): anything the provider can
-    # serve is fetched. Apple has no LOW rung (AAC 256 starts at HIGH).
+    # The audio-quality settings, one per provider (spec §9.2), each stored as
+    # a Waves tier string (waves.constants.QualityTier values: "LOW", "HIGH",
+    # "LOSSLESS", "HI_RES_LOSSLESS") -- never an engine enum. Both default to
+    # the highest rung: anything the provider can serve is fetched. Apple has
+    # no LOW rung (AAC 256 starts at HIGH).
     tidal_quality_audio: str = "HI_RES_LOSSLESS"
     apple_quality_audio: str = "HI_RES_LOSSLESS"
     # Apple Music ships as a user-enabled provider (spec ground rule 3), off
-    # by default and opt-in from Settings. Search reads this now. Setup,
-    # Chooser and download routing join it in their own rollout slices.
+    # by default and opt-in from Settings. Search, setup, the Chooser and
+    # download routing all read this flag.
     apple_enabled: bool = False
-    # Cookies-tier scaffolding (issue #28; superseded by the setup-wizard
-    # ticket): path to a Netscape-format cookies export from a logged-in
-    # music.apple.com session. Unlocks AAC 256 + Atmos downloads, no runtime.
+    # Path to a Netscape-format cookies export from a logged-in
+    # music.apple.com session, rendered in Settings under Providers, Apple
+    # Music. Unlocks AAC 256 + Atmos downloads with no runtime.
     apple_cookies_path: str = ""
-    # Same scaffolding shape as the FFmpeg override below: the N_m3u8DL-RE
-    # binary Apple downloads fetch through. Empty means PATH; the wizard
-    # provisions and pins it later.
+    # N_m3u8DL-RE binary override for Apple downloads. Empty prefers the
+    # managed, pinned copy the setup wizard provisions; when none is installed
+    # the fetch falls back to PATH. A set path wins over both.
     path_binary_nm3u8dlre: str = ""
-    # Setup wizard (issue #31, spec section 2 and 10): the user-supplied Apple
-    # Music APK the full tier's wrapper guest needs. Waves never fetches,
-    # bundles, mirrors, or proxies it; the wizard verifies the pinned
-    # version by SHA-256 and scripts the .apkm extraction.
+    # Optional Apple Music APK path for custom wrapper image builds (spec
+    # section 10): the published image already carries the guest libraries, so
+    # the setup wizard never needs one. Image publishing owns version pinning
+    # and the .apkm extraction; Waves never fetches, bundles, mirrors, or
+    # proxies this file.
     apple_apk_path: str = ""
     # Wrapper HTTP API port (spec section 2 wizard fuel): 0 means Waves picks
     # a free high port at setup time and passes it explicitly everywhere.
     # Never 80: that default is collision-prone on a desktop. A nonzero
     # value is a config-first override for a port the user knows is free.
     apple_wrapper_port: int = 0
-    # Integrity gate (issue #30, spec §6): always-on Apple verification knobs.
+    # Integrity gate (spec §6): always-on Apple verification knobs.
     # Retries counts AUTOMATIC re-downloads after an integrity failure (2 means
     # 3 attempts total); the outbreak pre-filter (Encoded date >= 2025-05)
     # quarantines after 1 retry. Pacing between integrity retries.
     apple_integrity_retries: int = 2
     apple_integrity_retry_delay_sec: float = 5.0
-    # Session supervision + pacing (issue #33, spec §3): proactive Apple
+    # Session supervision + pacing (spec §3): proactive Apple
     # pacing, same shape as TIDAL's api_rate_limit_* (pause after N songs
     # for N seconds; initial 30 s every 25 songs, fully tunable), and the
     # idle timeout after which the supervised sidecar stops itself
@@ -158,16 +153,15 @@ class Settings:
     # the skip-list; it just keeps no bytes.
     apple_quarantine_keep: bool = True
     quality_video: QualityVideo = QualityVideo.P480
-    # The Chooser one-click audio default (issue #66, spec §7.2): "stereo", or
-    # "both" for stereo + Atmos side by side where a track offers the choice.
-    # Replaces the old Download-Dolby-Atmos toggle one for one (on = both);
+    # The Chooser one-click audio default (spec §7.2): "stereo", or "both"
+    # for stereo + Atmos side by side where a track offers the choice.
     # Atmos-alone has no Settings spelling and stays per-click only.
     default_audio_type: str = "stereo"
     # Artist > Album > Track, the shape a music library (and Plex) expects.
     # Playlists / mixes keep their own parent folder: they are platform
     # constructs a library manager can't model, but stay downloadable.
-    # {provider_name} keeps each provider's files apart (issue #65: "Tidal",
-    # "Apple Music"), so the same song saved from both coexists.
+    # {provider_name} keeps each provider's files apart ("Tidal", "Apple
+    # Music"), so the same song saved from both coexists.
     format_album: str = (
         "{provider_name}/{artist_name}/[{album_year}] {album_title}{album_explicit}/{track_volume_num_optional}"
         "{album_track_num}. {artist_name} - {track_title}{track_explicit}"
@@ -180,7 +174,7 @@ class Settings:
         "{provider_name}/{artist_name}/[{album_year}] {album_title}{album_explicit}/{track_volume_num_optional}"
         "{album_track_num}. {artist_name} - {track_title}{track_explicit}"
     )
-    # Where Dolby Atmos Versions land (§5.4, issue #29): a folder fragment
+    # Where Dolby Atmos Versions land (§5.4): a folder fragment
     # rendered with the same tokens as the file templates, inserted between
     # the stereo file's folder and its name. Default "Dolby Atmos" gives the
     # Plex-friendly separate-subfolder layout zero-config; blank places Atmos
@@ -203,7 +197,7 @@ class Settings:
     # on PATH) or "none". Lets a pasted config reveal the ffmpeg situation, since
     # path_binary_ffmpeg stays "" for both the managed and the absent cases.
     ffmpeg_source: str = "unknown"
-    # Original quality by default (issue #59): the true master image on both
+    # Original quality by default: the true master image on both
     # providers (TIDAL's ORIGIN keeps its embedded cap; Apple's ORIGIN is the
     # original-master image). The separately-saved file follows this size.
     metadata_cover_dimension: CoverDimensions = CoverDimensions.PxORIGIN
@@ -213,11 +207,10 @@ class Settings:
     # the saved file, so the embedded art and the on-disk cover can differ.
     metadata_cover_file_dimension: str = "follow"
     metadata_cover_embed: bool = True
-    # Sidecar cover format (issue #34, spec section 9.1): "raw" (default,
-    # issue #59) is the true original-master bytes on Apple, and plain jpg on
-    # TIDAL, which has no original-master sidecar (raw falls back to jpg
-    # there). "jpg" or "png" force that container on both. Embedded art stays
-    # jpg either way.
+    # Sidecar cover format (spec section 9.1): "raw" (default) is the true
+    # original-master bytes on Apple, and plain jpg on TIDAL, which has no
+    # original-master sidecar (raw falls back to jpg there). "jpg" or "png"
+    # force that container on both. Embedded art stays jpg either way.
     cover_file_format: str = "raw"
     mark_explicit: bool = False
     cover_album_file: bool = True
@@ -226,7 +219,7 @@ class Settings:
     # saved cover.jpg for album/collection downloads.
     cover_single_track_file: bool = False
     extract_flac: bool = True
-    # FLAC scope (issue #64): off (default) converts lossless sources only and
+    # FLAC scope: off (default) converts lossless sources only and
     # keeps lossy originals as *.m4a; on also converts lossy (AAC) sources to
     # FLAC by re-encoding them (bigger files, no quality gain). Dolby Atmos
     # always stays *.m4a either way. Needs FFmpeg like extract_flac.
@@ -256,16 +249,15 @@ class Settings:
     format_playlist_folder_migrated: bool = False
     # Internal upgrade marker (not a user setting): records the one-time
     # rewrite that prefixed format_album and format_track with the
-    # {provider_name} segment (issue #65). Only stored values equal to the OLD
-    # defaults are rewritten; customized templates are left exactly as the
-    # user wrote them (the token is available for them to add by hand).
+    # {provider_name} segment. Only stored values equal to the OLD defaults
+    # are rewritten; customized templates are left exactly as the user wrote
+    # them (the token is available for them to add by hand).
     format_provider_segment_migrated: bool = False
     # Internal upgrade marker (not a user setting): records the one-time reset
-    # of the two api_rate_limit fields. They were editable in Advanced while
-    # nothing read them, so any value on disk was a guess that never took
-    # effect and never had a chance to be judged; now that they do take effect,
-    # an old guess of, say, 60 seconds would silently add half an hour to a
-    # long playlist. Set once, then the user's own choice stands.
+    # of the two api_rate_limit fields. A stored value predates them pacing
+    # downloads, so it is a guess: a leftover of, say, 60 seconds would
+    # silently add half an hour to a long playlist. Set once, then the user's
+    # own choice stands.
     api_rate_limit_wired_migrated: bool = False
     # DOWNLOAD ALL on a Browse playlist category asks before queueing the
     # whole set; the dialog's "Don't ask again" flips this off.
@@ -301,14 +293,14 @@ class Settings:
     api_rate_limit_delay_sec: float = 3.0  # Length of that pause, in seconds
     initial_key_format: InitialKey = InitialKey.ALPHANUMERIC
     # Legacy carrier for the one migration that split quality_audio into the
-    # per-provider settings above (issue #24). from_json reads the old key from
-    # a pre-split config; _migrate_settings folds its value into
-    # tidal_quality_audio and nulls it. The field is excluded from every
-    # serialization, so the key leaves settings.json on the first save and the
-    # migration is one-time by construction (nothing left to read).
+    # per-provider settings above. from_json reads the old key from a pre-split
+    # config; _migrate_settings folds its value into tidal_quality_audio and
+    # nulls it. The field is excluded from every serialization, so the key
+    # leaves settings.json on the first save and the migration is one-time by
+    # construction (nothing left to read).
     quality_audio: str | None = field(default=None, metadata=config(exclude=lambda v: True))
-    # Legacy carrier for the toggle this replaced (issue #66). from_json reads
-    # the old key from a pre-change config; _migrate_settings folds True into
+    # Legacy carrier for the Download-Dolby-Atmos key. from_json reads the old
+    # key from an existing config; _migrate_settings folds True into
     # default_audio_type "both" (False was the default already) and nulls it.
     # Excluded from every serialization like quality_audio above, so the key
     # leaves settings.json on the first save.
@@ -349,7 +341,7 @@ class HelpSettings:
         "Save Apple's verbatim TTML beside the track (zero conversion, sidecar-only, "
         "never embedded). Apple only; default on."
     )
-    # Per-provider mirrors (issue #61) share the wording above; the Providers
+    # Per-provider mirrors share the wording above; the Providers
     # cards name the provider, so the help stays provider-neutral here.
     tidal_lyrics_embed: str = "Embed lyrics in the TIDAL audio file, if lyrics are available."
     tidal_lyrics_file: str = (
@@ -493,7 +485,6 @@ class HelpSettings:
         "stereo, or both versions side by side where a track offers the choice. "
         "Atmos on its own stays a per-click choice in the Chooser."
     )
-    # TODO: Describe possible variables.
     format_album: str = "Where to download albums and how to name the items."
     format_playlist: str = (
         "Where to download playlists and how to name the items. {folder_path} mirrors the "
@@ -598,7 +589,7 @@ class Token:
     expiry_time: float = 0.0
 
 
-# Per-provider lyrics & artwork mirrors (issue #61): the shared key names
+# Per-provider lyrics & artwork mirrors: the shared key names
 # each provider prefixes. The migration loop and the schema walk both read
 # this table, so a new mirrored option lands in both by adding one word.
 LYRICS_ART_KEYS: tuple[str, ...] = (
@@ -618,7 +609,7 @@ LYRICS_ART_KEYS: tuple[str, ...] = (
 
 PROVIDER_IDS: tuple[str, ...] = ("tidal", "apple")
 
-# Custom-template tag groups (issue #61): the metadata tags a Custom
+# Custom-template tag groups: the metadata tags a Custom
 # template can omit, one toggle each (metadata_tag_<name>).
 METADATA_TAG_FLAGS: tuple[str, ...] = (
     "composer",
@@ -633,7 +624,7 @@ _MISSING = object()
 
 
 def provider_setting(data, provider_id: str, key: str, default=None):
-    """One lyrics/artwork option for one provider (issue #61).
+    """One lyrics/artwork option for one provider.
 
     Reads the provider's mirror (``tidal_lyrics_embed``) with the shared key
     as legacy fallback, so configs and stubs that predate the split keep
@@ -650,7 +641,7 @@ def provider_setting(data, provider_id: str, key: str, default=None):
 
 
 def metadata_tag_write(data, tag: str) -> bool:
-    """Whether the Custom template keeps one tag group (issue #61).
+    """Whether the Custom template keeps one tag group.
 
     Provider default (the custom switch off) writes everything; Custom
     omits the groups switched off. Unknown tags and unreadable configs

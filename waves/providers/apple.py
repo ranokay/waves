@@ -99,7 +99,7 @@ class AppleProvider(Provider):
         self.cookies_path: str = ""
         self.nm3u8dlre_path: str = ""
         self.ffmpeg_path: str = ""
-        # Managed wrapper configuration for the ALAC path (issue #32): the
+        # Managed wrapper configuration for the ALAC path: the
         # wrapper HTTP API URL (a persisted free high port, never port 80).
         # Written by the bridge from the runtime manager; empty means the
         # wrapper tier is not set up and the cookies tier serves alone. The
@@ -119,7 +119,7 @@ class AppleProvider(Provider):
 
     @property
     def wrapper_available(self) -> bool:
-        """Whether the managed wrapper tier can serve ALAC right now."""
+        """Whether the managed wrapper tier can serve ALAC."""
         return bool(str(self.wrapper_url or "").strip())
 
     def _run(self, awaitable):
@@ -829,7 +829,7 @@ class AppleProvider(Provider):
         return deliveries
 
     def advertised_ceiling(self, obj) -> int | None:
-        # Servable ceiling, per-track when the object is known (issue #32).
+        # Servable ceiling, per-track when the object is known.
         # Cookies tier alone: HIGH always. Wrapper tier: the master's own
         # flags (HI_RES for hi-res, LOSSLESS for lossless, HIGH otherwise),
         # so an AAC-only master never over-promises HI_RES. None when the
@@ -856,9 +856,9 @@ class AppleProvider(Provider):
         return isinstance(unwrapped, dict) and self._has_atmos(unwrapped)
 
     def _delivery_atmos(self, track, audio_type: AudioType | None) -> bool:
-        """Instead-of semantics (issue #28): the toggle's Atmos replaces
-        stereo for tracks that carry it, and tracks without it fall back to
-        stereo so no album is left with a hole."""
+        """Instead-of semantics: an Atmos ask replaces stereo for tracks that
+        carry it, and tracks without it fall back to stereo so no album is
+        left with a hole."""
         item = self._unwrap(track)
         if not isinstance(item, dict):
             return False
@@ -874,8 +874,8 @@ class AppleProvider(Provider):
         reads ``delivered`` for the ownership record.
 
         Stereo LOSSLESS/HI_RES takes the ALAC path through the managed
-        wrapper when it is set up (issue #32); everything else takes the
-        cookies path (AAC 256 stereo, E-AC-3 Atmos). The delivered tier is
+        wrapper when it is set up; everything else takes the cookies path
+        (AAC 256 stereo, E-AC-3 Atmos). The delivered tier is
         honest (probed off the staged bytes, e.g. 24/96 where the master
         tops out); the "ALAC 24/192" detail rides codecs/bit_depth/
         sample_rate label text, never rank.
@@ -989,11 +989,11 @@ class AppleProvider(Provider):
         )
         return StreamInfo(
             urls=[],
-            # Lossless stereo lands as FLAC (issue #64): the staged bytes are
-            # ALAC-in-m4a and the caller converts them to FLAC (a lossless
-            # decode + FLAC encode, bit for bit identical since the FLAC
-            # container cannot hold ALAC packets) when its FLAC toggle is on;
-            # the flag names the delivery's container truth either way.
+            # Lossless stereo lands as FLAC: the staged bytes are ALAC-in-m4a
+            # and the caller converts them to FLAC (a lossless decode + FLAC
+            # encode, bit for bit identical since the FLAC container cannot
+            # hold ALAC packets) when its FLAC toggle is on; the flag names
+            # the delivery's container truth either way.
             file_extension=".flac",
             codecs=codec or "alac",
             requires_flac_extraction=True,

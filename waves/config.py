@@ -119,15 +119,16 @@ class BaseConfig:
         # Windows), so a reader (or the next launch) only ever sees a complete
         # file. This mirrors the page_cache write in the Waves bridge.
         obj_json_config = json.loads(data_json)  # pretty format
-        # A temp sibling of this write's OWN, not one fixed name. Nothing stops
-        # a second copy of Waves running against the same config folder (the
-        # launch path contemplates one), and both staged through
-        # "settings.json.tmp": open() truncates and each writer flushes its own
-        # length, so the two interleaved into one file and whichever os.replace
-        # landed last published the mixture. The next launch called that
-        # corrupt, moved it to .bak and started on factory defaults, taking the
-        # download folder, the templates and the quality with it; the identical
-        # shape on token.json signs the user out.
+        # A temp sibling of this write's OWN, not one fixed name: a second copy
+        # of Waves running against the same config folder (the launch path
+        # contemplates one) must not stage through a shared
+        # "settings.json.tmp". open() truncates and each writer flushes its own
+        # length, so two writers sharing the name would interleave into one
+        # file and whichever os.replace ran last would publish the mixture: the
+        # next launch treats a mixture as corrupt, moves it to .bak and starts
+        # on factory defaults, taking the download folder, the templates and
+        # the quality with it. The identical shape on token.json signs the user
+        # out.
         fd, tmp_path = tempfile.mkstemp(
             dir=os.path.dirname(self.file_path) or ".",
             prefix=f"{os.path.basename(self.file_path)}.",
@@ -306,20 +307,20 @@ def _migrate_settings(data: ModelSettings, *, record: bool = True) -> bool:  # n
         data.quality_audio = None
         changed = True
 
-    # ReplayGain became on-by-default. Configs created before that carry an
-    # explicit False that is really just the old default, so switch them on once.
-    # A user who turns it back off later keeps it off: the marker and the
+    # ReplayGain is on by default. A config written under the old default
+    # carries an explicit False that is not a user choice, so the step switches
+    # it on once. A user who turns it back off keeps it off: the marker and the
     # sidecar stop this from firing again.
     if "replay_gain_default" not in done and not data.replay_gain_default_migrated:
         data.metadata_replay_gain = True
         data.replay_gain_default_migrated = True
         changed = True
 
-    # The playlist template default grew {folder_path}. Defaults are persisted
-    # verbatim, so an untouched install stores the old default string: only
-    # that exact value is upgraded. Anything else is a customized template the
-    # user owns, and it is never rewritten (they can add {folder_path} where
-    # they want it).
+    # The playlist template default carries {folder_path}. Defaults are
+    # persisted verbatim, so an untouched install stores the older default
+    # string: only that exact value is upgraded. Anything else is a customized
+    # template the user owns, and it is never rewritten (they can add
+    # {folder_path} where they want it).
     if "playlist_folder_default" not in done and not data.format_playlist_folder_migrated:
         old_default = "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}"
         if data.format_playlist == old_default:
@@ -327,24 +328,24 @@ def _migrate_settings(data: ModelSettings, *, record: bool = True) -> bool:  # n
         data.format_playlist_folder_migrated = True
         changed = True
 
-    # Download paths split by provider: the album and track
-    # template defaults grew a leading {provider_name} segment. Like the
-    # {folder_path} migration above, only stored values equal to the OLD
-    # defaults are rewritten; a customized template is the user's own layout
-    # and is never touched (existing files stay where they are either way:
-    # ownership records absolute paths and the library scan is recursive, so
-    # nothing is stranded by the new folder).
+    # Download paths split by provider: the album and track template defaults
+    # carry a leading {provider_name} segment. Like the {folder_path}
+    # migration above, only stored values equal to the OLD defaults are
+    # rewritten; a customized template is the user's own layout and is never
+    # touched (existing files stay where they are either way: ownership
+    # records absolute paths and the library scan is recursive, so nothing is
+    # stranded by the new folder).
     if "provider_segment" not in done:
         changed = _migrate_provider_segment(data) or changed
 
-    # The two rate-limit fields sat in Advanced while nothing read them, and
-    # they asked a different question then ("albums to process"), so a value on
-    # disk is a guess about something else that never took effect. Now that
-    # they pace real downloads, a leftover of a minute between batches would
-    # quietly add half an hour to a long playlist, so a pause no answer to the
-    # new question would give goes back to the default. The guard is the
-    # in-file marker for installs that carry it and the sidecar for configs a
-    # downgrade stripped: a pace the user has since tuned is theirs, and stands.
+    # The two rate-limit fields are a one-time reset: values on disk were set
+    # when the fields asked a different question ("albums to process") and
+    # nothing read them, so they are guesses about something else. A leftover
+    # of a minute between batches would quietly add half an hour to a long
+    # playlist, so anything beyond a plausible pause goes back to the default.
+    # The guard is the in-file marker for installs that carry it and the
+    # sidecar for configs a downgrade stripped: a pace the user has since
+    # tuned is theirs, and stands.
     if "rate_limit_wired" not in done and not data.api_rate_limit_wired_migrated:
         if data.api_rate_limit_delay_sec > _RATE_LIMIT_PAUSE_PLAUSIBLE_MAX_SEC:
             data.api_rate_limit_delay_sec = ModelSettings().api_rate_limit_delay_sec
@@ -451,15 +452,14 @@ class Settings(BaseConfig, metaclass=SingletonMeta):
             _remember_migrations(_completed_migrations())
 
 
-# Retry policy for api.tidal.com. Every catalog call the download engine makes
-# (the track re-fetch, its album, the playback request) went out exactly once:
-# tidalapi mounts no adapter, so the first 429 or 5xx failed that track, and a
-# failed track fails the collection around it. A 12-track album never noticed;
-# a 500-track playlist makes some 1500 calls in a row and noticed every time
-# (issue #35). Nothing that REACHED TIDAL is ever sent twice: a status or read
-# retry is GET/HEAD only, so a sign-in or a playlist edit is never resubmitted,
-# and a connect retry can only repeat a request whose connection never opened.
-# TIDAL's own Retry-After wins over the backoff.
+# Retry policy for api.tidal.com. tidalapi mounts no adapter, so a first 429
+# or 5xx fails that track, and a failed track fails the collection around it;
+# this policy retries each catalog call the download engine makes (the track
+# re-fetch, its album, the playback request). Nothing that REACHED TIDAL is
+# ever sent twice: a status or read retry is GET/HEAD only, so a sign-in or a
+# playlist edit is never resubmitted, and a connect retry can only repeat a
+# request whose connection never opened. TIDAL's own Retry-After wins over the
+# backoff.
 _API_RETRY_TOTAL: int = 3
 # urllib3's ladder from this factor is 0, 3, 6 seconds: its first retry is
 # always immediate (get_backoff_time returns 0 for it), which is the right
@@ -748,15 +748,15 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         self._note_session_credentials()
 
     def _reauthenticate_current_client(self) -> bool:
-        """Make the currently set client credentials actually take effect.
+        """Make the set client credentials actually take effect.
 
         A client swap alone does nothing: ``login_token`` loads the saved
         grant through ``load_oauth_session``, which only contacts TIDAL when
         the stored access pass is already rejected. While that pass is still
         valid (the normal case) the swap is a silent no-op, so the request
         keeps going out under the old client. Forcing a refresh here exchanges
-        the saved refresh credential for a fresh access pass under the client
-        that is set right now, which is what proves (or disproves) that client.
+        the saved refresh credential for a fresh access pass under the new
+        client, which is what proves (or disproves) that client.
 
         The refresh result is deliberately not persisted: the saved sign-in on
         disk stays the user's own, so an Atmos swap can never overwrite it.
@@ -804,8 +804,8 @@ class Tidal(BaseConfig, metaclass=SingletonMeta):
         # stops a Settings save from writing the user's stereo tier over the
         # Atmos request on the shared session, and the re-authentication is two
         # network round trips (tens of seconds while TIDAL throttles): a save
-        # landing in that window used to sail through the gate, and the Atmos
-        # get_stream that followed asked at a tier the Atmos client never
+        # landing in that window would sail through the gate, and the Atmos
+        # get_stream that followed would ask at a tier the Atmos client never
         # requests. Lowered again by the restore below if the switch fails.
         self.is_atmos_session = True
 

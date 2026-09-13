@@ -1,6 +1,6 @@
 """Apple download engine: gamdl-backed fetch and local decrypt for the cookies tier.
 
-The cookies tier (issue #28) needs no wrapper or runtime: a Netscape cookies
+The cookies tier needs no wrapper or runtime: a Netscape cookies
 export from a logged-in music.apple.com session unlocks AAC 256 stereo and
 Atmos E-AC-3. This module is the only place that speaks gamdl's download
 stack; the provider calls in with plain arguments and gets back a decrypted
@@ -42,7 +42,7 @@ class AppleHeld(RuntimeError):
 
 
 class AppleWrapperDown(AppleHeld, AppleDownloadError):
-    """The wrapper sidecar is not answering (held-not-failed, issue #33).
+    """The wrapper sidecar is not answering (held-not-failed).
 
     Subclasses AppleDownloadError so older catchers keep catching it; the
     supervision runner tests for this type first and holds the row with one
@@ -51,7 +51,7 @@ class AppleWrapperDown(AppleHeld, AppleDownloadError):
 
 
 class AppleIntegrityError(AppleDownloadError):
-    """A staged Apple file failed verification (integrity gate, issue #30).
+    """A staged Apple file failed verification (integrity gate).
 
     Carries the rejected bytes' location so the download runner can retry,
     read the Encoded date and quarantine them: ``staged_path`` is the failed
@@ -446,7 +446,7 @@ async def _download_song_via_wrapper_async(
     decrypt_port: int = 10020,
     max_tier: str = "",
 ) -> AppleDelivery:
-    """Fetch one ALAC song through the managed wrapper-v2 guest (issue #32).
+    """Fetch one ALAC song through the managed wrapper-v2 guest.
 
     The wrapper holds the Apple ID session itself: its tokens persist across
     container restarts (verified live, spec §2), so this creates the session
@@ -651,12 +651,12 @@ def _probe_bit_depth(stream: dict) -> int | None:
 def apple_tier_for_delivery(
     codec: str, bit_depth: int | None, sample_rate: int | str | None, fallback: str = "HIGH"
 ) -> str:
-    """An Apple delivery's honest Waves tier value (spec §4.3, issue #32).
+    """An Apple delivery's honest Waves tier value (spec §4.3).
 
     AAC 256 -> HIGH (Apple has no LOW); ALAC 16-bit -> LOSSLESS; ALAC
     24-bit -> HI_RES_LOSSLESS (24/96 and 24/192 are both this rung; the
     "24/192" detail rides label text, never rank). A converted FLAC answers
-    the same rungs as the ALAC it was converted from (issue #64). Bit depth alone decides
+    the same rungs as the ALAC it was converted from. Bit depth alone decides
     hi-res: a rate without a depth never promotes (a 16-bit 48 kHz master
     stays LOSSLESS). Atmos E-AC-3 answers HIGH: the drawer words it ATMOS,
     never a rung. Unknown stays on the fallback, never invented.
@@ -667,8 +667,8 @@ def apple_tier_for_delivery(
     if norm in ("eac3", "ec3", "ac4"):
         return QualityTier.HIGH.value
     if norm in ("alac", "flac"):
-        # FLAC is the converted ALAC container (issue #64): same lossless
-        # ladder, decided by depth alone, never by rate.
+        # FLAC is the converted ALAC container: same lossless ladder, decided
+        # by depth alone, never by rate.
         try:
             rate = int(str(sample_rate or "").strip())
         except (TypeError, ValueError):

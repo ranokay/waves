@@ -1,10 +1,10 @@
 """Apple session supervision: sidecar lifecycle, pacing and throttle recovery.
 
-Issue #33, spec section 3. The wrapper-v2 sidecar is on demand: search,
-browsing and link resolution never start it (they ride the auto-scraped dev
-token alone). Waves starts it lazily on the first Apple download that needs
-it, health-probes its HTTP API, and stops it after an idle period, so an
-idle container runtime does not burn memory and battery.
+Spec section 3 governs this module. The wrapper-v2 sidecar is on demand:
+search, browsing and link resolution never start it (they ride the
+auto-scraped dev token alone). Waves starts it lazily on the first Apple
+download that needs it, health-probes its HTTP API, and stops it after an
+idle period, so an idle container runtime does not burn memory and battery.
 
 Failure classes and what the user sees (presentations, never new queue
 states): a runtime that is missing or dies mid-run holds Apple rows with one
@@ -39,9 +39,7 @@ __all__ = [
     "AppleWrapperDown",
 ]
 
-# --------------------------------------------------------------------------- #
-# Pins (config-first initial values, spec section 3)
-# --------------------------------------------------------------------------- #
+# Pins: config-first initial values (spec section 3).
 
 # Proactive pacing: pause after N songs for N seconds, same shape as TIDAL's
 # api_rate_limit_*. Initial values tuned to the undocumented 429 threshold.
@@ -88,9 +86,7 @@ _LOOPBACK_HOSTS = {_LOOPBACK_BIND, "::1"}
 _WRAPPER_DATA_CONTAINER_PATH = "/app/rootfs/data/data/com.apple.android.music/files"
 
 
-# --------------------------------------------------------------------------- #
-# User-facing words (one clear message, no wall of failures)
-# --------------------------------------------------------------------------- #
+# User-facing words: one clear message, no wall of failures.
 
 
 # The user-facing path every setup message names, so a held row or a failed
@@ -129,9 +125,7 @@ def pacing_message(pause_sec: float, batch: int) -> str:
     return f"Pausing Apple downloads for {secs:g}s after {int(batch)} songs."
 
 
-# --------------------------------------------------------------------------- #
-# Proactive pacing (same shape as TIDAL's api_rate_limit_*)
-# --------------------------------------------------------------------------- #
+# Proactive pacing, same shape as TIDAL's api_rate_limit_*.
 
 
 def pacing_policy(batch, delay) -> tuple[int, float]:
@@ -161,9 +155,7 @@ def pacing_due(track_index_1based: int, batch: int) -> bool:
     return every > 0 and pos > 1 and (pos - 1) % every == 0
 
 
-# --------------------------------------------------------------------------- #
-# Reactive throttle backoff (Retry-After wins, else exponential, capped)
-# --------------------------------------------------------------------------- #
+# Reactive throttle backoff: Retry-After wins, else exponential, capped.
 
 
 def _retry_after_value(value) -> float | None:
@@ -356,9 +348,7 @@ def is_wrapper_down_error(exc: BaseException) -> bool:
     ) or ("all connection attempts failed" in text and "127.0.0.1" in text)
 
 
-# --------------------------------------------------------------------------- #
-# Sidecar lifecycle (ensure lazily, probe, stop after idle)
-# --------------------------------------------------------------------------- #
+# Sidecar lifecycle: ensure lazily, probe, stop after idle.
 
 
 def wrapper_data_host_dir(app_dir: str | Path) -> Path:
@@ -567,9 +557,8 @@ class SidecarSupervisor:
         # legitimately read 0.0, so 0.0 must not mean "never noted".
         self._last_activity: float | None = None
 
-    # ----- activity / idle ------------------------------------------------ #
     def note_activity(self) -> float:
-        """Record Apple wrapper work now; returns the stamp."""
+        """Record Apple wrapper work; returns the stamp."""
         self._last_activity = float(self._monotonic())
         return self._last_activity
 
@@ -580,7 +569,7 @@ class SidecarSupervisor:
         return max(0.0, float(self._monotonic()) - self._last_activity)
 
     def should_stop(self, idle_timeout: float, *, apple_busy: bool = False) -> bool:
-        """Whether the idle sidecar should stop itself now."""
+        """Whether the idle sidecar should stop itself."""
         try:
             limit = float(idle_timeout)
         except (TypeError, ValueError):
@@ -589,7 +578,6 @@ class SidecarSupervisor:
             return False
         return self.idle_seconds() >= limit
 
-    # ----- health ---------------------------------------------------------- #
     def health(self, port: int) -> dict | None:
         """The sidecar's /health reply, or None when it does not answer."""
         try:
@@ -598,14 +586,13 @@ class SidecarSupervisor:
             return None
 
     def is_ready(self, port: int) -> bool:
-        """Whether the sidecar answers healthy on this HTTP port right now."""
+        """Whether the sidecar answers healthy on this HTTP port."""
         try:
             payload = self.health(int(port))
         except Exception:
             return False
         return payload is not None and is_health_ok(payload)
 
-    # ----- start / stop ----------------------------------------------------- #
     def _run(self, args: list[str], timeout: int = 60):
         import subprocess
 
@@ -763,11 +750,11 @@ class SidecarSupervisor:
         if port <= 0:
             return False
         host_decrypt = _port_number(decrypt_port or WRAPPER_CONTAINER_DECRYPT_PORT, WRAPPER_CONTAINER_DECRYPT_PORT)
-        # A sidecar left by an earlier release can still publish on every
-        # host address; remove it so the run below rebinds both mappings to
-        # loopback. The session lives in the host data dir, so recreation
-        # preserves it. A removal that fails holds the row instead of
-        # trusting the exposed container's health.
+        # A sidecar whose published bindings are not loopback-private (an
+        # older container or a stale mapping) is removed so the run below
+        # rebinds both mappings to loopback. The session lives in the host
+        # data dir, so recreation preserves it. A removal that fails holds the
+        # row instead of trusting the exposed container's health.
         state = self._container_state()
         migrated = False
         if state and not self._container_bindings_private(port, host_decrypt):

@@ -11,8 +11,8 @@ import "HeartGib.js" as HeartGib
 Item {
     id: page
     property bool active: false
-    // Nothing on the page leaves it any more (CANCEL discards edits in place),
-    // but the host still listens: kept for a programmatic close.
+    // Nothing on the page leaves it (CANCEL discards edits in place), but the
+    // host still listens: kept for a programmatic close.
     signal closed()
     // Advanced-section reset actions. The page only asks; Main.qml shows the
     // confirmation dialog and calls the backend, then (for the settings
@@ -69,7 +69,7 @@ Item {
     // controls reflect the freshly-saved values on the next open.
     property bool needsRefresh: false
 
-    // ---- Shared FFmpeg manager ----
+    // Shared FFmpeg manager
     // Injected from Main as the single app-wide FfmpegManager instance (the same
     // one the first-run setup step uses), so install state lives in one place.
     property var ff: null
@@ -80,7 +80,7 @@ Item {
     function ffSyncEverMissing() { if (page.ff && page.ff.stateKey === "missing") page.ffEverMissing = true }
     Connections { target: page.ff; function onStateKeyChanged() { page.ffSyncEverMissing() } }
 
-    // ---- Ownership-badge scan status ----
+    // Ownership-badge scan status
     // Mirrored from the bridge so the "Music library" card can explain a blank
     // badge: "unreadable" means the folder exists but the OS won't let Waves
     // list it (a network/external drive without permission), which otherwise
@@ -199,7 +199,7 @@ Item {
                                            && (libraryScanProgress || {}).phase === "read"
                                            && (libraryScanProgress || {}).total > 0
 
-    // ---- Apple provider status light ----
+    // Apple provider status light
     // The Providers · Apple Music section's status row bakes its state into
     // the schema, but a save that flips the enable switch must move the
     // light at once, not on the next page open. The bridge emits
@@ -240,7 +240,7 @@ Item {
         }
     }
 
-    // ---- In-app updater state ----
+    // In-app updater state
     property var appUp: ({})             // last waves.appUpdateStatus()
     property string auState: ""          // install lifecycle: "" | downloading | done | failed | cancelled
     property string auMsg: ""
@@ -264,7 +264,7 @@ Item {
         }
     }
 
-    // ---- Diagnostics export state ----
+    // Diagnostics export state
     property bool diagBusy: false        // an export is being written
     property string diagPath: ""         // last exported bundle path ("" = none yet)
     property bool diagFailed: false
@@ -280,9 +280,9 @@ Item {
     // with every section starting collapsed, a deep link to a shut card
     // would otherwise land on a bare header.
     function jumpToCard(cardId) {
-        // Provider deep-links land on the one Providers section (issue #60):
-        // its bands stay expanded while the section is open, so the TIDAL
-        // band's two rows are the only scroll between the header and Apple.
+        // Provider deep-links land on the one Providers section: its bands
+        // stay expanded while the section is open, so the TIDAL band's two
+        // rows are the only scroll between the header and Apple.
         if (cardId === "providers_tidal" || cardId === "providers_apple") cardId = "providers"
         for (var i = 0; i < secRep.count; i++) {
             var it = secRep.itemAt(i)
@@ -300,7 +300,7 @@ Item {
         }
     }
 
-    // ---- Holding your place across tabs ---------------------------------
+    // Holding your place across tabs
     // The page stays mounted while another tab shows, but hiding it collapses
     // its Flickable to zero height and StopAtBounds then clamps contentY to
     // the top. Staying mounted is therefore not enough to keep the spot: the
@@ -453,9 +453,9 @@ Item {
     // else as labelled rows.
     function boolFields(fields) { return fields.filter(function(f){ return f.type === "bool" && f.embedded !== true }) }
     function rowFields(fields)  { return fields.filter(function(f){ return f.type !== "bool" && f.embedded !== true && f.third !== true && f.type !== "char_map" }) }
-    // The Providers section nests one field list per provider card (issue
-    // #60); its header chip counts those instead of the section's own
-    // (empty) field list.
+    // The Providers section nests one field list per provider card; its
+    // header chip counts those instead of the section's own (empty) field
+    // list.
     function providerFieldCount(section) {
         var n = 0
         var ps = section.providers || []
@@ -475,7 +475,7 @@ Item {
         for (var g = 0; g < groups.length; g++) {
             var fs = groups[g].fields
             for (var i = 0; i < fs.length; i++) if (fs[i].key === key) return fs[i]
-            // Provider cards nest their fields one level down (issue #60).
+            // Provider cards nest their fields one level down.
             var ps = groups[g].providers || []
             for (var p = 0; p < ps.length; p++) {
                 var pf = (ps[p] && ps[p].fields) || []
@@ -653,7 +653,7 @@ Item {
         }
     }
 
-    // ---- Controls -------------------------------------------------------
+    // Controls
     // Pure visual, the whole flag tile is the click target (see below).
     // Material pill switch (track + sliding knob). Pure-visual; the enclosing
     // flag tile's MouseArea drives `checked` via page.val/page.setv.
@@ -998,7 +998,7 @@ Item {
         onAccepted: page.setv(targetKey, page.urlToPath(selectedFile))
     }
 
-    // ---- Layout ---------------------------------------------------------
+    // Layout
     ColumnLayout {
         anchors.fill: parent
         spacing: 8
@@ -1096,7 +1096,7 @@ Item {
                         ? Math.max(ffLeftCol.implicitHeight + 28, ffTileR.rowImplicitHeight + 24, 108)
                         : ffSingle.implicitHeight
 
-                    // ---- Single wide card: missing / system-linked states ----
+                    // Single wide card: missing / system-linked states
                     Rectangle {
                     id: ffSingle
                     visible: !ffCard.twin
@@ -1278,7 +1278,7 @@ Item {
                     }
                     }
 
-                    // ---- Managed: left tile, status + actions (the Updates
+                    // Managed: left tile, status + actions (the Updates
                     // card's layout, FFmpeg's darker palette) ----------------
                     Rectangle {
                         visible: ffCard.twin
@@ -1405,7 +1405,7 @@ Item {
                         }
                     }
 
-                    // ---- Managed: right tile, the shared auto-check controls,
+                    // Managed: right tile, the shared auto-check controls,
                     // identical to the Updates card's tile by construction ----
                     AutoCheckTile {
                         id: ffTileR
@@ -1442,7 +1442,7 @@ Item {
                     readonly property var afAuto: page.fieldByKey("auto_update")
                     readonly property var afCad: page.fieldByKey("update_cadence")
 
-                    // ---- Left tile: status, actions, releases link -----------
+                    // Left tile: status, actions, releases link
                     Rectangle {
                         anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
                         width: (parent.width - 10) / 2
@@ -1584,7 +1584,7 @@ Item {
                         }
                     }
 
-                    // ---- Right tile: auto-check toggle + cadence segment ------
+                    // Right tile: auto-check toggle + cadence segment
                     // (AutoCheckTile, shared with the FFmpeg card.)
                     AutoCheckTile {
                         id: auTileR
@@ -1670,7 +1670,7 @@ Item {
                     readonly property bool vbOn: dfVerbose ? page.val(dfVerbose) === true : false
                     readonly property bool rdOn: dfRedact ? page.val(dfRedact) === true : false
 
-                    // ---- Left tile: status, export action ------------------
+                    // Left tile: status, export action
                     Rectangle {
                         anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
                         width: (parent.width - 10) / 2
@@ -1748,7 +1748,7 @@ Item {
                         }
                     }
 
-                    // ---- Right tile: verbose + redact-content toggles -------
+                    // Right tile: verbose + redact-content toggles
                     Rectangle {
                         anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
                         width: (parent.width - 10) / 2
@@ -2445,10 +2445,10 @@ Item {
                                     // Third fields sit three-up in the Flow below.
                                     // Parent width, not the section column: row
                                     // rows also render inside the narrower
-                                    // provider bands (issue #60), where the
-                                    // section width would overflow. Every
-                                    // direct repeater parent is section-width
-                                    // today, so this changes nothing there.
+                                    // provider bands, where the section width
+                                    // would overflow. Every direct repeater
+                                    // parent is section-width, so this changes
+                                    // nothing there.
                                     width: modelData.third === true ? (parent.width - 20) / 3 : parent.width
                                     radius: 10; color: page.surface; border.color: page.border1
                                     // Three-up cards hold a common height whatever their
@@ -2548,9 +2548,9 @@ Item {
                                         // dot and word on the right. The Apple row doubles as
                                         // its section's master switch: the schema carries the
                                         // enable toggle (enabled_key) the way the library
-                                        // composite does, plus the runtime-manage placeholders
-                                        // (actions), which render inert until the Apple rollout
-                                        // ships them. The light prefers the page's live mirror
+                                        // composite does, plus the runtime-manage actions the
+                                        // page wires to the bridge slots. The light prefers the
+                                        // page's live mirror
                                         // (refreshed on appleStatusChanged) over the value baked
                                         // into the schema, so a save flips it at once.
                                         Column {
@@ -2723,8 +2723,8 @@ Item {
                                             }
                                         }
 
-                                        // Apple setup wizard (issue #31): the in-place
-                                        // steps from appleSetupState(), walked in order.
+                                        // Apple setup wizard: the in-place steps
+                                        // from appleSetupState(), walked in order.
                                         // Each step names its advancing action (or none);
                                         // the card re-reads the live mirror whenever the
                                         // light or the runtime moves, so a landed step
@@ -3017,11 +3017,11 @@ Item {
                                             readonly property bool scannable: page.libraryEnabledLive && !libDirty && libraryCol.savedRoot !== "" && !libraryCol.scanning
 
                                             // Header: the master switch at the left, the card's honest
-                                            // "still new" mark as a chip at the right. The mark used to
-                                            // be a three-line red paragraph ABOVE the switch, which read
-                                            // as a crash warning and pushed the control it warned about
-                                            // down the card. As the page's existing gold chip (the same
-                                            // box the FFmpeg row wears) it admits the same thing in the
+                                            // "still new" mark as a chip at the right. A three-line
+                                            // red paragraph ABOVE the switch would read as a crash
+                                            // warning and push the control it warns about down the
+                                            // card. As the page's existing gold chip (the same box the
+                                            // FFmpeg row wears) it admits the same thing in the
                                             // vocabulary the rest of the app already uses, and the
                                             // detail moves to the quiet line below. Gold, not red: red
                                             // here says broken, gold says be aware.
@@ -3289,9 +3289,9 @@ Item {
                                             }
 
                                             // The card's two options, as the same bordered tiles the flag
-                                            // grid uses everywhere else on this page (they were loose
-                                            // switches stacked under the folder row, which read as
-                                            // leftovers rather than as settings). Two across, one row.
+                                            // grid uses everywhere else on this page (loose switches
+                                            // stacked under the folder row read as leftovers rather
+                                            // than as settings). Two across, one row.
                                             // Left: the bulk claim gate, on by default, so a discography
                                             // or an album leaves out what the scan already claims.
                                             // Right: MusicBrainz arbitration, off by default, and its
@@ -3743,9 +3743,9 @@ Item {
                                 }
 
                                 // An odd tile count simply ends the grid mid-row. A
-                                // decorative wave tile used to fill that slot; it read
-                                // as a dead panel rather than finished surface, so the
-                                // row now just stops.
+                                // decorative wave tile in that slot would read as a
+                                // dead panel rather than finished surface, so the
+                                // row just stops there.
                             }
 
                             // Reset actions, Advanced section only, at the very
@@ -3829,15 +3829,16 @@ Item {
                         gibOverlay.releaseWithText(fCredit)
                     }
                 }
-                // The burst's own lifetime. Clearing the mess used to be the
-                // user's job: scroll the credit down into the splats, or scroll
-                // the footer out of view. A window too short to do either (the
-                // page bottoms out before the footer leaves) could never clear
-                // it, so the heart stayed "[love]" for the rest of the session.
-                // It now retires on the same schedule the drip sim already winds
-                // down on (see gibOverlay.step's bleedTime cutoff): the credit
-                // drops off the bottom exactly as scrolling away sends it, and
-                // types itself back in with a whole heart.
+                // The burst's own lifetime. Clearing the mess cannot be the
+                // user's job: it would mean scrolling the credit down into the
+                // splats or the footer out of view, and a window too short to
+                // do either (the page bottoms out before the footer leaves)
+                // could never clear it, so the heart would stay "[love]" for
+                // the rest of the session. The burst retires on the same
+                // schedule the drip sim already winds down on (see
+                // gibOverlay.step's bleedTime cutoff): the credit drops off
+                // the bottom exactly as scrolling away sends it, and types
+                // itself back in with a whole heart.
                 Timer {
                     id: gibRetire
                     // 15s, not 9: the burst is worth watching, and the credit
