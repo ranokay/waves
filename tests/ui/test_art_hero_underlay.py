@@ -9,10 +9,10 @@ gating the "art: GET" box, the skeleton header, and the hover prefetch wiring.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-MAIN_PATH = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-MAIN_QML = MAIN_PATH.read_text()
+from support.paths import QML_MAIN
+
+MAIN_QML = QML_MAIN.read_text()
 
 
 def _body(start: str, end: str = "\n    }") -> str:
@@ -104,7 +104,7 @@ def test_every_loading_surface_shares_the_one_wire_hint():
     # The hint's look lives in WireHint.qml alone; the three loading surfaces
     # (landing, drilled page, fresh search) instantiate it rather than each
     # carrying its own copy, so an edit there changes every loading state.
-    wire = (MAIN_PATH.parent / "WireHint.qml").read_text(encoding="utf-8")
+    wire = (QML_MAIN.parent / "WireHint.qml").read_text(encoding="utf-8")
     assert 'property string phrase: "Reading the wire…"' in wire
     # (comments in Main.qml still quote the phrase when they explain the
     # loading states; what must not come back is a Text rendering it.)
@@ -119,7 +119,7 @@ def test_the_hint_ships_one_treatment_and_not_a_dial():
     # the chosen one is the whole file now. A `variant` switch back in this
     # component means the other ten came back with it, and every loading
     # surface in the app is then carrying code no release can reach.
-    wire = (MAIN_PATH.parent / "WireHint.qml").read_text(encoding="utf-8")
+    wire = (QML_MAIN.parent / "WireHint.qml").read_text(encoding="utf-8")
     assert "property int variant" not in wire
     assert "Loader" not in wire
     # The swell: a row of cells with a bright head and a long wake behind it.
@@ -133,7 +133,7 @@ def test_the_finished_page_never_waits_for_the_hint_to_fade():
     # collapse the instant loading ends: an animated height would hold the
     # finished page down for the length of the fade, and the rows would be
     # watched sliding up into place on every load.
-    wire = (MAIN_PATH.parent / "WireHint.qml").read_text(encoding="utf-8")
+    wire = (QML_MAIN.parent / "WireHint.qml").read_text(encoding="utf-8")
     assert "height: active ? implicitHeight : 0" in wire
     assert "Behavior on height" not in wire
     # The visual, and only the visual, rides the cross-fade. Through states and

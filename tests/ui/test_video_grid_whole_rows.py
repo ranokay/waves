@@ -9,9 +9,9 @@ eight at four; SHOW ALL appears only past that count.
 
 from __future__ import annotations
 
-from pathlib import Path
+from support.paths import QML_MAIN
 
-MAIN = (Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml").read_text(encoding="utf-8")
+MAIN = QML_MAIN.read_text(encoding="utf-8")
 
 
 def _block(start: str, end: str) -> str:

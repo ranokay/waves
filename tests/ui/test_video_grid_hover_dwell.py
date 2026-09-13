@@ -11,18 +11,19 @@ still, and assert the dwell completes and the peek opens.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-
-_EXIT_OK = 0
-_EXIT_FAIL = 1
-_EXIT_NO_QT = 3
-_EXIT_PRECONDITION = 4
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 _VIDEO = (
     '{"id":"v1","title":"House On Fire","artist":"Rise Against","artists":[],'
@@ -31,32 +32,18 @@ _VIDEO = (
 )
 
 
+@pytest.mark.qml
 def test_resting_on_a_video_result_opens_the_peek():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    # Sandboxed: this scenario builds a REAL WavesBridge, and a bridge that
-    # finds the packaged app's config dir adopts its settings, writes its
-    # log, and starts a real scan of the user's music library.
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-video-dwell-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-video-dwell-test-",
+        failure_message="a pointer resting on a video result no longer starts its preview",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"a pointer resting on a video result no longer starts its preview:\n{tail}"
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QPoint, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
@@ -65,15 +52,16 @@ def _run_scenario() -> int:
         from PySide6.QtTest import QTest
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
@@ -91,11 +79,11 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     if not isinstance(root, QQuickWindow):
         print("root object is not a window", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     def q(expr: str):
         r = QQmlExpression(QQmlEngine.contextForObject(root), root, expr).evaluate()
@@ -132,7 +120,7 @@ def _run_scenario() -> int:
     )
     if not centre:
         print("no video thumbnail in the grid to hover", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     x, y = (int(n) for n in str(centre).split(","))
 
     QTest.mouseMove(root, QPoint(x - 30, y - 30))
@@ -159,11 +147,9 @@ def _run_scenario() -> int:
             f"(hovered={q('root.peekThumbHover')})",
             file=sys.stderr,
         )
-        return _EXIT_FAIL
-    return _EXIT_OK
+        return EXIT_REGRESSED
+    return EXIT_OK
 
 
-if __name__ == "__main__":
-    if "--run-scenario" in sys.argv:
-        raise SystemExit(_run_scenario())
-    raise SystemExit("run this file through pytest")
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

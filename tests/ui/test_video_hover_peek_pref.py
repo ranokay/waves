@@ -9,8 +9,8 @@ flipping it notifies the QML, which re-reads the pref on that signal and gates
 root.peekOpen (the single entry point every thumbnail's dwell timer funnels
 into, so one check silences them all).
 
-The sibling of tests/test_hover_motion_pref.py and
-tests/test_art_hover_tilt_pref.py, and deliberately their twin: the escape
+The sibling of tests/ui/test_hover_motion_pref.py and
+tests/ui/test_art_hover_tilt_pref.py, and deliberately their twin: the escape
 hatches should stay pinned the same way.
 """
 

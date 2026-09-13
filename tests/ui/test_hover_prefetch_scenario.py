@@ -12,46 +12,34 @@ still on the wire.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-_EXIT_OK = 0
-_EXIT_FAIL = 1
-_EXIT_NO_QT = 3
-_EXIT_PRECONDITION = 4
 
-
+@pytest.mark.qml
 def test_resting_on_a_playlist_card_prefetches_its_page_and_the_click_paints_whole():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    # Sandboxed: a REAL WavesBridge adopts whatever config dir it finds.
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-hover-prefetch-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-hover-prefetch-test-",
+        failure_message="hover prefetch / skeleton header regression",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    # PRECONDITION is for the fixture (a fake card missing from the shelf),
-    # never for the app: a click that does not open, a Back that does not
-    # return, a page that never loads are regressions and exit FAIL.
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"hover prefetch / skeleton header regression:\n{tail}"
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import (
             QCoreApplication,
@@ -68,39 +56,39 @@ def _run_scenario() -> int:
         from PySide6.QtTest import QTest
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     # The first-run gates (terms, ffmpeg setup, update opt-in) are full-window
     # and sit above every surface -- the ffmpeg gate's MouseArea eats hover by
     # design -- and all three wake the moment the scenario declares the session
     # signed in. A machine that has run Waves has answered them; a fresh one
     # has not, and the gates would block everything this scenario drives. So
-    # the QSettings store they read is sandboxed per run (a unique ini file, so
-    # nothing global is touched) and pre-seeded with the answered state. This
-    # must happen before the QGuiApplication exists: QSettings resolves its
-    # storage from the application identity at first use.
-    scenario_config = tempfile.mkdtemp(prefix="waves-hover-config-")
+    # the QSettings store they read is sandboxed per run and pre-seeded with
+    # the answered state below. The identity must be set before the app exists
+    # (QSettings resolves its storage from it), and the format is forced to INI
+    # so the redirected store is the one the QML Settings objects read on every
+    # platform.
     QCoreApplication.setOrganizationName("Waves")
     QCoreApplication.setApplicationName("hover-prefetch-scenario")
     QSettings.setDefaultFormat(QSettings.Format.IniFormat)
-    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, scenario_config)
-    seeded = QSettings()
+
+    app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     # The terms answer is (accepted, version stamp): a bare acceptance of an
     # older revision re-prompts by design, so the stamp rides along.
+    seeded = QSettings()
     seeded.setValue("legal/termsAccepted", True)
     seeded.setValue("legal/termsAcceptedVersion", "1.0")
     seeded.setValue("setup/ffmpegSetupDone", True)
     seeded.setValue("setup/ffmpegPromptDismissed", True)
     seeded.setValue("setup/updatePromptAnswered", True)
     seeded.sync()
-
-    app = QGuiApplication.instance() or QGuiApplication([])
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
@@ -131,11 +119,11 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     if not isinstance(root, QQuickWindow):
         print("root object is not a window", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     def q(expr: str):
         r = QQmlExpression(QQmlEngine.contextForObject(root), root, expr).evaluate()
@@ -254,7 +242,7 @@ def _run_scenario() -> int:
             f"Browse landing never built (sections={q('browseSections.length')}, error={q('browseError')})",
             file=sys.stderr,
         )
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle(300)
 
     def is_card(it) -> bool:
@@ -306,7 +294,7 @@ def _run_scenario() -> int:
             f"landingH={q('browseLanding.contentHeight')}, open={q('browseOpen')}, key={q('browsePageKey')!r})",
             file=sys.stderr,
         )
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     c = centre_of(first)
 
     # 1. Hover and hold: the dwell must reach the backend and come back.
@@ -318,17 +306,17 @@ def _run_scenario() -> int:
             f"the hover never prefetched the page (prefetched={prefetched}, key={q('root._hoverPrefetchKey')})",
             file=sys.stderr,
         )
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if prefetched[0].get("art") != hero_art or list(prefetched[0].get("rowArts") or []) != [row_art]:
         print(f"prefetch summary carried the wrong covers: {prefetched[0]}", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     # The card's cover and the page's covers are in the warm pool.
     if not pump(lambda: q("warmArtModel.count") >= 3, 2000):
         print(f"warm pool did not take the prefetched covers (count={q('warmArtModel.count')})", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if q("root.busy") is True:
         print("a hover prefetch flipped the busy indicator", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
 
     # 2. Click the card's art: the page must paint at once, no loading hint.
     #
@@ -354,13 +342,13 @@ def _run_scenario() -> int:
         pump(opened, 3000)
     if q("browsePageKey") != "item:playlist:p0":
         print(f"the click did not open the page (key={q('browsePageKey')})", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if q("browsePageLoading") is True or not q("browseItemHeader.visible"):
         print("a prefetched page still showed the loading state on click", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if q("browseDrillHint.visible") is True:
         print('"Reading the wire…" showed for a prefetched page', file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     grab("1-prefetched-open")
     # Over the next second the hero must never be in the state that shows the
     # "art: GET" box (waited, with no stand-in up), and must end up ready.
@@ -368,22 +356,22 @@ def _run_scenario() -> int:
         settle(25)
         if q("bihArt.artWaited") is True and q("bihArt.underReady") is not True:
             print("the hero showed the art: GET box after a prefetched open", file=sys.stderr)
-            return _EXIT_FAIL
+            return EXIT_REGRESSED
     if q("bihArt.artState") != "ready":
         print(f"hero never became ready (state={q('bihArt.artState')})", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     # The rows' discs came from the warm pool: ready, and none of them ever
     # waited, so no mark was shown and nothing faded.
     warm = discs()
     if not warm:
         print("no track discs on the opened page", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if disc_states() != ["ready"]:
         print(f"a warm page's discs were not all ready: {disc_states()}", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if any(d.property("artWaited") is True for d in warm):
         print("a warm disc showed the waiting state (it would flash the mark and fade)", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
 
     # 3. Back, then open a never-hovered card whose page is slow: the header
     #    paints as a skeleton from the card's own title and cover while the
@@ -391,12 +379,12 @@ def _run_scenario() -> int:
     q("navBack()")
     if not pump(lambda: q("browsePageKey") == "", 2000):
         print("Back did not return to the landing", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     settle(200)
     slow = card_item("slow")
     if slow is None:
         print("the slow card is not on the shelf", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     sc = centre_of(slow)
     QTest.mouseMove(root, QPoint(sc.x() - 40, sc.y() - 40))
     settle(30)
@@ -404,26 +392,26 @@ def _run_scenario() -> int:
     settle(30)
     if q("browsePageKey") != "item:playlist:slow" or q("browsePageLoading") is not True:
         print(f"the slow page did not enter its loading state (key={q('browsePageKey')})", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if not q("browseItemHeader.visible") or q("bihTitle.text") != "Playlist 1":
         print(
             f"no skeleton header while loading (visible={q('browseItemHeader.visible')}, title={q('bihTitle.text')!r})",
             file=sys.stderr,
         )
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if not pump(lambda: q("bihArt.underReady") is True, 1000):
         print("the card's cover never showed in the skeleton hero", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if q("browseDrillHint.visible") is not True:
         print("the loading hint must still show under the skeleton", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     grab("2-skeleton-while-loading")
     if not pump(lambda: q("browsePageLoading") is False and q("bihArt.artState") == "ready", 4000):
         print("the slow page never landed", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if q("bihTitle.text") != "Page slow":
         print(f"payload title did not replace the hint ({q('bihTitle.text')!r})", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     grab("3-slow-page-landed")
 
     # 4. A page whose row covers cannot resolve: the discs must SAY so. While
@@ -433,32 +421,32 @@ def _run_scenario() -> int:
     q("navBack()")
     if not pump(lambda: q("browsePageKey") == "", 2000):
         print("Back did not return to the landing (before the disc page)", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     settle(200)
     dcard = card_item("discs")
     if dcard is None:
         print("the disc-state card is not on the shelf", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     QTest.mouseClick(root, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre_of(dcard))
     if not pump(lambda: q("browsePageKey") == "item:playlist:discs" and q("browsePageLoading") is False, 3000):
         print(f"the disc page never opened (key={q('browsePageKey')})", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     # A cover that cannot resolve keeps the disc in loading while it retries.
     if not pump(lambda: any(d.property("artWaited") is True for d in discs()), 2000):
         print(f"an unresolvable cover never reached the waiting state: {disc_states()}", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     marked = [d for d in discs() if d.property("artWaited") is True]
     if not any(str(d.property("artState")) == "loading" for d in marked):
         print(f"a retrying disc must read as loading, not failed: {disc_states()}", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     if "none" not in disc_states():
         print(f"a track with no cover must say so, not sit grey: {disc_states()}", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     grab("4-disc-loading-mark")
     # Retries spent (600ms x 3): the mark turns red rather than retrying forever.
     if not pump(lambda: "failed" in disc_states(), 5000):
         print(f"the discs never gave up (states={disc_states()})", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     settle(500)  # let the face and the border finish crossing over
     grab("5-disc-failed")
     # 5. Two rows of one album share a key. Crossing between them lands the
@@ -476,12 +464,10 @@ def _run_scenario() -> int:
     )
     if keys != "album:al9|":
         print(f"a neighbouring row of the same album cancelled the arm it did not own (keys={keys!r})", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     print("hover prefetch + skeleton header + disc states OK", flush=True)
-    return _EXIT_OK
+    return EXIT_OK
 
 
-if __name__ == "__main__":
-    if "--run-scenario" in sys.argv:
-        raise SystemExit(_run_scenario())
-    raise SystemExit("run this file through pytest")
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

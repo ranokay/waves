@@ -186,6 +186,11 @@ ignore = [
 "tests/ui/test_queue_row_progress_density.py" = ["C901"]
 "tests/ui/test_queue_row_quality.py" = ["C901"]
 "tests/ui/test_queue_unavailable_word.py" = ["C901"]
+# The ported hover/video scenarios keep their boot -> drive -> assert shape as
+# one deliberately linear function (C901).
+"tests/ui/test_hover_prefetch_scenario.py" = ["C901"]
+"tests/ui/test_hover_swell_fade.py" = ["C901"]
+"tests/ui/test_video_grid_hover_dwell.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
 "tests/metadata/test_apple_double_cleanup.py" = ["S603"]
@@ -236,16 +241,12 @@ ignore = [
 "tests/ui/test_tidal_signin_reachable_qml.py" = ["S603", "C901"]
 "tests/test_nav_seq_and_history_guards.py" = ["S603", "C901"]
 "tests/test_folder_badge_and_crumb_labels.py" = ["S603", "C901"]
-"tests/test_hover_swell_fade.py" = ["S603", "C901"]
-"tests/test_video_grid_hover_dwell.py" = ["S603", "C901"]
-"tests/test_hover_prefetch_scenario.py" = ["S603", "C901"]
 "tests/test_offscreen_qt_is_usable.py" = ["S603"]
 # Runs the bundle size report for real, on a root wide enough to fill the pipe
 # buffer, through the shell it is written for (S603/S607, fixed argv).
 "tests/test_final_audit_updater.py" = ["S603", "S607"]
 # Same subprocess-isolation + linear-scenario shape as the scroll guard.
 "tests/test_update_toast_staged.py" = ["S603", "C901"]
-"tests/test_video_card_date_no_overlap.py" = ["S603", "C901"]
 "tests/test_playlist_selection_and_reset.py" = ["S603", "C901"]
 # The quarantine-row scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).

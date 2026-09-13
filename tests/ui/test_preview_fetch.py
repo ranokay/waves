@@ -216,6 +216,10 @@ def test_the_remux_error_keeps_ffmpegs_words_and_none_of_the_paths(tmp_path, mon
     import logging
     import subprocess
 
+    # A bridge built earlier in the suite installs diagnostics, which turns
+    # "waves" propagation off; caplog reads through the root, so restore it.
+    monkeypatch.setattr(logging.getLogger("waves"), "propagate", True, raising=True)
+
     class _Stub:
         _remux_preview = WavesBridge._remux_preview
 

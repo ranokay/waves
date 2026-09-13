@@ -8,7 +8,7 @@ section, and flipping it notifies the QML, which re-reads the pref on that
 signal and swings root.artFxVariant between "tilt" and "none" (the switch the
 Art component, the track discs and the Browse hero cards all already hang off).
 
-The sibling of tests/test_hover_motion_pref.py, and deliberately its twin: the
+The sibling of tests/ui/test_hover_motion_pref.py, and deliberately its twin: the
 two escape hatches should stay pinned the same way.
 """
 
