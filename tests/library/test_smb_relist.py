@@ -36,7 +36,8 @@ import os
 from types import SimpleNamespace
 
 import pytest
-from test_library_listing_truncation import _CM, _fake_listing, _mk
+from support.library_fakes import make_album_dir as _mk
+from test_library_listing_truncation import _CM, _fake_listing
 
 from waves.library_index import LibraryIndex
 from waves.waves_ui import smb_relist

@@ -2,12 +2,12 @@
 
 WHAT THIS FENCES OFF (issue #26)
 --------------------------------
-Since the two-rows rule (test_atmos_is_its_own_row.py) the Atmos edition keys
+Since the two-rows rule (tests/library/test_atmos_is_its_own_row.py) the Atmos edition keys
 apart from its stereo twin in every same-release grouping, so it survives the
 discography's dedup and edition handling as its own album. Nothing after that
 asked the Atmos setting: the sweep queued the Atmos edition beside the stereo
 one, every track of it is Atmos-only, and the engine's "nothing else to fetch"
-clause (test_atmos_only_downloads_anyway.py) then delivered spatial files to a
+clause (tests/library/test_atmos_only_downloads_anyway.py) then delivered spatial files to a
 user who had turned Atmos off.
 
 THE RULE

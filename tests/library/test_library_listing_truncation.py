@@ -26,16 +26,10 @@ import os
 import shutil
 import time
 
+from support.library_fakes import make_album_dir as _mk
+
 import waves.library_index as li
 from waves.library_index import SCAN_OK, LibraryIndex
-
-
-def _mk(base, rel, files):
-    d = os.path.join(base, *rel.split("/"))
-    os.makedirs(d, exist_ok=True)
-    for name in files:
-        open(os.path.join(d, name), "w").close()
-    return d
 
 
 def _reader(tagmap, counter=None):

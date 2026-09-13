@@ -18,7 +18,7 @@ Covered here:
     symlink-to-track mode actually needs realpath.
 
 Download-side tests build the instance with __new__ (skipping the heavy
-network __init__); bridge-side tests follow the test_ownership_bridge.py
+network __init__); bridge-side tests follow the tests/library/test_ownership_bridge.py
 pattern of binding real WavesBridge methods onto a bare stub.
 """
 

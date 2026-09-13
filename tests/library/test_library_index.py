@@ -10,9 +10,9 @@ from __future__ import annotations
 import itertools
 import os
 import time
-from pathlib import Path
 
 import pytest
+from support.paths import REPO_ROOT
 
 from waves.library_index import (
     _EMPTY_STRIKE_GAP_S,
@@ -1282,7 +1282,7 @@ def test_the_scan_pools_are_actually_registered():
     """The gauges exist and move (above), and the bridge hands all three to
     diagnostics at startup. Without this the rule is only half kept: a gauge
     nobody registered reports to nobody."""
-    backend = (Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "backend.py").read_text(encoding="utf-8")
+    backend = (REPO_ROOT / "waves" / "waves_ui" / "backend.py").read_text(encoding="utf-8")
     for name in ("libwalk", "libread", "libpoll"):
         assert f'diagnostics.register_pool("{name}"' in backend, f"the {name} pool is not registered"
 

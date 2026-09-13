@@ -25,7 +25,15 @@ import os
 import threading
 from types import SimpleNamespace
 
-from test_library_bridge import _album, _make, _Stub
+from support.library_fakes import (
+    LibraryStub as _Stub,
+)
+from support.library_fakes import (
+    make_album_dir as _album,
+)
+from support.library_fakes import (
+    make_library_bridge as _make,
+)
 from test_library_listing_truncation import _fake_listing
 
 from waves.waves_ui import bridge_library

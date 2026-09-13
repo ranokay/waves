@@ -1,6 +1,6 @@
-"""Provider-aware scan & badges (issue #36, spec §8).
+"""Provider-aware library scan and badges.
 
-The library scan reads the generic tag family first (legacy fallback) plus
+The scan reads the generic tag family first (legacy fallback) plus
 WAVES_AUDIO_TYPE, with the codec sniff retired to a legacy fallback. Atmos
 files attach as Versions to the canonical track set: album arithmetic counts
 non-Atmos files, Atmos copies match within the album folder and its Atmos
@@ -16,19 +16,13 @@ from __future__ import annotations
 
 import os
 
+from support.library_fakes import make_album_dir as _mk
+
 from waves import matching
 from waves.library_index import LibraryIndex, _default_audio_type
 from waves.ownership import OwnershipStore
 from waves.waves_ui.backend import WavesBridge
 from waves.waves_ui.bridge_library import _atmos_fragments, _atmos_parent
-
-
-def _mk(base, rel, files):
-    d = os.path.join(base, *rel.split("/"))
-    os.makedirs(d, exist_ok=True)
-    for name in files:
-        open(os.path.join(d, name), "w").close()
-    return d
 
 
 def _tags(**over):

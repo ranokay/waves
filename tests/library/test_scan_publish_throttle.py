@@ -25,7 +25,12 @@ from __future__ import annotations
 
 import os
 
-from test_library_bridge import _album, _make
+from support.library_fakes import (
+    make_album_dir as _album,
+)
+from support.library_fakes import (
+    make_library_bridge as _make,
+)
 
 from waves.waves_ui import bridge_library
 

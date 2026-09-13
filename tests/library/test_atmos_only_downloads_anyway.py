@@ -22,7 +22,7 @@ WHAT IS REAL
 ------------
 The session-choice tests drive the engine's own _get_track_stream_info with a
 stub tidal that only records which session was reached for, the same shape
-tests/test_atmos_ownership_scale.py uses. The gate tests drive the real
+tests/library/test_atmos_ownership_scale.py uses. The gate tests drive the real
 _TrackedDownload._ownership_decision over a real OwnershipStore with real
 files, because the mirror _delivers_atmos now carries the engine's "nothing
 else to fetch" clause and the two must not drift.

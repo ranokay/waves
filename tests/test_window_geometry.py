@@ -8,11 +8,11 @@ Two layers are covered:
   * the ``windowSaveGeometry`` / ``windowRestoreGeometry`` round trip through a
     real ``waves.json`` on disk, exercised through a Qt-free stub that binds the
     real bridge methods onto a plain object (same approach as
-    tests/test_ownership_bridge.py). The screen clamp is stubbed to identity in
+    tests/library/test_ownership_bridge.py). The screen clamp is stubbed to identity in
     the round-trip layer so it does not depend on a real screen; the clamp math
     is covered on its own above.
 
-Like tests/test_ownership_bridge.py these import WavesBridge, so they collect
+Like tests/library/test_ownership_bridge.py these import WavesBridge, so they collect
 only in the full runtime venv (PySide6 present).
 """
 

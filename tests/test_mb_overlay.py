@@ -15,7 +15,7 @@ The rules fenced off here, each the safe direction:
   directly, so a third-party opinion can never cost a download.
 
 Exercised on a bare mixin instance with everything injected, mirroring
-test_library_claim_gate.py: no Qt, no network, no files.
+tests/library/test_library_claim_gate.py: no Qt, no network, no files.
 """
 
 from __future__ import annotations
