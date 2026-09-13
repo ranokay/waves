@@ -24,6 +24,16 @@ from mutagen.id3 import (
 from waves.ids import DEFAULT_PROVIDER, namespaced_id
 
 
+def sniff_image_format(data: bytes) -> str:
+    """The image's real format by magic bytes: "png", "jpg", or "" unknown."""
+    head = bytes(data[:8]) if data else b""
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    return ""
+
+
 def _rg_missing(value) -> bool:
     """True when a ReplayGain value was never actually measured.
 
@@ -358,11 +368,16 @@ class Metadata:
         result: bool = False
 
         if self.cover_data:
+            # The tag's declared format must match the bytes, or strict
+            # readers show a broken picture (a PNG labelled jpeg, or the
+            # default-format MP4Cover over PNG bytes).
+            image_format = sniff_image_format(self.cover_data)
+            mime = "image/png" if image_format == "png" else "image/jpeg"
             if isinstance(self.m, mutagen.flac.FLAC):
                 flac_cover = flac.Picture()
                 flac_cover.type = id3.PictureType.COVER_FRONT
                 flac_cover.data = self.cover_data
-                flac_cover.mime = "image/jpeg"
+                flac_cover.mime = mime
 
                 self.m.clear_pictures()
                 self.m.add_picture(flac_cover)
@@ -372,14 +387,17 @@ class Metadata:
                 self.m.tags.add(
                     APIC(
                         encoding=3,
-                        mime="image/jpeg",
+                        mime=mime,
                         type=id3.PictureType.COVER_FRONT,
                         desc="Cover",
                         data=self.cover_data,
                     )
                 )
             elif isinstance(self.m, mutagen.mp4.MP4):
-                cover_mp4 = mp4.MP4Cover(self.cover_data)
+                cover_mp4 = mp4.MP4Cover(
+                    self.cover_data,
+                    imageformat=(mp4.MP4Cover.FORMAT_PNG if image_format == "png" else mp4.MP4Cover.FORMAT_JPEG),
+                )
                 self.m.tags["covr"] = [cover_mp4]
 
             result = True

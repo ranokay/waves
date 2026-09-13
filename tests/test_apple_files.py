@@ -174,3 +174,129 @@ def test_tag_apple_file_writes_generic_only_tags(tmp_path):
     assert bytes(tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:song-1"
     assert tags["\xa9nam"] == ["Xtal"]
     assert not any("WAVES_TIDAL" in key for key in tags)
+
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _image_bytes(tmp_path, name: str, codec: str) -> bytes:
+    path = tmp_path / name
+    subprocess.run(  # noqa: S603 (fixed argv: a local fixture, no user input)
+        [
+            _ffmpeg(),
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=32x32",
+            "-frames:v",
+            "1",
+            "-c:v",
+            codec,
+            str(path),
+        ],
+        check=True,
+    )
+    return path.read_bytes()
+
+
+def test_sniff_image_format_reads_magic_bytes():
+    from waves.metadata import sniff_image_format
+
+    assert sniff_image_format(PNG_MAGIC + b"rest") == "png"
+    assert sniff_image_format(b"\xff\xd8\xff\xe0rest") == "jpg"
+    assert sniff_image_format(b"RIFF....WEBP") == ""
+    assert sniff_image_format(b"") == ""
+
+
+@needs_ffmpeg
+def test_cover_sidecar_converts_to_the_selected_format(tmp_path):
+    from waves.metadata import sniff_image_format
+
+    jpeg = _image_bytes(tmp_path, "src.jpg", "mjpeg")
+    png = _image_bytes(tmp_path, "src.png", "png")
+    (tmp_path / "as-png").mkdir()
+    (tmp_path / "as-jpg").mkdir()
+
+    as_png = write_cover_sidecar(tmp_path / "as-png", jpeg, "png", ffmpeg_path=_ffmpeg())
+    as_jpg = write_cover_sidecar(tmp_path / "as-jpg", png, "jpg", ffmpeg_path=_ffmpeg())
+
+    assert as_png is not None and as_png.name == "cover.png"
+    assert sniff_image_format(as_png.read_bytes()) == "png"
+    assert as_jpg is not None and as_jpg.name == "cover.jpg"
+    assert sniff_image_format(as_jpg.read_bytes()) == "jpg"
+
+
+def test_raw_sidecar_keeps_the_master_bytes(tmp_path):
+    png = PNG_MAGIC + b"master"
+    target = write_cover_sidecar(tmp_path, png, "raw")
+
+    assert target is not None and target.name == "cover.png"
+    assert target.read_bytes() == png
+
+
+def test_sidecar_without_a_converter_keeps_the_true_extension(tmp_path, monkeypatch):
+    monkeypatch.setattr("waves.apple_files.shutil.which", lambda name: None)
+    jpeg = b"\xff\xd8\xff\xe0" + b"jpeg"
+
+    target = write_cover_sidecar(tmp_path, jpeg, "png", ffmpeg_path="")
+
+    assert target is not None and target.name == "cover.jpg"
+    assert target.read_bytes() == jpeg, "the served bytes are never relabelled"
+
+
+@needs_ffmpeg
+def test_embedded_png_cover_keeps_its_true_format(tmp_path):
+    import mutagen.flac
+
+    src = tmp_path / "src.m4a"
+    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
+        [_ffmpeg(), "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "aac", str(src)],
+        check=True,
+    )
+    png = _image_bytes(tmp_path, "cover.png", "png")
+
+    assert tag_apple_file(src, title="Xtal", facts={}, cover_data=png) is True
+    cover = mutagen.mp4.MP4(str(src)).tags["covr"][0]
+    assert cover.imageformat == mutagen.mp4.MP4Cover.FORMAT_PNG
+
+    flac_src = tmp_path / "src.flac"
+    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
+        [
+            _ffmpeg(),
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-c:a",
+            "flac",
+            str(flac_src),
+        ],
+        check=True,
+    )
+    assert tag_apple_file(flac_src, title="Xtal", facts={}, cover_data=png) is True
+    assert mutagen.flac.FLAC(str(flac_src)).pictures[0].mime == "image/png"
+
+
+@needs_ffmpeg
+def test_embed_cover_bytes_converts_png_for_the_tag(tmp_path):
+    from types import SimpleNamespace
+
+    from waves.metadata import sniff_image_format
+    from waves.waves_ui.backend import WavesBridge
+
+    png = _image_bytes(tmp_path, "c.png", "png")
+    stub = SimpleNamespace()
+    stub._cover_convert_ffmpeg = lambda: _ffmpeg()
+    stub._embed_cover_bytes = WavesBridge._embed_cover_bytes.__get__(stub, SimpleNamespace)
+
+    assert sniff_image_format(stub._embed_cover_bytes(png)) == "jpg"
+
+    jpeg = _image_bytes(tmp_path, "c.jpg", "mjpeg")
+    assert stub._embed_cover_bytes(jpeg) is jpeg
+    assert stub._embed_cover_bytes(None) is None
