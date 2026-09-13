@@ -200,6 +200,12 @@ ignore = [
 "tests/ui/test_forward_history_account_switch.py" = ["C901"]
 "tests/ui/test_playlist_folder_qml.py" = ["C901"]
 "tests/ui/test_playlist_selection_and_reset.py" = ["C901"]
+# The ported library scenarios keep their boot -> drive -> assert shape as one
+# deliberately linear function (C901).
+"tests/ui/test_library_downloaded_state.py" = ["C901"]
+"tests/ui/test_library_presence_surfaces.py" = ["C901"]
+"tests/ui/test_library_track_claim.py" = ["C901"]
+"tests/ui/test_presence_call_budget.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
 "tests/metadata/test_apple_double_cleanup.py" = ["S603"]
@@ -218,12 +224,8 @@ ignore = [
 # whole so it reads (and was reviewed) as one flow, so exempt mccabe (C901).
 "waves/library_index.py" = ["C901"]
 # Same subprocess-isolation + linear-scenario shape as the scroll guard.
-"tests/test_library_track_claim.py" = ["S603", "C901"]
 "tests/test_gates_sit_above_drawers.py" = ["S603", "C901"]
-"tests/test_library_downloaded_state.py" = ["S603", "C901"]
 "tests/test_qml_loads.py" = ["S603", "C901"]
-"tests/test_presence_call_budget.py" = ["S603", "C901"]
-"tests/test_library_presence_surfaces.py" = ["S603", "C901"]
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
 "tests/library/test_library_bridge.py" = ["S603"]

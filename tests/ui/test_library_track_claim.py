@@ -38,18 +38,19 @@ the rest of the suite.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 ARTIST = "Miss May I"
 ALBUM = "Shadows Inside"
@@ -64,40 +65,28 @@ EXPECTED = {
 }
 
 
+@pytest.mark.qml
 def test_track_button_carries_the_library_verdict_and_opens_the_gate():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-track-claim-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-track-claim-test-",
+        failure_message="a track button reported the wrong library state.",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-16:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert (
-        proc.returncode == _EXIT_OK
-    ), f"a track button reported the wrong library state. Scenario exit={proc.returncode}:\n{tail}"
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from PySide6.QtCore import Slot
 
@@ -106,7 +95,7 @@ def _run_scenario() -> int:
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     # DOWNLOAD ANYWAY has to actually reach the engine. A subclass, not an
     # instance attribute: QML dispatches through the meta-object.
@@ -169,7 +158,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", 1400)
     root.setProperty("height", 900)
@@ -268,10 +257,10 @@ def _run_scenario() -> int:
         rows = json.loads(q(probe))
     except Exception as exc:
         print(f"probe failed: {exc}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if len(rows) != len(items):
         print(f"expected {len(items)} rows, probed {len(rows)}: {rows}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     bad = []
     for r in rows:
@@ -295,7 +284,7 @@ def _run_scenario() -> int:
         bad.append(f"t-proven: claim lost its folder ({by_id['t-proven']['path']!r})")
     if bad:
         print("\n".join(bad), file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     # Fire the REAL tap area rather than the function behind it: the wiring is
     # the thing at risk, and calling openLibraryClaim() directly would keep
@@ -343,7 +332,7 @@ def _run_scenario() -> int:
     """
     if not q(tap):
         print("could not reach the proven track's tap area", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle(80)
 
     gate = {
@@ -361,12 +350,10 @@ def _run_scenario() -> int:
 
     if not all(gate.values()):
         print(f"gate={gate}", file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
     print(f"ok: rows={rows} gate={gate} downloaded={downloaded}")
-    return _EXIT_OK
+    return EXIT_OK
 
 
-if __name__ == "__main__":
-    if "--run-scenario" in sys.argv:
-        raise SystemExit(_run_scenario())
-    raise SystemExit(_EXIT_PRECONDITION)
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

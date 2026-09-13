@@ -80,7 +80,7 @@ function collect(item, pick, out) {
 }
 """
 
-# The download box is reached the way tests/test_library_presence_surfaces.py
+# The download box is reached the way tests/ui/test_library_presence_surfaces.py
 # reaches it, by the word it prints; the preview control is named. Both are
 # measured in the coordinates of the line they share, which is their parent.
 _LINE_PROBE = (

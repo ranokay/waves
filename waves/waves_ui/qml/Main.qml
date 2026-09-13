@@ -6226,7 +6226,7 @@ ApplicationWindow {
         //
         // It is a second crossing on a surface whose ArtistBadges strip also
         // asks, and deliberately so: the budget this app keeps is one call per
-        // thing that ASKS, not one per row (see tests/test_presence_call_budget
+        // thing that ASKS, not one per row (see tests/ui/test_presence_call_budget
         // and the track row, whose pill and button both count). The rollup
         // itself is derived once and cached per index, so the repeat is a
         // dict.get behind the crossing.

@@ -31,20 +31,19 @@ installs process-global handlers that must not leak into the suite.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
-
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 ARTIST = "Miss May I"
 ALBUM = "Shadows Inside"
@@ -52,25 +51,17 @@ YEAR = "2017"
 FOLDER = "/lib/mmi/shadows-inside"
 
 
+@pytest.mark.qml
 def test_every_download_surface_reports_the_library_verdict():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-presence-surfaces-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=240,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-20:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, (
-        "a download surface stopped consulting the library presence bridge, so something already "
-        f"on disk reads as a plain DOWNLOAD there. Scenario exit={proc.returncode}:\n{tail}"
+        sandbox_prefix="waves-presence-surfaces-",
+        failure_message=(
+            "a download surface stopped consulting the library presence bridge, so something already on disk "
+            "reads as a plain DOWNLOAD there."
+        ),
     )
 
 
@@ -97,22 +88,22 @@ function faceOf(item) {
 
 
 def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.matching import presence_key, track_key
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -152,7 +143,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", 1400)
     root.setProperty("height", 900)
@@ -231,10 +222,10 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
         icons = {r["id"]: r for r in json.loads(q(icons_probe))}
     except Exception as exc:
         print(f"track-icon probe failed: {exc}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if "tr-held" not in icons or "tr-absent" not in icons:
         print(f"the expanded album panel built no track icons: {icons}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     held, absent = icons["tr-held"], icons["tr-absent"]
     # Done, and PROVEN done: the panel names the release, which is the only
     # evidence a track can be proven by, so this one is green rather than gold.
@@ -261,7 +252,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     )
     if not q(tap):
         print("could not reach the held track's tap area", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle(120)
     gate = {
         "opens": bool(q("libraryClaimGate.shown")),
@@ -289,10 +280,10 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
         artists = {r["id"]: r for r in json.loads(q(artist_probe))}
     except Exception as exc:
         print(f"artist-button probe failed: {exc}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if "a-held" not in artists or "a-absent" not in artists:
         print(f"the search page built no artist download buttons: {artists}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     a_held, a_absent = artists["a-held"], artists["a-absent"]
     if a_held["name"] != ARTIST or a_absent["name"] != "Nobody At All":
         bad.append(f"artist button: the button does not know whose catalogue it offers ({artists!r})")
@@ -336,12 +327,12 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
         heroes = {r["id"]: r for r in json.loads(q(hero_probe))}
     except Exception as exc:
         print(f"hero probe failed: {exc}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     # Every card of the landing's first shelf is a hero, so both artists are
     # here: the one on disk and the one that is not.
     if "a-held" not in heroes or "a-absent" not in heroes:
         print(f"the landing built no hero cards: {heroes}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     h_held, h_absent = heroes["a-held"], heroes["a-absent"]
     # The strip is gated by the NAME, never by an outer visible binding, and a
     # hero no longer clears its own name to stand down: an empty name here is
@@ -352,7 +343,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     # edge, which is the only reason it could come back at all.
     if h_held.get("capTop", -1) < 0:
         print(f"the hero card built no caption to stack above: {h_held!r}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if h_held.get("bottom", 0) > h_held["capTop"]:
         bad.append(f"hero card: the strip overlaps the caption it must sit above ({h_held!r})")
     # The badge hides ITSELF when the rollup says nothing: an artist with
@@ -399,10 +390,10 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
         browse = {r["id"]: r for r in json.loads(q(card_probe))}
     except Exception as exc:
         print(f"browse-card probe failed: {exc}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if "al-held" not in browse or "al-absent" not in browse:
         print(f"the console browse style built no cards: {browse}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     b_held, b_absent = browse["al-held"], browse["al-absent"]
     # A proven complete copy: the card says so in the shortest form its control
     # line can carry, and its click goes to the claim gate rather than a fetch.
@@ -434,7 +425,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
         after_icons = {r["id"]: r for r in json.loads(q(icons_probe))}
     except Exception as exc:
         print(f"re-ask probe failed: {exc}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if after_cards.get("al-held", {}).get("shown") != "DOWNLOAD":
         bad.append(f"browse card: it never re-asked when the scan changed ({after_cards.get('al-held')!r})")
     if after_icons.get("tr-held", {}).get("state") != "live":
@@ -442,9 +433,9 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
 
     if bad:
         print("\n".join(bad), file=sys.stderr)
-        return _EXIT_REGRESSED
-    return _EXIT_OK
+        return EXIT_REGRESSED
+    return EXIT_OK
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())
