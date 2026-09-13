@@ -13,8 +13,9 @@ import struct
 from pathlib import Path
 
 import pytest
+from support.paths import REPO_ROOT
 
-_ICO = Path(__file__).resolve().parent.parent / "waves" / "ui" / "icon.ico"
+_ICO = REPO_ROOT / "waves" / "ui" / "icon.ico"
 _EXPECTED_SIZES = {16, 32, 48, 64, 128, 256}
 
 

@@ -10,11 +10,10 @@ the retry from being quietly simplified away.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import yaml
+from support.paths import REPO_ROOT
 
-ACTION = Path(__file__).resolve().parent.parent / ".github/actions/setup-poetry-env/action.yml"
+ACTION = REPO_ROOT / ".github/actions/setup-poetry-env/action.yml"
 
 
 def _install_step() -> dict:

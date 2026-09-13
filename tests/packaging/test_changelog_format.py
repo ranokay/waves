@@ -19,9 +19,10 @@ instead of a paragraph.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-CHANGELOG = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
+from support.paths import REPO_ROOT
+
+CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 
 CANONICAL = ["Added", "Changed", "Fixed", "Removed"]
 

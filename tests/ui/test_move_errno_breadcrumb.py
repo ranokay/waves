@@ -27,7 +27,10 @@ def _download_instance() -> Download:
     return downloader
 
 
-def test_a_cross_filesystem_rename_says_which_errno(tmp_path, caplog):
+def test_a_cross_filesystem_rename_says_which_errno(tmp_path, monkeypatch, caplog):
+    # A bridge built earlier in the suite installs diagnostics, which turns
+    # "waves" propagation off; caplog reads through the root, so restore it.
+    monkeypatch.setattr(logging.getLogger("waves"), "propagate", True, raising=True)
     dl = _download_instance()
     source = tmp_path / "source.flac"
     source.write_bytes(b"audio")
@@ -54,7 +57,9 @@ def test_a_cross_filesystem_rename_says_which_errno(tmp_path, caplog):
     assert not any(str(tmp_path) in message for message in breadcrumbs), "the path never reaches the log"
 
 
-def test_a_successful_rename_says_nothing(tmp_path, caplog):
+def test_a_successful_rename_says_nothing(tmp_path, monkeypatch, caplog):
+    # Same root-propagation restore as above.
+    monkeypatch.setattr(logging.getLogger("waves"), "propagate", True, raising=True)
     dl = _download_instance()
     source = tmp_path / "source.flac"
     source.write_bytes(b"audio")

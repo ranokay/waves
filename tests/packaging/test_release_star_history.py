@@ -26,9 +26,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from support.paths import REPO_ROOT
 
-REPO = Path(__file__).resolve().parent.parent
-RELEASE_SH = REPO / "release.sh"
+RELEASE_SH = REPO_ROOT / "release.sh"
 
 pytestmark = pytest.mark.skipif(
     not RELEASE_SH.is_file(),

@@ -26,21 +26,19 @@ scenario given one can only ever touch a temporary directory.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-TESTS_DIR = Path(__file__).resolve().parent
+from support.paths import TESTS_ROOT
 
 
 def test_every_offscreen_bridge_scenario_sandboxes_its_config_dir():
     unsandboxed = []
-    for path in sorted(TESTS_DIR.rglob("test_*.py")):
+    for path in sorted(TESTS_ROOT.rglob("test_*.py")):
         src = path.read_text()
         builds_bridge = "WavesBridge(" in src and "QQmlApplicationEngine" in src
         if not builds_bridge:
             continue
         runs_shared = "from support.qml import" in src and "run_scenario(" in src
         if "XDG_CONFIG_HOME" not in src and not runs_shared:
-            unsandboxed.append(str(path.relative_to(TESTS_DIR)))
+            unsandboxed.append(str(path.relative_to(TESTS_ROOT)))
 
     assert not unsandboxed, (
         "these scenarios build a real WavesBridge without an XDG_CONFIG_HOME of "

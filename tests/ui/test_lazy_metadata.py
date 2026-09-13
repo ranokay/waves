@@ -17,11 +17,9 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
-
-ROOT = Path(__file__).resolve().parent.parent
+from support.paths import REPO_ROOT
 
 _PROBE = """
 import importlib.metadata
@@ -58,7 +56,7 @@ def _run_probe() -> dict[str, str]:
     # Fixed argv: this interpreter runs the literal probe above, no user input.
     result = subprocess.run(
         [sys.executable, "-c", _PROBE],
-        cwd=ROOT,
+        cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=120,
