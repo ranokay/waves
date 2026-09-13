@@ -124,6 +124,14 @@ fails the click with a status message before anything queues. A session
 rejected at a download boundary holds its row in place and pauses the run
 (the light says Needs attention); the job retries once the wrapper guest
 refreshes its tokens or the cookies export changes, and STOP lands promptly.
+A wrapper runtime that will not start holds once, then fails the row with the
+setup words and deep-links `appleSetupRequested("setup")`, so a broken tier
+cannot hold forever. A row whose integrity failure quarantined a copy carries
+the count and the failed row's OPEN/DELETE actions (`openQuarantine` /
+`deleteQuarantine`); deleting the bytes leaves the skip-list mark, so
+REDOWNLOAD stays the way back. Disabling Apple in Settings stops its queued
+and running rows through the same Stopped shape STOP uses, each carrying the
+reason that says why.
 
 ## Local library presence (the "in your library" badge)
 

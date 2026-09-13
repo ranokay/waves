@@ -354,6 +354,29 @@ def test_turning_apple_on_requests_the_setup_wizard():
     assert seen == [("setup",)]
 
 
+def test_turning_apple_off_stops_its_queue_and_says_how_many():
+    stub = _apply_stub(apple_enabled=True)
+    calls = []
+    stub._stop_provider_downloads = lambda provider, reason: calls.append((provider, reason)) or 3
+    status: list = []
+    stub._set_status = status.append
+
+    _apply(stub, {"apple_enabled": False})
+
+    assert calls == [("apple", "Apple Music was disabled")]
+    assert status and "stopped 3 Apple downloads" in status[0]
+
+
+def test_turning_apple_on_does_not_stop_the_queue():
+    stub = _apply_stub()
+    calls = []
+    stub._stop_provider_downloads = lambda provider, reason: calls.append((provider, reason)) or 0
+
+    _apply(stub, {"apple_enabled": True})
+
+    assert calls == []
+
+
 def test_an_untouched_switch_emits_nothing():
     stub = _apply_stub()
     seen = []

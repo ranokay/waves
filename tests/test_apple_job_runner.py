@@ -302,6 +302,7 @@ def _bind(stub):
         "_apple_cover_bytes",
         "_apple_write_sidecars",
         "_apple_cookies_ready",
+        "_apple_provider_enabled",
         "_apple_account_ready",
         "_apple_wrapper_signed_in",
         "_run_apple_job",
@@ -675,6 +676,22 @@ def test_entry_without_cookies_explains_instead_of_queueing(tmp_path):
 
     assert stub._queue == []
     assert any("cookies" in status for status in stub.statuses)
+
+
+def test_entry_while_apple_is_off_refuses_even_a_retry(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(base, provider, cookies)
+    stub.settings.data.apple_enabled = False
+
+    queued = WavesBridge._download_apple(
+        stub, "album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1"
+    )
+
+    assert queued is False and stub._queue == []
+    assert any("is off" in status for status in stub.statuses)
 
 
 def test_entry_with_cookies_queues_an_apple_job(tmp_path):
@@ -1207,3 +1224,41 @@ def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkey
 
     assert held, "the boundary held the row before the stop landed"
     assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path):
+    """A sidecar that cannot start ends the fetch with the wizard words.
+
+    The ensure's terminal verdict must become the job's failure reason (the
+    row repeats it), never an abort (which reads as a user stop) and never a
+    fetch that goes ahead against a dead wrapper.
+    """
+    from waves.waves_ui.backend import _AppleSetupRequired
+
+    provider = _FakeProvider()
+    stub = _bind(_stub(tmp_path / "lib", provider))
+    stub.settings = _settings(tmp_path / "lib", apple_quality_audio="LOSSLESS")
+    stub._queue_index = {1: {"askQuality": "LOSSLESS", "quality": "LOSSLESS"}}
+    stub._apple_needs_wrapper = lambda requested_rank: True
+    message = "Apple's runtime did not start. Finish setup in Settings, Providers, Apple Music, then retry."
+
+    def _refuse(qid, job_abort, *, need_wrapper):
+        raise _AppleSetupRequired(message)
+
+    stub._apple_ensure_sidecar = _refuse
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        WavesBridge._run_apple_job(
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    surfaced = str(excinfo.value)
+    assert "Settings" in surfaced and "Apple Music" in surfaced
