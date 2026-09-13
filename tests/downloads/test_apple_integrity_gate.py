@@ -53,22 +53,22 @@ def _tone(path: Path, codec: str = "aac"):
     )
 
 
-def _corrupt_alac_end_tag(clean: Path, dest: Path) -> Path:
-    """Turn a clean ALAC into a decode-failing one, deterministically.
+def _alac_with_broken_frame_end(clean: Path, dest: Path) -> Path:
+    """A decode-failing ALAC built from a clean tone, deterministically.
 
-    Apple's outbreak-era encoder shipped ALAC frames missing their trailing
-    TYPE_END element: ffprobe still reads the stream metadata, but the full
-    decode rejects the frame. Zeroing the final muxed packet's last non-zero
-    byte destroys the frame terminator in the same way, so the
-    probe-passes/decode-rejects shape is reproducible from a generated tone
-    without shipping a commercial master.
+    The documented outbreak defect is ALAC packets missing their trailing
+    TYPE_END terminator (docs/research/alac-verification.md): ffprobe reads
+    the stream metadata, the full decode rejects the frame. This walks the
+    muxed packets and zeroes the final packet's last non-zero byte -- the
+    bit window carrying the frame's end tag -- reproducing the
+    probe-passes/decode-rejects shape without a commercial master.
     """
     from waves.providers.apple import engine as apple_engine
 
     ffprobe = apple_engine.ffprobe_for(_ffmpeg())
     packets = subprocess.run(  # noqa: S603 (fixed argv: local fixture, no user input)
         [
-            ffprobe or "ffprobe",
+            ffprobe,
             "-v",
             "error",
             "-select_streams",
@@ -92,6 +92,35 @@ def _corrupt_alac_end_tag(clean: Path, dest: Path) -> Path:
     data[end] = 0
     dest.write_bytes(bytes(data))
     return dest
+
+
+def _run_to_quarantine(
+    base: Path, bad_files: list[Path], store, *, resource: dict | None = None, media_id: str = "apple:song-1"
+) -> tuple[_FakeProvider, _Relay]:
+    """Drive one track through its retries to a quarantine verdict.
+
+    Returns the provider and relay; the caller asserts the quarantine shape
+    it is about (text-padding bytes vs a real ALAC frame defect).
+    """
+    provider = _FakeProvider(bad_files)
+    stub = _bind(_stub(base, provider, _ownership_store=store))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id=media_id)
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            resource or _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
+    assert len(provider.fetched) == 3
+    return provider, relay
 
 
 def _song_resource(song_id="song-1", atmos=False):
@@ -613,26 +642,11 @@ def test_known_bad_fixture_quarantines_and_fails_in_plain_words(tmp_path, monkey
         bad = tmp_path / f"bad-{i}.m4a"
         bad.write_bytes(b"not audio at all, just text padding " * 100)
         bad_files.append(bad)
-    provider = _FakeProvider(bad_files)
     base = tmp_path / "lib"
     store = _SkipStore()
-    stub = _bind(_stub(base, provider, _ownership_store=store))
-    relay = _Relay()
-    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    with pytest.raises(DownloadIncomplete) as excinfo:
-        runner.run_apple_job(
-            stub._apple_job_hooks(),
-            1,
-            spec,
-            _song_resource(),
-            signals=relay,
-            job_abort=Event(),
-            file_template="{artist_name}/{track_title}",
-        )
+    _, relay = _run_to_quarantine(base, bad_files, store)
 
-    assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
-    assert len(provider.fetched) == 3
     assert any(ev.get("status") == "failed" for ev in relay.events)
     # Quarantine kept the bytes under the default folder with the intended name.
     quarantined = list((base / QUARANTINE_DIR_NAME).rglob("*.m4a"))
@@ -643,12 +657,13 @@ def test_known_bad_fixture_quarantines_and_fails_in_plain_words(tmp_path, monkey
 
 
 @pytest.mark.ffmpeg
-def test_corrupt_alac_end_tag_passes_the_probe_and_fails_the_decode(tmp_path):
-    """T4's synthetic defect: the missing-TYPE_END frame shape.
+def test_broken_alac_frame_end_passes_the_probe_and_fails_the_decode(tmp_path):
+    """The missing-terminator defect shape: ffprobe reads the stream (codec,
+    rate, depth) exactly like a healthy delivery, while the full decode
+    rejects the frame.
 
-    ffprobe reads the stream (codec, rate, depth) exactly like a healthy
-    delivery; the full decode rejects the frame, which is why the integrity
-    gate probes and decodes rather than probing alone.
+    That split is why the integrity gate probes and decodes rather than
+    probing alone.
     """
     from waves.providers.apple import engine as apple_engine
 
@@ -657,7 +672,7 @@ def test_corrupt_alac_end_tag_passes_the_probe_and_fails_the_decode(tmp_path):
         pytest.skip("ffprobe is not available")
     clean = tmp_path / "clean.m4a"
     _tone(clean, codec="alac")
-    corrupt = _corrupt_alac_end_tag(clean, tmp_path / "corrupt.m4a")
+    corrupt = _alac_with_broken_frame_end(clean, tmp_path / "corrupt.m4a")
 
     control = apple_engine.probe_audio_file(clean, ffprobe)
     probed = apple_engine.probe_audio_file(corrupt, ffprobe)
@@ -675,8 +690,9 @@ def test_named_alac_fixture_quarantines_through_a_real_store(tmp_path):
 
     The master itself is not redistributable, so the fixture reproduces its
     documented defect (probe-clean, decode-rejecting ALAC frames) from a
-    generated tone. Three failed attempts end in one quarantine copy, a
-    skip-list mark, no ownership claim and nothing landed to badge.
+    generated tone. Three failed attempts end in one quarantine copy that
+    keeps the rejected bytes, a skip-list mark, no ownership claim and
+    nothing landed in the library.
     """
     from waves.ownership import OwnershipStore
     from waves.providers.apple import engine as apple_engine
@@ -685,32 +701,21 @@ def test_named_alac_fixture_quarantines_through_a_real_store(tmp_path):
         pytest.skip("ffprobe is not available")
     clean = tmp_path / "clean.m4a"
     _tone(clean, codec="alac")
-    bad_files = [_corrupt_alac_end_tag(clean, tmp_path / f"bad-{i}.m4a") for i in range(3)]
-    provider = _FakeProvider(bad_files)
+    bad_files = [_alac_with_broken_frame_end(clean, tmp_path / f"bad-{i}.m4a") for i in range(3)]
     base = tmp_path / "lib"
     store = OwnershipStore(str(tmp_path / "own.db"))
     try:
-        stub = _bind(_stub(base, provider, _ownership_store=store))
-        relay = _Relay()
-        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:fragile-violet-1")
+        _, relay = _run_to_quarantine(
+            base, bad_files, store, resource=_fragile_violet_resource(), media_id="apple:fragile-violet-1"
+        )
 
-        with pytest.raises(DownloadIncomplete) as excinfo:
-            runner.run_apple_job(
-                stub._apple_job_hooks(),
-                1,
-                spec,
-                _fragile_violet_resource(),
-                signals=relay,
-                job_abort=Event(),
-                file_template="{artist_name}/{track_title}",
-            )
-
-        assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
-        assert len(provider.fetched) == 3
-        assert len(list((base / QUARANTINE_DIR_NAME).rglob("*.m4a"))) == 1
+        quarantined = list((base / QUARANTINE_DIR_NAME).rglob("*.m4a"))
+        assert len(quarantined) == 1
+        assert quarantined[0].read_bytes() == bad_files[-1].read_bytes()
         assert store.is_quarantined("apple:fragile-violet-1", "stereo") is not None
         assert store.ownership_of("apple:fragile-violet-1") is None
         assert not (base / "TOGENASHI TOGEARI").exists()
+        assert any(ev.get("status") == "failed" for ev in relay.events)
     finally:
         store.close()
 
