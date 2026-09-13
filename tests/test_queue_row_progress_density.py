@@ -29,13 +29,13 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from support.paths import QML_MAIN
+from support.qml import run_scenario
 from test_progress_matrix_stable_width import _EXIT_OK, _EXIT_REGRESSED, _boot
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
 _WALK = """
  function walk(it, pred){
@@ -62,11 +62,17 @@ def test_queue_row_bar_is_the_dense_grid():
     assert "property real edgeSoft: -1" in dm, "DotMatrix.edgeSoft must default to off"
 
 
+@pytest.mark.qml
 def test_running_queue_row_slot_fits_its_bar():
-    code, tail = _run_here()
-    assert code == _EXIT_OK, f"the queue row's bar and its slot disagree again:\n{tail}"
+    run_scenario(
+        Path(__file__),
+        "--run-queue-row-scenario",
+        sandbox_prefix="waves-queue-row-density-test-",
+        failure_message="the queue row's bar and its slot disagree again",
+    )
 
 
+@pytest.mark.qml
 def test_a_queue_row_that_is_not_running_builds_no_bar():
     """Hiding the bar is not sparing it.
 
@@ -76,34 +82,12 @@ def test_a_queue_row_that_is_not_running_builds_no_bar():
     the drawer dragged wide. A flick through a long queue dropped frames on rows
     that show nothing. The download button's smaller matrix has sat behind a
     Loader for exactly this reason; this one did not."""
-    code, tail = _run_here("--run-queue-row-idle-scenario")
-    assert code == _EXIT_OK, f"a queue row is building its bar with nothing to show:\n{tail}"
-
-
-def _run_here(flag: str = "--run-queue-row-scenario") -> tuple[int, str]:
-    """The sibling runner points at ITS file; run this file's scenario the same way."""
-    import os
-    import tempfile
-
-    import pytest
-
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-queue-row-density-test-")
-    env["HOME"] = env["XDG_CONFIG_HOME"]
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), flag],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=180,
+    run_scenario(
+        Path(__file__),
+        "--run-queue-row-idle-scenario",
+        sandbox_prefix="waves-queue-row-density-test-",
+        failure_message="a queue row is building its bar with nothing to show",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    if proc.returncode == 77:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == 78:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    return proc.returncode, tail
 
 
 def _scenario() -> int:

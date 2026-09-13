@@ -38,40 +38,27 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
 
 from __future__ import annotations
 
-import os
 import re
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+from support.paths import QML_MAIN
+from support.qml import run_scenario
 
 _EXIT_OK = 0
 _EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
 _EXIT_PRECONDITION = 78
 
 
-def _run_in_subprocess(flag: str) -> tuple[int, str]:
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-jump-ramp-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), flag],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=180,
+@pytest.mark.qml
+def test_a_forward_jump_fills_at_speed_and_a_tick_lands_at_once():
+    run_scenario(
+        Path(__file__),
+        "--run-ramp-scenario",
+        sandbox_prefix="waves-jump-ramp-test-",
+        failure_message="the download bar snaps on a jump again",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-16:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    return proc.returncode, tail
 
 
 def test_the_controls_read_the_ramped_value():
@@ -84,11 +71,6 @@ def test_the_controls_read_the_ramped_value():
     assert "Math.min(1500, 200 + d * 22)" in holder, "the ramp timing (200ms + 22ms a point, 1.5s cap) moved"
     assert "Easing.Linear" in holder, "the ramp must be linear: an eased one lights the blocks in a burst"
     assert "root.hoverMotion" in holder, "the ramp must snap when hover motion is off"
-
-
-def test_a_forward_jump_fills_at_speed_and_a_tick_lands_at_once():
-    code, tail = _run_in_subprocess("--run-ramp-scenario")
-    assert code == _EXIT_OK, f"the download bar snaps on a jump again:\n{tail}"
 
 
 # ---------------------------------------------------------------------------

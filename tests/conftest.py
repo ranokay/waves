@@ -107,6 +107,7 @@ def isolated_settings_migrations(tmp_path, monkeypatch):
 
 
 def pytest_addoption(parser) -> None:
+    """The GUI-required run's switch: skips become failures."""
     parser.addoption(
         "--require-qml",
         action="store_true",
@@ -116,6 +117,7 @@ def pytest_addoption(parser) -> None:
 
 
 def pytest_configure(config) -> None:
+    """Record --require-qml and refuse to run it without PySide6."""
     from support import qml as qml_support
 
     qml_support.set_require_qml(config.getoption("require_qml"))
@@ -124,6 +126,7 @@ def pytest_configure(config) -> None:
 
 
 def pytest_collection_modifyitems(config, items) -> None:
+    """Auto-skip marked tests only for a positively missing dependency."""
     from support import qml as qml_support
 
     if shutil.which("ffmpeg") is None:

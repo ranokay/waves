@@ -1,10 +1,8 @@
 """The QML scenario runner: success, positive dependency skips, loud failures.
 
-The old per-file parents treated exit 77 (no Qt) and exit 78 (QML did not
-load) as skips alike, and their children returned 77 for application import
-errors, so a broken app could pass the suite as an environment skip. The
-runner decides in the parent: only a positively absent PySide6 skips, and
-every other non-zero exit fails with the child's output.
+A scenario parent skips only when PySide6 is positively absent, and fails
+with the child's output on every other non-zero exit, so an application
+import error or a QML load failure can never pass as an environment skip.
 """
 
 from __future__ import annotations
@@ -100,7 +98,7 @@ def test_a_broken_app_import_fails_the_startup_scenario(tmp_path, monkeypatch):
 
 
 def test_ffmpeg_marker_skips_when_no_binary_is_on_path():
-    """The ffmpeg marker replaces the old per-file skipif helper."""
+    """The ffmpeg marker is the suite's skip gate for missing binaries."""
     import os
     import subprocess
     import sys
@@ -127,3 +125,71 @@ def test_ffmpeg_marker_skips_when_no_binary_is_on_path():
     )
 
     assert "1 skipped" in proc.stdout, proc.stdout + proc.stderr
+
+
+@pytest.mark.integration
+def test_qml_marker_skips_without_pyside_and_require_qml_fails(tmp_path):
+    """Against an interpreter with no PySide6: the qml marker skips the
+    scenario, and the GUI-required run refuses to start instead."""
+    import os
+    import subprocess
+    import sys
+
+    (tmp_path / "sitecustomize.py").write_text(
+        "import sys, importlib.abc\n"
+        "class _NoQt(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'PySide6':\n"
+        "            raise ModuleNotFoundError('blocked for the test')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _NoQt())\n"
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(tmp_path)
+    target = (
+        "tests/test_startup_provider_picker_qml.py"
+        "::test_first_run_offers_the_provider_choice_and_never_auto_opens_login"
+    )
+
+    skipped = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, one collected test)
+        [sys.executable, "-m", "pytest", "-m", "qml", "-q", "-p", "no:cacheprovider", target],
+        cwd=qml.REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert "1 skipped" in skipped.stdout, skipped.stdout + skipped.stderr
+
+    required = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, one collected test)
+        [sys.executable, "-m", "pytest", "-m", "qml", "--require-qml", "-q", "-p", "no:cacheprovider", target],
+        cwd=qml.REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert required.returncode != 0
+    assert "--require-qml was given but PySide6 is not importable" in (required.stdout + required.stderr)
+
+
+def test_tail_drops_noisy_lines_and_keeps_the_last_ones():
+    output = qml._tail("one\ntwo\nwaves.qt: noise\nthree\n", None, limit=2, drop=("waves.qt",))
+
+    assert output == "two\nthree"
+
+
+def test_missing_qt_only_reports_a_real_absence(monkeypatch):
+    def _raise(exc):
+        def _find(_name):
+            raise exc
+
+        return _find
+
+    monkeypatch.setattr(qml.importlib.util, "find_spec", _raise(ImportError()))
+    assert qml.missing_qt() is True
+    # A partially initialised module is not evidence of absence.
+    monkeypatch.setattr(qml.importlib.util, "find_spec", _raise(ValueError()))
+    assert qml.missing_qt() is False
+    monkeypatch.setattr(qml.importlib.util, "find_spec", lambda _name: None)
+    assert qml.missing_qt() is True

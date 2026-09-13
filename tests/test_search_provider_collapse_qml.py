@@ -13,10 +13,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from support.paths import QML_MAIN
 from support.qml import run_scenario
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-_EXIT_NO_QT = 77
 
 
 def _album(media_id: str) -> dict:
@@ -84,13 +82,9 @@ def _payload() -> dict:
 
 def _scenario() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    try:
-        from PySide6.QtCore import QEventLoop, QTimer, QUrl
-        from PySide6.QtGui import QGuiApplication
-        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
-    except ImportError as exc:
-        print(f"PySide6 unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+    from PySide6.QtCore import QEventLoop, QTimer, QUrl
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
 
     app = QGuiApplication.instance() or QGuiApplication([])
     from _qml_offline import PARK_LOGIN_QML, patch_offline

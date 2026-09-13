@@ -13,14 +13,13 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
-from test_progress_matrix_stable_width import _EXIT_NO_QT, _EXIT_OK, _EXIT_PRECONDITION, _boot
+from support.qml import run_scenario
+from test_progress_matrix_stable_width import _EXIT_OK, _EXIT_PRECONDITION, _boot
 
 _INTEGRITY_REASON = "failed integrity check \u2014 quarantined"
 _DISABLED_REASON = "Apple Music was disabled"
@@ -130,27 +129,15 @@ def _scenario() -> int:
     return _EXIT_OK
 
 
+@pytest.mark.qml
 def test_a_failed_apple_row_can_reveal_and_delete_its_quarantined_copy():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    # Sandboxed: this scenario builds a REAL WavesBridge, and a bridge that
-    # finds the packaged app's config dir adopts its settings, writes its log,
-    # and starts a real scan of the user's music library.
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-quarantine-row-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=180,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        sandbox_prefix="waves-quarantine-row-test-",
+        failure_message="the quarantine row actions regressed",
+        drop=("waves.qt",),
     )
-    lines = [ln for ln in (proc.stdout + proc.stderr).strip().splitlines() if "waves.qt" not in ln]
-    tail = "\n".join(lines[-12:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the quarantine row actions regressed:\n{tail}"
 
 
 if __name__ == "__main__":

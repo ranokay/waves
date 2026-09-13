@@ -18,14 +18,12 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
-from test_progress_matrix_stable_width import _EXIT_NO_QT, _EXIT_OK, _EXIT_PRECONDITION, _boot
+from support.qml import run_scenario
+from test_progress_matrix_stable_width import _EXIT_OK, _boot
 
 _REASON = "6 of 501 tracks failed"
 
@@ -123,29 +121,15 @@ def _scenario() -> int:
     return _EXIT_OK
 
 
+@pytest.mark.qml
 def test_a_failed_queue_row_shows_why_it_failed():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    # Sandboxed: this scenario builds a REAL WavesBridge, and a bridge that
-    # finds the packaged app's config dir adopts its settings, writes its log,
-    # and starts a real scan of the user's music library.
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-queue-reason-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=180,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        sandbox_prefix="waves-queue-reason-test-",
+        failure_message="the failed queue row lost its reason again",
+        drop=("waves.qt",),
     )
-    # The scenario prints its findings before Qt's own teardown chatter, so
-    # keep enough of the tail that they are still in it.
-    lines = [ln for ln in (proc.stdout + proc.stderr).strip().splitlines() if "waves.qt" not in ln]
-    tail = "\n".join(lines[-12:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the failed queue row lost its reason again:\n{tail}"
 
 
 if __name__ == "__main__":

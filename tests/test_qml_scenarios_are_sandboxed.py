@@ -38,7 +38,8 @@ def test_every_offscreen_bridge_scenario_sandboxes_its_config_dir():
         builds_bridge = "WavesBridge(" in src and "QQmlApplicationEngine" in src
         if not builds_bridge:
             continue
-        if "XDG_CONFIG_HOME" not in src and "run_scenario(" not in src:
+        runs_shared = "from support.qml import" in src and "run_scenario(" in src
+        if "XDG_CONFIG_HOME" not in src and not runs_shared:
             unsandboxed.append(str(path.relative_to(TESTS_DIR)))
 
     assert not unsandboxed, (

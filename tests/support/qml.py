@@ -39,15 +39,22 @@ def set_require_qml(required: bool) -> None:
 
 
 def require_qml() -> bool:
+    """Whether this run was started with ``--require-qml`` (set by conftest)."""
     return _REQUIRE_QML
 
 
 def missing_qt() -> bool:
-    """Whether PySide6 is positively absent, without importing it."""
+    """Whether PySide6 is positively absent, without importing it.
+
+    Only a real absence may skip; a spec that cannot be inspected (a partially
+    initialised module) is not evidence of absence and reads as present.
+    """
     try:
         return importlib.util.find_spec("PySide6") is None
-    except (ImportError, ValueError):
+    except ImportError:
         return True
+    except ValueError:
+        return False
 
 
 def scenario_env(sandbox: str) -> dict[str, str]:
@@ -61,9 +68,10 @@ def scenario_env(sandbox: str) -> dict[str, str]:
     return env
 
 
-def _tail(stdout: str | None, stderr: str | None, limit: int = 12) -> str:
+def _tail(stdout: str | None, stderr: str | None, limit: int = 12, drop: tuple[str, ...] = ()) -> str:
     text = ((stdout or "") + (stderr or "")).strip()
-    return "\n".join(text.splitlines()[-limit:])
+    lines = [line for line in text.splitlines() if not any(token in line for token in drop)]
+    return "\n".join(lines[-limit:])
 
 
 def _skip_or_fail_missing_qt() -> None:
@@ -79,6 +87,7 @@ def run_scenario(
     timeout: int = 180,
     sandbox_prefix: str = "waves-qml-",
     failure_message: str = "",
+    drop: tuple[str, ...] = (),
 ) -> str:
     """Run one QML scenario child and return its output tail.
 
@@ -86,7 +95,8 @@ def run_scenario(
     every other non-zero exit fails with the child's last output lines, so
     application import errors, QML load failures and regressions all read
     as failures. ``failure_message`` prefixes the failure when the caller
-    has a sharper verdict than "the scenario failed".
+    has a sharper verdict than "the scenario failed", and ``drop`` removes
+    known-noisy lines (Qt warnings) from the reported tail.
     """
     path = Path(script).resolve()
     if missing_qt():
@@ -103,8 +113,8 @@ def run_scenario(
             )
         except subprocess.TimeoutExpired as exc:
             message = failure_message or "the QML scenario did not finish"
-            pytest.fail(f"{message} (timed out after {timeout}s)\n{_tail(exc.stdout, exc.stderr)}")
-        output = _tail(proc.stdout, proc.stderr)
+            pytest.fail(f"{message} (timed out after {timeout}s)\n{_tail(exc.stdout, exc.stderr, drop=drop)}")
+        output = _tail(proc.stdout, proc.stderr, drop=drop)
         if proc.returncode != EXIT_OK:
             message = failure_message or "the QML scenario failed"
             pytest.fail(f"{message}\n{output}")

@@ -18,12 +18,11 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
+import pytest
+from support.qml import run_scenario
 from test_progress_matrix_stable_width import _EXIT_OK, _boot
 
 # The audit: walk the whole model (the slow way, this is a test) and compare
@@ -166,28 +165,15 @@ def _scenario() -> int:
     return _EXIT_OK
 
 
+@pytest.mark.qml
 def test_the_model_mirrors_the_bridge_through_every_kind_of_change():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-queue-delta-mirror-")
-    env["HOME"] = env["XDG_CONFIG_HOME"]
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-queue-delta-mirror"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-queue-delta-mirror",
         timeout=300,
+        sandbox_prefix="waves-queue-delta-mirror-",
+        failure_message="the model and the bridge disagree",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-14:])
-    if proc.returncode == 77:
-        import pytest
-
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == 78:
-        import pytest
-
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the model and the bridge disagree:\n{tail}"
 
 
 if __name__ == "__main__" and "--run-queue-delta-mirror" in sys.argv:
