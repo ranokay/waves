@@ -12703,6 +12703,13 @@ class WavesBridge(LibraryMixin, QObject):
         (spec §7.1): the affordance stays live and opens the path to making
         it work, instead of failing silently.
         """
+        enabled_gate = getattr(self, "_apple_provider_enabled", None)
+        if callable(enabled_gate) and not enabled_gate():
+            # The switch is off: a stale click or a RETRY from the Stopped
+            # section must not restart the work the disable stopped.
+            self._set_status("Apple Music is off; turn it on in Settings under Providers, Apple Music.")
+            self.downloadState.emit(media_id, "")
+            return False
         if not self._apple_account_ready():
             self._set_status(
                 "Apple downloads need a sign-in: open Settings, Providers, Apple Music to add a cookies "
@@ -13813,10 +13820,11 @@ class WavesBridge(LibraryMixin, QObject):
         if manager is None and not wrapper_url:
             return True
         try:
-            from waves.apple_supervision import HELD_POLL_SEC, HELD_START_FAILURES
+            from waves.apple_supervision import HELD_POLL_SEC, HELD_START_FAILURES, SETUP_PATH
         except Exception:
             HELD_POLL_SEC = 5.0
             HELD_START_FAILURES = 2
+            SETUP_PATH = "Settings, Providers, Apple Music"
         sup = self._apple_supervisor_for_job()
         # The wrapper tier was never set up (no URL and no persisted port):
         # the cookies path serves alone, exactly as before supervision.
@@ -13849,21 +13857,22 @@ class WavesBridge(LibraryMixin, QObject):
                 # Still down: hold with the setup words rather than fail a
                 # blip, but bounded: a start that keeps failing needs the
                 # wizard, and a held row cannot wait forever.
-                self._apple_set_held(qid, "Finish setup in Settings, Providers, Apple Music if it does not return.")
+                self._apple_set_held(qid)
+                terminal_message = f"Apple's runtime did not start. Finish setup in {SETUP_PATH}, then retry."
                 failures += 1
             else:
                 # Configured for the wrapper tier but no supervised port yet:
                 # the wizard has not picked one. Hold with the setup words
                 # instead of failing the wall.
-                self._apple_set_held(qid, "Finish setup in Settings under Providers, Apple Music.")
+                self._apple_set_held(qid, "The wrapper tier has no port yet.")
+                terminal_message = f"Apple's wrapper tier is not set up. Finish setup in {SETUP_PATH}, then retry."
                 failures += 1
             if failures >= max(1, int(HELD_START_FAILURES)):
-                message = "Apple's runtime did not start. Finish setup in Settings, Providers, Apple Music, then retry."
                 with contextlib.suppress(Exception):
                     self.appleSetupRequested.emit("setup")
                 with contextlib.suppress(Exception):
-                    self._set_status(message)
-                raise _AppleSetupRequired(message)
+                    self._set_status(terminal_message)
+                raise _AppleSetupRequired(terminal_message)
             if not self._apple_sleep_abortable(HELD_POLL_SEC, job_abort):
                 return False
         return False
@@ -14907,7 +14916,9 @@ class WavesBridge(LibraryMixin, QObject):
     def deleteQuarantine(self, qid: int) -> None:
         """Delete one failed row's quarantined copies and prune emptied folders.
 
-        The per-version skip-list mark stays: the source is still bad, and
+        A copy that cannot be removed stays recorded, so its row keeps the
+        actions instead of hiding bytes that are still on disk. The per-version
+        skip-list mark stays either way: the source is still bad, and
         REDOWNLOAD is the explicit way back, not a silent retry.
         """
         try:
@@ -14919,14 +14930,17 @@ class WavesBridge(LibraryMixin, QObject):
             self._set_status("No quarantined copy to delete")
             return
         removed = 0
+        remaining: list[str] = []
         for text in paths:
             try:
                 path = pathlib.Path(str(text)).expanduser()
+                # Already gone is not a failure: drop it from the record.
                 if path.is_file():
                     path.unlink()
                     removed += 1
             except OSError:
                 logger.debug("Could not delete a quarantined copy", exc_info=True)
+                remaining.append(text)
         try:
             from waves.apple_integrity import prune_empty_quarantine_dirs
 
@@ -14934,15 +14948,23 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Could not prune emptied quarantine folders", exc_info=True)
         try:
-            self._apple_quarantine_paths.pop(qid, None)
+            if remaining:
+                self._apple_quarantine_paths[qid] = remaining
+            else:
+                self._apple_quarantine_paths.pop(qid, None)
         except Exception:
-            logger.debug("Could not forget the quarantine paths for qid %s", qid, exc_info=True)
+            logger.debug("Could not record the remaining quarantine paths for qid %s", qid, exc_info=True)
         item = self._queue_item(qid)
         if item is not None:
-            item["quarantineCount"] = 0
+            item["quarantineCount"] = len(remaining)
             self._queue_mark_changed(qid)
         self._emit_queue()
-        self._set_status("Quarantined copy deleted" if removed else "No quarantined copy to delete")
+        if remaining:
+            self._set_status(
+                f"Could not delete {len(remaining)} quarantined copy" + ("s" if len(remaining) != 1 else "")
+            )
+        else:
+            self._set_status("Quarantined copy deleted" if removed else "No quarantined copy to delete")
 
     def _apple_quarantine_folder(self, qid: int) -> pathlib.Path | None:
         """The folder that holds one row's quarantined copies, or None."""
@@ -18681,7 +18703,7 @@ class WavesBridge(LibraryMixin, QObject):
         self._emit_queue()
         self._set_status("Downloads stopped")
 
-    def _stop_provider_queue(self, provider_id: str, reason: str) -> int:
+    def _stop_provider_downloads(self, provider_id: str, reason: str) -> int:
         """Stop one provider's queued and running rows, keeping them retryable.
 
         Used when a provider is disabled: the switch means its work stops,
@@ -21883,6 +21905,13 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Apple wrapper auth read failed", exc_info=True)
             return False
 
+    def _apple_provider_enabled(self) -> bool:
+        """Whether the Apple switch is on (stubs without the field read on)."""
+        try:
+            return bool(getattr(self.settings.data, "apple_enabled", True))
+        except Exception:
+            return True
+
     def _apple_account_ready(self) -> bool:
         """Whether an Apple download has an account to start with.
 
@@ -22040,7 +22069,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # using Apple", and rows that keep fetching behind a vanished
                 # search group read as a lie. The rows stay in Stopped with
                 # the reason, so RETRY ALL brings them back after a re-enable.
-                stop = getattr(self, "_stop_provider_queue", None)
+                stop = getattr(self, "_stop_provider_downloads", None)
                 if callable(stop):
                     count = int(stop(CTX_APPLE, "Apple Music was disabled") or 0)
                     if count:

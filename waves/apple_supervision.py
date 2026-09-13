@@ -93,16 +93,18 @@ _WRAPPER_DATA_CONTAINER_PATH = "/app/rootfs/data/data/com.apple.android.music/fi
 # --------------------------------------------------------------------------- #
 
 
+# The user-facing path every setup message names, so a held row or a failed
+# runtime says where the repair lives instead of leaving the user to guess.
+SETUP_PATH = "Settings, Providers, Apple Music"
+
+
 def held_message(detail: str = "") -> str:
     """One clear held row reason. Stays under Queued with this reason.
 
     The words name the setup path, because a held row is the user's only clue
     when the runtime does not come back on its own.
     """
-    base = (
-        "Held: the Apple runtime is not running. Waiting for it to return; "
-        "finish setup in Settings, Providers, Apple Music if it does not."
-    )
+    base = f"Held: the Apple runtime is not running. Waiting for it to return; finish setup in {SETUP_PATH} if it does not."
     detail = str(detail or "").strip()
     return f"{base} {detail}".strip() if detail else base
 

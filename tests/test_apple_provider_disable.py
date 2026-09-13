@@ -1,15 +1,12 @@
 """Disabling Apple Music stops its work and leaves it retryable.
 
-The switch reads as "stop using Apple", so its queued and running rows must
-stop with it: rows that keep fetching behind a vanished search group are the
-misleading state the audit recorded. What must not happen is loss: the rows
-stay in Stopped with the reason, RETRY / RETRY ALL picks them up after the
-provider is switched back on, and nothing about TIDAL (or work held for the
-download folder to return) is touched.
-
-The running row's worker settles itself as cancelled after STOP; these tests
-pin that the stop's words survive that wordless settle, and that the words do
-not leak into ordinary settles.
+The switch means "stop using Apple", so its queued and running rows stop with
+it; rows that keep fetching behind a vanished search group mislead. Nothing is
+lost: the rows stay in Stopped with the reason, RETRY / RETRY ALL picks them
+up after the switch is back on, and no TIDAL work (including TIDAL work held
+for the download folder to return) is touched. The running row's worker
+settles itself as cancelled, so the stop's words must survive that wordless
+settle without leaking into ordinary settles.
 """
 
 from __future__ import annotations
@@ -47,14 +44,14 @@ def _stop_stub() -> SimpleNamespace:
     stub.downloadState = SimpleNamespace(emit=lambda mid, state: stub.emitted.append((mid, state)))
     stub.queue_emits = 0
     stub._emit_queue = lambda: setattr(stub, "queue_emits", stub.queue_emits + 1)
-    stub._stop_provider_queue = WavesBridge._stop_provider_queue.__get__(stub, SimpleNamespace)
+    stub._stop_provider_downloads = WavesBridge._stop_provider_downloads.__get__(stub, SimpleNamespace)
     return stub
 
 
 def test_disabling_apple_stops_only_apple_work_and_keeps_it_retryable():
     stub = _stop_stub()
 
-    count = stub._stop_provider_queue(CTX_APPLE, _REASON)
+    count = stub._stop_provider_downloads(CTX_APPLE, _REASON)
 
     assert count == 2
     apple_queued = stub._queue_index[1]
@@ -85,7 +82,7 @@ def test_an_empty_provider_queue_stops_nothing_and_emits_nothing():
     stub._job_aborts = {}
     stub._pending_downloads = [("tidal:album:held", lambda: None)]
 
-    assert stub._stop_provider_queue(CTX_APPLE, _REASON) == 0
+    assert stub._stop_provider_downloads(CTX_APPLE, _REASON) == 0
     assert stub._queue_index[2]["status"] == "queued"
     assert stub.queue_emits == 0
 

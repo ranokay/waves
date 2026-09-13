@@ -9,7 +9,8 @@
 Turning a provider off stops that provider's queued and running downloads.
 The rows are not dropped: they settle in the queue's Stopped section carrying
 the reason ("Apple Music was disabled"), so RETRY / RETRY ALL re-queues them
-after the provider is switched back on. Work belonging to other providers,
+after the provider is switched back on; a retry attempted while it is still
+off is refused with a status message. Work belonging to other providers,
 and work of other providers held for the download folder to return, is
 untouched; the disabled provider's own held replays are dropped with its
 rows. The save's status line reports how many rows stopped.

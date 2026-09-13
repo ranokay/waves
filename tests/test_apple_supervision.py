@@ -602,3 +602,25 @@ def test_ensure_stops_holding_and_hands_the_click_to_setup():
     assert "Settings" in stub.last_status
     row = stub._queue_index[9]
     assert row["status"] == "queued" and "Held" in row["reason"] and "Settings" in row["reason"]
+
+
+def test_ensure_with_no_port_reports_setup_not_a_start_failure():
+    """A configured tier with no port never attempted a start, so its verdict
+    says setup is missing rather than claiming the runtime would not start."""
+    from waves.waves_ui import backend as backend_mod
+
+    stub = _bridge_stub()
+    stub._apple_runtime = SimpleNamespace(read_port=lambda: 0, app_dir="/tmp/waves-test")
+    stub.providers = {CTX_APPLE: SimpleNamespace(wrapper_url="http://127.0.0.1:51234")}
+    stub._apple_sleep_abortable = lambda secs, abort: True
+    requested: list = []
+    stub.appleSetupRequested = SimpleNamespace(emit=lambda reason: requested.append(reason))
+    stub._queue_index[9] = {"status": "running", "reason": ""}
+
+    with pytest.raises(backend_mod._AppleSetupRequired) as excinfo:
+        stub._apple_ensure_sidecar(9, Event(), need_wrapper=True)
+
+    assert requested == ["setup"]
+    assert "not set up" in str(excinfo.value)
+    row = stub._queue_index[9]
+    assert row["status"] == "queued" and "no port" in row["reason"]

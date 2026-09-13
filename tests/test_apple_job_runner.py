@@ -302,6 +302,7 @@ def _bind(stub):
         "_apple_cover_bytes",
         "_apple_write_sidecars",
         "_apple_cookies_ready",
+        "_apple_provider_enabled",
         "_apple_account_ready",
         "_apple_wrapper_signed_in",
         "_run_apple_job",
@@ -675,6 +676,22 @@ def test_entry_without_cookies_explains_instead_of_queueing(tmp_path):
 
     assert stub._queue == []
     assert any("cookies" in status for status in stub.statuses)
+
+
+def test_entry_while_apple_is_off_refuses_even_a_retry(tmp_path):
+    provider = _FakeProvider()
+    base = tmp_path / "lib"
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape\n")
+    stub = _entry_stub(base, provider, cookies)
+    stub.settings.data.apple_enabled = False
+
+    queued = WavesBridge._download_apple(
+        stub, "album", _album_row(), _album_row(), "{artist_name}/{track_title}", True, "apple:album-1"
+    )
+
+    assert queued is False and stub._queue == []
+    assert any("is off" in status for status in stub.statuses)
 
 
 def test_entry_with_cookies_queues_an_apple_job(tmp_path):
@@ -1243,4 +1260,5 @@ def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path):
             file_template="{artist_name}/{track_title}",
         )
 
-    assert str(excinfo.value) == message
+    surfaced = str(excinfo.value)
+    assert "Settings" in surfaced and "Apple Music" in surfaced
