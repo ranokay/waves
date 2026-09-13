@@ -34,6 +34,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support.paths import REPO_ROOT
 
 from waves.providers.apple.runtime import (
     APK_PINNED_VERSION,
@@ -935,7 +936,7 @@ def test_no_apple_module_touches_user_gamdl_config():
     # Waves owns its engine config surface: no Apple path may resolve a file
     # under the user's home gamdl config. Mentions in comments/docstrings
     # (documenting the ban) are fine; filesystem access is not.
-    root = Path(__file__).resolve().parent.parent / "waves" / "providers" / "apple"
+    root = REPO_ROOT / "waves" / "providers" / "apple"
     assert list(root.rglob("*.py")), "no Apple modules found: point this guard at the package's new home"
     hits = []
     for path in sorted(root.rglob("*.py")):
