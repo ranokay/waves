@@ -1506,6 +1506,20 @@ def _apple_effective_port(data, manager) -> int:
     return persisted if 1 <= persisted <= 65535 else 0
 
 
+def _apple_provision_port(data, manager) -> int:
+    """Persist and return the wrapper port: a free explicit override, else a pick.
+
+    The provisioning twin of ``_apple_effective_port``: both read the same
+    ``apple_wrapper_port`` preference; this one writes the persisted pick
+    when none is viable, so the port survives the next restart.
+    """
+    try:
+        preferred = int(getattr(data, "apple_wrapper_port", 0) or 0)
+    except (TypeError, ValueError):
+        preferred = 0
+    return int(manager.ensure_port(preferred) or 0)
+
+
 def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int | None = None) -> bool:
     """Is the copy already on disk as good as what a download queued now would
     write, so that fetching it again would achieve nothing?
@@ -19646,13 +19660,9 @@ class WavesBridge(LibraryMixin, QObject):
             return {"port": 0, "url": ""}
         data = getattr(getattr(self, "settings", None), "data", None)
         try:
-            preferred = int(getattr(data, "apple_wrapper_port", 0) or 0)
-        except (TypeError, ValueError):
-            preferred = 0
-        try:
             from waves.apple_runtime import wrapper_url as _url
 
-            port = manager.ensure_port(preferred)
+            port = _apple_provision_port(data, manager)
             return {"port": port, "url": _url(port)}
         except Exception as exc:
             logger.debug("Apple port ensure failed", exc_info=True)
@@ -21141,6 +21151,84 @@ class WavesBridge(LibraryMixin, QObject):
                 with contextlib.suppress(Exception):
                     lock.release()
 
+    def _apple_wrapper_login_url(self) -> str:
+        """The sign-in URL, provisioning the wrapper port when none is set.
+
+        A port that cannot be provisioned raises so the form names that
+        failure; an empty return means no wrapper tier exists on this machine.
+        """
+        url = self._apple_wrapper_base()
+        if url:
+            return url
+        manager = getattr(self, "_apple_runtime", None)
+        if manager is None:
+            return ""
+        from waves.apple_runtime import wrapper_url
+
+        data = getattr(getattr(self, "settings", None), "data", None)
+        url = wrapper_url(_apple_provision_port(data, manager))
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+        if provider is not None:
+            with contextlib.suppress(Exception):
+                provider.wrapper_url = url
+        return url
+
+    def _apple_wrapper_ensure_running(self, timeout: float = 60.0) -> bool:
+        """Start the supervised guest and wait for its health probe.
+
+        The sign-in action is the one click that must work on a cold machine,
+        so it starts the guest the same way a download would, then waits (a
+        cold container takes seconds to answer). ``ensure_started`` returns
+        True only when its own probe answered; a False result still gets the
+        bounded grace window because those probes are point-in-time.
+        """
+        port = self._apple_wrapper_port_for_job()
+        if not port:
+            return False
+        sup = self._apple_supervisor_for_job()
+        if sup is None:
+            return False
+        with contextlib.suppress(Exception):
+            if sup.is_ready(port):
+                return True
+        started = False
+        with contextlib.suppress(Exception):
+            started = bool(sup.ensure_started(http_port=port))
+        if started:
+            return True
+        deadline = time.monotonic() + max(1.0, float(timeout))
+        while time.monotonic() < deadline:
+            with contextlib.suppress(Exception):
+                if sup.is_ready(port):
+                    return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(1.0, remaining))
+        return False
+
+    def _apple_wrapper_login_call(self, request, timeout: float = 60.0):
+        """Resolve the URL, start the guest when needed, then run the request.
+
+        ``request`` receives the wrapper base URL and returns the result dict.
+        """
+        try:
+            url = self._apple_wrapper_login_url()
+        except Exception as exc:
+            logger.debug("Apple wrapper login port provisioning failed", exc_info=True)
+            return {"ok": False, "needs_2fa": False, "error": f"The wrapper port could not be provisioned: {exc}"}
+        if not url:
+            return {"ok": False, "needs_2fa": False, "error": "The wrapper tier is not set up."}
+        if not self._apple_wrapper_ensure_running(timeout=timeout):
+            return {
+                "ok": False,
+                "needs_2fa": False,
+                "error": (
+                    "The wrapper runtime did not start. Check the container runtime and image in the setup wizard."
+                ),
+            }
+        return request(url)
+
     def _run_apple_wrapper_login(self, callback) -> None:
         """Run one wrapper login call on a worker and signal the form.
 
@@ -21150,8 +21238,11 @@ class WavesBridge(LibraryMixin, QObject):
         if getattr(self, "_apple_wrapper_login_inflight", False):
             return
         self._apple_wrapper_login_inflight = True
-        # A new attempt clears the last error; the form goes back to busy.
+        # A new attempt clears the last error and shows the form as busy
+        # while the guest is provisioned, started and probed.
         self._apple_wrapper_login_result = {"ok": None, "needs_2fa": False, "error": ""}
+        with contextlib.suppress(Exception):
+            self.appleWrapperAuthChanged.emit()
 
         def work() -> None:
             try:
@@ -21179,32 +21270,16 @@ class WavesBridge(LibraryMixin, QObject):
         """Sign the wrapper guest in with Apple ID credentials."""
         from waves.apple_runtime import wrapper_login
 
-        url = self._apple_wrapper_base()
-        if not url:
-            self._apple_wrapper_login_result = {
-                "ok": False,
-                "needs_2fa": False,
-                "error": "The wrapper tier is not set up.",
-            }
-            self.appleWrapperAuthChanged.emit()
-            return
-        self._run_apple_wrapper_login(lambda: wrapper_login(url, username, password))
+        self._run_apple_wrapper_login(
+            lambda: self._apple_wrapper_login_call(lambda url: wrapper_login(url, username, password))
+        )
 
     @Slot(str)
     def appleWrapperSubmit2fa(self, code: str) -> None:
         """Finish the wrapper guest sign-in with the two-factor code."""
         from waves.apple_runtime import wrapper_login_2fa
 
-        url = self._apple_wrapper_base()
-        if not url:
-            self._apple_wrapper_login_result = {
-                "ok": False,
-                "needs_2fa": False,
-                "error": "The wrapper tier is not set up.",
-            }
-            self.appleWrapperAuthChanged.emit()
-            return
-        self._run_apple_wrapper_login(lambda: wrapper_login_2fa(url, code))
+        self._run_apple_wrapper_login(lambda: self._apple_wrapper_login_call(lambda url: wrapper_login_2fa(url, code)))
 
     @Slot(result="QVariant")
     def appleWrapperAuth(self) -> dict:
