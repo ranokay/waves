@@ -1,13 +1,10 @@
-"""The Provider seam's TIDAL side, pinned to the old paths it delegates to.
+"""The Provider seam's TIDAL side, pinned to independent sources of truth.
 
-Ticket #19 (expand half of the seam's expand-contract): ``waves/providers/``
-exists, nothing is routed yet, and the app behaves exactly as before. These
-tests are the anti-drift mechanism for the period where a fact exists in two
-places (the provider's translation and the backend mirror it must not drift
-from): each one pins the provider's answer to an independent source of truth --
-the helper call shapes, the backend's tier-word / ceiling / delivered-quality /
+Each test pins the provider's answer to a source outside the provider: the
+helper call shapes, the backend's tier-word / ceiling / delivered-quality /
 image normalizers, the engine's refusal decision, and the ownership store's
-rank scale.
+rank scale. A fact that exists in two places (the provider's translation
+and the backend mirror) must not drift.
 """
 
 from __future__ import annotations

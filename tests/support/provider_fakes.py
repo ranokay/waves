@@ -1,9 +1,8 @@
 """Provider stand-ins shared by the provider and bridge seam tests.
 
-A provider that implements the whole fused interface with no bodies: the
-neutral defaults (chooser metadata, capabilities, session verbs) are what
-the seam tests read, so every method stays a no-op and each test subclasses
-or wraps it for the behavior it pins.
+``BareProvider`` implements the whole fused interface with no bodies: the
+seam tests instantiate it to read the neutral defaults (chooser metadata,
+capabilities, session verbs) with no real provider behind them.
 """
 
 from __future__ import annotations
