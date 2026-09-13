@@ -34,18 +34,19 @@ bridge installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 _WIN_W, _WIN_H = 1100, 900
 
@@ -110,17 +111,19 @@ def _results(top: bool) -> dict:
     return payload
 
 
-def _run_scenario(shot: str) -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+def _run_scenario() -> int:
+    # Optional second argument: a PNG path to save the rendered page to.
+    shot = sys.argv[2] if len(sys.argv) > 2 else ""
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from support.offline import PARK_LOGIN_QML, patch_offline
 
@@ -129,7 +132,7 @@ def _run_scenario(shot: str) -> int:
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -140,7 +143,7 @@ def _run_scenario(shot: str) -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", _WIN_W)
     root.setProperty("height", _WIN_H)
@@ -189,7 +192,7 @@ def _run_scenario(shot: str) -> int:
     bridge.searchResults.emit(_results(top=True))
     if not pump(lambda: not q("searchBuilding")):
         print("search never finished building", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle()
 
     if not q("topHead.visible"):
@@ -246,7 +249,7 @@ def _run_scenario(shot: str) -> int:
     bridge.searchResults.emit(_results(top=False))
     if not pump(lambda: not q("searchBuilding")):
         print("second search never finished building", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle()
     if q("topHead.visible") or q("searchTop") is not None:
         failures.append("a reply without a top hit still shows TOP RESULT")
@@ -254,30 +257,20 @@ def _run_scenario(shot: str) -> int:
     for f in failures:
         print(f"FAIL: {f}", flush=True)
     print(f"checks failed: {len(failures)}", flush=True)
-    return _EXIT_REGRESSED if failures else _EXIT_OK
+    return EXIT_REGRESSED if failures else EXIT_OK
 
 
+@pytest.mark.qml
 def test_specific_search_answers_at_the_top():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-searchtop-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario", ""],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        "",
         timeout=120,
+        sandbox_prefix="waves-searchtop-test-",
+        failure_message="search top-result regression.",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-10:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not render a search page in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"search top-result regression. Scenario exit={proc.returncode}:\n{tail}"
 
 
-if __name__ == "__main__":
-    # Optional second argument: a PNG path to save the rendered page to.
-    raise SystemExit(_run_scenario(sys.argv[2] if len(sys.argv) > 2 else ""))
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

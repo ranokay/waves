@@ -28,75 +28,55 @@ the bridge installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-
-_EXIT_OK = 0
-_EXIT_FLOATED = 1  # the label showed over a page with no artists on it
-_EXIT_NEVER_SHOWS = 2  # the count gate swallowed the label that should show
-_EXIT_PAGE_NOT_SHOWN = 3  # an invisible ancestor, so the read means nothing
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+_FLOATED = 1  # the label showed over a page with no artists on it
+_NEVER_SHOWS = 2  # the count gate swallowed the label that should show
+_PAGE_NOT_SHOWN = 3  # an invisible ancestor, so the read means nothing
 
 
+@pytest.mark.qml
 def test_the_artists_show_all_label_needs_artists():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    sandbox = tempfile.mkdtemp(prefix="waves-artists-showall-")
-    env["XDG_CONFIG_HOME"] = sandbox
-    env["HOME"] = sandbox
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-artists-showall-",
+        failure_message="the ARTISTS toggle regressed:",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    if proc.returncode == _EXIT_PAGE_NOT_SHOWN:
-        # Deliberately not a skip: the search page being off screen is this
-        # scenario failing to set itself up, and a skip here would hide the
-        # very bug the scenario exists to catch.
-        pytest.fail(f"the search page never came on screen, so nothing was proved:\n{tail}")
-    if proc.returncode == _EXIT_FLOATED:
-        pytest.fail(f"SHOW LESS floated over a search page with no artists:\n{tail}")
-    if proc.returncode == _EXIT_NEVER_SHOWS:
-        pytest.fail(f"the label no longer shows when the row really is expanded:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the ARTISTS toggle regressed:\n{tail}"
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     bridge = WavesBridge(tidal=None)
     # The state the bug needs, and the only state it needs: someone expanded
@@ -112,7 +92,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -164,21 +144,21 @@ def _run_scenario() -> int:
 
     if not bool(q("root.searchArtistsExpanded")):
         print("the pref did not reach the page; the scenario proves nothing", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if int(q("artistsModel.count")) != 0:
         print("a fresh page already held artists", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     state = str(q(_SHOWN))
     if state == "MISSING":
         print("no item named artistsShowAll in the tree", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if not state.endswith("|ancestors-visible"):
         print(f"the search page is not on screen ({state}); the read proves nothing", file=sys.stderr)
-        return _EXIT_PAGE_NOT_SHOWN
+        return _PAGE_NOT_SHOWN
     if not state.startswith("HIDDEN"):
-        print(f"with no search run at all the label read {state}", file=sys.stderr)
-        return _EXIT_FLOATED
+        print(f"SHOW LESS floated over a search page with no artists (label read {state})", file=sys.stderr)
+        return _FLOATED
 
     # The positive leg: one artist, the row still expanded, and the toggle is
     # back. Without this an always-false binding would pass the check above.
@@ -186,10 +166,10 @@ def _run_scenario() -> int:
     settle(250)
     state = str(q(_SHOWN))
     if not state.startswith("SHOWN"):
-        print(f"with an artist listed and the row expanded the label read {state}", file=sys.stderr)
-        return _EXIT_NEVER_SHOWS
-    return _EXIT_OK
+        print(f"the label no longer shows when the row really is expanded (label read {state})", file=sys.stderr)
+        return _NEVER_SHOWS
+    return EXIT_OK
 
 
 if __name__ == "__main__" and "--run-scenario" in sys.argv:
-    sys.exit(_run_scenario())
+    raise SystemExit(_run_scenario())

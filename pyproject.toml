@@ -159,6 +159,14 @@ ignore = [
 "tests/ui/test_browse_console_wayfinding.py" = ["C901"]
 "tests/ui/test_browse_row_window.py" = ["C901"]
 "tests/ui/test_browse_strip_fits_the_card.py" = ["C901"]
+# The ported search scenarios keep their boot -> drive -> assert shape as one
+# deliberately linear function (C901).
+"tests/ui/test_search_artists_show_all_empty.py" = ["C901"]
+"tests/ui/test_search_playlist_block.py" = ["C901"]
+"tests/ui/test_search_refresh_in_place.py" = ["C901"]
+"tests/ui/test_search_scroll_reset.py" = ["C901"]
+"tests/ui/test_search_tab_artist_restore.py" = ["C901"]
+"tests/ui/test_search_top_result.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
 "tests/metadata/test_apple_double_cleanup.py" = ["S603"]
@@ -171,10 +179,6 @@ ignore = [
 # The quality badge menu scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).
 "tests/test_quality_pick_qml.py" = ["S603"]
-# The search in-place refresh scenario re-runs itself in a subprocess to
-# isolate the Qt boot (S603, fixed argv), and its build -> correct -> assert
-# scenario is one deliberately linear function (C901).
-"tests/test_search_refresh_in_place.py" = ["S603", "C901"]
 # The library scanner's directory walk (_walk_album_dirs) is a small state
 # machine over each folder's probe result (unchanged / relist / transient error /
 # vanished / root offline); the branching is the point and the function was kept
@@ -184,13 +188,8 @@ ignore = [
 "tests/test_forward_history_account_switch.py" = ["S603", "C901"]
 "tests/test_playlist_folder_qml.py" = ["S603", "C901"]
 "tests/test_folder_back_navigation.py" = ["S603", "C901"]
-"tests/test_search_results_surface_steal.py" = ["S603", "C901"]
-"tests/test_search_scroll_reset.py" = ["S603", "C901"]
-"tests/test_search_top_result.py" = ["S603", "C901"]
 "tests/test_breadcrumb_navigation.py" = ["S603", "C901"]
 "tests/test_library_track_claim.py" = ["S603", "C901"]
-"tests/test_search_tab_artist_restore.py" = ["S603", "C901"]
-"tests/test_search_paste_autosearch.py" = ["S603", "C901"]
 "tests/test_queue_failed_section.py" = ["S603", "C901"]
 "tests/test_queue_row_index.py" = ["S603", "C901"]
 "tests/test_queue_row_quality.py" = ["S603", "C901"]
@@ -211,9 +210,6 @@ ignore = [
 # The Apple-only search row scenario re-runs itself in a subprocess to isolate
 # the Qt boot (S603, fixed argv).
 "tests/test_apple_only_search_qml.py" = ["S603"]
-# The provider-collapse scenario re-runs itself in a subprocess to isolate
-# the Qt boot (S603, fixed argv).
-"tests/test_search_provider_collapse_qml.py" = ["S603"]
 # The logs-console scenario re-runs itself in a subprocess to isolate
 # the Qt boot (S603, fixed argv).
 "tests/test_logs_console_qml.py" = ["S603"]
@@ -239,7 +235,6 @@ ignore = [
 # Same subprocess-isolation + linear-scenario shape as the scroll guard.
 "tests/test_update_toast_staged.py" = ["S603", "C901"]
 "tests/test_video_card_date_no_overlap.py" = ["S603", "C901"]
-"tests/test_search_playlist_block.py" = ["S603", "C901"]
 "tests/test_playlist_selection_and_reset.py" = ["S603", "C901"]
 "tests/test_progress_matrix_stable_width.py" = ["S603", "C901"]
 # The quarantine-row scenario re-runs itself in a subprocess to isolate the
@@ -256,7 +251,6 @@ ignore = [
 "tests/test_queue_owned_prediction.py" = ["S603", "C901"]
 "tests/test_progress_jump_ramp.py" = ["S603", "C901"]
 "tests/test_progress_pad_cells.py" = ["S603", "C901"]
-"tests/test_search_artists_show_all_empty.py" = ["S603", "C901"]
 # Drives the real release.sh (bash) and git against throwaway sandbox repos;
 # both are resolved from PATH on purpose (S603/S607, fixed argv).
 "tests/test_release_star_history.py" = ["S603", "S607"]

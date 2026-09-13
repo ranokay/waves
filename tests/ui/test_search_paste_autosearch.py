@@ -2,7 +2,7 @@
 
 WHAT THIS FENCES OFF
 --------------------
-Issue #18 asked for the search bar's paste button to also run the search.
+The search bar's paste button also runs the search.
 The wiring is a one-shot arm on the decode pipeline: the glyph's click sets
 ``searchDecoder.submitPending`` right before ``paste()``, the decode that
 paste starts latches it (``submitArmed``), and ``onDecoded`` submits. Three
@@ -13,8 +13,8 @@ behaviors must hold:
    unless it is a TIDAL link (that auto-search predates the glyph arm).
 3. The arm is one-shot and disarmed by any non-decode text change, so a
    stale arm (empty clipboard at click time) cannot fire on a later paste.
-4. A glyph paste of three characters or fewer searches too (issue #28). The
-   decoder reads a paste off a >=4-char jump, which a short one cannot make,
+4. A glyph paste of three characters or fewer searches too. The decoder
+   reads a paste off a >=4-char jump, which a short one cannot make,
    so the handler runs the decode itself rather than waiting for a guess.
 
 The scenario never touches the OS clipboard: a paste, to the decoder, is a
@@ -30,65 +30,53 @@ installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
-
+@pytest.mark.qml
 def test_paste_glyph_auto_searches_and_plain_paste_does_not():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-paste-search-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
+        sandbox_prefix="waves-paste-search-test-",
+        failure_message="paste auto-search behavior regressed.",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-10:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert (
-        proc.returncode == _EXIT_OK
-    ), f"paste auto-search behavior regressed. Scenario exit={proc.returncode}:\n{tail}"
 
 
 def _run_scenario() -> int:
-    # THIS checkout's waves, not the venv's editable install.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -99,7 +87,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -213,8 +201,8 @@ def _run_scenario() -> int:
         f"short_searched={short_searched} short_left_no_arm={short_left_no_arm}",
         flush=True,
     )
-    return _EXIT_OK if ok else _EXIT_REGRESSED
+    return EXIT_OK if ok else EXIT_REGRESSED
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())

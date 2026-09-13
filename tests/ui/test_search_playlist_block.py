@@ -12,18 +12,19 @@ click the title and assert the browse surface keys to the playlist page.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-
-_EXIT_OK = 0
-_EXIT_FAIL = 1
-_EXIT_NO_QT = 3
-_EXIT_PRECONDITION = 4
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 _PLAYLIST = '{"id":"pl1","title":"DMX Essentials","art":"","tracks":25,"creator":"TIDAL"}'
 
@@ -51,32 +52,18 @@ _ROWS = [
 ]
 
 
+@pytest.mark.qml
 def test_playlist_rows_expand_and_title_opens_the_page():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    # Sandboxed: this scenario builds a REAL WavesBridge, and a bridge that
-    # finds the packaged app's config dir adopts its settings, writes its
-    # log, and starts a real scan of the user's music library.
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-playlist-block-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-playlist-block-test-",
+        failure_message="search playlist rows stopped behaving like album rows:",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"search playlist rows stopped behaving like album rows:\n{tail}"
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
@@ -85,15 +72,16 @@ def _run_scenario() -> int:
         from PySide6.QtTest import QTest
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     # The bridge's cached sign-in check raced this scenario's clicks against
     # live TIDAL latency (loginPanel's scrim swallowed whichever clicks it
@@ -125,11 +113,11 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     if not isinstance(root, QQuickWindow):
         print("root object is not a window", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     def q(expr: str):
         r = QQmlExpression(QQmlEngine.contextForObject(root), root, expr).evaluate()
@@ -198,7 +186,7 @@ def _run_scenario() -> int:
         # A FAIL, not a precondition: the appended playlist must always
         # render a PlaylistBlock; its absence IS the regression.
         print("no PlaylistBlock rendered for the appended playlist", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     x, y, w, h = g
 
     # 1) Row click expands. The expand also fires the REAL loadPlaylistTracks,
@@ -212,7 +200,7 @@ def _run_scenario() -> int:
     settle(200)
     if q("root.expandedPlaylists['pl1'] === true ? 1 : 0") != 1:
         print("clicking the playlist row did not expand it", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     for _ in range(100):  # generous, but the no-net reply arrives in ms
         if backend_replies:
             break
@@ -240,7 +228,7 @@ def _run_scenario() -> int:
     )
     if n != 2:
         print(f"expanded playlist shows {n} rows, expected 2", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
 
     # 3) Title click opens the playlist page (the title starts right after
     # the chevron and the 46px art tile). Fresh geometry: the waits above
@@ -249,18 +237,16 @@ def _run_scenario() -> int:
     g = find_geo()
     if g is None:
         print("the PlaylistBlock vanished before the title click", file=sys.stderr)
-        return _EXIT_FAIL
+        return EXIT_REGRESSED
     x, y, w, h = g
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(x + 95, y + 22))
     settle(300)
     key = str(q("root.browsePageKey") or "")
     if key != "item:playlist:pl1" or q("root.browseOpen ? 1 : 0") != 1:
         print(f"clicking the title did not open the playlist page (key={key})", file=sys.stderr)
-        return _EXIT_FAIL
-    return _EXIT_OK
+        return EXIT_REGRESSED
+    return EXIT_OK
 
 
-if __name__ == "__main__":
-    if "--run-scenario" in sys.argv:
-        raise SystemExit(_run_scenario())
-    raise SystemExit("run this file through pytest")
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())
