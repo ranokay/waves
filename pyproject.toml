@@ -191,6 +191,9 @@ ignore = [
 "tests/ui/test_hover_prefetch_scenario.py" = ["C901"]
 "tests/ui/test_hover_swell_fade.py" = ["C901"]
 "tests/ui/test_video_grid_hover_dwell.py" = ["C901"]
+# The ported update-toast scenario keeps its boot -> drive -> assert shape as
+# one deliberately linear function (C901).
+"tests/ui/test_update_toast_staged.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
 "tests/metadata/test_apple_double_cleanup.py" = ["S603"]
@@ -226,9 +229,6 @@ ignore = [
 # The Apple-only search row scenario re-runs itself in a subprocess to isolate
 # the Qt boot (S603, fixed argv).
 "tests/test_apple_only_search_qml.py" = ["S603"]
-# The logs-console scenario re-runs itself in a subprocess to isolate
-# the Qt boot (S603, fixed argv).
-"tests/test_logs_console_qml.py" = ["S603"]
 # The provider-badge scenario re-runs itself in a subprocess to isolate
 # the Qt boot (S603, fixed argv).
 "tests/test_provider_badge_qml.py" = ["S603"]
@@ -246,7 +246,6 @@ ignore = [
 # buffer, through the shell it is written for (S603/S607, fixed argv).
 "tests/test_final_audit_updater.py" = ["S603", "S607"]
 # Same subprocess-isolation + linear-scenario shape as the scroll guard.
-"tests/test_update_toast_staged.py" = ["S603", "C901"]
 "tests/test_playlist_selection_and_reset.py" = ["S603", "C901"]
 # The quarantine-row scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).

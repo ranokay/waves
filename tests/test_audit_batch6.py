@@ -15,7 +15,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from test_updater import _manifest, _prep
+from support.updater_fakes import make_manifest as _manifest
+from support.updater_fakes import prep_updater as _prep
 
 from waves.helper.path import FILENAME_LENGTH_MAX, format_path_media, path_file_uniquify
 from waves.helper.tidal import name_builder_album_artist, user_media_lists

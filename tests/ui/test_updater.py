@@ -15,9 +15,12 @@ import pathlib
 import re
 import sys
 import zipfile
-from pathlib import Path
 
 import pytest
+from support.paths import REPO_ROOT
+from support.updater_fakes import ASSET as _ASSET
+from support.updater_fakes import make_manifest as _manifest
+from support.updater_fakes import prep_updater as _prep
 
 from waves.waves_ui import signing
 from waves.waves_ui import updater as u
@@ -1043,9 +1046,7 @@ def test_select_old_updater_name_sort_stays_on_regular():
     # names that matter are the ones the release workflow publishes, so they
     # are read from it. Rename a leg to "macos-intel-legacy" (a hyphen sorts
     # before the dot) and every old updater in the field downgrades itself.
-    workflow = (
-        Path(__file__).resolve().parent.parent / ".github" / "workflows" / "release-or-test-build.yml"
-    ).read_text(encoding="utf-8")
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release-or-test-build.yml").read_text(encoding="utf-8")
     names = {}
     for key in (
         "OUT_NAME_FILE",
@@ -1158,48 +1159,6 @@ def test_install_blocked_from_source(monkeypatch):
 
 
 # ---- mocked download → verify → stage (signed manifest; real swap stubbed) --
-_ASSET = "Waves.bin"
-
-
-def _manifest(payload: bytes, asset: str = _ASSET, version: str = "v2.0.0") -> bytes:
-    """A signed-manifest body: the CI ``# waves-version`` line (anti-rollback) plus a
-    coreutils-style SHA256SUMS line pinning ``payload``'s digest to ``asset``."""
-    line = f"{hashlib.sha256(payload).hexdigest()}  {asset}\n"
-    return (f"# waves-version: {version}\n{line}").encode()
-
-
-def _prep(monkeypatch, tmp_path, *, payload, manifest, signature, pubkey, asset=_ASSET):
-    """Wire an AppUpdater whose download writes ``payload`` and whose signed
-    SHA256SUMS manifest + signature + embedded public key are as given. The
-    platform swap is stubbed so a passing case records the call without touching
-    the live executable."""
-    monkeypatch.setattr(u, "is_frozen", lambda: True)
-    monkeypatch.setattr(u, "UPDATE_PUBLIC_KEY", pubkey)
-    up = AppUpdater(tmp_path, "1.0.0", repo="owner/Waves")
-    up.latest = lambda *a, **k: Release(
-        version="v2.0.0",
-        asset=asset,
-        url="http://x/" + asset,
-        sha256sums_url="http://x/SHA256SUMS",
-        sig_url="http://x/SHA256SUMS.sig",
-    )
-
-    def fake_download(self, sess, url, dest, progress_cb, abort):
-        with open(dest, "wb") as fh:
-            fh.write(payload)
-        if progress_cb:
-            progress_cb(100.0)
-
-    monkeypatch.setattr(AppUpdater, "_download", fake_download, raising=True)
-    monkeypatch.setattr(AppUpdater, "_fetch_manifest", lambda self, sess, url: manifest, raising=True)
-    monkeypatch.setattr(AppUpdater, "_fetch_signature", lambda self, sess, url: signature, raising=True)
-    applied = {}
-    monkeypatch.setattr(
-        AppUpdater, "_apply", lambda self, p, rel, log, abort=None: applied.setdefault("path", p) or p, raising=True
-    )
-    return up, applied
-
-
 def _staged(tmp_path):
     """Leftover download temp files (must be empty after any install attempt)."""
     return list((tmp_path / "updates").glob("*-" + _ASSET))
