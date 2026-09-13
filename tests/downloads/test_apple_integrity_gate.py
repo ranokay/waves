@@ -34,7 +34,7 @@ def _ffmpeg() -> str:
     return path
 
 
-def _tone(path: Path):
+def _tone(path: Path, codec: str = "aac"):
     subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
         [
             _ffmpeg(),
@@ -46,11 +46,52 @@ def _tone(path: Path):
             "-i",
             "sine=frequency=440:duration=1",
             "-c:a",
-            "aac",
+            codec,
             str(path),
         ],
         check=True,
     )
+
+
+def _corrupt_alac_end_tag(clean: Path, dest: Path) -> Path:
+    """Turn a clean ALAC into a decode-failing one, deterministically.
+
+    Apple's outbreak-era encoder shipped ALAC frames missing their trailing
+    TYPE_END element: ffprobe still reads the stream metadata, but the full
+    decode rejects the frame. Zeroing the final muxed packet's last non-zero
+    byte destroys the frame terminator in the same way, so the
+    probe-passes/decode-rejects shape is reproducible from a generated tone
+    without shipping a commercial master.
+    """
+    from waves.providers.apple import engine as apple_engine
+
+    ffprobe = apple_engine.ffprobe_for(_ffmpeg())
+    packets = subprocess.run(  # noqa: S603 (fixed argv: local fixture, no user input)
+        [
+            ffprobe or "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_packets",
+            "-show_entries",
+            "packet=pos,size",
+            "-of",
+            "json",
+            str(clean),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    last = json.loads(packets.stdout)["packets"][-1]
+    data = bytearray(clean.read_bytes())
+    end = int(last["pos"]) + int(last["size"]) - 1
+    while end > 0 and data[end] == 0:
+        end -= 1
+    data[end] = 0
+    dest.write_bytes(bytes(data))
+    return dest
 
 
 def _song_resource(song_id="song-1", atmos=False):
@@ -78,10 +119,11 @@ def _song_resource(song_id="song-1", atmos=False):
 
 
 def _fragile_violet_resource():
-    """The known-bad fixture album's title (TOGENASHI TOGEARI – Fragile Violet).
+    """The known-bad fixture album's resource (TOGENASHI TOGEARI - Fragile Violet).
 
-    Synthetic corrupt bytes stand in for Apple's unre-encoded source: the
-    shape under test is quarantine + FAILED, not the network fetch.
+    The commercial master is not redistributable; the tests reproduce its
+    documented defect (probe-clean, decode-rejecting ALAC frames) from a
+    generated tone, so the fixture carries the defect shape, not the bytes.
     """
     res = _song_resource(song_id="fragile-violet-1")
     res["attributes"]["name"] = "Fragile Violet"
@@ -598,6 +640,79 @@ def test_known_bad_fixture_quarantines_and_fails_in_plain_words(tmp_path, monkey
     assert store.is_quarantined("apple:song-1", "stereo") is not None
     # Nothing landed in the library.
     assert not (base / "Aphex Twin" / "Xtal.m4a").exists()
+
+
+@pytest.mark.ffmpeg
+def test_corrupt_alac_end_tag_passes_the_probe_and_fails_the_decode(tmp_path):
+    """T4's synthetic defect: the missing-TYPE_END frame shape.
+
+    ffprobe reads the stream (codec, rate, depth) exactly like a healthy
+    delivery; the full decode rejects the frame, which is why the integrity
+    gate probes and decodes rather than probing alone.
+    """
+    from waves.providers.apple import engine as apple_engine
+
+    ffprobe = apple_engine.ffprobe_for(_ffmpeg())
+    if not ffprobe:
+        pytest.skip("ffprobe is not available")
+    clean = tmp_path / "clean.m4a"
+    _tone(clean, codec="alac")
+    corrupt = _corrupt_alac_end_tag(clean, tmp_path / "corrupt.m4a")
+
+    control = apple_engine.probe_audio_file(clean, ffprobe)
+    probed = apple_engine.probe_audio_file(corrupt, ffprobe)
+    assert control["codec"] == "alac" and probed["codec"] == "alac"
+    assert probed["sample_rate"] == control["sample_rate"]
+
+    apple_engine.decode_check(clean, _ffmpeg())  # the clean control decodes silently
+    with pytest.raises(apple_engine.AppleIntegrityError):
+        apple_engine.decode_check(corrupt, _ffmpeg())
+
+
+@pytest.mark.ffmpeg
+def test_named_alac_fixture_quarantines_through_a_real_store(tmp_path):
+    """The Fragile Violet defect shape, quarantined with a real SQLite store.
+
+    The master itself is not redistributable, so the fixture reproduces its
+    documented defect (probe-clean, decode-rejecting ALAC frames) from a
+    generated tone. Three failed attempts end in one quarantine copy, a
+    skip-list mark, no ownership claim and nothing landed to badge.
+    """
+    from waves.ownership import OwnershipStore
+    from waves.providers.apple import engine as apple_engine
+
+    if not apple_engine.ffprobe_for(_ffmpeg()):
+        pytest.skip("ffprobe is not available")
+    clean = tmp_path / "clean.m4a"
+    _tone(clean, codec="alac")
+    bad_files = [_corrupt_alac_end_tag(clean, tmp_path / f"bad-{i}.m4a") for i in range(3)]
+    provider = _FakeProvider(bad_files)
+    base = tmp_path / "lib"
+    store = OwnershipStore(str(tmp_path / "own.db"))
+    try:
+        stub = _bind(_stub(base, provider, _ownership_store=store))
+        relay = _Relay()
+        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:fragile-violet-1")
+
+        with pytest.raises(DownloadIncomplete) as excinfo:
+            runner.run_apple_job(
+                stub._apple_job_hooks(),
+                1,
+                spec,
+                _fragile_violet_resource(),
+                signals=relay,
+                job_abort=Event(),
+                file_template="{artist_name}/{track_title}",
+            )
+
+        assert INTEGRITY_FAIL_MESSAGE in str(excinfo.value)
+        assert len(provider.fetched) == 3
+        assert len(list((base / QUARANTINE_DIR_NAME).rglob("*.m4a"))) == 1
+        assert store.is_quarantined("apple:fragile-violet-1", "stereo") is not None
+        assert store.ownership_of("apple:fragile-violet-1") is None
+        assert not (base / "TOGENASHI TOGEARI").exists()
+    finally:
+        store.close()
 
 
 @pytest.mark.ffmpeg
