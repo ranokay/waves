@@ -47,6 +47,7 @@ from waves.providers.base import (
     Capability,
     FavoritesUnavailable,
     Provider,
+    QualityOption,
     Refusal,
     RefusalKind,
     StreamInfo,
@@ -121,6 +122,22 @@ class TidalProvider(Provider):
     id = CTX_TIDAL
     name = "TIDAL"
     capabilities = frozenset(Capability)
+
+    # ----- chooser metadata
+
+    # TIDAL serves its four rungs; the detail words are the Chooser's label
+    # text, not ranks (ADR 0001).
+    quality_options = (
+        QualityOption(QualityTier.HI_RES_LOSSLESS, "FLAC 24-bit up to 192 kHz"),
+        QualityOption(QualityTier.LOSSLESS, "FLAC 16-bit/44.1 kHz"),
+        QualityOption(QualityTier.HIGH, "AAC 320"),
+        QualityOption(QualityTier.LOW, "AAC 96"),
+    )
+    quality_setting = "tidal_quality_audio"
+    # Atmos-only releases are their own ids, so a track can arrive with Atmos
+    # and no stereo at all.
+    audio_types = frozenset({AudioType.STEREO, AudioType.ATMOS})
+    settings_card = "tidal"
 
     def __init__(self, tidal: Tidal, stream_resolver=None):
         self._tidal = tidal

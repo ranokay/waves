@@ -8,7 +8,7 @@ from threading import Lock
 from urllib.parse import urlparse
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
-from waves.providers.base import AudioType, Capability, Provider, Refusal, RefusalKind, StreamInfo
+from waves.providers.base import AudioType, Capability, Provider, QualityOption, Refusal, RefusalKind, StreamInfo
 
 
 class _QuietCatalogLog:
@@ -76,7 +76,32 @@ def _catalog_path_id(type_seg: str, raw_id: str) -> tuple[str, str, None] | None
 class AppleProvider(Provider):
     id = CTX_APPLE
     name = "Apple Music"
-    capabilities = frozenset({Capability.SEARCH, Capability.CATALOG, Capability.OPEN_URL, Capability.PREVIEW})
+    capabilities = frozenset(
+        {
+            Capability.SEARCH,
+            Capability.CATALOG,
+            Capability.OPEN_URL,
+            Capability.DOWNLOAD,
+            Capability.LYRICS,
+            Capability.ART,
+            Capability.PREVIEW,
+        }
+    )
+
+    # ----- chooser metadata
+
+    # Apple's ladder has no LOW rung; AAC 256 is its floor. The detail words
+    # are the Chooser's label text, never ranks (ADR 0001).
+    quality_options = (
+        QualityOption(QualityTier.HI_RES_LOSSLESS, "ALAC 24/192"),
+        QualityOption(QualityTier.LOSSLESS, "ALAC 16/44.1"),
+        QualityOption(QualityTier.HIGH, "AAC 256"),
+    )
+    quality_setting = "apple_quality_audio"
+    # A track always carries stereo alongside its Atmos variant, and a
+    # per-click Atmos fetch is a real delivery, so Apple serves both types.
+    audio_types = frozenset({AudioType.STEREO, AudioType.ATMOS})
+    settings_card = "apple"
 
     def __init__(self, catalog=None, catalog_factory=None) -> None:
         self._catalog = catalog

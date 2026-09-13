@@ -23,6 +23,7 @@ from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
+from waves.providers import Capability
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
 
@@ -177,7 +178,11 @@ def _run_search(monkeypatch, n_artists: int):
     stub = _SearchStub()
     artists = [SimpleNamespace(id=f"a{i}", name=f"Artist {i}") for i in range(n_artists)]
     # The search fetch rides the Provider seam (ticket #20).
-    stub.providers = {"tidal": SimpleNamespace(search=lambda needle: {"artists": artists})}
+    stub.providers = {
+        "tidal": SimpleNamespace(
+            capabilities=frozenset({Capability.SEARCH}), search=lambda needle: {"artists": artists}
+        )
+    }
     monkeypatch.setattr(backend, "_artist_popularity", lambda artist: 50)
     stub.search("needle")
     return stub

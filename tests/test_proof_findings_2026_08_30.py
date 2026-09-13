@@ -27,6 +27,7 @@ import pytest
 from waves import download as download_mod
 from waves.download import _os_error_text
 from waves.ownership import OwnershipStore
+from waves.providers import Capability
 from waves.waves_ui import diagnostics
 from waves.waves_ui.backend import WavesBridge
 
@@ -67,7 +68,9 @@ class _SearchStub:
         self.tidal = SimpleNamespace(session=object())
         # The fetch rides the Provider seam (ticket #20); the fake supersedes
         # itself mid-fetch the way logout used to via the old helper patch.
-        self.providers = {"tidal": SimpleNamespace(search=self._superseded_search)}
+        self.providers = {
+            "tidal": SimpleNamespace(capabilities=frozenset({Capability.SEARCH}), search=self._superseded_search)
+        }
         self.searchResults = _Signal()
         self.artistMetaLoaded = _Signal()
 

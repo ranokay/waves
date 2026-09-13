@@ -22,6 +22,7 @@ import inspect
 from threading import Lock
 from types import SimpleNamespace
 
+from waves.providers import Capability
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
 
@@ -181,7 +182,11 @@ class _SearchStub(_StubBase):
 
 def test_a_choking_search_build_clears_busy_and_says_so(monkeypatch):
     stub = _SearchStub()
-    stub.providers = {"tidal": SimpleNamespace(search=lambda needle: {"albums": [SimpleNamespace(id="x")]})}
+    stub.providers = {
+        "tidal": SimpleNamespace(
+            capabilities=frozenset({Capability.SEARCH}), search=lambda needle: {"albums": [SimpleNamespace(id="x")]}
+        )
+    }
 
     stub.search("aphex")
 

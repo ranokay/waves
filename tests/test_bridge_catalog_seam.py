@@ -25,6 +25,7 @@ from types import SimpleNamespace
 from tidalapi.album import Album
 from tidalapi.artist import Artist
 
+from waves.providers import Capability
 from waves.providers.apple import AppleCatalogUnavailable
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
@@ -53,6 +54,8 @@ class _GuardSession:
 
 class _FakeProvider:
     """Records the seam calls the bridge makes; answers with canned objects."""
+
+    capabilities = frozenset(Capability)
 
     def __init__(self, **answers):
         self.calls: list[tuple] = []
