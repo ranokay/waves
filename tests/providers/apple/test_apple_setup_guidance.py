@@ -104,23 +104,20 @@ def test_refresh_setup_reprobes_and_rebuilds_the_wizard():
     assert kinds[-1] == "state" and seen[-1][1] == "done"  # refreshed, not lingering
 
 
-# The first visible object whose action key is the setup refresh, as a scene
-# point: the status pill's own action, the way the user reaches it.
-_PILL_POINT_BODY = """
+# The first visible object whose action key is the setup refresh: the status
+# pill's own action, the way the user reaches it.
+_PILL_JS = """
     var pill = findFirst(settingsPage, function (o) {
         return o.actKey !== undefined && ("" + o.actKey) === "apple_setup"
             && o.visible !== false && o.width > 0;
     });
-    return pill ? pill.mapToItem(null, pill.width / 2, pill.height / 2) : null;
 """
+
+_PILL_POINT_BODY = _PILL_JS + "    return pill ? pill.mapToItem(null, pill.width / 2, pill.height / 2) : null;\n"
 
 # Bring the pill's row inside the Settings viewport before clicking: the
 # providers card is taller than the window and the Apple band sits below it.
-_SCROLL_TO_PILL_BODY = """
-    var pill = findFirst(settingsPage, function (o) {
-        return o.actKey !== undefined && ("" + o.actKey) === "apple_setup"
-            && o.visible !== false && o.width > 0;
-    });
+_SCROLL_TO_PILL_BODY = _PILL_JS + """
     if (!pill) return "none";
     var flick = findFirst(settingsPage, function (o) {
         return o.contentY !== undefined && o.contentHeight !== undefined && o.height > 0;
