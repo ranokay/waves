@@ -434,6 +434,7 @@ def _bridge_stub(**settings_overrides):
         "_apple_supervisor_for_job",
         "_apple_wrapper_port_for_job",
         "_apple_ensure_sidecar",
+        "_apple_sidecar_guard",
         "_apple_note_activity",
         "_apple_idle_timeout",
         "_apple_sleep_abortable",
@@ -624,3 +625,69 @@ def test_ensure_with_no_port_reports_setup_not_a_start_failure():
     assert "not set up" in str(excinfo.value)
     row = stub._queue_index[9]
     assert row["status"] == "queued" and "no port" in row["reason"]
+
+
+class _RecordingGuard:
+    """A lock stand-in that reports how many holders it had at each call."""
+
+    def __init__(self):
+        self.held = 0
+
+    def __enter__(self):
+        self.held += 1
+        return self
+
+    def __exit__(self, *exc):
+        self.held -= 1
+        return False
+
+
+def test_ensure_start_holds_the_sidecar_guard():
+    """The idle stop decides under the same lock an ensure holds, so a job
+    that starts mid-decision cannot have the sidecar stopped under it."""
+    guard = _RecordingGuard()
+    state = {"held_during_start": 0}
+    stub = _bridge_stub()
+    stub._apple_sidecar_lock = guard
+    stub._apple_runtime = SimpleNamespace(read_port=lambda: 51234, app_dir="/tmp/waves-test")
+    stub.providers = {CTX_APPLE: SimpleNamespace(wrapper_url="http://127.0.0.1:51234")}
+
+    def ensure_started(**kwargs):
+        state["held_during_start"] = guard.held
+        return True
+
+    stub._apple_supervisor = SimpleNamespace(ensure_started=ensure_started, note_activity=lambda: None)
+
+    assert stub._apple_ensure_sidecar(9, Event(), need_wrapper=True) is True
+    assert state["held_during_start"] == 1
+
+
+def test_idle_stop_decides_under_the_sidecar_guard():
+    guard = _RecordingGuard()
+    seen: dict = {}
+
+    def busy():
+        seen["busy_held"] = guard.held
+        return False
+
+    def should_stop(timeout, apple_busy=False):
+        seen["decide_held"] = guard.held
+        return True
+
+    def stop():
+        seen["stop_held"] = guard.held
+        return True
+
+    stub = SimpleNamespace(
+        settings=SimpleNamespace(data=SimpleNamespace(apple_wrapper_idle_sec=300.0)),
+        _apple_supervisor=SimpleNamespace(should_stop=should_stop, stop=stop),
+        _apple_sidecar_lock=guard,
+        _apple_busy=busy,
+        _schedule_apple_idle_stop=lambda: seen.setdefault("rescheduled", True),
+    )
+    for name in ("_apple_setting", "_apple_idle_timeout", "_apple_sidecar_guard", "_apple_idle_stop_if_idle"):
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+
+    stub._apple_idle_stop_if_idle()
+
+    assert seen == {"busy_held": 1, "decide_held": 1, "stop_held": 1}

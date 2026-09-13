@@ -212,15 +212,72 @@ class BaseConfig:
 # paced nothing, and it costs a long list half an hour of standing still.
 _RATE_LIMIT_PAUSE_PLAUSIBLE_MAX_SEC: float = 30.0
 
+# Run-once settings migrations, by name. Completion is recorded both in the
+# settings model (the boolean markers the steps set) and in a sidecar beside
+# the settings file. The sidecar is what survives a downgrade: an older
+# release rewrites settings.json from its own model and drops every field it
+# does not know, which used to strip the in-file markers and let a step run a
+# second time over a choice the user had made since.
+_MIGRATIONS_SIDECAR_NAME = "settings-migrations.json"
+_MIGRATION_STEPS: tuple[str, ...] = (
+    "quality_split",
+    "replay_gain_default",
+    "playlist_folder_default",
+    "provider_segment",
+    "rate_limit_wired",
+    "lyrics_art_providers",
+    "atmos_default",
+)
 
-def _migrate_settings(data: ModelSettings) -> bool:
+
+def _migrations_state_path() -> Path:
+    """The migration-completion sidecar beside settings.json."""
+    return Path(path_config_base()) / _MIGRATIONS_SIDECAR_NAME
+
+
+def _completed_migrations() -> set[str]:
+    """Steps recorded as applied, or an empty set when nothing is recorded."""
+    try:
+        raw = json.loads(_migrations_state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(raw, dict):
+        return set()
+    steps = raw.get("completed")
+    if not isinstance(steps, list):
+        return set()
+    return {str(step) for step in steps}
+
+
+def _remember_migrations(completed: set[str]) -> None:
+    """Record the completed run-once steps. Best-effort, never raises.
+
+    Names this build does not know (a newer build's steps, seen when the code
+    is downgraded) are carried through: dropping them would let the newer
+    build replay them on the next upgrade.
+    """
+    path = _migrations_state_path()
+    steps = sorted(completed | set(_MIGRATION_STEPS))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps({"completed": steps}, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        logger.warning("Could not record the completed settings migrations beside the settings file")
+
+
+def _migrate_settings(data: ModelSettings) -> bool:  # noqa: C901 (seven sequential one-time steps)
     """Apply one-time upgrade steps to an already-loaded settings model.
 
-    Returns True when something changed, so the caller persists it. Each step is
-    guarded by a marker stored in the config, so it runs at most once and never
-    overrides a choice the user makes afterwards.
+    Returns True when something changed, so the caller persists it. A step
+    runs only when neither its in-file marker nor the sidecar beside the
+    settings file says it already ran; once every step is covered the sidecar
+    is written, so a downgrade that drops the markers cannot replay a step
+    over choices the user has since made.
     """
     changed = False
+    done = _completed_migrations()
 
     # quality_audio split into the per-provider settings (issue #24, spec
     # §9.2), stored as Waves tier strings. The legacy field is a
@@ -232,24 +289,26 @@ def _migrate_settings(data: ModelSettings) -> bool:
     # settings.json on the next save and the migration is one-time by
     # construction. The fold also carries the member-name spellings a
     # hand-edited config may hold, and apple_quality_audio starts at its own
-    # default (Apple has no LOW rung); nothing else moves.
+    # default (Apple has no LOW rung); nothing else moves. A downgrade can
+    # re-serialize the carrier: it is still dropped, never folded twice.
     if data.quality_audio is not None:
-        tier = tier_from_word(data.quality_audio)
-        if tier is not None:
-            data.tidal_quality_audio = tier.value
-        else:
-            logger.warning(
-                "Settings carried an unreadable audio quality %r; the TIDAL default stands",
-                data.quality_audio,
-            )
+        if "quality_split" not in done:
+            tier = tier_from_word(data.quality_audio)
+            if tier is not None:
+                data.tidal_quality_audio = tier.value
+            else:
+                logger.warning(
+                    "Settings carried an unreadable audio quality %r; the TIDAL default stands",
+                    data.quality_audio,
+                )
         data.quality_audio = None
         changed = True
 
     # ReplayGain became on-by-default. Configs created before that carry an
     # explicit False that is really just the old default, so switch them on once.
-    # A user who turns it back off later keeps it off: the marker stops this from
-    # firing again.
-    if not data.replay_gain_default_migrated:
+    # A user who turns it back off later keeps it off: the marker and the
+    # sidecar stop this from firing again.
+    if "replay_gain_default" not in done and not data.replay_gain_default_migrated:
         data.metadata_replay_gain = True
         data.replay_gain_default_migrated = True
         changed = True
@@ -259,7 +318,7 @@ def _migrate_settings(data: ModelSettings) -> bool:
     # that exact value is upgraded. Anything else is a customized template the
     # user owns, and it is never rewritten (they can add {folder_path} where
     # they want it).
-    if not data.format_playlist_folder_migrated:
+    if "playlist_folder_default" not in done and not data.format_playlist_folder_migrated:
         old_default = "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}"
         if data.format_playlist == old_default:
             data.format_playlist = ModelSettings().format_playlist
@@ -273,22 +332,18 @@ def _migrate_settings(data: ModelSettings) -> bool:
     # and is never touched (existing files stay where they are either way:
     # ownership records absolute paths and the library scan is recursive, so
     # nothing is stranded by the new folder).
-    if _migrate_provider_segment(data):
-        changed = True
+    if "provider_segment" not in done:
+        changed = _migrate_provider_segment(data) or changed
 
     # The two rate-limit fields sat in Advanced while nothing read them, and
     # they asked a different question then ("albums to process"), so a value on
     # disk is a guess about something else that never took effect. Now that
     # they pace real downloads, a leftover of a minute between batches would
     # quietly add half an hour to a long playlist, so a pause no answer to the
-    # new question would give goes back to the default.
-    #
-    # It resets THAT and nothing else, because the marker cannot be relied on
-    # to keep this to one run: the marker is a field the previous release does
-    # not have, and that release rewrites settings.json from its own model on
-    # every launch, so a downgrade and back strips it and this runs again. A
-    # pace the user has since tuned is theirs, and stands.
-    if not data.api_rate_limit_wired_migrated:
+    # new question would give goes back to the default. The guard is the
+    # in-file marker for installs that carry it and the sidecar for configs a
+    # downgrade stripped: a pace the user has since tuned is theirs, and stands.
+    if "rate_limit_wired" not in done and not data.api_rate_limit_wired_migrated:
         if data.api_rate_limit_delay_sec > _RATE_LIMIT_PAUSE_PLAUSIBLE_MAX_SEC:
             data.api_rate_limit_delay_sec = ModelSettings().api_rate_limit_delay_sec
         data.api_rate_limit_wired_migrated = True
@@ -298,12 +353,20 @@ def _migrate_settings(data: ModelSettings) -> bool:
     # move into each provider's card. Copy the shared values into both
     # mirrors once, so an existing install downloads exactly as configured
     # while each provider's choices become its own from here on.
-    #
+    if "lyrics_art_providers" not in done:
+        changed = _migrate_lyrics_art_providers(data) or changed
+
     # The Atmos toggle became the Chooser default-audio dropdown (issue #66).
-    # Assignment form (not `if step(): changed = True`) to stay under the
-    # branch budget: both steps always run either way.
-    changed = _migrate_lyrics_art_providers(data) or changed
-    changed = _migrate_atmos_default(data) or changed
+    # A downgrade can re-serialize the retired carrier; it is dropped either
+    # way, and only a first run lets it move the dropdown.
+    if "atmos_default" not in done:
+        changed = _migrate_atmos_default(data) or changed
+    elif data.download_dolby_atmos is not None:
+        data.download_dolby_atmos = None
+        changed = True
+
+    if not set(_MIGRATION_STEPS) <= done:
+        _remember_migrations(done)
 
     return changed
 

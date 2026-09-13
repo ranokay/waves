@@ -40,6 +40,8 @@ from waves.progress import Progress
 from waves.waves_ui import backend
 from waves.waves_ui.backend import _collection_incomplete_reason, _TrackedDownload
 
+pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
+
 # --- the preparation gate: delisted is a refusal, not a failure --------------
 # Issue #25 settled this rule for the stream fetch. The preparation gate runs
 # FIRST and re-fetches every track of a collection (`session.track(id,

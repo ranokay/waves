@@ -89,6 +89,7 @@ from waves.helper.path import (
     path_config_base,
     safe_filename_replacement,
     safe_filename_replacement_map,
+    sanitize_name_component,
 )
 from waves.helper.tidal import (
     name_builder_album_artist,
@@ -4220,6 +4221,10 @@ class WavesBridge(LibraryMixin, QObject):
         self._apple_last_activity = None
         self._apple_idle_timer = None
         self._apple_idle_lock = Lock()
+        # Serializes sidecar starts/probes against the idle stop: without it
+        # the timer can read "not busy", a job can start, and the stop lands
+        # mid-start, surfacing as a held wrapper-down.
+        self._apple_sidecar_lock = Lock()
         try:
             self.threadpool.start(Worker(self._refresh_apple_container_cache))
         except Exception:
@@ -13790,6 +13795,11 @@ class WavesBridge(LibraryMixin, QObject):
             persisted = 0
         return persisted if 1 <= persisted <= 65535 else 0
 
+    def _apple_sidecar_guard(self):
+        """The lock serializing sidecar starts/probes against the idle stop."""
+        lock = getattr(self, "_apple_sidecar_lock", None)
+        return lock if lock is not None else contextlib.nullcontext()
+
     def _apple_ensure_sidecar(self, qid: int, job_abort, *, need_wrapper: bool) -> bool:
         """Lazily start the sidecar when this job needs it; hold until ready.
 
@@ -13843,7 +13853,10 @@ class WavesBridge(LibraryMixin, QObject):
             port = self._apple_wrapper_port_for_job()
             if sup is not None and port:
                 try:
-                    started = sup.ensure_started(http_port=port)
+                    # The idle stop decides under the same guard: a start in
+                    # flight is never stopped out from under itself.
+                    with self._apple_sidecar_guard():
+                        started = sup.ensure_started(http_port=port)
                 except Exception:
                     logger.debug("Wrapper ensure-start failed", exc_info=True)
                     started = False
@@ -13936,19 +13949,22 @@ class WavesBridge(LibraryMixin, QObject):
 
         One clock answers: the supervisor owns the activity stamp (the
         bridge mirrors it on every stamp), so there is no second clock to
-        diverge from. When work is busy or the timeout has not passed yet,
-        the countdown is rescheduled instead of dropped, so a job ending
-        just before the timeout still stops the sidecar once it truly idles.
-        Note on `--restart unless-stopped`: an explicit `docker stop` stays
-        stopped (the policy restarts exited containers on daemon restart,
-        never a container stopped on purpose); the next Apple download
-        restarts it by name.
+        diverge from. The whole decision runs under the sidecar guard, the
+        same lock a start/probe holds, so a job that starts between the busy
+        check and the stop cannot have the container stopped under it; when
+        work is busy or the timeout has not passed yet, the countdown is
+        rescheduled instead of dropped, so a job ending just before the
+        timeout still stops the sidecar once it truly idles. Note on
+        `--restart unless-stopped`: an explicit `docker stop` stays stopped
+        (the policy restarts exited containers on daemon restart, never a
+        container stopped on purpose); the next Apple download restarts it by
+        name.
         """
-        try:
-            timeout = self._apple_idle_timeout()
-            sup = getattr(self, "_apple_supervisor", None)
-            if timeout <= 0 or sup is None:
-                return
+        timeout = self._apple_idle_timeout()
+        sup = getattr(self, "_apple_supervisor", None)
+        if timeout <= 0 or sup is None:
+            return
+        with self._apple_sidecar_guard():
             try:
                 busy = self._apple_busy()
             except Exception:
@@ -13970,8 +13986,6 @@ class WavesBridge(LibraryMixin, QObject):
                 return
             if stopped:
                 logger.info("Apple wrapper sidecar stopped after %.0fs idle", timeout)
-        finally:
-            pass
 
     def _apple_busy(self) -> bool:
         """Whether any download work is queued or running right now.
@@ -18113,6 +18127,8 @@ class WavesBridge(LibraryMixin, QObject):
         """Folder and stem for one Apple standalone track, mirroring audio layout."""
         data = self.settings.data
         template = str(data.format_album if collection and album else data.format_track)
+        replacement = str(getattr(data, "filename_illegal_replacement", "") or "")
+        illegal_map = dict(getattr(data, "filename_illegal_map", None) or {})
         try:
             relative = format_apple_path(
                 template,
@@ -18121,14 +18137,19 @@ class WavesBridge(LibraryMixin, QObject):
                 pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
                 delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
                 delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
-                illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
-                illegal_map=dict(getattr(data, "filename_illegal_map", None) or {}),
+                illegal_replacement=replacement,
+                illegal_map=illegal_map,
             )
         except Exception:
-            relative = str(track.get("title") or "track")
+            # A template failure falls back to the title, sanitized exactly
+            # like a rendered token: the raw title can carry a separator.
+            logger.debug("Apple standalone template render failed; using the sanitized title", exc_info=True)
+            relative = ""
+        if not relative:
+            relative = sanitize_name_component(str(track.get("title") or ""), replacement, illegal_map) or "track"
         parent = base / pathlib.Path(relative).parent
         parent.mkdir(parents=True, exist_ok=True)
-        stem = pathlib.Path(relative).name or str(track.get("title") or "track")
+        stem = pathlib.Path(relative).name or "track"
         return parent, stem
 
     def _standalone_apple(self, media_id: str, mode: str) -> int | None:
@@ -21717,24 +21738,27 @@ class WavesBridge(LibraryMixin, QObject):
         sup = self._apple_supervisor_for_job()
         if sup is None:
             return False
-        with contextlib.suppress(Exception):
-            if sup.is_ready(port):
-                return True
-        started = False
-        with contextlib.suppress(Exception):
-            started = bool(sup.ensure_started(http_port=port))
-        if started:
-            return True
-        deadline = time.monotonic() + max(1.0, float(timeout))
-        while time.monotonic() < deadline:
+        # The idle stop decides under this same guard, so the guest this
+        # sign-in just started is never stopped out from under its probe.
+        with self._apple_sidecar_guard():
             with contextlib.suppress(Exception):
                 if sup.is_ready(port):
                     return True
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(1.0, remaining))
-        return False
+            started = False
+            with contextlib.suppress(Exception):
+                started = bool(sup.ensure_started(http_port=port))
+            if started:
+                return True
+            deadline = time.monotonic() + max(1.0, float(timeout))
+            while time.monotonic() < deadline:
+                with contextlib.suppress(Exception):
+                    if sup.is_ready(port):
+                        return True
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(1.0, remaining))
+            return False
 
     def _apple_wrapper_login_call(self, request, timeout: float = 60.0):
         """Resolve the URL, start the guest when needed, then run the request.

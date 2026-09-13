@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 
 logger = logging.getLogger("waves.apple_integrity")
@@ -52,16 +53,28 @@ def _norm_dir(path: str | Path) -> str:
     return os.path.normpath(os.path.realpath(os.path.expanduser(str(path or ""))))
 
 
+# Whether two different spellings can name the same path. Windows folds case
+# in the filesystem, and macOS volumes are case-insensitive by default while
+# normcase is a no-op there, so comparisons casefold on both.
+_CASE_INSENSITIVE_PATHS = os.name == "nt" or sys.platform == "darwin"
+
+
+def _fold_path(path: str) -> str:
+    """A path spelling for comparisons: folded on case-insensitive platforms."""
+    folded = os.path.normcase(str(path))
+    return folded.casefold() if _CASE_INSENSITIVE_PATHS else folded
+
+
 def _same_dir(first: str | Path, second: str | Path) -> bool:
     """Whether two directory paths name the same folder.
 
-    Platform-correct first (normcase folds case on Windows, is exact on
-    POSIX), then an identity check for aliases the spelling cannot show (a
-    symlink, a macOS case-insensitive volume): samefile needs both paths to
-    exist, so a missing path simply cannot prove aliasing.
+    Platform-correct first (casefolded on Windows and macOS, exact on Linux),
+    then an identity check for aliases the spelling cannot show (a symlink, a
+    case-insensitive volume): samefile needs both paths to exist, so a missing
+    path simply cannot prove aliasing.
     """
     first_norm, second_norm = _norm_dir(first), _norm_dir(second)
-    if os.path.normcase(first_norm) == os.path.normcase(second_norm):
+    if _fold_path(first_norm) == _fold_path(second_norm):
         return True
     try:
         return os.path.samefile(first_norm, second_norm)
@@ -72,16 +85,16 @@ def _same_dir(first: str | Path, second: str | Path) -> bool:
 def _is_within(child: str | Path, parent: str | Path) -> bool:
     """Whether ``child`` is ``parent`` itself or sits under it.
 
-    Lexical first (normcase folds case on Windows, is exact on POSIX, so a
-    case-only difference on Linux stays two different folders); samefile then
-    settles aliasing the spelling cannot show (symlinks, insensitive volumes)
-    wherever both paths exist.
+    Spelling first (folded on case-insensitive platforms, exact on Linux, so
+    a case-only difference on Linux stays two different folders); samefile
+    then settles aliasing the spelling cannot show (symlinks, insensitive
+    volumes) wherever both paths exist.
     """
     child_norm, parent_norm = _norm_dir(child), _norm_dir(parent)
     if _same_dir(child_norm, parent_norm):
         return True
     prefix = parent_norm.rstrip(os.sep) + os.sep
-    return os.path.normcase(child_norm).startswith(os.path.normcase(prefix))
+    return _fold_path(child_norm).startswith(_fold_path(prefix))
 
 
 def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None = None) -> Path:
@@ -278,7 +291,8 @@ def _ffprobe_creation_date(path: Path, ffprobe_path: str) -> datetime.date | Non
                 "-v",
                 "error",
                 "-show_entries",
-                "format_tags=creation_time:stream_tags=creation_time",
+                "format_tags=creation_time,creationdate,encoded_date:"
+                "stream_tags=creation_time,creationdate,encoded_date",
                 "-of",
                 "json",
                 str(path),

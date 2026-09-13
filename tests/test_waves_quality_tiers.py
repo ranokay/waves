@@ -25,6 +25,8 @@ from waves.model.cfg import Settings as _Model  # the migration subject
 from waves.ownership import quality_rank as ownership_quality_rank
 from waves.waves_ui.backend import WavesBridge, _enum_options
 
+pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
+
 # ---- the ladder ----------------------------------------------------------------
 
 
