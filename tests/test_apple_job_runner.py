@@ -286,6 +286,7 @@ def _bind(stub):
         "_apple_emit_progress",
         "_apple_gate_track",
         "_apple_track_relative",
+        "_apple_relative_path",
         "_apple_deliver_track",
         "_apple_guess_ext",
         "_apple_wants_flac",

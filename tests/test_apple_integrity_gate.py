@@ -363,6 +363,7 @@ def _bind(stub):
         "_apple_emit_progress",
         "_apple_gate_track",
         "_apple_track_relative",
+        "_apple_relative_path",
         "_apple_deliver_track",
         "_apple_guess_ext",
         "_apple_wants_flac",
@@ -452,6 +453,16 @@ def test_quarantine_dir_case_only_difference_folds_on_case_insensitive_platforms
 def test_quarantine_dest_keeps_the_intended_name(tmp_path):
     dest = quarantine_dest(tmp_path / "Q", "Aphex Twin/Xtal", ".m4a")
     assert dest == tmp_path / "Q" / "Aphex Twin" / "Xtal.m4a"
+
+
+def test_quarantine_dest_numbers_collisions(tmp_path):
+    root = tmp_path / "Q"
+    first = quarantine_dest(root, "Aphex Twin/Xtal", ".m4a")
+    first.touch()
+
+    second = quarantine_dest(root, "Aphex Twin/Xtal", ".m4a")
+
+    assert second.name == "Xtal_01.m4a"
 
 
 def test_encoded_date_parses_creation_time_and_bare_dates():

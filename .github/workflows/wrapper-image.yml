@@ -150,8 +150,8 @@ jobs:
           # blessed APK (issue #82), so the blessed file is the source of
           # truth: extract once ignoring hashes, rewrite this arch's pins
           # plus the APK identity, and let the strict extraction below prove
-          # the tree matches. The APK file itself is authenticated by the
-          # app's APK_SHA256 on the user side, never here.
+          # the tree matches. The APK file itself never reaches the app:
+          # publishing owns its provenance end to end.
           blessed_out="${RUNNER_TEMP}/blessed-libs"
           ./tools/extract-libs.sh \
             --bundle "${GITHUB_WORKSPACE}/${APPLE_MUSIC_ARTIFACT}" \

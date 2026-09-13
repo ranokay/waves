@@ -22,6 +22,8 @@ import re
 import sys
 from pathlib import Path
 
+from waves.helper.path import path_file_numbered_candidate
+
 logger = logging.getLogger("waves.apple_integrity")
 
 # The queue row's plain-words verdict after the retry cap. Counted as failed,
@@ -191,12 +193,7 @@ def quarantine_dest(quarantine_root: str | Path, relative: str, extension: str =
     parent = Path(str(quarantine_root)).expanduser() / Path(relative).parent
     parent.mkdir(parents=True, exist_ok=True)
     stem = Path(relative).name
-    candidate = parent / f"{stem}{extension}"
-    index = 0
-    while candidate.exists():
-        index += 1
-        candidate = parent / f"{stem}_{index:02d}{extension}"
-    return candidate
+    return path_file_numbered_candidate(parent / f"{stem}{extension}")
 
 
 def prune_empty_quarantine_dirs(paths, root: str | Path) -> None:

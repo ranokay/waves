@@ -33,6 +33,7 @@ from waves.constants import (
 from waves.helper.path import (
     _drop_empty_segments,
     calculate_number_padding,
+    path_file_numbered_candidate,
     path_file_sanitize,
     sanitize_name_component,
 )
@@ -155,12 +156,7 @@ def pick_destination(base_dir: str | Path, relative: str, extension: str) -> Pat
     parent = Path(str(base_dir)).expanduser() / relative_path.parent
     parent.mkdir(parents=True, exist_ok=True)
     stem = relative_path.name
-    candidate = parent / f"{stem}{extension}"
-    index = 0
-    while candidate.exists():
-        index += 1
-        candidate = parent / f"{stem}_{index:02d}{extension}"
-    return candidate
+    return path_file_numbered_candidate(parent / f"{stem}{extension}")
 
 
 def write_text_sidecar(directory: str | Path, stem: str, suffix: str, content: str) -> Path | None:

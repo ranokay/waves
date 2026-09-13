@@ -144,7 +144,6 @@ def test_the_apple_card_holds_the_switch_row_and_the_quality():
         "apple_cover_file_format",
         "apple_cookies_path",
         "path_binary_nm3u8dlre",
-        "apple_apk_path",
         "apple_wrapper_port",
         "apple_pacing_batch_size",
         "apple_pacing_delay_sec",
@@ -169,6 +168,14 @@ def test_the_apple_card_holds_the_switch_row_and_the_quality():
     wizard = _providers()["providers_apple"]["fields"][1]
     assert wizard["key"] == "apple_setup_wizard" and wizard["type"] == "apple_setup"
     assert wizard["live"] == "apple_setup"
+
+
+def test_dead_settings_keys_are_gone_from_the_model_and_the_help():
+    # Window geometry lives in waves.json prefs, and the APK override was
+    # replaced by the published wrapper image; neither is a setting now.
+    for key in ("window_x", "window_y", "window_w", "window_h", "apple_apk_path"):
+        assert not hasattr(ModelSettings(), key), key
+        assert not hasattr(HelpSettings(), key), key
 
 
 def test_the_apple_switch_defaults_off_and_persists_as_an_engine_setting():

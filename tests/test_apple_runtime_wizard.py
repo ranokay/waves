@@ -40,13 +40,11 @@ from waves.apple_runtime import (
     NM3U8DLRE_VERSION,
     WRAPPER_V2_IMAGE,
     AppleRuntimeManager,
-    apk_extract_plan,
     describe_setup,
     detect_container_runtime,
     gentle_start_command,
     pick_free_high_port,
     pinned_release,
-    verify_apk,
     verify_cookies_file,
     wrapper_auth_state,
     wrapper_login,
@@ -257,72 +255,6 @@ def test_manager_ensure_port_prefers_override_when_free(tmp_path):
     # A second ensure with the now-taken persisted port still answers a port.
     again = mgr.ensure_port(port)
     assert 1024 <= again <= 65535
-
-
-# ---- APK ---------------------------------------------------------------------- #
-
-
-def test_verify_apk_needs_a_file(tmp_path):
-    with pytest.raises(FileNotFoundError):
-        verify_apk(str(tmp_path / "nope.apkm"))
-
-
-def test_verify_apk_rejects_wrong_extension(tmp_path):
-    p = tmp_path / "music.txt"
-    p.write_bytes(b"hello")
-    with pytest.raises(ValueError, match="apk"):
-        verify_apk(str(p))
-
-
-def test_verify_apk_checks_hash_when_pinned(tmp_path):
-    p = tmp_path / "music.apkm"
-    p.write_bytes(b"fake-apk-bytes")
-    digest = hashlib.sha256(b"fake-apk-bytes").hexdigest()
-    ok = verify_apk(str(p), expected_sha256=digest)
-    assert ok["ok"] is True and ok["sha256"] == digest and ok["hash_pending"] is False
-    with pytest.raises(ValueError, match="mismatch"):
-        verify_apk(str(p), expected_sha256="0" * 64)
-
-
-def test_verify_apk_without_pinned_hash_checks_presence(tmp_path):
-    p = tmp_path / "music.apk"
-    p.write_bytes(b"bytes")
-    ok = verify_apk(str(p), expected_sha256="")
-    assert ok["ok"] is True and ok["hash_pending"] is True
-    assert "pending" in ok["note"]
-
-
-def test_apk_plan_scripts_extraction_and_names_pin(tmp_path):
-    from waves.apple_runtime import APK_PINNED_VERSION, APK_SHA256
-
-    # The blessed 3.6.0 hash is published: full verification is on, and the
-    # pin names the proven version (see APK_PINNED_VERSION's comment for why
-    # 4.7.0 does not work).
-    assert APK_PINNED_VERSION == "3.6.0-beta"
-    assert len(APK_SHA256) == 64 and all(c in "0123456789abcdef" for c in APK_SHA256.lower())
-
-    plan = apk_extract_plan(str(tmp_path / "music.apkm"))
-    assert any(APK_PINNED_VERSION in step for step in plan)
-    if APK_SHA256:
-        assert any("fail-closed" in step for step in plan)
-    else:
-        # No pinned hash published: the plan must say so, never claim a
-        # check that did not run.
-        assert any("pending" in step for step in plan)
-    assert any("Waves never fetches" in verify_apk(str(_apk(tmp_path)), expected_sha256="")["note"] for _ in [0])
-
-
-def test_apk_plan_with_pinned_hash_claims_the_check():
-    plan = apk_extract_plan("/m.apkm", hash_pinned=True)
-    assert any("fail-closed" in step for step in plan)
-    pending = apk_extract_plan("/m.apkm", hash_pinned=False)
-    assert any("pending" in step for step in pending)
-
-
-def _apk(tmp_path: Path) -> str:
-    p = tmp_path / "pinned.apkm"
-    p.write_bytes(b"x")
-    return str(p)
 
 
 # ---- cookies ------------------------------------------------------------------- #

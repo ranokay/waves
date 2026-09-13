@@ -766,9 +766,6 @@ _PATH_FIELDS = [
     # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
     # through; the wizard provisions it later.
     "path_binary_nm3u8dlre",
-    # Optional APK override for custom wrapper image builds; the published
-    # image carries its own guest libraries, so the wizard does not ask.
-    "apple_apk_path",
     # Integrity gate: quarantine folder override, browsed like a
     # download folder. Empty means the default inside the download folder.
     "apple_quarantine_dir",
@@ -778,7 +775,6 @@ _BROWSE = {
     "path_binary_ffmpeg": "file",
     "apple_cookies_path": "file",
     "path_binary_nm3u8dlre": "file",
-    "apple_apk_path": "file",
     "apple_quarantine_dir": "dir",
 }
 # String fields whose value is a character or two: they render as a compact
@@ -976,7 +972,6 @@ _FIELD_LABELS = {
     "apple_quality_audio": "Audio quality (Apple)",
     "apple_cookies_path": "Cookies file (Apple)",
     "path_binary_nm3u8dlre": "N_m3u8DL-RE binary path",
-    "apple_apk_path": "Apple Music APK (custom builds)",
     "apple_wrapper_port": "Wrapper port (Apple)",
     "apple_quarantine_dir": "Quarantine folder (Apple)",
     "apple_quarantine_keep": "Keep quarantined files",
@@ -13937,9 +13932,45 @@ class WavesBridge(LibraryMixin, QObject):
                 return len(pending) > 0
         return False
 
+    def _apple_relative_path(
+        self,
+        *,
+        track: dict,
+        album: dict | None,
+        playlist: dict | None,
+        file_template: str,
+        list_pos: int = 0,
+        list_total: int = 0,
+        num_volumes: int = 1,
+        isrc: str = "",
+    ) -> str:
+        """One Apple destination from the settings' template.
+
+        The single formatter behind both the download job's relative path and
+        the standalone actions' folder/stem split, so apart from playlist
+        collections (which reconstruct the album template) both render the
+        same vocabulary.
+        """
+        data = self.settings.data
+        return format_apple_path(
+            file_template,
+            track=track,
+            album=album,
+            playlist=playlist,
+            list_pos=list_pos,
+            list_total=list_total,
+            num_volumes=num_volumes,
+            isrc=isrc,
+            pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
+            delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
+            delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
+            illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
+            illegal_map=getattr(data, "filename_illegal_map", None),
+            provider_name=provider_folder_name(CTX_APPLE),
+        )
+
     def _apple_track_relative(
         self,
-        provider,
         row: dict,
         header: dict | None,
         type_media: str,
@@ -13950,30 +13981,21 @@ class WavesBridge(LibraryMixin, QObject):
         facts_isrc: str = "",
     ) -> str:
         """One Apple track's template path, without base dir or extension."""
-        from waves.apple_files import format_apple_path as _format
-
-        data = self.settings.data
         if type_media == "playlist":
             album = None
             playlist = header
         else:
             album = header
             playlist = None
-        return _format(
-            file_template,
+        return self._apple_relative_path(
             track=row,
             album=album,
             playlist=playlist,
+            file_template=file_template,
             list_pos=list_pos if type_media == "playlist" else 0,
             list_total=list_total if type_media == "playlist" else 0,
             num_volumes=num_volumes,
             isrc=facts_isrc,
-            pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
-            delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
-            delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
-            illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
-            illegal_map=getattr(data, "filename_illegal_map", None),
-            provider_name=provider_folder_name(getattr(provider, "id", CTX_APPLE)),
         )
 
     def _apple_deliver_track(
@@ -14029,7 +14051,6 @@ class WavesBridge(LibraryMixin, QObject):
         raw = provider.get_object("track", raw_id)
         facts = provider.track_facts(raw)
         relative = self._apple_track_relative(
-            provider,
             row,
             header,
             type_media,
@@ -18060,16 +18081,7 @@ class WavesBridge(LibraryMixin, QObject):
         replacement = str(getattr(data, "filename_illegal_replacement", "") or "")
         illegal_map = dict(getattr(data, "filename_illegal_map", None) or {})
         try:
-            relative = format_apple_path(
-                template,
-                track=track,
-                album=album,
-                pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
-                delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
-                delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
-                illegal_replacement=replacement,
-                illegal_map=illegal_map,
-            )
+            relative = self._apple_relative_path(track=track, album=album, playlist=None, file_template=template)
         except Exception:
             # A template failure falls back to the title, sanitized exactly
             # like a rendered token: the raw title can carry a separator.
@@ -19991,16 +20003,6 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception as exc:
             return {"ok": False, "path": str(path or ""), "error": str(exc)}
 
-    @Slot(str, result="QVariant")
-    def appleVerifyApk(self, path: str) -> dict:
-        """Verify a user-supplied APK against the pinned version."""
-        from waves.apple_runtime import verify_apk
-
-        try:
-            return verify_apk(path)
-        except Exception as exc:
-            return {"ok": False, "path": str(path or ""), "error": str(exc)}
-
     @Slot(result="QVariant")
     def appleEnsurePort(self) -> dict:
         """Persist and return the wrapper port: override when free, else picked."""
@@ -20955,7 +20957,6 @@ class WavesBridge(LibraryMixin, QObject):
                             "apple_cover_file_format",
                             "apple_cookies_path",
                             "path_binary_nm3u8dlre",
-                            "apple_apk_path",
                             "apple_wrapper_port",
                             "apple_pacing_batch_size",
                             "apple_pacing_delay_sec",
@@ -21986,7 +21987,6 @@ class WavesBridge(LibraryMixin, QObject):
             or "path_binary_ffmpeg" in values
             or "path_binary_nm3u8dlre" in values
             or "apple_quarantine_dir" in values
-            or "apple_apk_path" in values
             or "apple_wrapper_port" in values
         ):
             # The cookies-tier paths the Apple provider resolves against (the
