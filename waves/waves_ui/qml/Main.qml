@@ -16547,6 +16547,7 @@ ApplicationWindow {
                                     mix: qrow.tierMix
                                 }
                                 RetryMark {
+                                    objectName: "queueRetryMark"
                                     Layout.alignment: Qt.AlignVCenter; visible: root.retryableStatus(qrow.st)
                                     color: root.accent; box: 16
                                     MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: waves.retryQueueItem(model.qid) }
