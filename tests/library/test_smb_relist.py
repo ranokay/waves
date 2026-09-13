@@ -36,8 +36,8 @@ import os
 from types import SimpleNamespace
 
 import pytest
+from support.library_fakes import ScandirStub, fake_listing
 from support.library_fakes import make_album_dir as _mk
-from test_library_listing_truncation import _CM, _fake_listing
 
 from waves.library_index import LibraryIndex
 from waves.waves_ui import smb_relist
@@ -251,7 +251,7 @@ def test_a_second_broken_mount_is_refused_too(tmp_path, monkeypatch):
     def doubling(path=".", *a, **k):
         with real(path, *a, **k) as it:
             entries = list(it)
-        return _CM(entries * 2) if entries else _CM(entries)
+        return ScandirStub(entries * 2) if entries else ScandirStub(entries)
 
     monkeypatch.setattr(smb_relist.os, "scandir", doubling)
     mount, unmount, state = _mounter(ARTISTS)
@@ -342,7 +342,7 @@ def test_a_flagged_scan_recovers_the_artists_its_listing_hid(tmp_path, monkeypat
     root, tags = _tagged_library(tmp_path)
     shown = set(ARTISTS[:3])
     # The broken mount's shape: only the first page, handed over twice.
-    _fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
+    fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=lambda p: tags.get(os.path.dirname(p)))
 
     assert idx.refresh(root) == 3
@@ -413,7 +413,7 @@ def test_the_bridge_recovers_straight_after_a_flagged_scan(tmp_path, monkeypatch
 
     root, tags = _tagged_library(tmp_path)
     shown = set(ARTISTS[:3])
-    _fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
+    fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=lambda p: tags.get(os.path.dirname(p)))
     assert idx.refresh(root) == 3
 
@@ -444,7 +444,7 @@ def test_a_full_recovery_is_recorded_so_settings_stops_warning(tmp_path, monkeyp
 
     root, tags = _tagged_library(tmp_path)
     shown = set(ARTISTS[:3])
-    _fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
+    fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=lambda p: tags.get(os.path.dirname(p)))
     idx.refresh(root)
     assert idx.last_listing_reconciled is False
@@ -473,7 +473,7 @@ def test_a_recovery_that_cannot_reach_everything_keeps_warning(tmp_path, monkeyp
 
     root, tags = _tagged_library(tmp_path)
     shown = set(ARTISTS[:3])
-    _fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
+    fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=lambda p: tags.get(os.path.dirname(p)))
     idx.refresh(root)
 
@@ -516,7 +516,7 @@ def test_the_bridge_swallows_a_recovery_that_goes_wrong(tmp_path, monkeypatch):
 
     root, tags = _tagged_library(tmp_path)
     shown = set(ARTISTS[:3])
-    _fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
+    fake_listing(monkeypatch, {root: lambda e: [x for x in e if x.name in shown] * 2})
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=lambda p: tags.get(os.path.dirname(p)))
     idx.refresh(root)
     stub = SimpleNamespace(settings=SimpleNamespace(file_path=str(tmp_path / "cfg" / "settings.json")))

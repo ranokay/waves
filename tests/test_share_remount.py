@@ -15,7 +15,7 @@ import sys
 import types
 from threading import Lock
 
-from _dispatch_stub import arm_queue
+from support.dispatch_stub import arm_queue
 
 import waves.waves_ui.backend as backend_mod
 from waves.waves_ui import netmount

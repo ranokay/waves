@@ -21,7 +21,7 @@ from collections import deque
 from threading import Event, Lock
 from types import SimpleNamespace
 
-from _dispatch_stub import arm_queue
+from support.dispatch_stub import arm_queue
 
 from waves.waves_ui.backend import WavesBridge
 
@@ -187,7 +187,7 @@ class _JobStub:
         self.statuses: list = []
         self._track_poll = SimpleNamespace(isActive=lambda: True, start=lambda *a: None)
         self._merge_plan_arg = merge_plan
-        from _dispatch_stub import arm_dispatch
+        from support.dispatch_stub import arm_dispatch
 
         arm_dispatch(self)
         self._jobFinished = _Sig()

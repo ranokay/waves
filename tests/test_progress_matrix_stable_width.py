@@ -50,41 +50,17 @@ installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
 import pytest
-from support.paths import QML_MAIN
 from support.qml import (
-    EXIT_NO_QT as _EXIT_NO_QT,
-)
-from support.qml import (
-    EXIT_OK as _EXIT_OK,
-)
-from support.qml import (
-    EXIT_PRECONDITION as _EXIT_PRECONDITION,
-)
-from support.qml import (
-    EXIT_REGRESSED as _EXIT_REGRESSED,
-)
-from support.qml import (
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    ROLLING_ALBUM,
+    boot_main_qml,
     run_scenario,
-)
-
-_ALBUM = json.dumps(
-    {
-        "id": "al-roll",
-        "title": "Rolling Album",
-        "artist": "Artist R",
-        "artist_id": "r1",
-        "art": "",
-        "year": "2026",
-        "date": "2026-01-01",
-        "tracks": 10,
-        "quality": "LOSSLESS",
-        "popularity": 50,
-    }
 )
 
 # The steps that used to resize the bar: the first real percent (the "…"
@@ -142,71 +118,6 @@ _WALKERS = """
 """
 
 
-def _boot():
-    """Boot the real Main.qml offscreen; returns (root, q, settle, bridge), or
-    an exit code when the environment cannot host it."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    try:
-        from PySide6.QtCore import QEventLoop, QTimer, QUrl
-        from PySide6.QtGui import QGuiApplication
-        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
-        from PySide6.QtQuick import QQuickWindow
-    except ImportError as exc:
-        print(f"PySide6 unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
-
-    from support.offline import PARK_LOGIN_QML, patch_offline
-
-    patch_offline()  # BEFORE the bridge: its __init__ fires the sign-in check
-
-    app = QGuiApplication.instance() or QGuiApplication([])
-    from waves.waves_ui.app import _load_mono
-    from waves.waves_ui.backend import WavesBridge
-
-    # No library scan and no browse fetch: neither is what these scenarios
-    # are about, and both reach outside the sandbox.
-    WavesBridge._library_root = lambda self: ""  # type: ignore[method-assign]
-    WavesBridge.loadBrowse = lambda self, *a: None  # type: ignore[method-assign]
-
-    # Bridge BEFORE engine: see the sibling harnesses.
-    bridge = WavesBridge(tidal=None)
-    engine = QQmlApplicationEngine()
-    engine.rootContext().setContextProperty("waves", bridge)
-    engine.rootContext().setContextProperty("monoFont", _load_mono())
-    engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
-    engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
-    roots = engine.rootObjects()
-    if not roots:
-        raise RuntimeError("Main.qml failed to load")
-    root = roots[0]
-    if not isinstance(root, QQuickWindow):
-        raise TypeError("Main.qml's root object is not a window")
-
-    def q(expr: str):
-        ctx = QQmlEngine.contextForObject(root)
-        e = QQmlExpression(ctx, root, expr)
-        r = e.evaluate()
-        if e.hasError():
-            raise RuntimeError(e.error().toString())
-        return r[0] if isinstance(r, tuple) else r
-
-    def settle(ms: int) -> None:
-        loop = QEventLoop()
-        QTimer.singleShot(ms, loop.quit)
-        loop.exec()
-
-    root.resize(1280, 900)
-    root.show()
-    settle(300)
-    q("bootOverlay.done = true")
-    q("bootContentShown = 1")
-    q(PARK_LOGIN_QML)
-    # The engine owns the tree; keep it referenced for the scenario's life.
-    _boot.engine = engine  # type: ignore[attr-defined]
-    return root, q, settle, bridge
-
-
 # The Browse card's button and its matrix: the button is the one DownloadButton
 # in the tree whose mediaId is the seeded playlist's.
 _CARD_WALKERS = """
@@ -232,7 +143,7 @@ _CARD_WALKERS = """
 
 
 def _run_card_scenario() -> int:
-    booted = _boot()
+    booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
     _root, q, settle, bridge = booted
@@ -261,7 +172,7 @@ def _run_card_scenario() -> int:
     )
     if lit < 1:
         print("no ArtCard riser found on the seeded shelf", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle(500)
 
     def measure() -> str:
@@ -291,7 +202,7 @@ def _run_card_scenario() -> int:
     for rep in (first, later):
         if not rep.startswith("mx:"):
             print(f"could not locate the card's running dot matrix ({rep})", file=sys.stderr)
-            return _EXIT_PRECONDITION
+            return EXIT_PRECONDITION
     parsed = {}
     for tag, rep in (("first", first), ("settled", later)):
         width, cols, dot, gap, settled = (float(v) for v in rep[len("mx:") :].split(","))
@@ -314,19 +225,19 @@ def _run_card_scenario() -> int:
         print("the Browse card's progress bar opens with stale columns:", file=sys.stderr)
         print("\n".join(failures), file=sys.stderr)
         print(f"first {first}\nsettled {later}", file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
     print(f"card matrix fit from the first frame: {first}", flush=True)
-    return _EXIT_OK
+    return EXIT_OK
 
 
 def _run_scenario() -> int:
-    booted = _boot()
+    booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
     _root, q, settle, _bridge = booted
     q("root.openSearch()")
     q("albumsModel.clear()")
-    q(f"albumsModel.append({_ALBUM})")
+    q(f"albumsModel.append({ROLLING_ALBUM})")
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
     q("root.searchAlbumsExpanded = true")
@@ -365,7 +276,7 @@ def _run_scenario() -> int:
     bad = [(pct, rep) for pct, rep in readings if not rep.startswith("mx:")]
     if bad:
         print(f"could not locate the running download's dot matrix ({bad[0][1]})", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     parsed = []
     for pct, rep in readings:
@@ -400,10 +311,10 @@ def _run_scenario() -> int:
         print("readings (pct, width, cols, dot, gap, total, lit, readout):", file=sys.stderr)
         for row in parsed:
             print(f"  {row}", file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     print(f"matrix held {base_width}px across {[p for p, *_ in parsed]}", flush=True)
-    return _EXIT_OK
+    return EXIT_OK
 
 
 if __name__ == "__main__":

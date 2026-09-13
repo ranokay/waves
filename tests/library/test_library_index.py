@@ -12,6 +12,7 @@ import os
 import time
 
 import pytest
+from support.library_fakes import ScandirStub
 from support.paths import REPO_ROOT
 
 from waves.library_index import (
@@ -597,23 +598,13 @@ def test_non_utf8_folder_name_is_skipped_not_crash(tmp_path, monkeypatch):
         def is_dir(self, follow_symlinks=True):
             return True
 
-    class _CM:
-        def __init__(self, entries):
-            self._entries = entries
-
-        def __enter__(self):
-            return iter(self._entries)
-
-        def __exit__(self, *a):
-            return False
-
     def inject(path=".", *a, **k):
         if os.path.abspath(path) == os.path.abspath(a_dir):
             with real(path, *a, **k) as it:
                 entries = list(it)
             # A lone surrogate: str, but raises UnicodeEncodeError on utf-8 encode.
             entries.append(_FakeEntry("bad\udcff", os.path.join(path, "bad\udcff")))
-            return _CM(entries)
+            return ScandirStub(entries)
         return real(path, *a, **k)
 
     monkeypatch.setattr(li.os, "scandir", inject)

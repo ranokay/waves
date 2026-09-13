@@ -1,13 +1,11 @@
 """Arm a partial WavesBridge stand-in with the queue dispatcher's state.
 
-_download used to build a job per call and hand it straight to dl_pool; it
-now records a _JobSpec and _pump_queue builds the job when the pool is free,
-one at a time (the backlog resilience work for issue #30). Stubs that bind
-the real _download therefore need the dispatcher's fields, and their inline
-pools keep their synchronous behavior through a _jobFinished stand-in that
-calls the real _on_job_finished directly: the Worker's finally emits it, the
-next queued spec starts, and a multi-download test still sees every job run
-in order within the _download call it drove.
+``_pump_queue`` builds a queued ``_JobSpec`` when the pool is free, one at a
+time, so stubs that bind the real ``_download`` need the dispatcher's fields.
+Their inline pools keep their synchronous behavior through a ``_jobFinished``
+stand-in that calls the real ``_on_job_finished`` directly: the Worker's
+``finally`` emits it, the next queued spec starts, and a multi-download test
+still sees every job run in order within the ``_download`` call it drove.
 """
 
 from __future__ import annotations
@@ -107,10 +105,10 @@ def arm_queue(stub) -> None:
 
 
 def _arm_rollups(stub) -> None:
-    """The rollup fields and methods the withdrawal slots now touch (issue
-    #32: a cleared or cancelled queued row credits its discography/folder
-    rollups, and every slot sweeps for stranded groups afterwards). Stubs
-    with their own richer versions keep them."""
+    """The rollup fields and methods the withdrawal slots touch: a cleared or
+    cancelled queued row credits its discography/folder rollups, and every
+    slot sweeps for stranded groups afterwards. Stubs with their own richer
+    versions keep them."""
     from threading import Lock as _Lock
 
     for field, default in (

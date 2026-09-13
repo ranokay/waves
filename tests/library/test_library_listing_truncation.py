@@ -26,6 +26,7 @@ import os
 import shutil
 import time
 
+from support.library_fakes import fake_listing
 from support.library_fakes import make_album_dir as _mk
 
 import waves.library_index as li
@@ -45,19 +46,6 @@ def _index(tmp_path, tagmap, counter=None):
     return LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=_reader(tagmap, counter))
 
 
-class _CM:
-    """A scandir stand-in: the entries are handed over as-is."""
-
-    def __init__(self, entries):
-        self._entries = entries
-
-    def __enter__(self):
-        return iter(self._entries)
-
-    def __exit__(self, *a):
-        return False
-
-
 _TICK = [0]
 
 
@@ -66,26 +54,6 @@ def _bump(path):
     _TICK[0] += 1000
     future = time.time() + _TICK[0]
     os.utime(path, (future, future))
-
-
-def _fake_listing(monkeypatch, shape):
-    """Replace os.scandir for the folders in ``shape`` ({dir: transform}) with
-    the transform applied to the real entries; every other folder lists for
-    real. A transform receives the real DirEntry list and returns the list the
-    OS will be believed to have returned."""
-    real = os.scandir
-    targets = {os.path.abspath(d): fn for d, fn in shape.items()}
-
-    def fake(path=".", *a, **k):
-        fn = targets.get(os.path.abspath(path))
-        if fn is None:
-            return real(path, *a, **k)
-        with real(path, *a, **k) as it:
-            entries = list(it)
-        return _CM(fn(entries))
-
-    monkeypatch.setattr(li.os, "scandir", fake)
-    return real
 
 
 def _two_artists(tmp_path):
@@ -116,7 +84,7 @@ def test_duplicated_listing_is_deduped(tmp_path, monkeypatch):
     reads: list[str] = []
     idx = _index(tmp_path, tags, reads)
     # The root AND an album folder both page wrongly: names three times over.
-    _fake_listing(monkeypatch, {lib: lambda e: e * 3, a: lambda e: e * 3})
+    fake_listing(monkeypatch, {lib: lambda e: e * 3, a: lambda e: e * 3})
     assert idx.refresh(lib) == 2
     # One row per album, one track row per FILE, the raw count as on disk.
     assert _rows(idx, "SELECT raw_count, track_count FROM albums WHERE folder_path = ?", a) == [(2, 2)]
@@ -131,7 +99,7 @@ def test_duplicated_listing_is_deduped(tmp_path, monkeypatch):
 def test_duplicated_listing_marks_the_dir_unreliable(tmp_path, monkeypatch):
     lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
-    real = _fake_listing(monkeypatch, {lib: lambda e: e * 2})
+    real = fake_listing(monkeypatch, {lib: lambda e: e * 2})
     assert idx.refresh(lib) == 2
     assert idx.unreliable_dirs() == [lib]
     assert idx.last_scan_partial is True
@@ -158,7 +126,7 @@ def test_a_cache_from_before_listings_were_judged_relists_its_root_once(tmp_path
         idx._conn.execute("DELETE FROM meta WHERE key = ?", (li._ROOT_JUDGED_KEY,))
         idx._conn.commit()
     idx.close()
-    _fake_listing(monkeypatch, {lib: lambda e: e * 2})
+    fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx = _index(tmp_path, tags)
     assert idx.last_scan_partial is False  # the old cache carried no verdict
     assert idx.refresh(lib) == 2  # root mtime unchanged, yet it is re-listed...
@@ -184,7 +152,7 @@ def test_an_unchanged_folder_keeps_its_untrusted_flag(tmp_path, monkeypatch):
     # the badge fallback must keep probing until a CLEAN listing says otherwise.
     lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
-    real = _fake_listing(monkeypatch, {lib: lambda e: e * 2})
+    real = fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx.refresh(lib)
     monkeypatch.setattr(li.os, "scandir", real)
     idx.refresh(lib)  # root mtime unchanged: listing reused, flag carried
@@ -199,7 +167,7 @@ def test_a_warm_scan_keeps_the_measured_shape(tmp_path, monkeypatch):
     # incomplete" with no numbers, one scan after the numbers were had.
     lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
-    real = _fake_listing(monkeypatch, {lib: lambda e: e * 2})
+    real = fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx.refresh(lib)
     measured = idx.untrusted_listing_shape()
     assert measured[0] > measured[1] > 0
@@ -214,7 +182,7 @@ def test_a_healed_share_forgets_the_shape_and_the_recovery(tmp_path, monkeypatch
     # survive into the note.
     lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
-    _fake_listing(monkeypatch, {lib: lambda e: e * 2})
+    fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx.refresh(lib)
     idx.note_listing_reconciled(True)
     monkeypatch.undo()
@@ -232,7 +200,7 @@ def test_the_recovery_verdict_survives_a_relaunch(tmp_path, monkeypatch):
     lib, _a, _b, tags = _two_artists(tmp_path)
     path = str(tmp_path / "library.sqlite3")
     idx = LibraryIndex(path, read_tags=_reader(tags))
-    _fake_listing(monkeypatch, {lib: lambda e: e * 2})
+    fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx.refresh(lib)
     idx.note_listing_reconciled(True)
     idx.close()
@@ -262,7 +230,7 @@ def test_unreliable_listing_never_condemns_a_missing_child(tmp_path, monkeypatch
     idx = _index(tmp_path, tags)
     assert idx.refresh(lib) == 2
     # From now on the root repeats A and never names B (the first page, twice).
-    _fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name == "A"] * 2})
+    fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name == "A"] * 2})
     for _ in range(3):
         _bump(lib)  # forces a fresh listing each time; B is still not in it
         assert idx.refresh(lib) == 2
@@ -277,7 +245,7 @@ def test_truncated_listing_without_repeats_is_caught_by_the_stat_verify(tmp_path
     lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     assert idx.refresh(lib) == 2
-    _fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name == "A"]})
+    fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name == "A"]})
     _bump(lib)
     assert idx.refresh(lib) == 2
     assert sorted(x["title"] for x in idx.iter_albums()) == ["Alpha", "Beta"]
@@ -311,7 +279,7 @@ def _hidden_c(tmp_path, tags):
 
 def _root_hides_c(monkeypatch, lib):
     # The root's listing: A and B twice over, never C (a page that repeats).
-    _fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name != "C"] * 2})
+    fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name != "C"] * 2})
 
 
 def test_probe_indexes_a_hidden_artist(tmp_path, monkeypatch):
@@ -365,7 +333,7 @@ def test_probe_tries_the_spellings_in_order_and_stops_at_the_first_hit(tmp_path,
 def test_probe_skips_a_spelling_twin_of_a_stored_child(tmp_path, monkeypatch):
     lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
-    _fake_listing(monkeypatch, {lib: lambda e: e * 2})
+    fake_listing(monkeypatch, {lib: lambda e: e * 2})
     idx.refresh(lib)
     before = _rows(idx, "SELECT COUNT(*) FROM dirs")[0][0]
     # "a" is the stored "A" under a folding filesystem: never a second row.
@@ -461,7 +429,7 @@ def test_the_listing_shape_is_measured_and_survives_a_relaunch(tmp_path, monkeyp
     _hidden_c(tmp_path, tags)
     idx = _index(tmp_path, tags)
     # The root hands over its two visible artists five times over.
-    _fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name != "C"] * 5})
+    fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name != "C"] * 5})
     idx.refresh(lib)
     handed, distinct = idx.untrusted_listing_shape()
     assert (handed, distinct) == (10, 2)
@@ -508,7 +476,7 @@ def test_a_batch_finds_every_hidden_artist_in_one_call(tmp_path, monkeypatch):
         tags[folder] = {"album": f"Rec{artist}", "artist": artist, "date": "2022", "title": "Song"}
         hidden.append(folder)
     hide = {"C", "D", "E"}
-    _fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name not in hide] * 2})
+    fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name not in hide] * 2})
     idx = _index(tmp_path, tags)
     assert idx.refresh(lib) == 2
     reads = []
@@ -672,7 +640,7 @@ def test_probe_progress_never_goes_backwards(tmp_path, monkeypatch):
             folder = _mk(lib, f"{artist}/[202{n}] Rec{artist}{n}", ["1.flac"])
             tags[folder] = {"album": f"Rec{artist}{n}", "artist": artist, "date": f"202{n}", "title": "S"}
     hide = {"C", "D", "E"}
-    _fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name not in hide] * 2})
+    fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name not in hide] * 2})
     idx = _index(tmp_path, tags)
     assert idx.refresh(lib) == 2
 
@@ -736,7 +704,7 @@ def test_a_folded_name_match_does_not_condemn_a_different_folder(tmp_path, monke
     assert sorted(x["title"] for x in idx.iter_albums()) == ["Alpha", "Beta", "Parklife"]
 
     twin = os.path.join(tmp_path, "elsewhere", "blur")
-    _fake_listing(
+    fake_listing(
         monkeypatch,
         {lib: lambda e: [x for x in e if x.name != "Blur"] + [_Entry("blur", twin)]},
     )

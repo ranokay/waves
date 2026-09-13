@@ -22,8 +22,8 @@ width is the row's content width, not a fixed number), fade its ends over 28px
 than a shelf's) and shade its top and bottom rows' cells from 15% at their
 outer edge (a gradient on those cells only; the middle rows stay flat).
 
-Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
-``_boot``).
+Runs in a SUBPROCESS like the other Main.qml scenarios (shares
+``support.qml.boot_main_qml``).
 """
 
 from __future__ import annotations
@@ -34,8 +34,7 @@ from pathlib import Path
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import run_scenario
-from test_progress_matrix_stable_width import _EXIT_OK, _EXIT_REGRESSED, _boot
+from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 
 _WALK = """
  function walk(it, pred){
@@ -91,7 +90,7 @@ def test_a_queue_row_that_is_not_running_builds_no_bar():
 
 
 def _scenario() -> int:
-    booted = _boot()
+    booted = boot_main_qml()
     if not isinstance(booted, tuple):
         return booted
     _root, q, settle, bridge = booted
@@ -134,7 +133,7 @@ def _scenario() -> int:
         failures.append(f"outer-row shading gradients top/mid/bottom = {tg}/{mg}/{bg}, wanted 1/0/1")
     for f in failures:
         print(f, file=sys.stderr)
-    return _EXIT_REGRESSED if failures else _EXIT_OK
+    return EXIT_REGRESSED if failures else EXIT_OK
 
 
 _COUNT = """
@@ -151,7 +150,7 @@ _COUNT = """
 
 def _idle_scenario() -> int:
     """40 queued rows must build no bar at all; the first running one must."""
-    booted = _boot()
+    booted = boot_main_qml()
     if not isinstance(booted, tuple):
         return booted
     _root, q, settle, bridge = booted
@@ -182,7 +181,7 @@ def _idle_scenario() -> int:
         failures.append("a running row built no bar, so the gate is stuck shut")
     for f in failures:
         print(f, file=sys.stderr)
-    return _EXIT_REGRESSED if failures else _EXIT_OK
+    return EXIT_REGRESSED if failures else EXIT_OK
 
 
 if __name__ == "__main__" and "--run-queue-row-scenario" in sys.argv:

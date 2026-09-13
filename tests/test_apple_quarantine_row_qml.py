@@ -7,8 +7,8 @@ provider disable, then drives the drawer with real clicks: the actions must
 render, DELETE must remove the bytes from disk, and the stopped row must say
 why it stopped instead of a bare "Stopped".
 
-Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
-``_boot``).
+Runs in a SUBPROCESS like the other Main.qml scenarios (shares
+``support.qml.boot_main_qml``).
 """
 
 from __future__ import annotations
@@ -18,8 +18,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from support.qml import run_scenario
-from test_progress_matrix_stable_width import _EXIT_OK, _EXIT_PRECONDITION, _boot
+from support.qml import EXIT_OK, EXIT_PRECONDITION, boot_main_qml, run_scenario
 
 _INTEGRITY_REASON = "failed integrity check \u2014 quarantined"
 _DISABLED_REASON = "Apple Music was disabled"
@@ -72,7 +71,7 @@ def _quarantine_count(q, qid: int) -> str:
 
 
 def _scenario() -> int:
-    booted = _boot()
+    booted = boot_main_qml()
     if not isinstance(booted, tuple):
         return booted
     root, q, settle, bridge = booted
@@ -126,7 +125,7 @@ def _scenario() -> int:
         print("\n".join(problems), file=sys.stderr)
         return 1
     print("QUARANTINE ROW: OK")
-    return _EXIT_OK
+    return EXIT_OK
 
 
 @pytest.mark.qml
@@ -143,4 +142,4 @@ def test_a_failed_apple_row_can_reveal_and_delete_its_quarantined_copy():
 if __name__ == "__main__":
     if "--run-scenario" in sys.argv:
         raise SystemExit(_scenario())
-    raise SystemExit(_EXIT_PRECONDITION)
+    raise SystemExit(EXIT_PRECONDITION)

@@ -32,8 +32,8 @@ livetest caught would be past it), and reads exactly 40 once landed; a
 retarget mid-ramp keeps moving to the new target without snapping; a fall
 snaps; and with hover motion off the same leap snaps.
 
-Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
-``_boot``).
+Runs in a SUBPROCESS like the other Main.qml scenarios (shares
+``support.qml.boot_main_qml``).
 """
 
 from __future__ import annotations
@@ -44,11 +44,7 @@ from pathlib import Path
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import run_scenario
-
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_PRECONDITION = 78
+from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, run_scenario
 
 
 @pytest.mark.qml
@@ -79,10 +75,9 @@ def test_the_controls_read_the_ramped_value():
 
 
 def _run_ramp_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from test_progress_matrix_stable_width import _boot
+    from support.qml import boot_main_qml
 
-    booted = _boot()
+    booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
     _root, q, settle, _bridge = booted
@@ -150,12 +145,12 @@ def _run_ramp_scenario() -> int:
     if failures:
         print("the download bar's jump ramp regressed:", file=sys.stderr)
         print("\n".join(failures), file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
     print("jump ramp ok", flush=True)
-    return _EXIT_OK
+    return EXIT_OK
 
 
 if __name__ == "__main__":
     if "--run-ramp-scenario" in sys.argv:
         raise SystemExit(_run_ramp_scenario())
-    raise SystemExit(_EXIT_PRECONDITION)
+    raise SystemExit(EXIT_PRECONDITION)

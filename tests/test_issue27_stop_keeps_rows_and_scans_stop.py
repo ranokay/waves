@@ -32,7 +32,7 @@ from collections import deque
 from threading import Event, Lock
 from types import SimpleNamespace
 
-from _dispatch_stub import arm_queue
+from support.dispatch_stub import arm_queue
 from test_discography_video_source import _Artist as _VideoArtist
 from test_discography_video_source import _DiscoStub, _Signal
 

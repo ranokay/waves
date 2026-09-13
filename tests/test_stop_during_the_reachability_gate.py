@@ -25,7 +25,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from _dispatch_stub import arm_dispatch
+from support.dispatch_stub import arm_dispatch
 
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge, _JobSpec
