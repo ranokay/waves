@@ -19738,6 +19738,92 @@ class WavesBridge(LibraryMixin, QObject):
         self.appleStatusChanged.emit()
 
     @Slot()
+    def appleSignOut(self) -> None:
+        """End the Apple account session: clear cookies, stop and wipe the guest.
+
+        Runs on a worker (the container stop can take seconds) and reports on
+        the runtime state line. Only the setting that names the user's
+        cookies file and Waves' own wrapper session volume are cleared; the
+        cookies file and every downloaded track stay on disk.
+        """
+        if getattr(self, "_apple_signout_inflight", False):
+            return
+        self._apple_signout_inflight = True
+        self.appleRuntimeStateChanged.emit("downloading", "Signing out of Apple Music…")
+
+        def work() -> None:
+            failure = ""
+            try:
+                data = getattr(getattr(self, "settings", None), "data", None)
+                had_cookies = bool(str(getattr(data, "apple_cookies_path", "") or ""))
+                if data is not None:
+                    data.apple_cookies_path = ""
+                configure = getattr(self, "_configure_apple_provider", None)
+                if callable(configure):
+                    with contextlib.suppress(Exception):
+                        configure()
+                sup = self._apple_supervisor_for_job()
+                stopped = False
+                if sup is not None:
+                    with contextlib.suppress(Exception):
+                        stopped = bool(sup.stop())
+                if not stopped and sup is not None:
+                    # A stop that fails while the guest still answers leaves
+                    # the session in place; say so instead of claiming a
+                    # sign-out the next probe would immediately undo.
+                    port = self._apple_wrapper_port_for_job()
+                    alive = False
+                    if port:
+                        with contextlib.suppress(Exception):
+                            alive = bool(sup.is_ready(port))
+                    if alive:
+                        failure = (
+                            "The wrapper guest would not stop, so its session was not cleared. "
+                            "Sign out again when the container runtime is back."
+                        )
+                manager = getattr(self, "_apple_runtime", None)
+                if not failure and manager is not None:
+                    from waves.apple_supervision import wrapper_data_host_dir
+
+                    with contextlib.suppress(Exception):
+                        shutil.rmtree(wrapper_data_host_dir(manager.app_dir), ignore_errors=True)
+                if not failure:
+                    # Stop invalidates probes already in flight: a result that
+                    # says "logged in" must not restore what was just cleared.
+                    self._apple_session_gen = getattr(self, "_apple_session_gen", 0) + 1
+                    self._apple_wrapper_auth_cache = None
+                    self._apple_wrapper_login_result = {"ok": None, "needs_2fa": False, "error": ""}
+                    provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+                    if provider is not None:
+                        with contextlib.suppress(Exception):
+                            provider.wrapper_logged_in = False
+                if had_cookies:
+                    self._save_settings()
+            except Exception:
+                logger.exception("Apple sign-out failed")
+                failure = "Sign-out failed. Try again."
+            finally:
+                self._apple_signout_inflight = False
+            if failure:
+                self.appleRuntimeStateChanged.emit("failed", failure)
+            else:
+                self.appleRuntimeStateChanged.emit("done", "Signed out of Apple Music")
+            with contextlib.suppress(Exception):
+                self.appleWrapperAuthChanged.emit()
+            with contextlib.suppress(Exception):
+                self.appleStatusChanged.emit()
+            with contextlib.suppress(Exception):
+                self.appleRuntimeStatusChanged.emit()
+
+        pool = getattr(self, "threadpool", None)
+        start = getattr(pool, "start", None)
+        if callable(start):
+            start(Worker(work))
+        else:
+            # Plain unit-test stubs have no pool: run the attempt inline.
+            work()
+
+    @Slot()
     def appleStartContainer(self) -> None:
         """Attempt the gentle container start on a worker, then re-probe.
 
@@ -20197,18 +20283,19 @@ class WavesBridge(LibraryMixin, QObject):
                 },
                 {
                     # Bridge-computed status row, not a pref: the TIDAL
-                    # session the app is running on. Sign-in and sign-out
-                    # live on the landing page, so the row stages no edit;
-                    # it only reports, with the same state/word vocabulary
-                    # the Apple light below uses. A sign-in action is
-                    # attached below while signed out, so the flow survives
-                    # the landing panel being hidden.
+                    # session the app is running on. The status row carries
+                    # the session action that matches its state (attached
+                    # below): sign-in while signed out and sign-out while
+                    # signed in, so a hidden landing panel or top bar never
+                    # strands an account switch. It stages no edit; it only
+                    # reports, with the same state/word vocabulary the Apple
+                    # light below uses.
                     "key": "provider_tidal_session",
                     "label": "Session",
                     "help": (
                         "The TIDAL account Waves is working from. This row "
-                        "reports the session and offers sign-in while signed "
-                        "out; sign-out lives in the top bar."
+                        "reports the session and offers the matching action: "
+                        "sign in while signed out, sign out while signed in."
                     ),
                     "type": "status",
                     "value": "signed_in" if logged_in else "not_signed_in",
@@ -20240,11 +20327,18 @@ class WavesBridge(LibraryMixin, QObject):
                     "type": "status",
                     "value": apple_status["state"],
                     "word": apple_status["word"],
-                    "actions": [
-                        {"label": "Setup wizard", "action": "apple_setup"},
-                        {"label": "Update runtime", "action": "apple_update_runtime"},
-                        {"label": "Remove runtime", "action": "apple_remove_runtime"},
-                    ],
+                    "actions": (
+                        [
+                            {"label": "Setup wizard", "action": "apple_setup"},
+                            {"label": "Update runtime", "action": "apple_update_runtime"},
+                            {"label": "Remove runtime", "action": "apple_remove_runtime"},
+                        ]
+                        + (
+                            [{"label": "Sign out", "action": "apple_signout"}]
+                            if apple_status["state"] == "signed_in"
+                            else []
+                        )
+                    ),
                 },
                 {
                     # The in-place setup wizard steps (issue #31, spec §2):
@@ -20266,12 +20360,17 @@ class WavesBridge(LibraryMixin, QObject):
                 },
             ]
         }
-        # The TIDAL card carries a sign-in action only while signed out: with
-        # no session the landing panel can be hidden by the Apple provider or
-        # a dismissed first-run picker, so the card is the entry point that
-        # always exists. The action starts the same flow the panel does.
-        if not logged_in:
-            waves_fields["provider_tidal_session"]["actions"] = [{"label": "Sign in", "action": "tidal_signin"}]
+        # The TIDAL card carries the session action that matches its state:
+        # sign-in while signed out (with no session the landing panel can be
+        # hidden by the Apple provider or a dismissed first-run picker, so
+        # the card is the entry point that always exists) and sign-out while
+        # signed in, so an account switch never needs the top bar. Both
+        # start the same flows the panel and the top bar use.
+        waves_fields["provider_tidal_session"]["actions"] = (
+            [{"label": "Sign in", "action": "tidal_signin"}]
+            if not logged_in
+            else [{"label": "Sign out", "action": "tidal_signout"}]
+        )
 
         def get_field(key: str) -> dict:
             f = dict(waves_fields[key]) if key in waves_fields else auto_field(key)
@@ -21074,11 +21173,16 @@ class WavesBridge(LibraryMixin, QObject):
             )
 
         url = self._apple_wrapper_base()
+        gen = getattr(self, "_apple_session_gen", 0)
         try:
             result = wrapper_auth_state(url, timeout=timeout)
         except Exception:
             logger.debug("Apple wrapper auth probe failed", exc_info=True)
             result = {"reachable": False, "state": "", "logged_in": False, "account": "", "error": ""}
+        if gen != getattr(self, "_apple_session_gen", 0):
+            # A sign-out landed while this probe was in flight: its answer
+            # describes the account that was just dropped.
+            return result
         previous = getattr(self, "_apple_wrapper_auth_cache", None)
         previous_snapshot = None
         if isinstance(previous, dict) and isinstance(previous.get("result"), dict):
@@ -21094,6 +21198,10 @@ class WavesBridge(LibraryMixin, QObject):
         if snapshot(result) != previous_snapshot:
             with contextlib.suppress(Exception):
                 self.appleWrapperAuthChanged.emit()
+            # The status light reads the same probe, so a signed-in flip
+            # moves it too (the pill action follows the light).
+            with contextlib.suppress(Exception):
+                self.appleStatusChanged.emit()
         return result
 
     def apple_wrapper_auth_state(self, max_age_s: float = 30.0) -> dict:

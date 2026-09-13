@@ -53,6 +53,7 @@ from waves.apple_runtime import (
     wrapper_login_2fa,
     wrapper_url,
 )
+from waves.apple_supervision import wrapper_data_host_dir
 from waves.waves_ui.backend import WavesBridge, _apple_status
 
 
@@ -442,7 +443,9 @@ def test_refresh_wrapper_auth_mirrors_onto_the_provider(tmp_path, monkeypatch):
     stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
     stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
     emitted = []
+    lights = []
     stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: lights.append(True))
     monkeypatch.setattr(
         "waves.apple_runtime.wrapper_auth_state",
         lambda url, **kwargs: {
@@ -460,6 +463,33 @@ def test_refresh_wrapper_auth_mirrors_onto_the_provider(tmp_path, monkeypatch):
     assert result["state"] == "authenticated"
     assert provider.wrapper_logged_in is True
     assert emitted, "the wizard's form re-read signal fires on a state change"
+    assert lights, "the status light re-reads the same probe"
+
+
+def test_a_probe_from_before_a_sign_out_cannot_restore_the_session(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_logged_in=False)
+    stub.providers["apple"] = provider
+    stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
+    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
+    stub._apple_session_gen = 1
+    emitted = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+
+    def _probe(url, **kwargs):
+        # A sign-out lands while the /me probe is still in flight.
+        stub._apple_session_gen += 1
+        return {"reachable": True, "state": "authenticated", "logged_in": True, "account": "", "error": ""}
+
+    monkeypatch.setattr("waves.apple_runtime.wrapper_auth_state", _probe)
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
+
+    result = stub._refresh_apple_wrapper_auth()
+
+    assert result["logged_in"] is True, "the probe's answer is still returned to its caller"
+    assert provider.wrapper_logged_in is False, "the dropped account is not mirrored back"
+    assert stub._apple_wrapper_auth_cache == {"at": 0.0, "result": None}, "the cache is left cleared"
+    assert emitted == [], "no signed-in flip is signalled"
 
 
 def _bind_wrapper_login(stub) -> None:
@@ -641,6 +671,86 @@ def test_login_form_shows_busy_until_the_worker_finishes(tmp_path):
 
     assert stub.appleWrapperAuth()["busy"] is False
     assert stub.appleWrapperAuth()["login_error"] == "guest did not answer"
+
+
+def test_apple_sign_out_clears_the_account_session(tmp_path):
+    cookies = _cookies_file(tmp_path, with_token=True)
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=cookies)
+    provider = SimpleNamespace(wrapper_logged_in=True, cookies_path=cookies)
+    stub.providers["apple"] = provider
+    stub._configure_apple_provider = lambda: setattr(provider, "cookies_path", stub.settings.data.apple_cookies_path)
+    stops = []
+    stub._apple_supervisor = SimpleNamespace(stop=lambda: stops.append(True) or True)
+    stub._apple_supervisor_for_job = WavesBridge._apple_supervisor_for_job.__get__(stub, SimpleNamespace)
+    session_dir = wrapper_data_host_dir(tmp_path)
+    session_dir.mkdir(parents=True)
+    (session_dir / "account.json").write_text("{}", encoding="utf-8")
+    stub._apple_wrapper_auth_cache = {"at": 1.0, "result": {"logged_in": True}}
+    stub._apple_wrapper_login_result = {"ok": True, "needs_2fa": False, "error": ""}
+    stub._apple_session_gen = 0
+    saved = []
+    stub._save_settings = lambda: saved.append(True)
+    events = []
+
+    def _emit(name):
+        return lambda *args: events.append((name, *args))
+
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=_emit("wrapper"))
+    stub.appleStatusChanged = SimpleNamespace(emit=_emit("light"))
+    stub.appleRuntimeStatusChanged = SimpleNamespace(emit=_emit("runtime"))
+    stub.appleRuntimeStateChanged = SimpleNamespace(emit=_emit("state"))
+    stub.appleSignOut = WavesBridge.appleSignOut.__get__(stub, SimpleNamespace)
+
+    stub.appleSignOut()
+
+    assert stub.settings.data.apple_cookies_path == ""
+    assert Path(cookies).is_file(), "the user's cookies file stays on disk"
+    assert saved == [True], "clearing a stored cookies path persists the settings"
+    assert stops == [True], "the supervised guest is stopped"
+    assert not session_dir.exists(), "the wrapper session volume is wiped"
+    assert provider.wrapper_logged_in is False and provider.cookies_path == ""
+    assert stub._apple_wrapper_auth_cache is None
+    assert stub._apple_session_gen == 1, "probes from before the sign-out are invalidated"
+    assert stub._apple_wrapper_login_result == {"ok": None, "needs_2fa": False, "error": ""}
+    states = [e for e in events if e[0] == "state"]
+    assert states[0][1] == "downloading"
+    assert states[-1] == ("state", "done", "Signed out of Apple Music")
+    assert [e[0] for e in events].count("wrapper") == 1
+    assert "light" in [e[0] for e in events] and "runtime" in [e[0] for e in events]
+
+
+def test_apple_sign_out_reports_a_guest_that_will_not_stop(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_logged_in=True, cookies_path="")
+    stub.providers["apple"] = provider
+    stub._apple_supervisor = SimpleNamespace(stop=lambda: False, is_ready=lambda port: True)
+    stub._apple_supervisor_for_job = WavesBridge._apple_supervisor_for_job.__get__(stub, SimpleNamespace)
+    stub._apple_wrapper_port_for_job = lambda: 51234
+    session_dir = wrapper_data_host_dir(tmp_path)
+    session_dir.mkdir(parents=True)
+    (session_dir / "account.json").write_text("{}", encoding="utf-8")
+    stub._apple_wrapper_auth_cache = {"at": 1.0, "result": {"logged_in": True}}
+    stub._apple_wrapper_login_result = {"ok": True, "needs_2fa": False, "error": ""}
+    stub._configure_apple_provider = lambda: None
+    stub._save_settings = lambda: None
+    emitted = []
+    stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append("wrapper"))
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append("light"))
+    stub.appleRuntimeStatusChanged = SimpleNamespace(emit=lambda: emitted.append("runtime"))
+    stub.appleRuntimeStateChanged = SimpleNamespace(emit=lambda state, msg: emitted.append((state, msg)))
+    stub.appleSignOut = WavesBridge.appleSignOut.__get__(stub, SimpleNamespace)
+
+    stub.appleSignOut()
+
+    assert (
+        "failed",
+        "The wrapper guest would not stop, so its session was not cleared."
+        " Sign out again when the container runtime is back.",
+    ) in emitted
+    assert session_dir.exists(), "a guest that never stopped keeps its session volume"
+    assert stub._apple_wrapper_auth_cache == {"at": 1.0, "result": {"logged_in": True}}
+    assert provider.wrapper_logged_in is True, "the still-running guest's session is not mirrored away"
+    assert stub._apple_wrapper_login_result == {"ok": True, "needs_2fa": False, "error": ""}
 
 
 def test_refresh_wrapper_auth_signals_error_text_changes(tmp_path, monkeypatch):

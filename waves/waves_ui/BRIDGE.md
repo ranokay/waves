@@ -29,7 +29,7 @@ feature.
 | `diagnosticsExported(path)`                                                                        | A diagnostics export finished (`""` = failed)                                                                 |
 | `appleStatusChanged`                                                                               | A save moved `apple_enabled`; Settings re-reads `appleStatus()` and Main clears Apple search rows when off    |
 | `appleSetupRequested(reason)`                                                                      | Apple needs setup (`setup` on enable, `cookies` on a pre-setup download click); Main deep-links to the wizard |
-| `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull lifecycle (apple_runtime.py); Settings re-reads `appleSetupState()`    |
+| `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull and sign-out lifecycle; Settings re-reads `appleSetupState()`          |
 
 ## Search, artist pages, library
 

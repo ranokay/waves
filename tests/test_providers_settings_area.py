@@ -204,7 +204,7 @@ def test_the_status_light_flips_with_the_switch_and_the_session():
     assert session["value"] == "not_signed_in" and session["word"] == "Not signed in"
 
 
-def test_the_tidal_card_offers_sign_in_only_while_signed_out():
+def test_the_tidal_card_offers_the_session_action_matching_its_state():
     unsigned = _providers(_schema(logged_in=False))["providers_tidal"]["fields"][0]
     assert unsigned["key"] == "provider_tidal_session"
     assert unsigned["value"] == "not_signed_in"
@@ -217,7 +217,26 @@ def test_the_tidal_card_offers_sign_in_only_while_signed_out():
 
     signed = _providers(_schema(logged_in=True))["providers_tidal"]["fields"][0]
     assert signed["value"] == "signed_in"
-    assert "actions" not in signed
+    assert signed["actions"] == [{"label": "Sign out", "action": "tidal_signout"}]
+
+
+def test_the_apple_card_offers_sign_out_only_while_signed_in():
+    base = [
+        {"label": "Setup wizard", "action": "apple_setup"},
+        {"label": "Update runtime", "action": "apple_update_runtime"},
+        {"label": "Remove runtime", "action": "apple_remove_runtime"},
+    ]
+    out = _providers(_schema(apple_enabled=True))["providers_apple"]["fields"][0]
+    assert out["actions"] == base
+
+    # A signed-in light (the cookies tier or the wrapper guest) adds the
+    # session action the card was missing.
+    stub = _schema_stub(apple_enabled=True)
+    stub._apple_live_flags = lambda: {"enabled": True, "signed_in": True, "cookies_ready": True}
+    sections = {s["id"]: s for s in WavesBridge.settingsSchema(stub)}
+    signed = _providers(sections)["providers_apple"]["fields"][0]
+    assert signed["value"] == "signed_in"
+    assert signed["actions"] == [*base, {"label": "Sign out", "action": "apple_signout"}]
 
 
 def test_one_helper_serves_the_slot_and_the_schema():
