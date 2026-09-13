@@ -13932,6 +13932,43 @@ class WavesBridge(LibraryMixin, QObject):
                 return len(pending) > 0
         return False
 
+    def _apple_relative_path(
+        self,
+        *,
+        track: dict,
+        album: dict | None,
+        playlist: dict | None,
+        file_template: str,
+        list_pos: int = 0,
+        list_total: int = 0,
+        num_volumes: int = 1,
+        isrc: str = "",
+        provider=None,
+    ) -> str:
+        """One Apple destination from the settings' template.
+
+        The single formatter behind both the download job's relative path and
+        the standalone actions' folder/stem split, so a sidecar lands wherever
+        the audio of the same track would.
+        """
+        data = self.settings.data
+        return format_apple_path(
+            file_template,
+            track=track,
+            album=album,
+            playlist=playlist,
+            list_pos=list_pos,
+            list_total=list_total,
+            num_volumes=num_volumes,
+            isrc=isrc,
+            pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
+            delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
+            delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
+            illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
+            illegal_map=getattr(data, "filename_illegal_map", None),
+            provider_name=provider_folder_name(getattr(provider, "id", CTX_APPLE)),
+        )
+
     def _apple_track_relative(
         self,
         provider,
@@ -13945,30 +13982,22 @@ class WavesBridge(LibraryMixin, QObject):
         facts_isrc: str = "",
     ) -> str:
         """One Apple track's template path, without base dir or extension."""
-        from waves.apple_files import format_apple_path as _format
-
-        data = self.settings.data
         if type_media == "playlist":
             album = None
             playlist = header
         else:
             album = header
             playlist = None
-        return _format(
-            file_template,
+        return self._apple_relative_path(
             track=row,
             album=album,
             playlist=playlist,
+            file_template=file_template,
             list_pos=list_pos if type_media == "playlist" else 0,
             list_total=list_total if type_media == "playlist" else 0,
             num_volumes=num_volumes,
             isrc=facts_isrc,
-            pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
-            delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
-            delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
-            illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
-            illegal_map=getattr(data, "filename_illegal_map", None),
-            provider_name=provider_folder_name(getattr(provider, "id", CTX_APPLE)),
+            provider=provider,
         )
 
     def _apple_deliver_track(
@@ -18054,16 +18083,10 @@ class WavesBridge(LibraryMixin, QObject):
         template = str(data.format_album if collection and album else data.format_track)
         replacement = str(getattr(data, "filename_illegal_replacement", "") or "")
         illegal_map = dict(getattr(data, "filename_illegal_map", None) or {})
+        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
         try:
-            relative = format_apple_path(
-                template,
-                track=track,
-                album=album,
-                pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
-                delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
-                delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
-                illegal_replacement=replacement,
-                illegal_map=illegal_map,
+            relative = self._apple_relative_path(
+                track=track, album=album, playlist=None, file_template=template, provider=provider
             )
         except Exception:
             # A template failure falls back to the title, sanitized exactly

@@ -324,6 +324,7 @@ def _apple_stub(base: Path, provider, **overrides):
         "_apple_flac_ffmpeg",
         "_apple_extract_flac",
         "_apple_track_relative",
+        "_apple_relative_path",
         "_apple_deliver_track",
         "_apple_verify_staged",
         "_apple_probe",

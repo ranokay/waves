@@ -125,6 +125,17 @@ def test_pick_destination_steps_aside_on_collision(tmp_path):
     assert second.parent == first.parent
 
 
+def test_pick_destination_numbers_past_the_first_collision(tmp_path):
+    first = pick_destination(tmp_path, "Aphex Twin/Xtal", ".m4a")
+    first.touch()
+    second = pick_destination(tmp_path, "Aphex Twin/Xtal", ".m4a")
+    second.touch()
+
+    third = pick_destination(tmp_path, "Aphex Twin/Xtal", ".m4a")
+
+    assert third.name == "Xtal_02.m4a"
+
+
 def test_sidecars_land_beside_the_track(tmp_path):
     lyrics = write_text_sidecar(tmp_path, "Xtal", ".lrc", "[00:01.00]line")
     cover = write_cover_sidecar(tmp_path, b"fake-jpeg")

@@ -1,9 +1,11 @@
-"""A failed Apple standalone template still writes a sanitized name.
+"""Standalone Apple destinations render through the shared path core.
 
 `_apple_standalone_dest` falls back to the title when the template render
-raises, and again when the rendered name comes out empty. That fallback goes
+raises, and again when the rendered name comes out empty; that fallback goes
 through the same per-component sanitizer the template tokens use, so a title
-carrying a path separator becomes one file name, never a subfolder.
+carrying a path separator becomes one file name, never a subfolder. The render
+itself goes through the same formatter the download job uses, so a sidecar
+lands wherever the audio of the same track would (provider segment included).
 """
 
 from __future__ import annotations
@@ -26,9 +28,30 @@ def _stub(**data_overrides) -> SimpleNamespace:
     )
     for key, value in data_overrides.items():
         setattr(data, key, value)
-    stub = SimpleNamespace(settings=SimpleNamespace(data=data))
-    stub._apple_standalone_dest = WavesBridge._apple_standalone_dest.__get__(stub, SimpleNamespace)
+    stub = SimpleNamespace(settings=SimpleNamespace(data=data), providers={})
+    for name in ("_apple_standalone_dest", "_apple_relative_path"):
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
     return stub
+
+
+def test_a_standalone_dest_matches_the_audio_layout(tmp_path):
+    stub = _stub(format_track="{provider_name}/{track_title}")
+
+    folder, stem = stub._apple_standalone_dest(tmp_path, {"title": "Xtal"}, None, False)
+
+    assert folder == tmp_path / "Apple Music"
+    assert stem == "Xtal"
+
+
+def test_a_collection_standalone_dest_uses_the_album_template(tmp_path):
+    stub = _stub(format_album="{provider_name}/{artist_name}/{album_title}/{track_title}")
+    track = {"title": "Xtal", "artist": "Aphex Twin", "num": 1, "vol": 1}
+    album = {"title": "Selected Ambient Works", "artist": "Aphex Twin"}
+
+    folder, stem = stub._apple_standalone_dest(tmp_path, track, album, True)
+
+    assert folder == tmp_path / "Apple Music" / "Aphex Twin" / "Selected Ambient Works"
+    assert stem == "Xtal"
 
 
 def test_a_template_failure_writes_one_sanitized_name(tmp_path, monkeypatch):

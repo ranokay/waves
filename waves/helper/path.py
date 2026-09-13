@@ -1351,6 +1351,22 @@ def name_comparison_key(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
 
 
+def path_file_numbered_candidate(path_file: pathlib.Path) -> pathlib.Path:
+    """The first free ``stem_NN`` sibling of ``path_file``.
+
+    Returns ``path_file`` itself when nothing is there, else the same name
+    with "_01", "_02"... before the suffix: the collision step-aside the
+    Apple providers write for downloads and quarantine copies. The parent
+    directory must exist.
+    """
+    candidate = path_file
+    index = 0
+    while candidate.exists():
+        index += 1
+        candidate = path_file.with_name(f"{path_file.stem}_{index:02d}{path_file.suffix}")
+    return candidate
+
+
 def path_file_uniquify(
     path_file: pathlib.Path,
     *,
