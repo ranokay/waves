@@ -543,9 +543,10 @@ def verify_cookies_file(path: str) -> dict:
     """Check a Netscape cookies export unlocks the cookies tier.
 
     Returns ``{"ok", "path", "has_token"}``. ``has_token`` is True when a
-    ``media-user-token`` cookie for an Apple domain is present: the marker
-    gamdl's ``create_from_netscape_cookies`` needs to build a session.
-    Missing file or no token raises with wizard-ready words.
+    ``media-user-token`` cookie for an Apple domain is present and not
+    expired: the marker gamdl's ``create_from_netscape_cookies`` needs to
+    build a session. Missing file, no token, or a concrete past expiry
+    raises with wizard-ready words.
     """
     p = Path(str(path or "").strip()).expanduser()
     if not str(path or "").strip() or not p.is_file():
@@ -560,6 +561,19 @@ def verify_cookies_file(path: str) -> dict:
         if not stripped or stripped.startswith("#"):
             continue
         if "media-user-token" in stripped and "apple.com" in stripped:
+            fields = [field.strip() for field in stripped.split("\t")]
+            if len(fields) >= 7:
+                # Netscape field 5 is the expiry epoch; 0 is a session
+                # cookie (no static expiry to check).
+                try:
+                    expires = int(fields[4] or 0)
+                except ValueError:
+                    expires = 0
+                if expires > 0 and expires < time.time():
+                    raise ValueError(
+                        "That cookies export's Apple session has expired. "
+                        "Export fresh cookies from a logged-in music.apple.com tab."
+                    )
             has_token = True
             break
     if not has_token:

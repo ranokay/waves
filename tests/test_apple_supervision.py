@@ -70,7 +70,11 @@ def test_throttle_delay_is_exponential_then_capped_and_retry_after_wins():
     assert throttle_delay(2) == 20.0
     assert throttle_delay(10) == THROTTLE_CAP_SEC
     assert throttle_delay(0, 42.0) == 42.0
-    assert throttle_delay(3, 500.0) == THROTTLE_CAP_SEC
+    # A server Retry-After is honored as given, never shortened to the cap.
+    assert throttle_delay(3, 500.0) == 500.0
+    # Nonsense values fall through to the capped backoff.
+    assert throttle_delay(0, -1.0) == 5.0
+    assert throttle_delay(0, "soon") == 5.0
     assert throttle_delay(0, None) == 5.0
 
 

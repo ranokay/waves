@@ -1071,3 +1071,139 @@ def test_place_file_leaves_no_partials(tmp_path):
 
     assert dest.read_bytes() == b"audio"
     assert list(tmp_path.rglob("*.part-*")) == []
+
+
+@needs_ffmpeg
+def test_a_long_throttle_keeps_retrying_instead_of_failing(tmp_path, monkeypatch):
+    from waves import apple_engine
+    from waves.providers.apple import AppleProvider as _RealProvider
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    calls = []
+
+    def stubborn(raw, tier, audio_type):
+        calls.append(audio_type)
+        if len(calls) <= 12:  # past the retired 8-attempt cap
+            raise RuntimeError("HTTP 429 too many requests")
+        return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+
+    provider.resolve_stream = stubborn
+    provider.classify_refusal = lambda exc: _RealProvider.classify_refusal(provider, exc)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_throttle_wait = lambda *args: True
+    stub._apple_throttle_delay = lambda *args: 0.0
+    stub._set_status = lambda *args: None
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert len(calls) == 13, "throttling retries in place until it succeeds"
+    assert next(ev for ev in relay.events if ev.get("status") == "done")
+    assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+@needs_ffmpeg
+def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, monkeypatch):
+    from waves import apple_engine
+    from waves.apple_engine import AppleCredentialsError
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    calls = []
+
+    def flaky(raw, tier, audio_type):
+        calls.append(audio_type)
+        if len(calls) == 1:
+            raise AppleCredentialsError("The cookies export is not signed in")
+        return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+
+    provider.resolve_stream = flaky
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
+    held = []
+    stub._apple_set_held = lambda qid, detail="": held.append((qid, detail))
+    emitted = []
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+    stub._set_status = lambda *args: None
+    waited = []
+    stub._apple_wait_for_session = lambda provider, abort: waited.append(True) or True
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = WavesBridge._run_apple_job(
+        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert len(calls) == 2, "the same track retries in place once the session returns"
+    assert waited == [True]
+    assert held and held[0][0] == 1 and "Sign in again" in held[0][1]
+    assert stub._apple_session_expired is False, "a landed track lifts the marker"
+    assert emitted, "the light re-reads on the failure and the recovery"
+    assert next(ev for ev in relay.events if ev.get("status") == "done")
+    assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+@needs_ffmpeg
+def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkeypatch):
+    from waves import apple_engine
+    from waves.apple_engine import AppleCredentialsError
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(
+        AppleCredentialsError("The cookies export is not signed in")
+    )
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
+    held = []
+    stub._apple_set_held = lambda qid, detail="": held.append((qid, detail))
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._set_status = lambda *args: None
+    stub._apple_wait_for_session = lambda provider, job_abort: False
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    abort = Event()
+
+    def _wait_then_stop(provider, job_abort):
+        job_abort.set()
+        return False
+
+    # A STOP pressed while the row is held ends the run as a stop, never a
+    # failed track: the runner's settlement reports "no file", and the job
+    # starter routes that to the cancelled row because job_abort is set.
+    stub._apple_wait_for_session = _wait_then_stop
+    with pytest.raises(DownloadIncomplete):
+        WavesBridge._run_apple_job(
+            stub,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=abort,
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert held, "the boundary held the row before the stop landed"
+    assert not any(ev.get("status") == "failed" for ev in relay.events)

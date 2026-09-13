@@ -53,10 +53,10 @@ PACING_DELAY_DEFAULT = 30.0
 IDLE_TIMEOUT_DEFAULT = 300.0
 
 # Reactive throttle backoff: honor Retry-After when present, else exponential
-# backoff capped at a few minutes, then resume the same job in place.
+# backoff capped at a few minutes, then resume the same job in place. The job
+# keeps retrying while throttled (automatic recovery is never a failure).
 THROTTLE_BASE_SEC = 5.0
 THROTTLE_CAP_SEC = 180.0
-THROTTLE_MAX_ATTEMPTS = 8
 
 # How often a held job re-probes the runtime while it waits for it to return.
 HELD_POLL_SEC = 5.0
@@ -295,16 +295,16 @@ def parse_retry_after(exc: BaseException) -> float | None:
 def throttle_delay(attempt: int, retry_after: float | None = None) -> float:
     """How long to wait before retrying a throttled track, in seconds.
 
-    A server-sent Retry-After wins (capped at a few minutes); otherwise
-    exponential backoff from 5s, doubling per attempt, capped the same way.
-    Attempt counts from zero: 5, 10, 20, 40, ... capped at 180.
+    A server-sent Retry-After is honored as given: the service knows its
+    own window, and shortening it would retry too early. Without one,
+    exponential backoff from 5s, doubling per attempt, capped at 180s.
     """
     try:
         wait = float(retry_after) if retry_after is not None else None
     except (TypeError, ValueError):
         wait = None
     if wait is not None and wait >= 0:
-        return min(float(wait), THROTTLE_CAP_SEC)
+        return wait
     try:
         n = max(0, int(attempt))
     except (TypeError, ValueError):
