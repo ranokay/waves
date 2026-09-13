@@ -14,19 +14,18 @@
 """
 
 import os
-import pathlib
 
 import pytest
+from support.paths import REPO_ROOT
 
 from waves.download import Download
 from waves.helper.path import check_file_exists
 from waves.ownership import OwnershipStore
 from waves.waves_ui.updater import AppUpdater, UpdaterError
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-BACKEND_SRC = (ROOT / "waves" / "waves_ui" / "backend.py").read_text()
-MAIN_QML = (ROOT / "waves" / "waves_ui" / "qml" / "Main.qml").read_text()
-BRIDGE_MD = (ROOT / "waves" / "waves_ui" / "BRIDGE.md").read_text()
+BACKEND_SRC = (REPO_ROOT / "waves" / "waves_ui" / "backend.py").read_text()
+MAIN_QML = (REPO_ROOT / "waves" / "waves_ui" / "qml" / "Main.qml").read_text()
+BRIDGE_MD = (REPO_ROOT / "waves" / "waves_ui" / "BRIDGE.md").read_text()
 
 
 # ---------------------------------------------------------------- finding 65

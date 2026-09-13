@@ -16,11 +16,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from support.dispatch_stub import arm_queue
+from support.paths import QML_DIR
 
 from waves.waves_ui import updater as updater_mod
 from waves.waves_ui.backend import WavesBridge, _link_tiles_of
 
-QML_DIR = pathlib.Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml"
 MAIN_QML = (QML_DIR / "Main.qml").read_text(encoding="utf-8")
 SETTINGS_QML = (QML_DIR / "SettingsPage.qml").read_text(encoding="utf-8")
 

@@ -1,7 +1,7 @@
 """Tests for the ownership recording wiring in the bridge (backend.py).
 
 These import WavesBridge, so they collect only in the full runtime venv (PySide6
-present), like tests/test_audit_backend.py. Two layers are covered:
+present), like tests/ui/test_audit_backend.py. Two layers are covered:
 
   * the GUI-thread record sink (_track_lifecycle -> _record_ownership -> store)
     plus the ownershipOf query, exercised through a Qt-free _Stub that binds the
