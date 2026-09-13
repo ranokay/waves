@@ -12,8 +12,6 @@ and its migration landed with issue #24; this issue gives the split fields
 their sections: TIDAL's quality moves out of Downloads into the TIDAL
 section, ``apple_quality_audio`` renders in the Apple section for the first
 time, and the shared sections' help text says it governs both providers.
-Nothing sits behind the switch yet: flipping it records the choice and moves
-the status light, nothing else.
 
 Issue #60 nests the two sections as cards inside ONE Providers section
 (each with its logo header and its fields); the field contents pinned below
@@ -29,6 +27,9 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from support.paths import QML_DIR
+from support.settings_fakes import schema_stub as _schema_stub
+
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as ModelSettings
 from waves.waves_ui.backend import WavesBridge, _apple_status
@@ -38,13 +39,6 @@ def _bind(stub, name):
     return getattr(WavesBridge, name).__get__(stub, type(stub))
 
 
-def _prefs_stub():
-    """The shared prefs stub (same shape test_settings_place_memory uses)."""
-    from tests.test_settings_place_memory import _prefs_stub as _shared
-
-    return _shared()
-
-
 # ---- the schema: the Providers area ----------------------------------------------
 
 
@@ -52,28 +46,6 @@ def _schema(apple_enabled: bool = False, logged_in: bool = False):
     stub = _schema_stub(apple_enabled, logged_in)
     schema = WavesBridge.settingsSchema(stub)
     return {s["id"]: s for s in schema}
-
-
-def _schema_stub(apple_enabled: bool = False, logged_in: bool = False):
-    """A bridge stub with just enough state for settingsSchema(): a fresh
-    defaults-only config (never the machine's own), the given Apple switch
-    and TIDAL session state."""
-
-    class _Cfg:
-        data = ModelSettings()
-        help = HelpSettings()
-
-    stub = _prefs_stub()
-    stub.settings = _Cfg()
-    stub.settings.data.apple_enabled = apple_enabled
-    stub._help = HelpSettings()
-    stub._help_for = _bind(stub, "_help_for")
-    stub._ffmpeg_flag_prefs = {}
-    stub.ffmpegState = lambda: {"status": "none", "source": "none", "path": ""}
-    stub._user_ffmpeg_path = lambda: ""
-    stub._ffmpeg_detected_path = lambda: ""
-    stub._logged_in = logged_in
-    return stub
 
 
 def _keys(section):
@@ -424,9 +396,7 @@ def test_the_playlist_template_help_no_longers_claims_tidals_tree():
 
 
 def test_the_provider_sections_declarations_carry_the_area_vocabulary():
-    from pathlib import Path
-
-    src = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "SettingsPage.qml"
+    src = QML_DIR / "SettingsPage.qml"
     qml = src.read_text(encoding="utf-8")
     # The status row delegate and the Apple light's live mirror are pinned
     # by source (the settings-page QML convention): the mirror re-reads
@@ -465,9 +435,7 @@ def test_the_factory_reset_walk_still_finds_the_switch_through_the_composite():
 
 
 def test_enabling_and_pre_setup_clicks_deep_link_into_the_wizard():
-    from pathlib import Path
-
-    src = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+    src = QML_DIR / "Main.qml"
     qml = src.read_text(encoding="utf-8")
     # Enabling Apple Music and tapping an Apple download before setup
     # completes both land in Settings at the Apple section (issue #31,
@@ -517,9 +485,7 @@ def test_factory_reset_reaches_inside_the_provider_cards():
 
 
 def test_the_page_renders_provider_bands_with_logos_and_deep_links():
-    from pathlib import Path
-
-    src = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "SettingsPage.qml"
+    src = QML_DIR / "SettingsPage.qml"
     qml = src.read_text(encoding="utf-8")
     # One band per provider entry, each headed by its official logo and
     # name, fields through the shared renderers.

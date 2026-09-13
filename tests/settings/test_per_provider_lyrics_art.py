@@ -132,7 +132,8 @@ def test_metadata_writer_omits_only_switched_off_groups(tmp_path):
 
 
 def _schema():
-    from tests.test_providers_settings_area import _schema_stub
+    from support.settings_fakes import schema_stub as _schema_stub
+
     from waves.waves_ui.backend import WavesBridge
 
     return {s["id"]: s for s in WavesBridge.settingsSchema(_schema_stub())}
@@ -171,7 +172,8 @@ def test_bands_carry_the_mirrors_with_composites_and_gates():
 
 
 def test_metadata_section_holds_the_template_and_no_embed_toggles():
-    from tests.test_providers_settings_area import _schema_stub
+    from support.settings_fakes import schema_stub as _schema_stub
+
     from waves.waves_ui.backend import WavesBridge
 
     stub = _schema_stub()
