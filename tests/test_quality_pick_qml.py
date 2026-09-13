@@ -157,7 +157,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
 
     from types import SimpleNamespace
 
-    from _qml_offline import PARK_LOGIN_QML, patch_offline
+    from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
     app = QGuiApplication.instance() or QGuiApplication([])

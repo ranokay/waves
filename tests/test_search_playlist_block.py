@@ -98,8 +98,8 @@ def _run_scenario() -> int:
     # The bridge's cached sign-in check raced this scenario's clicks against
     # live TIDAL latency (loginPanel's scrim swallowed whichever clicks it
     # preceded, the full-suite-only failures this harness used to produce).
-    # See tests/_qml_offline.py; the patch must precede the bridge.
-    from tests._qml_offline import PARK_LOGIN_QML, patch_offline
+    # See tests/support/offline.py; the patch must precede the bridge.
+    from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
     bridge = WavesBridge(tidal=None)

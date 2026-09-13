@@ -143,7 +143,7 @@ def _run_scenario() -> int:
 
     app = QGuiApplication.instance() or QGuiApplication([])
     try:
-        from _qml_offline import PARK_LOGIN_QML, patch_offline
+        from support.offline import PARK_LOGIN_QML, patch_offline
 
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge

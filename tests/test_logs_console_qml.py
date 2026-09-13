@@ -89,7 +89,7 @@ def _scenario() -> int:
     from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
 
     app = QGuiApplication.instance() or QGuiApplication([])
-    from _qml_offline import PARK_LOGIN_QML, patch_offline
+    from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
     from waves.waves_ui import diagnostics

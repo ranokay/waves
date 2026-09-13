@@ -28,7 +28,7 @@ def _scenario() -> int:
     from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
 
     app = QGuiApplication.instance() or QGuiApplication([])
-    from _qml_offline import patch_offline
+    from support.offline import patch_offline
     from support.qml import sandbox_qml_settings
 
     patch_offline()
