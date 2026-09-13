@@ -11,16 +11,16 @@ Hermetic: the recovery methods are borrowed unbound onto a plain host.
 
 from __future__ import annotations
 
-import pathlib
 import time
 from threading import Lock
 from types import SimpleNamespace
 
+from support.paths import QML_DIR, QML_MAIN
+
 from waves.waves_ui.backend import WavesBridge
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-MAIN_QML = (ROOT / "waves" / "waves_ui" / "qml" / "Main.qml").read_text()
-SETTINGS_QML = (ROOT / "waves" / "waves_ui" / "qml" / "SettingsPage.qml").read_text()
+MAIN_QML = QML_MAIN.read_text()
+SETTINGS_QML = (QML_DIR / "SettingsPage.qml").read_text()
 
 
 class _Signal:

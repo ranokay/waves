@@ -17,45 +17,32 @@ bridge installs process-global handlers.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 _WIN_W, _WIN_H = 1100, 720
 
 
+@pytest.mark.qml
 def test_playlist_folder_drill_in_and_badge_state():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-folderqml-test-")
-    # The scenario must import THIS tree's waves (script mode puts tests/ on
-    # sys.path, and an editable install could otherwise shadow a worktree).
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
-
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
+        sandbox_prefix="waves-folderqml-test-",
+        failure_message="folder drill-in scenario failed",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-10:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"folder drill-in scenario failed, exit={proc.returncode}:\n{tail}"
 
 
 def _rows_root() -> list:
@@ -110,15 +97,16 @@ def _run_scenario() -> int:
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -129,7 +117,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", _WIN_W)
     root.setProperty("height", _WIN_H)
@@ -149,7 +137,7 @@ def _run_scenario() -> int:
 
     def fail(msg: str) -> int:
         print(msg, file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     # 1. Land on the playlists tab with a folder row + a playlist row.
     root.setProperty("libraryOpen", True)
@@ -200,8 +188,8 @@ def _run_scenario() -> int:
         return fail("root rows were lost while drilled in")
 
     print("folder drill-in scenario ok", flush=True)
-    return _EXIT_OK
+    return EXIT_OK
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())

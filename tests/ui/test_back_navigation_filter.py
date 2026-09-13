@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from conftest import _Signal
 from PySide6.QtCore import QEvent, Qt
+from support.paths import QML_MAIN
 
 from waves.waves_ui import backend as backend_mod
 from waves.waves_ui.backend import WavesBridge
@@ -185,11 +186,7 @@ def test_search_select_all_rearms_on_window_activation():
     term (reported from livetesting: the term sat unselected until a click
     away and back). The field must also ride the window's active flag, a
     QWindow signal the swallow does not touch."""
-    from pathlib import Path
-
-    main = (Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml").read_text(
-        encoding="utf-8"
-    )
+    main = QML_MAIN.read_text(encoding="utf-8")
     assert "onAppActiveChanged: if (appActive && activeFocus)" in main
     assert (
         main.count("searchField.selectAll()") >= 2

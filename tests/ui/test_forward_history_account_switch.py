@@ -36,44 +36,31 @@ leak into unrelated tests in the same interpreter.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_FIXED = 0  # Forward history was dropped on account switch: fix present.
-_EXIT_REGRESSED = 1  # The old account's page leaked back in via Forward: bug is back.
-_EXIT_NO_QT = 77  # PySide6 / a usable Qt platform is unavailable: skip.
-_EXIT_PRECONDITION = 78  # environment could not set up the scenario.
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 _LEAK_MARKER = "ACCOUNT-A-ONLY-PAGE"
 
 
+@pytest.mark.qml
 def test_account_switch_clears_forward_history():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-fwdhistory-test-")
-
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not build the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_FIXED, (
-        "An account switch left a stale entry in navForwardHistory, so the "
-        f"mouse forward button can replay the previous account's page. Scenario exit={proc.returncode}:\n{tail}"
+        sandbox_prefix="waves-fwdhistory-test-",
+        failure_message="the account-switch navigation reset regressed",
     )
 
 
@@ -94,15 +81,16 @@ def _run_scenario() -> int:
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -113,7 +101,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -151,20 +139,20 @@ def _run_scenario() -> int:
     bridge.browsePageLoaded.emit(_leaked_item())
     if not pump(lambda: q("browsePageKey") == "item:playlist:leak"):
         print("drill-in page never loaded", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 2. Back to Browse: pushes the item's snapshot onto navForwardHistory.
     q("navBack()")
     if not pump(lambda: q("navForwardHistory.length") > 0):
         print("Back did not populate navForwardHistory", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     top_title = q(
         "navForwardHistory.length > 0 && navForwardHistory[navForwardHistory.length - 1].page "
         "? navForwardHistory[navForwardHistory.length - 1].page.title : ''"
     )
     if top_title != _LEAK_MARKER:
         print(f"forward-history top was not the expected marker page: {top_title!r}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 3. Simulate an account switch: this is the real trigger onLoggedInChanged
     #    responds to, independent of the actual loggedIn value.
@@ -172,8 +160,13 @@ def _run_scenario() -> int:
 
     remaining = q("navForwardHistory.length")
     if remaining != 0:
+        print(
+            "An account switch left a stale entry in navForwardHistory, so the "
+            "mouse forward button can replay the previous account's page",
+            file=sys.stderr,
+        )
         print(f"navForwardHistory still has {remaining} stale entr(y/ies) after account switch", file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     # 4. Forward must now be inert, never resurrecting the old account's page.
     before_key = q("browsePageKey")
@@ -181,7 +174,7 @@ def _run_scenario() -> int:
     after_key = q("browsePageKey")
     if after_key == "item:playlist:leak" or after_key != before_key:
         print(f"navForward() resurrected the old page: {before_key!r} -> {after_key!r}", file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     # 5. Same leak, different state: an armed DOWNLOAD ALL / PREVIEW intent.
     #    The tile records the category path it is waiting on and the backend
@@ -204,7 +197,7 @@ def _run_scenario() -> int:
     ]
     if armed:
         print(f"category intent survived the account switch: {', '.join(armed)}", file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     # 6. Clicking away from the confirm must forget "Don't ask again" too.
     #    Left ticked, the dialog re-opens pre-armed for an unrelated category
@@ -214,15 +207,15 @@ def _run_scenario() -> int:
     q("catDlDismiss()")
     if bool(q("cdSkip.checked")) or q("catDlPrompt") is not None:
         print("dismissing the confirm left 'Don't ask again' ticked", file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     print(
         f"navForwardHistory cleared on account switch, navForward() stayed inert (key={after_key!r});"
         " category intent and the confirm's tick cleared too",
         flush=True,
     )
-    return _EXIT_FIXED
+    return EXIT_OK
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())

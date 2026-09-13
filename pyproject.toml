@@ -194,6 +194,12 @@ ignore = [
 # The ported update-toast scenario keeps its boot -> drive -> assert shape as
 # one deliberately linear function (C901).
 "tests/ui/test_update_toast_staged.py" = ["C901"]
+# The ported folder/playlist/nav scenarios keep their boot -> drive -> assert
+# shape as one deliberately linear function (C901).
+"tests/ui/test_folder_badge_and_crumb_labels.py" = ["C901"]
+"tests/ui/test_forward_history_account_switch.py" = ["C901"]
+"tests/ui/test_playlist_folder_qml.py" = ["C901"]
+"tests/ui/test_playlist_selection_and_reset.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
 "tests/metadata/test_apple_double_cleanup.py" = ["S603"]
@@ -212,10 +218,6 @@ ignore = [
 # whole so it reads (and was reviewed) as one flow, so exempt mccabe (C901).
 "waves/library_index.py" = ["C901"]
 # Same subprocess-isolation + linear-scenario shape as the scroll guard.
-"tests/test_forward_history_account_switch.py" = ["S603", "C901"]
-"tests/test_playlist_folder_qml.py" = ["S603", "C901"]
-"tests/test_folder_back_navigation.py" = ["S603", "C901"]
-"tests/test_breadcrumb_navigation.py" = ["S603", "C901"]
 "tests/test_library_track_claim.py" = ["S603", "C901"]
 "tests/test_gates_sit_above_drawers.py" = ["S603", "C901"]
 "tests/test_library_downloaded_state.py" = ["S603", "C901"]
@@ -239,14 +241,10 @@ ignore = [
 # isolate the Qt boot (S603, fixed argv), and its build -> click -> assert
 # scenario is one deliberately linear function (C901).
 "tests/ui/test_tidal_signin_reachable_qml.py" = ["S603", "C901"]
-"tests/test_nav_seq_and_history_guards.py" = ["S603", "C901"]
-"tests/test_folder_badge_and_crumb_labels.py" = ["S603", "C901"]
 "tests/test_offscreen_qt_is_usable.py" = ["S603"]
 # Runs the bundle size report for real, on a root wide enough to fill the pipe
 # buffer, through the shell it is written for (S603/S607, fixed argv).
 "tests/test_final_audit_updater.py" = ["S603", "S607"]
-# Same subprocess-isolation + linear-scenario shape as the scroll guard.
-"tests/test_playlist_selection_and_reset.py" = ["S603", "C901"]
 # The quarantine-row scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).
 "tests/test_apple_quarantine_row_qml.py" = ["S603"]
