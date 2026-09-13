@@ -16,13 +16,12 @@ so the hand-over to a real queue row is the cancel X arriving and nothing else.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.waves_ui.backend import WavesBridge
+from support.paths import QML_MAIN, REPO_ROOT
 
-QML = Path(__file__).resolve().parents[1] / "waves" / "waves_ui" / "qml" / "Main.qml"
+from waves.waves_ui.backend import WavesBridge
 
 
 class _Emit:
@@ -95,14 +94,14 @@ def test_a_playlist_waiting_on_the_folder_sweep_never_lights_the_progress_bar():
 
 def test_every_pre_queue_hand_off_uses_the_same_word():
     """No entry point may go back to "running" for a click it has not queued."""
-    src = (Path(__file__).resolve().parents[1] / "waves" / "waves_ui" / "backend.py").read_text()
+    src = (REPO_ROOT / "waves" / "waves_ui" / "backend.py").read_text()
     # The pre-queue acknowledgements, each immediately before a return or
     # a worker dispatch. Any of them saying "running" is the progress-bar flash.
     assert src.count('"preparing")') == 5, "refetch, apple refetch, playlist warm, category warm, edition scan"
 
 
 def test_the_buttons_draw_preparing_as_a_wait_not_a_download():
-    src = QML.read_text()
+    src = QML_MAIN.read_text()
     # Each of the three surfaces that shows a download state derives one flag,
     # so a state that is not yet queued can never fall through to the idle or
     # the running arm.
@@ -117,7 +116,7 @@ def test_only_a_real_queue_row_can_be_cancelled():
     """The X keeps its space while preparing (so the label does not shift when
     the row lands) but is invisible and inert: there is nothing to cancel yet,
     and a press that silently does nothing is worse than no X at all."""
-    src = QML.read_text()
+    src = QML_MAIN.read_text()
     body = src.split("component DownloadButton", 1)[1].split("component FolderTile", 1)[0]
     assert 'opacity: db.st === "queued" ? 1 : 0' in body
     assert 'enabled: db.st === "queued"' in body
