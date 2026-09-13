@@ -14,6 +14,7 @@ import pytest
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
 from waves.helper.exceptions import DownloadIncomplete
+from waves.providers.apple import runner
 from waves.providers.apple.integrity import (
     INTEGRITY_FAIL_MESSAGE,
     QUARANTINE_DIR_NAME,
@@ -388,6 +389,7 @@ def _bind(stub):
         "_apple_skiplist_clear",
         "_apple_quarantine_file",
         "_apple_staged_encoded_date",
+        "_apple_job_hooks",
         "_run_apple_job",
     ):
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
@@ -555,7 +557,7 @@ def test_corrupt_staged_file_fails_verification(tmp_path, monkeypatch):
     stub = _bind(_stub(base, provider))
 
     with pytest.raises(AppleIntegrityError):
-        WavesBridge._apple_verify_staged(stub, bad, expect_atmos=False)
+        runner.verify_staged(stub._apple_job_hooks(), bad, expect_atmos=False)
 
 
 @needs_ffmpeg
@@ -579,8 +581,8 @@ def test_known_bad_fixture_quarantines_and_fails_in_plain_words(tmp_path, monkey
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     with pytest.raises(DownloadIncomplete) as excinfo:
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(),
@@ -608,7 +610,7 @@ def test_outbreak_era_file_quarantines_after_one_retry(tmp_path, monkeypatch):
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
     )
     # Outbreak-era Encoded date forces the sharpened budget: 2 attempts total.
-    monkeypatch.setattr(WavesBridge, "_apple_staged_encoded_date", lambda self, staged: "2025-06-23")
+    monkeypatch.setattr(runner, "staged_encoded_date", lambda hooks, staged: "2025-06-23")
     bad_files = []
     for i in range(3):
         bad = tmp_path / f"bad-{i}.m4a"
@@ -621,8 +623,8 @@ def test_outbreak_era_file_quarantines_after_one_retry(tmp_path, monkeypatch):
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     with pytest.raises(DownloadIncomplete):
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(),
@@ -649,8 +651,14 @@ def test_clean_album_downloads_normally_after_a_quarantine(tmp_path, monkeypatch
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -674,8 +682,14 @@ def test_skiplisted_track_autoskips_bulk_runs_plainly(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _album_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == " (already downloaded)"
@@ -701,8 +715,14 @@ def test_redownload_reattempts_and_clears_when_apple_reencodes(tmp_path, monkeyp
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -729,8 +749,14 @@ def test_corrupt_atmos_never_blocks_its_stereo_sibling(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -751,10 +777,10 @@ def test_stereo_verification_accepts_alac_for_the_wrapper_tier(tmp_path, monkeyp
     provider = _FakeProvider([good])
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_probe = lambda: "/fake/ffprobe"
+    monkeypatch.setattr(runner, "probe_binary", lambda hooks: "/fake/ffprobe")
 
     # Must not raise: ALAC stereo is a valid delivery, not a codec mismatch.
-    WavesBridge._apple_verify_staged(stub, good, expect_atmos=False)
+    runner.verify_staged(stub._apple_job_hooks(), good, expect_atmos=False)
 
 
 @needs_ffmpeg
@@ -776,8 +802,14 @@ def test_retry_spec_bypasses_the_skiplist(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1", is_retry=True)
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -812,8 +844,8 @@ def test_resolve_stage_integrity_failure_retries_and_marks_the_skiplist(tmp_path
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     with pytest.raises(DownloadIncomplete) as excinfo:
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(),
@@ -868,8 +900,14 @@ def test_retry_bypass_covers_every_track_of_a_collection(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1", is_retry=True)
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _album_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -892,7 +930,7 @@ def test_atmos_rejects_plain_ac3(tmp_path, monkeypatch):
     stub = _bind(_stub(base, provider))
 
     with pytest.raises(AppleDownloadError):
-        WavesBridge._apple_verify_staged(stub, bad, expect_atmos=True)
+        runner.verify_staged(stub._apple_job_hooks(), bad, expect_atmos=True)
 
 
 @needs_ffmpeg
@@ -915,8 +953,14 @@ def test_success_after_a_retry_leaves_no_hold_dirs(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -963,8 +1007,14 @@ def test_engine_rejected_bytes_are_quarantined_with_their_date(tmp_path, monkeyp
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -995,8 +1045,8 @@ def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     with pytest.raises(DownloadIncomplete) as excinfo:
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(),
@@ -1082,8 +1132,8 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
         spec = SimpleNamespace(
             kind="track", collection=False, media_id="apple:song-1", audio_type=version, is_retry=True
         )
-        summary = WavesBridge._run_apple_job(
-            stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template=template
+        summary = runner.run_apple_job(
+            stub._apple_job_hooks(), 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template=template
         )
         return summary, provider
 
@@ -1126,8 +1176,8 @@ def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     with pytest.raises(DownloadIncomplete):
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(),
@@ -1192,8 +1242,8 @@ def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     with pytest.raises(DownloadIncomplete):
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(atmos=False),
@@ -1268,8 +1318,8 @@ def test_resolve_stage_failure_files_under_effective_version(tmp_path, monkeypat
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     with pytest.raises(DownloadIncomplete) as excinfo:
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(atmos=False),

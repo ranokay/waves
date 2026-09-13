@@ -17,18 +17,21 @@ from threading import Lock
 from types import SimpleNamespace
 
 import waves.waves_ui.backend as backend
+from waves.providers.apple import runner
 from waves.waves_ui.backend import WavesBridge
 
-_METHODS = (
-    "_apple_record_quarantine",
-    "_apple_quarantine_file",
+# The QML slots stay bridge calls; the quarantine helpers move to the runner
+# and these tests drive them through the hooks the bridge would build.
+_SLOTS = (
     "openQuarantine",
     "deleteQuarantine",
     "_apple_quarantine_folder",
+    "_apple_quarantine_root",
+    "_apple_job_hooks",
 )
 
 
-def _stub(root: Path) -> SimpleNamespace:
+def _stub(root: Path, *, keep: bool = True) -> SimpleNamespace:
     stub = SimpleNamespace()
     stub._apple_quarantine_paths = {}
     stub._queue_index = {}
@@ -39,11 +42,26 @@ def _stub(root: Path) -> SimpleNamespace:
     stub._queue_mark_changed = lambda qid: stub.marked.append(int(qid))
     stub._emit_queue = lambda: setattr(stub, "queue_emits", stub.queue_emits + 1)
     stub._set_status = lambda msg: setattr(stub, "last_status", msg)
-    stub._apple_quarantine_root = lambda: root
-    stub._apple_quarantine_keep = lambda: True
-    for name in _METHODS:
+    stub.settings = SimpleNamespace(
+        data=SimpleNamespace(
+            download_base_path=str(root.parent / "lib"),
+            apple_quarantine_dir=str(root),
+            apple_quarantine_keep=keep,
+        )
+    )
+    for name in _SLOTS:
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
     return stub
+
+
+def _hooks(stub: SimpleNamespace):
+    return runner.AppleJobHooks(
+        settings=lambda: stub.settings,
+        quarantine_paths=lambda: stub._apple_quarantine_paths,
+        queue_item=lambda qid: stub._queue_item(qid),
+        queue_mark_changed=lambda qid: stub._queue_mark_changed(qid),
+        emit_queue=lambda: stub._emit_queue(),
+    )
 
 
 def _failed_row(stub: SimpleNamespace, qid: int = 7) -> dict:
@@ -66,8 +84,8 @@ def test_a_kept_copy_lands_in_the_folder_and_on_its_row(tmp_path):
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"bad")
 
-    dest = stub._apple_quarantine_file(
-        staged, relative="Artist/Album/01 Track", track_id="apple:t1", audio_type="stereo", qid=7
+    dest = runner.quarantine_file(
+        _hooks(stub), staged, relative="Artist/Album/01 Track", track_id="apple:t1", audio_type="stereo", qid=7
     )
 
     assert dest == root / "Artist" / "Album" / "01 Track.m4a"
@@ -78,13 +96,12 @@ def test_a_kept_copy_lands_in_the_folder_and_on_its_row(tmp_path):
 
 def test_keep_off_writes_no_bytes_and_leaves_the_row_clean(tmp_path):
     root = tmp_path / "Waves Quarantine"
-    stub = _stub(root)
-    stub._apple_quarantine_keep = lambda: False
+    stub = _stub(root, keep=False)
     row = _failed_row(stub)
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"bad")
 
-    assert stub._apple_quarantine_file(staged, relative="A/01", track_id="apple:t1", qid=7) is None
+    assert runner.quarantine_file(_hooks(stub), staged, relative="A/01", track_id="apple:t1", qid=7) is None
     assert row["quarantineCount"] == 0
     assert stub._apple_quarantine_paths == {}
 
@@ -96,11 +113,11 @@ def test_recording_counts_each_copy_once(tmp_path):
     first = _copy(root, "01 Track.m4a")
     second = _copy(root, "02 Track.m4a")
 
-    stub._apple_record_quarantine(7, first)
+    runner.record_quarantine(_hooks(stub), 7, first)
     assert row["quarantineCount"] == 1
-    stub._apple_record_quarantine(7, first)
+    runner.record_quarantine(_hooks(stub), 7, first)
     assert row["quarantineCount"] == 1
-    stub._apple_record_quarantine(7, second)
+    runner.record_quarantine(_hooks(stub), 7, second)
     assert row["quarantineCount"] == 2
     assert stub._apple_quarantine_paths[7] == [str(first), str(second)]
 
@@ -110,7 +127,7 @@ def test_open_reveals_the_folder_holding_the_copy(tmp_path, monkeypatch):
     stub = _stub(root)
     _failed_row(stub)
     copy = _copy(root)
-    stub._apple_record_quarantine(7, copy)
+    runner.record_quarantine(_hooks(stub), 7, copy)
 
     opened: list[str] = []
     fake = SimpleNamespace(QDesktopServices=SimpleNamespace(openUrl=lambda url: opened.append(url.toLocalFile())))
@@ -127,8 +144,8 @@ def test_delete_removes_the_copies_and_prunes_the_emptied_folders(tmp_path):
     row = _failed_row(stub)
     first = _copy(root, "01 Track.m4a")
     second = _copy(root, "02 Track.m4a")
-    stub._apple_record_quarantine(7, first)
-    stub._apple_record_quarantine(7, second)
+    runner.record_quarantine(_hooks(stub), 7, first)
+    runner.record_quarantine(_hooks(stub), 7, second)
 
     stub.deleteQuarantine(7)
 
@@ -146,8 +163,8 @@ def test_a_copy_that_cannot_be_deleted_stays_on_the_row(tmp_path, monkeypatch):
     row = _failed_row(stub)
     locked = _copy(root, "locked.m4a")
     free = _copy(root, "free.m4a")
-    stub._apple_record_quarantine(7, locked)
-    stub._apple_record_quarantine(7, free)
+    runner.record_quarantine(_hooks(stub), 7, locked)
+    runner.record_quarantine(_hooks(stub), 7, free)
 
     real_unlink = Path.unlink
 

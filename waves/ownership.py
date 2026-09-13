@@ -83,6 +83,130 @@ def _matches_audio_type(row_type: str | None, row_mode: str | None, want: str | 
     return True
 
 
+def record_is_atmos(rec) -> bool:
+    """Was the copy on disk delivered as Dolby Atmos? The store keeps the
+    delivered audio type beside the tier, and it is the only thing that says
+    which scale that tier was measured on. A row written before the column
+    existed reads as stereo, which costs one re-download and then settles.
+    Prefers the explicit audio_type (stereo/atmos); falls back to the legacy
+    audio_mode for rows from before the type column."""
+    atype = str((rec or {}).get("audio_type") or "").strip().lower()
+    if atype in ("atmos", "stereo"):
+        return atype == "atmos"
+    return str((rec or {}).get("audio_mode") or "").upper() == "DOLBY_ATMOS"
+
+
+def record_names_a_broken_copy(rec: dict | None) -> bool:
+    """True when the recorded path was written by an old build's broken name
+    formatter: a "[None]" spelling where the release year belonged (any album
+    TIDAL lists no date for took this through the normal path of released
+    builds), or a literal unrendered "{album_track_num}" token (the album-404
+    fallback before it was fixed). Such a copy must not satisfy the ownership
+    gate: the fixed formatter can never rebuild those spellings, so the gate
+    would freeze the garbage file as the owned copy and skip the corrected
+    re-download forever. The old file itself is left alone (the app never
+    deletes user-visible files); the fresh download lands at the corrected
+    path and takes over the record."""
+    path = str((rec or {}).get("path", "") or "")
+    return "[None]" in path or "{album_track_num}" in path
+
+
+# How many consecutive deliveries under the provider's own advertised ceiling
+# the upgrade gate will chase before it settles for what it keeps being given.
+# Two, so a genuine one-off (a bad edge node, a session that fell back mid
+# stream) is still retried and a persistent under-serve costs the user one
+# extra fetch, not one on every click for the rest of the install's life.
+DEGRADED_RETRY_MAX = 2
+
+
+def copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int | None = None) -> bool:
+    """Is the copy already on disk as good as what a download queued now would
+    write, so that fetching it again would achieve nothing?
+
+    The tier alone cannot answer that for a Dolby Atmos copy. TIDAL serves
+    Atmos only through a session pinned to ATMOS_REQUEST_QUALITY
+    (constants.py), so an Atmos file arrives at that tier whatever the audio
+    quality setting says. Ranked on the stereo scale it would be judged stale
+    against a tier it can never be granted, and stale means force: re-fetch and
+    overwrite the identical file on every download while the button never
+    leaves DOWNLOAD. An Atmos copy is therefore current for a job that would
+    fetch Atmos, full stop: the request tier is a constant this app cannot
+    raise, and a change in TIDAL's own answer is not something an ownership
+    gate can see, so Redownload is the way to ask again.
+
+    Turning Atmos on does not make an owned stereo copy read as stale: a track
+    can hold Atmos and stereo copies at once (different codecs and extensions,
+    so two rows), and ownership_of answers with the highest tier among them,
+    the stereo one, so forcing on that mismatch would re-fetch an Atmos file
+    the user already has. That guard holds only while the stereo copy sits AT
+    OR ABOVE the target; below it the tier comparison forces, the fetch returns
+    Atmos to a second path, and ownership_of keeps answering with the stereo
+    row. Closing that needs a mode-aware store query and bridge cache
+    (ownershipOf holds an id and a record, never the track's audio modes), so
+    Redownload is the way out. Do not "fix" it by making an Atmos-wanting job
+    read any record as current: that makes a below-target stereo copy read as
+    current too and splits the gate from the button.
+
+    The tier comparison converges at each track's achievable ceiling.
+    ``ceiling_rank`` is the best rank the provider advertises at scan time
+    (pass None when unknown, never a guess): a known ceiling caps the target,
+    so owning the best that exists counts as current. A copy served by a run
+    that already ASKED at this target or better counts as current even without
+    a live ceiling, unless the advertised ceiling has risen past the record's
+    stored ``ceiling_rank``, in which case a genuinely better master exists
+    and the upgrade reopens. That clause lets a ceiling-blind caller
+    (ownershipOf holds only an id) settle off the stored ``requested_rank``
+    and ``ceiling_rank`` instead of flashing an upgrade forever.
+
+    A DEGRADED delivery -- asked high enough, served below the ceiling its run
+    saw -- must never settle on the request alone, or the copy freezes as
+    current while every later run skips it. After ``DEGRADED_RETRY_MAX``
+    consecutive under-ceiling deliveries the ask has been made honestly and
+    the copy settles; a delivery that reaches the ceiling resets the count."""
+    if wants_atmos and record_is_atmos(rec):
+        return True
+    # Rank -1 means no quality concept (a video's tier-less record): nothing to
+    # upgrade to, so a surviving copy is simply current.
+    rank = int((rec or {}).get("quality_rank", -1))
+    if rank < 0:
+        return True
+    target = int(target_rank)
+    if ceiling_rank is not None and 0 <= int(ceiling_rank) < target:
+        target = int(ceiling_rank)
+    if rank >= target:
+        return True
+    requested = (rec or {}).get("requested_rank")
+    requested = int(requested) if requested is not None else -1
+    stored_ceiling = (rec or {}).get("ceiling_rank")
+    stored_ceiling = int(stored_ceiling) if stored_ceiling is not None else -1
+    if rank < stored_ceiling:
+        # Served below what its own run was told existed: a better master is
+        # there for the asking, so the upgrade stays open however high that run
+        # asked. (rank == stored_ceiling means this IS the best that exists, and
+        # it settles below.)
+        #
+        # Open, but not forever: TIDAL can advertise LOSSLESS and keep serving
+        # HIGH, and then "stays open" re-fetches and overwrites the track on
+        # every album click with the button never settling. After
+        # DEGRADED_RETRY_MAX consecutive under-ceiling attempts the ask has
+        # been made honestly and the answer is not changing: settle, and let
+        # Redownload ask again. A delivery that reaches the ceiling resets the
+        # count, so a master TIDAL genuinely fixes is still picked up.
+        tries = (rec or {}).get("degraded_tries")
+        return int(tries or 0) >= DEGRADED_RETRY_MAX
+    # Or the copy already sits at the ceiling its own release advertised, in
+    # which case no run at any setting can do better and the ask never has to
+    # be made again. Without this arm the button path (ownershipOf passes no
+    # live ceiling, so the clamp above never fires) answered "requested >=
+    # target" and stayed False for good once the setting was raised past what
+    # the release offers: the button read DOWNLOAD forever while the gate,
+    # which IS ceiling-aware, skipped every track, so the job completed as a
+    # success having fetched nothing and the button never changed.
+    return (requested >= target or 0 <= stored_ceiling <= rank) and (
+        ceiling_rank is None or int(ceiling_rank) <= stored_ceiling
+    )
+
+
 # Columns beyond the primary key, with the type used to ADD them to an older DB.
 # CREATE TABLE below carries the full schema; this list only drives the
 # forward-compatible ALTER guard, so every entry must be nullable or defaulted

@@ -443,6 +443,7 @@ def _bridge_stub(**settings_overrides):
         "_apple_note_activity",
         "_apple_idle_timeout",
         "_apple_sleep_abortable",
+        "_apple_job_hooks",
     ):
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
     stub._queue_index = {}
@@ -464,10 +465,12 @@ def test_backend_pacing_reads_settings_and_never_pauses_without_them():
     assert stub_plain._apple_pace_if_due(26, Event()) is True
 
 
-def test_backend_proactive_pause_sleeps_once_per_batch(tmp_path):
+def test_backend_proactive_pause_sleeps_once_per_batch(tmp_path, monkeypatch):
+    from waves.providers.apple import runner
+
     stub = _bridge_stub(apple_pacing_batch_size=25, apple_pacing_delay_sec=30.0)
     slept: list = []
-    stub._apple_sleep_abortable = lambda secs, abort: slept.append(secs) or True
+    monkeypatch.setattr(runner, "sleep_abortable", lambda secs, abort: slept.append(secs) or True)
     assert stub._apple_pace_if_due(26, Event(), 1) is True
     assert slept == [30.0]
     assert stub._apple_pace_if_due(27, Event(), 1) is True
@@ -502,8 +505,9 @@ def test_backend_needs_wrapper_only_for_lossless_and_up():
     assert stub._apple_needs_wrapper(quality_rank(QualityTier.HI_RES_LOSSLESS)) is True
 
 
-def test_backend_ensure_skips_cookies_tier_and_holds_a_dead_sidecar(tmp_path):
+def test_backend_ensure_skips_cookies_tier_and_holds_a_dead_sidecar(tmp_path, monkeypatch):
     from waves.constants import QualityTier, quality_rank
+    from waves.providers.apple import runner
 
     # Cookies-tier ask: no sidecar, no hold, even with no manager at all.
     stub = _bridge_stub()
@@ -548,7 +552,7 @@ def test_backend_ensure_skips_cookies_tier_and_holds_a_dead_sidecar(tmp_path):
         assert row["status"] == "queued" and "Held" in row["reason"]
         return True
 
-    stub3._apple_sleep_abortable = _sleep_once
+    monkeypatch.setattr(runner, "sleep_abortable", _sleep_once)
     stub3._queue_index[9] = {"status": "running", "reason": ""}
     assert stub3._apple_ensure_sidecar(9, Event(), need_wrapper=True) is True
     assert states["ready"] is True
@@ -582,9 +586,9 @@ def test_held_poll_tick_is_sane():
     assert 1.0 <= float(HELD_POLL_SEC) <= 30.0
 
 
-def test_ensure_stops_holding_and_hands_the_click_to_setup():
+def test_ensure_stops_holding_and_hands_the_click_to_setup(monkeypatch):
     """A runtime that will not start fails to the wizard, never holds forever."""
-    from waves.waves_ui import backend as backend_mod
+    from waves.providers.apple import runner
 
     stub = _bridge_stub()
     stub._apple_runtime = SimpleNamespace(read_port=lambda: 51234, app_dir="/tmp/waves-test")
@@ -593,12 +597,12 @@ def test_ensure_stops_holding_and_hands_the_click_to_setup():
     stub._apple_supervisor = SimpleNamespace(
         ensure_started=lambda **kwargs: starts.append(kwargs) or False, note_activity=lambda: None
     )
-    stub._apple_sleep_abortable = lambda secs, abort: True
+    monkeypatch.setattr(runner, "sleep_abortable", lambda secs, abort: True)
     requested: list = []
     stub.appleSetupRequested = SimpleNamespace(emit=lambda reason: requested.append(reason))
     stub._queue_index[9] = {"status": "running", "reason": ""}
 
-    with pytest.raises(backend_mod._AppleSetupRequired) as excinfo:
+    with pytest.raises(runner._AppleSetupRequired) as excinfo:
         stub._apple_ensure_sidecar(9, Event(), need_wrapper=True)
 
     assert len(starts) == HELD_START_FAILURES  # one held blip, then the verdict
@@ -610,20 +614,20 @@ def test_ensure_stops_holding_and_hands_the_click_to_setup():
     assert row["status"] == "queued" and "Held" in row["reason"] and "Settings" in row["reason"]
 
 
-def test_ensure_with_no_port_reports_setup_not_a_start_failure():
+def test_ensure_with_no_port_reports_setup_not_a_start_failure(monkeypatch):
     """A configured tier with no port never attempted a start, so its verdict
     says setup is missing rather than claiming the runtime would not start."""
-    from waves.waves_ui import backend as backend_mod
+    from waves.providers.apple import runner
 
     stub = _bridge_stub()
     stub._apple_runtime = SimpleNamespace(read_port=lambda: 0, app_dir="/tmp/waves-test")
     stub.providers = {CTX_APPLE: SimpleNamespace(wrapper_url="http://127.0.0.1:51234")}
-    stub._apple_sleep_abortable = lambda secs, abort: True
+    monkeypatch.setattr(runner, "sleep_abortable", lambda secs, abort: True)
     requested: list = []
     stub.appleSetupRequested = SimpleNamespace(emit=lambda reason: requested.append(reason))
     stub._queue_index[9] = {"status": "running", "reason": ""}
 
-    with pytest.raises(backend_mod._AppleSetupRequired) as excinfo:
+    with pytest.raises(runner._AppleSetupRequired) as excinfo:
         stub._apple_ensure_sidecar(9, Event(), need_wrapper=True)
 
     assert requested == ["setup"]

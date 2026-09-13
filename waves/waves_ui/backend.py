@@ -50,7 +50,6 @@ from waves.constants import (
     CTX_TIDAL,
     DEFAULT_ILLEGAL_MAP,
     LIBRARY_PAGE,
-    TIER_RANK,
     CoverDimensions,
     DefaultAudio,
     DownsampleTarget,
@@ -90,13 +89,33 @@ from waves.library_index import (
     cache_file_for_root,
     root_comparison_key,
 )
-from waves.metadata import sniff_image_format
-from waves.model.cfg import METADATA_TAG_FLAGS, HelpSettings, metadata_tag_write, provider_setting
+from waves.model.cfg import (
+    METADATA_TAG_FLAGS,
+    HelpSettings,
+    cover_sidecar_format,
+    metadata_tag_write,
+    provider_setting,
+    wants_both_default,
+)
 from waves.model.cfg import Settings as CfgSettings
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.downloader import TrackStreamInfo
 from waves.model.gui_data import ProgressBars
-from waves.ownership import OwnershipStore
+from waves.ownership import (
+    DEGRADED_RETRY_MAX as _DEGRADED_RETRY_MAX,
+)
+from waves.ownership import (
+    OwnershipStore,
+)
+from waves.ownership import (
+    copy_is_current as _copy_is_current,
+)
+from waves.ownership import (
+    record_is_atmos as _record_is_atmos,
+)
+from waves.ownership import (
+    record_names_a_broken_copy as _record_names_a_broken_copy,
+)
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress
 from waves.providers import (
@@ -108,21 +127,13 @@ from waves.providers import (
     RefusalKind,
     TidalProvider,
 )
-from waves.providers.apple.engine import (
-    AppleCredentialsError,
-    AppleIntegrityError,
-    AppleTrackUnavailable,
-    _AppleAborted,
-    _AppleSkipped,
-)
+from waves.providers.apple import runner
 from waves.providers.apple.files import (
-    convert_image,
-    format_apple_path,
-    pick_destination,
     tag_apple_file,
     write_cover_sidecar,
     write_text_sidecar,
 )
+from waves.providers.apple.runner import AppleJobHooks, _JobOptions
 from waves.waves_ui import proc
 from waves.waves_ui.session import WavesTidal
 from waves.worker import Worker
@@ -1300,20 +1311,6 @@ def _delivers_atmos(media, atmos_on: bool) -> bool:
     return bool(_ATMOS_MODE in modes and (atmos_on or all(str(m) == _ATMOS_MODE for m in modes)))
 
 
-def _wants_both_default(settings) -> bool:
-    """Whether the Chooser one-click default fetches both Versions.
-
-    Module-level so engine-adjacent paths bound onto bare test stubs can ask
-    without the full bridge: only an explicit "both" fetches twice, and
-    anything unreadable (missing settings, hand-edited configs) reads stereo.
-    """
-    try:
-        data = getattr(settings, "data", None)
-        return default_audio_is_both(getattr(data, "default_audio_type", "stereo")) if data is not None else False
-    except Exception:
-        return False
-
-
 def _atmos_only(obj) -> bool:
     """Does TIDAL offer this release or track in Dolby Atmos and nothing else?
     That is how TIDAL ships Atmos: as a SEPARATE release with its own id,
@@ -1366,19 +1363,6 @@ def atmos_file_template(base_template: str, atmos_fragment: str | None) -> str:
     return f"{base[:idx]}{sep}{frag}{sep}{base[idx + 1 :]}"
 
 
-def _record_is_atmos(rec) -> bool:
-    """Was the copy on disk delivered as Dolby Atmos? The store keeps the
-    delivered audio type beside the tier (ownership.py), and it is the only
-    thing that says which scale that tier was measured on. A row written before
-    the column existed reads as stereo, which costs one re-download and then
-    settles. Prefers the explicit audio_type (stereo/atmos); falls back to
-    the legacy audio_mode for rows from before the type column."""
-    atype = str((rec or {}).get("audio_type") or "").strip().lower()
-    if atype in ("atmos", "stereo"):
-        return atype == "atmos"
-    return str((rec or {}).get("audio_mode") or "").upper() == _ATMOS_MODE.upper()
-
-
 def _advertised_ceiling(media) -> int | None:
     """Best quality rank TIDAL advertises for this media right now, or None when
     unknown. Feeds _copy_is_current's target cap, so it only trusts the explicit
@@ -1400,31 +1384,6 @@ def _advertised_ceiling(media) -> int | None:
     return None
 
 
-def _record_names_a_broken_copy(rec: dict | None) -> bool:
-    """True when the recorded path was written by an old build's broken name
-    formatter: a "[None]" spelling where the release year belonged (any album
-    TIDAL lists no date for took this through the normal path of released
-    builds), or a literal unrendered "{album_track_num}" token (the album-404
-    fallback before it was fixed). Such a copy must not satisfy the ownership
-    gate: the fixed formatter can never rebuild those spellings, so the gate
-    would freeze the garbage file as the owned copy and skip the corrected
-    re-download forever. The old file itself is left alone (the app never
-    deletes user-visible files); the fresh download lands at the corrected
-    path and takes over the record."""
-    path = str((rec or {}).get("path", "") or "")
-    return "[None]" in path or "{album_track_num}" in path
-
-
-def _apple_cookies_fingerprint(path: str) -> tuple:
-    """(path, mtime_ns, size) for a cookies export, or a stable empty."""
-    candidate = pathlib.Path(str(path or "").strip()).expanduser()
-    try:
-        stat = candidate.stat()
-    except OSError:
-        return ("", 0, 0)
-    return (str(candidate), int(stat.st_mtime_ns), int(stat.st_size))
-
-
 def _apple_cookies_resave_changed(values, before: str) -> bool:
     """Whether a settings save names a different cookies export than before.
 
@@ -1432,62 +1391,6 @@ def _apple_cookies_resave_changed(values, before: str) -> bool:
     unchanged path must not count as the user's answer to a session pause.
     """
     return "apple_cookies_path" in values and str(values.get("apple_cookies_path") or "") != str(before or "")
-
-
-def _cover_sidecar_format(data, key: str = "cover_file_format") -> str:
-    """The sidecar cover format: jpg, png, or raw (Apple-only).
-
-    One normalizer for every writer so TIDAL and Apple agree on the
-    spelling; unknown values fall back to jpg and TIDAL treats raw as jpg
-    (it has no original-master sidecar). ``key`` selects whose mirror to
-    read; the shared key is the fallback when no mirror is set.
-    """
-    fmt = str(provider_setting(data, "apple" if key.startswith("apple_") else "tidal", key, "jpg") or "jpg")
-    fmt = fmt.strip().lower()
-    if fmt in ("jpeg",):
-        return "jpg"
-    return fmt if fmt in ("jpg", "png", "raw") else "jpg"
-
-
-# How many consecutive deliveries under TIDAL's own advertised ceiling the
-# upgrade gate will chase before it settles for what it keeps being given.
-# Two, so a genuine one-off (a bad edge node, a session that fell back mid
-# stream) is still retried and a persistent under-serve costs the user one
-# extra fetch, not one on every click for the rest of the install's life.
-_DEGRADED_RETRY_MAX = 2
-
-# License-exchange 429 backoff inside one Apple track: without it an album
-# that crosses Apple's undocumented threshold fails every remaining row in a
-# burst and hammers the throttle harder. Bounded and abort-aware; the
-# supervision layer owns pacing fields and the visible resume countdown.
-_APPLE_THROTTLE_WAITS = (5.0, 20.0)
-
-
-def _apple_effective_version(provider, track_id: str, audio_type) -> str:
-    """The Version a fetch will actually verify as: Atmos only when asked AND
-    offered (spec §6.4: each Version verifies independently).
-
-    An Atmos ask for a stereo-only track falls back to stereo (the provider's
-    instead-of rule), so gating and clearing on the asked version would file
-    the failure under Atmos while stereo runs keep refetching the same corrupt
-    source. A track that cannot be read keeps the asked version: it will fail
-    per-track below, never silently vanish. Module-level (not a method) so the
-    runner needs no extra seam and test stubs need no new binding.
-    """
-    try:
-        want_atmos = str(getattr(audio_type, "value", audio_type) or "").strip().lower() == "atmos"
-    except Exception:
-        want_atmos = False
-    if not want_atmos:
-        return "stereo"
-    try:
-        raw = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
-    except Exception:
-        return "atmos"
-    try:
-        return "atmos" if bool(provider.has_atmos(raw)) else "stereo"
-    except Exception:
-        return "atmos"
 
 
 def _apple_effective_port(data, manager) -> int:
@@ -1535,103 +1438,6 @@ def _apple_provision_port(data, manager) -> int:
     except (TypeError, ValueError):
         preferred = 0
     return int(manager.ensure_port(preferred) or 0)
-
-
-class _AppleSetupRequired(Exception):
-    """The wrapper tier cannot start without the user finishing setup.
-
-    Raised by the sidecar ensure when repeated start attempts fail, so the
-    job fails with the setup words and the wizard can open instead of a row
-    holding forever with nowhere to go.
-    """
-
-
-def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int | None = None) -> bool:
-    """Is the copy already on disk as good as what a download queued now would
-    write, so that fetching it again would achieve nothing?
-
-    The tier alone cannot answer that for a Dolby Atmos copy. TIDAL serves
-    Atmos only through a session pinned to ATMOS_REQUEST_QUALITY
-    (constants.py), so an Atmos file arrives at that tier whatever the audio
-    quality setting says. Ranked on the stereo scale it would be judged stale
-    against a tier it can never be granted, and stale means force: re-fetch and
-    overwrite the identical file on every download while the button never
-    leaves DOWNLOAD. An Atmos copy is therefore current for a job that would
-    fetch Atmos, full stop: the request tier is a constant this app cannot
-    raise, and a change in TIDAL's own answer is not something an ownership
-    gate can see, so Redownload is the way to ask again.
-
-    Turning Atmos on does not make an owned stereo copy read as stale: a track
-    can hold Atmos and stereo copies at once (different codecs and extensions,
-    so two rows), and ownership_of answers with the highest tier among them,
-    the stereo one, so forcing on that mismatch would re-fetch an Atmos file
-    the user already has. That guard holds only while the stereo copy sits AT
-    OR ABOVE the target; below it the tier comparison forces, the fetch returns
-    Atmos to a second path, and ownership_of keeps answering with the stereo
-    row. Closing that needs a mode-aware store query and bridge cache
-    (ownershipOf holds an id and a record, never the track's audio modes), so
-    Redownload is the way out. Do not "fix" it by making an Atmos-wanting job
-    read any record as current: that makes a below-target stereo copy read as
-    current too and splits the gate from the button.
-
-    The tier comparison converges at each track's achievable ceiling.
-    ``ceiling_rank`` is the best rank TIDAL advertises at scan time (pass None
-    when unknown, never a guess): a known ceiling caps the target, so owning
-    the best that exists counts as current. A copy served by a run that
-    already ASKED at this target or better counts as current even without a
-    live ceiling, unless the advertised ceiling has risen past the record's
-    stored ``ceiling_rank``, in which case a genuinely better master exists
-    and the upgrade reopens. That clause lets a ceiling-blind caller
-    (ownershipOf holds only an id) settle off the stored ``requested_rank``
-    and ``ceiling_rank`` instead of flashing an upgrade forever.
-
-    A DEGRADED delivery — asked high enough, served below the ceiling its run
-    saw — must never settle on the request alone, or the copy freezes as
-    current while every later run skips it. After ``_DEGRADED_RETRY_MAX``
-    consecutive under-ceiling deliveries the ask has been made honestly and
-    the copy settles; a delivery that reaches the ceiling resets the count."""
-    if wants_atmos and _record_is_atmos(rec):
-        return True
-    # Rank -1 means no quality concept (a video's tier-less record): nothing to
-    # upgrade to, so a surviving copy is simply current.
-    rank = int((rec or {}).get("quality_rank", -1))
-    if rank < 0:
-        return True
-    target = int(target_rank)
-    if ceiling_rank is not None and 0 <= int(ceiling_rank) < target:
-        target = int(ceiling_rank)
-    if rank >= target:
-        return True
-    requested = (rec or {}).get("requested_rank")
-    requested = int(requested) if requested is not None else -1
-    stored_ceiling = (rec or {}).get("ceiling_rank")
-    stored_ceiling = int(stored_ceiling) if stored_ceiling is not None else -1
-    if rank < stored_ceiling:
-        # Served below what its own run was told existed: a better master is
-        # there for the asking, so the upgrade stays open however high that run
-        # asked. (rank == stored_ceiling means this IS the best that exists, and
-        # it settles below.)
-        #
-        # Open, but not forever: TIDAL can advertise LOSSLESS and keep serving
-        # HIGH, and then "stays open" re-fetches and overwrites the track on
-        # every album click with the button never settling. After
-        # _DEGRADED_RETRY_MAX consecutive under-ceiling attempts the ask has
-        # been made honestly and the answer is not changing: settle, and let
-        # Redownload ask again. A delivery that reaches the ceiling resets the
-        # count, so a master TIDAL genuinely fixes is still picked up.
-        tries = (rec or {}).get("degraded_tries")
-        return int(tries or 0) >= _DEGRADED_RETRY_MAX
-    # Or the copy already sits at the ceiling its own release advertised, in
-    # which case no run at any setting can do better and the ask never has to
-    # be made again. Without this arm the button path (ownershipOf passes no
-    # live ceiling, so the clamp above never fires) answered "requested >=
-    # target" and stayed False for good once the setting was raised past what
-    # the release offers: the button read DOWNLOAD forever while the gate,
-    # which IS ceiling-aware, skipped every track, so the job completed as a
-    # success having fetched nothing and the button never changed.
-    return (requested >= target or 0 <= stored_ceiling <= rank) and (
-        ceiling_rank is None or int(ceiling_rank) <= stored_ceiling
-    )
 
 
 class _TrackedDownload(Download):
@@ -3255,25 +3061,6 @@ class _JobSpec:
     def raw_object_id(self) -> str:
         """The id inside the namespace, as the provider's get_object wants it."""
         return self.object_id.partition(":")[2]
-
-
-class _JobOptions:
-    """The lyrics/art options one job runs with: per-click pins over Settings.
-
-    A Chooser click pins its quick toggles for that click only; every other
-    job leaves the pins empty and reads the provider's stored options. The
-    fallback is the bridge's ``_psetting``, so one reader serves both.
-    """
-
-    def __init__(self, fallback, provider_id: str, pinned: dict | None = None) -> None:
-        self._fallback = fallback
-        self._provider_id = str(provider_id or "")
-        self._pinned = {str(key): value for key, value in dict(pinned or {}).items()}
-
-    def option(self, key: str, default=None):
-        if key in self._pinned:
-            return self._pinned[key]
-        return self._fallback(self._provider_id, key, default)
 
 
 def _norm_track_title(name: str) -> str:
@@ -9102,7 +8889,7 @@ class WavesBridge(LibraryMixin, QObject):
         settings read as stereo, the shipped default.
         """
         try:
-            return _wants_both_default(getattr(self, "settings", None))
+            return wants_both_default(getattr(self, "settings", None))
         except Exception:
             return False
 
@@ -10038,7 +9825,7 @@ class WavesBridge(LibraryMixin, QObject):
         DOWNLOAD for stereo-only tracks they cannot judge.
         """
         try:
-            atmos_on = _wants_both_default(self.settings)
+            atmos_on = wants_both_default(self.settings)
         except Exception:
             return None
         if not atmos_on:
@@ -10081,7 +9868,7 @@ class WavesBridge(LibraryMixin, QObject):
         only answer _copy_is_current acts on is the one where the copy on disk
         IS Atmos, and such a copy is itself proof that the track offers Atmos.
         The setting supplies the rest."""
-        return bool(_record_is_atmos(rec) and _wants_both_default(self.settings))
+        return bool(_record_is_atmos(rec) and wants_both_default(self.settings))
 
     @Slot(str, result="QVariant")
     def collectionMemberIds(self, collection_id: str):
@@ -10361,7 +10148,7 @@ class WavesBridge(LibraryMixin, QObject):
         if media_id in self._redownload_overrides or media_id in self._merge_plans:
             return marks
         target = self._target_quality_rank(self._job_quality(qid))
-        atmos_on = _wants_both_default(self.settings)
+        atmos_on = wants_both_default(self.settings)
         # Dual-download rows predict only their own Version (§5.2-5.3, worker
         # thread, no network beyond the ownership store): stereo rows skip
         # Atmos-only tracks (the Atmos row covers them), Atmos rows skip
@@ -12442,7 +12229,7 @@ class WavesBridge(LibraryMixin, QObject):
         # legacy, existing behavior).
         versions: list[str | None]
         try:
-            _atmos_on = _wants_both_default(self.settings)
+            _atmos_on = wants_both_default(self.settings)
         except Exception:
             _atmos_on = False
         if keep_ver is not None:
@@ -12989,503 +12776,111 @@ class WavesBridge(LibraryMixin, QObject):
         else:
             return
 
+    def _finish_job(self, qid: int) -> None:
+        """Drop a finished job's abort token, progress relay and poll entry."""
+        self._job_aborts.pop(qid, None)
+        self._release_job_signals(qid)
+        self._job_dls.pop(qid, None)
+
+    def _apple_job_hooks(self) -> AppleJobHooks:
+        """The bridge-owned services one Apple job reaches, as plain callables.
+
+        Built per call, never cached: the settings, provider registry, queue
+        and supervisor are read live while a job runs, and every callable
+        defers its attribute read to call time so a job path only touches
+        what it uses.
+        """
+        return AppleJobHooks(
+            provider=lambda: (getattr(self, "providers", {}) or {}).get(CTX_APPLE),
+            settings=lambda: getattr(self, "settings", None),
+            psetting=lambda provider_id, key, default=None: self._psetting(provider_id, key, default),
+            apple_setting=lambda key, default=None: self._apple_setting(key, default),
+            tag_write_flags=lambda: self._tag_write_flags(),
+            job_quality=lambda qid: self._job_quality(qid) if hasattr(self, "_job_quality") else None,
+            job_audio_type=lambda qid: self._job_audio_type(qid) if hasattr(self, "_job_audio_type") else None,
+            ownership=lambda: getattr(self, "_ownership", None),
+            redownload_overrides=lambda: self._redownload_overrides,
+            library_claim_overrides=lambda: self._library_claim_overrides,
+            quarantine_paths=lambda: self._apple_quarantine_paths,
+            status=lambda text: self._set_status(text),
+            queue_status=lambda qid, status, reason="": self._set_queue_status(qid, status, reason),
+            queue_progress=lambda qid, pct: self._set_queue_progress(qid, pct),
+            queue_item=lambda qid: self._queue_item(qid),
+            queue_mark_changed=lambda qid: self._queue_mark_changed(qid),
+            emit_queue=lambda: self._emit_queue(),
+            remove_row=lambda qid: self._remove_row(qid),
+            bump_groups=lambda media_id, pct, status: self._bump_download_groups(media_id, pct, status),
+            download_state=lambda media_id, status: self.downloadState.emit(media_id, status),
+            download_progress=lambda media_id, pct: self.downloadProgress.emit(media_id, pct),
+            setup_requested=lambda kind: self.appleSetupRequested.emit(kind),
+            finish_job=lambda qid: self._finish_job(qid),
+            gate_reachability=lambda retry, media_id="": self._gate_reachability(retry, media_id),
+            download_apple=lambda *args, **kwargs: self._download_apple(*args, **kwargs),
+            download_failed_with_folder=lambda *args, **kwargs: self._download_failed_with_folder(*args, **kwargs),
+            supervisor=lambda: self._apple_supervisor_for_job(),
+            runtime=lambda: getattr(self, "_apple_runtime", None),
+            wrapper_port=lambda: self._apple_wrapper_port_for_job(),
+            sidecar_guard=lambda: self._apple_sidecar_guard(),
+            note_activity=lambda: self._apple_note_activity(),
+            refresh_wrapper_auth=lambda timeout=5: self._refresh_apple_wrapper_auth(timeout=timeout),
+            schedule_idle_stop=lambda: self._schedule_apple_idle_stop(),
+            mark_session_expired=lambda: self._apple_mark_session_expired(),
+            clear_session_expired=lambda: self._apple_clear_session_expired(),
+            redact=lambda text: diagnostics.content(text),
+            devlog_event=lambda *args, **kwargs: devlog.event(*args, **kwargs),
+            devlog_done=lambda *args, **kwargs: devlog.done(*args, **kwargs),
+            devlog_clock=lambda: devlog.clock(),
+        )
+
     def _apple_wants_atmos(self) -> bool:
         """Whether the one-click default fetches the Atmos Version alongside
         stereo, read live per job like the engine's."""
         try:
-            return _wants_both_default(getattr(self, "settings", None))
+            return wants_both_default(getattr(self, "settings", None))
         except Exception:
             return False
 
     def _apple_audio_type(self):
-        return AudioType.ATMOS if self._apple_wants_atmos() else AudioType.STEREO
+        """The AudioType an unpinned Apple job fetches (runner policy)."""
+        return runner.fetch_audio_type(self._apple_job_hooks())
 
     def _apple_setting_tier(self):
         """The Apple quality setting folded onto the ladder, or None."""
-        return tier_from_word(str(self.settings.data.apple_quality_audio))
+        return runner.setting_tier(self._apple_job_hooks())
 
     def _apple_options(self, pinned: dict | None = None) -> _JobOptions:
-        """The lyrics/art options one Apple job runs with: per-click Chooser
-        pins over the provider's stored options."""
-        return _JobOptions(self._psetting, CTX_APPLE, pinned)
+        """The lyrics/art options one Apple job runs with (runner policy)."""
+        return runner.job_options(self._apple_job_hooks(), pinned)
 
     def _apple_target_rank(self, pinned=None) -> int:
-        """Rank of the audio quality an Apple run targets: the row's pinned
-        rung, else the Apple setting. Mirrors _target_quality_rank, which
-        reads the TIDAL side."""
-        q = self.settings.data.apple_quality_audio if pinned is None else pinned
-        return quality_rank(str(getattr(q, "value", q) or ""))
+        """Rank of the quality an Apple run targets (runner policy)."""
+        return runner.target_rank(self._apple_job_hooks(), pinned)
 
     def _apple_expected_word(self, job_atype, *, requested_rank: int, ceiling_rank: int) -> str:
-        """The queue row's expected word: ATMOS for Atmos rows, else the
-        requested tier capped by the servable ceiling.
-
-        Cookies-tier ceiling HIGH keeps the old HIGH; the wrapper ceiling
-        HI_RES lets a HI_RES ask read HI-RES. Detail ("ALAC 24/192") never
-        rides this word, only the tier.
-        """
-        if job_atype == "atmos" or (job_atype is None and self._apple_wants_atmos()):
-            return "ATMOS"
-        try:
-            want = int(requested_rank)
-            ceil = int(ceiling_rank)
-        except (TypeError, ValueError):
-            want, ceil = -1, -1
-        rank = min(want, ceil) if want >= 0 and ceil >= 0 else (want if want >= 0 else ceil)
-        for tier_value, tier_rank in TIER_RANK.items():
-            if tier_rank == rank:
-                return _tier_word(tier_value)
-        return _tier_word(str(getattr(self.settings.data, "apple_quality_audio", "") or "")) or "HIGH"
+        """The queue row's expected word for one Apple run (runner policy)."""
+        return runner.queue_expected_word(
+            self._apple_job_hooks(), job_atype, requested_rank=requested_rank, ceiling_rank=ceiling_rank
+        )
 
     def _run_apple_job(self, qid, spec, obj, *, signals, job_abort, file_template) -> str:
-        """Download one Apple track or collection, emitting the shared
-        lifecycle events so queue rows, delivered words, ownership and badges
-        behave exactly like TIDAL jobs.
-
-        Returns "" on a clean run; raises DownloadIncomplete naming the
-        shortfall when tracks failed (the settlement's row reason), like the
-        collection path it mirrors. Sequential per track: gamdl's stack runs
-        one song at a time, and serial fetches stay under Apple's
-        undocumented license-exchange rate limit.
-        """
-
-        provider = self.providers[CTX_APPLE]
-        type_media, collection, media_id = spec.kind, spec.collection, spec.media_id
-        # Dual-download Version (§5.2): explicit stereo/atmos rows pin their
-        # Version; legacy single rows (None, toggle off) keep today's
-        # instead-of behavior (ATMOS when toggled, else stereo).
-        job_atype = (
-            str(
-                getattr(spec, "audio_type", None)
-                or (self._job_audio_type(qid) if hasattr(self, "_job_audio_type") else "")
-                or ""
-            )
-            .strip()
-            .lower()
-            or None
+        """Download one Apple track or collection (runner policy)."""
+        return runner.run_apple_job(
+            self._apple_job_hooks(),
+            qid,
+            spec,
+            obj,
+            signals=signals,
+            job_abort=job_abort,
+            file_template=file_template,
         )
-        if job_atype not in ("stereo", "atmos"):
-            job_atype = None
-        if job_atype == "atmos":
-            audio_type = AudioType.ATMOS
-        elif job_atype == "stereo":
-            audio_type = AudioType.STEREO
-        else:
-            audio_type = self._apple_audio_type()
-        # The Version this job fetches as, for the per-version skip-list.
-        # Legacy single rows (None) resolve to the concrete fetch (stereo on
-        # the stereo default, Atmos on "both"): an Atmos quarantine never
-        # skips a stereo fetch, and vice versa. Ownership keeps its own legacy
-        # whole-track query above; the skip-list is always per-version.
-        try:
-            job_version = str(getattr(audio_type, "value", audio_type) or "").strip().lower()
-        except Exception:
-            job_version = ""
-        if job_version not in ("stereo", "atmos"):
-            job_version = "stereo"
-        ask_tier = self._job_quality(qid)
-        requested_rank = self._apple_target_rank(ask_tier)
-        if ask_tier is None:
-            # A row that pinned nothing (legacy or unreadable) fetches at the
-            # setting, read once so the whole run shares one request.
-            ask_tier = self._apple_setting_tier()
-        try:
-            ceiling_probe = provider.advertised_ceiling(None)
-        except Exception:
-            ceiling_probe = None
-        try:
-            if ceiling_probe is None and bool(getattr(provider, "wrapper_available", False)):
-                # Wrapper up but object unknown: predict the ask (the per-track
-                # gate and the deliver record still read the track's own
-                # ceiling, so AAC-only masters settle honestly after one fetch).
-                ceiling_rank = int(requested_rank)
-            elif ceiling_probe is None:
-                ceiling_rank = quality_rank(QualityTier.HIGH)
-            else:
-                ceiling_rank = int(ceiling_probe)
-        except Exception:
-            ceiling_rank = quality_rank(QualityTier.HIGH)
-        force = media_id in self._redownload_overrides
-        if collection:
-            header = provider.row_for(type_media, obj)
-            rows = provider.collection_items(obj)
-        else:
-            header = None
-            rows = [provider.row_for("track", obj)]
-        rows = [row for row in rows if isinstance(row, dict) and row.get("id")]
-        total = len(rows)
-        if not total:
-            _raise_download_incomplete("Apple served an empty track list")
-        # Empty-dual withdrawal (§5.2): an Atmos row with nothing to fetch
-        # (all tracks stereo-only) leaves no row, not a done row with no
-        # files. Runs on the worker (may fetch track raws), never the GUI.
-        if job_atype == "atmos":
-            atmos_capable = 0
-            for row in rows:
-                try:
-                    raw = provider.get_object("track", str(row.get("id")).removeprefix(f"{CTX_APPLE}:"))
-                    if bool(provider.has_atmos(raw)):
-                        atmos_capable += 1
-                        break
-                except Exception:
-                    # A track that cannot be read cannot prove it has no
-                    # Atmos: keep the row (it will fail/skip per-track below,
-                    # never silently vanish).
-                    atmos_capable += 1
-                    break
-            if not atmos_capable:
-                # Withdraw: remove the queue row so the click leaves one row
-                # (stereo), not a done row with no files. The bypass permit is
-                # released by the job body's finally, the one place that runs
-                # however this job ends, so one release covers every exit here.
-                self._remove_row(qid)
-                self._emit_queue()
-                return " (already downloaded)"
-        num_volumes = max([int(row.get("vol") or 1) for row in rows] + [1])
-        ok = fail = skipped = unavailable = quarantined = 0
-        failed_names: list[str] = []
-        landed: list = []
-        # The lyrics/art options this job runs with: the row's per-click
-        # Chooser pins when it has any, the provider's stored options otherwise.
-        options = self._apple_options(getattr(spec, "chooser_toggles", None))
-        # Session supervision (spec §3): the sidecar starts lazily
-        # on the first Apple download that needs it. Cookies-tier asks (HIGH)
-        # never touch it; only a LOSSLESS-or-better ask waits here.
-        try:
-            need_wrapper = bool(self._apple_needs_wrapper(requested_rank))
-        except Exception:
-            need_wrapper = False
-        if need_wrapper:
-            try:
-                ensured = self._apple_ensure_sidecar(qid, job_abort, need_wrapper=True)
-            except _AppleSetupRequired as exc:
-                # The runtime cannot come back on its own: fail with the setup
-                # words so the row is retryable once setup works, never a
-                # forever hold.
-                _raise_download_incomplete(str(exc))
-            except Exception:
-                logger.debug("Apple sidecar ensure failed; proceeding to fetch", exc_info=True)
-                ensured = True
-            if not ensured:
-                raise _AppleAborted()
-        for pos, row in enumerate(rows, start=1):
-            if job_abort.is_set():
-                break
-            # Proactive pacing (spec §3): pause after N songs for
-            # N seconds, same shape as TIDAL's. STOP lands promptly.
-            try:
-                pace_ok = self._apple_pace_if_due(pos, job_abort, qid)
-            except Exception:
-                pace_ok = True
-            if pace_ok is False:
-                raise _AppleAborted()
-            track_id = str(row.get("id"))
-            # Atmos rows skip stereo-only tracks (no Atmos to fetch); stereo
-            # rows fetch stereo for every track (every Apple song has stereo).
-            # Legacy single rows keep today's behavior (fetch what the toggle
-            # names, falling back to stereo).
-            if job_atype == "atmos":
-                try:
-                    raw_probe = provider.get_object("track", track_id.removeprefix(f"{CTX_APPLE}:"))
-                    has_at = bool(provider.has_atmos(raw_probe))
-                except Exception:
-                    has_at = True
-                if not has_at:
-                    skipped += 1
-                    signals.track_event.emit({"id": track_id, "status": "skipped"})
-                    self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
-                    continue
-            try:
-                expected_word = self._apple_expected_word(
-                    job_atype, requested_rank=requested_rank, ceiling_rank=ceiling_rank
-                )
-            except Exception:
-                # Plain unit-test stubs bind _run_apple_job without the new
-                # helper; fall back to the pre-wrapper words there.
-                try:
-                    wants_atmos = bool(self._apple_wants_atmos())
-                except Exception:
-                    wants_atmos = False
-                expected_word = "ATMOS" if (job_atype == "atmos" or (job_atype is None and wants_atmos)) else "HIGH"
-            signals.track_event.emit(
-                {
-                    "id": track_id,
-                    "title": str(row.get("title") or ""),
-                    "num": int(row.get("num") or pos),
-                    "vol": int(row.get("vol") or 1),
-                    "duration": str(row.get("duration") or ""),
-                    "status": "running",
-                    "expected": expected_word,
-                }
-            )
-            verdict, gate_rec = self._apple_gate_track(provider, track_id, requested_rank, force, audio_type=job_atype)
-            if verdict == "skip":
-                skipped += 1
-                signals.track_event.emit({"id": track_id, "status": "skipped", "owned": "own"})
-                self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
-                continue
-            # Integrity skip-list (spec §6.3): bulk runs auto-skip quarantined
-            # tracks, shown plainly like IN LIBRARY rows. REDOWNLOAD (force)
-            # and an explicit RETRY (single or RETRY ALL, spec §6.4) are the
-            # re-asks that bypass it: the row's own spec carries is_retry, so
-            # each retried row (each Version of a dual pair included) bypasses
-            # on its own, nothing is counted or released, and a dispatch that
-            # never runs a job leaks nothing. Per-version: an Atmos quarantine
-            # never skips its stereo sibling. Fresh clicks (even
-            # single-track) also skip: otherwise the mark would be bypassable
-            # by re-clicking and REDOWNLOAD would not be the way back.
-            bypass = bool(force) or bool(getattr(spec, "is_retry", False))
-            # The Version the fetch will verify as (not the bare ask): an
-            # Atmos ask for a stereo-only track falls back, and its failure is
-            # filed under stereo. Computed for every track; the gate below and
-            # the success-clear both read it.
-            try:
-                check_version = _apple_effective_version(provider, track_id, audio_type)
-            except Exception:
-                check_version = job_version
-                logger.debug("Apple effective-version probe failed; gating on the ask", exc_info=True)
-            if not bypass:
-                # Gate on the fetched Version (check_version above).
-                try:
-                    skip_mark = self._apple_skiplist_get(track_id, check_version)
-                except Exception:
-                    skip_mark = None
-                if skip_mark is not None:
-                    skipped += 1
-                    signals.track_event.emit({"id": track_id, "status": "skipped", "quarantined": True})
-                    self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
-                    continue
-            # An upgrade run overwrites the stale copy in place; without the
-            # per-track verdict an upgrade would land beside it as a numbered
-            # copy and the old file would stay behind.
-            track_force = force or verdict == "force"
-            owned_path = str((gate_rec or {}).get("path") or "") or None
-            attempts = 0
-            try:
-                while True:
-                    try:
-                        delivered = self._apple_deliver_track(
-                            provider,
-                            row,
-                            header,
-                            type_media=type_media,
-                            file_template=file_template,
-                            collection=collection,
-                            list_pos=pos,
-                            list_total=total,
-                            num_volumes=num_volumes,
-                            audio_type=audio_type,
-                            requested_rank=requested_rank,
-                            requested_tier=ask_tier,
-                            ceiling_rank=ceiling_rank,
-                            force=track_force,
-                            owned_path=owned_path,
-                            job_abort=job_abort,
-                            signals=signals,
-                            options=options,
-                            qid=qid,
-                        )
-                        break
-                    except Exception as exc:
-                        if isinstance(exc, AppleCredentialsError):
-                            # The saved session no longer works: tell the
-                            # light, hold the row with the sign-in message,
-                            # and wait in place for recovery instead of
-                            # failing the run (spec §3). The wrapper guest
-                            # refreshes its tokens on its own; a cookies
-                            # export recovers when its file or path changes.
-                            # STOP lands promptly and settles the row
-                            # cancelled. The retry re-runs THIS track.
-                            self._apple_mark_session_expired()
-                            with contextlib.suppress(Exception):
-                                self._apple_set_held(qid, "Sign in again in Settings under Providers, Apple Music.")
-                            if not self._apple_wait_for_session(provider, job_abort):
-                                raise _AppleAborted() from exc
-                            continue
-                        # A dead sidecar holds the row while a return is
-                        # plausible: one clear message, automatic resume. A
-                        # runtime that will not start ends the run through
-                        # the ensure's setup verdict instead of holding on.
-                        try:
-                            from waves.providers.apple.supervision import is_wrapper_down_error
-                        except Exception:
-                            is_wrapper_down_error = None
-                        try:
-                            down = bool(is_wrapper_down_error(exc)) if callable(is_wrapper_down_error) else False
-                        except Exception:
-                            down = False
-                        if down:
-                            logger.warning("Apple runtime down mid-run; holding %s", diagnostics.content(track_id))
-                            with contextlib.suppress(Exception):
-                                self._apple_set_held(qid)
-                            try:
-                                ensured = self._apple_ensure_sidecar(qid, job_abort, need_wrapper=True)
-                            except _AppleSetupRequired:
-                                # The runtime cannot come back on its own: the
-                                # track handler below ends the run with the
-                                # setup words instead of holding again.
-                                raise
-                            except Exception:
-                                logger.debug("Apple sidecar re-ensure failed", exc_info=True)
-                                ensured = False
-                            if not ensured or job_abort.is_set():
-                                raise _AppleAborted() from exc
-                            continue
-                        try:
-                            throttled = provider.classify_refusal(exc).kind is RefusalKind.THROTTLED
-                        except Exception:
-                            throttled = False
-                        if not throttled:
-                            raise
-                        try:
-                            wait = float(self._apple_throttle_delay(attempts, exc))
-                        except Exception:
-                            wait = 5.0
-                        attempts += 1
-                        logger.warning(
-                            "Apple rate-limited this job; retrying %s in %ss",
-                            diagnostics.content(track_id),
-                            round(wait, 1),
-                        )
-                        try:
-                            waited = self._apple_throttle_wait(qid, wait, job_abort, track_id)
-                        except Exception:
-                            # Old test stubs without the countdown helper keep
-                            # the previous abortable sleep there.
-                            with contextlib.suppress(Exception):
-                                self._set_status(f"Apple is rate-limiting; retrying in {int(wait)}s…")
-                            waited = self._apple_sleep_abortable(wait, job_abort)
-                        if not waited:
-                            raise _AppleAborted() from exc
-            except AppleTrackUnavailable as exc:
-                unavailable += 1
-                signals.track_event.emit({"id": track_id, "status": "unavailable"})
-                logger.info("Apple track unavailable: %s", exc)
-                self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
-                continue
-            except _AppleSkipped:
-                skipped += 1
-                signals.track_event.emit({"id": track_id, "status": "skipped"})
-                self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
-                continue
-            except _AppleAborted:
-                break
-            except _AppleSetupRequired as exc:
-                # The runtime cannot come back on its own: end the whole run
-                # with the setup words rather than failing track after track.
-                _raise_download_incomplete(str(exc))
-            except Exception as exc:
-                fail += 1
-                failed_names.append(str(row.get("title") or track_id))
-                # Integrity quarantines end FAILED in plain words (spec §6.4);
-                # other failures keep the existing failed row without a reason.
-                try:
-                    is_integrity = self._is_integrity_failure(exc)
-                except Exception:
-                    is_integrity = False
-                if is_integrity:
-                    quarantined += 1
-                try:
-                    if is_integrity:
-                        from waves.providers.apple.integrity import INTEGRITY_FAIL_MESSAGE as _IFM
-
-                        signals.track_event.emit({"id": track_id, "status": "failed", "reason": _IFM})
-                    else:
-                        signals.track_event.emit({"id": track_id, "status": "failed"})
-                except Exception:
-                    with contextlib.suppress(Exception):
-                        signals.track_event.emit({"id": track_id, "status": "failed"})
-                logger.exception("Apple track failed for %s", diagnostics.content(track_id))
-                self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
-                continue
-            ok += 1
-            landed.append(pathlib.Path(delivered["path"]))
-            # A landed track proves the session works: lift the expiry marker
-            # even when recovery was never observed by a probe (spec §3).
-            clear = getattr(self, "_apple_clear_session_expired", None)
-            if callable(clear):
-                clear()
-            # Wrapper work stamps the idle clock so an in-flight run never
-            # looks idle to the sidecar stop.
-            with contextlib.suppress(Exception):
-                self._apple_note_activity()
-            # A verified copy landing clears the skip-list (REDOWNLOAD's way
-            # back; also clears a stale mark when Apple re-encoded). The
-            # fetched Version clears its own mark (check_version above).
-            try:
-                self._apple_skiplist_clear(track_id, check_version)
-            except Exception:
-                logger.debug("Could not clear the Apple skip-list", exc_info=True)
-            signals.track_event.emit(
-                {
-                    "id": track_id,
-                    "status": "done",
-                    "path": delivered["path"],
-                    "quality": delivered["quality"],
-                }
-            )
-            self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
-        if collection and landed and self.settings.data.playlist_create and not job_abort.is_set():
-            # The _Name.m3u8 the playlist_create setting promises, in landed
-            # order (mirrors the engine's playlist_populate scope).
-            from waves.providers.apple.files import write_collection_playlist
-
-            header_title = ""
-            try:
-                header_title = str(provider.row_for(type_media, obj).get("title") or "")
-            except Exception:
-                logger.debug("Apple playlist title unreadable", exc_info=True)
-            data = self.settings.data
-            write_collection_playlist(
-                landed,
-                header_title or spec.name,
-                is_album=type_media == "album",
-                illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
-                illegal_map=getattr(data, "filename_illegal_map", None),
-            )
-        # Settlement: every exit below returns or raises through here, and the
-        # job body's finally releases this job's bypass permit exactly once.
-        # Releasing here as well would consume a sibling Version's permit on
-        # dual retries (two jobs, one media id, one permit each).
-        if total == 1 and not collection:
-            if ok or skipped:
-                return "" if ok else " (already downloaded)"
-            if unavailable:
-                _raise_download_incomplete("not available on Apple Music anymore")
-            if quarantined:
-                from waves.providers.apple.integrity import INTEGRITY_FAIL_MESSAGE as _IFM_SINGLE
-
-                _raise_download_incomplete(_IFM_SINGLE)
-            _raise_download_incomplete("Apple download produced no file")
-        short = fail + unavailable
-        if short:
-            if quarantined and quarantined == fail and not unavailable:
-                # Every failure is a quarantine: the row's plain-words verdict.
-                from waves.providers.apple.integrity import INTEGRITY_FAIL_MESSAGE as _IFM_ALL
-
-                done_word = f"{ok} of {total} tracks" if ok else f"0 of {total} tracks"
-                _raise_download_incomplete(f"{done_word} downloaded ({_IFM_ALL})")
-            done_word = f"{ok} of {total} tracks" if ok else f"0 of {total} tracks"
-            _raise_download_incomplete(f"{done_word} downloaded ({short} failed)")
-        if skipped and not ok:
-            return " (already downloaded)"
-        return ""
 
     def _apple_emit_progress(self, signals, collection: bool, pos: int, total: int, media_id: str, qid: int) -> None:
-        """Stepwise row progress: one tick per settled track."""
-        pct = min(100.0, (pos / total) * 100.0) if total else 100.0
-        (signals.list_item if collection else signals.item).emit(pct)
+        """One progress tick per settled Apple track."""
+        runner.emit_progress(signals, collection, pos, total, media_id, qid)
 
     def _apple_sleep_abortable(self, seconds: float, job_abort) -> bool:
         """Sleep in slices so STOP lands promptly; False when aborted."""
-        deadline = time.monotonic() + float(seconds)
-        while True:
-            if job_abort.is_set():
-                return False
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return True
-            time.sleep(min(0.2, remaining))
+        return runner.sleep_abortable(seconds, job_abort)
 
     def _psetting(self, provider_id: str, key: str, default=None):
         """One lyrics/artwork option for one provider.
@@ -13529,143 +12924,24 @@ class WavesBridge(LibraryMixin, QObject):
         return value if value is not None else default
 
     def _apple_pacing_policy(self) -> tuple[int, float]:
-        """Proactive Apple pacing: pause after N songs for N seconds.
-
-        Same shape as TIDAL's api_rate_limit_*. Read on every track (a
-        settings change takes effect on the next download, never the next
-        restart) and best-effort: a value that cannot be read means no
-        pause, never a download that will not start. Old test stubs without
-        the fields read as (0, 0.0) so they never pause.
-        """
-        try:
-            from waves.providers.apple.supervision import pacing_policy
-        except Exception:
-            return 0, 0.0
-        try:
-            return pacing_policy(
-                self._apple_setting("pacing_batch_size", 0),
-                self._apple_setting("pacing_delay_sec", 0.0),
-            )
-        except Exception:
-            return 0, 0.0
+        """Proactive Apple pacing (batch, delay), read per track (runner policy)."""
+        return runner.pacing_policy(self._apple_job_hooks())
 
     def _apple_pace_if_due(self, pos_1based: int, job_abort, qid: int = 0) -> bool:
-        """Stand back when this 1-based track opens a new Apple pacing batch.
-
-        Returns False only when STOP lands mid-pause (the caller aborts the
-        job). The pause is a deliberate stall, logged at INFO like TIDAL's
-        so a support bundle names it instead of showing a silent gap.
-        """
-        try:
-            from waves.providers.apple.supervision import pacing_due, pacing_message
-        except Exception:
-            return True
-        every, seconds = self._apple_pacing_policy()
-        if not every or seconds <= 0:
-            return True
-        try:
-            due = pacing_due(int(pos_1based), int(every))
-        except Exception:
-            due = False
-        if not due:
-            return True
-        try:
-            self.fn_logger.info(pacing_message(seconds, every))
-        except Exception:
-            logger.info("Apple pacing pause for %ss after %s songs", seconds, every)
-        try:
-            self._set_status(f"Pausing Apple downloads for {float(seconds):g}s…")
-        except Exception:
-            logger.debug("Apple pacing status failed", exc_info=True)
-        return bool(self._apple_sleep_abortable(float(seconds), job_abort))
+        """Stand back when this track opens a new pacing batch (runner policy)."""
+        return runner.pace_if_due(self._apple_job_hooks(), pos_1based, job_abort, qid)
 
     def _apple_throttle_delay(self, attempt: int, exc) -> float:
         """Reactive 429 wait: Retry-After wins, else exponential, capped."""
-        try:
-            from waves.providers.apple.supervision import parse_retry_after, throttle_delay
-        except Exception:
-            try:
-                return float(_APPLE_THROTTLE_WAITS[min(int(attempt), len(_APPLE_THROTTLE_WAITS) - 1)])
-            except Exception:
-                return 5.0
-        try:
-            retry_after = parse_retry_after(exc)
-        except Exception:
-            retry_after = None
-        try:
-            return float(throttle_delay(int(attempt), retry_after))
-        except Exception:
-            return 5.0
+        return runner.throttle_delay(attempt, exc)
 
     def _apple_throttle_wait(self, qid: int, wait: float, job_abort, track_id: str = "") -> bool:
-        """Wait out a license-exchange 429 with a visible resume countdown.
-
-        The row stays in Downloading with its countdown (a presentation, not
-        a new state); STOP lands promptly and returns False. RETRY ALL covers
-        anything manually stopped because a stop settles the row cancelled.
-        Ticks the countdown about once a second so the drawer visibly counts
-        down instead of stalling silently.
-        """
-        try:
-            from waves.providers.apple.supervision import throttled_message
-        except Exception:
-            throttled_message = lambda s: f"Apple is rate-limiting; retrying in {int(s)}s…"
-        try:
-            total = max(0.0, float(wait))
-        except (TypeError, ValueError):
-            total = 0.0
-        deadline = time.monotonic() + total
-        try:
-            self._set_status(throttled_message(total))
-        except Exception:
-            logger.debug("Apple throttle status failed", exc_info=True)
-        set_status = getattr(self, "_set_queue_status", None)
-        if callable(set_status):
-            try:
-                set_status(int(qid), "running", throttled_message(total))
-            except Exception:
-                logger.debug("Apple throttle row update failed", exc_info=True)
-        last_shown = -1
-        while True:
-            if job_abort.is_set():
-                return False
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return True
-            shown = round(remaining)
-            if shown != last_shown and shown >= 0:
-                last_shown = shown
-                with contextlib.suppress(Exception):
-                    self._set_status(throttled_message(remaining))
-                if callable(set_status):
-                    with contextlib.suppress(Exception):
-                        set_status(int(qid), "running", throttled_message(remaining))
-            time.sleep(min(0.25, remaining))
+        """Wait out a 429 with a visible resume countdown (runner policy)."""
+        return runner.throttle_wait(self._apple_job_hooks(), qid, wait, job_abort, track_id)
 
     def _apple_set_held(self, qid: int, detail: str = "") -> None:
-        """Hold an Apple row with one clear message (presentation, not a state).
-
-        The row sits under Queued with its reason; it resumes automatically
-        when the runtime returns and respects STOP while it waits.
-        """
-        try:
-            from waves.providers.apple.supervision import held_message
-        except Exception:
-            held_message = lambda d="": "Held: the Apple runtime is not running. Waiting for it to return."
-        try:
-            message = held_message(detail)
-        except Exception:
-            message = "Held: the Apple runtime is not running. Waiting for it to return."
-        set_status = getattr(self, "_set_queue_status", None)
-        if callable(set_status):
-            try:
-                set_status(int(qid), "queued", message)
-            except Exception:
-                logger.debug("Apple held row update failed", exc_info=True)
-        try:
-            self._set_status(message)
-        except Exception:
-            logger.debug("Apple held status failed", exc_info=True)
+        """Hold an Apple row with one clear message (runner presentation)."""
+        runner.set_held(self._apple_job_hooks(), qid, detail)
 
     def _apple_mark_session_expired(self) -> None:
         """Remember a boundary-rejected Apple session and move the light.
@@ -13689,61 +12965,12 @@ class WavesBridge(LibraryMixin, QObject):
             self.appleStatusChanged.emit()
 
     def _apple_wait_for_session(self, provider, job_abort) -> bool:
-        """Wait (abortably) until the Apple session can serve again.
-
-        The wrapper guest refreshes its own tokens, so a cheap /me probe
-        finds it; a cookies export cannot be probed server-side, so the wait
-        watches the file the provider names and retries once it changes.
-        False when STOP lands.
-        """
-        try:
-            from waves.providers.apple.supervision import HELD_POLL_SEC
-        except Exception:
-            HELD_POLL_SEC = 5.0
-        cookies_before = _apple_cookies_fingerprint(str(getattr(provider, "cookies_path", "") or ""))
-        while not job_abort.is_set():
-            if str(getattr(provider, "wrapper_url", "") or "").strip():
-                try:
-                    state = self._refresh_apple_wrapper_auth(timeout=5) or {}
-                    if bool(state.get("logged_in")):
-                        return True
-                except Exception:
-                    logger.debug("Apple wrapper recovery probe failed", exc_info=True)
-            cookies_now = _apple_cookies_fingerprint(str(getattr(provider, "cookies_path", "") or ""))
-            if cookies_now != cookies_before:
-                # A fresh export landed (in place or at a new path): the
-                # retried fetch is the proof.
-                return True
-            try:
-                if not self._apple_sleep_abortable(HELD_POLL_SEC, job_abort):
-                    return False
-            except Exception:
-                deadline = time.monotonic() + float(HELD_POLL_SEC)
-                while time.monotonic() < deadline:
-                    if job_abort.is_set():
-                        return False
-                    time.sleep(0.2)
-        return False
+        """Wait (abortably) until the Apple session can serve again (runner policy)."""
+        return runner.wait_for_session(self._apple_job_hooks(), provider, job_abort)
 
     def _apple_needs_wrapper(self, requested_rank: int = -1) -> bool:
-        """Whether this job's ask can need the wrapper sidecar at all.
-
-        The cookies tier serves HIGH alone (AAC 256 + Atmos); only a
-        LOSSLESS-or-better ask reaches for the wrapper's ALAC path. Reads
-        defensively so old stubs without the ladder still answer.
-        """
-        try:
-            from waves.constants import QualityTier, quality_rank
-        except Exception:
-            return False
-        try:
-            want = int(requested_rank)
-        except (TypeError, ValueError):
-            return False
-        try:
-            return want >= int(quality_rank(QualityTier.LOSSLESS))
-        except Exception:
-            return False
+        """Whether this job's ask can need the wrapper sidecar at all."""
+        return runner.needs_wrapper(requested_rank)
 
     def _apple_supervisor_for_job(self):
         """The sidecar supervisor for Apple jobs, or None on plain stubs."""
@@ -13783,96 +13010,8 @@ class WavesBridge(LibraryMixin, QObject):
         return lock if lock is not None else contextlib.nullcontext()
 
     def _apple_ensure_sidecar(self, qid: int, job_abort, *, need_wrapper: bool) -> bool:
-        """Lazily start the sidecar when this job needs it; hold until ready.
-
-        Search, browsing and link resolution never call here (they ride the
-        dev token alone). Returns True when the job may proceed, False when
-        STOP landed while held. One failed start is a blip the next poll may
-        heal, so the row is HELD with the setup words and re-probed; a runtime
-        that fails to start repeatedly cannot come back on its own, so the
-        row stops waiting, setup opens, and the job fails with those words
-        (RETRY is the way back once the runtime works). Never re-provisions:
-        the runtime is the setup wizard's artifact.
-        """
-        if not need_wrapper:
-            return True
-        if job_abort.is_set():
-            return False
-        # No manager and no wrapper URL on a plain stub means there is no
-        # sidecar to supervise: proceed so old tests keep fetching.
-        manager = getattr(self, "_apple_runtime", None)
-        provider = None
-        try:
-            provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
-        except Exception:
-            provider = None
-        wrapper_url = ""
-        try:
-            wrapper_url = str(getattr(provider, "wrapper_url", "") or "").strip()
-        except Exception:
-            wrapper_url = ""
-        if manager is None and not wrapper_url:
-            return True
-        try:
-            from waves.providers.apple.supervision import HELD_POLL_SEC, HELD_START_FAILURES, SETUP_PATH
-        except Exception:
-            HELD_POLL_SEC = 5.0
-            HELD_START_FAILURES = 2
-            SETUP_PATH = "Settings, Providers, Apple Music"
-        sup = self._apple_supervisor_for_job()
-        # The wrapper tier was never set up (no URL and no persisted port):
-        # the cookies path serves alone, exactly as before supervision.
-        # Only a configured tier that stops answering holds.
-        port_probe = self._apple_wrapper_port_for_job()
-        if not wrapper_url and not port_probe:
-            return True
-        # Poll until the supervised port exists and answers, or STOP lands.
-        # The wizard may pick the port concurrently; ensure_started probes
-        # first, so a healthy sidecar returns without sleeping, and it also
-        # migrates a sidecar still publishing on a wildcard host address.
-        failures = 0
-        while not job_abort.is_set():
-            port = self._apple_wrapper_port_for_job()
-            if sup is not None and port:
-                try:
-                    # The idle stop decides under the same guard: a start in
-                    # flight is never stopped out from under itself.
-                    with self._apple_sidecar_guard():
-                        started = sup.ensure_started(http_port=port)
-                except Exception:
-                    logger.debug("Wrapper ensure-start failed", exc_info=True)
-                    started = False
-                if started:
-                    with contextlib.suppress(Exception):
-                        self._apple_note_activity()
-                    # A row held on an earlier poll resumes visibly.
-                    with contextlib.suppress(Exception):
-                        set_status = getattr(self, "_set_queue_status", None)
-                        if callable(set_status):
-                            set_status(int(qid), "running", "")
-                    return True
-                # Still down: hold with the setup words rather than fail a
-                # blip, but bounded: a start that keeps failing needs the
-                # wizard, and a held row cannot wait forever.
-                self._apple_set_held(qid)
-                terminal_message = f"Apple's runtime did not start. Finish setup in {SETUP_PATH}, then retry."
-                failures += 1
-            else:
-                # Configured for the wrapper tier but no supervised port yet:
-                # the wizard has not picked one. Hold with the setup words
-                # instead of failing the wall.
-                self._apple_set_held(qid, "The wrapper tier has no port yet.")
-                terminal_message = f"Apple's wrapper tier is not set up. Finish setup in {SETUP_PATH}, then retry."
-                failures += 1
-            if failures >= max(1, int(HELD_START_FAILURES)):
-                with contextlib.suppress(Exception):
-                    self.appleSetupRequested.emit("setup")
-                with contextlib.suppress(Exception):
-                    self._set_status(terminal_message)
-                raise _AppleSetupRequired(terminal_message)
-            if not self._apple_sleep_abortable(HELD_POLL_SEC, job_abort):
-                return False
-        return False
+        """Lazily start the sidecar when this job needs it (runner policy)."""
+        return runner.ensure_sidecar(self._apple_job_hooks(), qid, job_abort, need_wrapper=need_wrapper)
 
     def _apple_note_activity(self) -> None:
         """Stamp wrapper work now for the idle-stop clock."""
@@ -13997,29 +13136,17 @@ class WavesBridge(LibraryMixin, QObject):
         num_volumes: int = 1,
         isrc: str = "",
     ) -> str:
-        """One Apple destination from the settings' template.
-
-        The single formatter behind both the download job's relative path and
-        the standalone actions' folder/stem split, so apart from playlist
-        collections (which reconstruct the album template) both render the
-        same vocabulary.
-        """
-        data = self.settings.data
-        return format_apple_path(
-            file_template,
+        """One Apple destination from the settings' template (runner policy)."""
+        return runner.relative_path(
+            self._apple_job_hooks(),
             track=track,
             album=album,
             playlist=playlist,
+            file_template=file_template,
             list_pos=list_pos,
             list_total=list_total,
             num_volumes=num_volumes,
             isrc=isrc,
-            pad_min=int(getattr(data, "album_track_num_pad_min", 1) or 1),
-            delimiter_artist=str(getattr(data, "filename_delimiter_artist", ", ") or ", "),
-            delimiter_album_artist=str(getattr(data, "filename_delimiter_album_artist", ", ") or ", "),
-            illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
-            illegal_map=getattr(data, "filename_illegal_map", None),
-            provider_name=provider_folder_name(CTX_APPLE),
         )
 
     def _apple_track_relative(
@@ -14034,21 +13161,16 @@ class WavesBridge(LibraryMixin, QObject):
         facts_isrc: str = "",
     ) -> str:
         """One Apple track's template path, without base dir or extension."""
-        if type_media == "playlist":
-            album = None
-            playlist = header
-        else:
-            album = header
-            playlist = None
-        return self._apple_relative_path(
-            track=row,
-            album=album,
-            playlist=playlist,
-            file_template=file_template,
-            list_pos=list_pos if type_media == "playlist" else 0,
-            list_total=list_total if type_media == "playlist" else 0,
-            num_volumes=num_volumes,
-            isrc=facts_isrc,
+        return runner.track_relative(
+            self._apple_job_hooks(),
+            row,
+            header,
+            type_media,
+            file_template,
+            list_pos,
+            list_total,
+            num_volumes,
+            facts_isrc,
         )
 
     def _apple_deliver_track(
@@ -14074,799 +13196,99 @@ class WavesBridge(LibraryMixin, QObject):
         options: _JobOptions | None = None,
         qid: int = 0,
     ) -> dict:
-        """Fetch, verify, place, tag and sidecar one Apple track.
-
-        Verification is always-on pre-swap (spec §6.1): the ffmpeg
-        decode-to-null check runs on the staged file during the finishing
-        phase, never a setting. Integrity failures retry automatically (2
-        re-downloads, 1 for outbreak-era Encoded date >= 2025-05, with brief
-        pacing); persistent failures land in Quarantine plus the skip-list and
-        raise with the plain-words verdict. Each Version verifies
-        independently; no conversion runs before verification passes; no
-        patching.
-
-        Returns {"path", "quality"} for the done event. Raises
-        AppleTrackUnavailable when Apple withholds the song and
-        AppleDownloadError (or anything gamdl raises) otherwise.
-        """
-        from waves.providers.apple.engine import AppleDownloadError, probe_audio_file
-        from waves.providers.apple.integrity import (
-            INTEGRITY_FAIL_MESSAGE,
-            integrity_retries,
-            integrity_retry_delay,
-            is_outbreak_era,
-            parse_encoded_date,
-        )
-
-        options = options or self._apple_options()
-        track_id = str(row.get("id"))
-        raw_id = track_id.removeprefix(f"{CTX_APPLE}:")
-        raw = provider.get_object("track", raw_id)
-        facts = provider.track_facts(raw)
-        relative = self._apple_track_relative(
+        """Fetch, verify, place, tag and sidecar one Apple track (runner policy)."""
+        return runner.deliver_track(
+            self._apple_job_hooks(),
+            provider,
             row,
             header,
-            type_media,
-            file_template,
-            list_pos,
-            list_total,
-            num_volumes,
-            facts_isrc=str(facts.get("isrc") or ""),
-        )
-        base = pathlib.Path(str(self.settings.data.download_base_path)).expanduser()
-        # Lossless stereo lands as FLAC; the true extension is
-        # only known after the fetch, so guess here and correct per attempt
-        # below (the TIDAL pipeline's guess-then-correct shape).
-        guess_ext = self._apple_guess_ext(provider, audio_type, requested_rank)
-        # The skip check reads the REQUESTED destination: pick_destination
-        # loops until it finds a free name, so asking it first would make the
-        # exists check below permanently false and duplicate owned files.
-        exact = base / f"{relative}{guess_ext}"
-        exact.parent.mkdir(parents=True, exist_ok=True)
-        if force:
-            # Overwrite the copy THIS track owns, not the template path: two
-            # distinct tracks can render to one relative name (the second owns
-            # the _01 suffixed file), and the template path would overwrite
-            # the sibling's audio while its record goes stale.
-            dest = pathlib.Path(owned_path) if owned_path else exact
-            dest.parent.mkdir(parents=True, exist_ok=True)
-        elif self.settings.data.skip_existing and exact.exists():
-            raise _AppleSkipped()
-        else:
-            dest = pick_destination(base, relative, guess_ext)
-        # The Version this fetch verifies as, for the per-version skip-list.
-        # resolve_stream decides Atmos from the raw + ask; the delivered word
-        # confirms it per attempt below.
-        version_hint = str(getattr(audio_type, "value", audio_type) or "").strip().lower() or None
-        if version_hint not in ("stereo", "atmos"):
-            version_hint = None
-        attempt = 0
-        last_encoded: str | None = None
-        last_staged: pathlib.Path | None = None
-        outbreak_seen = False
-
-        def _drop_hold() -> None:
-            """Delete the superseded retry hold, if any, and forget it."""
-            nonlocal last_staged
-            if last_staged is not None:
-                with contextlib.suppress(OSError):
-                    if "quarantine-" in str(last_staged.parent):
-                        shutil.rmtree(last_staged.parent, ignore_errors=True)
-                last_staged = None
-
-        # Every attempt fetches at the row's pinned ask, never the live setting.
-        while True:
-            info = None
-            try:
-                try:
-                    info = provider.resolve_stream(raw, requested_tier, audio_type)
-                except Exception as resolve_exc:
-                    # A refusal is TIDAL-vocabulary for "gone": kept out of the fail
-                    # count so one delisted track cannot fail its whole album.
-                    if provider.classify_refusal(resolve_exc).kind is RefusalKind.UNAVAILABLE:
-                        raise AppleTrackUnavailable(str(resolve_exc) or "not available on Apple Music") from resolve_exc
-                    # The engine verifies inside its own fetch (decode-to-null
-                    # before resolve_stream returns), so a corrupt delivery can
-                    # raise here with no staged file to hold: it still enters
-                    # the integrity retry/quarantine path below (without bytes
-                    # for the quarantine copy or the Encoded-date read).
-                    raise
-                staged = pathlib.Path(str(info.local_file))
-                if not staged.is_file():
-                    raise AppleDownloadError("Apple download produced no file")  # noqa: TRY003, TRY301
-                atmos = str((info.delivered or {}).get("audio_type") or "") == str(AudioType.ATMOS)
-                # The true extension off the delivery: ALAC stereo becomes
-                # .flac when the FLAC toggle is on (and an ffmpeg binary is
-                # at hand); scope "all" additionally converts lossy stereo
-                # by re-encoding it. AAC (lossless-only scope) and Atmos
-                # always stay .m4a. A HI_RES ask can fall back to AAC on an
-                # AAC-only master, so this is decided per attempt, never
-                # from the ask alone.
-                flac_mode = self._apple_flac_mode(info, atmos=atmos)  # "lossless", "lossy", or ""
-                flac_tmpdir: str | None = None
-                if flac_mode and not self._apple_flac_ffmpeg():
-                    # "Continue anyway" past the ffmpeg gate (or a binary
-                    # that went away mid-job): keep the original .m4a rather
-                    # than fail a fetchable track.
-                    logger.debug("Apple FLAC extraction skipped (no ffmpeg); keeping the original file")
-                    flac_mode = ""
-                want_ext = ".flac" if flac_mode else ".m4a"
-                if dest.suffix != want_ext:
-                    if force and owned_path:
-                        owned = pathlib.Path(owned_path)
-                        dest = owned.with_suffix(want_ext) if owned.suffix != want_ext else owned
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                    else:
-                        exact_true = base / f"{relative}{want_ext}"
-                        if not force and self.settings.data.skip_existing and exact_true.exists():
-                            raise _AppleSkipped()  # noqa: TRY301
-                        dest = pick_destination(base, relative, want_ext)
-                self._apple_verify_staged(staged, expect_atmos=atmos)
-                if job_abort.is_set():
-                    raise _AppleAborted()  # noqa: TRY301
-                if flac_mode:
-                    # Verified above, so conversion runs on known-good bytes
-                    # (spec §6: no conversion before verification passes).
-                    # The converted file lands outside the provider's workdir,
-                    # which discard_delivery removes below.
-                    staged, flac_tmpdir = self._apple_extract_flac(staged)
-                try:
-                    self._apple_place_file(staged, dest)
-                finally:
-                    if flac_tmpdir is not None:
-                        with contextlib.suppress(OSError):
-                            shutil.rmtree(flac_tmpdir, ignore_errors=True)
-            except _AppleAborted:
-                if info is not None:
-                    try:
-                        provider.discard_delivery(str(info.local_file))
-                    except Exception:
-                        logger.debug("Could not discard the Apple staging area", exc_info=True)
-                if "flac_tmpdir" in locals() and flac_tmpdir is not None:
-                    with contextlib.suppress(OSError):
-                        shutil.rmtree(flac_tmpdir, ignore_errors=True)
-                _drop_hold()
-                raise
-            except Exception as exc:
-                # The staged bytes still exist here (discard runs below), so
-                # read the Encoded date and hold quarantine bytes FIRST: after
-                # discard the workdir is gone and both reads would miss. A
-                # resolve-stage integrity failure carries its rejected bytes on
-                # the exception itself (the engine transfers workdir ownership
-                # outward instead of deleting it); without them it still
-                # retries and marks the skip-list, just without bytes or a date.
-                failed_staged: pathlib.Path | None = None
-                preserved_workdir = ""
-                if info is not None:
-                    try:
-                        candidate = pathlib.Path(str(info.local_file))
-                        failed_staged = candidate if candidate.is_file() else None
-                    except Exception:
-                        failed_staged = None
-                else:
-                    try:
-                        exc_staged = str(getattr(exc, "staged_path", "") or "")
-                        preserved_workdir = str(getattr(exc, "workdir", "") or "")
-                        candidate = pathlib.Path(exc_staged)
-                        failed_staged = candidate if exc_staged and candidate.is_file() else None
-                    except Exception:
-                        failed_staged = None
-                try:
-                    _is_integrity = self._is_integrity_failure(exc)
-                except Exception:
-                    # Old test stubs without the gate: fall back to the wording
-                    # check so clean fixtures still pass unretried.
-                    _is_integrity = "integrity check" in str(exc or "").lower()
-                if not _is_integrity:
-                    if info is not None:
-                        try:
-                            provider.discard_delivery(str(info.local_file))
-                        except Exception:
-                            logger.debug("Could not discard the Apple staging area", exc_info=True)
-                    if "flac_tmpdir" in locals() and flac_tmpdir is not None:
-                        with contextlib.suppress(OSError):
-                            shutil.rmtree(flac_tmpdir, ignore_errors=True)
-                    _drop_hold()
-                    raise
-                # Integrity failure: sharpen the budget on outbreak-era bytes.
-                # The Encoded date rides the failed file itself; unknown stays
-                # on the normal budget (never the sharpened one).
-                try:
-                    encoded_text = self._apple_staged_encoded_date(failed_staged) if failed_staged else None
-                except Exception:
-                    encoded_text = None
-                if encoded_text:
-                    last_encoded = encoded_text
-                with contextlib.suppress(Exception):
-                    outbreak_seen = outbreak_seen or is_outbreak_era(parse_encoded_date(encoded_text))
-                hold_path: pathlib.Path | None = None
-                if failed_staged is not None:
-                    try:
-                        import tempfile as _tmp
-
-                        hold = pathlib.Path(_tmp.mkdtemp(prefix="waves-apple-quarantine-")) / "failed.m4a"
-                        shutil.copyfile(failed_staged, hold)
-                        hold_path = hold
-                    except Exception:
-                        hold_path = None
-                if info is not None:
-                    try:
-                        provider.discard_delivery(str(info.local_file))
-                    except Exception:
-                        logger.debug("Could not discard the Apple staging area", exc_info=True)
-                if preserved_workdir:
-                    # The engine's rejected bytes were copied into the hold
-                    # above (or there was nothing to hold): either way the
-                    # preserved workdir is spent and must not leak.
-                    with contextlib.suppress(OSError):
-                        shutil.rmtree(preserved_workdir, ignore_errors=True)
-                if hold_path is not None:
-                    # A superseded hold is deleted with its temp dir: only the
-                    # latest failure's bytes are quarantined, the earlier
-                    # copies are retry debris, never keepsakes.
-                    previous = last_staged
-                    last_staged = hold_path
-                    if previous is not None and previous != hold_path:
-                        with contextlib.suppress(OSError):
-                            if "quarantine-" in str(previous.parent):
-                                shutil.rmtree(previous.parent, ignore_errors=True)
-                try:
-                    budget = integrity_retries(getattr(self.settings, "data", None), outbreak=outbreak_seen)
-                except Exception:
-                    budget = 1 if outbreak_seen else 2
-                if attempt >= budget:
-                    # Persistent failure: quarantine (keep-by-default) plus the
-                    # provider-scoped skip-list. Filed under the DELIVERED
-                    # Version: an Atmos ask for a stereo-only track falls back,
-                    # so its corrupt bytes belong to stereo (the effective
-                    # version the gate and the clear both read). A resolve-stage
-                    # failure never produced a delivered word, but the effective
-                    # Version is still knowable (asked AND offered); only a
-                    # probe that fails too falls back to the ask.
-                    if info is not None:
-                        version = "atmos" if locals().get("atmos", False) else "stereo"
-                    else:
-                        try:
-                            version = _apple_effective_version(provider, track_id, audio_type)
-                        except Exception:
-                            version = ""
-                        if version not in ("stereo", "atmos"):
-                            if version_hint in ("stereo", "atmos"):
-                                version = version_hint
-                            else:
-                                try:
-                                    version = str(getattr(audio_type, "value", audio_type) or "").strip().lower()
-                                except Exception:
-                                    version = ""
-                                version = version if version in ("stereo", "atmos") else "stereo"
-                    if last_staged is not None and last_staged.is_file():
-                        try:
-                            self._apple_quarantine_file(
-                                last_staged, relative=relative, track_id=track_id, audio_type=version, qid=qid
-                            )
-                        except Exception:
-                            logger.debug("Could not quarantine the Apple file", exc_info=True)
-                        _drop_hold()
-                    try:
-                        self._apple_skiplist_add(track_id, version, last_encoded)
-                    except Exception:
-                        logger.debug("Could not mark the Apple skip-list", exc_info=True)
-                    raise AppleDownloadError(INTEGRITY_FAIL_MESSAGE) from exc
-                attempt += 1
-                # Mid-run integrity retry keeps the row's progress (the caller
-                # ticks per settled track, so nothing moves) with a brief note.
-                try:
-                    if signals is not None:
-                        signals.track_event.emit({"id": track_id, "status": "running"})
-                except Exception:
-                    logger.debug("Could not emit the Apple integrity-retry event", exc_info=True)
-                with contextlib.suppress(Exception):
-                    self._set_status(f"Retrying {row.get('title') or track_id} (integrity)…")
-                logger.warning(
-                    "Apple integrity check failed for %s (attempt %s); retrying",
-                    diagnostics.content(track_id),
-                    attempt + 1,
-                )
-                try:
-                    delay = integrity_retry_delay(getattr(self.settings, "data", None))
-                except Exception:
-                    delay = 5.0
-                try:
-                    sleep_ok = self._apple_sleep_abortable(delay, job_abort) if delay > 0 else True
-                except Exception:
-                    # Old test stubs without the sleep helper: pacing is
-                    # best-effort in tests (they stub delay to 0 anyway).
-                    with contextlib.suppress(Exception):
-                        import time as _time
-
-                        _time.sleep(0)
-                    sleep_ok = not job_abort.is_set()
-                if delay > 0 and not sleep_ok:
-                    _drop_hold()
-                    raise _AppleAborted() from exc
-                if job_abort.is_set():
-                    _drop_hold()
-                    raise _AppleAborted() from exc
-                continue
-            else:
-                try:
-                    provider.discard_delivery(str(info.local_file))
-                except Exception:
-                    logger.debug("Could not discard the Apple staging area", exc_info=True)
-                _drop_hold()
-                break
-        full = getattr(self, "_apple_lyrics_full", None)
-        if callable(full):
-            lyrics_synced, lyrics_unsynced, lyrics_ttml = full(provider, row, facts, options=options)
-        else:
-            # Old test stubs predate the TTML verbatim: two-tuple only.
-            lyrics_synced, lyrics_unsynced = self._apple_lyrics(provider, row, facts, options=options)
-            lyrics_ttml = ""
-        cover_data = (
-            self._apple_cover_bytes(provider, raw) if self._apple_wants_cover(collection, options=options) else None
-        )
-        # Embedded art stays jpg (spec 9.1): an original-master PNG is
-        # converted for the tag while the sidecar keeps the master bytes.
-        embed_cover = self._embed_cover_bytes(cover_data) if options.option("metadata_cover_embed", True) else None
-        # The embed toggle is the single source for embedding; the sidecars
-        # below still receive the fetched text.
-        embed_lyrics = bool(options.option("lyrics_embed", False))
-        if not tag_apple_file(
-            dest,
-            title=str(row.get("title") or ""),
-            facts=facts,
-            lyrics_synced=lyrics_synced if embed_lyrics else "",
-            lyrics_unsynced=lyrics_unsynced if embed_lyrics else "",
-            cover_data=embed_cover,
-            mark_explicit=bool(self.settings.data.mark_explicit),
-            metadata_target_upc=str(getattr(self.settings.data, "metadata_target_upc", "UPC") or "UPC"),
-            audio_type="atmos" if atmos else "stereo",
-            **self._tag_write_flags(),
-        ):
-            logger.debug("Apple tagging reported failure for %s", diagnostics.content(track_id))
-        self._apple_write_sidecars(
-            dest,
-            lyrics_synced,
-            lyrics_unsynced,
-            cover_data,
-            collection,
-            ttml_verbatim=lyrics_ttml,
+            type_media=type_media,
+            file_template=file_template,
+            collection=collection,
+            list_pos=list_pos,
+            list_total=list_total,
+            num_volumes=num_volumes,
+            audio_type=audio_type,
+            requested_rank=requested_rank,
+            requested_tier=requested_tier,
+            ceiling_rank=ceiling_rank,
+            force=force,
+            owned_path=owned_path,
+            job_abort=job_abort,
+            signals=signals,
             options=options,
+            qid=qid,
         )
-        # Honest delivered tier: the provider probed the staged
-        # bytes (ALAC 24/96 where the master tops out stays 24/96 in the
-        # record); the landed file re-probes for depth/rate so the ownership
-        # row carries reality, not the ask. Detail rides bit_depth/
-        # sample_rate/codecs label text, never rank.
-        try:
-            landed_probe = probe_audio_file(dest, self._apple_probe()) or {}
-        except Exception:
-            landed_probe = {}
-        try:
-            delivered = dict(getattr(info, "delivered", None) or {})
-        except Exception:
-            delivered = {}
-        tier = str(delivered.get("tier") or QualityTier.HIGH.value)
-        try:
-            probe_depth = landed_probe.get("bit_depth")
-            depth = int(probe_depth) if isinstance(probe_depth, int) and probe_depth > 0 else None
-            if depth is None and delivered.get("bit_depth") is not None:
-                depth = int(delivered.get("bit_depth"))
-        except (TypeError, ValueError):
-            depth = None
-        try:
-            raw_rate = landed_probe.get("sample_rate") or delivered.get("sample_rate")
-            rate = int(str(raw_rate or "").strip()) if str(raw_rate or "").strip().isdigit() else None
-        except (TypeError, ValueError):
-            rate = None
-        # A landed ALAC file re-derives its tier off its own bytes (a 24/96
-        # master asked as HI_RES stays HI_RES with rate 96000; a 16/44.1
-        # master asked as HI_RES lands LOSSLESS, honestly). A converted
-        # FLAC probes as "flac" and answers the same rungs.
-        # Source-gated, never container-gated: a transcoded AAC also probes
-        # as FLAC, but it keeps its staged HIGH tier and must never promote
-        # off its new container.
-        try:
-            from waves.providers.apple.engine import apple_tier_for_delivery as _honest_tier
-
-            codecs_landed = str(landed_probe.get("codec") or delivered.get("codecs") or info.codecs or "")
-            source_codecs = str(getattr(info, "codecs", "") or delivered.get("codecs") or "")
-            if not atmos and "alac" in source_codecs.lower().replace("-", "").replace("_", ""):
-                tier = _honest_tier(codecs_landed, depth, rate or "", fallback=tier)
-        except Exception:
-            logger.debug("Apple honest-tier re-probe failed; keeping the staged tier", exc_info=True)
-        # Per-track ceiling for the ownership record: an AAC-only
-        # master caps at HIGH even when the job asked HI_RES, so the copy
-        # settles instead of reopening an upgrade that is not coming. Falls
-        # back to the job's ceiling when the track cannot be read.
-        try:
-            per_track_ceiling = provider.advertised_ceiling(raw)
-        except Exception:
-            per_track_ceiling = None
-        try:
-            ceiling_for_record = int(per_track_ceiling) if per_track_ceiling is not None else int(ceiling_rank)
-        except (TypeError, ValueError):
-            ceiling_for_record = int(ceiling_rank)
-        return {
-            "path": str(dest),
-            "quality": {
-                "tier": tier,
-                "audio_mode": "DOLBY_ATMOS" if atmos else "STEREO",
-                "bit_depth": depth,
-                "sample_rate": rate,
-                "codecs": str(info.codecs or ""),
-                "requested_rank": int(requested_rank),
-                "ceiling_rank": int(ceiling_for_record),
-            },
-        }
 
     def _cover_convert_ffmpeg(self) -> str:
-        """An ffmpeg binary for cover conversion, or "" (PATH fallback).
-
-        The Apple provider's resolved path covers managed installs; the
-        persisted setting covers TIDAL's standalone art action; the
-        converter itself falls back to PATH.
-        """
-        provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
-        path = str(getattr(provider, "ffmpeg_path", "") or "").strip()
-        if not path:
-            data = getattr(getattr(self, "settings", None), "data", None)
-            path = str(getattr(data, "path_binary_ffmpeg", "") or "").strip()
-        return path
+        """An ffmpeg binary for cover conversion, or "" (runner policy)."""
+        return runner.cover_convert_ffmpeg(self._apple_job_hooks())
 
     def _embed_cover_bytes(self, cover: bytes | None) -> bytes | None:
         """Cover bytes for embedding: jpg per spec 9.1, converted when needed."""
-        if not cover or sniff_image_format(cover) != "png":
-            return cover
-        return convert_image(cover, "jpg", self._cover_convert_ffmpeg()) or cover
+        return runner.embed_cover_bytes(self._apple_job_hooks(), cover)
 
     def _apple_probe(self) -> str:
-        """An ffprobe binary for Apple verification: beside the resolved
-        ffmpeg first (managed installs), else PATH, else "" (trust)."""
-        from waves.providers.apple.engine import ffprobe_for
-
-        provider = self.providers.get(CTX_APPLE)
-        ffmpeg = str(getattr(provider, "ffmpeg_path", "") or "")
-        try:
-            return ffprobe_for(ffmpeg)
-        except Exception:
-            logger.debug("Apple ffprobe resolution failed", exc_info=True)
-            return ""
+        """An ffprobe binary for Apple verification, or "" (runner policy)."""
+        return runner.probe_binary(self._apple_job_hooks())
 
     def _apple_wants_flac(self) -> bool:
-        """Whether lossless Apple stereo should land as FLAC.
-
-        The shared Processing toggle (``extract_flac``), off meaning the
-        original .m4a is kept. Plain test stubs without settings read as on,
-        the shipped default.
-        """
-        try:
-            return bool(getattr(self.settings.data, "extract_flac", True))
-        except Exception:
-            return True
+        """Whether lossless Apple stereo should land as FLAC (runner policy)."""
+        return runner.wants_flac(self._apple_job_hooks())
 
     def _apple_guess_ext(self, provider, audio_type, requested_rank: int) -> str:
-        """The destination extension guessed before the fetch.
-
-        Stereo at a lossless-or-better ask with the wrapper tier up and the
-        FLAC toggle on guesses .flac (scope "all" guesses .flac for stereo
-        of any tier); everything else (Atmos, lossy asks under the
-        lossless-only scope, cookies tier alone) guesses .m4a. The
-        per-attempt correction below settles the truth off the delivery, so
-        a wrong guess only costs the re-check, never a wrong file.
-        """
-        try:
-            want_atmos = str(getattr(audio_type, "value", audio_type) or "").strip().lower() == "atmos"
-        except Exception:
-            want_atmos = False
-        if want_atmos or not self._apple_wants_flac():
-            return ".m4a"
-        if self._apple_flac_scope_all():
-            # Scope "all": stereo of any tier lands FLAC (lossy by
-            # re-encode); only Atmos keeps its container.
-            return ".flac"
-        try:
-            if int(requested_rank) < int(quality_rank(QualityTier.LOSSLESS)):
-                return ".m4a"
-        except (TypeError, ValueError):
-            return ".m4a"
-        try:
-            if not bool(getattr(provider, "wrapper_available", False)):
-                return ".m4a"
-        except Exception:
-            return ".m4a"
-        return ".flac"
+        """The destination extension guessed before the fetch (runner policy)."""
+        return runner.guess_ext(self._apple_job_hooks(), provider, audio_type, requested_rank)
 
     def _apple_flac_scope_all(self) -> bool:
-        """Whether lossy stereo also converts to FLAC.
-
-        The scope toggle beside the shared FLAC switch (``extract_flac_all``,
-        default off): on re-encodes AAC stereo into FLAC, off keeps lossy
-        originals as .m4a. Plain test stubs without settings read as off.
-        """
-        try:
-            return bool(getattr(self.settings.data, "extract_flac_all", False))
-        except Exception:
-            return False
+        """Whether lossy stereo also converts to FLAC (runner policy)."""
+        return runner.flac_scope_all(self._apple_job_hooks())
 
     def _apple_flac_mode(self, info, *, atmos: bool) -> str:
-        """How this delivery becomes FLAC: "lossless", "lossy", or "".
-
-        Stereo ALAC converts losslessly (the FLAC container cannot hold ALAC
-        packets, so the engine decodes and FLAC-encodes them: still bit for
-        bit identical, never a lossy step); with the scope toggle on, stereo
-        AAC re-encodes instead. AAC under the lossless-only scope, Atmos,
-        unknown codecs, and a switched-off FLAC toggle all answer "" (keep
-        the original .m4a). The provider flags ALAC with
-        ``requires_flac_extraction``; older fakes naming ``alac`` in codecs
-        read the same way. Only the lossless mode re-derives its tier off
-        the landed bytes; the lossy mode keeps its staged HIGH tier.
-        """
-        if atmos or not self._apple_wants_flac():
-            return ""
-        with contextlib.suppress(Exception):
-            if bool(getattr(info, "requires_flac_extraction", False)):
-                return "lossless"
-        try:
-            delivered = getattr(info, "delivered", None) or {}
-            codecs = str(getattr(info, "codecs", "") or delivered.get("codecs") or "")
-            norm = codecs.lower().replace("-", "").replace("_", "")
-        except Exception:
-            return ""
-        if "alac" in norm:
-            return "lossless"
-        if self._apple_flac_scope_all() and ("aac" in norm or "mp4a" in norm):
-            return "lossy"
-        return ""
+        """How this delivery becomes FLAC: "lossless", "lossy", or ""."""
+        return runner.flac_mode(self._apple_job_hooks(), info, atmos=atmos)
 
     def _apple_flac_ffmpeg(self) -> str:
-        """An ffmpeg binary for the Apple FLAC conversion, or "" to keep .m4a.
-
-        Precedence mirrors the probe: the provider's resolved path first,
-        then the saved override, then PATH.
-        """
-        try:
-            provider = self.providers.get(CTX_APPLE)
-            cand = str(getattr(provider, "ffmpeg_path", "") or "")
-            if cand and pathlib.Path(cand).is_file():
-                return cand
-        except Exception:
-            logger.debug("Apple FLAC ffmpeg resolve failed", exc_info=True)
-        try:
-            cand = str(getattr(getattr(self, "settings", None), "data", None).path_binary_ffmpeg or "")
-            if cand and pathlib.Path(cand).is_file():
-                return cand
-        except Exception:
-            logger.debug("Apple FLAC ffmpeg resolve failed", exc_info=True)
-        try:
-            return shutil.which("ffmpeg") or ""
-        except Exception:
-            return ""
+        """An ffmpeg binary for the Apple FLAC conversion, or "" (runner policy)."""
+        return runner.flac_ffmpeg(self._apple_job_hooks())
 
     def _apple_extract_flac(self, staged: pathlib.Path) -> tuple[pathlib.Path, str]:
-        """Convert staged audio into FLAC, losslessly where the source is.
-
-        ALAC cannot stream-copy into a FLAC container (it holds FLAC packets
-        only), so the engine decodes and FLAC-encodes with no resampling and
-        no bit-depth change: out of ALAC the result is bit for bit identical
-        (pinned test-side by a PCM comparison); lossy stereo converts only
-        under the scope-"all" toggle. Runs only on bytes that already passed
-        verification. Returns the converted path plus its temp dir; the caller
-        removes the dir once the file is placed (or on failure). A converted
-        file that will not decode fails the track as a conversion failure
-        (plain AppleDownloadError), never as source corruption: the staged
-        original verified clean, so there is nothing to quarantine.
-        """
-        from waves.providers.apple.engine import AppleDownloadError
-
-        ffmpeg = self._apple_flac_ffmpeg()
-        if not ffmpeg:
-            raise AppleDownloadError("Apple FLAC extraction needs FFmpeg")  # noqa: TRY003
-        import tempfile
-
-        tmpdir = tempfile.mkdtemp(prefix="waves-apple-flac-")
-        out = pathlib.Path(tmpdir) / (staged.stem + ".flac")
-        try:
-            from ffmpeg import FFmpeg
-
-            (
-                FFmpeg(executable=ffmpeg)
-                .option("hide_banner")
-                .option("nostdin")
-                .option("y")
-                .input(url=staged)
-                .output(url=out, map=0, acodec="flac", map_metadata="0:g", loglevel="quiet")
-                .execute()
-            )
-        except Exception as exc:
-            with contextlib.suppress(OSError):
-                shutil.rmtree(tmpdir, ignore_errors=True)
-            raise AppleDownloadError(f"Could not extract FLAC from the Apple download: {exc}") from exc  # noqa: TRY003
-        if not out.is_file() or out.stat().st_size == 0:
-            with contextlib.suppress(OSError):
-                shutil.rmtree(tmpdir, ignore_errors=True)
-            raise AppleDownloadError("Apple FLAC extraction produced no file")  # noqa: TRY003
-        try:
-            from waves.providers.apple.engine import AppleIntegrityError, decode_check
-
-            decode_check(out, ffmpeg)
-        except AppleIntegrityError as exc:
-            with contextlib.suppress(OSError):
-                shutil.rmtree(tmpdir, ignore_errors=True)
-            raise AppleDownloadError(f"Apple FLAC extraction failed its check: {exc}") from exc  # noqa: TRY003
-        except AppleDownloadError:
-            with contextlib.suppress(OSError):
-                shutil.rmtree(tmpdir, ignore_errors=True)
-            raise
-        return out, tmpdir
+        """Convert staged audio into FLAC, losslessly where the source is."""
+        return runner.extract_flac(self._apple_job_hooks(), staged)
 
     def _apple_place_file(self, staged: pathlib.Path, dest: pathlib.Path) -> None:
-        """Land one staged file on its final path, atomically.
-
-        Staging lives on another filesystem (system temp vs library, typically
-        a network share), so a direct move copies into the final name and a
-        mid-copy failure (full disk, dropped share) leaves a partial .m4a
-        that skip_existing would then treat as complete. Copy beside the
-        target and rename over it instead: readers never see a half file, and
-        forced overwrites never delete the good copy before its replacement
-        is whole.
-        """
-        tmp = dest.with_name(f"{dest.name}.part-{uuid4().hex[:8]}")
-        try:
-            shutil.copyfile(staged, tmp)
-            os.replace(tmp, dest)
-        except Exception:
-            with contextlib.suppress(OSError):
-                tmp.unlink()
-            raise
+        """Land one staged file on its final path, atomically."""
+        runner.place_file(staged, dest)
 
     def _apple_verify_staged(self, staged: pathlib.Path, *, expect_atmos: bool) -> None:
-        """Pre-swap verification of one Apple delivery (spec §6.1).
-
-        Always-on structural behavior, never a setting; TIDAL downloads never
-        reach here. Two checks on the staged file, before it is swapped into
-        the library: the codec must be the asked family (stereo: AAC or ALAC;
-        Atmos: E-AC-3), and the whole file must ffmpeg-decode cleanly (the
-        decode-to-null check, ~50 ms, no network). Either failure raises
-        AppleDownloadError with the integrity wording, so the retry policy
-        and quarantine treat both identically. No conversion runs before this
-        passes; there is no patching in v1.
-
-        No ffprobe/ffmpeg anywhere means trust (their absence already fails
-        louder paths via the ffmpeg gate); a wrong codec or a decode error
-        fails the track, never the job.
-        """
-        from waves.providers.apple.engine import AppleIntegrityError, decode_check, probe_audio_file
-
-        ffprobe = self._apple_probe()
-        if ffprobe:
-            probe = probe_audio_file(staged, ffprobe)
-            codec = str(probe.get("codec") or "").lower().replace("-", "").replace("_", "")
-            # Stereo is AAC today (cookies tier) and ALAC once the wrapper
-            # unlocks it; Atmos is E-AC-3 (AC-4 accepted as the same family).
-            # Normalized (hyphens/underscores dropped): "e-ac-3" -> "eac3".
-            if expect_atmos:
-                if codec not in ("eac3", "ec3", "ac4"):
-                    raise AppleIntegrityError(  # noqa: TRY003
-                        f"Apple served {codec or 'an unknown codec'}, expected eac3", staged_path=str(staged)
-                    )
-            elif codec not in ("aac", "alac"):
-                raise AppleIntegrityError(  # noqa: TRY003
-                    f"Apple served {codec or 'an unknown codec'}, expected aac", staged_path=str(staged)
-                )
-        else:
-            logger.debug("Apple codec check skipped (no ffprobe): %s", staged)
-        # The decode-to-null gate: the only check that catches the outbreak's
-        # malformed ALAC packets (missing TYPE_END terminators). decode_check
-        # skips itself when ffmpeg is absent; its AppleDownloadError already
-        # carries the integrity wording.
-        provider = self.providers.get(CTX_APPLE)
-        ffmpeg = str(getattr(provider, "ffmpeg_path", "") or "")
-        if not ffmpeg:
-            try:
-                ffmpeg = str(getattr(self.settings.data, "path_binary_ffmpeg", "") or "")
-            except Exception:
-                ffmpeg = ""
-        try:
-            decode_check(staged, ffmpeg)
-        except Exception as exc:
-            from waves.providers.apple.engine import AppleDownloadError as _ADE
-
-            if isinstance(exc, _ADE):
-                raise
-            raise _ADE(f"Could not verify the Apple download: {exc}") from exc  # noqa: TRY003
-
-    # Apple integrity gate (spec §6).
+        """Pre-swap verification of one Apple delivery (spec §6.1)."""
+        runner.verify_staged(self._apple_job_hooks(), staged, expect_atmos=expect_atmos)
 
     def _apple_quarantine_root(self) -> pathlib.Path:
         """The quarantine folder: custom override or the default inside the
-        download folder. Created on use, never here. A custom location
-        registers its full path for scan exclusion (basename matching would
-        prune legitimate same-named folders)."""
-        from waves.providers.apple.integrity import resolve_quarantine_dir
-
-        try:
-            base = str(getattr(self.settings.data, "download_base_path", "") or "")
-        except Exception:
-            base = ""
-        try:
-            custom = str(getattr(self.settings.data, "apple_quarantine_dir", "") or "")
-        except Exception:
-            custom = ""
-        root = resolve_quarantine_dir(base, custom or None)
-        if custom:
-            try:
-                from waves import library_index as _lib_index
-
-                _lib_index.register_quarantine_dir(str(root))
-            except Exception:
-                logger.debug("Could not register the quarantine dir for scan exclusion", exc_info=True)
-        return root
+        download folder."""
+        return runner.quarantine_root(self._apple_job_hooks())
 
     def _apple_quarantine_keep(self) -> bool:
         """Keep vs delete for quarantined files, default keep."""
-        try:
-            return bool(getattr(self.settings.data, "apple_quarantine_keep", True))
-        except Exception:
-            return True
+        return runner.quarantine_keep(self._apple_job_hooks())
 
     @staticmethod
     def _is_integrity_failure(exc: BaseException) -> bool:
-        """Whether an Apple failure is an integrity verdict (retry + quarantine).
-
-        Explicit first: AppleIntegrityError is the verifier's own verdict
-        (decode failures, wrong codecs, files with no audio stream). The
-        wording fallback covers the same verdicts built as plain
-        AppleDownloadErrors (older callers, test doubles); transport,
-        credential and refusal failures match neither and keep their existing
-        handling.
-        """
-        if isinstance(exc, AppleIntegrityError):
-            return True
-        text = str(exc or "").lower()
-        return (
-            "integrity check" in text
-            or "expected aac" in text
-            or "expected eac3" in text
-            or "no playable audio stream" in text
-        )
+        """Whether an Apple failure is an integrity verdict (retry + quarantine)."""
+        return runner.is_integrity_failure(exc)
 
     def _apple_skiplist_get(self, track_id: str, audio_type: str | None):
-        """A skip-list entry for a track's version, or None (no store = none)."""
-        store = getattr(self, "_ownership", None)
-        if store is None or not hasattr(store, "is_quarantined"):
-            return None
-        try:
-            want = str(audio_type or "").strip().lower() or None
-            if want not in ("stereo", "atmos", None):
-                want = None
-            return store.is_quarantined(str(track_id), want)
-        except Exception:
-            logger.debug("Apple skip-list lookup failed; not gating", exc_info=True)
-            return None
+        """A skip-list entry for a track's version, or None."""
+        return runner.skiplist_get(self._apple_job_hooks(), track_id, audio_type)
 
     def _apple_skiplist_add(self, track_id: str, audio_type: str | None, encoded_date: str | None = None) -> None:
         """Mark a track's version as quarantined (bulk runs auto-skip it)."""
-        store = getattr(self, "_ownership", None)
-        if store is None or not hasattr(store, "quarantine_add"):
-            return
-        try:
-            store.quarantine_add(str(track_id), audio_type, encoded_date)
-        except Exception:
-            logger.debug("Could not mark the Apple skip-list", exc_info=True)
+        runner.skiplist_add(self._apple_job_hooks(), track_id, audio_type, encoded_date)
 
     def _apple_skiplist_clear(self, track_id: str, audio_type: str | None = None) -> None:
-        """Clear a quarantine mark: a verified copy landed (REDOWNLOAD's way back)."""
-        store = getattr(self, "_ownership", None)
-        if store is None or not hasattr(store, "quarantine_remove"):
-            return
-        try:
-            # A versioned clear removes only that version; the deliver path
-            # passes its own version, so a fixed Atmos copy never leaves a
-            # stale stereo mark (or vice versa).
-            store.quarantine_remove(str(track_id), audio_type)
-        except Exception:
-            logger.debug("Could not clear the Apple skip-list", exc_info=True)
+        """Clear a quarantine mark: a verified copy landed."""
+        runner.skiplist_clear(self._apple_job_hooks(), track_id, audio_type)
 
     def _apple_quarantine_file(
         self,
@@ -14877,56 +13299,19 @@ class WavesBridge(LibraryMixin, QObject):
         audio_type: str | None = None,
         qid: int = 0,
     ) -> pathlib.Path | None:
-        """Keep a persistently-bad staged file in Quarantine, or None.
-
-        Honors the keep-vs-delete toggle (delete keeps no bytes but still
-        marks the skip-list via the caller). Files keep their intended names
-        under the quarantine root, so a later verified copy replaces them by
-        name. A kept copy is recorded against the queue row that produced it,
-        so the drawer can offer to reveal or delete it. Never raises:
-        quarantine must not fail a download that already failed.
-        """
-        if not self._apple_quarantine_keep():
-            return None
-        try:
-            from waves.providers.apple.integrity import quarantine_dest
-        except Exception:
-            return None
-        try:
-            root = self._apple_quarantine_root()
-            dest = quarantine_dest(root, relative, ".m4a")
-            shutil.copyfile(staged, dest)
-        except Exception:
-            logger.debug("Could not quarantine the Apple file for %s", track_id, exc_info=True)
-            return None
-        else:
-            # A quarantined file was never swapped in, so ownership stays
-            # honest by construction: nothing is owned that isn't on disk.
-            self._apple_record_quarantine(qid, dest)
-            return dest
+        """Keep a persistently-bad staged file in Quarantine, or None."""
+        return runner.quarantine_file(
+            self._apple_job_hooks(),
+            staged,
+            relative=relative,
+            track_id=track_id,
+            audio_type=audio_type,
+            qid=qid,
+        )
 
     def _apple_record_quarantine(self, qid: int, dest: pathlib.Path | str) -> None:
         """Remember one quarantined copy on its queue row (open/delete actions)."""
-        text = str(dest or "")
-        if not text:
-            return
-        try:
-            qid = int(qid)
-        except (TypeError, ValueError):
-            return
-        try:
-            paths = self._apple_quarantine_paths.setdefault(qid, [])
-            if text in paths:
-                return
-            paths.append(text)
-        except Exception:
-            logger.debug("Could not record a quarantined copy for qid %s", qid, exc_info=True)
-            return
-        item = self._queue_item(qid)
-        if item is not None:
-            item["quarantineCount"] = len(paths)
-            self._queue_mark_changed(qid)
-            self._emit_queue()
+        runner.record_quarantine(self._apple_job_hooks(), qid, dest)
 
     @Slot(int)
     def openQuarantine(self, qid: int) -> None:
@@ -14992,280 +13377,29 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _apple_quarantine_folder(self, qid: int) -> pathlib.Path | None:
         """The folder that holds one row's quarantined copies, or None."""
-        try:
-            paths = list(getattr(self, "_apple_quarantine_paths", {}).get(int(qid), []))
-        except (TypeError, ValueError):
-            return None
-        for text in paths:
-            if not text:
-                continue
-            parent = pathlib.Path(str(text)).expanduser().parent
-            if parent.is_dir():
-                return parent
-        return None
+        return runner.quarantine_folder(self._apple_job_hooks(), qid)
 
     def _apple_staged_encoded_date(self, staged: pathlib.Path) -> str | None:
         """A staged file's Encoded date as "YYYY-MM-DD", or None when unknown."""
-        try:
-            from waves.providers.apple.integrity import encoded_date_of
-        except Exception:
-            return None
-        try:
-            ffprobe = self._apple_probe()
-        except Exception:
-            ffprobe = ""
-        try:
-            parsed = encoded_date_of(staged, ffprobe)
-        except Exception:
-            return None
-        return parsed.isoformat() if parsed is not None else None
+        return runner.staged_encoded_date(self._apple_job_hooks(), staged)
 
     def _apple_lyrics(self, provider, row: dict, facts: dict, options: _JobOptions | None = None) -> tuple[str, str]:
-        """LRCLIB-first lyrics for one Apple track, or ("", "").
-
-        Legacy two-tuple kept for old test stubs that override it; new code
-        prefers :meth:`_apple_lyrics_full` for the TTML verbatim. Kept
-        LRCLIB-only so a stubbed override never reaches the catalog.
-        """
-        from waves.lyrics import fetch_lrclib_lyrics
-
-        options = options or self._apple_options()
-        if not (
-            options.option("lyrics_embed", False)
-            or options.option("lyrics_file", False)
-            or options.option("lyrics_ttml_file", False)
-        ):
-            return "", ""
-        if not options.option("lyrics_prefer_lrclib", True):
-            return "", ""
-        try:
-            session = _waves_download.pooled_session()
-            return fetch_lrclib_lyrics(
-                session,
-                artist=str(row.get("artist") or ""),
-                title=str(row.get("title") or ""),
-                album=str(row.get("album") or ""),
-                duration=int(row.get("duration_sec") or 0),
-            )
-        except Exception:
-            logger.debug("Apple LRCLIB lookup failed", exc_info=True)
-            return "", ""
+        """LRCLIB-first lyrics for one Apple track, or ("", "")."""
+        return runner.lyrics(self._apple_job_hooks(), provider, row, facts, options=options)
 
     def _apple_lyrics_full(
         self, provider, row: dict, facts: dict, options: _JobOptions | None = None
     ) -> tuple[str, str, str]:
-        """Lyrics for one Apple track as (synced, plain, ttml_verbatim).
-
-        Source precedence (spec section 9.1), both providers in
-        spirit, Apple in full:
-
-        1. word-timed when the toggle is on (default on): syllable TTML
-           sourced directly through the embedded catalog client and
-           converted in Waves' layer (enhanced LRC). It outranks a
-           line-timed LRCLIB hit.
-        2. LRCLIB-first (existing toggle, governs both providers).
-        3. provider-native fallback (Apple TTML to LRC conversion).
-        4. unsynced text last.
-
-        Syllable fetching degrades per track: a missing or unreadable
-        syllable document falls back to line-timed sources, never failing
-        the download. The verbatim TTML is returned alongside for the
-        sidecar-only save (zero conversion); embedding keeps its exact
-        TIDAL semantics (timed LRC in the primary field, TTML never
-        embedded).
-        """
-        from waves.lyrics import fetch_lrclib_lyrics
-
-        options = options or self._apple_options()
-        if not (
-            options.option("lyrics_embed", False)
-            or options.option("lyrics_file", False)
-            or options.option("lyrics_ttml_file", False)
-        ):
-            return "", "", ""
-        word_on = bool(options.option("lyrics_word_timed", True))
-        prefer_lrclib = bool(options.option("lyrics_prefer_lrclib", True))
-
-        track_obj = None
-        try:
-            track_obj = provider.get_object("track", str(row.get("id") or ""))
-        except Exception:
-            track_obj = None
-
-        # 1. Word-timed: syllable TTML outranks a line-timed LRCLIB hit.
-        # The verbatim sidecar is independent of this toggle (spec: sidecar
-        # toggles independent, all combinations valid), so the syllable
-        # document is fetched when either the word-timed source or the TTML
-        # file is on.
-        word_lrc = ""
-        syllable_ttml = ""
-        ttml_on = bool(options.option("lyrics_ttml_file", False))
-        if (word_on or ttml_on) and track_obj is not None:
-            try:
-                syllable_ttml = provider.fetch_syllable_ttml(track_obj) or ""
-            except Exception:
-                logger.debug("Apple syllable-TTML fetch failed", exc_info=True)
-                syllable_ttml = ""
-            if syllable_ttml and word_on:
-                try:
-                    from waves.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
-
-                    if ttml_timing_mode(syllable_ttml) == "word":
-                        word_lrc = ttml_to_enhanced_lrc(syllable_ttml) or ""
-                except Exception:
-                    logger.debug("Apple enhanced-LRC conversion failed", exc_info=True)
-                    word_lrc = ""
-
-        # 2. LRCLIB-first (existing toggle, both providers).
-        lrclib_synced = ""
-        lrclib_plain = ""
-        if prefer_lrclib:
-            try:
-                session = _waves_download.pooled_session()
-                lrclib_synced, lrclib_plain = fetch_lrclib_lyrics(
-                    session,
-                    artist=str(row.get("artist") or ""),
-                    title=str(row.get("title") or ""),
-                    album=str(row.get("album") or ""),
-                    duration=int(row.get("duration_sec") or 0),
-                )
-            except Exception:
-                logger.debug("Apple LRCLIB lookup failed", exc_info=True)
-                lrclib_synced, lrclib_plain = "", ""
-
-        if word_lrc:
-            # Word-timed wins for the synced slot; the plain sibling still
-            # prefers LRCLIB's text, then the syllable document's own text.
-            plain = lrclib_plain
-            if not plain and syllable_ttml:
-                try:
-                    from waves.ttml_lyrics import ttml_to_text
-
-                    plain = ttml_to_text(syllable_ttml) or ""
-                except Exception:
-                    plain = ""
-            verbatim = syllable_ttml
-            if not verbatim and track_obj is not None:
-                try:
-                    verbatim = provider.fetch_line_ttml(track_obj) or ""
-                except Exception:
-                    verbatim = ""
-            return word_lrc, plain, verbatim
-
-        if lrclib_synced:
-            # A timed LRCLIB hit wins outright; native is never spent on it.
-            verbatim = ""
-            if track_obj is not None:
-                try:
-                    verbatim = provider.fetch_line_ttml(track_obj) or ""
-                    if not verbatim and syllable_ttml:
-                        verbatim = syllable_ttml
-                except Exception:
-                    verbatim = syllable_ttml or ""
-            return lrclib_synced, lrclib_plain, verbatim
-
-        # 3. Provider-native fallback (Apple TTML to LRC conversion). Tried
-        # on a plain-only LRCLIB hit too: unsynced text is the last resort,
-        # not something that hides available native timing.
-        native_synced = ""
-        native_plain = ""
-        if track_obj is not None:
-            try:
-                native_synced, native_plain = provider.fetch_lyrics(track_obj)
-            except Exception:
-                logger.debug("Apple native lyrics fetch failed", exc_info=True)
-                native_synced, native_plain = "", ""
-            if native_synced or native_plain:
-                verbatim = ""
-                try:
-                    verbatim = provider.fetch_line_ttml(track_obj) or syllable_ttml or ""
-                except Exception:
-                    verbatim = syllable_ttml or ""
-                # The timed native document owns the synced slot; LRCLIB's
-                # text still owns the plain slot when it has one.
-                return native_synced, lrclib_plain or native_plain, verbatim
-
-        # 4. Unsynced text last: LRCLIB's plain text, then the syllable
-        # document's own text when nothing else exists.
-        if lrclib_plain:
-            verbatim = ""
-            if track_obj is not None:
-                try:
-                    verbatim = provider.fetch_line_ttml(track_obj) or syllable_ttml or ""
-                except Exception:
-                    verbatim = syllable_ttml or ""
-            return "", lrclib_plain, verbatim
-        if syllable_ttml:
-            try:
-                from waves.ttml_lyrics import ttml_to_text
-
-                plain = ttml_to_text(syllable_ttml) or ""
-            except Exception:
-                plain = ""
-            if plain:
-                return "", plain, syllable_ttml
-
-        return "", "", syllable_ttml
+        """Lyrics for one Apple track as (synced, plain, ttml_verbatim)."""
+        return runner.lyrics_full(self._apple_job_hooks(), provider, row, facts, options=options)
 
     def _apple_wants_cover(self, collection: bool, options: _JobOptions | None = None) -> bool:
-        """Whether this job fetches cover art at all: embedded, or filed per
-        the engine's own cover.jpg rule (collections always qualify; a lone
-        track only with the single-track opt-in)."""
-        options = options or self._apple_options()
-        if options.option("metadata_cover_embed", True):
-            return True
-        return bool(
-            Download._want_cover_file(
-                bool(options.option("cover_album_file", True)),
-                bool(collection),
-                bool(options.option("cover_single_track_file", False)),
-            )
-        )
+        """Whether this job fetches cover art at all (runner policy)."""
+        return runner.wants_cover(self._apple_job_hooks(), collection, options=options)
 
     def _apple_cover_bytes(self, provider, raw: dict) -> bytes | None:
-        """The collection cover at the embedded size, or None.
-
-        ORIGIN maps per provider (spec section 9.1): TIDAL keeps
-        its exact current behavior (embedded cap included); Apple's ORIGIN
-        is the true original-master image via the raw URL-rewrite path, with
-        the ``{w}x{h}`` template up to 5000x5000 otherwise. The requested
-        sidecar/embedded formats are the writers' job: sidecars convert the
-        served bytes to the selected format (or keep their true extension),
-        and embedding normalizes to jpg.
-        """
-        dimension = self._psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
-        is_origin = str(getattr(dimension, "value", dimension)) == "origin"
-        if is_origin:
-            try:
-                url = provider.cover_raw_url(raw)
-            except Exception:
-                url = ""
-            if not url:
-                # Same-size fallback: the template at its largest before
-                # giving up, mirroring the engine's original-mode fallback.
-                try:
-                    url = provider.cover_url(raw, 5000)
-                except Exception:
-                    url = ""
-        else:
-            try:
-                size = int(dimension)
-            except (TypeError, ValueError):
-                size = 320
-            try:
-                url = provider.cover_url(raw, size)
-            except Exception:
-                url = ""
-        if not url:
-            return None
-        try:
-            response = _waves_download.pooled_session().get(url, timeout=30)
-            response.raise_for_status()
-        except Exception:
-            logger.debug("Apple cover fetch failed", exc_info=True)
-            return None
-        else:
-            return response.content or None
+        """The collection cover at the embedded size, or None."""
+        return runner.cover_bytes(self._apple_job_hooks(), provider, raw)
 
     def _apple_write_sidecars(
         self,
@@ -15277,238 +13411,36 @@ class WavesBridge(LibraryMixin, QObject):
         ttml_verbatim: str = "",
         options: _JobOptions | None = None,
     ) -> None:
-        """Lyrics and cover sidecars per the shared toggles.
-
-        The per-format matrix (spec section 9.1): independent
-        sidecar toggles (.lrc; .ttml on Apple; .txt under the existing
-        unsynced rule; extensions never faked; all embed x sidecar
-        combinations valid). SRT is not shipped.
-        """
-        from waves.lyrics import lyrics_sidecar_choices
-
-        options = options or self._apple_options()
-        for text, suffix in lyrics_sidecar_choices(
-            synced=lyrics_synced,
-            plain=lyrics_unsynced,
-            ttml=ttml_verbatim,
-            lyrics_file=bool(options.option("lyrics_file", False)),
-            synced_only=bool(options.option("lyrics_file_synced_only", False)),
-            ttml_file=bool(options.option("lyrics_ttml_file", False)),
-            is_apple=True,
-        ):
-            write_text_sidecar(dest.parent, dest.stem, suffix, text)
-        # Same gate as the fetch decision above: a lone track files its cover
-        # only with the single-track opt-in.
-        want_cover_file = Download._want_cover_file(
-            bool(options.option("cover_album_file", True)),
-            bool(collection),
-            bool(options.option("cover_single_track_file", False)),
+        """Lyrics and cover sidecars per the shared toggles."""
+        runner.write_sidecars(
+            self._apple_job_hooks(),
+            dest,
+            lyrics_synced,
+            lyrics_unsynced,
+            cover_data,
+            collection,
+            ttml_verbatim=ttml_verbatim,
+            options=options,
         )
-        if want_cover_file and cover_data:
-            write_cover_sidecar(
-                dest.parent,
-                cover_data,
-                _cover_sidecar_format(
-                    getattr(getattr(self, "settings", None), "data", None), "apple_cover_file_format"
-                ),
-                ffmpeg_path=self._cover_convert_ffmpeg(),
-            )
 
     def _apple_gate_track(
         self, provider, track_id: str, requested_rank: int, force: bool, audio_type: str | None = None
     ) -> tuple[str | None, dict | None]:
-        """Ownership verdict plus the record it was read from: 'skip' when an
-        owned copy is current, 'force' when owned but stale, (None, None)
-        when nothing is owned. Ranked on the servable ceiling: cookies tier
-        HIGH settles whatever was asked; wrapper tier uses the track's own
-        ceiling (an AAC-only master caps at HIGH, never HI_RES).
-
-        Dual-download rows (§5.3) ask per Version (audio_type stereo/atmos),
-        so owning stereo leaves the Atmos half fetching and vice versa.
-        Legacy single rows (None) keep today's whole-track query.
-        """
-        if force:
-            return "force", None
-        store = getattr(self, "_ownership", None)
-        if store is None:
-            return None, None
-        want_type = str(audio_type or "").strip().lower() or None
-        if want_type not in ("stereo", "atmos"):
-            want_type = None
-        try:
-            if want_type in ("stereo", "atmos"):
-                rec = store.ownership_of(str(track_id), audio_type=want_type)
-            else:
-                rec = store.ownership_of(str(track_id))
-        except TypeError:
-            try:
-                rec = store.ownership_of(str(track_id))
-            except Exception:
-                logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
-                return None, None
-        except Exception:
-            logger.debug("Apple ownership lookup failed; not gating", exc_info=True)
-            return None, None
-        if not rec or _record_names_a_broken_copy(rec):
-            return None, None
-        if want_type == "stereo":
-            wants = False
-        elif want_type == "atmos":
-            wants = True
-        else:
-            try:
-                raw = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
-                wants = self._apple_wants_atmos() and bool(provider.has_atmos(raw))
-            except Exception:
-                wants = False
-        try:
-            raw_for_ceiling = provider.get_object("track", str(track_id).removeprefix(f"{CTX_APPLE}:"))
-        except Exception:
-            raw_for_ceiling = None
-        try:
-            ceiling = provider.advertised_ceiling(raw_for_ceiling)
-        except Exception:
-            ceiling = None
-        try:
-            # Plain test doubles implement advertised_ceiling(None-only);
-            # a TypeError there means "no per-track ceiling", not a gate.
-            if ceiling is None:
-                try:
-                    ceiling = provider.advertised_ceiling(None)
-                except Exception:
-                    ceiling = None
-        except Exception:
-            ceiling = None
-        current = _copy_is_current(rec, requested_rank, wants, ceiling)
-        return ("skip", rec) if current else ("force", rec)
+        """Ownership verdict plus the record it was read from (runner policy)."""
+        return runner.gate_track(self._apple_job_hooks(), provider, track_id, requested_rank, force, audio_type)
 
     def _apple_job_body(self, qid, spec, obj, *, signals, job_abort, row_ask, name) -> None:
-        """An Apple job's worker body: probe, run, settle. Mirrors the TIDAL
-        body's three outcomes (cancelled / done / failed) without its engine."""
-        from waves.providers.apple.engine import AppleCredentialsError
-
-        type_media, file_template, collection, media_id = (
-            spec.kind,
-            spec.file_template,
-            spec.collection,
-            spec.media_id,
+        """An Apple job's worker body: probe, run, settle (runner policy)."""
+        runner.run_job_body(
+            self._apple_job_hooks(),
+            qid,
+            spec,
+            obj,
+            signals=signals,
+            job_abort=job_abort,
+            row_ask=row_ask,
+            name=name,
         )
-        provider = self.providers.get(CTX_APPLE)
-        try:
-            replay_row = provider.row_for(type_media, obj) if provider is not None else {}
-        except Exception:
-            replay_row = {}
-        replay_collection = replay_row if collection else None
-        if job_abort.is_set():
-            self._set_queue_status(qid, "cancelled")
-            self.downloadState.emit(media_id, "")
-            self._bump_download_groups(media_id, None, "failed")
-            self._job_aborts.pop(qid, None)
-            self._release_job_signals(qid)
-            self._job_dls.pop(qid, None)
-            return
-        if not self._gate_reachability(
-            lambda: self._download_apple(
-                type_media,
-                replay_row,
-                replay_collection,
-                file_template,
-                collection,
-                media_id,
-                # The replay keeps the row's pinned ask either way, but only a
-                # retried row replays as a retry (its skip-list bypass rides
-                # the spec flag); a fresh row replays fresh, so quarantined
-                # tracks skip again instead of fetching on a folder hiccup.
-                keep_ask=row_ask,
-                is_retry=bool(getattr(spec, "is_retry", False)),
-                chooser_toggles=getattr(spec, "chooser_toggles", None),
-            ),
-            media_id,
-        ):
-            self.downloadState.emit(media_id, "")
-            self._job_aborts.pop(qid, None)
-            self._release_job_signals(qid)
-            self._job_dls.pop(qid, None)
-            self._remove_row(qid)
-            self._emit_queue()
-            return
-        if job_abort.is_set():
-            self._set_queue_status(qid, "cancelled")
-            self.downloadState.emit(media_id, "")
-            self._bump_download_groups(media_id, None, "failed")
-            self._job_aborts.pop(qid, None)
-            self._release_job_signals(qid)
-            self._job_dls.pop(qid, None)
-            return
-        self._set_queue_status(qid, "running")
-        self.downloadProgress.emit(media_id, 0.0)
-        self.downloadState.emit(media_id, "running")
-        self._set_status(f"Downloading {name}…")
-        devlog.event("download", "start", type=type_media, id=media_id, qid=qid)
-        t0 = devlog.clock()
-        try:
-            summary = self._run_apple_job(
-                qid, spec, obj, signals=signals, job_abort=job_abort, file_template=file_template
-            )
-            if job_abort.is_set():
-                self.downloadState.emit(media_id, "")
-                self._set_queue_status(qid, "cancelled")
-                self._bump_download_groups(media_id, None, "failed")
-                self._set_status(f"Cancelled {name}")
-            else:
-                self._redownload_overrides.discard(media_id)
-                self._library_claim_overrides.discard(media_id)
-                self.downloadProgress.emit(media_id, 100.0)
-                self._set_queue_progress(qid, 100.0)
-                self.downloadState.emit(media_id, "done")
-                self._set_queue_status(qid, "done")
-                self._bump_download_groups(media_id, 100.0, "done")
-                self._set_status(f"Finished {name}{summary}")
-                devlog.done("download", f"done {type_media} id={media_id}", devlog.clock() - t0)
-        except Exception as exc:
-            if job_abort.is_set():
-                self.downloadState.emit(media_id, "")
-                self._set_queue_status(qid, "cancelled")
-                self._bump_download_groups(media_id, None, "failed")
-                self._set_status(f"Cancelled {name}")
-            elif self._download_failed_with_folder(
-                lambda: self._download_apple(
-                    type_media,
-                    replay_row,
-                    replay_collection,
-                    file_template,
-                    collection,
-                    media_id,
-                    keep_ask=row_ask,
-                    is_retry=bool(getattr(spec, "is_retry", False)),
-                    chooser_toggles=getattr(spec, "chooser_toggles", None),
-                ),
-                media_id,
-                qid,
-                name,
-                job_abort,
-            ):
-                pass
-            else:
-                logger.exception("Apple download failed for %s", diagnostics.content(name))
-                reason = str(exc) if isinstance(exc, (DownloadIncomplete, AppleCredentialsError)) else ""
-                self.downloadState.emit(media_id, "failed")
-                self._set_queue_status(qid, "failed", reason)
-                self._bump_download_groups(media_id, None, "failed")
-                self._set_status(f"Failed {name}{': ' + reason if reason else ''}")
-                devlog.done("download", f"FAILED {type_media} id={media_id}", devlog.clock() - t0)
-        finally:
-            self._job_aborts.pop(qid, None)
-            self._release_job_signals(qid)
-            self._job_dls.pop(qid, None)
-            # Session supervision: an Apple job ending restarts
-            # the idle clock's countdown; the sidecar stops itself when no
-            # download has needed it for the tuned timeout.
-            try:
-                if spec.provider_id == CTX_APPLE:
-                    self._schedule_apple_idle_stop()
-            except Exception:
-                logger.debug("Apple idle-stop schedule failed", exc_info=True)
 
     def _pump_queue(self) -> None:
         """Start the next queued row's download if nothing is running.
@@ -17680,7 +15612,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self.downloadState.emit(artist_id, "")
                 self._set_status("Could not load the full discography, try again")
                 return
-            if not _wants_both_default(self.settings):
+            if not wants_both_default(self.settings):
                 # The default decides which of a release's two rows a bulk
                 # sweep downloads; see _drop_spatial_editions.
                 albums, guest, left_out = _drop_spatial_editions(albums, guest)
@@ -18211,7 +16143,7 @@ class WavesBridge(LibraryMixin, QObject):
                     write_cover_sidecar(
                         folder,
                         cover,
-                        _cover_sidecar_format(data, "apple_cover_file_format"),
+                        cover_sidecar_format(data, "apple_cover_file_format"),
                         ffmpeg_path=self._cover_convert_ffmpeg(),
                     )
                     is not None
@@ -18380,7 +16312,7 @@ class WavesBridge(LibraryMixin, QObject):
                 if not cover:
                     continue
                 folder, stem = self._tidal_standalone_dest(base, track_obj, collection)
-                fmt = _cover_sidecar_format(data, "tidal_cover_file_format")
+                fmt = cover_sidecar_format(data, "tidal_cover_file_format")
                 if write_cover_sidecar(folder, bytes(cover), fmt, ffmpeg_path=self._cover_convert_ffmpeg()) is not None:
                     served += 1
                 if bool(self._psetting(CTX_TIDAL, "metadata_cover_embed", True)):
@@ -18545,7 +16477,7 @@ class WavesBridge(LibraryMixin, QObject):
             stop_check()
             # From here the sweep is the discography's, minus guest tracks
             # and videos; see downloadArtist for the why of each step.
-            if not _wants_both_default(self.settings):
+            if not wants_both_default(self.settings):
                 albums, _guest, left_out = _drop_spatial_editions(albums, [])
                 if left_out:
                     devlog.event("playlist_albums", atmos_editions_left_out=left_out)

@@ -2,7 +2,14 @@ from dataclasses import dataclass, field
 
 from dataclasses_json import config, dataclass_json
 
-from waves.constants import CoverDimensions, DownsampleTarget, InitialKey, MetadataTargetUPC, QualityVideo
+from waves.constants import (
+    CoverDimensions,
+    DownsampleTarget,
+    InitialKey,
+    MetadataTargetUPC,
+    QualityVideo,
+    default_audio_is_both,
+)
 
 
 @dataclass_json
@@ -618,6 +625,34 @@ def provider_setting(data, provider_id: str, key: str, default=None):
     if namespaced is not _MISSING:
         return namespaced
     return getattr(data, key, default)
+
+
+def wants_both_default(settings) -> bool:
+    """Whether the Chooser one-click default fetches both Versions.
+
+    Only an explicit "both" fetches twice; anything unreadable (missing
+    settings, hand-edited configs) reads stereo.
+    """
+    try:
+        data = getattr(settings, "data", None)
+        return default_audio_is_both(getattr(data, "default_audio_type", "stereo")) if data is not None else False
+    except Exception:
+        return False
+
+
+def cover_sidecar_format(data, key: str = "cover_file_format") -> str:
+    """The sidecar cover format: jpg, png, or raw (Apple-only).
+
+    One normalizer for every writer so TIDAL and Apple agree on the
+    spelling; unknown values fall back to jpg and TIDAL treats raw as jpg
+    (it has no original-master sidecar). ``key`` selects whose mirror to
+    read; the shared key is the fallback when no mirror is set.
+    """
+    fmt = str(provider_setting(data, "apple" if key.startswith("apple_") else "tidal", key, "jpg") or "jpg")
+    fmt = fmt.strip().lower()
+    if fmt in ("jpeg",):
+        return "jpg"
+    return fmt if fmt in ("jpg", "png", "raw") else "jpg"
 
 
 def metadata_tag_write(data, tag: str) -> bool:
