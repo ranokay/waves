@@ -1,6 +1,6 @@
 """Regression tests for the cached-token launch login (``_try_token_login``).
 
-Hermetic and Qt-free in the ``test_audit_backend.py`` style: the real, unbound
+Hermetic and Qt-free in the ``tests/ui/test_audit_backend.py`` style: the real, unbound
 ``WavesBridge`` method is bound onto a minimal stand-in whose collaborators are
 fakes. ``_try_token_login`` dispatches a ``Worker`` to ``self.threadpool``; the
 conftest ``_InlinePool`` runs it synchronously on the calling thread, and the

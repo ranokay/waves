@@ -236,7 +236,7 @@ ignore = [
 "tests/ui/test_offscreen_qt_is_usable.py" = ["S603"]
 # Runs the bundle size report for real, on a root wide enough to fill the pipe
 # buffer, through the shell it is written for (S603/S607, fixed argv).
-"tests/test_final_audit_updater.py" = ["S603", "S607"]
+"tests/packaging/test_final_audit_updater.py" = ["S603", "S607"]
 # Drives the real release.sh (bash) and git against throwaway sandbox repos;
 # both are resolved from PATH on purpose (S603/S607, fixed argv).
 "tests/packaging/test_release_star_history.py" = ["S603", "S607"]

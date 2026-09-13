@@ -22,6 +22,7 @@ import subprocess
 import sys
 
 import pytest
+from support.paths import REPO_ROOT
 
 from waves.waves_ui import updater as u
 from waves.waves_ui.updater import AppUpdater, Release
@@ -579,7 +580,7 @@ def test_the_bundle_size_report_survives_a_wide_bundle_root(tmp_path):
     bundle: it had merely grown enough top-level entries to fill 64 KB of du
     output. The report is a report; it must never be what fails a build.
     """
-    script = pathlib.Path(__file__).resolve().parents[1] / "tools" / "bundle_size_report.sh"
+    script = REPO_ROOT / "tools" / "bundle_size_report.sh"
     root = tmp_path / "waves.dist"
     (root / "PySide6").mkdir(parents=True)
     wide = "w" * 200  # long names: 64 KB of du output without 60k files
@@ -600,6 +601,6 @@ def test_the_bundle_size_report_survives_a_wide_bundle_root(tmp_path):
 def test_the_size_report_caps_its_table_without_cutting_the_pipe(tmp_path):
     """The cap is awk's now, so it has to still be a cap, and it has to stay
     the kind of cap that reads its input to the end."""
-    text = (pathlib.Path(__file__).resolve().parents[1] / "tools" / "bundle_size_report.sh").read_text()
+    text = (REPO_ROOT / "tools" / "bundle_size_report.sh").read_text()
     assert "NR <= 25" in text
     assert "| head -" not in text, "a head on a pipe is what kills the producer behind it"
