@@ -45,7 +45,7 @@ from threading import Event
 
 import requests
 
-logger = logging.getLogger("waves.apple_runtime")
+logger = logging.getLogger("waves.providers.apple.runtime")
 
 _HTTP_TIMEOUT = 30
 _IO_CHUNK = 1 << 16  # 64 KiB streaming chunks

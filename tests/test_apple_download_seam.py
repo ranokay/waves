@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from waves.apple_engine import AppleCredentialsError
 from waves.constants import QualityTier, quality_rank
 from waves.providers.apple import AppleProvider
+from waves.providers.apple.engine import AppleCredentialsError
 from waves.providers.base import AudioType, RefusalKind
 
 
@@ -101,7 +101,7 @@ def test_classify_refusal_sorts_credentials_throttle_and_gone():
 
 
 def test_resolve_stream_delivers_a_staged_file_and_releases_it(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"fake-audio")
@@ -140,7 +140,7 @@ def test_resolve_stream_without_cookies_raises_before_touching_gamdl():
 
 
 def test_missing_binaries_name_the_settings_field(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape\n")
@@ -151,7 +151,7 @@ def test_missing_binaries_name_the_settings_field(tmp_path, monkeypatch):
 
 
 def test_ffprobe_prefers_the_ffmpeg_sibling(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     ffmpeg = tmp_path / "bin" / "ffmpeg"
     ffmpeg.parent.mkdir()
@@ -177,7 +177,7 @@ def _ffmpeg() -> str:
 def test_decode_check_accepts_clean_audio_and_rejects_garbage(tmp_path):
     import subprocess
 
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     good = tmp_path / "good.m4a"
     subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)

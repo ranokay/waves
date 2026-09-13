@@ -23,7 +23,7 @@ def _workflow() -> dict:
 
 
 def test_workflow_defaults_publish_exactly_the_pinned_image():
-    from waves.apple_runtime import WRAPPER_V2_IMAGE
+    from waves.providers.apple.runtime import WRAPPER_V2_IMAGE
 
     wf = _workflow()
     inputs = wf[True]["workflow_dispatch"]["inputs"]  # YAML reads `on:` as boolean True
@@ -57,7 +57,7 @@ def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
 def test_blessed_apk_inputs_match_the_app_pins():
     import yaml
 
-    from waves.apple_runtime import APK_PINNED_VERSION
+    from waves.providers.apple.runtime import APK_PINNED_VERSION
 
     wf = yaml.safe_load(WORKFLOW.read_text())
     inputs = wf[True]["workflow_dispatch"]["inputs"]  # YAML reads `on:` as boolean True
@@ -66,7 +66,7 @@ def test_blessed_apk_inputs_match_the_app_pins():
 
 
 def test_runbook_names_the_current_pins():
-    from waves.apple_runtime import APK_PINNED_VERSION, WRAPPER_LIBS_VERSION, WRAPPER_V2_IMAGE
+    from waves.providers.apple.runtime import APK_PINNED_VERSION, WRAPPER_LIBS_VERSION, WRAPPER_V2_IMAGE
 
     doc = RUNBOOK.read_text()
     tag = WRAPPER_V2_IMAGE.rsplit(":", 1)[1]

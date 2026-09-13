@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from waves.apple_runtime import (
+from waves.providers.apple.runtime import (
     WRAPPER_V2_IMAGE,
     describe_image_pull_error,
 )

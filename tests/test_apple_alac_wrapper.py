@@ -6,13 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from waves.apple_engine import (
+from waves.constants import QualityTier, quality_rank
+from waves.providers.apple import AppleProvider
+from waves.providers.apple.engine import (
     AppleCredentialsError,
     apple_delivery_detail,
     apple_tier_for_delivery,
 )
-from waves.constants import QualityTier, quality_rank
-from waves.providers.apple import AppleProvider
 from waves.providers.base import AudioType, RefusalKind
 
 
@@ -126,7 +126,7 @@ def test_unservable_rendition_surfaces_as_a_typed_refusal():
 
     from gamdl.interface.exceptions import GamdlInterfaceFormatNotAvailableError
 
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     class _Interface:
         async def _get_song_media(self, song_id):
@@ -146,7 +146,7 @@ def test_unservable_rendition_surfaces_as_a_typed_refusal():
 
 
 def test_alac_playlist_choice_honors_the_ceiling():
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     cd = {"uri": "16-441.m3u8", "stream_info": {"audio": "audio-alac-stereo-44100-16", "average_bandwidth": 900000}}
     cd48 = {"uri": "16-48.m3u8", "stream_info": {"audio": "audio-alac-stereo-48000-16"}}
@@ -170,7 +170,7 @@ def test_alac_playlist_choice_honors_the_ceiling():
 
 
 def test_resolve_stream_asks_the_alac_fetch_at_the_pinned_tier(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"fake-alac")
@@ -199,7 +199,7 @@ def test_resolve_stream_asks_the_alac_fetch_at_the_pinned_tier(tmp_path, monkeyp
 
 
 def test_resolve_stream_alac_reports_honest_tier(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"fake-alac")
@@ -239,7 +239,7 @@ def test_resolve_stream_alac_reports_honest_tier(tmp_path, monkeypatch):
 
 
 def test_resolve_stream_alac_16bit_lands_lossless(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"fake-alac")
@@ -269,7 +269,7 @@ def test_resolve_stream_alac_16bit_lands_lossless(tmp_path, monkeypatch):
 
 
 def test_resolve_stream_without_wrapper_stays_aac(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"fake-aac")
@@ -294,8 +294,8 @@ def test_resolve_stream_without_wrapper_stays_aac(tmp_path, monkeypatch):
 
 
 def test_alac_fallback_to_aac_when_no_alac_variant(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
-    from waves.apple_engine import AppleVariantUnavailable
+    import waves.providers.apple.engine as engine
+    from waves.providers.apple.engine import AppleVariantUnavailable
 
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"fake-aac")
@@ -326,7 +326,7 @@ def test_alac_fallback_to_aac_when_no_alac_variant(tmp_path, monkeypatch):
 
 
 def test_wrapper_logged_out_raises_credentials_without_fallback(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     def _logged_out(**kwargs):
         raise AppleCredentialsError("The Apple wrapper is not signed in")
@@ -342,8 +342,8 @@ def test_wrapper_logged_out_raises_credentials_without_fallback(tmp_path, monkey
 
 def test_corrupt_alac_never_falls_back_to_aac(tmp_path, monkeypatch):
     """Integrity failures stay integrity failures (spec §6): no AAC mask."""
-    import waves.apple_engine as engine
-    from waves.apple_engine import AppleIntegrityError
+    import waves.providers.apple.engine as engine
+    from waves.providers.apple.engine import AppleIntegrityError
 
     def _corrupt(**kwargs):
         raise AppleIntegrityError("The Apple download failed its integrity check", staged_path="/tmp/bad.m4a")
@@ -361,7 +361,7 @@ def test_probe_failure_records_lossless_not_the_ask(tmp_path, monkeypatch):
     """A failed probe cannot record the requested rung as verified."""
     from types import SimpleNamespace as _NS
 
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"fake-alac")
@@ -387,7 +387,7 @@ def test_probe_failure_records_lossless_not_the_ask(tmp_path, monkeypatch):
 
 def test_wrapper_session_persists_across_provider_restarts(tmp_path, monkeypatch):
     """Same URL, new provider instance, no re-login: the guest holds the session."""
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     calls: list = []
 
@@ -415,7 +415,7 @@ def test_wrapper_session_persists_across_provider_restarts(tmp_path, monkeypatch
 
 
 def test_probe_bit_depth_prefers_bits_per_sample():
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     assert engine._probe_bit_depth({"bits_per_sample": "24"}) == 24
     assert engine._probe_bit_depth({"bits_per_raw_sample": "16"}) == 16
@@ -425,7 +425,7 @@ def test_probe_bit_depth_prefers_bits_per_sample():
 
 
 def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path, monkeypatch):
-    from waves.apple_runtime import AppleRuntimeManager
+    from waves.providers.apple.runtime import AppleRuntimeManager
     from waves.waves_ui.backend import WavesBridge
 
     mgr = AppleRuntimeManager(tmp_path)
@@ -438,7 +438,7 @@ def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path, monkeypat
     assert stub._resolve_apple_wrapper_url().endswith(f":{persisted}")
     override = 50000 if persisted != 50000 else 50001
     stub.settings.data.apple_wrapper_port = override
-    monkeypatch.setattr("waves.apple_runtime._port_free", lambda port: True)
+    monkeypatch.setattr("waves.providers.apple.runtime._port_free", lambda port: True)
     # Override accepted: the resolved URL names it explicitly.
     assert stub._resolve_apple_wrapper_url().endswith(f":{override}")
 

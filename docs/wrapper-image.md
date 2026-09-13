@@ -25,7 +25,7 @@ runbook: one-time setup, how to publish, and the version lockstep.
   `ghcr.io/<your-name>/waves-wrapper-v2` automatically (set your own
   `APK_URL`/`APK_AUTH_HEADER` secrets there the same way), flip _your_
   package public, then move this repo's `WRAPPER_V2_IMAGE` pin
-  (`waves/apple_runtime.py`) to your path. That one-line pin edit is the
+  (`waves/providers/apple/runtime.py`) to your path. That one-line pin edit is the
   only code change a private image ever needs. Version lockstep below
   applies to you exactly as written.
 - **You send Apple work upstream as a PR.** The workflow is
@@ -81,7 +81,7 @@ Actions → **wrapper-image** → Run workflow:
 - `wrapper_ref` — upstream `wrapper-v2` ref to build. Prefer a full
   commit SHA for reproducibility; `main` tracks upstream.
 - `image_tag` — the tag to push. **It must equal the `WRAPPER_V2_IMAGE`
-  pin in `waves/apple_runtime.py`** (the suite enforces this).
+  pin in `waves/providers/apple/runtime.py`** (the suite enforces this).
 
 The run downloads the APK, extracts and hash-verifies the arm64 native
 libs against the source tree's `LIBS_VERSION.json`, builds `linux/arm64`,
@@ -109,7 +109,7 @@ These four move together; bump them as one change:
 | Piece       | Where                                                                                                                                                                                                                                                                                                | Current                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | Image tag   | workflow `image_tag` input                                                                                                                                                                                                                                                                           | `0.2.3`                   |
-| Image pin   | `WRAPPER_V2_IMAGE`, `waves/apple_runtime.py`                                                                                                                                                                                                                                                         | `…:0.2.3`                 |
+| Image pin   | `WRAPPER_V2_IMAGE`, `waves/providers/apple/runtime.py`                                                                                                                                                                                                                                               | `…:0.2.3`                 |
 | APK version | `APK_PINNED_VERSION`, same file + `APK_URL` content                                                                                                                                                                                                                                                  | `3.6.0-beta` (build 1109) |
 | Guest libs  | regenerated from the blessed APK at build time (issue #82): upstream's pin file matched 3.6.0-1109 when last checked, but nothing guarantees it tracks the blessed APK, so CI pins deterministically from the file itself; `WRAPPER_LIBS_VERSION` (`17.0.0`) is still recorded in the image manifest | 18 arm64 libs             |
 

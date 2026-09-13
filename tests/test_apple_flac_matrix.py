@@ -99,7 +99,7 @@ def _track_row():
 
 
 def test_provider_alac_reports_flac_while_aac_and_atmos_stay_m4a(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
     from waves.providers.apple import AppleProvider
 
     staged = tmp_path / "staged.m4a"
@@ -146,7 +146,7 @@ def test_provider_alac_reports_flac_while_aac_and_atmos_stay_m4a(tmp_path, monke
 
 
 def test_tier_mapping_treats_flac_like_alac():
-    from waves.apple_engine import apple_tier_for_delivery
+    from waves.providers.apple.engine import apple_tier_for_delivery
 
     assert apple_tier_for_delivery("flac", 16, 44100) == QualityTier.LOSSLESS.value
     assert apple_tier_for_delivery("flac", 24, 96000) == QualityTier.HI_RES_LOSSLESS.value
@@ -467,7 +467,7 @@ def test_guess_and_mode_matrix():
 
 
 def test_master_switch_off_keeps_the_m4a(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     monkeypatch.setattr(
         engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "alac", "sample_rate": "44100"}
@@ -485,7 +485,7 @@ def test_master_switch_off_keeps_the_m4a(tmp_path, monkeypatch):
 
 
 def test_aac_stays_m4a_under_the_lossless_scope(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     monkeypatch.setattr(
         engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -503,7 +503,7 @@ def test_aac_stays_m4a_under_the_lossless_scope(tmp_path, monkeypatch):
 
 
 def test_atmos_stays_m4a_even_under_the_all_scope(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     monkeypatch.setattr(
         engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "eac3", "sample_rate": "48000"}
@@ -540,7 +540,7 @@ def test_atmos_stays_m4a_even_under_the_all_scope(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_alac_converts_to_flac_by_default(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     real_probe = engine.probe_audio_file
     real_decode = engine.decode_check
@@ -578,7 +578,7 @@ def test_alac_converts_to_flac_by_default(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_aac_transcodes_to_flac_under_the_all_scope_without_promotion(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     real_probe = engine.probe_audio_file
     real_decode = engine.decode_check
@@ -604,7 +604,7 @@ def test_conversion_encodes_flac_without_resampling(tmp_path, monkeypatch):
     ALAC cannot stream-copy into a FLAC container, so even the lossless mode
     encodes -- losslessly, with the source's own rate and channels.
     """
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     monkeypatch.setattr(engine, "decode_check", lambda *a, **k: None)
     calls: list = []
@@ -642,7 +642,7 @@ def test_conversion_encodes_flac_without_resampling(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_verify_runs_before_conversion(tmp_path, monkeypatch):
-    import waves.apple_engine as engine
+    import waves.providers.apple.engine as engine
 
     monkeypatch.setattr(engine, "decode_check", lambda *a, **k: None)
     order: list = []

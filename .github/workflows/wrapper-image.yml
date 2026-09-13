@@ -16,7 +16,7 @@
 #
 # What gets published: linux/arm64 only (the Apple-silicon native path; the
 # compile stage stays linux/amd64 because Google ships the NDK as x86_64
-# only). The pushed tag must equal the pin in waves/apple_runtime.py
+# only). The pushed tag must equal the pin in waves/providers/apple/runtime.py
 # (WRAPPER_V2_IMAGE); the pin-drift test fails the suite otherwise.
 name: wrapper-image
 
@@ -203,7 +203,7 @@ jobs:
       - name: Smoke test (HTTP and TCP)
         run: |
           docker rm -f wrapper-smoke 2>/dev/null || true
-          # Same caps as production (see apple_supervision.container_run_args):
+          # Same caps as production (see waves/providers/apple/supervision.container_run_args):
           # AppArmor's default profile can deny mount(2) even with CAP_SYS_ADMIN.
           docker run -d \
             --platform "${RUNTIME_PLATFORM}" \
