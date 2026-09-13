@@ -12,8 +12,6 @@ and its migration landed with issue #24; this issue gives the split fields
 their sections: TIDAL's quality moves out of Downloads into the TIDAL
 section, ``apple_quality_audio`` renders in the Apple section for the first
 time, and the shared sections' help text says it governs both providers.
-Nothing sits behind the switch yet: flipping it records the choice and moves
-the status light, nothing else.
 
 Issue #60 nests the two sections as cards inside ONE Providers section
 (each with its logo header and its fields); the field contents pinned below

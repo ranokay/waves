@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import json
 
+from support.settings_fakes import prefs_stub as _prefs_stub
+from support.settings_fakes import schema_stub as _schema_stub
+
 from waves.waves_ui.backend import WavesBridge
 
 
@@ -22,14 +25,6 @@ class _Stub:
 
 def _bind(stub, name):
     return getattr(WavesBridge, name).__get__(stub, type(stub))
-
-
-def _prefs_stub():
-    stub = _Stub()
-    stub._default_waves_prefs = _bind(stub, "_default_waves_prefs")
-    stub._waves_prefs = stub._default_waves_prefs()
-    stub._waves_pref_bool = _bind(stub, "_waves_pref_bool")
-    return stub
 
 
 def test_open_sections_pref_defaults_to_untouched():
@@ -52,29 +47,3 @@ def test_open_sections_survive_a_round_trip_as_json():
     # for the page to parse on the next launch.
     stored = stub._waves_prefs["settings_open_sections"]
     assert json.loads(stored) == {"advanced": True, "downloads": False}
-
-
-def _schema_stub():
-    """A bridge stub with just enough state for settingsSchema().
-
-    Built on a fresh defaults-only config, never the machine's own, so the
-    test can't depend on (or print) the user's real settings.
-    """
-    from waves.model.cfg import HelpSettings
-    from waves.model.cfg import Settings as CfgSettings
-
-    class _Cfg:
-        data = CfgSettings()
-        help = HelpSettings()
-
-    stub = _prefs_stub()
-    stub.settings = _Cfg()
-    stub._help = HelpSettings()
-    stub._help_for = _bind(stub, "_help_for")
-    stub._ffmpeg_flag_prefs = {}
-    stub.ffmpegState = lambda: {"status": "none", "source": "none", "path": ""}
-    # No ffmpeg probing from a unit test: the page prefills the detected
-    # binary, which is machine state this test has no business reading.
-    stub._user_ffmpeg_path = lambda: ""
-    stub._ffmpeg_detected_path = lambda: ""
-    return stub

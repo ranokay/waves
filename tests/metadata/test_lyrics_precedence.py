@@ -181,7 +181,7 @@ def test_word_timed_outranks_a_synced_lrclib_hit(monkeypatch):
     assert calls["native"] == 0
 
 
-def test_native_line_timed_is_the_fallback_over_plain_text(monkeypatch):
+def test_native_line_timed_fills_the_synced_slot(monkeypatch):
     from waves.providers.apple import runner
 
     hooks, provider, calls = _lyrics_stub(monkeypatch, lrclib=("", ""))
@@ -313,18 +313,18 @@ def test_tidal_standalone_lyrics_without_lyrics_is_not_served(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def _psetting_map(*, lyrics_file=False, lyrics_embed=False, cover_album_file=True):
+def _psetting_map(*, lyrics_file=False, lyrics_embed=False, lyrics_ttml_file=False, cover_album_file=True):
     return {
         "lyrics_file": lyrics_file,
         "lyrics_file_synced_only": False,
-        "lyrics_ttml_file": False,
+        "lyrics_ttml_file": lyrics_ttml_file,
         "lyrics_embed": lyrics_embed,
         "metadata_cover_embed": False,
         "cover_album_file": cover_album_file,
     }
 
 
-def _standalone_bridge(tmp_path, *, psettings, lyrics=None, cover=None, lyrics_error=False):
+def _standalone_bridge(tmp_path, *, psettings, lyrics=None, lyrics_error=False):
     from types import SimpleNamespace
 
     from conftest import _InlinePool
@@ -367,7 +367,7 @@ def _standalone_bridge(tmp_path, *, psettings, lyrics=None, cover=None, lyrics_e
         stub._apple_lyrics_full = _raise
     else:
         stub._apple_lyrics_full = lambda provider, row, facts, options=None: lyrics or ("[00:01.00]hi", "hi", "")
-    stub._apple_cover_bytes = lambda provider, raw: cover or b"\xff\xd8\xff\xdbjpeg-bytes"
+    stub._apple_cover_bytes = lambda provider, raw: b"\xff\xd8\xff\xdbjpeg-bytes"
     for name in (
         "_standalone_fetch",
         "_standalone_base_dir",
@@ -382,7 +382,6 @@ def _standalone_bridge(tmp_path, *, psettings, lyrics=None, cover=None, lyrics_e
     return stub, folder, statuses, states
 
 
-@pytest.mark.ffmpeg
 def test_download_lyrics_only_writes_the_sidecar_and_no_audio(tmp_path):
     stub, folder, statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map(lyrics_file=True))
 
@@ -431,13 +430,27 @@ def test_download_lyrics_only_reports_a_failed_provider_request(tmp_path):
     assert not (folder / "S1.lrc").exists()
 
 
-@pytest.mark.ffmpeg
 def test_download_art_only_writes_the_cover_and_no_audio(tmp_path):
     stub, folder, statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map())
 
     stub.downloadArtOnly("apple:s1")
 
     assert (folder / "cover.jpg").read_bytes().startswith(b"\xff\xd8\xff")
-    assert list(folder.glob("*.m4a")) == []
+    assert list(folder.glob("*.m4a")) == [] and list(folder.glob("*.flac")) == []
     assert states == [("apple:s1", "running"), ("apple:s1", "done")]
     assert statuses[-1] == "Saved artwork for 1 track"
+
+
+def test_download_lyrics_only_files_the_verbatim_ttml_when_asked(tmp_path):
+    """The TTML sidecar toggle is independent: the verbatim document lands as .ttml."""
+    ttml = '<tt><body><div><p begin="00:01.00">Hi</p></div></body></tt>'
+    stub, folder, _statuses, _states = _standalone_bridge(
+        tmp_path,
+        psettings=_psetting_map(lyrics_ttml_file=True),
+        lyrics=("[00:01.00]hi", "hi", ttml),
+    )
+
+    stub.downloadLyricsOnly("apple:s1")
+
+    assert (folder / "S1.ttml").read_text() == ttml
+    assert not (folder / "S1.lrc").exists()
