@@ -141,7 +141,7 @@ from .ffmpeg_manager import FfmpegCancelled, FfmpegManager
 from .updater import AppUpdater, UpdateCancelled
 
 logger = logging.getLogger("waves")
-# Window geometry persistence (issue #6). Its own child logger so restore/save
+# Window geometry persistence. Its own child logger so restore/save
 # breadcrumbs are attributable in a crash report. Coordinates and sizes are not
 # PII, so they are logged in the clear (no register_secret / content wrapping).
 _win_log = logging.getLogger("waves.window")
@@ -240,7 +240,7 @@ _PREVIEW_SEG_WORKERS = 8
 # Length of a non-``whole`` preview: a quick taste of the track.
 _PREVIEW_TASTE_SECONDS = 30
 
-# Segment fetches currently in flight, and the gauge that reports them to the
+# Segment fetches in flight, and the gauge that reports them to the
 # perf sampler. The pool itself is created per preview (abandoning one clip
 # must not leave its queue in front of the next one), and the sampler holds
 # what it is given for the life of the run, so the registered object is this
@@ -337,11 +337,11 @@ _FLAG_FIELDS = [
     "lyrics_file",
     "lyrics_file_synced_only",
     "lyrics_prefer_lrclib",
-    # Lyrics & art matrix (issue #34, spec section 9.1): word-timed source
+    # Lyrics & art matrix (spec section 9.1): word-timed source
     # toggle (default on) and the verbatim Apple TTML sidecar (default off).
     "lyrics_word_timed",
     "lyrics_ttml_file",
-    # Per-provider mirrors (issue #61): each provider's own lyrics/artwork
+    # Per-provider mirrors: each provider's own lyrics/artwork
     # options, rendered inside its Providers card.
     "tidal_lyrics_embed",
     "tidal_lyrics_file",
@@ -375,7 +375,7 @@ _FLAG_FIELDS = [
     "playlist_create",
     "mark_explicit",
     "use_primary_album_artist",
-    # Custom tag template (issue #61): the master switch plus one omit flag
+    # Custom tag template: the master switch plus one omit flag
     # per tag group, shown only while the switch is on.
     "metadata_custom",
     "metadata_tag_composer",
@@ -390,11 +390,11 @@ _FLAG_FIELDS = [
     "playlist_create",
     "mark_explicit",
     "use_primary_album_artist",
-    # Providers area: the Apple component's enable switch (issue #25). It is
+    # Providers area: the Apple component's enable switch. It is
     # never rendered as a flag tile: the Apple status row carries it as the
     # section's master switch, so it only needs the persistence coercion.
     "apple_enabled",
-    # Integrity gate (issue #30, spec §6): keep-vs-delete for quarantined
+    # Integrity gate (spec §6): keep-vs-delete for quarantined
     # files, default keep. The quarantine folder itself is a path field below.
     "apple_quarantine_keep",
     # Advanced
@@ -408,7 +408,7 @@ _CHOICE_FIELDS = [
     ("default_audio_type", DefaultAudio),
     ("quality_video", QualityVideo),
     ("metadata_cover_dimension", CoverDimensions),
-    # Per-provider mirrors (issue #61).
+    # Per-provider mirrors of the keys above.
     ("tidal_metadata_cover_dimension", CoverDimensions),
     ("apple_metadata_cover_dimension", CoverDimensions),
     # Advanced
@@ -422,13 +422,13 @@ _NUMBER_FIELDS = [
     # Advanced
     "downloads_simultaneous_per_track_max",
     "api_rate_limit_batch_size",
-    # Integrity gate (issue #30): automatic re-downloads after an integrity
+    # Integrity gate: automatic re-downloads after an integrity
     # failure, tunable in Advanced. Default 2 (3 attempts total).
     "apple_integrity_retries",
-    # Setup wizard (issue #31): wrapper HTTP API port override. 0 means pick
+    # Setup wizard: wrapper HTTP API port override. 0 means pick
     # a free high port; rendered as a plain number field in the Apple section.
     "apple_wrapper_port",
-    # Session supervision (issue #33, spec §3): proactive Apple pacing, same
+    # Session supervision (spec §3): proactive Apple pacing, same
     # shape as TIDAL's api_rate_limit_* (pause after N songs for N seconds).
     "apple_pacing_batch_size",
 ]
@@ -438,7 +438,7 @@ _FLOAT_FIELDS = [
     "download_delay_sec_max",
     "api_rate_limit_delay_sec",
     "apple_integrity_retry_delay_sec",
-    # Session supervision (issue #33, spec §3): the proactive Apple pause
+    # Session supervision (spec §3): the proactive Apple pause
     # length, and the idle timeout after which the sidecar stops itself.
     "apple_pacing_delay_sec",
     "apple_wrapper_idle_sec",
@@ -528,7 +528,7 @@ class _SingleFlightWriter:
 
     The atomic writers above fsync, and both waves.json and settings.json were
     written from GUI-thread slots (every pref flip, every window-geometry
-    debounce), so the GUI paid a disk sync per save. Callers now snapshot
+    debounce), so the GUI paid a disk sync per save. Callers snapshot
     their payload on their own thread (microseconds) and submit the disk work
     here keyed by file: consecutive submits for the same key coalesce to the
     NEWEST closure (latest snapshot wins, which is also what the old
@@ -760,8 +760,8 @@ _PATH_FIELDS = [
     # card normally manages the binary; an explicit path here wins over the
     # managed copy (see _resolve_ffmpeg).
     "path_binary_ffmpeg",
-    # Cookies-tier scaffolding (issue #28): a Netscape cookies export that
-    # unlocks Apple downloads, browsed like the FFmpeg override above.
+    # Cookies tier: a Netscape cookies export that unlocks Apple downloads,
+    # browsed like the FFmpeg override above.
     "apple_cookies_path",
     # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
     # through; the wizard provisions it later.
@@ -769,7 +769,7 @@ _PATH_FIELDS = [
     # Optional APK override for custom wrapper image builds; the published
     # image carries its own guest libraries, so the wizard does not ask.
     "apple_apk_path",
-    # Integrity gate (issue #30): quarantine folder override, browsed like a
+    # Integrity gate: quarantine folder override, browsed like a
     # download folder. Empty means the default inside the download folder.
     "apple_quarantine_dir",
 ]
@@ -833,7 +833,6 @@ _ENUM_BY_FIELD = dict(_CHOICE_FIELDS)
 # Flags that do nothing without FFmpeg, greyed out on the page when it's absent.
 _FFMPEG_DEPENDENT = {"video_convert_mp4", "extract_flac", "extract_flac_all"}
 
-# ---- Path-template helper data (File organization) -------------------------
 # Every template token, grouped for the "Want to know more?" reference table.
 # The sample values shown next to each are produced by the REAL formatter
 # (format_str_media) against the canned sample library below, so the reference
@@ -1019,7 +1018,7 @@ _FIELD_LABELS = {
     "lyrics_ttml_file": "Save Apple TTML file",
     "cover_file_format": "Cover file format",
     "mark_explicit": "Mark explicit in title",
-    # Per-provider mirrors (issue #61): the Providers cards already name the
+    # Per-provider mirrors: the Providers cards already name the
     # provider, so the labels stay provider-neutral.
     "tidal_lyrics_embed": "Embed lyrics",
     "tidal_lyrics_file": "Save lyrics file",
@@ -1041,7 +1040,7 @@ _FIELD_LABELS = {
     "apple_metadata_cover_embed": "Embed cover art",
     "apple_cover_album_file": "Save cover",
     "apple_cover_file_format": "Cover file format",
-    # Custom tag template (issue #61).
+    # Custom tag template.
     "metadata_custom": "Custom tag template",
     "metadata_tag_composer": "Composer tag",
     "metadata_tag_copyright": "Copyright tag",
@@ -1067,8 +1066,8 @@ _FIELD_LABELS = {
 # Human labels for enum dropdown values, keyed by field then by enum member
 # name (the stored value). Unmapped members fall back to the raw name.
 _ENUM_LABELS = {
-    # Per-provider audio quality (issue #24): the Waves rungs, each provider
-    # stating them in its own codecs with "Up to" ceilings (issue #59), so the
+    # Per-provider audio quality: the Waves rungs, each provider
+    # stating them in its own codecs with "Up to" ceilings, so the
     # dropdown reads as a fidelity promise: bitrate for lossy rungs, bit depth
     # and sample rate for lossless ones. Apple has no LOW rung (AAC 256 starts
     # at HIGH), so its list starts there.
@@ -1084,7 +1083,7 @@ _ENUM_LABELS = {
         "HI_RES_LOSSLESS": "Max · Hi-Res · Up to 24-bit / 192 kHz (ALAC)",
     },
     "quality_video": {"P360": "360p", "P480": "480p", "P720": "720p", "P1080": "1080p"},
-    # Chooser one-click audio default (issue #66): stereo, or both Versions
+    # Chooser one-click audio default: stereo, or both Versions
     # side by side where a track offers the choice.
     "default_audio_type": {"STEREO": "Stereo", "BOTH": "Stereo + Atmos"},
     "metadata_cover_dimension": {
@@ -1095,7 +1094,7 @@ _ENUM_LABELS = {
         "Px1280": "1280×1280",
         "PxORIGIN": "Original",
     },
-    # Per-provider mirrors (issue #61): identical rungs, one list each so a
+    # Per-provider mirrors: identical rungs, one list each so a
     # provider's wording can diverge later without touching the other.
     "tidal_metadata_cover_dimension": {
         "Px80": "80×80",
@@ -1147,7 +1146,7 @@ def _apple_status(
     needs_attention: bool = False,
     cookies_ready: bool = False,
 ) -> dict:
-    """The Apple status light's ``{"state", "word"}`` (issue #25, spec §9.2.3).
+    """The Apple status light's ``{"state", "word"}`` (spec §9.2.3).
 
     One source for both the bridge slot (the page's live mirror) and the
     schema's baked value, so the two can never disagree. The light has five
@@ -1211,9 +1210,10 @@ _VIDEOS_GROUP_PREFIX = "vids:"
 # from the bare playlist id that "Download playlist" owns.
 _PLAYLIST_ALBUMS_GROUP_PREFIX = "albums:"
 
-# The download folder Waves used to ship as a silent default. A blank path now
-# means "unset" (fresh installs), but existing users who never changed it still
-# carry this exact value; it triggers the one-time "choose a folder" nudge.
+# The silent download-folder default older installs carry. A blank path
+# means "unset" (fresh installs); an install that never changed the folder
+# still holds this exact value, which triggers the one-time "choose a folder"
+# nudge.
 _LEGACY_DEFAULT_DOWNLOAD_PATH = "~/download"
 # Video path templates as shipped in past releases; a stored value equal to
 # any of these is silently upgraded to the current dataclass default at
@@ -1306,7 +1306,7 @@ def _delivers_atmos(media, atmos_on: bool) -> bool:
 
 
 def _wants_both_default(settings) -> bool:
-    """Whether the Chooser one-click default fetches both Versions (issue #66).
+    """Whether the Chooser one-click default fetches both Versions.
 
     Module-level so engine-adjacent paths bound onto bare test stubs can ask
     without the full bridge: only an explicit "both" fetches twice, and
@@ -1445,7 +1445,7 @@ def _cover_sidecar_format(data, key: str = "cover_file_format") -> str:
     One normalizer for every writer so TIDAL and Apple agree on the
     spelling; unknown values fall back to jpg and TIDAL treats raw as jpg
     (it has no original-master sidecar). ``key`` selects whose mirror to
-    read (issue #61); the shared key stays the legacy fallback.
+    read; the shared key is the fallback when no mirror is set.
     """
     fmt = str(provider_setting(data, "apple" if key.startswith("apple_") else "tidal", key, "jpg") or "jpg")
     fmt = fmt.strip().lower()
@@ -1464,13 +1464,13 @@ _DEGRADED_RETRY_MAX = 2
 # License-exchange 429 backoff inside one Apple track: without it an album
 # that crosses Apple's undocumented threshold fails every remaining row in a
 # burst and hammers the throttle harder. Bounded and abort-aware; the
-# supervision slice owns pacing fields and the visible resume countdown.
+# supervision layer owns pacing fields and the visible resume countdown.
 _APPLE_THROTTLE_WAITS = (5.0, 20.0)
 
 
 def _apple_effective_version(provider, track_id: str, audio_type) -> str:
     """The Version a fetch will actually verify as: Atmos only when asked AND
-    offered (issue #30, spec §6.4: each Version verifies independently).
+    offered (spec §6.4: each Version verifies independently).
 
     An Atmos ask for a stereo-only track falls back to stereo (the provider's
     instead-of rule), so gating and clearing on the asked version would file
@@ -1496,7 +1496,7 @@ def _apple_effective_version(provider, track_id: str, audio_type) -> str:
 
 
 def _apple_effective_port(data, manager) -> int:
-    """The one wrapper HTTP port every Apple path agrees on (issue #33).
+    """The one wrapper HTTP port every Apple path agrees on.
 
     Module-level so plain unit-test stubs binding one resolver keep working
     without the other: an explicit `apple_wrapper_port` wins when it is
@@ -1558,60 +1558,41 @@ def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int
     The tier alone cannot answer that for a Dolby Atmos copy. TIDAL serves
     Atmos only through a session pinned to ATMOS_REQUEST_QUALITY
     (constants.py), so an Atmos file arrives at that tier whatever the audio
-    quality setting says. Ranked on the stereo scale it is judged stale against
-    a tier it can never be granted, and stale means force: re-fetch and
-    overwrite the identical file on every download, forever, while the button
-    never leaves DOWNLOAD and the album card never reads as downloaded.
+    quality setting says. Ranked on the stereo scale it would be judged stale
+    against a tier it can never be granted, and stale means force: re-fetch and
+    overwrite the identical file on every download while the button never
+    leaves DOWNLOAD. An Atmos copy is therefore current for a job that would
+    fetch Atmos, full stop; Redownload is the way to ask for it again.
 
-    An Atmos copy is therefore current for a job that would fetch Atmos, full
-    stop. The request tier is a constant this app cannot raise, so the next
-    fetch would ask for exactly what this one already got. If TIDAL's own
-    answer changes, that is not something an ownership gate can see; Redownload
-    is the way to ask for it again.
+    Turning Atmos on does not make an owned stereo copy read as stale: a track
+    can hold Atmos and stereo copies at once (different codecs and extensions,
+    so two rows), and ownership_of answers with the highest tier among them,
+    the stereo one, so forcing on that mismatch would re-fetch an Atmos file
+    the user already has. That guard holds only while the stereo copy sits AT
+    OR ABOVE the target; below it the tier comparison forces, the fetch returns
+    Atmos to a second path, and ownership_of keeps answering with the stereo
+    row. Closing that needs a mode-aware store query and bridge cache
+    (ownershipOf holds an id and a record, never the track's audio modes), so
+    Redownload is the way out. Do not "fix" it by making an Atmos-wanting job
+    read any record as current: that makes a below-target stereo copy read as
+    current too and splits the gate from the button.
 
-    Everything else is the tier comparison, unchanged. Note what is deliberately
-    NOT here: turning Atmos on does not make an owned stereo copy read as stale.
-    A track can hold an Atmos copy and a stereo copy at once (different codecs,
-    different file extensions, so two rows), and ownership_of answers with the
-    highest tier among them, which is the stereo one. Forcing on that mismatch
-    would re-fetch the Atmos file the user already has, on every download,
-    which is the very loop above wearing the other mask.
+    The tier comparison converges at each track's achievable ceiling.
+    ``ceiling_rank`` is the best rank TIDAL advertises at scan time (pass None
+    when unknown, never a guess): a known ceiling caps the target, so owning
+    the best that exists counts as current. A copy served by a run that
+    already ASKED at this target or better counts as current even without a
+    live ceiling, unless the advertised ceiling has risen past the run's own
+    stored ceiling, in which case a genuinely better master exists and the
+    upgrade reopens. That clause lets a ceiling-blind caller (ownershipOf
+    holds only an id) settle off the stored ranks instead of flashing an
+    upgrade forever.
 
-    That last paragraph holds only while the stereo copy sits AT OR ABOVE the
-    target. Below it, the tier comparison forces on its own account, the fetch
-    returns Atmos to a second path, and ownership_of goes on answering with the
-    stereo row because it orders by rank, so the verdict stays "force" and the
-    button never settles. Closing that needs a mode-aware store query and a
-    mode-aware bridge cache: ownershipOf holds an id and a record, never the
-    track's audio modes, so the gate and the button cannot even be told the same
-    thing today. Redownload is the way out meanwhile. Do not "fix" it by making
-    an Atmos-wanting job read any record as current: that makes a below-target
-    stereo copy read as current too, and splits the gate from the button
-    permanently.
-
-    The tier comparison itself converges at each track's achievable ceiling
-    (issue #31): a release TIDAL has no hi-res master for delivers LOSSLESS
-    however high the setting asks, so ranking that copy against the raw target
-    forced a re-download of the identical file on every run, forever, exactly
-    the loop the Atmos clause above closes for its own arm. ``ceiling_rank``
-    is the best rank TIDAL advertises for the item RIGHT NOW (pass None when
-    unknown, never a guess): a known ceiling caps the target, so owning the
-    best that exists counts as current. And a copy served by a run that
-    already ASKED at this target or better (the record's requested_rank)
-    counts as current even without a live ceiling, unless the advertised
-    ceiling has risen past what that run saw (the record's ceiling_rank), in
-    which case a genuinely better master exists and the upgrade reopens. That
-    second clause is what lets a ceiling-blind caller (ownershipOf holds only
-    an id) settle off the stored ranks instead of flashing an upgrade forever.
-
-    What the request alone must never settle is a DEGRADED delivery: a run that
-    asked high enough and was served below the ceiling it saw at the time
-    (TIDAL has handed back less than it advertised, issue #2). The record then
-    holds a rank under its own stored ceiling, and settling on the request
-    would freeze that copy as current for good: the button reads DOWNLOADED,
-    every later run skips it, and raising the quality setting does nothing.
-    That is the one case where the stored ranks disagree with each other, and
-    the disagreement is the answer."""
+    A DEGRADED delivery — asked high enough, served below the ceiling its run
+    saw — must never settle on the request alone, or the copy freezes as
+    current while every later run skips it. After ``_DEGRADED_RETRY_MAX``
+    consecutive under-ceiling deliveries the ask has been made honestly and
+    the copy settles; a delivery that reaches the ceiling resets the count."""
     if wants_atmos and _record_is_atmos(rec):
         return True
     # Rank -1 means no quality concept (a video's tier-less record): nothing to
@@ -1631,18 +1612,16 @@ def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int
     if rank < stored_ceiling:
         # Served below what its own run was told existed: a better master is
         # there for the asking, so the upgrade stays open however high that run
-        # asked. (rank == stored_ceiling is the issue #31 case: this IS the best
-        # that exists, and it settles below.)
+        # asked. (rank == stored_ceiling means this IS the best that exists, and
+        # it settles below.)
         #
-        # Open, but not forever. TIDAL can advertise LOSSLESS and go on serving
-        # HIGH (issue #2's own story), and then "stays open" means this track
-        # is re-fetched and overwritten on every album click for the rest of
-        # time, with the button never settling and nothing on screen to say
-        # why. After _DEGRADED_RETRY_MAX consecutive attempts that each came
-        # back under the ceiling, the ask has been made honestly and the answer
-        # is not changing: settle, and let Redownload be the way to ask again.
-        # Any delivery that DOES reach the ceiling resets the count to zero, so
-        # a master TIDAL genuinely fixes is still picked up.
+        # Open, but not forever: TIDAL can advertise LOSSLESS and keep serving
+        # HIGH, and then "stays open" re-fetches and overwrites the track on
+        # every album click with the button never settling. After
+        # _DEGRADED_RETRY_MAX consecutive under-ceiling attempts the ask has
+        # been made honestly and the answer is not changing: settle, and let
+        # Redownload ask again. A delivery that reaches the ceiling resets the
+        # count, so a master TIDAL genuinely fixes is still picked up.
         tries = (rec or {}).get("degraded_tries")
         return int(tries or 0) >= _DEGRADED_RETRY_MAX
     # Or the copy already sits at the ceiling its own release advertised, in
@@ -1697,11 +1676,11 @@ class _TrackedDownload(Download):
         # raising the quality setting re-fetches, a plain re-click does not.
         self._ownership_of = ownership_of
         self._target_rank = int(target_rank)
-        # The Waves rung this job was queued at (issue #24). A download asks
-        # the SHARED session for its stream, so without this a quality change
-        # in Settings would silently retarget work already queued or in
-        # flight; a job now finishes at the quality the user started it with,
-        # and the new choice applies to what they queue next.
+        # The Waves rung this job was queued at. A download asks the SHARED
+        # session for its stream, so without this a quality change in Settings
+        # would silently retarget work already queued or in flight; a job
+        # finishes at the quality the user started it with, and the new choice
+        # applies to what they queue next.
         self._pinned_quality = pinned_quality
         # The library scan's bulk claim gate (library_bulk_skip): a callable
         # answering "does the user's library already claim this track?" from
@@ -1752,9 +1731,9 @@ class _TrackedDownload(Download):
         self.fail_count = 0
         # Items TIDAL itself refuses to stream (allow_streaming false), tallied
         # apart from fail_count because they are not a failure of this app and
-        # no retry can turn them into a file. Counting them as failures is what
-        # painted a whole album red and told the user 15 of 15 tracks had failed
-        # when TIDAL had simply delisted every one of them (issue #25).
+        # no retry can turn them into a file. Counting them as failures would
+        # paint the whole album red and tell the user every track failed when
+        # TIDAL has only delisted them.
         self.unavailable_count = 0
         # The collection itself was refused, so no track was ever reached.
         self.list_unavailable = False
@@ -1828,10 +1807,9 @@ class _TrackedDownload(Download):
     def _note_item_crashed(self) -> None:
         """Engine hook (download.py): an item of a collection raised on its way
         out of the pool. The per-track row already went red from item()'s own
-        re-raise arm, but nothing had counted it: the exception used to unwind
-        the whole list, so there was no list left to count it for. items() now
-        keeps going, so the tally has to happen or a collection that lost a
-        track would settle as a clean done."""
+        re-raise arm, and items() keeps going rather than unwinding the list,
+        so the tally has to happen here or a collection that lost a track
+        would settle as a clean done."""
         self._note_outcome(False)
 
     def _note_unavailable(self, media) -> None:
@@ -1945,8 +1923,8 @@ class _TrackedDownload(Download):
                         logger.info("Could not leave the Atmos session; not fetching this track at an unpinned quality")
                         return TrackStreamInfo(None, "", False, None)
                     prev = self.session.audio_quality
-                    # The job pins a Waves rung (issue #24); the engine maps
-                    # the rung onto the codec vocabulary its session asks at.
+                    # The job pins a Waves rung; the engine maps the rung
+                    # onto the codec vocabulary its session asks at.
                     self.session.audio_quality = tidal_quality_for_tier(pinned)
             except Exception:
                 logger.debug("Could not pin this job's audio quality", exc_info=True)
@@ -1963,8 +1941,8 @@ class _TrackedDownload(Download):
         mid = getattr(media, "id", None)
         if mid is not None and getattr(info, "media_stream", None) is not None:
             quality = _stream_quality(info)
-            # What this run asked for and the best TIDAL advertised right now
-            # ride along to the ownership record, so the gate can later tell
+            # What this run asked for and the best TIDAL advertises at fetch
+            # time ride along to the ownership record, so the gate can later tell
             # "a better master does not exist" (skip) from "we never tried at
             # this quality" (force). An Atmos fetch asks at its own fixed tier
             # the pin does not govern, so it stamps no requested rank.
@@ -2035,9 +2013,9 @@ class _TrackedDownload(Download):
         download gets recorded under) and, because the whole point of a merge is
         assembling one complete album folder, it may only be skipped when the
         owned copy already sits in THIS job's destination folder. An owned copy
-        elsewhere (another edition's folder, a playlist folder) previously
-        satisfied the gate and left a hole in the merged album while the job
-        still reported done.
+        elsewhere (another edition's folder, a playlist folder) must not
+        satisfy the gate: the merged album would be left with a hole while the
+        job still reports done.
 
         "Equal-or-better quality" is asked on the scale the copy was delivered
         on, not on the tier string alone: a Dolby Atmos copy is delivered at a
@@ -2085,8 +2063,7 @@ class _TrackedDownload(Download):
         # An owned Atmos copy of an Atmos-only track is current whatever the
         # setting says: _wants_atmos carries the engine's own "nothing else to
         # fetch" clause, so the copy is ranked on the scale the next fetch
-        # would really deliver on. This is what used to need a separate
-        # exclusion mirror, back when the engine skipped such a track outright.
+        # would really deliver on.
         current = _copy_is_current(rec, self._target_rank, self._wants_atmos(media), _advertised_ceiling(media))
         return ("skip" if current else "force"), rec
 
@@ -2477,7 +2454,7 @@ def _collection_incomplete_reason(
     so the job worker judges the outcome from the counters:
       * fail_count > 0: at least one track failed, so the collection is
         incomplete even if other tracks were written or skipped (the 19-of-20
-        case, which previously rode its successes to a green done).
+        case, which would otherwise ride its successes to a green done).
       * no writes and nothing handled ok: nothing happened at all, e.g. an
         unentitled or free account that rejected every stream.
     An all-owned collection (ownership skips count as ok, no failures, no writes)
@@ -2486,9 +2463,9 @@ def _collection_incomplete_reason(
     Tracks TIDAL refuses to stream are counted apart and do NOT make the
     collection a failure: the app did everything it could and the rest of the
     album is on disk, so the job settles as finished and the refusals are named
-    in the status line instead (see _unavailable_note). Reading them as failures
-    is what turned a delisted commentary edition into a red "15 of 15 tracks
-    failed" (issue #25). What they may not do is prop up a false success: an
+    in the status line instead (see _unavailable_note). Counting them as
+    failures would turn a delisted commentary edition into a red "every track
+    failed" album. What they may not do is prop up a false success: an
     album whose every track was refused wrote nothing, so it says exactly that
     rather than reporting done over an empty folder.
 
@@ -3058,7 +3035,6 @@ def _dedup_versions(items, key_fn, mode: str, max_rank: int = 3) -> list:
     return [x for x in out if x is not None]
 
 
-# --- Album-edition collapsing (opt-in: keep only the most complete edition) ----
 # Qualifiers that mark a genuinely DIFFERENT release; an edition whose qualifier
 # matches one of these is never collapsed into another (it keeps its own group).
 _EDITION_KEEP_RE = re.compile(
@@ -3123,12 +3099,11 @@ def _drop_spatial_editions(own: list, guest: list) -> tuple[list, list, int]:
     out, wherever the sweep also holds the same release in stereo.
 
     _atmos_kind keys the Atmos edition apart so every collapse keeps both rows,
-    which is right for browsing (issue #26 is what happens when it is also the
-    last word for a discography: the sweep queues the Atmos edition beside its
-    stereo twin, every track of it is Atmos-only, and the engine's own
-    "nothing else to fetch" clause then downloads Atmos for a user who turned
-    it off). The setting means "prefer stereo where there is a choice", so the
-    sweep is where the choice gets made.
+    which is right for browsing but not the last word for a discography: the
+    sweep would queue the Atmos edition beside its stereo twin, every track of
+    it Atmos-only, and the engine's own "nothing else to fetch" clause would
+    then download Atmos for a user who turned it off. The setting means "prefer
+    stereo where there is a choice", so the sweep is where the choice gets made.
 
     Paired on (base title, artist), the edition key without its Atmos kind, so
     a "(Dolby Atmos)"-suffixed twin still meets its stereo edition. An Atmos
@@ -3175,9 +3150,9 @@ def _stop_check_for(bridge) -> Callable[[], None]:
 
     The scan has to police itself: STOP clears the QUEUE, and a scan in flight
     holds no queue row, no job abort and no artist group yet, so nothing
-    stopAll touches reaches it. Before this, a discography stopped mid-scan
-    finished the scan after STOP and queued the whole discography behind the
-    press, with the artist button stuck at "running" (issue #27)."""
+    stopAll touches reaches it. Without this generation check a discography
+    stopped mid-scan would finish and queue the whole discography behind the
+    press, with the artist button stuck at "running"."""
     gen = bridge._scan_gen
 
     def check() -> None:
@@ -3239,12 +3214,12 @@ _RETRYABLE = frozenset({"failed", "cancelled"})
 class _JobSpec:
     """What a queued row's download needs, held until its turn comes.
 
-    A queued row used to carry its whole job from the moment it was queued: a
-    Download object, a Progress, a progress relay QObject and a pooled
-    Worker, about 19 KB apiece, with the 500 ms track poll walking every one
-    of them. A backlog of thousands paid for all of that before a byte moved.
-    The spec is the handful of arguments that job is built from, and
-    _pump_queue builds the job itself only when the pool is free.
+    A queued row must not carry its whole job before its turn comes: a
+    Download object, a Progress, a progress relay QObject and a pooled Worker
+    are about 19 KB apiece, with the 500 ms track poll walking every one, and
+    a backlog of thousands would pay for all of that before a byte moves. The
+    spec is the handful of arguments that job is built from, and _pump_queue
+    builds the job itself only when the pool is free.
 
     The catalog object is NOT among them: the job names what it wants as
     (provider_id, kind, namespaced id) and _start_job resolves it through
@@ -3314,10 +3289,10 @@ def _norm_track_title(name: str) -> str:
 def _merge_rec_title(track) -> str:
     """Normalised title for cross-edition matching, which is never empty.
 
-    A track whose title normalises away used to be dropped from the rec list
-    outright. That left a hole in the merged album which still reported 100%,
-    and on equal-length editions it let the superset guard pass vacuously and
-    lose a non-template edition's exclusive track.
+    A track whose title normalises away must not be dropped from the rec list:
+    that leaves a hole in the merged album which still reports 100%, and on
+    equal-length editions it lets the superset guard pass vacuously and lose a
+    non-template edition's exclusive track.
 
     Two fallbacks, and they behave differently on purpose. A title that survives
     as raw text ("(Live)", punctuation only) keys to that text and matches its
@@ -3458,7 +3433,6 @@ def _collapse_album_editions(albums, tracks_of, quality_of, conflict: str = "kee
     return [a for a in albums if id(a) not in drop]
 
 
-# --- Best-of-both-worlds merge: assemble one album from several editions -------
 # When a higher-quality edition is a subset of a lower-quality "complete" edition,
 # the merge takes each shared recording from the highest-quality edition that has
 # it and the exclusive tracks from the complete edition, presenting them all under
@@ -3838,7 +3812,7 @@ class WavesBridge(LibraryMixin, QObject):
     # Per-track view of a queued album (queue drawer row expansion):
     # queueTracksLoaded delivers the full ordered snapshot for a qid;
     # queueTrackState streams one track's lifecycle change; queueTrackPct
-    # batches live percentages for the tracks currently downloading.
+    # batches live percentages for the tracks downloading.
     queueTracksLoaded = Signal(int, "QVariantList")
     queueTrackState = Signal(int, "QVariant")
     queueTrackPct = Signal(int, "QVariantMap")
@@ -3916,7 +3890,7 @@ class WavesBridge(LibraryMixin, QObject):
     # nudge, the download proceeds). QML routes both to the Downloads setting.
     downloadFolderMissing = Signal()
     downloadFolderDefault = Signal()
-    # A folder IS set but a write probe says it is not reachable right now (a
+    # A folder IS set but a write probe says it is temporarily not reachable (a
     # NAS that dropped off on sleep, an unplugged drive, a stale macOS mount
     # point). Blocking: the download is held (see _pending_downloads) until the
     # user reconnects and retries, or picks a new folder. Arg = the dead path,
@@ -3964,7 +3938,7 @@ class WavesBridge(LibraryMixin, QObject):
     # appleStatusChanged so the wizard's login form re-reads without a
     # schema rebuild.
     appleWrapperAuthChanged = Signal()
-    # Managed Apple runtime (Settings → Providers · Apple Music, issue #31).
+    # Managed Apple runtime (Settings → Providers · Apple Music).
     appleRuntimeStatusChanged = Signal()
     appleRuntimeProgress = Signal(float)
     appleRuntimeStateChanged = Signal(str, str)  # state, message
@@ -4113,15 +4087,15 @@ class WavesBridge(LibraryMixin, QObject):
         self._scan_count_lock = Lock()
         self.dl_pool = QtCore.QThreadPool()
         # ONE queue item at a time, strictly in the order they were queued.
-        # This pool used to run downloads_concurrent_max items side by side,
-        # which read as the queue jumping around: a 21-track album (whose
-        # tracks also carry the 3-5s anti-hammer delay) ground along while
-        # single tracks queued after it zipped past, and every concurrent item
-        # fought the album for the shared 10-connection HTTP pool (livetest
-        # report). Parallelism lives INSIDE a collection instead: the engine's
-        # track executor still fans out downloads_concurrent_max tracks, and a
-        # lone track saturates the socket pool by itself, so serial items cost
-        # little throughput and the queue keeps its promise of order.
+        # Running downloads_concurrent_max items side by side reads as the
+        # queue jumping around: a 21-track album (whose tracks also carry the
+        # 3-5s anti-hammer delay) grinds along while single tracks queued after
+        # it zip past, and every concurrent item fights the album for the
+        # shared 10-connection HTTP pool. Parallelism lives INSIDE a collection
+        # instead: the engine's track executor still fans out
+        # downloads_concurrent_max tracks, and a lone track saturates the
+        # socket pool by itself, so serial items cost little throughput and the
+        # queue keeps its promise of order.
         self.dl_pool.setMaxThreadCount(1)
         # Let the verbose perf sampler report saturation per pool by name.
         diagnostics.register_pool("ui", self.threadpool)
@@ -4179,10 +4153,10 @@ class WavesBridge(LibraryMixin, QObject):
         # the on-disk value up front is what keeps them from being misread as a
         # user choice. Updated on save in applySettings.
         self._ffmpeg_user_path = (self.settings.data.path_binary_ffmpeg or "").strip()
-        # Managed Apple runtime (issue #31, spec §2/§10): the N_m3u8DL-RE
-        # binary and wrapper port state live under the same app data dir as
-        # FFmpeg, provisioned by the setup wizard. Imported lazily so plain
-        # unit-test stubs without the package still bind bridge methods.
+        # Managed Apple runtime (spec §2/§10): the N_m3u8DL-RE binary and
+        # wrapper port state live under the same app data dir as FFmpeg,
+        # provisioned by the setup wizard. Imported lazily so plain unit-test
+        # stubs without the package still bind bridge methods.
         try:
             from waves.apple_runtime import AppleRuntimeManager
 
@@ -4192,7 +4166,7 @@ class WavesBridge(LibraryMixin, QObject):
             self._apple_runtime = None
         self._apple_runtime_abort = Event()
         self._apple_runtime_inflight = False
-        # Cached container-runtime probe (issue #31): appleSetupState() runs
+        # Cached container-runtime probe: appleSetupState() runs
         # on the GUI thread, where a `docker info` against a hung daemon
         # would freeze Settings. GUI callers read this cache; workers
         # refresh it (warm-up below, appleStartContainer, image pull).
@@ -4207,7 +4181,7 @@ class WavesBridge(LibraryMixin, QObject):
         self._apple_wrapper_auth_cache: dict = {"at": 0.0, "result": None}
         self._apple_wrapper_auth_refresh_lock = Lock()
         self._apple_wrapper_login_inflight = False
-        # Session supervision (issue #33, spec §3): the lazy sidecar's
+        # Session supervision (spec §3): the lazy sidecar's
         # health/idle lifecycle. The supervisor is pure (injectable runner
         # and HTTP probe) so workers drive it without touching Qt; the
         # last-activity stamp lives here beside it.
@@ -4599,8 +4573,8 @@ class WavesBridge(LibraryMixin, QObject):
         # down, tracks overwrite in place). Session-long like the claim
         # overrides, so a retry of a forced job stays forced.
         self._redownload_overrides: set[str] = set()
-        # Per-item audio quality choices made on a row's quality badge (issue
-        # #36): media id -> UI tier word ("HI-RES", "LOSSLESS", "HIGH", "LOW")
+        # Per-item audio quality choices made on a row's quality badge:
+        # media id -> UI tier word ("HI-RES", "LOSSLESS", "HIGH", "LOW")
         # or "DEFAULT". A choice stands on its item until that item is given
         # another tier: a download asks at it without spending it, so the badge
         # keeps stating the tier the copy was fetched at. A track without one
@@ -4666,7 +4640,6 @@ class WavesBridge(LibraryMixin, QObject):
         self._own_pool = QtCore.QThreadPool()
         self._own_pool.setMaxThreadCount(2)
         diagnostics.register_pool("ownership", self._own_pool)
-        # ---- Local music-library scan (the "in your library" badge) ----------
         # See waves.library_index + bridge_library.LibraryMixin: scans the
         # configured library folder for albums the user already has, downloaded
         # by Waves or not. Kept across logout: it describes files on THIS disk.
@@ -4781,9 +4754,9 @@ class WavesBridge(LibraryMixin, QObject):
         # so it needs its own adapter rather than _library_probe_page.
         self.playlistTracksLoaded.connect(self._library_probe_track_rows)
         self._library = self._open_library_index()
-        # The index object a scan currently holds (None outside a scan), so an
+        # The index object a scan holds (None outside a scan), so an
         # invalidation can tell whether the object it just retired may be
-        # closed now or must be left to that scan's own cleanup.
+        # closed at once or must be left to that scan's own cleanup.
         self._library_scanning = None
         # Freshness (see the _LIBRARY_* constants in bridge_library): a cheap
         # container-mtime poll every few minutes (the network-safe backbone), an
@@ -4827,7 +4800,7 @@ class WavesBridge(LibraryMixin, QObject):
         # committed DB, then re-checks the library for changes made while Waves
         # was closed. That check is normally the cheap mtime-incremental sweep,
         # but if it has been longer than the deep-sweep interval since a full
-        # re-list, do a full one now so an add/remove/replace an unreliable mount
+        # re-list, do a full one here so an add/remove/replace an unreliable
         # hid from mtimes is caught on launch, not only after the 12h in-session
         # sweep or a manual Rescan. The seed means this heavier sweep runs behind
         # badges already shown.
@@ -4837,7 +4810,7 @@ class WavesBridge(LibraryMixin, QObject):
         # compete with the GUI thread for the interpreter, and the launch
         # water visibly stuttered for it (probe 2026-09-01: 59-73 ms GUI
         # stalls with the walk busy, and the landing-arrival stall doubled).
-        # Only the seed runs now, so the cards incubating behind the veil are
+        # Only the seed runs, so the cards incubating behind the veil are
         # never badge-less; the failsafe timer starts the sweep even if the
         # reveal never reports (headless embedding, a wedged QML load).
         self._seed_library_badges()
@@ -4954,8 +4927,6 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Back-navigation filter error", exc_info=True)
         return False
 
-    # ----- Qt properties -------------------------------------------------
-
     def _get_logged_in(self) -> bool:
         return self._logged_in
 
@@ -4976,8 +4947,6 @@ class WavesBridge(LibraryMixin, QObject):
     sessionResolved = Property(bool, _get_session_resolved, notify=sessionResolvedChanged)
     busy = Property(bool, _get_busy, notify=busyChanged)
     status = Property(str, _get_status, notify=statusChanged)
-
-    # ----- internal state helpers ---------------------------------------
 
     def _set_logged_in(self, value: bool) -> None:
         if value != self._logged_in:
@@ -5180,8 +5149,6 @@ class WavesBridge(LibraryMixin, QObject):
             if len(d) > self._objs_max:
                 del d[next(iter(d))]  # evict oldest insert (dicts keep insertion order)
 
-    # ----- result dict builders -----------------------------------------
-
     def _album_dict(self, album) -> dict:
         key = str(getattr(album, "id", id(album)))
         self._remember("album", key, album)
@@ -5321,8 +5288,6 @@ class WavesBridge(LibraryMixin, QObject):
             self._remember("artist", artist_id, artist)
         return artist
 
-    # ----- auth slots ----------------------------------------------------
-
     @Slot()
     def beginLogin(self) -> None:
         def work() -> None:
@@ -5395,7 +5360,7 @@ class WavesBridge(LibraryMixin, QObject):
         # signed-in check sits at enqueue time, never inside a job: without
         # this stop the backlog would keep dispatching against the account
         # being signed out of and fail one item at a time, which is exactly
-        # what someone switching to a second account is escaping (issue #30).
+        # what someone switching to a second account is escaping.
         # The stop is the STOP button's (it also drops every waiting row's
         # spec), so the rows stay in the Stopped section and RETRY ALL picks
         # them up on whichever account signs in next.
@@ -5482,8 +5447,6 @@ class WavesBridge(LibraryMixin, QObject):
         self._set_busy(False)
         self._set_status("Signed out")
 
-    # ----- page-cache persistence ----------------------------------------
-
     _ARTIST_CACHE_MAX = 60  # ~30-80 KB each, worst case a few MB on disk
     # Browse drill-ins (editorial pages, pl: grids, item: pages) can each hold
     # thousands of rows and the whole map is re-serialized on every cache
@@ -5525,11 +5488,12 @@ class WavesBridge(LibraryMixin, QObject):
                 if cat not in self._lib_sort
             }
             data = {
-                # v2: the persisted default-sort library pages are now date-added
-                # descending (v1 held tidalapi's raw, non-date order), so drop v1
-                # snapshots rather than restore a stale order on launch.
-                # v3: playlists rows carry kind/sub/path (folder rows share the
-                # model); older snapshots would render rows the delegate misreads.
+                # Persisted default-sort library pages are date-added
+                # descending (v1 held tidalapi's raw, non-date order), so v1
+                # snapshots are dropped rather than restored with a stale order
+                # on launch. v3: playlists rows carry kind/sub/path (folder
+                # rows share the model); older snapshots would render rows the
+                # delegate misreads.
                 "version": 3,
                 "user": self._cache_user_id(),
                 "browse_root": self._browse_root_cache,
@@ -5610,8 +5574,6 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _remember_album_tracks(self, album_id: str, rows: list) -> None:
         self._remember_capped(self._album_tracks_cache, album_id, rows, self._ALBUM_TRACKS_CACHE_MAX)
-
-    # ----- search --------------------------------------------------------
 
     def _apple_link_payload(self, resolved: object) -> dict | None:
         """A resolved Apple link as a search payload with one Apple row.
@@ -5993,7 +5955,7 @@ class WavesBridge(LibraryMixin, QObject):
                 with ThreadPoolExecutor(max_workers=min(_POP_WORKERS, len(artist_objs))) as pool:
                     list(pool.map(_enrich, artist_objs))
                 if total and gen == self._search_gen:
-                    self._save_page_cache()  # the meters, now in the snapshot
+                    self._save_page_cache()  # the meters are in the snapshot
 
         self.threadpool.start(Worker(work))
 
@@ -6820,8 +6782,8 @@ class WavesBridge(LibraryMixin, QObject):
         the folder tree walked in the SAME sweep.
 
         The playlists and mixes categories are paged and sorted locally (see
-        :meth:`_library_page`), yet each page used to re-fetch the entire
-        listing just to slice one window from it. Now only first-page loads
+        :meth:`_library_page`), so re-fetching the entire listing per page just
+        to slice one window from it would be waste: only first-page loads
         (``refresh=True``, the tab's usual stale-while-revalidate entry) re-run
         the sweep, and even those reuse a copy younger than
         ``_MEDIA_LISTS_TTL``; scroll pages and re-sorts always work against
@@ -6893,10 +6855,11 @@ class WavesBridge(LibraryMixin, QObject):
         The tree is written in exactly one place (the sweep in
         :meth:`_media_lists`), so anything that needs it before the user has
         opened My Tidal, or straight after a sign-in that nulled it, finds it
-        None. Two callers used to fail silently in that window: a folder tile
-        restored from the disk page cache drilled into a permanently blank
-        list, and a playlist downloaded from search resolved ``{folder_path}``
-        to "" and landed in a second directory alongside its real one.
+        None. Callers must warm it rather than fail silently in that window: a
+        folder tile restored from the disk page cache would drill into a
+        permanently blank list, and a playlist downloaded from search would
+        resolve ``{folder_path}`` to "" and land in a second directory
+        alongside its real one.
 
         Returns False when no warm could be started (signed out), so the caller
         can keep its old not-ready behaviour. ``then`` runs on the GUI thread,
@@ -6957,7 +6920,7 @@ class WavesBridge(LibraryMixin, QObject):
         - A ``limit``-N request can return *fewer* than N rows because tidalapi
           drops unavailable items within the window, so "more" must be derived
           from the total ``get_*_count``, not the returned length (the provider
-          owns that verdict now).
+          owns that verdict).
         Playlists and mixes come back as one list, paged and sorted locally
         against the cached sweep (see :meth:`_media_lists`)."""
         # order_override lets a caller force a specific order (e.g. Home's date-desc
@@ -7292,8 +7255,6 @@ class WavesBridge(LibraryMixin, QObject):
 
         self.threadpool.start(Worker(work))
 
-    # ----- browse (TIDAL editorial pages) --------------------------------
-
     def _browse_card(self, obj) -> dict | None:
         """Normalize one page item into a flat card dict: ``kind`` plus the
         same keys the search sections already use, built through the existing
@@ -7383,7 +7344,7 @@ class WavesBridge(LibraryMixin, QObject):
         """Fetch one TIDAL editorial page through the provider: the read and
         its parse (the tolerant per-row re-do of tidalapi's ``Page.parse``,
         the shared-parser serialization, and the raw paging handle each
-        parsed category carries) all live behind the seam now. The bridge
+        parsed category carries) all live behind the seam. The bridge
         renders the parsed categories the page comes back with."""
         return self.providers[CTX_TIDAL].browse_page(title, api_path)
 
@@ -8106,8 +8067,8 @@ class WavesBridge(LibraryMixin, QObject):
                 # Fetched within the minute (a hover, a quick Back): the
                 # revalidate would be a no-op round trip. Older pages, and
                 # pages restored from disk (no stamp), revalidate as always.
-                # A page the hover built is opened now, so its membership
-                # is recorded now (off the GUI thread: it is a commit).
+                # A page the hover built is opened immediately, so its
+                # membership is recorded (off the GUI thread: it is a commit).
                 with self._prefetch_lock:
                     unrecorded = key in self._prefetch_unrecorded
                     self._prefetch_unrecorded.discard(key)
@@ -8282,8 +8243,6 @@ class WavesBridge(LibraryMixin, QObject):
         header = payload.get("header") or {}
         return {"key": payload.get("key", ""), "art": str(header.get("art") or ""), "rowArts": arts}
 
-    # ----- browse tile art (cover mosaics) --------------------------------
-
     _TILE_ART_TTL = 7 * 24 * 3600  # editorial pages shuffle slowly; a week is fine
     _TILE_ART_V = 3  # bump to invalidate cached samples when the sampler changes
 
@@ -8413,8 +8372,8 @@ class WavesBridge(LibraryMixin, QObject):
         missing: list[tuple[str, str]] = []
         for title, path in links:
             # Memory entries carry the sample's own timestamp and honour the
-            # TTL: an always-on app previously served day-0 mosaics forever
-            # because the mem hit short-circuited the disk TTL check.
+            # TTL: without that, an always-on app serves day-0 mosaics forever,
+            # because the mem hit short-circuits the disk TTL check.
             arts = None
             held = self._tile_art_mem.get(path)
             if held is not None and now - held[0] < self._TILE_ART_TTL:
@@ -8500,14 +8459,11 @@ class WavesBridge(LibraryMixin, QObject):
 
         self.threadpool.start(Worker(work))
 
-    # ----- downloads -----------------------------------------------------
-
     # Settled rows: finished work with nothing left to do about it. A FAILED
     # row is not settled, however old it is, because it is the only record
     # that something still needs retrying.
-    # Done is the one settled status. A cancelled row used to settle too, but
-    # since STOP keeps its rows (issue #27) a cancelled row is a stopped one
-    # waiting for RETRY, the same record a failed row is, and is kept for the
+    # Done is the one settled status: a cancelled row is a stopped one waiting
+    # for RETRY, the same record a failed row is, and stays unsettled for the
     # same reason.
     _QUEUE_SETTLED = frozenset({"done"})
     _QUEUE_HISTORY_MAX = 250
@@ -8518,10 +8474,9 @@ class WavesBridge(LibraryMixin, QObject):
         Everything the queue does per change is proportional to its length: the
         whole list is marshalled across to QML on every status change and
         reconciled row by row there, and each collection row also holds a
-        per-track registry that lives as long as the row. Nothing ever removed
-        a finished row, so a long batch left the drawer carrying its own
-        history and paying for it on every update, which is the lag reported
-        in issue #24.
+        per-track registry that lives as long as the row. Unbounded, a long
+        batch leaves the drawer carrying its own history and paying for it on
+        every update.
 
         Oldest settled rows go first, and only past the cap; queued, running,
         failed and stopped rows are never touched. Nothing is lost with them: what was
@@ -8547,21 +8502,14 @@ class WavesBridge(LibraryMixin, QObject):
             self._reindex_queue()
             self._qdirty_removed.extend(gone)
 
-    # ----- queue change delivery ------------------------------------------
-    #
-    # Every mutation of a queue row ends in _emit_queue(). It used to ship the
-    # whole queue to QML each time, and QML reconciled every row against the
-    # copy: O(queue) work per change at both ends, plus a fresh JS array of
-    # every row per change for the QML garbage collector to chase. Measured
-    # with the stress harness (scratchpad/queue_stress): a queue of 9,000 rows
-    # cost 19 ms per change and grew the process by 690 MB over 30 albums,
-    # with garbage-collection pauses of over two seconds; a blocked account
-    # failing 2,000 queued albums grew it by 13 GB, because a worker thread
-    # emitting snapshots faster than the window absorbed them left a copy of
-    # the queue in every queued signal. Now each mutation marks its qids
-    # dirty, and one flush on the GUI thread turns the marks into three
-    # delta signals carrying only the rows concerned. queueChanged (the whole
-    # queue) remains for the rare wholesale resync.
+    # Every mutation of a queue row ends in _emit_queue(). Shipping the whole
+    # queue to QML on every change would cost O(queue) work at both ends plus
+    # a fresh JS array of every row for the QML garbage collector to chase; a
+    # worker emitting snapshots faster than the window absorbs them leaves a
+    # copy of the queue in every queued signal. Instead each mutation marks
+    # its qids dirty, and one flush on the GUI thread turns the marks into
+    # three delta signals carrying only the rows concerned. queueChanged (the
+    # whole queue) remains for the rare wholesale resync.
 
     def _queue_mark_changed(self, qid: int) -> None:
         """Record that a row's fields moved (any thread)."""
@@ -8708,11 +8656,11 @@ class WavesBridge(LibraryMixin, QObject):
         time and would otherwise deliver the queue once per row, so the drawer
         visibly counts 0 to N. Suspending coalesces that into one delivery.
 
-        The flush belongs in the same finally as the flag. It used to sit on
-        the line after, so a loop body that raised skipped it while the flag
-        was still cleared: the rows were in the queue and marked dirty, but
-        nothing delivered them until some later, unrelated change flushed the
-        marks, and the drawer showed none of the work that had just started.
+        The flush belongs in the same finally as the flag: on the line after,
+        a loop body that raised would skip it while the flag was still
+        cleared, leaving the rows queued and marked dirty but undelivered
+        until some later, unrelated change flushed the marks, with the drawer
+        showing none of the work that had just started.
         """
         outer = self._queue_emit_suspended
         self._queue_emit_suspended = True
@@ -8795,9 +8743,9 @@ class WavesBridge(LibraryMixin, QObject):
         appears at once rather than the queue visibly jumping 0 → N.
 
         ``gen`` is the scan generation the ordering scan captured: a batch
-        posted before STOP can be DELIVERED after it, and used to queue the
-        whole discography behind the press (issue #32). A stale batch queues
-        nothing and resets any button the scan lit for its keys."""
+        posted before STOP can be DELIVERED after it, and would then queue the
+        whole discography behind the press. A stale batch queues nothing and
+        resets any button the scan lit for its keys."""
         if gen != self._scan_gen:
             # The scan marked every key exempt from the edition scan before it
             # emitted this batch, and the mark is consumed by the next click
@@ -8856,7 +8804,6 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Could not read the audio quality to pin on the row", exc_info=True)
             return ""
 
-    # ---- per-item quality choice (issue #36) --------------------------------
     # A choice lives on the media id it was made on. Every download entry point
     # (a button, the owned gate's REDOWNLOAD, the library claim's DOWNLOAD
     # ANYWAY, a re-fetched share link, a held download released by the folder
@@ -8907,10 +8854,9 @@ class WavesBridge(LibraryMixin, QObject):
         self.qualityOverridesChanged.emit()
         # A choice moves the target the owned copies are judged against, so
         # every button standing on one of them re-asks (a copy landed at a
-        # lower tier is an upgrade now), and a button that reads DOWNLOADED
-        # only because THIS session fetched the item is handed back too
-        # (livetest report: download a song, choose another tier on it, the
-        # button stayed DOWNLOADED and there was nothing to click).
+        # lower tier is an upgrade), and a button that reads DOWNLOADED only
+        # because THIS session fetched the item is handed back too, so it does
+        # not keep claiming a copy the choice just invalidated.
         scope = self._quality_choice_scope(mid)
         for tid in scope:
             self.ownershipChanged.emit(tid)
@@ -8970,7 +8916,7 @@ class WavesBridge(LibraryMixin, QObject):
         """What a download queued now asks for: (askQuality value, tier word).
         Without a choice it is the Settings tier, exactly as before; DEFAULT is
         that same answer made explicit on one item. The value is the Waves
-        tier string the row pins (issue #24)."""
+        tier string the row pins."""
         key = self._quality_override_key(obj, type_media, media_id)
         word = (getattr(self, "_quality_overrides", None) or {}).get(key, "") if key else ""
         tier = tier_from_word(word)
@@ -9007,9 +8953,8 @@ class WavesBridge(LibraryMixin, QObject):
         """The audio quality a queue row was created at, as a Waves rung, or
         None when the row is gone or its value is no longer a tier this build
         knows (then the session's own quality stands). The row's askQuality
-        parses through the Waves enum (issue #24): the tier strings new rows
-        pin, and the tidalapi spellings rows queued before the split carried,
-        fold onto the same ladder."""
+        parses through the Waves enum: the Waves tier strings rows pin and the
+        tidalapi spellings fold onto the same ladder."""
         row = self._queue_item(qid)
         raw = (row or {}).get("askQuality") or ""
         if not raw:
@@ -9051,7 +8996,7 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Could not read the target audio quality", exc_info=True)
             return ""
 
-    # ---- Chooser split button + popover (issue #35, spec §7.2) ------------
+    # Chooser split button + popover (spec §7.2).
     # Every download control is a split button: the main face queues with the
     # saved Settings defaults, the chevron face (or right-click) opens the
     # anchored Chooser popover. The popover's choice applies to that click
@@ -9147,7 +9092,7 @@ class WavesBridge(LibraryMixin, QObject):
         return "both" if default_audio_is_both(value) else "stereo"
 
     def _default_wants_both(self) -> bool:
-        """Whether the Chooser one-click default fetches both Versions (issue #66).
+        """Whether the Chooser one-click default fetches both Versions.
 
         The single source every plain (non-Chooser) click consults instead of
         the retired Download-Dolby-Atmos toggle. Plain test stubs without
@@ -9187,7 +9132,7 @@ class WavesBridge(LibraryMixin, QObject):
         provider's tier entries; lyrics/art: the shared quick-toggles."""
         provider_id = self._chooser_provider_of(media_id)
         try:
-            # Per-provider quick toggles (issue #61): the Chooser stages the
+            # Per-provider quick toggles: the Chooser stages the
             # row's own provider options, and SET AS DEFAULTS writes them back
             # to that provider's mirrors.
             lyrics_embed = bool(self._psetting(provider_id, "lyrics_embed", False))
@@ -9246,8 +9191,8 @@ class WavesBridge(LibraryMixin, QObject):
         # only): SET AS DEFAULTS leaves the default unchanged rather than
         # misrecording it as both.
         # Lyrics/art quick-toggles write back to the row's own provider
-        # mirrors (issue #61); the shared keys stay legacy carriers. An
-        # explicit mirror always wins over its shared spelling.
+        # mirrors; the shared keys are fallbacks. An explicit mirror always
+        # wins over its shared spelling.
         provider_prefix = "apple_" if provider_id == CTX_APPLE else "tidal_"
         for _prefix in ("tidal_", "apple_"):
             for _base in _CHOOSER_TOGGLE_KEYS:
@@ -9486,7 +9431,7 @@ class WavesBridge(LibraryMixin, QObject):
             # The audio quality this job is queued at, held for its whole
             # life: a change in Settings retargets nothing that is already
             # queued or running, it applies to what is queued from then on.
-            # Stored as the plain Waves tier string (issue #24) so the
+            # Stored as the plain Waves tier string so the
             # row stays a QML-friendly dict.
             "askQuality": ask_quality,
             # Whether the library scan's tag claim may skip tracks for this job,
@@ -9620,14 +9565,12 @@ class WavesBridge(LibraryMixin, QObject):
             return True
         return False
 
-    # ----- per-track queue view (queue drawer album expansion) ------------
-
     def _track_lifecycle(self, qid: int, ev: dict) -> None:
         """Record one track's state change and stream it to QML. Called on the
         GUI thread via _ProgressSignals.track_event (queued connection)."""
         if qid not in self._job_tracks and self._queue_item(qid) is None:
             # The row was cleared or cancelled while this event was crossing
-            # the thread hop. Seeding a registry for it now would build per
+            # the thread hop. Seeding a registry for it would build per
             # track state nothing can ever show or free: qids are never
             # reused, so it would sit there for the rest of the session.
             return
@@ -9784,7 +9727,7 @@ class WavesBridge(LibraryMixin, QObject):
                 degraded=degraded,
             )
             # The file was written this instant, so assert the cache entry
-            # directly (no stat needed) and let QML flip the button now. The
+            # directly (no stat needed) and let QML flip the button. The
             # next TTL refresh reconciles against the store's full row set.
             if degraded:
                 logger.info(
@@ -10029,7 +9972,7 @@ class WavesBridge(LibraryMixin, QObject):
             else:
                 rec_st = vst[1] if vst else None
                 rec_at = vat[1] if vat else None
-                # Owned only when every enabled Version survives on disk now
+                # Owned only when every enabled Version survives on disk
                 # (the versioned queries already re-checked the disk on the
                 # worker; None means no surviving copy of that Version).
                 if not rec_st or not rec_at:
@@ -10121,13 +10064,12 @@ class WavesBridge(LibraryMixin, QObject):
         "no" (at least one member firmly not), or "pending" (nothing firmly
         against, but a cold query is still being answered).
 
-        One call on purpose. Every card used to ask collectionMemberIds and
-        then ownershipOf once PER MEMBER, ~15 slot calls per card, twice per
-        card (the card and its download button), for every card of every shelf
-        as the landing built. Each call takes the GIL, and while the library
-        scan's workers were busy the GUI thread queued for it on every one:
-        sampled live, that queueing was most of a shelf's ~120ms atomic build,
-        which is what the launch animation dropped frames on."""
+        One call on purpose. Asking collectionMemberIds and then ownershipOf
+        once PER MEMBER would be ~15 slot calls per card, twice per card (the
+        card and its download button), for every card of every shelf as the
+        landing builds. Each call takes the GIL, and while the library scan's
+        workers are busy the GUI thread queues for it on every one, which
+        drops launch-animation frames."""
         ids = self._ownership.members_of(str(collection_id))
         return {"ids": ids, "verdict": self._rollup_verdict(ids or [])}
 
@@ -10140,9 +10082,8 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(str, result=str)
     def ownedTierOf(self, media_id: str) -> str:
         """The tier of the copy this item ALREADY has on disk, as the UI's one
-        word, or "" when it has none (issue #36: the quality menu marks that
-        one row, so a tier you already hold is not downloaded again by
-        mistake).
+        word, or "" when it has none (the quality menu marks that one row, so
+        a tier you already hold is not downloaded again by mistake).
 
         A track answers with its own copy's delivered tier, which is what the
         file actually is, not what was asked for. A collection Waves knows the
@@ -10556,8 +10497,6 @@ class WavesBridge(LibraryMixin, QObject):
             self._job_fetched.pop(qid, None)
             self._job_objs.pop(qid, None)
 
-    # ----- Waves-only preferences (kept out of the engine's Settings) -------
-
     def _migrate_video_template(self) -> bool:
         """Follow the video template's shipped default forward for users who
         never customized it.
@@ -10595,15 +10534,15 @@ class WavesBridge(LibraryMixin, QObject):
     def _migrate_illegal_map_offer(self) -> None:
         """Decide whether the recommended stand-ins still need offering.
 
-        The per-character table (issue #16) shipped empty, and
-        DEFAULT_ILLEGAL_MAP is what it should have held. Applying that to an
-        existing install would change how future downloads spell albums whose
-        folders are already on disk, so the table is offered on the File
-        organization card instead, and only ever written by the user's own
-        hand. This just settles who never needs asking: a brand-new install
-        (the defaults are already in _FIRST_RUN_OVERRIDES) and anyone who has
-        stand-ins of their own. Everyone else is left unstamped, which is what
-        puts the strip on the card.
+        DEFAULT_ILLEGAL_MAP holds recommended stand-ins for characters that
+        cannot appear in a filename. Applying it to an existing install would
+        change how future downloads spell albums whose folders are already on
+        disk, so the table is offered on the File organization card instead,
+        and only ever written by the user's own hand. This just settles who
+        never needs asking: a brand-new install (the defaults are already in
+        _FIRST_RUN_OVERRIDES) and anyone who has stand-ins of their own.
+        Everyone else is left unstamped, which is what puts the strip on the
+        card.
 
         Runs from __init__ right after the prefs load, same as the video flag
         above; it only touches waves.json, never settings."""
@@ -10750,7 +10689,7 @@ class WavesBridge(LibraryMixin, QObject):
             "search_sec_videos_expanded": False,
             "search_sec_playlists_expanded": False,
             "search_sec_mixes_expanded": False,
-            # Search-page provider groups (issue #67): a collapsed provider
+            # Search-page provider groups: a collapsed provider
             # group stays collapsed on the next search and across restarts,
             # per provider, alongside the section memory above.
             "search_provider_tidal_collapsed": False,
@@ -10760,7 +10699,7 @@ class WavesBridge(LibraryMixin, QObject):
             # an index so the option list can change) and the direction.
             "search_sort": "relevance",
             "search_sort_asc": False,
-            # Window geometry, remembered across launches (issue #6). These
+            # Window geometry, remembered across launches. These
             # store the NORMAL (non-maximized) frame so an un-maximize returns
             # to a sane size; win_max restores the maximized state on top. A
             # zero win_w/win_h is the "never saved" sentinel: a fresh install
@@ -10794,9 +10733,9 @@ class WavesBridge(LibraryMixin, QObject):
             # loss, half-written by a process that died mid-save, corrupt on
             # disk, or valid JSON whose top level is not an object. Loading
             # defaults is right; saving them back over the only copy of
-            # someone's settings is not, and that is what used to happen the
-            # moment anything called _save_waves_prefs (__init__ itself does,
-            # through _migrate_video_flag). The loss was total and silent.
+            # someone's settings is not. The loss would be total and silent,
+            # and __init__ itself calls _save_waves_prefs (through
+            # _migrate_video_flag), so every save path must preserve the file.
             self._preserve_unreadable_prefs()
         return prefs
 
@@ -10885,7 +10824,7 @@ class WavesBridge(LibraryMixin, QObject):
         if hook is not None:
             with contextlib.suppress(Exception):
                 hook()
-        # The launch look is over: the held library sweep may now compete for
+        # The launch look is over: the held library sweep may compete for
         # the interpreter (see the constructor's boot deferral).
         self._start_boot_library_scan()
 
@@ -11030,13 +10969,11 @@ class WavesBridge(LibraryMixin, QObject):
         return v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "yes", "on")
 
     def _merge_pref_on(self) -> bool:
-        """Whether 'best of both' is on. It stands on its own: it used to also
-        require ``collapse_editions``, which is labelled (and documented) as a
-        discography setting, so turning that off silently stopped every
-        single-album merge AND hid the control that said so."""
+        """Whether 'best of both' is on. It stands independent of
+        ``collapse_editions``, which is labelled (and documented) as a
+        discography setting: gating on it would stop every single-album merge
+        AND hide the control that said so."""
         return self._waves_prefs.get("edition_conflict") == "merge"
-
-    # ----- window geometry (issue #6) ------------------------------------
 
     def _fit_geometry_to_screens(self, x: int, y: int, w: int, h: int):
         """Clamp a restored frame onto a currently-connected screen.
@@ -11058,7 +10995,7 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(result="QVariant")
     def windowRestoreGeometry(self):
         """The sanitized window frame to apply at startup, or ``{}`` on a fresh
-        install or an unreadable save (issue #6).
+        install or an unreadable save.
 
         The saved NORMAL frame is clamped onto a live screen so a window last
         positioned on a monitor that is now gone, or on a resolution that has
@@ -11083,7 +11020,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(int, int, int, int, bool)
     def windowSaveGeometry(self, x: int, y: int, w: int, h: int, maximized: bool) -> None:
-        """Persist the window's NORMAL frame and maximized state (issue #6).
+        """Persist the window's NORMAL frame and maximized state.
 
         QML sends the last non-maximized frame (never the maximized one, which
         would un-maximize to fullscreen size) and debounces the per-pixel change
@@ -11146,8 +11083,6 @@ class WavesBridge(LibraryMixin, QObject):
             self._save_waves_prefs()
             _win_log.debug("save queue drawer width %d", w)
 
-    # ----- diagnostics export --------------------------------------------
-
     @Slot()
     def exportDiagnostics(self) -> None:
         """Build the redacted diagnostic bundle off the GUI thread and report
@@ -11190,7 +11125,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(int, result=str)
     def logTail(self, max_lines: int = 500) -> str:
-        """The on-disk log's tail for the in-app console (issue #68).
+        """The on-disk log's tail for the in-app console.
 
         Bounded (see diagnostics.log_tail); "" when there is no log file
         yet. The console polls this while open, so it stays cheap by
@@ -11204,7 +11139,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot()
     def copyLogs(self) -> None:
-        """Copy the recent log tail to the clipboard (issue #68)."""
+        """Copy the recent log tail to the clipboard."""
         try:
             text = diagnostics.log_tail()
         except Exception:
@@ -11228,7 +11163,7 @@ class WavesBridge(LibraryMixin, QObject):
         # per key, so collapsing two same-titled editions that differ in track count
         # would silently drop the extra edition's unique songs. Quality/region
         # duplicates of ONE release share a track count and still collapse to the
-        # best version; a more-complete same-titled edition now survives to the
+        # best version; a more-complete same-titled edition survives to the
         # edition stage, which decides losslessly. (A deluxe already keeps its own
         # title and stays separate regardless.) The Atmos kind rides last: an
         # Atmos-only edition is its own row, see _atmos_kind.
@@ -11259,7 +11194,7 @@ class WavesBridge(LibraryMixin, QObject):
     def _max_quality_rank(self) -> int:
         """Rank of the user's configured maximum audio quality (the cap that
         search results are filtered down to). The setting folds through the
-        shared ladder like every other read (issue #24); an unreadable value
+        shared ladder like every other read; an unreadable value
         caps at nothing (HI-RES), never at the bottom."""
         tier = tier_from_word(str(self.settings.data.tidal_quality_audio or ""))
         return quality_rank(tier) if tier is not None else 3
@@ -11477,7 +11412,7 @@ class WavesBridge(LibraryMixin, QObject):
         Groups with no quality upgrade collapse to the most complete edition (so
         the user still gets the fullest version, just without a merge). Only
         the sweep with 'Most-complete edition only' on calls this; with it off
-        every edition downloads whole (issue #27). ``stop_check`` runs before
+        every edition downloads whole. ``stop_check`` runs before
         each edition's track fetch, see _collapse_editions."""
         recs_of = _stoppable(self._merge_recs_factory(), stop_check)
         rank_of = self._merge_rank_fn()
@@ -11551,9 +11486,9 @@ class WavesBridge(LibraryMixin, QObject):
 
         Returns ``(editions, complete)``. ``complete`` is False when the artist
         could not be read at all or a bucket failed, mirroring
-        :meth:`_artist_releases`: a dropped session or a 429 used to be
-        swallowed here and reported to the user as "No richer edition found",
-        asserting something the scan never established."""
+        :meth:`_artist_releases`: a dropped session or a 429 must not be
+        swallowed and reported as "No richer edition found", which asserts
+        something the scan never established."""
         base = _edition_base_key(album)
         artist_id = str(getattr(getattr(album, "artist", None), "id", "") or "")
         artist = self._get_artist(artist_id) if artist_id else None
@@ -11791,7 +11726,7 @@ class WavesBridge(LibraryMixin, QObject):
         Deliberately cheap (pure string checks): this runs on the GUI thread at
         the moment of the Download click. The reachability probe of the folder
         lives in :meth:`_gate_reachability`, called from the download worker,
-        because a write probe against a network mount costs seconds and used to
+        because a write probe against a network mount costs seconds and would
         stall the GUI (no queue row, no progress bar) before anything happened."""
         action = self._folder_gate_action(
             self.settings.data.download_base_path, self.settings.data.download_folder_prompted
@@ -12030,7 +11965,7 @@ class WavesBridge(LibraryMixin, QObject):
         self._remove_row(qid)  # the registry goes with the row at the flush
         self._emit_queue()
         if verdict in ("ok", "healed"):
-            # Our own remount already brought the share back: replay now.
+            # Our own remount already brought the share back: replay immediately.
             self._set_status(f"Reconnected the download folder, retrying {name}…")
             self.downloadFolderRecovered.emit()
         else:
@@ -12119,7 +12054,7 @@ class WavesBridge(LibraryMixin, QObject):
                     if time.monotonic() - self._recovery_started > self._WEDGE_FORCE_SEC:
                         self._remount_download_share(self.settings.data.download_base_path, wedged=True)
                     # If the quiet warm-up window has run out and the user has
-                    # not seen the dialog yet, raise it now (once): past this
+                    # not seen the dialog yet, raise it (once): past this
                     # point it is a real outage, not a cold share waking up.
                     if not self._recovery_dialog_shown and time.monotonic() > self._recovery_dialog_deadline:
                         self._recovery_dialog_shown = True
@@ -12236,11 +12171,11 @@ class WavesBridge(LibraryMixin, QObject):
                 # being abandoned, so this is where its rollup is settled. The
                 # gate that stashed it deliberately credited nothing (the
                 # replay was still expected to report in), and every other
-                # withdrawal path settles its own rows (issue #32). Without
-                # the credit here a discography kept the albums it never ran
-                # in "done" short of "keys" for good: its button stayed
-                # running and refused every tap, with an idle queue and no
-                # STOP on screen to end it.
+                # withdrawal path settles its own rows. Without the credit
+                # here a discography keeps the albums it never ran in "done"
+                # short of "keys" for good: its button stays running and
+                # refuses every tap, with an idle queue and no STOP on screen
+                # to end it.
                 self._bump_download_groups(mid, None, "failed")
         # Same release as STOP's drain: these holds are being abandoned, so
         # the force, the claim override and the plan the withdrawal kept for
@@ -12432,18 +12367,17 @@ class WavesBridge(LibraryMixin, QObject):
         # An identical row already waiting or running makes a second one pure
         # duplication: the same item, at the same pinned quality, into the same
         # folder, downloaded twice (a re-clicked discography overlapping a
-        # RETRY ALL kept re-adding whole albums, issue #32). A different pinned
-        # quality is NOT a duplicate: that click is an upgrade or downgrade
-        # request and keeps its own row. Terminal rows (done, failed, stopped)
-        # never block a fresh ask.
+        # RETRY ALL would re-add whole albums). A different pinned quality is
+        # NOT a duplicate: that click is an upgrade or downgrade request and
+        # keeps its own row. Terminal rows (done, failed, stopped) never block
+        # a fresh ask.
         # The tier this click asks at: the Chooser's pin when this is a
         # Chooser click, else the item's (or, for a track, its album's)
         # quality choice when one stands, else the setting. Read here, after
         # every gate, so a held download asks at the choice that stands when
-        # it is finally released. A download never spends the choice: it
-        # stays on the item, stated by its badge, until the item is given
-        # another tier (livetest report: download a song at a chosen tier and
-        # its badge fell straight back to the catalog's word).
+        # it is finally released. A download never spends the choice: it stays
+        # on the item, stated by its badge, until the item is given another
+        # tier, so the badge does not fall back to the catalog's word.
         if chooser_ask is not None and chooser_ask[0]:
             ask, ask_tier = (
                 str(chooser_ask[0]),
@@ -12601,7 +12535,6 @@ class WavesBridge(LibraryMixin, QObject):
         self._pump_queue()
         return True
 
-    # ----- Apple downloads (cookies tier) ----------------------------------
     # One click downloads an Apple album/playlist/track end-to-end through
     # gamdl's fetch+decrypt, then rides the normal queue rows, per-track
     # lifecycle events, ownership store and library scan. The TIDAL segment
@@ -12699,7 +12632,7 @@ class WavesBridge(LibraryMixin, QObject):
         the skip-list gate. They travel separately so a deferred replay keeps
         the row's pinned ask without promoting a fresh row into a retry.
 
-        ``chooser_ask``/``chooser_audio`` pin one Chooser click (issue #35),
+        ``chooser_ask``/``chooser_audio`` pin one Chooser click,
         that click only, never stored.
 
         Returns True when a row was queued (or acknowledged); False when a
@@ -12888,8 +12821,8 @@ class WavesBridge(LibraryMixin, QObject):
             elif ver == "stereo":
                 row_expected = "HIGH"
             # A re-clicked row overlapping a queued or running one is pure
-            # duplication (the TIDAL _download guard, issue #32): a different
-            # pinned quality is an upgrade request and keeps its own row. Each
+            # duplication (the TIDAL _download guard): a different pinned
+            # quality is an upgrade request and keeps its own row. Each
             # Version guards on its own audioType, so stereo+Atmos coexist.
             if media_id:
                 with self._queue_lock:
@@ -13042,7 +12975,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _apple_expected_word(self, job_atype, *, requested_rank: int, ceiling_rank: int) -> str:
         """The queue row's expected word: ATMOS for Atmos rows, else the
-        requested tier capped by the servable ceiling (issue #32).
+        requested tier capped by the servable ceiling.
 
         Cookies-tier ceiling HIGH keeps the old HIGH; the wrapper ceiling
         HI_RES lets a HI_RES ask read HI-RES. Detail ("ALAC 24/192") never
@@ -13172,7 +13105,7 @@ class WavesBridge(LibraryMixin, QObject):
         # The lyrics/art options this job runs with: the row's per-click
         # Chooser pins when it has any, the provider's stored options otherwise.
         options = self._apple_options(getattr(spec, "chooser_toggles", None))
-        # Session supervision (issue #33, spec §3): the sidecar starts lazily
+        # Session supervision (spec §3): the sidecar starts lazily
         # on the first Apple download that needs it. Cookies-tier asks (HIGH)
         # never touch it; only a LOSSLESS-or-better ask waits here.
         try:
@@ -13195,7 +13128,7 @@ class WavesBridge(LibraryMixin, QObject):
         for pos, row in enumerate(rows, start=1):
             if job_abort.is_set():
                 break
-            # Proactive pacing (issue #33, spec §3): pause after N songs for
+            # Proactive pacing (spec §3): pause after N songs for
             # N seconds, same shape as TIDAL's. STOP lands promptly.
             try:
                 pace_ok = self._apple_pace_if_due(pos, job_abort, qid)
@@ -13510,11 +13443,10 @@ class WavesBridge(LibraryMixin, QObject):
                 return True
             time.sleep(min(0.2, remaining))
 
-    # ----- Apple session supervision (issue #33, spec §3) --------------------
     def _psetting(self, provider_id: str, key: str, default=None):
-        """One lyrics/artwork option for one provider (issue #61).
+        """One lyrics/artwork option for one provider.
 
-        Reads the provider's mirror with the shared key as legacy fallback,
+        Reads the provider's mirror with the shared key as fallback,
         defensively (old unit-test stubs bind the bridge without these
         fields; they read as the default).
         """
@@ -13525,7 +13457,7 @@ class WavesBridge(LibraryMixin, QObject):
             return default
 
     def _tag_write_flags(self) -> dict:
-        """The Custom template's omit flags for tag writers (issue #61)."""
+        """The Custom template's omit flags for tag writers."""
         try:
             data = getattr(getattr(self, "settings", None), "data", None)
         except Exception:
@@ -13975,7 +13907,7 @@ class WavesBridge(LibraryMixin, QObject):
                 idle = False
             if not idle:
                 # Not yet idle (busy or recent activity): countdown again
-                # from now instead of dropping the stop.
+                # from here instead of dropping the stop.
                 with contextlib.suppress(Exception):
                     self._schedule_apple_idle_stop()
                 return
@@ -14106,7 +14038,7 @@ class WavesBridge(LibraryMixin, QObject):
             facts_isrc=str(facts.get("isrc") or ""),
         )
         base = pathlib.Path(str(self.settings.data.download_base_path)).expanduser()
-        # Lossless stereo lands as FLAC (issue #64); the true extension is
+        # Lossless stereo lands as FLAC; the true extension is
         # only known after the fetch, so guess here and correct per attempt
         # below (the TIDAL pipeline's guess-then-correct shape).
         guess_ext = self._apple_guess_ext(provider, audio_type, requested_rank)
@@ -14425,7 +14357,7 @@ class WavesBridge(LibraryMixin, QObject):
             ttml_verbatim=lyrics_ttml,
             options=options,
         )
-        # Honest delivered tier (issue #32): the provider probed the staged
+        # Honest delivered tier: the provider probed the staged
         # bytes (ALAC 24/96 where the master tops out stays 24/96 in the
         # record); the landed file re-probes for depth/rate so the ownership
         # row carries reality, not the ask. Detail rides bit_depth/
@@ -14454,7 +14386,7 @@ class WavesBridge(LibraryMixin, QObject):
         # A landed ALAC file re-derives its tier off its own bytes (a 24/96
         # master asked as HI_RES stays HI_RES with rate 96000; a 16/44.1
         # master asked as HI_RES lands LOSSLESS, honestly). A converted
-        # FLAC probes as "flac" and answers the same rungs (issue #64).
+        # FLAC probes as "flac" and answers the same rungs.
         # Source-gated, never container-gated: a transcoded AAC also probes
         # as FLAC, but it keeps its staged HIGH tier and must never promote
         # off its new container.
@@ -14467,7 +14399,7 @@ class WavesBridge(LibraryMixin, QObject):
                 tier = _honest_tier(codecs_landed, depth, rate or "", fallback=tier)
         except Exception:
             logger.debug("Apple honest-tier re-probe failed; keeping the staged tier", exc_info=True)
-        # Per-track ceiling for the ownership record (issue #32): an AAC-only
+        # Per-track ceiling for the ownership record: an AAC-only
         # master caps at HIGH even when the job asked HI_RES, so the copy
         # settles instead of reopening an upgrade that is not coming. Falls
         # back to the job's ceiling when the track cannot be read.
@@ -14526,7 +14458,7 @@ class WavesBridge(LibraryMixin, QObject):
             return ""
 
     def _apple_wants_flac(self) -> bool:
-        """Whether lossless Apple stereo should land as FLAC (issue #64).
+        """Whether lossless Apple stereo should land as FLAC.
 
         The shared Processing toggle (``extract_flac``), off meaning the
         original .m4a is kept. Plain test stubs without settings read as on,
@@ -14538,7 +14470,7 @@ class WavesBridge(LibraryMixin, QObject):
             return True
 
     def _apple_guess_ext(self, provider, audio_type, requested_rank: int) -> str:
-        """The destination extension guessed before the fetch (issue #64).
+        """The destination extension guessed before the fetch.
 
         Stereo at a lossless-or-better ask with the wrapper tier up and the
         FLAC toggle on guesses .flac (scope "all" guesses .flac for stereo
@@ -14570,7 +14502,7 @@ class WavesBridge(LibraryMixin, QObject):
         return ".flac"
 
     def _apple_flac_scope_all(self) -> bool:
-        """Whether lossy stereo also converts to FLAC (issue #64).
+        """Whether lossy stereo also converts to FLAC.
 
         The scope toggle beside the shared FLAC switch (``extract_flac_all``,
         default off): on re-encodes AAC stereo into FLAC, off keeps lossy
@@ -14582,7 +14514,7 @@ class WavesBridge(LibraryMixin, QObject):
             return False
 
     def _apple_flac_mode(self, info, *, atmos: bool) -> str:
-        """How this delivery becomes FLAC: "lossless", "lossy", or "" (issue #64).
+        """How this delivery becomes FLAC: "lossless", "lossy", or "".
 
         Stereo ALAC converts losslessly (the FLAC container cannot hold ALAC
         packets, so the engine decodes and FLAC-encodes them: still bit for
@@ -14636,7 +14568,7 @@ class WavesBridge(LibraryMixin, QObject):
             return ""
 
     def _apple_extract_flac(self, staged: pathlib.Path) -> tuple[pathlib.Path, str]:
-        """Convert staged audio into FLAC, losslessly where the source is (issue #64).
+        """Convert staged audio into FLAC, losslessly where the source is.
 
         ALAC cannot stream-copy into a FLAC container (it holds FLAC packets
         only), so the engine decodes and FLAC-encodes with no resampling and
@@ -14713,7 +14645,7 @@ class WavesBridge(LibraryMixin, QObject):
             raise
 
     def _apple_verify_staged(self, staged: pathlib.Path, *, expect_atmos: bool) -> None:
-        """Pre-swap verification of one Apple delivery (issue #30, spec §6.1).
+        """Pre-swap verification of one Apple delivery (spec §6.1).
 
         Always-on structural behavior, never a setting; TIDAL downloads never
         reach here. Two checks on the staged file, before it is swapped into
@@ -14768,7 +14700,7 @@ class WavesBridge(LibraryMixin, QObject):
                 raise
             raise _ADE(f"Could not verify the Apple download: {exc}") from exc  # noqa: TRY003
 
-    # ----- Apple integrity gate (issue #30, spec §6) -------------------------
+    # Apple integrity gate (spec §6).
 
     def _apple_quarantine_root(self) -> pathlib.Path:
         """The quarantine folder: custom override or the default inside the
@@ -15048,7 +14980,7 @@ class WavesBridge(LibraryMixin, QObject):
     ) -> tuple[str, str, str]:
         """Lyrics for one Apple track as (synced, plain, ttml_verbatim).
 
-        Source precedence (issue #34, spec section 9.1), both providers in
+        Source precedence (spec section 9.1), both providers in
         spirit, Apple in full:
 
         1. word-timed when the toggle is on (default on): syllable TTML
@@ -15217,7 +15149,7 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_cover_bytes(self, provider, raw: dict) -> bytes | None:
         """The collection cover at the embedded size, or None.
 
-        ORIGIN maps per provider (issue #34, spec section 9.1): TIDAL keeps
+        ORIGIN maps per provider (spec section 9.1): TIDAL keeps
         its exact current behavior (embedded cap included); Apple's ORIGIN
         is the true original-master image via the raw URL-rewrite path, with
         the ``{w}x{h}`` template up to 5000x5000 otherwise. The requested
@@ -15271,7 +15203,7 @@ class WavesBridge(LibraryMixin, QObject):
     ) -> None:
         """Lyrics and cover sidecars per the shared toggles.
 
-        The per-format matrix (issue #34, spec section 9.1): independent
+        The per-format matrix (spec section 9.1): independent
         sidecar toggles (.lrc; .ttml on Apple; .txt under the existing
         unsynced rule; extensions never faked; all embed x sidecar
         combinations valid). SRT is not shipped.
@@ -15311,9 +15243,9 @@ class WavesBridge(LibraryMixin, QObject):
     ) -> tuple[str | None, dict | None]:
         """Ownership verdict plus the record it was read from: 'skip' when an
         owned copy is current, 'force' when owned but stale, (None, None)
-        when nothing is owned. Ranked on the servable ceiling (issue #32):
-        cookies tier HIGH settles whatever was asked; wrapper tier uses the
-        track's own ceiling (an AAC-only master caps at HIGH, never HI_RES).
+        when nothing is owned. Ranked on the servable ceiling: cookies tier
+        HIGH settles whatever was asked; wrapper tier uses the track's own
+        ceiling (an AAC-only master caps at HIGH, never HI_RES).
 
         Dual-download rows (§5.3) ask per Version (audio_type stereo/atmos),
         so owning stereo leaves the Atmos half fetching and vice versa.
@@ -15493,7 +15425,7 @@ class WavesBridge(LibraryMixin, QObject):
             self._job_aborts.pop(qid, None)
             self._release_job_signals(qid)
             self._job_dls.pop(qid, None)
-            # Session supervision (issue #33): an Apple job ending restarts
+            # Session supervision: an Apple job ending restarts
             # the idle clock's countdown; the sidecar stops itself when no
             # download has needed it for the tuned timeout.
             try:
@@ -15506,11 +15438,10 @@ class WavesBridge(LibraryMixin, QObject):
         """Start the next queued row's download if nothing is running.
 
         GUI thread only (every caller is a slot or a queued hand-over). One
-        job at a time, in queue order: the pool used to hold a Worker per
-        queued row and drain them itself, which cost the row its whole job
-        up front; now the queue is the backlog and the pool holds the one
-        job in flight. A paused queue starts nothing (resumeQueue pumps). A
-        row that was cancelled, cleared or stopped while it waited has lost
+        job at a time, in queue order: the queue is the backlog and the pool
+        holds the one job in flight, so a queued row does not pay for its
+        whole job up front. A paused queue starts nothing (resumeQueue pumps).
+        A row that was cancelled, cleared or stopped while it waited has lost
         its spec or its queued status and is skipped."""
         if self._running_qid is not None or self._paused:
             return
@@ -15617,7 +15548,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # row starts from the GUI thread.
                 self._jobFinished.emit(qid)
 
-        # What this row asked at, captured now: the held retries below (a dead
+        # What this row asked at, captured here: the held retries below (a dead
         # mount, a folder failure) re-enter _download after the row has been
         # withdrawn, and they are retries of THIS job, not fresh clicks.
         row_ask = self._row_ask(qid)
@@ -15712,7 +15643,7 @@ class WavesBridge(LibraryMixin, QObject):
                 if job_abort.is_set():
                     self._discard_pending_downloads([media_id])
                     # Released only when the press took the row with it. STOP
-                    # keeps its Stopped row (issue #27) and a stopped row is
+                    # keeps its Stopped row and a stopped row is
                     # RETRYABLE, so its merge plan, REDOWNLOAD force and claim
                     # override are exactly what its RETRY reads back: released
                     # here, that retry came back as a plain, unforced download
@@ -15866,7 +15797,7 @@ class WavesBridge(LibraryMixin, QObject):
                     self._set_status(f"Cancelled {name}")
                 else:
                     # Merge succeeded → the stashed plan (kept for a possible
-                    # retry) is no longer needed; drop it now.
+                    # retry) is no longer needed; drop it.
                     if merge_plan is not None:
                         self._merge_plans.pop(media_id, None)
                     # A REDOWNLOAD mark is one job's force, not a standing
@@ -15928,9 +15859,9 @@ class WavesBridge(LibraryMixin, QObject):
                     # them and says nothing but counts, where any other
                     # exception can carry a path, a URL or a host onto a screen
                     # (see the class). Without this the whole diagnosis of a
-                    # 500-track playlist was the word "Failed", so a run that
+                    # 500-track playlist is the word "Failed", so a run that
                     # delivered 499 songs and a run that delivered none read
-                    # exactly alike (issue #35).
+                    # exactly alike.
                     reason = str(exc) if isinstance(exc, DownloadIncomplete) else ""
                     self.downloadState.emit(media_id, "failed")
                     self._set_queue_status(qid, "failed", reason)
@@ -15963,11 +15894,10 @@ class WavesBridge(LibraryMixin, QObject):
         breadcrumb (the job worker logs the outcome), and the empty-list
         progress emit (the worker emits 100 itself).
 
-        The two fan-outs now agree on per-item failure policy: a crashed item
-        is counted and the shortfall judged at the end. ``items()`` used to
-        fail the whole job on the first crash, which is what threw away the
-        reading of 500 good tracks over one bad one (issue #35), and this
-        fan-out's way of doing it was the precedent for the fix."""
+        The two fan-outs agree on per-item failure policy: a crashed item is
+        counted and the shortfall judged at the end. Failing the whole job on
+        the first crash would throw away the reading of 500 good tracks over
+        one bad one; this fan-out deliberately matches ``items()``."""
         total = len(plan)
         if not total:
             return
@@ -16035,14 +15965,13 @@ class WavesBridge(LibraryMixin, QObject):
         # would silently leave the user short a song). Raise so the caller marks
         # the job failed/retryable, unless the user aborted, which is handled
         # separately as a cancellation.
-        #
         # A track TIDAL REFUSES to stream is not a failure, the same rule a plain
         # collection follows in _collection_incomplete_reason: the app did
         # everything it could and the rest of the album is on disk. Counting
-        # refusals here turned one delisted track into a red album, and because
-        # the plan is only dropped on success, every retry replayed it and failed
-        # identically (issue #25, in the merge path). item() returns ok=False for
-        # a refusal too, so subtract them before judging.
+        # refusals here turns one delisted track into a red album, and because
+        # the plan is only dropped on success, every retry replays it and fails
+        # identically. item() returns ok=False for a refusal too, so subtract
+        # them before judging.
         refused = int(dl.unavailable_count or 0)
         hard = max(0, failures - refused)
         if hard and not job_abort.is_set():
@@ -16086,7 +16015,7 @@ class WavesBridge(LibraryMixin, QObject):
                 if state == "done":
                     grp["prog"][media_id] = 100.0
                     grp["done"].add(media_id)
-                    # A member that failed earlier and has now landed is not a
+                    # A member that failed earlier and has landed is not a
                     # failure any more. Without this discard the credit was
                     # add-only while the group's verdict is bool(grp["failed"]),
                     # so a run in which a held-and-recovered member failed once
@@ -16180,12 +16109,12 @@ class WavesBridge(LibraryMixin, QObject):
         has a live queue row, and hand its button back to idle.
 
         The bumps above only ever run from download workers, so a group whose
-        remaining members were withdrawn before starting can no longer settle
-        by itself: nothing will ever credit them, `finished` can never come
-        true, and the button re-reads "running" on every later tick, with only
-        a restart left to clear it (issue #32). The known withdrawal paths now
-        credit the rollup themselves; this sweep is the net under them, healing
-        any stranding path nobody has found yet within two quiet ticks.
+        remaining members were withdrawn before starting cannot settle by
+        itself: nothing will ever credit them, `finished` can never come true,
+        and the button re-reads "running" on every later tick with only a
+        restart left to clear it. The withdrawal paths credit the rollup
+        themselves; this sweep is the net under them, healing any stranding
+        path not yet found within two quiet ticks.
 
         Two strikes before reaping, because registration and enqueueing are
         not atomic: a scan registers its group, posts the batch enqueue to the
@@ -17687,11 +17616,10 @@ class WavesBridge(LibraryMixin, QObject):
             # and off means what its label says: every edition downloads
             # whole, and nothing here merges or collapses. 'Best of both' is
             # how the one edition gets BUILT when the switch is on; on its own
-            # it still runs for a single-album click (downloadAlbum). Before
-            # this, the merge ran on the sweep with the switch off, so a
-            # Standard beside its Deluxe left as one merged album, and a group
-            # whose merge declined was collapsed anyway: the switch was dead
-            # while on the page (issue #27).
+            # it runs for a single-album click (downloadAlbum) too, so the
+            # switch is never dead while on the page: without that run a
+            # Standard beside its Deluxe would leave as one merged album, and a
+            # group whose merge declined would be collapsed anyway.
             if self._waves_pref_bool("collapse_editions"):
                 self._set_status("Scanning editions…")
                 if self._merge_pref_on():
@@ -17729,7 +17657,7 @@ class WavesBridge(LibraryMixin, QObject):
                 key = str(getattr(album, "id", id(album)))
                 self._remember("album", key, album)
                 # This sweep decided the album downloads plain (the setting
-                # is off, or no richer edition exists now). A plan an earlier
+                # is off, or no richer edition exists). A plan an earlier
                 # run stashed for it and never consumed (a STOP, a failure)
                 # must not turn that into a merge: downloadAlbum peeks the
                 # stash unconditionally, so the stash is cleared here.
@@ -17828,7 +17756,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # Checked under the same lock stopAll's sweep takes: a scan
                 # that lost the race to STOP must not register a group behind
                 # the sweep (it would strand at "running" with nothing left to
-                # settle it, issue #32).
+                # settle it).
                 stop_check()
                 self._artist_groups[artist_id] = {
                     "keys": set(keys) | set(track_keys) | set(video_keys),
@@ -17844,7 +17772,7 @@ class WavesBridge(LibraryMixin, QObject):
             if keys:
                 # Edition handling already ran above; exempt these from
                 # downloadAlbum's automatic scan. Marked unconditionally, and
-                # safe to do so now the mark is consumed on read: the pref can
+                # safe to do so because the mark is consumed on read: the pref can
                 # be flipped between this scan and the queueing below, and an
                 # album that slipped into downloadAlbumBestOfBoth there would
                 # exit by a path that never bumps the artist rollup, leaving the
@@ -17882,8 +17810,8 @@ class WavesBridge(LibraryMixin, QObject):
                 devlog.event("artist_releases", stopped=True)
             except Exception:
                 # A scan that dies any other way (a network flap mid-fetch, a
-                # parse hole) used to leave the button lit at "running" for
-                # the whole session, with nothing left to reset it (issue #32).
+                # parse hole) must not leave the button lit at "running" for
+                # the whole session with nothing left to reset it.
                 logger.exception("Discography scan failed")
                 self.downloadState.emit(artist_id, "")
                 self._set_status("Could not load the full discography, try again")
@@ -17990,7 +17918,7 @@ class WavesBridge(LibraryMixin, QObject):
 
         self._scan_pool.start(Worker(_counted_scan(self, work)))
 
-    # ---- Standalone lyrics / art actions (issue #34, spec section 7.3) ----
+    # Standalone lyrics / art actions (spec section 7.3).
 
     @Slot(str)
     def downloadLyricsOnly(self, media_id: str) -> None:
@@ -18456,7 +18384,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadPlaylistAlbums(self, playlist_id: str) -> None:
-        """Queue the full source album of every track in a playlist (issue #4).
+        """Queue the full source album of every track in a playlist.
 
         The playlist page's second button. One album per distinct source
         album, in playlist order; videos have no album and are skipped. The
@@ -18585,7 +18513,7 @@ class WavesBridge(LibraryMixin, QObject):
                 key = str(getattr(album, "id", id(album)))
                 self._remember("album", key, album)
                 # This sweep decided the album downloads plain (the setting
-                # is off, or no richer edition exists now). A plan an earlier
+                # is off, or no richer edition exists). A plan an earlier
                 # run stashed for it and never consumed (a STOP, a failure)
                 # must not turn that into a merge: downloadAlbum peeks the
                 # stash unconditionally, so the stash is cleared here.
@@ -18642,18 +18570,17 @@ class WavesBridge(LibraryMixin, QObject):
         scan still gathering, and leave every stopped row in place.
 
         The rows stay, marked ``cancelled``, in the drawer's own Stopped
-        section with RETRY and RETRY ALL: STOP used to empty the queue, so a
-        press over one wrong item cost the other two hundred and left no
-        record of what was in flight (issue #27). The press still ends every
-        transfer; what it no longer does is forget them. That section's CLEAR
-        and the footer's CLEAR ALL sweep them like any other row.
+        section with RETRY and RETRY ALL: a press over one wrong item must not
+        cost the other two hundred or leave no record of what was in flight.
+        The press ends every transfer; it does not forget them. That section's
+        CLEAR and the footer's CLEAR ALL sweep them like any other row.
 
         A discography (or videos, or edition) scan in flight holds no row and
         no abort yet, so it is stopped by generation: the bump here makes
         every scan ordered before this press stale, and each one drops what it
         gathered and hands its button back the next time it checks (see
-        _stop_check_for). Before that, the scan finished after STOP and queued
-        the whole discography behind the press."""
+        _stop_check_for). A scan that ignored the bump would finish after STOP
+        and queue the whole discography behind the press."""
         self._scan_gen += 1
         # The one job in flight gets its abort; the rows behind it never
         # became jobs, so dropping their specs is all it takes to stop them.
@@ -18664,12 +18591,12 @@ class WavesBridge(LibraryMixin, QObject):
         # Downloads held for an unreachable download folder are neither
         # running nor queued: the gate withdrew their rows, so the sweep below
         # cannot see them and nothing above holds their abort. Left in the
-        # stash they were not stopped at all, only postponed: the recovery
-        # timer kept polling, and when the share came back minutes later
-        # _run_pending_downloads called each held closure and the albums
-        # started downloading again by themselves, into rollups this press had
-        # already deleted. "The press still ends every transfer" is the
-        # docstring's promise, so the stash goes and the poll stops.
+        # stash they are not stopped at all, only postponed: the recovery
+        # timer keeps polling, and when the share returns minutes later
+        # _run_pending_downloads calls each held closure and the albums
+        # start downloading again by themselves, into rollups this press has
+        # already deleted. "The press ends every transfer" is the docstring's
+        # promise, so the stash goes and the poll stops.
         # Drained, not discarded, and each button handed back to idle the way
         # dismissDownloadFolderNudge does it: a download can enter the stash
         # with its button already lit ("preparing", the re-click guard), and
@@ -18882,7 +18809,6 @@ class WavesBridge(LibraryMixin, QObject):
                 os.remove(path)
         self._preview_clips.clear()
 
-    # ----- in-app FFmpeg manager ----------------------------------------- #
     def _save_settings(self) -> None:
         """Persist settings with the transient ffmpeg injections undone first.
 
@@ -18891,36 +18817,34 @@ class WavesBridge(LibraryMixin, QObject):
         managed binary path into ``path_binary_ffmpeg``. ``Settings`` is a
         singleton and ``save()`` serialises the whole dataclass, so a bare save
         from anywhere writes those transient values to disk: the user silently
-        loses FLAC extraction and video conversion until they notice, and a
-        machine path (containing the username) lands in settings.json, which
-        the bug template asks users to paste publicly.
+        loses FLAC extraction and video conversion, and a machine path
+        (containing the username) lands in settings.json, which the bug
+        template asks users to paste publicly.
 
-        The undoing is UNDONE AGAIN once the write is out. Every in-flight
-        ``Download`` holds this same singleton and re-reads both values on every
+        The restores are put back once the write is out: every in-flight
+        ``Download`` holds this singleton and re-reads both values on every
         track, so leaving the restored values in place de-provisions ffmpeg
-        underneath a running album: from that track on, the remux that repairs
-        an m4a's duration is skipped (the issue #2 symptom it exists to fix) and
-        a FLAC extraction runs with an empty executable and fails outright.
-        Nothing ever put them back, because only ``_resolve_ffmpeg`` injects and
-        no save site calls it. Saves fire from thoroughly ordinary places, a
-        "Don't ask again" tick, the first album to land on a network share, a
-        folder becoming reachable again, so this sat in the middle of any
-        download that ran long enough.
+        underneath a running album, from that track on skipping the remux that
+        repairs an m4a's duration and running FLAC extraction with an empty
+        executable. Saves fire from ordinary places (a "Don't ask again" tick,
+        the first album to land on a network share), so the restore must never
+        outlive the write.
 
         What goes to disk is the user's real preference; what stays in memory is
         what the running download was built with. Both, not one or the other.
-
-        Serialised, because those save sites run on the GUI thread, on download
-        workers and on the keep-warm daemon: two overlapping saves would put
-        each other's borrowed values back and strand the singleton on them.
+        Saves are serialised because save sites run on the GUI thread, on
+        download workers and on the keep-warm daemon: two overlapping saves
+        would put each other's borrowed values back and strand the singleton on
+        them.
 
         Every save must go through here. Callers that need a specific ordering
-        around the restores (``applySettings``) do them explicitly instead, under
-        ``_settings_save_lock`` all the same, and follow with ``_init_download``
-        so the managed path is re-injected. Holding the lock is not optional
-        there: the restore and the write are separate statements, and this
-        method's ``finally`` puts the managed path back, so a save from here
-        landing between them would be serialised by that write."""
+        around the restores (``applySettings``) do them explicitly instead,
+        under ``_settings_save_lock`` all the same, and follow with
+        ``_init_download`` so the managed path is re-injected. Holding the lock
+        is not optional there: the restore and the write are separate
+        statements, and this method's ``finally`` puts the managed path back,
+        so a save from here landing between them would be serialised by that
+        write."""
         with self._settings_save_lock:
             data = self.settings.data
             # Exactly the fields the two restores below overwrite, so putting
@@ -19018,7 +18942,7 @@ class WavesBridge(LibraryMixin, QObject):
                     logger.exception("FFmpeg install failed")
                     self.ffmpegStateChanged.emit("failed", str(exc) or "Install failed")
                     return
-                # ffmpeg is available now, undo any in-memory feature disabling
+                # ffmpeg is available, undo any in-memory feature disabling
                 # and rebuild the Download so the new binary is used immediately.
                 self._restore_ffmpeg_flags()
                 if self._logged_in:
@@ -19041,7 +18965,7 @@ class WavesBridge(LibraryMixin, QObject):
     def removeFfmpeg(self) -> None:
         self._ffmpeg.remove()
         # The managed binary is gone; a prior _resolve_ffmpeg may have injected
-        # its (now dangling) path in-memory. Reset the live value to the user's
+        # its dangling path in-memory. Reset the live value to the user's
         # real override (empty when none), so downloads/previews don't keep
         # spawning a deleted executable, then rebuild Download without it (which
         # also re-gates the ffmpeg-dependent flags via its own construction).
@@ -19051,7 +18975,6 @@ class WavesBridge(LibraryMixin, QObject):
         self._configure_apple_provider()
         self.ffmpegStatusChanged.emit()
 
-    # ----- in-app updater ----------------------------------------------- #
     def _emit_from_worker(self, signal_name: str, *args) -> None:
         """Emit a bridge signal from a pool worker that can outlive the bridge.
 
@@ -19310,11 +19233,11 @@ class WavesBridge(LibraryMixin, QObject):
             self.downloadState.emit(str(item.get("media_id", "")), "")
         # A row withdrawn before it ever started has no worker to credit its
         # rollups: settle them here, or a discography holding it can never
-        # finish and its button re-reads "running" forever (issue #32). A
-        # running row's own worker does this when the abort lands. Which of
-        # the two it was is read from the removal, not from the row fetched
-        # above: the worker thread can flip the status in between, and this
-        # then credited a failure against a download that had just started.
+        # finish and its button re-reads "running" forever. A running row's
+        # own worker does this when the abort lands. Which of the two it was
+        # is read from the removal, not from the row fetched above: the worker
+        # thread can flip the status in between, and a failure would then be
+        # credited against a download that had just started.
         withdrawn: list[str] = []
         self._remove_row(qid, withdrawn)
         self._release_abandoned_hold(self._discard_pending_downloads(withdrawn))
@@ -19327,11 +19250,11 @@ class WavesBridge(LibraryMixin, QObject):
     def clearFinished(self) -> None:
         """Clear the Completed section: done rows.
 
-        Failed and stopped rows are NOT swept here. Losing them silently
-        alongside the completed ones is issue #18: a failure would vanish
-        before it could be retried. The Failed and Stopped sections carry
-        their own CLEAR, so dismissing a failure or a STOP is always
-        something the user aimed at."""
+        Failed and stopped rows are NOT swept here: losing them silently
+        alongside the completed ones would vanish a failure before it could
+        be retried. The Failed and Stopped sections carry their own CLEAR, so
+        dismissing a failure or a STOP is always something the user aimed
+        at."""
         self._remove_rows_where(lambda q: q["status"] == "done")
         self._reap_stranded_groups()
         self._emit_queue()
@@ -19346,7 +19269,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot()
     def clearStopped(self) -> None:
-        """Clear the Stopped section: the rows STOP ended (issue #27).
+        """Clear the Stopped section: the rows STOP ended.
 
         Terminal rows like failed ones: their Workers were aborted by stopAll,
         so there is nothing to abort here. Failed rows are not touched, so a
@@ -19374,7 +19297,7 @@ class WavesBridge(LibraryMixin, QObject):
         # whose hold is taken AFTER this press; this covers one already held.
         self._release_abandoned_hold(self._discard_pending_downloads(withdrawn))
         # Withdrawn before starting: no worker will ever credit these rows to
-        # their rollups, so settle the rollups here (issue #32).
+        # their rollups, so settle the rollups here.
         for mid in withdrawn:
             self._bump_download_groups(mid, None, "failed")
         self._reap_stranded_groups()
@@ -19391,7 +19314,7 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot()
     def retryAllStopped(self) -> None:
         """Retry every row STOP ended in one click (the Stopped section's
-        header, issue #27). Rows are re-queued in their original order, so
+        header). Rows are re-queued in their original order, so
         a stopped discography resumes as it was laid out."""
         self._retry_all_with_status("cancelled")
 
@@ -19462,7 +19385,7 @@ class WavesBridge(LibraryMixin, QObject):
         # held download is exactly that if it is left behind.
         self._release_abandoned_hold(self._discard_pending_downloads(withdrawn))
         # Only the rows that never started need crediting here: done, failed
-        # and stopped rows were already settled by their workers (issue #32).
+        # and stopped rows were already settled by their workers.
         for mid in withdrawn:
             self._bump_download_groups(mid, None, "failed")
         self._reap_stranded_groups()
@@ -19476,7 +19399,7 @@ class WavesBridge(LibraryMixin, QObject):
             self._abort_if_in_flight((qid,))
         self._release_abandoned_hold(self._discard_pending_downloads(withdrawn))
         # Same rollup settlement as cancelQueueItem: a row removed before it
-        # ever started has no worker left to credit it (issue #32), and the
+        # ever started has no worker left to credit it, and the
         # same reason for reading the status from the removal rather than from
         # a separate look at the row.
         for mid in withdrawn:
@@ -19687,17 +19610,14 @@ class WavesBridge(LibraryMixin, QObject):
         # A queue paused between jobs started nothing while it waited.
         self._pump_queue()
 
-    # ----- settings ------------------------------------------------------
-
     def _help_for(self, key: str) -> str:
         # Pull the upstream help text, normalising any em dash to plain
         # punctuation so the settings descriptions read consistently. Only the
-        # dash is rewritten: an earlier blanket sweep replaced ", " here
-        # instead, which turned every comma in every description into a
-        # semicolon ("16 Bit, 44,1 kHz" became "16 Bit; 44,1 kHz") and made
-        # the delimiter fields advertise a default they do not have.
-        # Per-provider mirrors (issue #61) share their base key's wording;
-        # the Providers cards already name the provider.
+        # dash is rewritten: replacing ", " here would turn every comma in
+        # every description into a semicolon ("16 Bit, 44,1 kHz" becomes
+        # "16 Bit; 44,1 kHz") and make the delimiter fields advertise a
+        # default they do not have. Per-provider mirrors share their base
+        # key's wording; the Providers cards already name the provider.
         text = str(getattr(self._help, key, "") or "")
         if not text:
             for prefix in ("tidal_", "apple_"):
@@ -19729,7 +19649,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(result="QVariant")
     def appleSetupState(self) -> dict:
-        """The in-place setup wizard's full state (issue #31, spec §2).
+        """The in-place setup wizard's full state (spec §2).
 
         One dict the QML wizard renders step by step: the light (state,
         word, tier, next_step), the ``steps`` list (each with key, label,
@@ -20382,7 +20302,7 @@ class WavesBridge(LibraryMixin, QObject):
         hard-coding key names in QML.
         """
         d = self.settings.data
-        # The Providers area's status rows (issue #25): live bridge state,
+        # The Providers area's status rows: live bridge state,
         # read at build time — the TIDAL session, and the Apple component's
         # light, through the same helper the appleStatus() slot serves the
         # page's live mirror from, so the two can never disagree.
@@ -20420,7 +20340,7 @@ class WavesBridge(LibraryMixin, QObject):
                 return field(key, "enum", getattr(current, "name", str(current)), {"options": _enum_options(key, enum)})
             if key in _FLOAT_FIELDS:
                 # Most second-scale fields pause under a minute; the
-                # supervision knobs (issue #33) run longer by design (idle
+                # supervision knobs run longer by design (idle
                 # default 300 s), so they carry their own ceiling.
                 maximum = {"apple_wrapper_idle_sec": 3600.0, "apple_pacing_delay_sec": 600.0}.get(key, 60)
                 return field(
@@ -20733,13 +20653,13 @@ class WavesBridge(LibraryMixin, QObject):
                 },
                 {
                     # The Apple section's master switch, status light and
-                    # runtime-manage actions in one row (issues #25/#31, spec
-                    # §9.2.3). apple_enabled rides as enabled_key: the switch
+                    # runtime-manage actions in one row (spec §9.2.3).
+                    # apple_enabled rides as enabled_key: the switch
                     # stages into editMap like any toggle and SAVE CHANGES
                     # persists it, while enabled_key is what makes
                     # _factory_default_values enumerate it for RESET ALL
                     # SETTINGS. The actions drive the managed runtime's
-                    # install/remove behind the setup wizard (issue #31);
+                    # install/remove behind the setup wizard;
                     # "action" names the slot channel QML calls. "live" names
                     # the channel the page re-reads when a save moves the switch.
                     "key": "provider_apple_status",
@@ -20772,7 +20692,7 @@ class WavesBridge(LibraryMixin, QObject):
                     ),
                 },
                 {
-                    # The in-place setup wizard steps (issue #31, spec §2):
+                    # The in-place setup wizard steps (spec §2):
                     # a bridge-computed card, not a pref. QML renders the
                     # step list from the live appleSetupState() mirror
                     # ("live" names that channel, like apple_status above)
@@ -20827,7 +20747,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # cover file. Power users get a second size without a new row
                 # appearing for everyone else. QML renders "cover_sizes" specially
                 # and writes both keys back through applySettings. Per-provider
-                # mirrors (issue #61) carry their own file size the same way.
+                # mirrors carry their own file size the same way.
                 file_key = _prefixed("metadata_cover_file_dimension", provider)
                 f["type"] = "cover_sizes"
                 f["file_key"] = file_key
@@ -20910,7 +20830,7 @@ class WavesBridge(LibraryMixin, QObject):
                 "metadata_tag_initial_key",
                 "metadata_tag_upc",
             ):
-                # Custom-template omit flags (issue #61): shown only while the
+                # Custom-template omit flags: shown only while the
                 # Custom template is on (the page hides depends_on fields).
                 f["depends_on"] = "metadata_custom"
                 f["depends_on_value"] = bool(getattr(d, "metadata_custom", False))
@@ -20954,7 +20874,7 @@ class WavesBridge(LibraryMixin, QObject):
             # runs on its own for a single album, and hiding the control
             # behind another toggle is what let the merge sit silently off
             # with nothing on the page to say so. On the discography sweep it
-            # follows 'Most-complete edition only' (issue #27), which the help
+            # follows 'Most-complete edition only', which the help
             # says in words instead.
             if key == "update_cadence":
                 f["depends_on"] = "auto_update"
@@ -20972,7 +20892,7 @@ class WavesBridge(LibraryMixin, QObject):
 
         sections = [
             {
-                # The two-axis layout's first axis (spec §9.2), issue #60: ONE
+                # The two-axis layout's first axis (spec §9.2): ONE
                 # Providers section holding a distinctive card per provider
                 # for what differs (session, quality, runtime/pacing/setup).
                 # A third provider slots in as a third card; shared behavior
@@ -20985,7 +20905,7 @@ class WavesBridge(LibraryMixin, QObject):
                 "providers": [
                     {
                         # TIDAL is the only provider with a session today. Its
-                        # lyrics/artwork options (issue #61) ride this card, so
+                        # lyrics/artwork options ride this card, so
                         # what TIDAL embeds need not match Apple. Word-timed
                         # and TTML have no TIDAL source and stay off this card.
                         "name": "TIDAL",
@@ -21009,7 +20929,7 @@ class WavesBridge(LibraryMixin, QObject):
                         # Always visible, per the optional-component decision: the
                         # card renders while Apple is off, so the switch stays
                         # discoverable and the light shows what is (not) set up.
-                        # The in-place setup wizard (issue #31, spec §2) lives here:
+                        # The in-place setup wizard (spec §2) lives here:
                         # cookies export for the fallback tier, managed runtime plus
                         # wrapper sign-in for the full tier, wrapper port override.
                         "name": "Apple Music",
@@ -21093,7 +21013,7 @@ class WavesBridge(LibraryMixin, QObject):
                 ],
             },
             {
-                # One tag template for every provider (issue #61): with the
+                # One tag template for every provider: with the
                 # Custom switch off each file carries what its provider
                 # supplies; with it on, the tag groups switched off below are
                 # omitted. Lyrics and cover embedding live only in the
@@ -21194,13 +21114,11 @@ class WavesBridge(LibraryMixin, QObject):
         ]
         for sec in sections:
             sec["fields"] = [get_field(k) for k in sec["fields"]]
-            # Provider cards resolve their fields the same way (issue #60):
+            # Provider cards resolve their fields the same way:
             # one Providers section, one card per provider.
             for provider in sec.get("providers") or []:
                 provider["fields"] = [get_field(k) for k in provider["fields"]]
         return sections
-
-    # ---- Path-template preview + token reference -------------------------
 
     def _template_sample(self):
         smp = getattr(self, "_tpl_sample", None)
@@ -21318,8 +21236,8 @@ class WavesBridge(LibraryMixin, QObject):
         self._reapply_provider_quality(CTX_TIDAL, quality)
 
     def _reapply_provider_quality(self, context: str, quality) -> None:
-        """Apply a provider's own quality setting to that provider alone
-        (issue #24). An unknown rung applies nothing."""
+        """Apply a provider's own quality setting to that provider alone.
+        An unknown rung applies nothing."""
         provider = self.providers.get(context)
         tier = tier_from_word(quality)
         if provider is not None and tier is not None:
@@ -21336,7 +21254,7 @@ class WavesBridge(LibraryMixin, QObject):
         "" on the normal managed path, which would fail the gate that the
         manager itself just passed. The N_m3u8DL-RE path follows the same
         rule: explicit override, else the managed runtime copy, else "" for
-        PATH lookup at fetch time. The wrapper URL (issue #32) follows the
+        PATH lookup at fetch time. The wrapper URL follows the
         persisted port: an explicit override wins when free, else the
         manager's persisted pick, else "" (no wrapper tier).
         """
@@ -21374,11 +21292,11 @@ class WavesBridge(LibraryMixin, QObject):
                 manager.engine_config_dir()
         except Exception:
             logger.debug("Apple engine config dir ensure failed", exc_info=True)
-        # A custom quarantine folder from a previous session already exists on
-        # disk: register it now (startup runs here, settings saves re-enter
-        # here) so the boot scan excludes it before any new failure occurs.
-        # Previously-used custom folders stay excluded too: changing the
-        # setting must not resurrect an old corrupt stash in the scan.
+        # A custom quarantine folder already exists on disk: register it
+        # (startup runs this, settings saves re-enter) so the boot scan
+        # excludes it before any new failure occurs. Custom folders already
+        # registered stay excluded too: changing the setting must not
+        # resurrect an old corrupt stash in the scan.
         try:
             root = self._apple_quarantine_root()
             from waves import library_index as _lib_index
@@ -21409,7 +21327,7 @@ class WavesBridge(LibraryMixin, QObject):
         return ""
 
     def _apple_effective_wrapper_port(self) -> int:
-        """The one wrapper HTTP port every Apple path agrees on (issue #33).
+        """The one wrapper HTTP port every Apple path agrees on.
 
         Precedence mirrors the config-first override rule: an explicit
         `apple_wrapper_port` wins when it is unprivileged and either matches
@@ -21427,7 +21345,7 @@ class WavesBridge(LibraryMixin, QObject):
         )
 
     def _resolve_apple_wrapper_url(self) -> str:
-        """The wrapper HTTP API URL an Apple ALAC download would use (issue #32).
+        """The wrapper HTTP API URL an Apple ALAC download would use.
 
         Precedence is the config-first override (apple_wrapper_port when it
         names a free unprivileged port) else the manager's persisted pick,
@@ -21440,7 +21358,7 @@ class WavesBridge(LibraryMixin, QObject):
             port = resolve()
         else:
             # Plain unit-test stubs bind this resolver without the shared
-            # one (issue #32 pins this precedence here).
+            # one; the precedence must still match _apple_effective_port.
             port = _apple_effective_port(
                 getattr(getattr(self, "settings", None), "data", None),
                 getattr(self, "_apple_runtime", None),
@@ -21585,7 +21503,6 @@ class WavesBridge(LibraryMixin, QObject):
                 with contextlib.suppress(Exception):
                     lock.release()
 
-    # ----- wrapper guest account (the full tier's sign-in) ------------------ #
     def _apple_wrapper_base(self) -> str:
         """The configured wrapper HTTP API URL, or "" when no tier is set up."""
         try:
@@ -22036,7 +21953,7 @@ class WavesBridge(LibraryMixin, QObject):
         # (up_to_date is computed against it). Empty id = broadcast: every
         # DOWNLOADED button re-asks ownershipOf, no per-track invalidation needed
         # because the cache stores raw records, not verdicts. Each provider's
-        # setting applies to that provider alone (issue #24): TIDAL's carries
+        # setting applies to that provider alone: TIDAL's carries
         # the ownership refresh (its copies are the library today), Apple's
         # reaches the Apple session when that provider is registered.
         if "tidal_quality_audio" in values:
@@ -22045,7 +21962,7 @@ class WavesBridge(LibraryMixin, QObject):
             self.targetTierChanged.emit()
             # Streams are requested at the SESSION's audio quality (the UI never
             # passes a per-download quality), and that was only set at startup.
-            # Re-apply it now so the next download honours the new choice without
+            # Re-apply it so the next download honours the new choice without
             # a restart. The write skips while an Atmos-credential session is
             # active; restore_normal_session re-reads the setting then.
             self._reapply_quality(values["tidal_quality_audio"])
@@ -22087,7 +22004,7 @@ class WavesBridge(LibraryMixin, QObject):
                 logger.debug("Apple runtime signal emit failed", exc_info=True)
         if "apple_enabled" in values and bool(getattr(data, "apple_enabled", False)) != apple_enabled_before:
             # Search reads the saved switch on its next request. The live
-            # settings page also needs the status light refreshed now.
+            # settings page also needs the status light refreshed immediately.
             self._search_gen += 1
             self._search_cache.clear()
             self._set_busy(False)
@@ -22211,7 +22128,7 @@ class WavesBridge(LibraryMixin, QObject):
         values: dict = {}
         for section in self.settingsSchema():
             fields = list(section["fields"])
-            # Provider cards nest their fields one level down (issue #60);
+            # Provider cards nest their fields one level down;
             # factory reset must still reach every key they expose.
             for provider in section.get("providers") or []:
                 fields.extend(provider["fields"])
@@ -22280,7 +22197,7 @@ class WavesBridge(LibraryMixin, QObject):
         logger.info("factory reset requested; wiping the config directory")
         with contextlib.suppress(Exception):
             self._ownership.close()
-        # Any straggler ownership query between now and the quit hits a
+        # Any straggler ownership query before the quit hits a
         # throwaway in-memory store instead of a closed connection.
         with contextlib.suppress(Exception):
             self._ownership = OwnershipStore(":memory:")

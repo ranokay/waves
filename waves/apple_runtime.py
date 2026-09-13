@@ -1,13 +1,13 @@
-"""Managed Apple runtime for Waves (issue #31, spec section 2 and 10).
+"""Managed Apple runtime for Waves (spec section 2 and 10).
 
 The full Apple tier needs two provisioned pieces Waves owns end to end,
 FFmpeg-manager style: the N_m3u8DL-RE fetch binary (pinned release,
 downloaded as tar.gz or zip per platform, checksum-verified, extracted,
-chmod'd) and the
-wrapper-v2 container image (Waves-built, pinned) running on a free high
-port. The Apple Music APK stays user-supplied: the wizard guides the user
-to the pinned version, verifies it by SHA-256, and scripts the .apkm
-extraction. Waves never fetches, bundles, mirrors, or proxies it.
+chmod'd) and the wrapper-v2 container image (Waves-built, pinned) running
+on a free high port. The Apple Music APK stays user-supplied: the published
+image already carries the guest libraries, so normal setup needs none. The
+APK helpers here serve custom image builds; Waves never fetches, bundles,
+mirrors, or proxies the file.
 
 The cookies-only fallback tier needs none of this: a Netscape cookies
 export from a logged-in music.apple.com session unlocks AAC 256 and
@@ -53,9 +53,7 @@ _HTTP_TIMEOUT = 30
 _IO_CHUNK = 1 << 16  # 64 KiB streaming chunks
 _UA = "Waves-apple-runtime"
 
-# --------------------------------------------------------------------------- #
-# Pins (config-first initial values; engine bumps ride Waves' updater, spec 10.4)
-# --------------------------------------------------------------------------- #
+# Pins: config-first initial values; engine bumps ride Waves' updater (spec 10.4).
 
 # Waves-built wrapper-v2 image, pinned. Waves builds from source (Unlicense)
 # and never vendors the image into its own package (spec 10.1); the setup
@@ -190,9 +188,7 @@ def _session() -> requests.Session:
     return sess
 
 
-# --------------------------------------------------------------------------- #
-# Container runtime: detect, gentle-start, never install
-# --------------------------------------------------------------------------- #
+# Container runtime: detect, gentle-start, never install.
 
 
 def detect_container_runtime(runner=None, timeout: int = 10) -> dict:
@@ -276,9 +272,7 @@ def attempt_gentle_start(runner=None, name: str = "docker") -> bool:
         return proc.returncode == 0
 
 
-# --------------------------------------------------------------------------- #
-# Free high port (never port 80)
-# --------------------------------------------------------------------------- #
+# Free high port (never port 80).
 
 
 def pick_free_high_port(low: int = WRAPPER_PORT_LOW, high: int = WRAPPER_PORT_HIGH) -> int:
@@ -305,9 +299,7 @@ def wrapper_url(port: int) -> str:
     return f"http://127.0.0.1:{int(port)}"
 
 
-# --------------------------------------------------------------------------- #
-# Wrapper guest account: /me state plus the one-time login + 2FA handshake
-# --------------------------------------------------------------------------- #
+# Wrapper guest account: /me state plus the one-time login + 2FA handshake.
 
 
 def _wrapper_error(exc: Exception) -> str:
@@ -445,9 +437,7 @@ def wrapper_login_2fa(base_url: str, code: str, session=None, timeout: int = 30)
     return {"ok": True, "error": ""}
 
 
-# --------------------------------------------------------------------------- #
-# APK (custom image builds only): SHA-verified, extraction scripted, never fetched
-# --------------------------------------------------------------------------- #
+# APK (custom image builds only): SHA-verified, extraction scripted, never fetched.
 
 
 def verify_apk(path: str, expected_sha256: str | None = None) -> dict:
@@ -489,7 +479,7 @@ def verify_apk(path: str, expected_sha256: str | None = None) -> dict:
 
 
 def describe_image_pull_error(exc: Exception, image: str = WRAPPER_V2_IMAGE) -> str:
-    """Plain-words guidance for a failed wrapper-image pull (issue #62).
+    """Plain-words guidance for a failed wrapper-image pull.
 
     A registry "denied"/"unauthorized" refusal almost always means access,
     not a broken setup: the image is private to accounts without access, or
@@ -534,9 +524,7 @@ def apk_extract_plan(apk_path: str, hash_pinned: bool | None = None) -> list[str
     ]
 
 
-# --------------------------------------------------------------------------- #
-# Cookies fallback: Netscape export carrying a signed-in session
-# --------------------------------------------------------------------------- #
+# Cookies fallback: Netscape export carrying a signed-in session.
 
 
 def verify_cookies_file(path: str) -> dict:
@@ -584,9 +572,7 @@ def verify_cookies_file(path: str) -> dict:
     return {"ok": True, "path": str(p), "has_token": True}
 
 
-# --------------------------------------------------------------------------- #
-# Setup state: one describer for the slot and the schema
-# --------------------------------------------------------------------------- #
+# Setup state: one describer for the slot and the schema.
 
 _STATE_WORDS = {
     "off": "Off",
@@ -648,9 +634,7 @@ def describe_setup(
     }
 
 
-# --------------------------------------------------------------------------- #
-# Manager: N_m3u8DL-RE provisioning + isolated engine config + provenance
-# --------------------------------------------------------------------------- #
+# Manager: N_m3u8DL-RE provisioning + isolated engine config + provenance.
 
 
 class AppleRuntimeManager:
@@ -660,7 +644,6 @@ class AppleRuntimeManager:
         self.app_dir = Path(app_dir)
         self.os_key, self.arch = _safe_target()
 
-    # ----- locations ----------------------------------------------------- #
     @property
     def runtime_dir(self) -> Path:
         return self.app_dir / "apple-runtime"
@@ -753,7 +736,6 @@ class AppleRuntimeManager:
             raise
         return port
 
-    # ----- status -------------------------------------------------------- #
     def _base_status(self) -> dict:
         """The wrapper pins every status answer carries, managed or not."""
         return {"wrapper_image": WRAPPER_V2_IMAGE, "wrapper_libs": WRAPPER_LIBS_VERSION}
@@ -812,7 +794,6 @@ class AppleRuntimeManager:
             "sha256": "",
         }
 
-    # ----- install ------------------------------------------------------- #
     def install(
         self,
         release: Nm3u8dlreRelease | None = None,
@@ -913,7 +894,6 @@ class AppleRuntimeManager:
         self.manifest_path.unlink(missing_ok=True)
         return self.status()
 
-    # ----- wrapper image ------------------------------------------------- #
     @property
     def image_manifest_path(self) -> Path:
         return self.runtime_dir / "wrapper-image.json"
@@ -936,7 +916,7 @@ class AppleRuntimeManager:
         passes). Records provenance (image + pull time) beside the runtime
         manifest. ``runner`` is an injectable ``subprocess.run`` for tests.
         Running the container and its health/idle lifecycle is session
-        supervision's slice, not this one.
+        supervision's job, not this manager's.
         """
         run = runner or (lambda *a, **k: subprocess.run(*a, **k))
         if log_cb:
@@ -962,7 +942,6 @@ class AppleRuntimeManager:
             log_cb(f"pulled {WRAPPER_V2_IMAGE}")
         return manifest
 
-    # ----- internals ----------------------------------------------------- #
     def _download(self, sess, url: str, dest: Path, progress_cb, abort: Event | None) -> None:
         with sess.get(url, stream=True, timeout=_HTTP_TIMEOUT) as resp:
             resp.raise_for_status()

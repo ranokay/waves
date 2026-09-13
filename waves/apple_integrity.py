@@ -1,6 +1,6 @@
 """Apple integrity gate: verification, outbreak pre-filter, quarantine paths.
 
-Spec §6 (issue #30): every Apple audio delivery is verified pre-swap with an
+Spec §6: every Apple audio delivery is verified pre-swap with an
 ffmpeg decode-to-null check (always-on, never a setting; TIDAL untouched).
 Persistent failures land in a scan-excluded "Waves Quarantine" folder inside
 the library root plus a provider-scoped skip-list that bulk runs auto-skip.
@@ -123,12 +123,12 @@ def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None 
 
 
 # Previously-used custom quarantine folders, remembered so a changed setting
-# cannot resurrect an old corrupt stash in the scan (issue #30): the library
-# scan excludes every remembered root, not just the current one. A tiny JSON
-# sidecar beside the settings (not a setting itself: no UI, no migration,
-# just an exclusion list the bridge rewrites). Uncapped on purpose: evicting
-# the oldest root would re-expose a folder that may still hold quarantined
-# files, and entries are short strings written only when settings save.
+# cannot resurrect an old corrupt stash in the scan: the library scan excludes
+# every remembered root, not just the current one. A tiny JSON sidecar beside
+# the settings (not a setting itself: no UI, no migration, just an exclusion
+# list the bridge rewrites). Uncapped on purpose: evicting the oldest root
+# would re-expose a folder that may still hold quarantined files, and entries
+# are short strings written only when settings save.
 _QUARANTINE_SIDECAR_NAME = "apple_quarantine_roots.json"
 
 

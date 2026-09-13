@@ -17,7 +17,7 @@ ApplicationWindow {
     // below still ride the bridge signal itself.
     readonly property bool signedIn: waves.loggedIn
     // Starts hidden and is shown from Component.onCompleted once the saved
-    // frame (issue #6) has been applied, so a remembered size/position takes
+    // frame has been applied, so a remembered size/position takes
     // effect BEFORE the first present: the window opens where it was left with
     // no jump from the default frame. On a fresh install there is nothing to
     // restore and it shows at the default (4:3, 1040x780), centered on the
@@ -57,7 +57,7 @@ ApplicationWindow {
     // download folder the face says DOWNLOADED, and moving the files into
     // the library flips it through the normal rescan.
     property bool dlInLibrary: waves.downloadsInsideLibrary() === true
-    // ---- per-item quality choices (issue #36) ------------------------------
+    // ---- per-item quality choices ------------------------------------------
     // Mirrored ONCE from the bridge, like the prefs above: media id -> tier
     // word, or "DEFAULT" for a track pinned to the setting under an album
     // that chose otherwise. A track without a choice of its own inherits its
@@ -79,7 +79,7 @@ ApplicationWindow {
         return (q === "HI-RES" || q === "VIDEO") ? goldCont : q === "LOSSLESS" ? greenCont
              : q === "HIGH" ? cyanCont : surface3
     }
-    // ---- Chooser split button (issue #35, spec §7.2) --------------------
+    // ---- Chooser split button (spec §7.2) -------------------------------
     // Mirrored once: with Apple disabled every DownloadButton keeps today's
     // single-face behavior; with Apple enabled each gains its chevron face.
     property bool appleEnabled: false
@@ -224,7 +224,7 @@ ApplicationWindow {
     // away below if the bridge finished its token login before QML loaded.
     property bool browseOpen: true
 
-    // ---- Window geometry persistence (issue #6) ------------------------
+    // ---- Window geometry persistence -----------------------------------
     // Remember the window's size, position and maximized state across launches.
     // Saves route through the bridge's waves.json store (the channel every
     // other pref uses; it writes synchronously so it survives the standalone
@@ -749,7 +749,7 @@ ApplicationWindow {
     }
     function toggleSearchSection(which) { toggleProviderSearchSection(which, false) }
     function toggleAppleSearchSection(which) { toggleProviderSearchSection(which, true) }
-    // Provider groups in Search (issue #67): each provider header collapses
+    // Provider groups in Search: each provider header collapses
     // its whole result group, so users need not scroll through one provider
     // to reach the next. Default expanded; the fold persists per session and
     // across restarts via prefs, per provider, alongside the section SHOW ALL
@@ -766,7 +766,7 @@ ApplicationWindow {
             waves.setWavesPref("search_provider_tidal_collapsed", tidalSearchGroupCollapsed)
         }
     }
-    // Provider badge (issue #69): drill pages carry namespaced ids
+    // Provider badge: drill pages carry namespaced ids
     // ("apple:…" vs bare TIDAL ids), so a header reads its provider off
     // the id it already shows. Unknown ids read TIDAL, the historic shape.
     function providerOfId(id) {
@@ -1184,7 +1184,7 @@ ApplicationWindow {
     // zoom starts every one of those caches is already warm.
     //
     // NOT wired to bootContentShown: that dial also ungates input, and the
-    // interface must stay inert under the launch screen (issue #13).
+    // interface must stay inert under the launch screen.
     property bool bootWarming: false
 
     // ---- Ambient wave-loop background -----------------------------------
@@ -4037,7 +4037,7 @@ ApplicationWindow {
                          + (anyOwned ? qpmHave.width + 6 : 0) + 10)
     }
 
-    // The quality badge you can choose a tier on (issue #36): the row's
+    // The quality badge you can choose a tier on: the row's
     // QualTag, untouched at rest, that grows a caret when hovered and drops a
     // menu of the four tiers when clicked. A choice repaints the pill in the
     // tier's container colour (plain ground = the catalog says, tinted = you
@@ -6015,11 +6015,11 @@ ApplicationWindow {
         }
     }
 
-    // First-class standalone lyrics/art actions (issue #34, spec section 7.3):
+    // First-class standalone lyrics/art actions (spec section 7.3):
     // LYRICS / COVER beside DOWNLOAD on album and artist pages, plus the
     // per-track pair. Both providers; found and saved music alike (the
-    // provider resolves rows, not files). Always visible, even per track
-    // (issue #70): appearing on hover reflowed the row.
+    // provider resolves rows, not files). Always visible, even per track:
+    // appearing only on hover would reflow the row.
     component StandalonePair: Row {
         id: sp
         property string mediaId: ""
@@ -6060,7 +6060,7 @@ ApplicationWindow {
             return ""
         }
         property var onTap: (function(){})
-        // ---- Chooser split button (issue #35, spec 7.2) ------------------
+        // ---- Chooser split button (spec 7.2) ----------------------------
         // chooserKind names what this control downloads (track, album,
         // playlist, mix, video, artist, folder, category). Track rows and
         // collection pages carry per-click support. Bulk sweeps keep Settings.
@@ -7018,7 +7018,7 @@ ApplicationWindow {
         }
     }
 
-    // Playlist-folder tile (issue #11): folders draw their own glyph, they
+    // Playlist-folder tile: folders draw their own glyph, they
     // have no artwork.
     component FolderTile: Rectangle {
         width: 44; height: 44; radius: 6
@@ -7927,7 +7927,7 @@ ApplicationWindow {
         }
     }
 
-    // Provider badge (issue #69): the official logo chip overlaid top-right
+    // Provider badge: the official logo chip overlaid top-right
     // of drill header artwork, so a page names its provider at a glance.
     // Logo sizes follow the Chooser provider segments (wide TIDAL mark,
     // square Apple mark).
@@ -7989,7 +7989,7 @@ ApplicationWindow {
     component SearchSectionMore: ShowAllLabel {
         property string section: ""
         property int cap: 5
-        // Provider-group fold (issue #67): the caller passes its group's
+        // Provider-group fold: the caller passes its group's
         // open state; a collapsed group hides its SHOW ALL with its rows.
         property bool groupOpen: true
         opacity: root.searchReveal
@@ -9514,9 +9514,9 @@ ApplicationWindow {
                                    duration_sec: trow.durationSec })
                     onTap: function(){ trow.kind === "video" ? waves.downloadVideo(tId) : waves.downloadTrack(tId) }
                 }
-                // Per-track standalone pair (issue #34) beside the track's
-                // split button: always visible, so hovering never reflows
-                // the row (issue #70). Videos have no standalone lyrics/art.
+                // Per-track standalone pair beside the track's split button:
+                // always visible, so hovering never reflows the row. Videos
+                // have no standalone lyrics/art.
                 StandalonePair {
                     Layout.alignment: Qt.AlignVCenter
                     mediaId: tId; compact: true
@@ -11660,7 +11660,7 @@ ApplicationWindow {
     ListModel { id: libPlaylistsModel }
     ListModel { id: libMixesModel }
     ListModel { id: libVideosModel }
-    // Drilled-into playlist folder (issue #11). Its own model on purpose: a
+    // Drilled-into playlist folder. Its own model on purpose: a
     // background revalidate of the playlists tab clears the six lib models,
     // and must not wipe the folder the user is standing in.
     ListModel { id: libFolderModel }
@@ -12039,12 +12039,12 @@ ApplicationWindow {
 
     // The model row holding a qid, without walking the model to find it.
     // Progress ticks arrive per delivered segment, dozens a second per active
-    // download, and each one used to scan every row until it hit its own: with
-    // a few hundred rows behind it that scan ran on the GUI thread thousands of
-    // times a second and is what made a long batch feel heavy (issue #24). The
-    // map above is rebuilt after every structural change; a tick landing
-    // between a move and that rebuild pays for one rebuild here, not a scan.
-    // -1 means the row is gone, which a late tick for a cancelled job will see.
+    // download; scanning every row per tick would run on the GUI thread
+    // thousands of times a second with a few hundred rows, which makes a long
+    // batch feel heavy. The map above is rebuilt after every structural change;
+    // a tick landing between a move and that rebuild pays for one rebuild
+    // here, not a scan. -1 means the row is gone, which a late tick for a
+    // cancelled job will see.
     function queueRowIndexOf(qid) {
         var i = root.queueRowIndex[qid]
         if (i !== undefined && i < queueModel.count && queueModel.get(i).qid === qid) return i
@@ -12824,7 +12824,7 @@ ApplicationWindow {
         // Hidden until the launch sequence hands over (see bootOverlay).
         // Invisible must also mean inert: opacity does not gate input, so
         // without the enabled gate every control is live under the launch
-        // screen from the first frame (issue #13).
+        // screen from the first frame.
         // 0.004 is invisible but rendered; see root.bootWarming for why the
         // page is painted before the reveal asks for it.
         // root.uiShown, not the raw dial: a pending terms gate holds the whole
@@ -12969,7 +12969,7 @@ ApplicationWindow {
                             }
                             // Matrix-decrypt paste-in; a pasted TIDAL link auto-searches once
                             // settled. A paste-glyph click arms the same auto-search for plain
-                            // text too (issue #18): the button means "search this", while a
+                            // text too: the button means "search this", while a
                             // bare Ctrl+V still only fills the field so a term can be edited.
                             DecodeController {
                                 id: searchDecoder; field: searchField; glyph: pasteGlyph
@@ -13054,9 +13054,8 @@ ApplicationWindow {
                                         searchField.paste()
                                         // A paste of three characters or fewer is not a jump typing
                                         // could not produce, so noteTextChanged starts no decode and
-                                        // the field's own disarm has already dropped the arm: the
-                                        // button pasted "U2" and then sat there (issue #28). A click
-                                        // here is explicit intent, not a guess, so run the decode on
+                                        // the field's own disarm drops the arm. A glyph click is
+                                        // explicit intent, not a guess, so run the decode on
                                         // whatever actually landed. Nothing landing means an empty
                                         // clipboard, which must stay inert.
                                         if (!searchDecoder.decoding && searchField.text.length > 0) {
@@ -13504,7 +13503,7 @@ ApplicationWindow {
                         readonly property bool skeleton: hd === null && keyKind !== ""
                                                          && root.browseHighlightId === ""
                                                          && (root.browseTitleHint !== "" || root.browseArtHint !== "")
-                        // Provider badge (issue #69): the payload id when it
+                        // Provider badge: the payload id when it
                         // has landed, else the key the page was opened with,
                         // so the skeleton names its provider from the first
                         // frame instead of flashing TIDAL.
@@ -13573,7 +13572,7 @@ ApplicationWindow {
                                 url: browseItemHeader.hd ? (browseItemHeader.hd.art || "") : ""
                                 // The clicked card's cover, up from the first frame.
                                 underUrl: root.browseArtHint
-                                // Provider badge over the poster's top-right (issue #69).
+                                // Provider badge over the poster's top-right.
                                 ProviderBadge {
                                     id: bihProviderBadge
                                     anchors.right: parent.right; anchors.top: parent.top
@@ -13686,7 +13685,7 @@ ApplicationWindow {
                                         mediaId: browseItemHeader.hd ? (browseItemHeader.hd.id || "") : ""
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
-                                    // Playlists only: the full source album of every track (issue #4).
+                                    // Playlists only: the full source album of every track.
                                     // Its state lives under "albums:<id>", apart from the playlist button's.
                                     DownloadButton {
                                         visible: !!browseItemHeader.hd && browseItemHeader.hd.kind === "playlist"
@@ -14445,7 +14444,7 @@ ApplicationWindow {
                             width: 150; height: 150; hoverFx: true
                             fxKind: "artist"; fxId: "" + (root.artistData.id || "")
                             url: root.artistData.art || ""
-                            // Provider badge over the photo's top-right (issue #69).
+                            // Provider badge over the photo's top-right.
                             // Hidden until the id is known, so a skeleton page
                             // never flashes the wrong provider.
                             ProviderBadge {
@@ -15323,7 +15322,7 @@ ApplicationWindow {
                     Layout.maximumWidth: root.previewKind !== "" ? Math.max(60, nowPlaying.x - 51) : statusBar.width - 260
                 }
                 Item { Layout.fillWidth: true }
-                // Logs console (issue #68): realtime tail of the dev log for
+                // Logs console: realtime tail of the dev log for
                 // debugging. Opens the drawer below; always on duty, update
                 // notice or not.
                 Text {
@@ -15762,7 +15761,7 @@ ApplicationWindow {
                     onClicked: waves.paused ? waves.resumeQueue() : waves.pauseQueue()
                 }
                 // Stop everything: abort running downloads and the queued
-                // ones; the rows stay, as Stopped, with RETRY (issue #27).
+                // ones; the rows stay, as Stopped, with RETRY.
                 SpecBtn {
                     // Or a scan in flight: it has no row yet, and this is
                     // the only control that ends it.
@@ -15833,9 +15832,8 @@ ApplicationWindow {
                         Rectangle { Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter; height: 1; color: root.divider }
                         // One-click retry of every row in the section, riding
                         // the Failed and Stopped headers themselves so it appears
-                        // exactly when it applies and takes no room anywhere else
-                        // (issue #18; Stopped joined it in issue #27). Each header
-                        // retries its own section only.
+                        // exactly when it applies and takes no room anywhere
+                        // else. Each header retries its own section only.
                         SpecBtn {
                             compact: true; primary: true; label: "RETRY ALL"
                             visible: secItem.section === "failed" || secItem.section === "stopped"
@@ -16039,11 +16037,11 @@ ApplicationWindow {
                                         textFormat: Text.PlainText  // composed from a remote artist name
                                         text: {
                                             var a = model.artist ? model.artist + " · " : ""
-                                            // Session supervision (issue #33): HELD and
-                                            // THROTTLED are presentations, not new
-                                            // states. A held row stays queued with its
-                                            // reason; a throttled row stays running
-                                            // with its countdown.
+                                            // Session supervision: HELD and THROTTLED
+                                            // are presentations, not new states. A
+                                            // held row stays queued with its reason;
+                                            // a throttled row stays running with its
+                                            // countdown.
                                             if (qrow.st === "queued") return a + (model.reason ? model.reason : "Queued")
                                             // A failure states WHAT failed when the job
                                             // knows ("6 of 501 tracks failed"): on a long
@@ -16594,7 +16592,7 @@ ApplicationWindow {
     // ====================================================================
     // Logs drawer
     // ====================================================================
-    // Realtime console (issue #68): tail of the dev log for debugging. The
+    // Realtime console: tail of the dev log for debugging. The
     // poll runs while open only (1s, capped lines), so a quiet app stays
     // quiet; level filter + follow live in QML over the returned text, and
     // copy/export ride the existing backend slots (copyLogs reuses the tail,
@@ -16876,7 +16874,7 @@ ApplicationWindow {
         }
     }
 
-    // Provider picker (issue #63): first run offers the choice of provider
+    // Provider picker: first run offers the choice of provider
     // instead of dropping straight into the TIDAL login above. Two cards
     // with the official marks; TIDAL continues into the login panel, Apple
     // Music enables the provider (its setup wizard opens itself) and never
@@ -17017,7 +17015,7 @@ ApplicationWindow {
         // Exit warning (exitGate): "Don't warn me again" mutes the
         // downloads-still-running close prompt permanently.
         property bool exitWarnMuted: false
-        // Provider picker (issue #63): answered = a provider card or "Not
+        // Provider picker: answered = a provider card or "Not
         // now" was clicked, the picker never returns. Persisted like every
         // other first-run gate above.
         property bool providerPickerDone: false
@@ -18239,8 +18237,8 @@ ApplicationWindow {
         // Input shield. The interface underneath hides by opacity alone, so
         // without this it stays clickable and hoverable while invisible: a
         // click on the launch water could land on a preview control and start
-        // full-volume audio, and the hand cursor roamed over buttons nobody
-        // could see (issue #13). Eats clicks, hover, and wheel, and keeps the
+        // full-volume audio, and the hand cursor would roam over buttons nobody
+        // can see. Eats clicks, hover, and wheel, and keeps the
         // plain arrow cursor, until the reveal starts painting the content.
         // Visibility-gated as well: a MouseArea claims the cursor even while
         // disabled (the library pill's scar), so a boot that never reaches

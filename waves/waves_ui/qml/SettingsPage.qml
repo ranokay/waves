@@ -280,9 +280,9 @@ Item {
     // with every section starting collapsed, a deep link to a shut card
     // would otherwise land on a bare header.
     function jumpToCard(cardId) {
-        // Provider deep-links land on the one Providers section (issue #60):
-        // its bands stay expanded while the section is open, so the TIDAL
-        // band's two rows are the only scroll between the header and Apple.
+        // Provider deep-links land on the one Providers section: its bands
+        // stay expanded while the section is open, so the TIDAL band's two
+        // rows are the only scroll between the header and Apple.
         if (cardId === "providers_tidal" || cardId === "providers_apple") cardId = "providers"
         for (var i = 0; i < secRep.count; i++) {
             var it = secRep.itemAt(i)
@@ -475,7 +475,7 @@ Item {
         for (var g = 0; g < groups.length; g++) {
             var fs = groups[g].fields
             for (var i = 0; i < fs.length; i++) if (fs[i].key === key) return fs[i]
-            // Provider cards nest their fields one level down (issue #60).
+            // Provider cards nest their fields one level down.
             var ps = groups[g].providers || []
             for (var p = 0; p < ps.length; p++) {
                 var pf = (ps[p] && ps[p].fields) || []
@@ -2445,10 +2445,10 @@ Item {
                                     // Third fields sit three-up in the Flow below.
                                     // Parent width, not the section column: row
                                     // rows also render inside the narrower
-                                    // provider bands (issue #60), where the
-                                    // section width would overflow. Every
-                                    // direct repeater parent is section-width
-                                    // today, so this changes nothing there.
+                                    // provider bands, where the section width
+                                    // would overflow. Every direct repeater
+                                    // parent is section-width, so this changes
+                                    // nothing there.
                                     width: modelData.third === true ? (parent.width - 20) / 3 : parent.width
                                     radius: 10; color: page.surface; border.color: page.border1
                                     // Three-up cards hold a common height whatever their
@@ -2723,8 +2723,8 @@ Item {
                                             }
                                         }
 
-                                        // Apple setup wizard (issue #31): the in-place
-                                        // steps from appleSetupState(), walked in order.
+                                        // Apple setup wizard: the in-place steps
+                                        // from appleSetupState(), walked in order.
                                         // Each step names its advancing action (or none);
                                         // the card re-reads the live mirror whenever the
                                         // light or the runtime moves, so a landed step
