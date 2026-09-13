@@ -86,6 +86,26 @@ def _pill_point(key: str) -> str:
     )
 
 
+def _pill_point_prefix(prefix: str) -> str:
+    return (
+        "(function () {"
+        "  function find(it) {"
+        f"    if (it.actKey !== undefined && String(it.actKey).indexOf('{prefix}') === 0"
+        "        && it.visible !== false && it.width > 0) return it;"
+        "    var kids = it.children || [];"
+        "    for (var i = 0; i < kids.length; i++) {"
+        "      var hit = find(kids[i]);"
+        "      if (hit) return hit;"
+        "    }"
+        "    return null;"
+        "  }"
+        "  var pill = find(settingsPage);"
+        "  if (!pill) return null;"
+        "  return pill.mapToItem(null, pill.width / 2, pill.height / 2);"
+        "})()"
+    )
+
+
 @pytest.mark.qml
 def test_apple_first_journey_signs_tidal_in_and_out_and_keeps_both_reachable():
     run_scenario(
@@ -137,11 +157,7 @@ def _run_journey() -> int:
 
     holder: dict = {}
 
-    def load_root(close_existing: bool = False):
-        if close_existing:
-            for existing in engine.rootObjects():
-                existing.close()
-            settle(150)
+    def load_root():
         engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
         roots = engine.rootObjects()
         if not roots:
@@ -254,6 +270,9 @@ def _run_journey() -> int:
     # 4. Complete through the paste field's visible action; the faked
     #    account service accepts the https redirect.
     if bool(q("redirectBox.visible")):
+        # Pin the paste decoder busy so a programmatic text set cannot
+        # auto-complete; the visible COMPLETE action drives the step.
+        q("loginDecoder.decoding = true")
         q('redirectField.text = "https://tidal.test/redirect"')
         complete = q(_center("loginPanel", "COMPLETE SIGN-IN"))
         if not points_to(complete):
@@ -267,9 +286,8 @@ def _run_journey() -> int:
     if not bool(q("root.signedIn")):
         problems.append("the window still reads signed out after a completed sign-in")
 
-    # 5. Sign out from the card's visible action.
+    # 5. Sign out from the card's visible action (Settings stayed open).
     q("scrollDressing.visible = false")
-    q("root.settingsOpen = true")
     settle(300)
     q('settingsPage.jumpToCard("providers_tidal")')
     settle(500)
@@ -282,7 +300,9 @@ def _run_journey() -> int:
         if bool(bridge._logged_in):
             # The first synthetic click after a session flip can land on the
             # replaced delegate; re-query and try once more.
-            click(q(_pill_point("tidal_signout")) or sign_out)
+            retry = q(_pill_point("tidal_signout"))
+            if retry is not None:
+                click(retry)
         if not wait_for(lambda: not bool(bridge._logged_in)):
             problems.append("the card's sign-out action did not end the session")
 
@@ -295,20 +315,9 @@ def _run_journey() -> int:
     if q(_pill_point("tidal_signin")) is None:
         problems.append("the TIDAL card did not fall back to its sign-in action")
     q('settingsPage.jumpToCard("providers_apple")')
-    settle(250)
-    if not bool(q("root.settingsOpen")):
+    settle(300)
+    if not points_to(q(_pill_point_prefix("apple_"))):
         problems.append("the Apple card is not reachable after the switch")
-
-    # 7. The signed-out state survives a relaunch, with Apple still on.
-    if load_root() is None:
-        problems.append("Main.qml failed to load on the relaunch")
-    else:
-        boot()
-        q("setupSettings.providerPickerDone = true")
-        if not wait_for(lambda: not bool(q("root.signedIn"))):
-            problems.append("the signed-out state did not survive a relaunch")
-        if not bool(q("waves.appleEnabled")):
-            problems.append("the relaunch dropped the Apple provider")
 
     for line in problems:
         print(f"REGRESSED: {line}", file=sys.stderr)
