@@ -19,6 +19,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from support.paths import REPO_ROOT
 from tidalapi import Album, Track
 
 from waves.download import Download
@@ -32,7 +33,7 @@ from waves.model.cfg import Settings as CfgSettings
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
 
-_UI = pathlib.Path(__file__).resolve().parent.parent / "waves" / "waves_ui"
+_UI = REPO_ROOT / "waves" / "waves_ui"
 
 _SUBTITLED = "The Better Life (Rarities Edition: Live At Red Rocks)"
 _MIDDOT = "The Better Life (Rarities Edition · Live At Red Rocks)"

@@ -23,13 +23,14 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from support.paths import REPO_ROOT
 from tidalapi import Album, Track
 
 from waves.download import Download
 from waves.helper.path import format_path_media, safe_filename_replacement
 from waves.waves_ui.backend import WavesBridge
 
-_UI = pathlib.Path(__file__).resolve().parent.parent / "waves" / "waves_ui"
+_UI = REPO_ROOT / "waves" / "waves_ui"
 
 _SLASHED = "The Better Life / Dead Love"
 _LEGACY_DIR = "The Better Life  Dead Love"  # doubled space, pre-0.1.17

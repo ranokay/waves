@@ -21,11 +21,11 @@ asked, and that every one of the three answers ends the asking.
 
 from __future__ import annotations
 
-import pathlib
 from datetime import datetime
 from threading import Lock
 from types import SimpleNamespace
 
+from support.paths import REPO_ROOT
 from tidalapi import Album, Track
 
 from waves.constants import DEFAULT_ILLEGAL_MAP
@@ -39,7 +39,7 @@ from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as CfgSettings
 from waves.waves_ui.backend import _FIRST_RUN_OVERRIDES, WavesBridge
 
-_UI = pathlib.Path(__file__).resolve().parent.parent / "waves" / "waves_ui"
+_UI = REPO_ROOT / "waves" / "waves_ui"
 _SETTINGS_QML = (_UI / "qml" / "SettingsPage.qml").read_text(encoding="utf-8")
 
 

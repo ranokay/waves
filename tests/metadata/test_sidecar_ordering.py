@@ -119,7 +119,7 @@ class TestSidecarsWaitForTheAudio:
         assert (library / "Song.lrc").read_text(encoding="utf-8") == "[00:01.00] words\n"
         assert (library / "cover.jpg").read_bytes() == b"cover bytes"
         # A file landed here, so this folder is one the m3u writer may write in
-        # (see tests/test_playlist_scope_only_what_landed.py).
+        # (see tests/ui/test_playlist_scope_only_what_landed.py).
         assert dl._dirs_filled == {library}
 
     def test_the_sidecars_follow_the_name_the_audio_actually_took(self, tmp_path):
