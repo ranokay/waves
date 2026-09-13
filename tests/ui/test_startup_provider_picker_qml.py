@@ -22,15 +22,17 @@ from support.qml import run_scenario
 
 
 def _scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from PySide6.QtCore import QEventLoop, QTimer, QUrl
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
 
     app = QGuiApplication.instance() or QGuiApplication([])
     from _qml_offline import patch_offline
+    from support.qml import sandbox_qml_settings
 
     patch_offline()
+    sandbox_qml_settings()
     from waves.waves_ui.app import _load_mono
     from waves.waves_ui.backend import WavesBridge
 

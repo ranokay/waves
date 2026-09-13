@@ -57,6 +57,31 @@ def missing_qt() -> bool:
         return False
 
 
+def sandbox_qml_settings() -> None:
+    """Start a scenario from a clean QSettings slate, off the app's own domain.
+
+    QML `Settings` objects use QSettings, which on macOS writes to the real
+    ``~/Library/Preferences``; its native backend ignores ``setPath``, so the
+    INI redirect only helps on other platforms. Each QML scenario subprocess
+    runs under the scenario script's own application name (only the real
+    entry point names the app), so clearing the default domain here wipes
+    test-owned state only -- never the app's own domain -- and keeps a
+    scenario idempotent across runs. Call it once the child has a QCore
+    application, before any QML engine or bridge exists.
+    """
+    import tempfile
+
+    from PySide6.QtCore import QCoreApplication, QSettings
+
+    if QCoreApplication.applicationName() == "Waves":
+        raise RuntimeError("sandbox_qml_settings must run before the real app configures QSettings")
+    base = os.environ.get("XDG_CONFIG_HOME") or tempfile.mkdtemp(prefix="waves-qml-settings-")
+    Path(base).mkdir(parents=True, exist_ok=True)
+    QSettings.setPath(QSettings.NativeFormat, QSettings.UserScope, base)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, base)
+    QSettings().clear()
+
+
 def scenario_env(sandbox: str) -> dict[str, str]:
     """The environment one scenario child runs with: offscreen Qt, a private
     config directory, and the repo plus tests root importable from any depth."""

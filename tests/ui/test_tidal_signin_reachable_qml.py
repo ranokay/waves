@@ -31,18 +31,17 @@ installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+import pytest
+from support.paths import QML_MAIN
+from support.qml import run_scenario
 
 _EXIT_OK = 0
 _EXIT_REGRESSED = 1
 _EXIT_NO_QT = 77
 _EXIT_PRECONDITION = 78
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
 # The Settings nav tab's centre in window coordinates. NavTab exposes its
 # label, so the tab is found by name rather than by index or pixel guess.
@@ -80,67 +79,34 @@ def _pill_point(key: str) -> str:
     )
 
 
+@pytest.mark.qml
 def test_tidal_signin_stays_reachable_under_the_overlay_and_with_apple_on():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-tidal-signin-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert (
-        proc.returncode == _EXIT_OK
-    ), f"TIDAL sign-in reachability regressed. Scenario exit={proc.returncode}:\n{tail}"
+    run_scenario(Path(__file__), "--run-scenario", timeout=120, sandbox_prefix="waves-tidal-signin-test-")
 
 
+@pytest.mark.qml
 def test_tidal_signout_pill_ends_the_session_and_flips_the_card():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-tidal-signout-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-signout-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"TIDAL sign-out regressed. Scenario exit={proc.returncode}:\n{tail}"
+    run_scenario(Path(__file__), "--run-signout-scenario", timeout=120, sandbox_prefix="waves-tidal-signout-test-")
 
 
 def _run_scenario() -> int:
     # THIS checkout's waves, not the venv's editable install.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     try:
         from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
         from PySide6.QtTest import QTest
-    except Exception as exc:
-        print(f"Qt unavailable: {exc}", file=sys.stderr)
+    except ImportError as exc:
+        print(f"PySide6 unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
 
     from _qml_offline import patch_offline
+    from support.qml import sandbox_qml_settings
 
     patch_offline()
-
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
@@ -196,7 +162,13 @@ def _run_scenario() -> int:
     if point is None:
         print("could not locate the Settings nav tab", file=sys.stderr)
         return _EXIT_PRECONDITION
+    # The offscreen window needs a mouse move plus a warm-up click before
+    # a GateAction reacts; the delayed press/release then lands.
+    QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
+    settle(60)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())))
+    settle(80)
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())), 40)
     settle(250)
     if not bool(q("root.settingsOpen")):
         bad.append("the login overlay swallowed the Settings nav click")
@@ -215,7 +187,13 @@ def _run_scenario() -> int:
     if point is None:
         print("the TIDAL card exposes no sign-in action", file=sys.stderr)
         return _EXIT_PRECONDITION
+    # The offscreen window needs a mouse move plus a warm-up click before
+    # a GateAction reacts; the delayed press/release then lands.
+    QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
+    settle(60)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())))
+    settle(80)
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())), 40)
     settle(1200)
 
     # 3. The flow opened in the browser and the panel came back with the
@@ -236,21 +214,22 @@ def _run_scenario() -> int:
 
 def _run_signout_scenario() -> int:
     # THIS checkout's waves, not the venv's editable install.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     try:
         from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
         from PySide6.QtTest import QTest
-    except Exception as exc:
-        print(f"Qt unavailable: {exc}", file=sys.stderr)
+    except ImportError as exc:
+        print(f"PySide6 unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
 
     from _qml_offline import patch_offline
+    from support.qml import sandbox_qml_settings
 
     patch_offline()
-
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
@@ -331,8 +310,23 @@ def _run_signout_scenario() -> int:
         return _EXIT_REGRESSED
     q("root.requestActivate()")
     settle(100)
+    # The offscreen window needs a mouse move plus a warm-up click before
+    # a GateAction reacts; the delayed press/release then lands.
+    QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
+    settle(60)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())))
+    settle(80)
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())), 40)
     settle(600)
+    if bridge._logged_in:
+        # The first synthetic click after the session flip can land on the
+        # replaced delegate; re-query and try once more.
+        point = q(_pill_point("tidal_signout"))
+        if point is not None:
+            QTest.mouseMove(root, QPoint(int(point.x()), int(point.y())))
+            settle(60)
+            QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())), 40)
+            settle(500)
 
     bad: list[str] = []
     if bridge._logged_in:

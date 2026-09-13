@@ -147,6 +147,9 @@ ignore = [
 # Qt boot (S603, fixed argv), and its boot -> drive -> assert scenario is one
 # deliberately linear function (C901).
 "tests/test_browse_back_scroll.py" = ["S603", "C901"]
+# One deliberately linear end-to-end journey (pick a provider -> Settings ->
+# sign in -> sign out -> relaunch); the branching is the journey (C901).
+"tests/ui/test_account_journey.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
 "tests/metadata/test_apple_double_cleanup.py" = ["S603"]
@@ -221,11 +224,11 @@ ignore = [
 "tests/test_provider_badge_qml.py" = ["S603"]
 # The startup picker scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).
-"tests/test_startup_provider_picker_qml.py" = ["S603"]
+"tests/ui/test_startup_provider_picker_qml.py" = ["S603"]
 # The TIDAL sign-in reachability scenario re-runs itself in a subprocess to
 # isolate the Qt boot (S603, fixed argv), and its build -> click -> assert
 # scenario is one deliberately linear function (C901).
-"tests/test_tidal_signin_reachable_qml.py" = ["S603", "C901"]
+"tests/ui/test_tidal_signin_reachable_qml.py" = ["S603", "C901"]
 "tests/test_nav_seq_and_history_guards.py" = ["S603", "C901"]
 "tests/test_folder_badge_and_crumb_labels.py" = ["S603", "C901"]
 "tests/test_hover_swell_fade.py" = ["S603", "C901"]

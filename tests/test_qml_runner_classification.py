@@ -92,7 +92,7 @@ def test_a_broken_app_import_fails_the_startup_scenario(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", str(tmp_path))
 
     with pytest.raises(pytest.fail.Exception) as excinfo:
-        run_scenario(qml.TESTS_ROOT / "test_startup_provider_picker_qml.py", "--run-scenario")
+        run_scenario(qml.TESTS_ROOT / "ui" / "test_startup_provider_picker_qml.py", "--run-scenario")
 
     assert "injected app import failure" in str(excinfo.value)
 
@@ -147,7 +147,7 @@ def test_qml_marker_skips_without_pyside_and_require_qml_fails(tmp_path):
     env = dict(os.environ)
     env["PYTHONPATH"] = str(tmp_path)
     target = (
-        "tests/test_startup_provider_picker_qml.py"
+        "tests/ui/test_startup_provider_picker_qml.py"
         "::test_first_run_offers_the_provider_choice_and_never_auto_opens_login"
     )
 
