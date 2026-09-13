@@ -54,7 +54,7 @@ _METHODS = (
     "_library_track_claim",
     # The MusicBrainz overlay rides inside the presence slot; the opt-in pref
     # defaults off in these stubs, so it answers pass-through (its own rules
-    # are covered in test_mb_overlay.py).
+    # are covered in tests/library/test_mb_overlay.py).
     "_mb_arbitrated",
     "_mb_arbiter_on",
     # The scan sizes its pools from this classifier's verdict; the real one

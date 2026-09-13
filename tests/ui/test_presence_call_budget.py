@@ -34,25 +34,27 @@ installs process-global handlers that must not leak into the suite.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
 # A spy that measured ZERO calls after the consumer-count preconditions have
 # already passed. That can only be overload drift (a new argument on the slot
 # the spy's overloads no longer intercept), never an environment problem, so
-# unlike _EXIT_PRECONDITION it must FAIL: mapped to skip, the dead spy kept CI
+# unlike EXIT_PRECONDITION it must FAIL: mapped to skip, the dead spy kept CI
 # green while measuring nothing, one notch quieter than the silent pass the
 # loud-on-zero rule exists to prevent.
-_EXIT_DEAD_SPY = 79
+EXIT_DEAD_SPY = 79
 
 _ROWS = 30
 #: One call per presence consumer (a pill, or a Download button holding an album
@@ -62,55 +64,38 @@ _ROWS = 30
 #: back, and no multiplier would catch that.
 _SLACK = 8
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
-
+@pytest.mark.qml
 def test_presence_is_asked_once_per_badge_not_once_per_property():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-presence-budget-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-6:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    if proc.returncode == _EXIT_DEAD_SPY:
-        pytest.fail(f"the presence spy measured zero calls (overload drift?):\n{tail}")
-    assert proc.returncode == _EXIT_OK, (
-        "presence is being resolved more than once per badge again. The usual cause is an "
-        "album's identity being split back into separate properties, each with its own change "
-        f"handler, so one row asks the same question several times:\n{tail}"
+        sandbox_prefix="waves-presence-budget-",
+        failure_message="the presence call budget regressed",
     )
 
 
 def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl, Slot
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.matching import presence_key, track_key
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     calls = {"n": 0}
 
@@ -221,7 +206,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -285,7 +270,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     )
     if consumers < _ROWS:
         print(f"only {consumers} presence consumers built for {_ROWS} rows", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # Track consumers: the TrackPresencePill beside the title (identified by
     # its `track` identity plus a pill's qclass) and the row's DownloadButton
@@ -305,7 +290,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     )
     if track_consumers < _ROWS * 2:
         print(f"only {track_consumers} track consumers built for {_ROWS} rows", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # Artist consumers: the library strip on an artist card (identified by the
     # name it holds) and, like the track row, the card's own Download button
@@ -326,7 +311,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     )
     if artist_consumers < _ROWS * 2:
         print(f"only {artist_consumers} artist consumers built for {_ROWS} rows", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # A dead spy (an overload the real callers use but the spy does not
     # declare) counts zero and would pass every budget forever; zero calls
@@ -338,7 +323,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
             f"artist={acalls['n']}): overload drift?",
             file=sys.stderr,
         )
-        return _EXIT_DEAD_SPY
+        return EXIT_DEAD_SPY
 
     budget = consumers + _SLACK
     tbudget = track_consumers + _SLACK
@@ -354,9 +339,15 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
         flush=True,
     )
     if calls["n"] > budget or tcalls["n"] > tbudget or acalls["n"] > abudget:
-        return _EXIT_REGRESSED
-    return _EXIT_OK
+        print(
+            "presence is being resolved more than once per badge again. The usual cause is an album's identity "
+            "being split back into separate properties, each with its own change handler, so one row asks the "
+            "same question several times:",
+            file=sys.stderr,
+        )
+        return EXIT_REGRESSED
+    return EXIT_OK
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())
