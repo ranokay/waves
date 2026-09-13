@@ -27,22 +27,21 @@ Now:
 from __future__ import annotations
 
 import inspect
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
 import pytest
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 
 # ---- bridge side --------------------------------------------------------------
@@ -150,48 +149,37 @@ def test_merge_seed_and_load_queue_tracks_read_the_catalog_ceiling(monkeypatch):
 
 
 # ---- the real drawer -------------------------------------------------------------
+@pytest.mark.qml
 def test_drawer_states_the_floor_and_holds_it():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    sandbox = tempfile.mkdtemp(prefix="waves-queue-expected-")
-    env["XDG_CONFIG_HOME"] = sandbox
-    env["HOME"] = sandbox
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-queue-expected-",
+        failure_message="the drawer's predicted tier is dishonest again:",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the drawer's predicted tier is dishonest again:\n{tail}"
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -202,7 +190,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -223,7 +211,7 @@ def _run_scenario() -> int:
     settle(120)
     if not bool(q("queueDrawer.visible")):
         print("the queue drawer would not open", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     bad: list[str] = []
     # The pure function first: the floor in every direction.
@@ -248,14 +236,14 @@ def _run_scenario() -> int:
     settle(120)
     if bridge._target_tier() != "HI-RES":
         print(f"the setting did not take: target reads {bridge._target_tier()!r}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     qid = bridge._enqueue("Album A", "album", media_id="m1", collection=True, tracks=2, expected="LOSSLESS")
     bridge.queueChanged.emit(list(bridge._queue))
     settle(120)
     row = "(function(){ var it = queueList.itemAtIndex(0); return it })()"
     if not bool(q(row + " !== null")):
         print("no drawer row", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     tier = str(q(row + ".tier"))
     if tier != "LOSSLESS":
         bad.append(f"a lossless-only album queued under HI-RES states {tier!r} on its pill, want LOSSLESS")
@@ -297,7 +285,7 @@ def _run_scenario() -> int:
     settle(300)
     if bridge._target_tier() != "HIGH":
         print(f"the setting change did not take: target reads {bridge._target_tier()!r}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     tier = str(q(row + ".tier"))
     if tier != "LOSSLESS":
         bad.append(f"after the setting changed the pill states {tier!r}, want the queued LOSSLESS")
@@ -317,9 +305,9 @@ def _run_scenario() -> int:
     if bad:
         for b in bad:
             print(b, file=sys.stderr)
-        return _EXIT_REGRESSED
-    return _EXIT_OK
+        return EXIT_REGRESSED
+    return EXIT_OK
 
 
 if __name__ == "__main__" and "--run-scenario" in sys.argv:
-    sys.exit(_run_scenario())
+    raise SystemExit(_run_scenario())

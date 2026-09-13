@@ -45,7 +45,7 @@ connected alongside. The carcass connects the signals the way ``__init__`` does,
 so the last test pins that wiring on the real class.
 
 Only _predict_skips is replaced: what the lookup answers is its own subject
-(tests/test_queue_owned_prediction.py). What is pinned here is what
+(tests/ui/test_queue_owned_prediction.py). What is pinned here is what
 loadQueueTracks does with the answer it gets back.
 """
 
