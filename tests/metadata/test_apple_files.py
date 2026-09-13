@@ -7,6 +7,7 @@ import subprocess
 
 import mutagen.mp4
 import pytest
+from support.audio_fixtures import tone
 
 from waves.providers.apple.files import (
     format_apple_path,
@@ -155,11 +156,7 @@ def _ffmpeg() -> str:
 
 @pytest.mark.ffmpeg
 def test_tag_apple_file_writes_generic_only_tags(tmp_path):
-    src = tmp_path / "src.m4a"
-    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
-        [_ffmpeg(), "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "aac", str(src)],
-        check=True,
-    )
+    src = tone(tmp_path / "src.m4a")
     facts = {
         "item_id": "apple:song-1",
         "artist_ids": ["apple:artist-1"],
@@ -260,34 +257,14 @@ def test_sidecar_without_a_converter_keeps_the_true_extension(tmp_path, monkeypa
 def test_embedded_png_cover_keeps_its_true_format(tmp_path):
     import mutagen.flac
 
-    src = tmp_path / "src.m4a"
-    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
-        [_ffmpeg(), "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "aac", str(src)],
-        check=True,
-    )
+    src = tone(tmp_path / "src.m4a")
     png = _image_bytes(tmp_path, "cover.png", "png")
 
     assert tag_apple_file(src, title="Xtal", facts={}, cover_data=png) is True
     cover = mutagen.mp4.MP4(str(src)).tags["covr"][0]
     assert cover.imageformat == mutagen.mp4.MP4Cover.FORMAT_PNG
 
-    flac_src = tmp_path / "src.flac"
-    subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)
-        [
-            _ffmpeg(),
-            "-y",
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=1",
-            "-c:a",
-            "flac",
-            str(flac_src),
-        ],
-        check=True,
-    )
+    flac_src = tone(tmp_path / "src.flac", "flac")
     assert tag_apple_file(flac_src, title="Xtal", facts={}, cover_data=png) is True
     assert mutagen.flac.FLAC(str(flac_src)).pictures[0].mime == "image/png"
 
