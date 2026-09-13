@@ -61,7 +61,7 @@ def _gate_fake():
     fake._stash_pending_download = WavesBridge._stash_pending_download.__get__(fake)
     fake._run_pending_downloads = WavesBridge._run_pending_downloads.__get__(fake)
     # Saves go through the guarded helper, which undoes the transient ffmpeg
-    # injections before writing (see tests/test_settings_save_guard.py).
+    # injections before writing (see tests/settings/test_settings_save_guard.py).
     fake._ffmpeg_flag_prefs = {}
     fake._ffmpeg_user_path = ""
     fake._restore_ffmpeg_flags = WavesBridge._restore_ffmpeg_flags.__get__(fake)

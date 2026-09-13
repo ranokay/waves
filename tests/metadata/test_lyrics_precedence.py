@@ -1,4 +1,6 @@
-"""Source precedence + standalone slots (issue #34)."""
+"""Source precedence + standalone actions (spec section 9.1)."""
+
+import pytest
 
 from waves.model.cfg import Settings
 
@@ -16,12 +18,8 @@ def test_new_settings_defaults_match_spec():
     assert data.cover_file_format == "raw"
 
 
-def test_word_timed_outranks_line_lrclib():
-    """Precedence unit: the provider layer prefers enhanced LRC over LRCLIB text.
-
-    Exercises the ordering rule directly: when a word-timed document exists,
-    its conversion wins the synced slot even against a line-timed LRCLIB hit.
-    """
+def test_word_timed_ttml_converts_to_enhanced_lrc():
+    """Honest parser contract: syllable TTML converts to enhanced LRC."""
     from waves.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
 
     syllable = """<tt xmlns:itunes="x" itunes:timing="Word"><body><div>
@@ -29,16 +27,7 @@ def test_word_timed_outranks_line_lrclib():
     assert ttml_timing_mode(syllable) == "word"
     word_lrc = ttml_to_enhanced_lrc(syllable)
     assert word_lrc.startswith("[00:01.00]")
-    # The rule: word_lrc is chosen before lrclib_synced. The backend
-    # implements it in _apple_lyrics_full; this pins the conversion half.
     assert "<00:01.00>Hi" in word_lrc
-
-
-def test_standalone_slots_exist():
-    from waves.waves_ui import backend as backend_module
-
-    assert hasattr(backend_module.WavesBridge, "downloadLyricsOnly")
-    assert hasattr(backend_module.WavesBridge, "downloadArtOnly")
 
 
 def test_provider_word_timed_lrc_helper():
@@ -78,7 +67,9 @@ class _Options:
         return self.values.get(name, default)
 
 
-def _lyrics_stub(monkeypatch, *, native=("[00:10.00]Hello\n[00:12.00]World", "Hello\nWorld"), lrclib=("", "")):
+def _lyrics_stub(
+    monkeypatch, *, native=("[00:10.00]Hello\n[00:12.00]World", "Hello\nWorld"), lrclib=("", ""), syllable=""
+):
     from types import SimpleNamespace
 
     from waves.providers.apple import runner
@@ -86,7 +77,7 @@ def _lyrics_stub(monkeypatch, *, native=("[00:10.00]Hello\n[00:12.00]World", "He
     calls = {"native": 0}
     provider = SimpleNamespace(
         get_object=lambda kind, raw_id: {"id": raw_id},
-        fetch_syllable_ttml=lambda track: "",
+        fetch_syllable_ttml=lambda track: syllable,
         fetch_line_ttml=lambda track: LINE_TTML,
     )
 
@@ -164,6 +155,49 @@ def test_plain_only_lrclib_alone_stays_plain(monkeypatch):
     )
 
     assert synced == "" and plain == "plain words"
+
+
+WORD_TTML = """<tt xmlns:itunes="x" itunes:timing="Word"><body><div>
+<p begin="00:01.00"><span begin="00:01.00">Hi</span></p></div></body></tt>"""
+
+
+def test_word_timed_outranks_a_synced_lrclib_hit(monkeypatch):
+    """The word-timed Apple document wins the synced slot outright."""
+    from waves.providers.apple import runner
+
+    hooks, provider, calls = _lyrics_stub(monkeypatch, syllable=WORD_TTML, lrclib=("[00:02.00]LRCLIB", "lrclib text"))
+
+    synced, plain, ttml = runner.lyrics_full(
+        hooks,
+        provider,
+        {"id": "apple:s1", "artist": "A", "title": "T", "album": "X", "duration_sec": 10},
+        {},
+        options=_lyrics_options(lyrics_word_timed=True),
+    )
+
+    assert "<00:01.00>Hi" in synced and synced != "[00:02.00]LRCLIB"
+    assert plain == "lrclib text"
+    assert ttml == WORD_TTML
+    assert calls["native"] == 0
+
+
+def test_native_line_timed_is_the_fallback_over_plain_text(monkeypatch):
+    from waves.providers.apple import runner
+
+    hooks, provider, calls = _lyrics_stub(monkeypatch, lrclib=("", ""))
+
+    synced, plain, ttml = runner.lyrics_full(
+        hooks,
+        provider,
+        {"id": "apple:s1", "artist": "A", "title": "T", "album": "X", "duration_sec": 10},
+        {},
+        options=_lyrics_options(lyrics_prefer_lrclib=False),
+    )
+
+    assert synced == "[00:10.00]Hello\n[00:12.00]World"
+    assert plain == "Hello\nWorld"
+    assert ttml == LINE_TTML
+    assert calls["native"] == 1
 
 
 def test_apple_standalone_lyrics_embeds_with_every_sidecar_off(tmp_path):
@@ -272,3 +306,138 @@ def test_tidal_standalone_lyrics_without_lyrics_is_not_served(tmp_path):
 
     assert stub._standalone_tidal("123", "lyrics") == 0
     assert embedded == [], "nothing to embed never tags a file or reports a serve"
+
+
+# --------------------------------------------------------------------------- #
+# Standalone actions through the real bridge entry points
+# --------------------------------------------------------------------------- #
+
+
+def _psetting_map(*, lyrics_file=False, lyrics_embed=False, cover_album_file=True):
+    return {
+        "lyrics_file": lyrics_file,
+        "lyrics_file_synced_only": False,
+        "lyrics_ttml_file": False,
+        "lyrics_embed": lyrics_embed,
+        "metadata_cover_embed": False,
+        "cover_album_file": cover_album_file,
+    }
+
+
+def _standalone_bridge(tmp_path, *, psettings, lyrics=None, cover=None, lyrics_error=False):
+    from types import SimpleNamespace
+
+    from conftest import _InlinePool
+
+    from waves.waves_ui.backend import WavesBridge
+
+    folder = tmp_path / "Artist"
+    folder.mkdir(parents=True, exist_ok=True)
+    statuses: list[str] = []
+    states: list[tuple] = []
+    provider = SimpleNamespace(
+        get_object=lambda kind, raw_id: {"id": raw_id},
+        track_facts=lambda obj: {},
+    )
+    stub = SimpleNamespace(
+        settings=SimpleNamespace(
+            data=SimpleNamespace(
+                download_base_path=str(tmp_path),
+                mark_explicit=False,
+                metadata_target_upc="UPC",
+            )
+        ),
+        providers={"apple": provider},
+        downloadState=SimpleNamespace(emit=lambda media_id, state: states.append((media_id, state))),
+        _set_status=statuses.append,
+        _download_gate=lambda: "ok",
+        threadpool=_InlinePool(),
+        _psetting=lambda provider_id, name, default: psettings.get(name, default),
+        _standalone_apple_tracks=lambda media_id: [({"id": "apple:s1", "title": "S1"}, None, False)],
+        _apple_standalone_dest=lambda base, row, album, collection: (folder, "S1"),
+        _apple_wants_cover=lambda collection: True,
+        _cover_convert_ffmpeg=lambda: "",
+        _tag_write_flags=lambda: {},
+    )
+    if lyrics_error:
+
+        def _raise(*args, **kwargs):
+            raise RuntimeError("provider exploded")
+
+        stub._apple_lyrics_full = _raise
+    else:
+        stub._apple_lyrics_full = lambda provider, row, facts, options=None: lyrics or ("[00:01.00]hi", "hi", "")
+    stub._apple_cover_bytes = lambda provider, raw: cover or b"\xff\xd8\xff\xdbjpeg-bytes"
+    for name in (
+        "_standalone_fetch",
+        "_standalone_base_dir",
+        "_apple_standalone_embed",
+        "_apple_standalone_embed_lyrics",
+        "_apple_standalone_embed_cover",
+        "downloadLyricsOnly",
+        "downloadArtOnly",
+        "_standalone_apple",
+    ):
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
+    return stub, folder, statuses, states
+
+
+@pytest.mark.ffmpeg
+def test_download_lyrics_only_writes_the_sidecar_and_no_audio(tmp_path):
+    stub, folder, statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map(lyrics_file=True))
+
+    stub.downloadLyricsOnly("apple:s1")
+
+    assert (folder / "S1.lrc").read_text() == "[00:01.00]hi"
+    assert list(folder.glob("*.m4a")) == [] and list(folder.glob("*.flac")) == []
+    assert states == [("apple:s1", "running"), ("apple:s1", "done")]
+    assert statuses[-1] == "Saved lyrics for 1 track"
+
+
+def test_download_lyrics_only_replaces_an_existing_hand_edited_sidecar(tmp_path):
+    stub, folder, _statuses, _states = _standalone_bridge(tmp_path, psettings=_psetting_map(lyrics_file=True))
+    (folder / "S1.lrc").write_text("[hand-edited]")
+
+    stub.downloadLyricsOnly("apple:s1")
+
+    assert (folder / "S1.lrc").read_text() == "[00:01.00]hi"
+
+
+@pytest.mark.ffmpeg
+def test_download_lyrics_only_embeds_into_an_existing_track(tmp_path):
+    import mutagen.mp4
+    from support.audio_fixtures import tone
+
+    stub, folder, _statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map(lyrics_embed=True))
+    tone(folder / "S1.m4a")
+
+    stub.downloadLyricsOnly("apple:s1")
+
+    assert "hi" in str(mutagen.mp4.MP4(str(folder / "S1.m4a")).tags["\xa9lyr"][0])
+    assert not (folder / "S1.lrc").exists(), "the sidecar toggle stays independent of the embed"
+    assert len(list(folder.glob("*.m4a"))) == 1, "the embed tags the existing file, never downloads audio"
+    assert states[-1] == ("apple:s1", "done")
+
+
+def test_download_lyrics_only_reports_a_failed_provider_request(tmp_path):
+    stub, folder, statuses, states = _standalone_bridge(
+        tmp_path, psettings=_psetting_map(lyrics_file=True), lyrics_error=True
+    )
+
+    stub.downloadLyricsOnly("apple:s1")
+
+    assert states[-1] == ("apple:s1", "failed")
+    assert statuses[-1] == "Could not fetch lyrics, try again"
+    assert not (folder / "S1.lrc").exists()
+
+
+@pytest.mark.ffmpeg
+def test_download_art_only_writes_the_cover_and_no_audio(tmp_path):
+    stub, folder, statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map())
+
+    stub.downloadArtOnly("apple:s1")
+
+    assert (folder / "cover.jpg").read_bytes().startswith(b"\xff\xd8\xff")
+    assert list(folder.glob("*.m4a")) == []
+    assert states == [("apple:s1", "running"), ("apple:s1", "done")]
+    assert statuses[-1] == "Saved artwork for 1 track"

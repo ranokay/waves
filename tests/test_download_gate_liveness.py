@@ -48,7 +48,7 @@ class GateHost:
     _remount_download_share = WavesBridge._remount_download_share
     _REMOUNT_COOLDOWN_SEC = WavesBridge._REMOUNT_COOLDOWN_SEC
     # Saves go through the guarded helper, which undoes the transient ffmpeg
-    # injections before writing (see tests/test_settings_save_guard.py).
+    # injections before writing (see tests/settings/test_settings_save_guard.py).
     _save_settings = WavesBridge._save_settings
 
     def _submit_settings_write(self):
