@@ -336,7 +336,7 @@ def _tone(path: Path):
 
 @needs_ffmpeg
 def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -373,7 +373,7 @@ def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
 @needs_ffmpeg
 def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkeypatch):
     """The row's pinned ask reaches resolve_stream even when Settings disagree."""
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -413,7 +413,7 @@ def test_embed_toggle_governs_lyrics_embedding(tmp_path, monkeypatch):
     """Sidecar-only lyrics land as files; the audio embeds only when on."""
     import mutagen.mp4
 
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -462,7 +462,7 @@ def test_chooser_toggles_layer_over_settings_for_one_job(tmp_path, monkeypatch):
     """A job spec's per-click toggles win over the contradicting Settings."""
     import mutagen.mp4
 
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -534,7 +534,7 @@ def test_apple_folder_hold_replays_with_the_same_toggle_pins():
 
 @needs_ffmpeg
 def test_owned_track_skips_without_fetching(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -589,7 +589,7 @@ def test_gate_without_a_store_never_gates():
 
 @needs_ffmpeg
 def test_both_default_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "eac3", "sample_rate": "48000"}
@@ -871,7 +871,7 @@ def test_second_click_on_a_queued_row_acknowledges_without_requeueing(tmp_path):
 
 @needs_ffmpeg
 def test_stale_owned_copy_forces_an_in_place_overwrite(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -947,7 +947,7 @@ def test_row_object_falls_back_to_the_provider_cache(tmp_path):
 
 @needs_ffmpeg
 def test_lone_track_files_no_cover_without_the_single_track_option(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -970,7 +970,7 @@ def test_lone_track_files_no_cover_without_the_single_track_option(tmp_path, mon
 
 @needs_ffmpeg
 def test_album_job_writes_the_promised_playlist_file(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -997,8 +997,8 @@ def test_album_job_writes_the_promised_playlist_file(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
-    from waves import apple_engine
     from waves.providers.apple import AppleProvider as _RealProvider
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -1042,7 +1042,7 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -1093,8 +1093,8 @@ def test_place_file_leaves_no_partials(tmp_path):
 
 @needs_ffmpeg
 def test_a_long_throttle_keeps_retrying_instead_of_failing(tmp_path, monkeypatch):
-    from waves import apple_engine
     from waves.providers.apple import AppleProvider as _RealProvider
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -1132,8 +1132,8 @@ def test_a_long_throttle_keeps_retrying_instead_of_failing(tmp_path, monkeypatch
 
 @needs_ffmpeg
 def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, monkeypatch):
-    from waves import apple_engine
-    from waves.apple_engine import AppleCredentialsError
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleCredentialsError
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -1180,8 +1180,8 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
 
 @needs_ffmpeg
 def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkeypatch):
-    from waves import apple_engine
-    from waves.apple_engine import AppleCredentialsError
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleCredentialsError
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}

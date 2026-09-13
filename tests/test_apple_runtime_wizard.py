@@ -35,7 +35,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from waves.apple_runtime import (
+from waves.providers.apple.runtime import (
     APK_PINNED_VERSION,
     NM3U8DLRE_VERSION,
     WRAPPER_V2_IMAGE,
@@ -51,7 +51,7 @@ from waves.apple_runtime import (
     wrapper_login_2fa,
     wrapper_url,
 )
-from waves.apple_supervision import wrapper_data_host_dir
+from waves.providers.apple.supervision import wrapper_data_host_dir
 from waves.waves_ui.backend import WavesBridge, _apple_status
 
 
@@ -86,7 +86,7 @@ def test_pins_are_versioned_not_floating():
 
 
 def test_pin_table_covers_every_desktop_platform_with_a_hash():
-    from waves.apple_runtime import NM3U8DLRE_RELEASES, NM3U8DLRE_SHA256
+    from waves.providers.apple.runtime import NM3U8DLRE_RELEASES, NM3U8DLRE_SHA256
 
     for platform_key in [
         ("macos", "arm64"),
@@ -217,7 +217,7 @@ def test_gentle_start_is_macos_only(monkeypatch):
 def test_gentle_start_reports_only_a_launch(monkeypatch):
     import platform as _platform
 
-    from waves.apple_runtime import attempt_gentle_start
+    from waves.providers.apple.runtime import attempt_gentle_start
 
     monkeypatch.setattr(_platform, "system", lambda: "Darwin")
 
@@ -408,7 +408,7 @@ def test_refresh_wrapper_auth_mirrors_onto_the_provider(tmp_path, monkeypatch):
     stub.appleWrapperAuthChanged = SimpleNamespace(emit=lambda: emitted.append(True))
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: lights.append(True))
     monkeypatch.setattr(
-        "waves.apple_runtime.wrapper_auth_state",
+        "waves.providers.apple.runtime.wrapper_auth_state",
         lambda url, **kwargs: {
             "reachable": True,
             "state": "authenticated",
@@ -442,7 +442,7 @@ def test_a_probe_from_before_a_sign_out_cannot_restore_the_session(tmp_path, mon
         stub._apple_session_gen += 1
         return {"reachable": True, "state": "authenticated", "logged_in": True, "account": "", "error": ""}
 
-    monkeypatch.setattr("waves.apple_runtime.wrapper_auth_state", _probe)
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_auth_state", _probe)
     stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
 
     result = stub._refresh_apple_wrapper_auth()
@@ -496,7 +496,7 @@ def test_login_provisions_the_port_then_posts_with_that_url(tmp_path, monkeypatc
     stub._refresh_apple_wrapper_auth = lambda: None
     _bind_wrapper_login(stub)
     monkeypatch.setattr(
-        "waves.apple_runtime.wrapper_login",
+        "waves.providers.apple.runtime.wrapper_login",
         lambda url, username, password: events.append("post")
         or {
             "ok": True,
@@ -731,7 +731,7 @@ def test_refresh_wrapper_auth_signals_error_text_changes(tmp_path, monkeypatch):
             {"reachable": False, "state": "", "logged_in": False, "account": "", "error": "timed out"},
         ]
     )
-    monkeypatch.setattr("waves.apple_runtime.wrapper_auth_state", lambda url, **kwargs: next(results))
+    monkeypatch.setattr("waves.providers.apple.runtime.wrapper_auth_state", lambda url, **kwargs: next(results))
     stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
 
     stub._refresh_apple_wrapper_auth()
@@ -789,7 +789,7 @@ def _make_zip(exe_name: str, payload: bytes = b"MZ-fake-binary") -> bytes:
 
 
 def test_extract_reads_tar_gz_and_zip(tmp_path):
-    from waves.apple_runtime import _exe_name, _extract_binary
+    from waves.providers.apple.runtime import _exe_name, _extract_binary
 
     mgr = AppleRuntimeManager(tmp_path)
     exe = _exe_name(mgr.os_key or "macos")
@@ -804,7 +804,7 @@ def test_extract_reads_tar_gz_and_zip(tmp_path):
 
 
 def test_extract_rejects_unknown_format(tmp_path):
-    from waves.apple_runtime import _extract_binary
+    from waves.providers.apple.runtime import _extract_binary
 
     blob = tmp_path / "a.7z"
     blob.write_bytes(b"nope")
@@ -842,15 +842,15 @@ class _Sess:
 
 
 def test_install_verifies_extracts_chmods_and_records_provenance(tmp_path, monkeypatch):
-    from waves.apple_runtime import _exe_name
+    from waves.providers.apple.runtime import _exe_name
 
     mgr = AppleRuntimeManager(tmp_path)
     exe = _exe_name(mgr.os_key or "macos")
     blob = _make_tarball(exe)
     sha = hashlib.sha256(blob).hexdigest()
-    monkeypatch.setattr("waves.apple_runtime._probe_version", lambda path: "0.7.3")
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.7.3")
     status = mgr.install(
-        release=__import__("waves.apple_runtime", fromlist=["Nm3u8dlreRelease"]).Nm3u8dlreRelease(
+        release=__import__("waves.providers.apple.runtime", fromlist=["Nm3u8dlreRelease"]).Nm3u8dlreRelease(
             version=NM3U8DLRE_VERSION,
             url="https://example.invalid/N.tar.gz",
             sha256_url="https://example.invalid/N.tar.gz.sha256",
@@ -867,7 +867,7 @@ def test_install_verifies_extracts_chmods_and_records_provenance(tmp_path, monke
 
 
 def test_install_fails_closed_without_checksum(tmp_path):
-    from waves.apple_runtime import Nm3u8dlreRelease
+    from waves.providers.apple.runtime import Nm3u8dlreRelease
 
     mgr = AppleRuntimeManager(tmp_path)
     blob = _make_tarball("N_m3u8DL-RE")
@@ -889,7 +889,7 @@ def test_install_fails_closed_without_checksum(tmp_path):
 
 
 def test_install_rejects_checksum_mismatch(tmp_path):
-    from waves.apple_runtime import Nm3u8dlreRelease
+    from waves.providers.apple.runtime import Nm3u8dlreRelease
 
     mgr = AppleRuntimeManager(tmp_path)
     blob = _make_tarball("N_m3u8DL-RE")
@@ -902,11 +902,11 @@ def test_install_rejects_checksum_mismatch(tmp_path):
 
 
 def test_remove_clears_binary_and_manifest(tmp_path, monkeypatch):
-    from waves.apple_runtime import Nm3u8dlreRelease, _exe_name
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
 
     mgr = AppleRuntimeManager(tmp_path)
     blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
-    monkeypatch.setattr("waves.apple_runtime._probe_version", lambda path: "0.7.3")
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.7.3")
     mgr.install(
         release=Nm3u8dlreRelease(
             version="v", url="https://example.invalid/N.tar.gz", sha256=hashlib.sha256(blob).hexdigest()
@@ -1073,7 +1073,7 @@ def test_live_flags_report_an_expired_session_and_recover(tmp_path, monkeypatch)
     emitted = []
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
     monkeypatch.setattr(
-        "waves.apple_runtime.wrapper_auth_state",
+        "waves.providers.apple.runtime.wrapper_auth_state",
         lambda url, **kwargs: {
             "reachable": True,
             "state": "authenticated",
@@ -1167,11 +1167,11 @@ def test_missing_saved_cookies_file_needs_attention(tmp_path):
 
 
 def test_managed_runtime_alone_is_runtime_ready(tmp_path, monkeypatch):
-    from waves.apple_runtime import Nm3u8dlreRelease, _exe_name
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
 
     mgr = AppleRuntimeManager(tmp_path)
     blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
-    monkeypatch.setattr("waves.apple_runtime._probe_version", lambda path: "0.7.3")
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.7.3")
     mgr.install(
         release=Nm3u8dlreRelease(
             version="v", url="https://example.invalid/N.tar.gz", sha256=hashlib.sha256(blob).hexdigest()
@@ -1209,7 +1209,7 @@ def test_setup_state_carries_wizard_pins_and_high_port(tmp_path):
 
 
 def test_resolve_prefers_override_then_managed(tmp_path, monkeypatch):
-    from waves.apple_runtime import Nm3u8dlreRelease, _exe_name
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
 
     stub = _bridge_stub(tmp_path)
     stub._resolve_apple_nm3u8dlre = WavesBridge._resolve_apple_nm3u8dlre.__get__(stub, SimpleNamespace)
@@ -1219,7 +1219,7 @@ def test_resolve_prefers_override_then_managed(tmp_path, monkeypatch):
     stub.settings.data.path_binary_nm3u8dlre = ""
     mgr = stub._apple_runtime
     blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
-    monkeypatch.setattr("waves.apple_runtime._probe_version", lambda path: "0.7.3")
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.7.3")
     mgr.install(
         release=Nm3u8dlreRelease(
             version="v", url="https://example.invalid/N.tar.gz", sha256=hashlib.sha256(blob).hexdigest()
@@ -1390,7 +1390,7 @@ def test_container_state_caches_for_gui_callers(tmp_path, monkeypatch):
         calls.append(timeout)
         return {"name": "", "available": False, "running": False, "hint": ""}
 
-    monkeypatch.setattr("waves.apple_runtime.detect_container_runtime", fake_detect)
+    monkeypatch.setattr("waves.providers.apple.runtime.detect_container_runtime", fake_detect)
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub._apple_container_cache = {"at": 0.0, "result": None}  # cold: no probe completed yet
     stub.appleSetupState()
@@ -1408,7 +1408,7 @@ def test_non_executable_override_does_not_light_the_tier(tmp_path):
 
 
 def test_port_override_wins_over_persisted_pick(tmp_path):
-    from waves.apple_runtime import wrapper_url
+    from waves.providers.apple.runtime import wrapper_url
 
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     manager = stub._apple_runtime
@@ -1436,7 +1436,7 @@ def test_concurrent_refreshes_coalesce_to_one_probe(tmp_path, monkeypatch):
         calls.append(timeout)
         return {"name": "", "available": False, "running": False, "hint": ""}
 
-    monkeypatch.setattr("waves.apple_runtime.detect_container_runtime", fake_detect)
+    monkeypatch.setattr("waves.providers.apple.runtime.detect_container_runtime", fake_detect)
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub._apple_container_refresh_lock = Lock()
     stub._apple_container_cache = {
@@ -1463,7 +1463,7 @@ def test_stale_cache_serves_immediately_and_refreshes_on_worker(tmp_path, monkey
         calls.append(timeout)
         return fresh
 
-    monkeypatch.setattr("waves.apple_runtime.detect_container_runtime", fake_detect)
+    monkeypatch.setattr("waves.providers.apple.runtime.detect_container_runtime", fake_detect)
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub._apple_container_cache = {"at": time.time() - 1000.0, "result": dict(stale)}
     started = []

@@ -44,21 +44,6 @@ from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
 
 import waves.download as _waves_download
-from waves.apple_engine import (
-    AppleCredentialsError,
-    AppleIntegrityError,
-    AppleTrackUnavailable,
-    _AppleAborted,
-    _AppleSkipped,
-)
-from waves.apple_files import (
-    convert_image,
-    format_apple_path,
-    pick_destination,
-    tag_apple_file,
-    write_cover_sidecar,
-    write_text_sidecar,
-)
 from waves.config import Settings, Tidal, tidal_quality_for_tier
 from waves.constants import (
     CTX_APPLE,
@@ -122,6 +107,21 @@ from waves.providers import (
     Provider,
     RefusalKind,
     TidalProvider,
+)
+from waves.providers.apple.engine import (
+    AppleCredentialsError,
+    AppleIntegrityError,
+    AppleTrackUnavailable,
+    _AppleAborted,
+    _AppleSkipped,
+)
+from waves.providers.apple.files import (
+    convert_image,
+    format_apple_path,
+    pick_destination,
+    tag_apple_file,
+    write_cover_sidecar,
+    write_text_sidecar,
 )
 from waves.waves_ui import proc
 from waves.waves_ui.session import WavesTidal
@@ -1156,7 +1156,7 @@ def _apple_status(
     AAC 256 + Atmos with no runtime at all (spec §2).
     """
     # Local import avoids a module-import cycle in tests that stub the bridge.
-    from waves.apple_runtime import describe_setup
+    from waves.providers.apple.runtime import describe_setup
 
     described = describe_setup(
         enabled=bool(enabled),
@@ -1511,7 +1511,7 @@ def _apple_effective_port(data, manager) -> int:
         if preferred == persisted:
             return preferred
         try:
-            from waves.apple_runtime import _port_free
+            from waves.providers.apple.runtime import _port_free
         except Exception:
             return preferred
         try:
@@ -4155,7 +4155,7 @@ class WavesBridge(LibraryMixin, QObject):
         # provisioned by the setup wizard. Imported lazily so plain unit-test
         # stubs without the package still bind bridge methods.
         try:
-            from waves.apple_runtime import AppleRuntimeManager
+            from waves.providers.apple.runtime import AppleRuntimeManager
 
             self._apple_runtime = AppleRuntimeManager(os.path.dirname(self.settings.file_path))
         except Exception:
@@ -4183,7 +4183,7 @@ class WavesBridge(LibraryMixin, QObject):
         # and HTTP probe) so workers drive it without touching Qt; the
         # last-activity stamp lives here beside it.
         try:
-            from waves.apple_supervision import SidecarSupervisor
+            from waves.providers.apple.supervision import SidecarSupervisor
 
             self._apple_supervisor = SidecarSupervisor(manager=self._apple_runtime)
         except Exception:
@@ -13261,7 +13261,7 @@ class WavesBridge(LibraryMixin, QObject):
                         # runtime that will not start ends the run through
                         # the ensure's setup verdict instead of holding on.
                         try:
-                            from waves.apple_supervision import is_wrapper_down_error
+                            from waves.providers.apple.supervision import is_wrapper_down_error
                         except Exception:
                             is_wrapper_down_error = None
                         try:
@@ -13341,7 +13341,7 @@ class WavesBridge(LibraryMixin, QObject):
                     quarantined += 1
                 try:
                     if is_integrity:
-                        from waves.apple_integrity import INTEGRITY_FAIL_MESSAGE as _IFM
+                        from waves.providers.apple.integrity import INTEGRITY_FAIL_MESSAGE as _IFM
 
                         signals.track_event.emit({"id": track_id, "status": "failed", "reason": _IFM})
                     else:
@@ -13382,7 +13382,7 @@ class WavesBridge(LibraryMixin, QObject):
         if collection and landed and self.settings.data.playlist_create and not job_abort.is_set():
             # The _Name.m3u8 the playlist_create setting promises, in landed
             # order (mirrors the engine's playlist_populate scope).
-            from waves.apple_files import write_collection_playlist
+            from waves.providers.apple.files import write_collection_playlist
 
             header_title = ""
             try:
@@ -13407,7 +13407,7 @@ class WavesBridge(LibraryMixin, QObject):
             if unavailable:
                 _raise_download_incomplete("not available on Apple Music anymore")
             if quarantined:
-                from waves.apple_integrity import INTEGRITY_FAIL_MESSAGE as _IFM_SINGLE
+                from waves.providers.apple.integrity import INTEGRITY_FAIL_MESSAGE as _IFM_SINGLE
 
                 _raise_download_incomplete(_IFM_SINGLE)
             _raise_download_incomplete("Apple download produced no file")
@@ -13415,7 +13415,7 @@ class WavesBridge(LibraryMixin, QObject):
         if short:
             if quarantined and quarantined == fail and not unavailable:
                 # Every failure is a quarantine: the row's plain-words verdict.
-                from waves.apple_integrity import INTEGRITY_FAIL_MESSAGE as _IFM_ALL
+                from waves.providers.apple.integrity import INTEGRITY_FAIL_MESSAGE as _IFM_ALL
 
                 done_word = f"{ok} of {total} tracks" if ok else f"0 of {total} tracks"
                 _raise_download_incomplete(f"{done_word} downloaded ({_IFM_ALL})")
@@ -13486,7 +13486,7 @@ class WavesBridge(LibraryMixin, QObject):
         the fields read as (0, 0.0) so they never pause.
         """
         try:
-            from waves.apple_supervision import pacing_policy
+            from waves.providers.apple.supervision import pacing_policy
         except Exception:
             return 0, 0.0
         try:
@@ -13505,7 +13505,7 @@ class WavesBridge(LibraryMixin, QObject):
         so a support bundle names it instead of showing a silent gap.
         """
         try:
-            from waves.apple_supervision import pacing_due, pacing_message
+            from waves.providers.apple.supervision import pacing_due, pacing_message
         except Exception:
             return True
         every, seconds = self._apple_pacing_policy()
@@ -13530,7 +13530,7 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_throttle_delay(self, attempt: int, exc) -> float:
         """Reactive 429 wait: Retry-After wins, else exponential, capped."""
         try:
-            from waves.apple_supervision import parse_retry_after, throttle_delay
+            from waves.providers.apple.supervision import parse_retry_after, throttle_delay
         except Exception:
             try:
                 return float(_APPLE_THROTTLE_WAITS[min(int(attempt), len(_APPLE_THROTTLE_WAITS) - 1)])
@@ -13555,7 +13555,7 @@ class WavesBridge(LibraryMixin, QObject):
         down instead of stalling silently.
         """
         try:
-            from waves.apple_supervision import throttled_message
+            from waves.providers.apple.supervision import throttled_message
         except Exception:
             throttled_message = lambda s: f"Apple is rate-limiting; retrying in {int(s)}s…"
         try:
@@ -13597,7 +13597,7 @@ class WavesBridge(LibraryMixin, QObject):
         when the runtime returns and respects STOP while it waits.
         """
         try:
-            from waves.apple_supervision import held_message
+            from waves.providers.apple.supervision import held_message
         except Exception:
             held_message = lambda d="": "Held: the Apple runtime is not running. Waiting for it to return."
         try:
@@ -13645,7 +13645,7 @@ class WavesBridge(LibraryMixin, QObject):
         False when STOP lands.
         """
         try:
-            from waves.apple_supervision import HELD_POLL_SEC
+            from waves.providers.apple.supervision import HELD_POLL_SEC
         except Exception:
             HELD_POLL_SEC = 5.0
         cookies_before = _apple_cookies_fingerprint(str(getattr(provider, "cookies_path", "") or ""))
@@ -13702,7 +13702,7 @@ class WavesBridge(LibraryMixin, QObject):
         # build a throwaway supervisor around whatever runtime they carry so
         # held/idle paths still exercise without Qt.
         try:
-            from waves.apple_supervision import SidecarSupervisor
+            from waves.providers.apple.supervision import SidecarSupervisor
 
             return SidecarSupervisor(manager=getattr(self, "_apple_runtime", None))
         except Exception:
@@ -13762,7 +13762,7 @@ class WavesBridge(LibraryMixin, QObject):
         if manager is None and not wrapper_url:
             return True
         try:
-            from waves.apple_supervision import HELD_POLL_SEC, HELD_START_FAILURES, SETUP_PATH
+            from waves.providers.apple.supervision import HELD_POLL_SEC, HELD_START_FAILURES, SETUP_PATH
         except Exception:
             HELD_POLL_SEC = 5.0
             HELD_START_FAILURES = 2
@@ -14037,8 +14037,8 @@ class WavesBridge(LibraryMixin, QObject):
         AppleTrackUnavailable when Apple withholds the song and
         AppleDownloadError (or anything gamdl raises) otherwise.
         """
-        from waves.apple_engine import AppleDownloadError, probe_audio_file
-        from waves.apple_integrity import (
+        from waves.providers.apple.engine import AppleDownloadError, probe_audio_file
+        from waves.providers.apple.integrity import (
             INTEGRITY_FAIL_MESSAGE,
             integrity_retries,
             integrity_retry_delay,
@@ -14415,7 +14415,7 @@ class WavesBridge(LibraryMixin, QObject):
         # as FLAC, but it keeps its staged HIGH tier and must never promote
         # off its new container.
         try:
-            from waves.apple_engine import apple_tier_for_delivery as _honest_tier
+            from waves.providers.apple.engine import apple_tier_for_delivery as _honest_tier
 
             codecs_landed = str(landed_probe.get("codec") or delivered.get("codecs") or info.codecs or "")
             source_codecs = str(getattr(info, "codecs", "") or delivered.get("codecs") or "")
@@ -14471,7 +14471,7 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_probe(self) -> str:
         """An ffprobe binary for Apple verification: beside the resolved
         ffmpeg first (managed installs), else PATH, else "" (trust)."""
-        from waves.apple_engine import ffprobe_for
+        from waves.providers.apple.engine import ffprobe_for
 
         provider = self.providers.get(CTX_APPLE)
         ffmpeg = str(getattr(provider, "ffmpeg_path", "") or "")
@@ -14605,7 +14605,7 @@ class WavesBridge(LibraryMixin, QObject):
         (plain AppleDownloadError), never as source corruption: the staged
         original verified clean, so there is nothing to quarantine.
         """
-        from waves.apple_engine import AppleDownloadError
+        from waves.providers.apple.engine import AppleDownloadError
 
         ffmpeg = self._apple_flac_ffmpeg()
         if not ffmpeg:
@@ -14635,7 +14635,7 @@ class WavesBridge(LibraryMixin, QObject):
                 shutil.rmtree(tmpdir, ignore_errors=True)
             raise AppleDownloadError("Apple FLAC extraction produced no file")  # noqa: TRY003
         try:
-            from waves.apple_engine import AppleIntegrityError, decode_check
+            from waves.providers.apple.engine import AppleIntegrityError, decode_check
 
             decode_check(out, ffmpeg)
         except AppleIntegrityError as exc:
@@ -14684,7 +14684,7 @@ class WavesBridge(LibraryMixin, QObject):
         louder paths via the ffmpeg gate); a wrong codec or a decode error
         fails the track, never the job.
         """
-        from waves.apple_engine import AppleIntegrityError, decode_check, probe_audio_file
+        from waves.providers.apple.engine import AppleIntegrityError, decode_check, probe_audio_file
 
         ffprobe = self._apple_probe()
         if ffprobe:
@@ -14718,7 +14718,7 @@ class WavesBridge(LibraryMixin, QObject):
         try:
             decode_check(staged, ffmpeg)
         except Exception as exc:
-            from waves.apple_engine import AppleDownloadError as _ADE
+            from waves.providers.apple.engine import AppleDownloadError as _ADE
 
             if isinstance(exc, _ADE):
                 raise
@@ -14731,7 +14731,7 @@ class WavesBridge(LibraryMixin, QObject):
         download folder. Created on use, never here. A custom location
         registers its full path for scan exclusion (basename matching would
         prune legitimate same-named folders)."""
-        from waves.apple_integrity import resolve_quarantine_dir
+        from waves.providers.apple.integrity import resolve_quarantine_dir
 
         try:
             base = str(getattr(self.settings.data, "download_base_path", "") or "")
@@ -14837,7 +14837,7 @@ class WavesBridge(LibraryMixin, QObject):
         if not self._apple_quarantine_keep():
             return None
         try:
-            from waves.apple_integrity import quarantine_dest
+            from waves.providers.apple.integrity import quarantine_dest
         except Exception:
             return None
         try:
@@ -14914,7 +14914,7 @@ class WavesBridge(LibraryMixin, QObject):
                 logger.debug("Could not delete a quarantined copy", exc_info=True)
                 remaining.append(text)
         try:
-            from waves.apple_integrity import prune_empty_quarantine_dirs
+            from waves.providers.apple.integrity import prune_empty_quarantine_dirs
 
             prune_empty_quarantine_dirs(paths, self._apple_quarantine_root())
         except Exception:
@@ -14955,7 +14955,7 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_staged_encoded_date(self, staged: pathlib.Path) -> str | None:
         """A staged file's Encoded date as "YYYY-MM-DD", or None when unknown."""
         try:
-            from waves.apple_integrity import encoded_date_of
+            from waves.providers.apple.integrity import encoded_date_of
         except Exception:
             return None
         try:
@@ -15333,7 +15333,7 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_job_body(self, qid, spec, obj, *, signals, job_abort, row_ask, name) -> None:
         """An Apple job's worker body: probe, run, settle. Mirrors the TIDAL
         body's three outcomes (cancelled / done / failed) without its engine."""
-        from waves.apple_engine import AppleCredentialsError
+        from waves.providers.apple.engine import AppleCredentialsError
 
         type_media, file_template, collection, media_id = (
             spec.kind,
@@ -19673,7 +19673,7 @@ class WavesBridge(LibraryMixin, QObject):
         blocks behind them (cookies, runtime, container, wrapper image/
         port/account). Pure reads, no network, safe on the GUI thread.
         """
-        from waves.apple_runtime import (
+        from waves.providers.apple.runtime import (
             WRAPPER_LIBS_VERSION,
             WRAPPER_V2_IMAGE,
             describe_setup,
@@ -19869,7 +19869,7 @@ class WavesBridge(LibraryMixin, QObject):
         elif container.get("available"):
             # The gentle start exists on macOS only: elsewhere the step
             # keeps the manual guidance with no dead button.
-            from waves.apple_runtime import gentle_start_command
+            from waves.providers.apple.runtime import gentle_start_command
 
             startable = gentle_start_command(str(container.get("name") or "docker")) is not None
             container_step = (
@@ -19987,7 +19987,7 @@ class WavesBridge(LibraryMixin, QObject):
         try:
             if callable(probe):
                 return probe()
-            from waves.apple_runtime import detect_container_runtime
+            from waves.providers.apple.runtime import detect_container_runtime
 
             return detect_container_runtime()
         except Exception:
@@ -19997,7 +19997,7 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(str, result="QVariant")
     def appleVerifyCookies(self, path: str) -> dict:
         """Verify a cookies export unlocks the cookies tier."""
-        from waves.apple_runtime import verify_cookies_file
+        from waves.providers.apple.runtime import verify_cookies_file
 
         try:
             return {"ok": True, **verify_cookies_file(path)}
@@ -20012,7 +20012,7 @@ class WavesBridge(LibraryMixin, QObject):
             return {"port": 0, "url": ""}
         data = getattr(getattr(self, "settings", None), "data", None)
         try:
-            from waves.apple_runtime import wrapper_url as _url
+            from waves.providers.apple.runtime import wrapper_url as _url
 
             port = _apple_provision_port(data, manager)
             return {"port": port, "url": _url(port)}
@@ -20043,7 +20043,7 @@ class WavesBridge(LibraryMixin, QObject):
                         abort=self._apple_runtime_abort,
                     )
                 except Exception as exc:
-                    from waves.apple_runtime import AppleRuntimeCancelled
+                    from waves.providers.apple.runtime import AppleRuntimeCancelled
 
                     if isinstance(exc, AppleRuntimeCancelled):
                         self.appleRuntimeStateChanged.emit("cancelled", "Cancelled")
@@ -20135,7 +20135,7 @@ class WavesBridge(LibraryMixin, QObject):
                         )
                 manager = getattr(self, "_apple_runtime", None)
                 if not failure and manager is not None:
-                    from waves.apple_supervision import wrapper_data_host_dir
+                    from waves.providers.apple.supervision import wrapper_data_host_dir
 
                     with contextlib.suppress(Exception):
                         shutil.rmtree(wrapper_data_host_dir(manager.app_dir), ignore_errors=True)
@@ -20189,7 +20189,7 @@ class WavesBridge(LibraryMixin, QObject):
         """
 
         def work() -> None:
-            from waves.apple_runtime import attempt_gentle_start
+            from waves.providers.apple.runtime import attempt_gentle_start
 
             cache = getattr(self, "_apple_container_cache", None) or {}
             name = str((cache.get("result") or {}).get("name") or "docker")
@@ -20275,7 +20275,7 @@ class WavesBridge(LibraryMixin, QObject):
                         log_cb=lambda m: self.appleRuntimeStateChanged.emit("downloading", m),
                     )
                 except Exception as exc:
-                    from waves.apple_runtime import AppleRuntimeCancelled
+                    from waves.providers.apple.runtime import AppleRuntimeCancelled
 
                     if isinstance(exc, AppleRuntimeCancelled):
                         self.appleRuntimeStateChanged.emit("cancelled", "Cancelled")
@@ -21304,7 +21304,7 @@ class WavesBridge(LibraryMixin, QObject):
         try:
             root = self._apple_quarantine_root()
             from waves import library_index as _lib_index
-            from waves.apple_integrity import remember_quarantine_dir
+            from waves.providers.apple.integrity import remember_quarantine_dir
 
             for known in remember_quarantine_dir(path_config_base(), root):
                 _lib_index.register_quarantine_dir(known)
@@ -21369,7 +21369,7 @@ class WavesBridge(LibraryMixin, QObject):
             )
         if port:
             try:
-                from waves.apple_runtime import wrapper_url
+                from waves.providers.apple.runtime import wrapper_url
 
                 return wrapper_url(port)
             except Exception:
@@ -21431,7 +21431,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _refresh_apple_container_cache(self, timeout: int = 10) -> dict:
         """Probe the container runtime and store it for GUI-thread readers."""
-        from waves.apple_runtime import detect_container_runtime
+        from waves.providers.apple.runtime import detect_container_runtime
 
         try:
             result = detect_container_runtime(timeout=timeout)
@@ -21517,7 +21517,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _refresh_apple_wrapper_auth(self, timeout: int = 10) -> dict:
         """Probe the wrapper guest's /me and store it for GUI-thread readers."""
-        from waves.apple_runtime import wrapper_auth_state
+        from waves.providers.apple.runtime import wrapper_auth_state
 
         def snapshot(payload) -> tuple:
             """The /me fields a form re-read: any change re-signals."""
@@ -21634,7 +21634,7 @@ class WavesBridge(LibraryMixin, QObject):
         manager = getattr(self, "_apple_runtime", None)
         if manager is None:
             return ""
-        from waves.apple_runtime import wrapper_url
+        from waves.providers.apple.runtime import wrapper_url
 
         data = getattr(getattr(self, "settings", None), "data", None)
         url = wrapper_url(_apple_provision_port(data, manager))
@@ -21742,7 +21742,7 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(str, str)
     def appleWrapperLogin(self, username: str, password: str) -> None:
         """Sign the wrapper guest in with Apple ID credentials."""
-        from waves.apple_runtime import wrapper_login
+        from waves.providers.apple.runtime import wrapper_login
 
         self._run_apple_wrapper_login(
             lambda: self._apple_wrapper_login_call(lambda url: wrapper_login(url, username, password))
@@ -21751,7 +21751,7 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(str)
     def appleWrapperSubmit2fa(self, code: str) -> None:
         """Finish the wrapper guest sign-in with the two-factor code."""
-        from waves.apple_runtime import wrapper_login_2fa
+        from waves.providers.apple.runtime import wrapper_login_2fa
 
         self._run_apple_wrapper_login(lambda: self._apple_wrapper_login_call(lambda url: wrapper_login_2fa(url, code)))
 
@@ -21803,7 +21803,7 @@ class WavesBridge(LibraryMixin, QObject):
         signed_in = False
         if cookies_ready and not needs_attention:
             try:
-                from waves.apple_runtime import verify_cookies_file
+                from waves.providers.apple.runtime import verify_cookies_file
 
                 provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
                 cookies_path = str(getattr(provider, "cookies_path", "") or "") or str(

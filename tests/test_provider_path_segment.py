@@ -16,11 +16,11 @@ from types import SimpleNamespace
 import pytest
 from tidalapi import Album, Track
 
-from waves.apple_files import format_apple_path
 from waves.config import _migrate_settings
 from waves.constants import provider_folder_name
 from waves.helper.path import format_path_media, format_str_media
 from waves.model.cfg import Settings
+from waves.providers.apple.files import format_apple_path
 
 pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
 

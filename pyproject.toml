@@ -47,7 +47,7 @@ gamdl = "~3.8.5"
 pyside6 = { version = "6.11.1", optional = true }
 tidalapi = "^0.8.10"
 python-ffmpeg = "^2.0.12"
-# Direct import in waves/apple_engine.py (the cookies-tier fallback shells
+# Direct import in waves/providers/apple/engine.py (the cookies-tier fallback shells
 # through it); pinned to gamdl's own floor so the two can never disagree.
 yt-dlp = ">=2025.10.22"
 pycryptodome = "^3.23.0"
@@ -268,11 +268,11 @@ ignore = [
 # the N_m3u8DL-RE binary and probes the container runtime (S603/S607), its
 # install is one linear sequence (C901), and its errors carry deliberately
 # descriptive messages (TRY003).
-"waves/apple_runtime.py" = ["S603", "S607", "C901", "TRY003"]
+"waves/providers/apple/runtime.py" = ["S603", "S607", "C901", "TRY003"]
 # Session supervision (issue #33): it starts/stops the wrapper sidecar via the
 # container runtime and probes its health endpoint (S603/S607), and its
 # helpers carry deliberately descriptive messages (TRY003).
-"waves/apple_supervision.py" = ["S603", "S607", "TRY003"]
+"waves/providers/apple/supervision.py" = ["S603", "S607", "TRY003"]
 # The updater downloads and swaps a packaged build, so it intentionally shells
 # out (S603/S607) for the platform swap/relaunch; install()/_apply are linear
 # sequences (C901); and its errors carry deliberately descriptive messages (TRY003).

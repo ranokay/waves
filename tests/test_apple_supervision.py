@@ -9,7 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from waves.apple_supervision import (
+from waves.constants import CTX_APPLE
+from waves.model.cfg import HelpSettings, Settings
+from waves.providers.apple.supervision import (
     HELD_POLL_SEC,
     HELD_START_FAILURES,
     IDLE_TIMEOUT_DEFAULT,
@@ -33,8 +35,6 @@ from waves.apple_supervision import (
     throttle_delay,
     throttled_message,
 )
-from waves.constants import CTX_APPLE
-from waves.model.cfg import HelpSettings, Settings
 from waves.waves_ui.backend import WavesBridge
 
 
@@ -114,7 +114,12 @@ def test_presentations_carry_one_clear_message_with_countdown():
 
 
 def test_wrapper_down_means_held_never_credentials_or_integrity():
-    from waves.apple_engine import AppleCredentialsError, AppleDownloadError, AppleIntegrityError, AppleWrapperDown
+    from waves.providers.apple.engine import (
+        AppleCredentialsError,
+        AppleDownloadError,
+        AppleIntegrityError,
+        AppleWrapperDown,
+    )
 
     assert is_wrapper_down_error(AppleWrapperDown("Apple wrapper is unreachable at x: refused")) is True
     assert is_wrapper_down_error(AppleCredentialsError("need cookies")) is False
@@ -124,8 +129,8 @@ def test_wrapper_down_means_held_never_credentials_or_integrity():
 
 
 def test_held_hierarchy_is_single_and_catchable_as_a_download_error():
-    import waves.apple_engine as engine
-    import waves.apple_supervision as supervision
+    import waves.providers.apple.engine as engine
+    import waves.providers.apple.supervision as supervision
 
     assert supervision.AppleHeld is engine.AppleHeld
     assert supervision.AppleWrapperDown is engine.AppleWrapperDown
@@ -134,8 +139,8 @@ def test_held_hierarchy_is_single_and_catchable_as_a_download_error():
 
 
 def test_classify_maps_a_dead_sidecar_to_retryable_failure_never_unavailable():
-    from waves.apple_engine import AppleWrapperDown
     from waves.providers.apple import AppleProvider
+    from waves.providers.apple.engine import AppleWrapperDown
     from waves.providers.base import RefusalKind
 
     verdict = AppleProvider.classify_refusal(AppleProvider(), AppleWrapperDown("Apple wrapper is unreachable"))
@@ -282,7 +287,7 @@ def test_supervisor_ready_and_ensure_paths():
 
 
 def test_supervisor_recreates_a_running_but_unhealthy_container(tmp_path):
-    from waves.apple_supervision import container_states
+    from waves.providers.apple.supervision import container_states
 
     assert container_states("waves-wrapper-v2 running\nother exited") == {
         "waves-wrapper-v2": "running",

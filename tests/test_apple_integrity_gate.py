@@ -12,7 +12,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from waves.apple_integrity import (
+from waves.constants import CTX_APPLE, QualityTier, quality_rank
+from waves.helper.exceptions import DownloadIncomplete
+from waves.providers.apple.integrity import (
     INTEGRITY_FAIL_MESSAGE,
     QUARANTINE_DIR_NAME,
     integrity_retries,
@@ -22,8 +24,6 @@ from waves.apple_integrity import (
     quarantine_dest,
     resolve_quarantine_dir,
 )
-from waves.constants import CTX_APPLE, QualityTier, quality_rank
-from waves.helper.exceptions import DownloadIncomplete
 from waves.waves_ui.backend import WavesBridge
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
@@ -429,7 +429,7 @@ def test_quarantine_dir_case_only_difference_stays_distinct(tmp_path, monkeypatc
     # On a case-sensitive filesystem these are two different folders: the
     # custom location stands, no silent fallback to the default. The flag is
     # forced off so the assertion holds on every platform the suite runs on.
-    from waves import apple_integrity
+    from waves.providers.apple import integrity as apple_integrity
 
     monkeypatch.setattr(apple_integrity, "_CASE_INSENSITIVE_PATHS", False)
     base = tmp_path / "Library" / "music"
@@ -442,7 +442,7 @@ def test_quarantine_dir_case_only_difference_folds_on_case_insensitive_platforms
     # overlap guard without folding: normcase is a no-op on macOS and the
     # samefile fallback only compares two existing paths, never the prefix
     # walk. The custom spelling names the library, so the default stands.
-    from waves import apple_integrity
+    from waves.providers.apple import integrity as apple_integrity
 
     monkeypatch.setattr(apple_integrity, "_CASE_INSENSITIVE_PATHS", True)
     base = tmp_path / "Library" / "music"
@@ -479,7 +479,7 @@ def test_ffprobe_is_asked_for_every_encoded_date_key(tmp_path, monkeypatch):
     # `_creation_candidates` reads creationdate/encoded_date too; a query
     # that asks for creation_time only makes those branches dead and loses a
     # Windows-style creationdate before the outbreak pre-filter sees it.
-    from waves import apple_integrity
+    from waves.providers.apple import integrity as apple_integrity
 
     target = tmp_path / "track.m4a"
     target.write_bytes(b"x")
@@ -542,8 +542,8 @@ def test_ownership_skiplist_is_per_version(tmp_path):
 
 @needs_ffmpeg
 def test_corrupt_staged_file_fails_verification(tmp_path, monkeypatch):
-    from waves import apple_engine
-    from waves.apple_engine import AppleIntegrityError
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleIntegrityError
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -560,7 +560,7 @@ def test_corrupt_staged_file_fails_verification(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_known_bad_fixture_quarantines_and_fails_in_plain_words(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -602,7 +602,7 @@ def test_known_bad_fixture_quarantines_and_fails_in_plain_words(tmp_path, monkey
 
 @needs_ffmpeg
 def test_outbreak_era_file_quarantines_after_one_retry(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -636,7 +636,7 @@ def test_outbreak_era_file_quarantines_after_one_retry(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_clean_album_downloads_normally_after_a_quarantine(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -659,7 +659,7 @@ def test_clean_album_downloads_normally_after_a_quarantine(tmp_path, monkeypatch
 
 @needs_ffmpeg
 def test_skiplisted_track_autoskips_bulk_runs_plainly(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -685,7 +685,7 @@ def test_skiplisted_track_autoskips_bulk_runs_plainly(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_redownload_reattempts_and_clears_when_apple_reencodes(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -712,7 +712,7 @@ def test_redownload_reattempts_and_clears_when_apple_reencodes(tmp_path, monkeyp
 
 @needs_ffmpeg
 def test_corrupt_atmos_never_blocks_its_stereo_sibling(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -740,7 +740,7 @@ def test_corrupt_atmos_never_blocks_its_stereo_sibling(tmp_path, monkeypatch):
 def test_stereo_verification_accepts_alac_for_the_wrapper_tier(tmp_path, monkeypatch):
     """Runs everywhere: both engine functions are stubbed and the probe path
     is forced, so the aac/alac acceptance check is exercised with no ffmpeg."""
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "alac", "sample_rate": "44100"}
@@ -761,7 +761,7 @@ def test_stereo_verification_accepts_alac_for_the_wrapper_tier(tmp_path, monkeyp
 def test_retry_spec_bypasses_the_skiplist(tmp_path, monkeypatch):
     """A retried row carries is_retry on its spec and bypasses the auto-skip;
     a fresh click afterwards skips again (REDOWNLOAD stays the way back)."""
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -791,8 +791,8 @@ def test_retry_spec_bypasses_the_skiplist(tmp_path, monkeypatch):
 def test_resolve_stage_integrity_failure_retries_and_marks_the_skiplist(tmp_path, monkeypatch):
     """The engine's own decode check can raise from resolve_stream (no staged
     file): the retry/quarantine path still applies, minus the quarantine bytes."""
-    from waves import apple_engine
-    from waves.apple_engine import AppleDownloadError
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleDownloadError
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -830,7 +830,7 @@ def test_resolve_stage_integrity_failure_retries_and_marks_the_skiplist(tmp_path
 
 @needs_ffmpeg
 def test_retry_bypass_covers_every_track_of_a_collection(tmp_path, monkeypatch):
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -878,8 +878,8 @@ def test_retry_bypass_covers_every_track_of_a_collection(tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_atmos_rejects_plain_ac3(tmp_path, monkeypatch):
-    from waves import apple_engine
-    from waves.apple_engine import AppleDownloadError
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleDownloadError
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "ac3", "sample_rate": "48000"}
@@ -898,7 +898,7 @@ def test_atmos_rejects_plain_ac3(tmp_path, monkeypatch):
 @needs_ffmpeg
 def test_success_after_a_retry_leaves_no_hold_dirs(tmp_path, monkeypatch):
 
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()
@@ -930,8 +930,8 @@ def test_engine_rejected_bytes_are_quarantined_with_their_date(tmp_path, monkeyp
     """An integrity failure raised from resolve_stream carries the rejected
     bytes on the exception (the engine transfers workdir ownership outward):
     they are quarantined with their Encoded date, and the workdir is removed."""
-    from waves import apple_engine
-    from waves.apple_engine import AppleIntegrityError
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleIntegrityError
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -975,8 +975,8 @@ def test_engine_rejected_bytes_are_quarantined_with_their_date(tmp_path, monkeyp
 
 @needs_ffmpeg
 def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
-    from waves import apple_engine
-    from waves.apple_engine import AppleIntegrityError
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleIntegrityError
 
     def _no_audio(path, ffprobe_path=""):
         raise AppleIntegrityError("The Apple download has no playable audio stream", staged_path=str(path))
@@ -1048,7 +1048,7 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
     """Two failed rows sharing one media_id each carry is_retry on their own
     spec, so both Version jobs bypass on their own with nothing counted,
     released, or leaked (the Codex dual-RETRY ALL case)."""
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     # The staged fixture's name decides the probed codec, so each Version
     # verifies against the family it asked for (a real run probes real bytes).
@@ -1099,7 +1099,7 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
 @needs_ffmpeg
 def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
 
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()
@@ -1145,7 +1145,7 @@ def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
 
 
 def test_quarantine_sidecar_remembers_previous_roots(tmp_path):
-    from waves.apple_integrity import known_quarantine_dirs, remember_quarantine_dir
+    from waves.providers.apple.integrity import known_quarantine_dirs, remember_quarantine_dir
 
     config = tmp_path / "config"
     assert known_quarantine_dirs(config) == []
@@ -1161,7 +1161,7 @@ def test_quarantine_sidecar_remembers_previous_roots(tmp_path):
 def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
     """An Atmos ask for a stereo-only track falls back: the failure is filed
     under stereo, so the next stereo run sees the mark instead of refetching."""
-    from waves import apple_engine
+    from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
@@ -1227,7 +1227,7 @@ def test_fallback_delivery_files_under_stereo(tmp_path, monkeypatch):
 
 
 def test_quarantine_sidecar_keeps_every_root(tmp_path):
-    from waves.apple_integrity import known_quarantine_dirs, remember_quarantine_dir
+    from waves.providers.apple.integrity import known_quarantine_dirs, remember_quarantine_dir
 
     config = tmp_path / "config"
     for i in range(12):
@@ -1240,8 +1240,8 @@ def test_resolve_stage_failure_files_under_effective_version(tmp_path, monkeypat
     """An engine-raised integrity failure (no StreamInfo) still files under
     the effective Version: an Atmos ask for a stereo-only track lands under
     stereo, with its preserved bytes quarantined."""
-    from waves import apple_engine
-    from waves.apple_engine import AppleIntegrityError
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleIntegrityError
 
     monkeypatch.setattr(
         apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}

@@ -8,7 +8,7 @@ import subprocess
 import mutagen.mp4
 import pytest
 
-from waves.apple_files import (
+from waves.providers.apple.files import (
     format_apple_path,
     pick_destination,
     tag_apple_file,
@@ -95,7 +95,7 @@ def test_emptied_and_dot_segments_cannot_escape_the_library():
 
 
 def test_collection_playlist_lists_landings_in_order(tmp_path):
-    from waves.apple_files import write_collection_playlist
+    from waves.providers.apple.files import write_collection_playlist
 
     first = tmp_path / "A" / "01.m4a"
     second = tmp_path / "A" / "02.m4a"
@@ -250,7 +250,7 @@ def test_raw_sidecar_keeps_the_master_bytes(tmp_path):
 
 
 def test_sidecar_without_a_converter_keeps_the_true_extension(tmp_path, monkeypatch):
-    monkeypatch.setattr("waves.apple_files.shutil.which", lambda name: None)
+    monkeypatch.setattr("waves.providers.apple.files.shutil.which", lambda name: None)
     jpeg = b"\xff\xd8\xff\xe0" + b"jpeg"
 
     target = write_cover_sidecar(tmp_path, jpeg, "png", ffmpeg_path="")

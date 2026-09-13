@@ -34,7 +34,7 @@ from waves.helper.path import (
 from waves.metadata import Metadata, sniff_image_format
 from waves.playlists import populate_playlists
 
-logger = logging.getLogger("waves.apple_files")
+logger = logging.getLogger("waves.providers.apple.files")
 
 
 def _raw_apple_id(value: object) -> str:

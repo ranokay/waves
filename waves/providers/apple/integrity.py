@@ -24,7 +24,7 @@ from pathlib import Path
 
 from waves.helper.path import path_file_numbered_candidate
 
-logger = logging.getLogger("waves.apple_integrity")
+logger = logging.getLogger("waves.providers.apple.integrity")
 
 # The queue row's plain-words verdict after the retry cap. Counted as failed,
 # covered by RETRY ALL. The em dash is the spec's own wording.

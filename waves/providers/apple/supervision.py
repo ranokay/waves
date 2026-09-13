@@ -27,12 +27,12 @@ import re
 import time
 from pathlib import Path
 
-logger = logging.getLogger("waves.apple_supervision")
+logger = logging.getLogger("waves.providers.apple.supervision")
 
 # The held-not-failed verdicts are canonical in the engine (the sidecar's own
 # errors subclass them there); this module re-exports them so callers read
 # one hierarchy, never two same-named ones.
-from waves.apple_engine import AppleHeld, AppleWrapperDown  # noqa: E402
+from waves.providers.apple.engine import AppleHeld, AppleWrapperDown  # noqa: E402
 
 __all__ = [
     "AppleHeld",
@@ -327,7 +327,7 @@ def is_wrapper_down_error(exc: BaseException) -> bool:
     wrapper or its URL. Credentials (login needed) and integrity verdicts
     are not down: they have their own recovery paths.
     """
-    from waves.apple_engine import AppleCredentialsError, AppleIntegrityError
+    from waves.providers.apple.engine import AppleCredentialsError, AppleIntegrityError
 
     if isinstance(exc, (AppleCredentialsError, AppleIntegrityError)):
         return False
@@ -605,7 +605,7 @@ class SidecarSupervisor:
         if img or self._manager is None:
             return img
         try:
-            from waves.apple_runtime import WRAPPER_V2_IMAGE
+            from waves.providers.apple.runtime import WRAPPER_V2_IMAGE
         except Exception:
             return ""
         else:

@@ -880,7 +880,7 @@ class AppleProvider(Provider):
         tops out); the "ALAC 24/192" detail rides codecs/bit_depth/
         sample_rate label text, never rank.
         """
-        from waves.apple_engine import download_song_file
+        from waves.providers.apple.engine import download_song_file
 
         item = self._unwrap(track)
         if not isinstance(item, dict) or not item.get("id"):
@@ -894,7 +894,7 @@ class AppleProvider(Provider):
             try:
                 return self._resolve_via_wrapper(item, want)
             except Exception as exc:
-                from waves.apple_engine import AppleCredentialsError, AppleIntegrityError
+                from waves.providers.apple.engine import AppleCredentialsError, AppleIntegrityError
 
                 if isinstance(exc, (AppleCredentialsError, AppleIntegrityError)):
                     # Credentials need the wizard; integrity needs retry +
@@ -948,7 +948,7 @@ class AppleProvider(Provider):
         16-bit, HI_RES the best the master holds (the delivered tier is
         probed off the bytes either way).
         """
-        from waves.apple_engine import (
+        from waves.providers.apple.engine import (
             apple_delivery_detail,
             apple_tier_for_delivery,
             download_song_alac_file,
@@ -1013,7 +1013,7 @@ class AppleProvider(Provider):
     def _probe_path(self) -> str:
         """An ffprobe binary for the ALAC honesty probe, or "" to trust."""
         try:
-            from waves.apple_engine import ffprobe_for
+            from waves.providers.apple.engine import ffprobe_for
 
             return ffprobe_for(self.ffmpeg_path)
         except Exception:
@@ -1022,7 +1022,7 @@ class AppleProvider(Provider):
     def _probe_sample_rate(self, staged_path: str) -> int | None:
         """A staged AAC file's sample rate for the ownership record, if known."""
         try:
-            from waves.apple_engine import probe_audio_file
+            from waves.providers.apple.engine import probe_audio_file
 
             probe = probe_audio_file(staged_path, self._probe_path())
         except Exception:
@@ -1036,7 +1036,7 @@ class AppleProvider(Provider):
 
     def discard_delivery(self, local_file: str) -> None:
         """Remove a staged delivery's workdir after its file moved out."""
-        from waves.apple_engine import cleanup_delivery
+        from waves.providers.apple.engine import cleanup_delivery
 
         delivery = self._staged.pop(str(local_file), None)
         if delivery is not None:
@@ -1269,7 +1269,7 @@ class AppleProvider(Provider):
 
     def classify_refusal(self, exc) -> Refusal:
         """Apple engine errors into the shared refusal vocabulary."""
-        from waves.apple_engine import AppleCredentialsError, AppleVariantUnavailable, AppleWrapperDown
+        from waves.providers.apple.engine import AppleCredentialsError, AppleVariantUnavailable, AppleWrapperDown
 
         if isinstance(exc, AppleCredentialsError):
             return Refusal(RefusalKind.FAILURE, str(exc))

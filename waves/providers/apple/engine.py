@@ -26,7 +26,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger("waves.apple_engine")
+logger = logging.getLogger("waves.providers.apple.engine")
 
 
 class AppleCredentialsError(Exception):
