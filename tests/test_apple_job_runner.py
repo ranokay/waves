@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -1338,3 +1339,251 @@ def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path, monkeypa
 
     surfaced = str(excinfo.value)
     assert "Settings" in surfaced and "Apple Music" in surfaced
+
+
+# ---------------------------------------------------------------------------
+# E11 reuse: one verified probe, one fetch session per job
+# ---------------------------------------------------------------------------
+
+
+def _numbered_track_row(n: int) -> dict:
+    row = _track_row()
+    row["id"] = f"apple:song-{n}"
+    row["title"] = f"Track {n}"
+    row["num"] = n
+    return row
+
+
+class _ThreeTrackProvider(_FakeProvider):
+    """A three-track album whose deliveries may carry a verified probe."""
+
+    def __init__(self, fixture: Path, probe: dict | None = None):
+        super().__init__(fixture=fixture)
+        self.probe = dict(probe) if probe else None
+
+    def collection_items(self, obj, include_videos=True):
+        return [_numbered_track_row(n) for n in (1, 2, 3)]
+
+    def get_object(self, kind, raw_id):
+        if kind == "track":
+            raw = _song_resource(song_id=str(raw_id))
+            raw["attributes"]["name"] = f"Track {str(raw_id)[-1]}"
+            raw["attributes"]["trackNumber"] = int(str(raw_id)[-1])
+            return raw
+        return _album_resource()
+
+    def resolve_stream(self, raw, tier, audio_type):
+        staged = Path(str(self.fixture))
+        self.fetched.append(audio_type)
+        delivered = {"tier": QualityTier.HIGH.value, "audio_type": str(audio_type)}
+        if self.probe is not None:
+            delivered["probe"] = dict(self.probe)
+        return SimpleNamespace(local_file=str(staged), delivered=delivered, codecs="mp4a.40.2")
+
+
+def _three_track_hooks(provider, base: Path, settings=None):
+    """Minimal hooks: only the services this album path actually reaches."""
+    return runner.AppleJobHooks(
+        provider=lambda: provider,
+        settings=lambda: settings or _settings(base, playlist_create=False),
+        psetting=lambda provider_id, key, default=None: default,
+        ownership=lambda: None,
+        job_quality=lambda qid: QualityTier.HIGH,
+        status=lambda text: None,
+    )
+
+
+def _run_three_track_album(provider, base: Path):
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+    summary = runner.run_apple_job(
+        _three_track_hooks(provider, base),
+        1,
+        spec,
+        _album_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+    return summary, relay
+
+
+@needs_ffmpeg
+def test_album_job_reuses_a_carried_probe_without_probing_or_decoding(tmp_path, monkeypatch):
+    """A delivery carrying the engine's verified probe costs the runner zero
+    ffprobe and zero decode calls, for every track of the album."""
+    from waves.providers.apple import engine as apple_engine
+
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    probes: list = []
+    decodes: list = []
+    monkeypatch.setattr(
+        apple_engine,
+        "probe_audio_file",
+        lambda path, ffprobe_path="": probes.append(str(path)) or {"codec": "aac", "sample_rate": "44100"},
+    )
+    monkeypatch.setattr(apple_engine, "decode_check", lambda staged, ffmpeg_path="": decodes.append(str(staged)))
+    monkeypatch.setattr(runner, "probe_binary", lambda hooks: "/fake/ffprobe")
+    provider = _ThreeTrackProvider(staged, probe={"codec": "aac", "sample_rate": "44100", "bit_depth": None})
+    base = tmp_path / "lib"
+
+    summary, relay = _run_three_track_album(provider, base)
+
+    assert summary == ""
+    assert probes == [], "the carried probe answers the pre-swap and landed reads"
+    assert decodes == [], "the engine's decode is the track's only decode"
+    assert len([ev for ev in relay.events if ev.get("status") == "done"]) == 3
+    assert sorted(path.name for path in base.rglob("*.m4a")) == ["Track 1.m4a", "Track 2.m4a", "Track 3.m4a"]
+
+
+@needs_ffmpeg
+def test_album_job_still_verifies_tracks_without_a_carried_probe(tmp_path, monkeypatch):
+    """Probe-less deliveries keep the pre-swap verification and the landed
+    read: one ffprobe each per track, one decode for the verification."""
+    from waves.providers.apple import engine as apple_engine
+
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    probes: list = []
+    decodes: list = []
+    monkeypatch.setattr(
+        apple_engine,
+        "probe_audio_file",
+        lambda path, ffprobe_path="": probes.append(str(path)) or {"codec": "aac", "sample_rate": "44100"},
+    )
+    monkeypatch.setattr(apple_engine, "decode_check", lambda staged, ffmpeg_path="": decodes.append(str(staged)))
+    monkeypatch.setattr(runner, "probe_binary", lambda hooks: "/fake/ffprobe")
+    provider = _ThreeTrackProvider(staged)
+    base = tmp_path / "lib"
+
+    summary, relay = _run_three_track_album(provider, base)
+
+    assert summary == ""
+    # Three pre-swap codec probes plus three landed-file probes; the landed
+    # copies are separate paths, so no landed read is a duplicate.
+    assert len(probes) == 6
+    assert len(decodes) == 3
+    assert len(relay.events) and relay.events[-1].get("status") == "done"
+
+
+class _ScopeTrackingProvider(_ThreeTrackProvider):
+    """Records the fetch scope's enter/exit; optionally fails every fetch."""
+
+    def __init__(self, fixture: Path, events: list, *, fail: bool = False):
+        super().__init__(fixture, probe={"codec": "aac", "sample_rate": "44100"})
+        self.events = events
+        self.fail = fail
+
+    @contextlib.contextmanager
+    def fetch_job_session(self):
+        self.events.append("enter")
+        try:
+            yield self
+        finally:
+            self.events.append("exit")
+
+    def resolve_stream(self, raw, tier, audio_type):
+        if self.fail:
+            raise RuntimeError("fetch died")
+        return super().resolve_stream(raw, tier, audio_type)
+
+
+def test_job_body_opens_one_fetch_session_for_the_whole_album(tmp_path):
+    """The worker opens the provider's scope once, around every track."""
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"tone-bytes")
+    events: list = []
+    provider = _ScopeTrackingProvider(staged, events)
+    hooks = _three_track_hooks(provider, tmp_path / "lib")
+    spec = SimpleNamespace(
+        kind="album",
+        collection=True,
+        media_id="apple:album-1",
+        is_retry=False,
+        file_template="{artist_name}/{track_title}",
+    )
+
+    runner.run_job_body(
+        hooks,
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        row_ask=None,
+        name="Measure Album",
+    )
+
+    assert events == ["enter", "exit"], "one scope for the whole job, not one per track"
+    assert len(provider.fetched) == 3
+
+
+def test_job_body_closes_the_fetch_session_when_the_job_fails(tmp_path):
+    """The scope exits on failure too: clients and loop never leak a job."""
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"tone-bytes")
+    events: list = []
+    provider = _ScopeTrackingProvider(staged, events, fail=True)
+    hooks = _three_track_hooks(provider, tmp_path / "lib")
+    spec = SimpleNamespace(
+        kind="album",
+        collection=True,
+        media_id="apple:album-1",
+        is_retry=False,
+        file_template="{artist_name}/{track_title}",
+    )
+
+    runner.run_job_body(
+        hooks,
+        1,
+        spec,
+        _album_resource(),
+        signals=_Relay(),
+        job_abort=Event(),
+        row_ask=None,
+        name="Measure Album",
+    )
+
+    assert events == ["enter", "exit"]
+
+
+@needs_ffmpeg
+def test_atmos_album_reuses_a_carried_atmos_probe(tmp_path, monkeypatch):
+    """An Atmos delivery's carried eac3 probe answers the runner's checks."""
+    from waves.providers.apple import engine as apple_engine
+
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    probes: list = []
+    decodes: list = []
+    monkeypatch.setattr(
+        apple_engine,
+        "probe_audio_file",
+        lambda path, ffprobe_path="": probes.append(str(path)) or {"codec": "eac3", "sample_rate": "48000"},
+    )
+    monkeypatch.setattr(apple_engine, "decode_check", lambda staged, ffmpeg_path="": decodes.append(str(staged)))
+    monkeypatch.setattr(runner, "probe_binary", lambda hooks: "/fake/ffprobe")
+    provider = _ThreeTrackProvider(staged, probe={"codec": "eac3", "sample_rate": "48000", "bit_depth": None})
+    base = tmp_path / "lib"
+    hooks = _three_track_hooks(
+        provider, base, settings=_settings(base, playlist_create=False, default_audio_type="both")
+    )
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _album_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert probes == [] and decodes == []
+    done = [ev for ev in relay.events if ev.get("status") == "done"]
+    assert len(done) == 3
+    assert all(ev["quality"]["audio_mode"] == "DOLBY_ATMOS" for ev in done)

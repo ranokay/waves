@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import contextmanager
 from threading import Lock
 from urllib.parse import urlparse
 
@@ -141,11 +142,135 @@ class AppleProvider(Provider):
         # a workdir the caller moves out of, then releases here so the temp
         # tree is removed. Never global: one entry per in-flight track.
         self._staged: dict[str, object] = {}
+        # One download job's reused gamdl stack (event loop, API, wrapper
+        # client). The runner opens a scope around a job's tracks; outside
+        # one every fetch builds and closes its own stack.
+        self._fetch_scoped = False
+        self._fetch_stack: object | None = None
 
     @property
     def wrapper_available(self) -> bool:
         """Whether the managed wrapper tier can serve ALAC."""
         return bool(str(self.wrapper_url or "").strip())
+
+    @contextmanager
+    def fetch_job_session(self):
+        """One download job's shared fetch stack, closed when the job ends.
+
+        The job's tracks fetch sequentially through this scope; the engine
+        builds each tier's gamdl stack (API, base interface, wrapper client)
+        and its event loop once and the scope releases them at the end. A
+        nested scope shares the outermost stack.
+        """
+        if self._fetch_scoped:
+            yield self
+            return
+        self._fetch_scoped = True
+        try:
+            yield self
+        finally:
+            self._fetch_scoped = False
+            self._drop_fetch_stack()
+
+    def _fetch_session(self):
+        """The scoped engine session for this job, or None outside a scope."""
+        if not self._fetch_scoped:
+            return None
+        if self._fetch_stack is None:
+            from waves.providers.apple import engine as apple_engine
+
+            self._fetch_stack = apple_engine.AppleFetchSession(
+                cookies_path=self.cookies_path,
+                wrapper_url=self.wrapper_url,
+                nm3u8dlre_path=self.nm3u8dlre_path,
+                ffmpeg_path=self.ffmpeg_path,
+                decrypt_host=self.wrapper_decrypt_host,
+                decrypt_port=self.wrapper_decrypt_port,
+            )
+        return self._fetch_stack
+
+    def _drop_fetch_stack(self) -> None:
+        """Close and forget the scoped stack: a job end, or a stale session."""
+        session = self._fetch_stack
+        self._fetch_stack = None
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                logger.debug("Could not close the Apple fetch stack", exc_info=True)
+
+    def _fetch_with_stack(self, one_shot, scoped):
+        """Run a fetch through the job's stack when one is open, else one-shot.
+
+        A credential failure drops the stale stack so the runner's retry
+        rebuilds it from the fresh export or signed-in guest; wrapper
+        death drops it too, so the retry re-opens the guest instead of
+        reusing the client that just failed.
+        """
+        from waves.providers.apple.engine import AppleCredentialsError, AppleWrapperDown
+
+        session = self._fetch_session()
+        if session is None:
+            return one_shot()
+        try:
+            return scoped(session)
+        except (AppleCredentialsError, AppleWrapperDown):
+            self._drop_fetch_stack()
+            raise
+
+    def _fetch_cookies(self, *, song_id: str, atmos: bool):
+        """One cookies-tier delivery through the job's stack when scoped."""
+        from waves.providers.apple.engine import download_song_file
+
+        return self._fetch_with_stack(
+            one_shot=lambda: download_song_file(
+                song_id=song_id,
+                atmos=atmos,
+                cookies_path=self.cookies_path,
+                nm3u8dlre_path=self.nm3u8dlre_path,
+                ffmpeg_path=self.ffmpeg_path,
+            ),
+            scoped=lambda session: session.download_song(song_id=song_id, atmos=atmos),
+        )
+
+    def _fetch_alac(self, *, song_id: str, max_tier: str):
+        """One wrapper-tier delivery through the job's stack when scoped."""
+        from waves.providers.apple.engine import download_song_alac_file
+
+        return self._fetch_with_stack(
+            one_shot=lambda: download_song_alac_file(
+                song_id=song_id,
+                wrapper_url=self.wrapper_url,
+                nm3u8dlre_path=self.nm3u8dlre_path,
+                ffmpeg_path=self.ffmpeg_path,
+                decrypt_host=self.wrapper_decrypt_host,
+                decrypt_port=self.wrapper_decrypt_port,
+                max_tier=max_tier,
+            ),
+            scoped=lambda session: session.download_alac(song_id=song_id, max_tier=max_tier),
+        )
+
+    @staticmethod
+    def _verified_probe(delivery) -> dict | None:
+        """The engine-verified probe carried by a delivery, or None.
+
+        Only the engine's fail-fast verification (codec family + full
+        decode on the exact staged bytes) marks a delivery verified; a
+        probe-less delivery keeps the provider's own read.
+        """
+        probe = getattr(delivery, "probe", None)
+        if not getattr(delivery, "verified", False) or not isinstance(probe, dict) or not probe:
+            return None
+        return dict(probe)
+
+    @staticmethod
+    def _probe_rate(probe: dict) -> int | None:
+        """An ffprobe sample-rate string as an int, or None."""
+        try:
+            rate = int(str(probe.get("sample_rate") or "").strip())
+        except (TypeError, ValueError):
+            return None
+        return rate if rate > 0 else None
 
     def _run(self, awaitable):
         with self._loop_lock:
@@ -903,10 +1028,10 @@ class AppleProvider(Provider):
         (AAC 256 stereo, E-AC-3 Atmos). The delivered tier is
         honest (probed off the staged bytes, e.g. 24/96 where the master
         tops out); the "ALAC 24/192" detail rides codecs/bit_depth/
-        sample_rate label text, never rank.
+        sample_rate label text, never rank. A probe verified inside the
+        engine rides ``delivered["probe"]`` so the runner reuses it instead
+        of probing and decoding the same bytes again.
         """
-        from waves.providers.apple.engine import download_song_file
-
         item = self._unwrap(track)
         if not isinstance(item, dict) or not item.get("id"):
             raise KeyError(str(getattr(track, "id", track)))
@@ -937,29 +1062,35 @@ class AppleProvider(Provider):
                 if str(kind) != str(RefusalKind.UNAVAILABLE) or not str(self.cookies_path or "").strip():
                     raise
                 logger.debug("Apple ALAC unavailable, falling back to AAC", exc_info=True)
-        delivery = download_song_file(
-            song_id=str(item.get("id")),
-            atmos=atmos,
-            cookies_path=self.cookies_path,
-            nm3u8dlre_path=self.nm3u8dlre_path,
-            ffmpeg_path=self.ffmpeg_path,
-        )
+        delivery = self._fetch_cookies(song_id=str(item.get("id")), atmos=atmos)
         self._staged[str(delivery.staged_path)] = delivery
         # The staged file is the provider's to clean once the caller has
         # moved it out; keep the handle beside the answer, never global.
         codecs = "ec-3" if atmos else "mp4a.40.2"
+        probe = self._verified_probe(delivery)
+        if probe is None:
+            # No engine verification traveled with these bytes: read the
+            # sample rate here, exactly as the pre-session shape did.
+            sample_rate = self._probe_sample_rate(str(delivery.staged_path))
+            bit_depth = None
+        else:
+            sample_rate = self._probe_rate(probe)
+            bit_depth = probe.get("bit_depth")
+        delivered = {
+            "tier": QualityTier.HIGH.value,
+            "audio_type": str(AudioType.ATMOS if atmos else AudioType.STEREO),
+            "bit_depth": bit_depth,
+            "sample_rate": sample_rate,
+            "codecs": codecs,
+        }
+        if probe is not None:
+            delivered["probe"] = probe
         return StreamInfo(
             urls=[],
             file_extension=".m4a",
             codecs=codecs,
             requires_flac_extraction=False,
-            delivered={
-                "tier": QualityTier.HIGH.value,
-                "audio_type": str(AudioType.ATMOS if atmos else AudioType.STEREO),
-                "bit_depth": None,
-                "sample_rate": self._probe_sample_rate(str(delivery.staged_path)),
-                "codecs": codecs,
-            },
+            delivered=delivered,
             replay_gain=None,
             encrypted=False,
             single_file=True,
@@ -976,42 +1107,43 @@ class AppleProvider(Provider):
         from waves.providers.apple.engine import (
             apple_delivery_detail,
             apple_tier_for_delivery,
-            download_song_alac_file,
-            probe_audio_file,
         )
 
-        delivery = download_song_alac_file(
-            song_id=str(item.get("id")),
-            wrapper_url=self.wrapper_url,
-            nm3u8dlre_path=self.nm3u8dlre_path,
-            ffmpeg_path=self.ffmpeg_path,
-            decrypt_host=self.wrapper_decrypt_host,
-            decrypt_port=self.wrapper_decrypt_port,
-            max_tier=want.value,
-        )
+        delivery = self._fetch_alac(song_id=str(item.get("id")), max_tier=want.value)
         self._staged[str(delivery.staged_path)] = delivery
         # Honest tier off the staged bytes: the master may top out at 24/96
         # where HI_RES was asked, and the readout must say so. Detail rides
         # codecs/bit_depth/sample_rate; the tier alone ranks. A probe that
         # fails too cannot record the ask as verified: ALAC proves at least
         # LOSSLESS, so that is the substitute, never the requested rung.
-        try:
-            probe = probe_audio_file(str(delivery.staged_path), self._probe_path())
-        except Exception:
-            logger.debug("Apple ALAC probe failed; recording LOSSLESS, not the ask", exc_info=True)
-            probe = {"codec": "alac", "sample_rate": "", "bit_depth": None}
-        codec = str(probe.get("codec") or "alac")
+        carried = self._verified_probe(delivery)
+        probe = carried
+        if probe is None:
+            try:
+                from waves.providers.apple.engine import probe_audio_file
+
+                probe = probe_audio_file(str(delivery.staged_path), self._probe_path())
+            except Exception:
+                logger.debug("Apple ALAC probe failed; recording LOSSLESS, not the ask", exc_info=True)
+                probe = {"codec": "alac", "sample_rate": "", "bit_depth": None}
+        codec = str(probe.get("codec") or getattr(delivery, "codec", "") or "alac")
         bit_depth = probe.get("bit_depth")
-        try:
-            sample_rate: int | None = int(str(probe.get("sample_rate") or "").strip())
-        except (TypeError, ValueError):
-            sample_rate = None
+        sample_rate: int | None = self._probe_rate(probe)
         tier_value = apple_tier_for_delivery(codec, bit_depth, sample_rate or "", fallback=QualityTier.LOSSLESS.value)
         logger.debug(
             "Apple ALAC delivery %s",
             apple_delivery_detail(codec, bit_depth, sample_rate or ""),
             extra={"tier": tier_value},
         )
+        delivered = {
+            "tier": tier_value,
+            "audio_type": str(AudioType.STEREO),
+            "bit_depth": bit_depth,
+            "sample_rate": sample_rate,
+            "codecs": codec or "alac",
+        }
+        if carried is not None:
+            delivered["probe"] = carried
         return StreamInfo(
             urls=[],
             # Lossless stereo lands as FLAC: the staged bytes are ALAC-in-m4a
@@ -1022,13 +1154,7 @@ class AppleProvider(Provider):
             file_extension=".flac",
             codecs=codec or "alac",
             requires_flac_extraction=True,
-            delivered={
-                "tier": tier_value,
-                "audio_type": str(AudioType.STEREO),
-                "bit_depth": bit_depth,
-                "sample_rate": sample_rate,
-                "codecs": codec or "alac",
-            },
+            delivered=delivered,
             replay_gain=None,
             encrypted=False,
             single_file=True,
