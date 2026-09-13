@@ -22,39 +22,30 @@ installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
-
+@pytest.mark.qml
 def test_collapsing_an_album_row_returns_the_view_to_where_it_was():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-collapse-test-")
-    proc = subprocess.run(  # (fixed argv: this file, one flag)
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-collapse-test-",
+        failure_message="the collapse scroll regressed.",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-16:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the collapse scroll regressed. Scenario exit={proc.returncode}:\n{tail}"
 
 
 _ROW = {
@@ -102,25 +93,25 @@ _FIND_BLOCKS = """
 
 
 def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     WavesBridge._library_root = lambda self: ""  # type: ignore[method-assign]
     WavesBridge.loadBrowse = lambda self: None  # type: ignore[method-assign]
@@ -136,7 +127,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -178,7 +169,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     settle(400)
     if not q("results.contentHeight > results.height * 2"):
         print("the results page is not long enough to scroll", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # Scroll so a row sits low in the view, the way a row you reach by
     # scrolling does, then expand it: the view moves up to the anchor line.
@@ -194,7 +185,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
             break
     if low is None:
         print("no album row sits low in the view:", keys, file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     q(f"root._ab['{low}'].toggle()")
     settle(700)
     check(bool(q(f"root.expandedAlbums['{low}'] === true")), "the row did not expand")
@@ -258,15 +249,14 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     if failures:
         for f in failures:
             print("REGRESSED:", f, file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
     print("album collapse returns the view: OK")
-    return _EXIT_OK
+    return EXIT_OK
 
 
 def results_h(q) -> float:
     return float(q("results.height"))
 
 
-if __name__ == "__main__":
-    if "--run-scenario" in sys.argv:
-        raise SystemExit(_run_scenario())
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

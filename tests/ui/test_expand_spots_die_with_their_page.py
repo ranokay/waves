@@ -18,9 +18,8 @@ same breath. The one other writer is AlbumBlock.toggle, which earns its spots.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-QML = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+from support.paths import QML_MAIN
 
 # The two writers the rule allows: the reset helper's own line, and the toggle
 # that adds or removes a single row.
@@ -32,7 +31,7 @@ def _assignments(src: str) -> list[str]:
 
 
 def test_every_wholesale_write_of_the_expanded_set_goes_through_the_reset():
-    src = QML.read_text(encoding="utf-8")
+    src = QML_MAIN.read_text(encoding="utf-8")
     stray = [a for a in _assignments(src) if a not in _ALLOWED]
     assert not stray, (
         "an expanded-album set is replaced without dropping the remembered scroll spots; "
@@ -41,7 +40,7 @@ def test_every_wholesale_write_of_the_expanded_set_goes_through_the_reset():
 
 
 def test_the_reset_drops_the_spots_it_was_written_for():
-    src = QML.read_text(encoding="utf-8")
+    src = QML_MAIN.read_text(encoding="utf-8")
     body = src.split("function resetExpandedAlbums(", 1)
     assert len(body) == 2, "resetExpandedAlbums is gone; the wholesale-write rule has no home"
     head = body[1][:400]
@@ -51,6 +50,6 @@ def test_the_reset_drops_the_spots_it_was_written_for():
 
 def test_the_spots_map_is_only_cleared_by_that_reset():
     """A second clear site would mean the pair can come apart again."""
-    src = QML.read_text(encoding="utf-8")
+    src = QML_MAIN.read_text(encoding="utf-8")
     clears = [m.group(0).strip() for m in re.finditer(r"(?:root\.)?expandReturnY\s*=\s*[^\n]+", src)]
     assert clears == ["expandReturnY = ({})"], f"the remembered spots are reset somewhere else too: {clears}"

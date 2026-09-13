@@ -143,10 +143,6 @@ ignore = [
 # Tests use asserts (S101), terse error messages (TRY003) and throwaway temp
 # paths like "/tmp/x" as never-touched dummy dirs (S108).
 "tests/*" = ["S101", "TRY003", "S108"]
-# The Back-to-Browse scroll guard re-runs itself in a subprocess to isolate the
-# Qt boot (S603, fixed argv), and its boot -> drive -> assert scenario is one
-# deliberately linear function (C901).
-"tests/test_browse_back_scroll.py" = ["S603", "C901"]
 # One deliberately linear end-to-end journey (pick a provider -> Settings ->
 # sign in -> sign out -> relaunch); the branching is the journey (C901).
 "tests/ui/test_account_journey.py" = ["C901"]
@@ -155,6 +151,14 @@ ignore = [
 "tests/ui/test_boot_fade_landing_park.py" = ["C901"]
 "tests/ui/test_boot_shield_cursor_release.py" = ["C901"]
 "tests/ui/test_boot_version_drain_order.py" = ["C901"]
+# The ported browse scenarios keep their boot -> drive -> assert shape as one
+# deliberately linear function (C901).
+"tests/ui/test_browse_back_scroll.py" = ["C901"]
+"tests/ui/test_browse_card_library_state.py" = ["C901"]
+"tests/ui/test_browse_card_line_fits.py" = ["C901"]
+"tests/ui/test_browse_console_wayfinding.py" = ["C901"]
+"tests/ui/test_browse_row_window.py" = ["C901"]
+"tests/ui/test_browse_strip_fits_the_card.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
 "tests/metadata/test_apple_double_cleanup.py" = ["S603"]
@@ -167,7 +171,6 @@ ignore = [
 # The quality badge menu scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).
 "tests/test_quality_pick_qml.py" = ["S603"]
-"tests/test_album_collapse_returns_the_view.py" = ["S603"]
 # The search in-place refresh scenario re-runs itself in a subprocess to
 # isolate the Qt boot (S603, fixed argv), and its build -> correct -> assert
 # scenario is one deliberately linear function (C901).
@@ -185,8 +188,6 @@ ignore = [
 "tests/test_search_scroll_reset.py" = ["S603", "C901"]
 "tests/test_search_top_result.py" = ["S603", "C901"]
 "tests/test_breadcrumb_navigation.py" = ["S603", "C901"]
-"tests/test_browse_card_library_state.py" = ["S603", "C901"]
-"tests/test_browse_strip_fits_the_card.py" = ["S603", "C901"]
 "tests/test_library_track_claim.py" = ["S603", "C901"]
 "tests/test_search_tab_artist_restore.py" = ["S603", "C901"]
 "tests/test_search_paste_autosearch.py" = ["S603", "C901"]
@@ -203,7 +204,6 @@ ignore = [
 "tests/test_qml_loads.py" = ["S603", "C901"]
 "tests/test_presence_call_budget.py" = ["S603", "C901"]
 "tests/test_library_presence_surfaces.py" = ["S603", "C901"]
-"tests/test_browse_card_line_fits.py" = ["S603", "C901"]
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
 "tests/library/test_library_bridge.py" = ["S603"]
@@ -230,8 +230,6 @@ ignore = [
 "tests/test_nav_seq_and_history_guards.py" = ["S603", "C901"]
 "tests/test_folder_badge_and_crumb_labels.py" = ["S603", "C901"]
 "tests/test_hover_swell_fade.py" = ["S603", "C901"]
-"tests/test_browse_console_wayfinding.py" = ["S603", "C901"]
-"tests/test_browse_row_window.py" = ["S603", "C901"]
 "tests/test_video_grid_hover_dwell.py" = ["S603", "C901"]
 "tests/test_hover_prefetch_scenario.py" = ["S603", "C901"]
 "tests/test_offscreen_qt_is_usable.py" = ["S603"]

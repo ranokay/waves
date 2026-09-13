@@ -24,26 +24,24 @@ landing shows again at the saved spot. It lands at the top (exit 1) on a
 regressed tree and on the saved spot (exit 0) otherwise. It runs in a
 SUBPROCESS: constructing the bridge installs a process-global Qt message
 handler / diagnostics logging that would otherwise leak into unrelated tests
-in the same interpreter (the repo's other QML checks, e.g.
-scratchpad/gate_qml.py, run standalone for the same reason). Promotion of
-``scratchpad/browse_back_scroll_check.py``.
+in the same interpreter.
 """
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-# Exit codes the standalone scenario uses to talk back to the pytest wrapper.
-_EXIT_RESTORED = 0  # Back landed on the saved spot: fix present.
-_EXIT_REGRESSED = 1  # Back jumped to the top: the bug is back.
-_EXIT_NO_QT = 77  # PySide6 / a usable Qt platform is unavailable: skip.
-_EXIT_PRECONDITION = 78  # environment could not set up a scrollable scenario.
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 # A fixed window size makes contentHeight/maxY deterministic across machines, so
 # the saved offset the scenario restores to does not depend on the CI window size.
@@ -53,37 +51,19 @@ _WIN_W, _WIN_H = 1100, 720
 # ===========================================================================
 # pytest wrapper: run the scenario isolated, assert the outcome by exit code.
 # ===========================================================================
+@pytest.mark.qml
 def test_back_from_long_playlist_restores_browse_scroll():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    # A throwaway config dir: the real WavesBridge writes settings/waves.json, and
-    # a window-geometry save firing in the event loop must not clobber the user's
-    # remembered window frame with the offscreen 0,0 placement.
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-backscroll-test-")
-
-    # Fixed argv: this interpreter re-runs this very file (see S603 per-file-ignore).
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not build a scrollable scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_RESTORED, (
-        "Back to Browse did not restore the scroll position (scroll-restore "
-        f"regression). Scenario exit={proc.returncode}:\n{tail}"
+        sandbox_prefix="waves-backscroll-test-",
+        failure_message="Back to Browse did not restore the scroll position (scroll-restore regression).",
     )
 
 
 # ===========================================================================
-# Standalone scenario (runs in its own interpreter via the subprocess above).
+# Standalone scenario (runs in its own interpreter via support.qml.run_scenario).
 # ===========================================================================
 def _landing() -> dict:
     """Ten card shelves: a tall, scrollable Browse landing that rebuilds through
@@ -142,15 +122,16 @@ def _run_scenario() -> int:
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -161,7 +142,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", _WIN_W)
     root.setProperty("height", _WIN_H)
@@ -211,14 +192,14 @@ def _run_scenario() -> int:
         and q("browseLanding.contentHeight") > q("browseLanding.height") + 200
     ):
         print("Browse landing never became scrollable", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle()
 
     landing_ch = q("browseLanding.contentHeight")
     landing_max = max(0.0, landing_ch - q("browseLanding.height"))
     if landing_max <= 100:
         print("no scrollable landing in this environment", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 2. Scroll partway down and remember the spot.
     saved = round(landing_max * 0.6)
@@ -226,7 +207,7 @@ def _run_scenario() -> int:
     saved = q("browseLanding.contentY")
     if saved <= 10:
         print("could not establish a non-top scroll offset", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 3. Drill into a tall playlist: taller than the saved offset is the
     #    precondition that let the stale-height check disarm the restore.
@@ -237,7 +218,7 @@ def _run_scenario() -> int:
         and (q("browseDrill.contentHeight") - q("browseDrill.height")) > saved
     ):
         print("playlist page never grew taller than the saved position", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 4. Back to Browse. The landing pane never went away, so its height must
     #    already be the landing's and its position must be the saved spot; the
@@ -245,14 +226,14 @@ def _run_scenario() -> int:
     q("navBack()")
     if not pump(lambda: q("browsePageKey") == "" and abs(q("browseLanding.contentHeight") - landing_ch) <= 1):
         print("Browse landing is not at its original height after Back", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle()
 
     final = q("browseLanding.contentY")
     restored = abs(final - saved) <= 2
     print(f"savedY={saved:.0f} finalY={final:.0f} restored={restored}", flush=True)
-    return _EXIT_RESTORED if restored else _EXIT_REGRESSED
+    return EXIT_OK if restored else EXIT_REGRESSED
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())

@@ -457,6 +457,9 @@ def test_a_hover_leaves_no_info_crumb_and_a_claimed_hover_leaves_an_open(caplog,
     import logging
 
     monkeypatch.setattr(backend.devlog, "done", _REAL_DEVLOG_DONE, raising=True)
+    # A bridge built earlier in the suite installs diagnostics, which turns
+    # "waves" propagation off; caplog reads through the root, so restore it.
+    monkeypatch.setattr(logging.getLogger("waves"), "propagate", True, raising=True)
     b = _prefetch_bridge()
     with caplog.at_level(logging.DEBUG, logger="waves"):
         b.prefetchBrowseItem("playlist", "p1")
