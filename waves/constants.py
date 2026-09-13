@@ -158,6 +158,22 @@ def tier_from_word(word: str | None) -> QualityTier | None:
     return None
 
 
+def tier_word(name: str | None) -> str:
+    """The one word the UI shows for a quality, from any spelling a path can
+    carry: an enum member, an enum value, a TIDAL wire name, or an already
+    delivered tier word."""
+    lowered = str(name or "").lower()
+    if "hi_res" in lowered or "hires" in lowered:
+        return "HI-RES"
+    if "lossless" in lowered:
+        return "LOSSLESS"
+    if "320" in lowered or lowered == "high":
+        return "HIGH"
+    if "96" in lowered or lowered == "low":
+        return "LOW"
+    return str(name).replace("_", " ").upper() if name else ""
+
+
 class QualityVideo(StrEnum):
     P360 = "360"
     P480 = "480"

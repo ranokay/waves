@@ -444,19 +444,18 @@ def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path, monkeypat
 
 
 def test_expected_word_caps_by_ceiling():
-    from waves.waves_ui.backend import WavesBridge
+    from waves.providers.apple import runner
 
-    stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo")))
-    stub._apple_wants_atmos = WavesBridge._apple_wants_atmos.__get__(stub, SimpleNamespace)
-    stub._apple_expected_word = WavesBridge._apple_expected_word.__get__(stub, SimpleNamespace)
+    hooks = runner.AppleJobHooks(settings=lambda: SimpleNamespace(data=SimpleNamespace(default_audio_type="stereo")))
     assert (
-        stub._apple_expected_word(
-            None, requested_rank=quality_rank(QualityTier.HIGH), ceiling_rank=quality_rank(QualityTier.HIGH)
+        runner.queue_expected_word(
+            hooks, None, requested_rank=quality_rank(QualityTier.HIGH), ceiling_rank=quality_rank(QualityTier.HIGH)
         )
         == "HIGH"
     )
     assert (
-        stub._apple_expected_word(
+        runner.queue_expected_word(
+            hooks,
             None,
             requested_rank=quality_rank(QualityTier.HI_RES_LOSSLESS),
             ceiling_rank=quality_rank(QualityTier.HI_RES_LOSSLESS),
@@ -465,7 +464,8 @@ def test_expected_word_caps_by_ceiling():
     )
     # Asked HI_RES, cookies ceiling HIGH: the row promises HIGH, not HI-RES.
     assert (
-        stub._apple_expected_word(
+        runner.queue_expected_word(
+            hooks,
             None,
             requested_rank=quality_rank(QualityTier.HI_RES_LOSSLESS),
             ceiling_rank=quality_rank(QualityTier.HIGH),

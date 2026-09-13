@@ -1572,39 +1572,34 @@ def test_download_click_with_cookies_and_binary_passes_the_gates(tmp_path):
     assert seen == []
 
 
-def test_wait_for_session_returns_when_the_cookies_export_changes(tmp_path):
+def test_wait_for_session_returns_when_the_cookies_export_changes(tmp_path, monkeypatch):
     from threading import Event
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.providers.apple import runner
 
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("old export", encoding="utf-8")
     provider = SimpleNamespace(cookies_path=str(cookies), wrapper_url="")
-    stub = SimpleNamespace()
 
     def _change_and_sleep(seconds, job_abort):
         cookies.write_text("fresh export", encoding="utf-8")
         return True
 
-    stub._apple_sleep_abortable = _change_and_sleep
-    stub._apple_wait_for_session = WavesBridge._apple_wait_for_session.__get__(stub, SimpleNamespace)
+    monkeypatch.setattr(runner, "sleep_abortable", _change_and_sleep)
 
-    assert stub._apple_wait_for_session(provider, Event()) is True
+    assert runner.wait_for_session(runner.AppleJobHooks(), provider, Event()) is True
 
 
 def test_wait_for_session_returns_false_on_stop(tmp_path):
     from threading import Event
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.providers.apple import runner
 
     provider = SimpleNamespace(cookies_path="", wrapper_url="")
     abort = Event()
     abort.set()
-    stub = SimpleNamespace()
 
-    stub._apple_wait_for_session = WavesBridge._apple_wait_for_session.__get__(stub, SimpleNamespace)
-
-    assert stub._apple_wait_for_session(provider, abort) is False
+    assert runner.wait_for_session(runner.AppleJobHooks(), provider, abort) is False
 
 
 def test_an_unchanged_cookies_resave_does_not_lift_the_expiry_marker():

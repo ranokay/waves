@@ -81,7 +81,7 @@ class _Options:
 def _lyrics_stub(monkeypatch, *, native=("[00:10.00]Hello\n[00:12.00]World", "Hello\nWorld"), lrclib=("", "")):
     from types import SimpleNamespace
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.providers.apple import runner
 
     calls = {"native": 0}
     provider = SimpleNamespace(
@@ -95,11 +95,10 @@ def _lyrics_stub(monkeypatch, *, native=("[00:10.00]Hello\n[00:12.00]World", "He
         return native
 
     provider.fetch_lyrics = _fetch_native
-    stub = SimpleNamespace()
-    stub._apple_lyrics_full = WavesBridge._apple_lyrics_full.__get__(stub, SimpleNamespace)
-    monkeypatch.setattr("waves.waves_ui.backend._waves_download.pooled_session", lambda: None)
-    monkeypatch.setattr("waves.lyrics.fetch_lrclib_lyrics", lambda session, **kwargs: lrclib)
-    return stub, provider, calls
+    hooks = runner.AppleJobHooks()
+    monkeypatch.setattr(runner, "_pooled_session", lambda: None)
+    monkeypatch.setattr(runner, "fetch_lrclib_lyrics", lambda session, **kwargs: lrclib)
+    return hooks, provider, calls
 
 
 def _lyrics_options(**overrides):
@@ -115,9 +114,12 @@ def _lyrics_options(**overrides):
 
 
 def test_plain_only_lrclib_does_not_hide_native_timing(monkeypatch):
-    stub, provider, calls = _lyrics_stub(monkeypatch, lrclib=("", "plain words"))
+    from waves.providers.apple import runner
 
-    synced, plain, ttml = stub._apple_lyrics_full(
+    hooks, provider, calls = _lyrics_stub(monkeypatch, lrclib=("", "plain words"))
+
+    synced, plain, ttml = runner.lyrics_full(
+        hooks,
         provider,
         {"id": "apple:s1", "artist": "A", "title": "T", "album": "X", "duration_sec": 10},
         {},
@@ -131,9 +133,12 @@ def test_plain_only_lrclib_does_not_hide_native_timing(monkeypatch):
 
 
 def test_lrclib_synced_still_wins_outright(monkeypatch):
-    stub, provider, calls = _lyrics_stub(monkeypatch, lrclib=("[00:01.00]LRCLIB", "lrclib text"))
+    from waves.providers.apple import runner
 
-    synced, plain, _ttml = stub._apple_lyrics_full(
+    hooks, provider, calls = _lyrics_stub(monkeypatch, lrclib=("[00:01.00]LRCLIB", "lrclib text"))
+
+    synced, plain, _ttml = runner.lyrics_full(
+        hooks,
         provider,
         {"id": "apple:s1", "artist": "A", "title": "T", "album": "X", "duration_sec": 10},
         {},
@@ -146,9 +151,12 @@ def test_lrclib_synced_still_wins_outright(monkeypatch):
 
 
 def test_plain_only_lrclib_alone_stays_plain(monkeypatch):
-    stub, provider, _calls = _lyrics_stub(monkeypatch, native=("", ""), lrclib=("", "plain words"))
+    from waves.providers.apple import runner
 
-    synced, plain, _ttml = stub._apple_lyrics_full(
+    hooks, provider, _calls = _lyrics_stub(monkeypatch, native=("", ""), lrclib=("", "plain words"))
+
+    synced, plain, _ttml = runner.lyrics_full(
+        hooks,
         provider,
         {"id": "apple:s1", "artist": "A", "title": "T", "album": "X", "duration_sec": 10},
         {},

@@ -300,18 +300,16 @@ def test_embed_cover_bytes_converts_png_for_the_tag(tmp_path):
     from types import SimpleNamespace
 
     from waves.metadata import sniff_image_format
-    from waves.waves_ui.backend import WavesBridge
+    from waves.providers.apple import runner
 
     png = _image_bytes(tmp_path, "c.png", "png")
-    stub = SimpleNamespace()
-    stub._cover_convert_ffmpeg = lambda: _ffmpeg()
-    stub._embed_cover_bytes = WavesBridge._embed_cover_bytes.__get__(stub, SimpleNamespace)
+    hooks = runner.AppleJobHooks(provider=lambda: SimpleNamespace(ffmpeg_path=_ffmpeg()))
 
-    assert sniff_image_format(stub._embed_cover_bytes(png)) == "jpg"
+    assert sniff_image_format(runner.embed_cover_bytes(hooks, png)) == "jpg"
 
     jpeg = _image_bytes(tmp_path, "c.jpg", "mjpeg")
-    assert stub._embed_cover_bytes(jpeg) is jpeg
-    assert stub._embed_cover_bytes(None) is None
+    assert runner.embed_cover_bytes(hooks, jpeg) is jpeg
+    assert runner.embed_cover_bytes(hooks, None) is None
 
 
 def test_an_apple_partial_run_keeps_a_complete_playlist(tmp_path):

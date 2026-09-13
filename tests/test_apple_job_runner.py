@@ -13,6 +13,7 @@ import pytest
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
 from waves.helper.exceptions import DownloadIncomplete
 from waves.providers import AppleCollectionIncomplete
+from waves.providers.apple import runner
 from waves.providers.base import AudioType
 from waves.waves_ui.backend import WavesBridge
 
@@ -306,7 +307,7 @@ def _bind(stub):
         "_apple_provider_enabled",
         "_apple_account_ready",
         "_apple_wrapper_signed_in",
-        "_run_apple_job",
+        "_apple_job_hooks",
     ):
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
     # Per-provider option + template-flag readers used by the bound bodies.
@@ -349,8 +350,14 @@ def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -388,8 +395,8 @@ def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkey
         stub._queue_index = {1: {"askQuality": queued_word, "quality": queued_word}}
         relay = _Relay()
         spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
-        summary = WavesBridge._run_apple_job(
-            stub,
+        summary = runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(),
@@ -434,8 +441,8 @@ def test_embed_toggle_governs_lyrics_embedding(tmp_path, monkeypatch):
         )
         relay = _Relay()
         spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
-        summary = WavesBridge._run_apple_job(
-            stub,
+        summary = runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(),
@@ -489,8 +496,14 @@ def test_chooser_toggles_layer_over_settings_for_one_job(tmp_path, monkeypatch):
         chooser_toggles={"lyrics_embed": True, "lyrics_file": False},
     )
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -517,7 +530,8 @@ def test_apple_folder_hold_replays_with_the_same_toggle_pins():
         _remove_row=lambda qid: None,
         _emit_queue=lambda: None,
     )
-    stub._apple_job_body = WavesBridge._apple_job_body.__get__(stub)
+    for name in ("_finish_job", "_apple_job_hooks"):
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
     spec = SimpleNamespace(
         kind="track",
         file_template="{artist_name}/{track_title}",
@@ -527,7 +541,9 @@ def test_apple_folder_hold_replays_with_the_same_toggle_pins():
         chooser_toggles={"lyrics_embed": True},
     )
 
-    WavesBridge._apple_job_body(stub, 7, spec, object(), signals=None, job_abort=Event(), row_ask=None, name="Xtal")
+    runner.run_job_body(
+        stub._apple_job_hooks(), 7, spec, object(), signals=None, job_abort=Event(), row_ask=None, name="Xtal"
+    )
 
     assert calls and calls[0]["chooser_toggles"] == {"lyrics_embed": True}
 
@@ -554,8 +570,14 @@ def test_owned_track_skips_without_fetching(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == " (already downloaded)"
@@ -567,11 +589,15 @@ def test_gate_force_and_miss():
     provider = _FakeProvider()
     stub = _bind(_stub(Path("/tmp"), provider))
 
-    assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), True) == (
+    assert runner.gate_track(
+        stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), True
+    ) == (
         "force",
         None,
     )
-    assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), False) == (
+    assert runner.gate_track(
+        stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), False
+    ) == (
         None,
         None,
     )
@@ -581,7 +607,9 @@ def test_gate_without_a_store_never_gates():
     provider = _FakeProvider()
     stub = _bind(_stub(Path("/tmp"), provider, _ownership=None))
 
-    assert WavesBridge._apple_gate_track(stub, provider, "apple:song-1", quality_rank(QualityTier.HIGH), False) == (
+    assert runner.gate_track(
+        stub._apple_job_hooks(), provider, "apple:song-1", quality_rank(QualityTier.HIGH), False
+    ) == (
         None,
         None,
     )
@@ -604,8 +632,14 @@ def test_both_default_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -627,8 +661,8 @@ def test_album_job_reports_a_partial_shortfall(tmp_path):
     spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
 
     with pytest.raises(DownloadIncomplete):
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _album_resource(),
@@ -894,8 +928,14 @@ def test_stale_owned_copy_forces_an_in_place_overwrite(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -960,8 +1000,14 @@ def test_lone_track_files_no_cover_without_the_single_track_option(tmp_path, mon
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -985,8 +1031,14 @@ def test_album_job_writes_the_promised_playlist_file(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _album_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _album_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -1024,14 +1076,20 @@ def test_throttled_track_retries_in_place_then_lands(tmp_path, monkeypatch):
     # attempt and the throttle retry must ask the pinned tier.
     stub.settings = _settings(base, apple_quality_audio="HI_RES_LOSSLESS")
     stub._queue_index = {1: {"askQuality": "HIGH", "quality": "HIGH"}}
-    stub._apple_sleep_abortable = lambda *a: True
+    monkeypatch.setattr(runner, "sleep_abortable", lambda *a: True)
     stub.statuses = []
     stub._set_status = stub.statuses.append
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -1067,8 +1125,14 @@ def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -1079,13 +1143,12 @@ def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
 
 
 def test_place_file_leaves_no_partials(tmp_path):
-    stub = _bind(_stub(tmp_path, _FakeProvider()))
     src = tmp_path / "src.m4a"
     src.write_bytes(b"audio")
     dest = tmp_path / "lib" / "Xtal.m4a"
     dest.parent.mkdir(parents=True)
 
-    WavesBridge._apple_place_file(stub, src, dest)
+    runner.place_file(src, dest)
 
     assert dest.read_bytes() == b"audio"
     assert list(tmp_path.rglob("*.part-*")) == []
@@ -1114,14 +1177,20 @@ def test_a_long_throttle_keeps_retrying_instead_of_failing(tmp_path, monkeypatch
     provider.classify_refusal = lambda exc: _RealProvider.classify_refusal(provider, exc)
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
-    stub._apple_throttle_wait = lambda *args: True
-    stub._apple_throttle_delay = lambda *args: 0.0
+    monkeypatch.setattr(runner, "throttle_wait", lambda *args: True)
+    monkeypatch.setattr(runner, "throttle_delay", lambda *args: 0.0)
     stub._set_status = lambda *args: None
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -1155,17 +1224,23 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
     stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
     held = []
-    stub._apple_set_held = lambda qid, detail="": held.append((qid, detail))
+    monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
     emitted = []
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
     stub._set_status = lambda *args: None
     waited = []
-    stub._apple_wait_for_session = lambda provider, abort: waited.append(True) or True
+    monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort: waited.append(True) or True)
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
-    summary = WavesBridge._run_apple_job(
-        stub, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
     )
 
     assert summary == ""
@@ -1196,25 +1271,25 @@ def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkey
     stub = _bind(_stub(base, provider))
     stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
     held = []
-    stub._apple_set_held = lambda qid, detail="": held.append((qid, detail))
+    monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
-    stub._apple_wait_for_session = lambda provider, job_abort: False
+    monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort: False)
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
     abort = Event()
 
-    def _wait_then_stop(provider, job_abort):
+    def _wait_then_stop(hooks, provider, job_abort):
         job_abort.set()
         return False
 
     # A STOP pressed while the row is held ends the run as a stop, never a
     # failed track: the runner's settlement reports "no file", and the job
     # starter routes that to the cancelled row because job_abort is set.
-    stub._apple_wait_for_session = _wait_then_stop
+    monkeypatch.setattr(runner, "wait_for_session", _wait_then_stop)
     with pytest.raises(DownloadIncomplete):
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(),
@@ -1227,32 +1302,32 @@ def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkey
     assert not any(ev.get("status") == "failed" for ev in relay.events)
 
 
-def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path):
+def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path, monkeypatch):
     """A sidecar that cannot start ends the fetch with the wizard words.
 
     The ensure's terminal verdict must become the job's failure reason (the
     row repeats it), never an abort (which reads as a user stop) and never a
     fetch that goes ahead against a dead wrapper.
     """
-    from waves.waves_ui.backend import _AppleSetupRequired
+    from waves.providers.apple.runner import _AppleSetupRequired
 
     provider = _FakeProvider()
     stub = _bind(_stub(tmp_path / "lib", provider))
     stub.settings = _settings(tmp_path / "lib", apple_quality_audio="LOSSLESS")
     stub._queue_index = {1: {"askQuality": "LOSSLESS", "quality": "LOSSLESS"}}
-    stub._apple_needs_wrapper = lambda requested_rank: True
+    monkeypatch.setattr(runner, "needs_wrapper", lambda requested_rank: True)
     message = "Apple's runtime did not start. Finish setup in Settings, Providers, Apple Music, then retry."
 
-    def _refuse(qid, job_abort, *, need_wrapper):
+    def _refuse(hooks, qid, job_abort, *, need_wrapper):
         raise _AppleSetupRequired(message)
 
-    stub._apple_ensure_sidecar = _refuse
+    monkeypatch.setattr(runner, "ensure_sidecar", _refuse)
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
     with pytest.raises(DownloadIncomplete) as excinfo:
-        WavesBridge._run_apple_job(
-            stub,
+        runner.run_apple_job(
+            stub._apple_job_hooks(),
             1,
             spec,
             _song_resource(),

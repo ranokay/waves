@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
+from waves.providers.apple import runner
 from waves.providers.base import AudioType, StreamInfo
 from waves.waves_ui.backend import WavesBridge
 
@@ -315,29 +316,10 @@ def _apple_stub(base: Path, provider, **overrides):
         providers={CTX_APPLE: provider},
         _ownership=SimpleNamespace(ownership_of=lambda *a, **k: None),
     )
-    for name in (
-        "_apple_guess_ext",
-        "_apple_options",
-        "_apple_wants_flac",
-        "_apple_flac_scope_all",
-        "_apple_flac_mode",
-        "_apple_flac_ffmpeg",
-        "_apple_extract_flac",
-        "_apple_track_relative",
-        "_apple_relative_path",
-        "_apple_deliver_track",
-        "_apple_verify_staged",
-        "_apple_probe",
-        "_apple_place_file",
-        "_apple_lyrics",
-        "_apple_wants_cover",
-        "_apple_cover_bytes",
-        "_apple_write_sidecars",
-        "_apple_skiplist_add",
-        "_psetting",
-        "_tag_write_flags",
-    ):
-        setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+    # The runner drives these paths through the bridge-built hooks.
+    stub._apple_job_hooks = WavesBridge._apple_job_hooks.__get__(stub, SimpleNamespace)
+    for name in ("_psetting", "_tag_write_flags"):
+        setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
     return stub
 
 
@@ -419,8 +401,8 @@ class _Provider:
 
 def _deliver(stub, provider):
     info = provider._info if isinstance(provider, _Provider) else provider
-    return WavesBridge._apple_deliver_track(
-        stub,
+    return runner.deliver_track(
+        stub._apple_job_hooks(),
         provider if isinstance(provider, _Provider) else _Provider(info),
         _track_row(),
         None,
@@ -443,27 +425,32 @@ def _deliver(stub, provider):
 
 def test_guess_and_mode_matrix():
     stub = _apple_stub(Path("/tmp"), _Provider(None))
+    hooks = stub._apple_job_hooks()
 
-    assert stub._apple_guess_ext(_Provider(None), AudioType.ATMOS, quality_rank(QualityTier.HI_RES_LOSSLESS)) == ".m4a"
+    assert (
+        runner.guess_ext(hooks, _Provider(None), AudioType.ATMOS, quality_rank(QualityTier.HI_RES_LOSSLESS)) == ".m4a"
+    )
     stub.settings.data.extract_flac = False
-    assert stub._apple_guess_ext(_Provider(None), AudioType.STEREO, quality_rank(QualityTier.HI_RES_LOSSLESS)) == ".m4a"
+    assert (
+        runner.guess_ext(hooks, _Provider(None), AudioType.STEREO, quality_rank(QualityTier.HI_RES_LOSSLESS)) == ".m4a"
+    )
     stub.settings.data.extract_flac = True
     assert (
-        stub._apple_guess_ext(_Provider(None), AudioType.STEREO, quality_rank(QualityTier.HI_RES_LOSSLESS)) == ".flac"
+        runner.guess_ext(hooks, _Provider(None), AudioType.STEREO, quality_rank(QualityTier.HI_RES_LOSSLESS)) == ".flac"
     )
-    assert stub._apple_guess_ext(_Provider(None), AudioType.STEREO, quality_rank(QualityTier.HIGH)) == ".m4a"
+    assert runner.guess_ext(hooks, _Provider(None), AudioType.STEREO, quality_rank(QualityTier.HIGH)) == ".m4a"
     stub.settings.data.extract_flac_all = True
-    assert stub._apple_guess_ext(_Provider(None), AudioType.STEREO, quality_rank(QualityTier.HIGH)) == ".flac"
+    assert runner.guess_ext(hooks, _Provider(None), AudioType.STEREO, quality_rank(QualityTier.HIGH)) == ".flac"
 
-    assert stub._apple_flac_mode(_alac_info("/x"), atmos=False) == "lossless"
-    assert stub._apple_flac_mode(_aac_info("/x"), atmos=False) == "lossy"
+    assert runner.flac_mode(hooks, _alac_info("/x"), atmos=False) == "lossless"
+    assert runner.flac_mode(hooks, _aac_info("/x"), atmos=False) == "lossy"
     stub.settings.data.extract_flac_all = False
-    assert stub._apple_flac_mode(_aac_info("/x"), atmos=False) == ""
-    assert stub._apple_flac_mode(_atmos_info("/x"), atmos=True) == ""
+    assert runner.flac_mode(hooks, _aac_info("/x"), atmos=False) == ""
+    assert runner.flac_mode(hooks, _atmos_info("/x"), atmos=True) == ""
     stub.settings.data.extract_flac_all = True
-    assert stub._apple_flac_mode(_atmos_info("/x"), atmos=True) == ""
+    assert runner.flac_mode(hooks, _atmos_info("/x"), atmos=True) == ""
     stub.settings.data.extract_flac = False
-    assert stub._apple_flac_mode(_alac_info("/x"), atmos=False) == ""
+    assert runner.flac_mode(hooks, _alac_info("/x"), atmos=False) == ""
 
 
 def test_master_switch_off_keeps_the_m4a(tmp_path, monkeypatch):
@@ -514,8 +501,8 @@ def test_atmos_stays_m4a_even_under_the_all_scope(tmp_path, monkeypatch):
     provider = _Provider(_atmos_info(str(staged)))
     stub = _apple_stub(tmp_path / "lib", provider, extract_flac_all=True)
 
-    delivered = WavesBridge._apple_deliver_track(
-        stub,
+    delivered = runner.deliver_track(
+        stub._apple_job_hooks(),
         provider,
         _track_row(),
         None,
@@ -634,7 +621,7 @@ def test_conversion_encodes_flac_without_resampling(tmp_path, monkeypatch):
     staged = tmp_path / "staged.m4a"
     staged.write_bytes(b"audio")
 
-    out, tmpdir = stub._apple_extract_flac(staged)
+    out, tmpdir = runner.extract_flac(stub._apple_job_hooks(), staged)
     assert out.suffix == ".flac" and Path(tmpdir) in out.parents
     assert calls[-1].get("acodec") == "flac"
     assert "sample_rate" not in calls[-1] and "audio_bitrate" not in calls[-1] and "ar" not in calls[-1]
@@ -651,13 +638,13 @@ def test_verify_runs_before_conversion(tmp_path, monkeypatch):
     provider = _Provider(_alac_info(str(staged)))
     stub = _apple_stub(tmp_path / "lib", provider)
 
-    def _spy_verify(path, **kwargs):
+    def _spy_verify(hooks, path, **kwargs):
         order.append(("verify", str(path)))
         # Record only: the bytes are a fixture, verification itself is
         # pinned by the engine's own tests and the real-ffmpeg runs above.
         return None
 
-    def _spy_extract(path, **kwargs):
+    def _spy_extract(hooks, path, **kwargs):
         order.append(("extract", str(path)))
         work = tmp_path / "flac-work"
         work.mkdir(exist_ok=True)
@@ -666,8 +653,8 @@ def test_verify_runs_before_conversion(tmp_path, monkeypatch):
         _tone(out, codec="flac")
         return out, str(work)
 
-    stub._apple_verify_staged = _spy_verify
-    stub._apple_extract_flac = _spy_extract
+    monkeypatch.setattr(runner, "verify_staged", _spy_verify)
+    monkeypatch.setattr(runner, "extract_flac", _spy_extract)
 
     delivered = _deliver(stub, provider)
 

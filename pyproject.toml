@@ -273,6 +273,11 @@ ignore = [
 # container runtime and probes its health endpoint (S603/S607), and its
 # helpers carry deliberately descriptive messages (TRY003).
 "waves/providers/apple/supervision.py" = ["S603", "S607", "TRY003"]
+# The Apple job runner owns the orchestration the bridge used to hold: the
+# per-track delivery and the job settlement are deliberately linear sequences
+# (C901), and their raised messages are the queue row's own user-facing words
+# (TRY003), same rationale as the bridge itself.
+"waves/providers/apple/runner.py" = ["C901", "TRY003"]
 # The updater downloads and swaps a packaged build, so it intentionally shells
 # out (S603/S607) for the platform swap/relaunch; install()/_apply are linear
 # sequences (C901); and its errors carry deliberately descriptive messages (TRY003).
