@@ -149,7 +149,7 @@ ignore = [
 "tests/test_browse_back_scroll.py" = ["S603", "C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
-"tests/test_apple_double_cleanup.py" = ["S603"]
+"tests/metadata/test_apple_double_cleanup.py" = ["S603"]
 # Measures import-time metadata cost in a fresh interpreter: this interpreter
 # runs a literal probe script (S603, fixed argv).
 "tests/test_lazy_metadata.py" = ["S603"]
