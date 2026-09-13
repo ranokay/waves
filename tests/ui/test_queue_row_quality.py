@@ -47,65 +47,53 @@ installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
-
+@pytest.mark.qml
 def test_a_queue_row_states_the_quality_it_is_being_fetched_at():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-queue-quality-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
+        sandbox_prefix="waves-queue-quality-test-",
+        failure_message="the queue drawer's quality readout regressed.",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert (
-        proc.returncode == _EXIT_OK
-    ), f"the queue drawer's quality readout regressed. Scenario exit={proc.returncode}:\n{tail}"
 
 
 def _run_scenario() -> int:
-    # THIS checkout's waves, not the venv's editable install.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -116,7 +104,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -137,14 +125,14 @@ def _run_scenario() -> int:
     settle(120)
     if not bool(q("queueDrawer.visible")):
         print("the queue drawer would not open", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # An album job, enqueued through the bridge, asking for hi-res.
     bridge._target_tier = lambda: "HI-RES"
     qid = bridge._enqueue("Album A", "album", media_id="m1", collection=True, tracks=3)
     if bridge._queue_item(qid).get("quality") != "HI-RES":
         print("the bridge did not put the target tier on the row", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     bridge.queueChanged.emit(list(bridge._queue))
     settle(120)
 
@@ -265,10 +253,10 @@ def _run_scenario() -> int:
 
     if bad:
         print("\n".join(bad), file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
     print("ok: the pill follows the delivery, not the promise")
-    return _EXIT_OK
+    return EXIT_OK
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())

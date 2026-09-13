@@ -173,13 +173,17 @@ class _Catcher(logging.Handler):
 def _breadcrumbs(fn):
     logger = logging.getLogger("waves.config")
     catcher = _Catcher()
-    level, logger.level = logger.level, logging.INFO
+    # setLevel, not a direct level assignment: only setLevel clears the
+    # logger's enabled-for cache, and a stale WARNING-era False would swallow
+    # the INFO record regardless of the level read now.
+    level = logger.level
+    logger.setLevel(logging.INFO)
     logger.addHandler(catcher)
     try:
         fn()
     finally:
         logger.removeHandler(catcher)
-        logger.level = level
+        logger.setLevel(level)
     return catcher.records
 
 

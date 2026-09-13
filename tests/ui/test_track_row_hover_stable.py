@@ -10,9 +10,8 @@ always visible (compact) instead, labelled LYRICS / COVER.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-MAIN_QML = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+from support.paths import QML_MAIN
 
 
 def _strip_strings_and_comments(line: str) -> str:
@@ -23,7 +22,7 @@ def _strip_strings_and_comments(line: str) -> str:
 
 def _track_row_block() -> str:
     """The `component TrackRow` block, brace-matched from its opening line."""
-    lines = MAIN_QML.read_text(encoding="utf-8").splitlines()
+    lines = QML_MAIN.read_text(encoding="utf-8").splitlines()
     start = next(i for i, line in enumerate(lines) if line.strip().startswith("component TrackRow:"))
     depth = 0
     for i in range(start, len(lines)):
@@ -51,7 +50,7 @@ def test_hover_never_toggles_visibility_inside_track_row():
 
 
 def test_standalone_pair_is_always_visible_and_renamed():
-    text = MAIN_QML.read_text(encoding="utf-8")
+    text = QML_MAIN.read_text(encoding="utf-8")
     assert '"LYRICS ONLY"' not in text and '"ART ONLY"' not in text
     pair = re.search(r"component StandalonePair: Row \{(.*?)\n    \}", text, re.DOTALL)
     assert pair is not None

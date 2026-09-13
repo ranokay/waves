@@ -31,46 +31,33 @@ installs process-global handlers that must not leak into the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
-
+@pytest.mark.qml
 def test_the_queue_drawer_closes_from_its_own_header_button():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-queue-close-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
+        sandbox_prefix="waves-queue-close-test-",
+        failure_message="the queue drawer's close button regressed.",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert (
-        proc.returncode == _EXIT_OK
-    ), f"the queue drawer's close button regressed. Scenario exit={proc.returncode}:\n{tail}"
 
 
 def _run_scenario() -> int:
-    # THIS checkout's waves, not the venv's editable install.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
@@ -78,19 +65,20 @@ def _run_scenario() -> int:
         from PySide6.QtTest import QTest
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -101,7 +89,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -125,17 +113,17 @@ def _run_scenario() -> int:
     settle(250)
     if not bool(q("queueDrawer.visible")):
         print("the queue drawer would not open", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     bad: list[str] = []
 
     # 2. Empty queue: PAUSE and STOP are both gone and the X is still there.
     if int(q("queueModel.count")) != 0:
         print(f"the scenario started with {q('queueModel.count')} queued rows", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if bool(q("queuePauseBtn.visible")):
         print("PAUSE is showing with an empty queue, so this proves nothing", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if not bool(q("queueCloseBtn.visible")):
         bad.append("the close button is hidden when the queue is empty, which is when it is needed most")
 
@@ -183,12 +171,12 @@ def _run_scenario() -> int:
     settle(150)
     if int(q("queueModel.count")) < 1:
         print("could not put a row in the queue model", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if not bool(q("queueCloseBtn.visible")):
         bad.append("the close button disappeared once the queue had a row in it")
     if not bool(q("queuePauseBtn.visible")):
         print("PAUSE did not appear for a queued row", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     close_x = float(q("queueCloseBtn.mapToItem(null, 0, 0).x"))
     pause_right = float(q("queuePauseBtn.mapToItem(null, 0, 0).x + queuePauseBtn.width"))
     if close_x < pause_right:
@@ -197,11 +185,9 @@ def _run_scenario() -> int:
     if bad:
         for line in bad:
             print(f"REGRESSED: {line}", file=sys.stderr)
-        return _EXIT_REGRESSED
-    return _EXIT_OK
+        return EXIT_REGRESSED
+    return EXIT_OK
 
 
-if __name__ == "__main__":
-    if "--run-scenario" in sys.argv:
-        raise SystemExit(_run_scenario())
-    raise SystemExit(_EXIT_PRECONDITION)
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

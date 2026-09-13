@@ -19,21 +19,20 @@ record, or the library scan's local class) plus HOW it was found, and the row:
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from threading import Lock
 
 import pytest
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 
 class _Signal:
@@ -86,48 +85,37 @@ def test_the_registry_keeps_the_owned_copy_and_how_it_was_found():
     assert (rows[0]["owned"], rows[0]["quality"]) == ("claim", "")
 
 
+@pytest.mark.qml
 def test_drawer_row_keeps_the_tier_and_colours_the_word():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    sandbox = tempfile.mkdtemp(prefix="waves-queue-inlib-")
-    env["XDG_CONFIG_HOME"] = sandbox
-    env["HOME"] = sandbox
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-queue-inlib-",
+        failure_message="the IN LIBRARY ledger row regressed:",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the IN LIBRARY ledger row regressed:\n{tail}"
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -138,7 +126,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -159,7 +147,7 @@ def _run_scenario() -> int:
     settle(120)
     if not bool(q("queueDrawer.visible")):
         print("the queue drawer would not open", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     bridge._target_tier = lambda: "HI-RES"
     qid = bridge._enqueue("Album A", "album", media_id="m1", collection=True, tracks=3)
@@ -167,7 +155,7 @@ def _run_scenario() -> int:
     settle(120)
     if not bool(q("queueList.itemAtIndex(0) !== null")):
         print("no drawer row", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     bridge._merge_queue_tracks(
         qid,
         [
@@ -202,9 +190,9 @@ def _run_scenario() -> int:
     want = "LOSSLESS@full | IN LIBRARY:green | HI-RES@full | IN LIBRARY:gold | HI-RES@faded"
     if got != want:
         print(f"ledger read {got!r}, want {want!r}", file=sys.stderr)
-        return _EXIT_REGRESSED
-    return _EXIT_OK
+        return EXIT_REGRESSED
+    return EXIT_OK
 
 
 if __name__ == "__main__" and "--run-scenario" in sys.argv:
-    sys.exit(_run_scenario())
+    raise SystemExit(_run_scenario())

@@ -28,19 +28,20 @@ Runs in a SUBPROCESS like the other Main.qml scenarios.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 _LANDING = (
     "{sections: [{title: 'The Hits', rowKind: 'cards', kind: 'playlists', items: ["
@@ -49,27 +50,15 @@ _LANDING = (
 )
 
 
+@pytest.mark.qml
 def test_card_progress_bar_keeps_its_outline():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    # Sandboxed: a bridge that finds the packaged app's config dir adopts its
-    # settings and starts a real scan of the user's music library.
-    sandbox = tempfile.mkdtemp(prefix="waves-card-outline-test-")
-    env["XDG_CONFIG_HOME"] = sandbox
-    env["HOME"] = sandbox
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-card-outline-test-",
+        failure_message="the card's progress bar lost its outline again:",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"the card's progress bar lost its outline again:\n{tail}"
 
 
 _WALK = """
@@ -89,8 +78,6 @@ _WALK = """
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication, QImage
@@ -98,19 +85,20 @@ def _run_scenario() -> int:
         from PySide6.QtQuick import QQuickWindow
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     bridge = WavesBridge(tidal=None)
     engine = QQmlApplicationEngine()
@@ -121,7 +109,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots or not isinstance(roots[0], QQuickWindow):
         print("Main.qml failed to load as a window", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -158,11 +146,11 @@ def _run_scenario() -> int:
     )
     if not shape or shape == "no button":
         print("could not find the card's running download button", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     st, _bw, _bh, ba, _pa, pr, pg, pb, fr, fg, fb = shape.split(",")
     if st != "running":
         print(f"button is not running: {st}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     failures: list[str] = []
     if float(ba) > 0.001:
         failures.append(f"a bare download button still paints its own fill (alpha {ba})")
@@ -183,7 +171,7 @@ def _run_scenario() -> int:
             break
     if not os.path.exists(png):
         print("grabToImage produced no file", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     edge = q(
         "(function(){" + _WALK + " var c = card(); var b = btn();"
         " var p = b.mapToItem(c, 0, b.height / 2); return p.x + ',' + p.y })()"
@@ -192,7 +180,7 @@ def _run_scenario() -> int:
     img = QImage(png)
     if img.isNull():
         print("grabbed image unreadable", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     edge_px = img.pixelColor(int(ex) + 1, int(ey))
     # 3px in is pure fill: the outline is 1px and the matrix starts 6px inside
     # the button (it ran 12px in until the progress pill lab of 2026-08-17).
@@ -207,9 +195,9 @@ def _run_scenario() -> int:
     if failures:
         for f in failures:
             print(f, file=sys.stderr)
-        return _EXIT_REGRESSED
-    return _EXIT_OK
+        return EXIT_REGRESSED
+    return EXIT_OK
 
 
 if __name__ == "__main__" and "--run-scenario" in sys.argv:
-    sys.exit(_run_scenario())
+    raise SystemExit(_run_scenario())

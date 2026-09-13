@@ -235,7 +235,7 @@ def test_the_row_records_the_setting_it_was_queued_at():
     stub.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio="HI_RES_LOSSLESS"))
     stub._queued_quality_value = backend.WavesBridge._queued_quality_value.__get__(stub, type(stub))
     # The other value a row pins at birth, tested on its own in
-    # tests/test_queue_row_pins_the_library_skip.py.
+    # tests/ui/test_queue_row_pins_the_library_skip.py.
     stub._library_bulk_skip_on = lambda: True
     qid = backend.WavesBridge._enqueue.__get__(stub, type(stub))("Album", "album")
     assert stub._queue[0]["askQuality"] == "HI_RES_LOSSLESS"
