@@ -142,7 +142,7 @@ def test_reveal_download_path_opens_nearest_existing(tmp_path, monkeypatch):
 
 # ----- My Tidal sort -> tidalapi order enums -------------------------------
 # The enum mapping itself moved into TidalProvider with the favorites reads
-# (ticket #20); its verdicts are pinned in tests/test_provider_seam.py. Here:
+# (ticket #20); its verdicts are pinned in tests/providers/test_provider_seam.py. Here:
 # the bridge's default-sort policy, still date-desc, now delivered through
 # the seam.
 
