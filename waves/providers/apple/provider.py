@@ -145,7 +145,7 @@ class AppleProvider(Provider):
         # One download job's reused gamdl stack (event loop, API, wrapper
         # client). The runner opens a scope around a job's tracks; outside
         # one every fetch builds and closes its own stack.
-        self._fetch_depth = 0
+        self._fetch_scoped = False
         self._fetch_stack: object | None = None
 
     @property
@@ -159,21 +159,22 @@ class AppleProvider(Provider):
 
         The job's tracks fetch sequentially through this scope; the engine
         builds each tier's gamdl stack (API, base interface, wrapper client)
-        and its event loop once and the scope releases them at the end.
-        Nested scopes share the outermost stack.
+        and its event loop once and the scope releases them at the end. A
+        nested scope shares the outermost stack.
         """
-        self._fetch_depth += 1
+        if self._fetch_scoped:
+            yield self
+            return
+        self._fetch_scoped = True
         try:
             yield self
         finally:
-            self._fetch_depth -= 1
-            if self._fetch_depth <= 0:
-                self._fetch_depth = 0
-                self._drop_fetch_stack()
+            self._fetch_scoped = False
+            self._drop_fetch_stack()
 
     def _fetch_session(self):
         """The scoped engine session for this job, or None outside a scope."""
-        if self._fetch_depth <= 0:
+        if not self._fetch_scoped:
             return None
         if self._fetch_stack is None:
             from waves.providers.apple import engine as apple_engine
@@ -198,34 +199,46 @@ class AppleProvider(Provider):
             except Exception:
                 logger.debug("Could not close the Apple fetch stack", exc_info=True)
 
-    def _fetch_cookies(self, *, song_id: str, atmos: bool):
-        """One cookies-tier delivery through the job's stack when scoped."""
-        from waves.providers.apple.engine import AppleCredentialsError, download_song_file
+    def _fetch_with_stack(self, one_shot, scoped):
+        """Run a fetch through the job's stack when one is open, else one-shot.
+
+        A credential failure drops the stale stack so the runner's retry
+        rebuilds it from the fresh export or signed-in guest; wrapper
+        death drops it too, so the retry re-opens the guest instead of
+        reusing the client that just failed.
+        """
+        from waves.providers.apple.engine import AppleCredentialsError, AppleWrapperDown
 
         session = self._fetch_session()
         if session is None:
-            return download_song_file(
+            return one_shot()
+        try:
+            return scoped(session)
+        except (AppleCredentialsError, AppleWrapperDown):
+            self._drop_fetch_stack()
+            raise
+
+    def _fetch_cookies(self, *, song_id: str, atmos: bool):
+        """One cookies-tier delivery through the job's stack when scoped."""
+        from waves.providers.apple.engine import download_song_file
+
+        return self._fetch_with_stack(
+            one_shot=lambda: download_song_file(
                 song_id=song_id,
                 atmos=atmos,
                 cookies_path=self.cookies_path,
                 nm3u8dlre_path=self.nm3u8dlre_path,
                 ffmpeg_path=self.ffmpeg_path,
-            )
-        try:
-            return session.download_song(song_id=song_id, atmos=atmos)
-        except AppleCredentialsError:
-            # The export no longer works: drop the stale stack so the retry,
-            # after the runner's hold, rebuilds from the fresh file.
-            self._drop_fetch_stack()
-            raise
+            ),
+            scoped=lambda session: session.download_song(song_id=song_id, atmos=atmos),
+        )
 
     def _fetch_alac(self, *, song_id: str, max_tier: str):
         """One wrapper-tier delivery through the job's stack when scoped."""
-        from waves.providers.apple.engine import AppleCredentialsError, download_song_alac_file
+        from waves.providers.apple.engine import download_song_alac_file
 
-        session = self._fetch_session()
-        if session is None:
-            return download_song_alac_file(
+        return self._fetch_with_stack(
+            one_shot=lambda: download_song_alac_file(
                 song_id=song_id,
                 wrapper_url=self.wrapper_url,
                 nm3u8dlre_path=self.nm3u8dlre_path,
@@ -233,13 +246,9 @@ class AppleProvider(Provider):
                 decrypt_host=self.wrapper_decrypt_host,
                 decrypt_port=self.wrapper_decrypt_port,
                 max_tier=max_tier,
-            )
-        try:
-            return session.download_alac(song_id=song_id, max_tier=max_tier)
-        except AppleCredentialsError:
-            # The guest session went stale: rebuild it on the retry.
-            self._drop_fetch_stack()
-            raise
+            ),
+            scoped=lambda session: session.download_alac(song_id=song_id, max_tier=max_tier),
+        )
 
     @staticmethod
     def _verified_probe(delivery) -> dict | None:
@@ -1107,7 +1116,8 @@ class AppleProvider(Provider):
         # codecs/bit_depth/sample_rate; the tier alone ranks. A probe that
         # fails too cannot record the ask as verified: ALAC proves at least
         # LOSSLESS, so that is the substitute, never the requested rung.
-        probe = self._verified_probe(delivery)
+        carried = self._verified_probe(delivery)
+        probe = carried
         if probe is None:
             try:
                 from waves.providers.apple.engine import probe_audio_file
@@ -1132,8 +1142,8 @@ class AppleProvider(Provider):
             "sample_rate": sample_rate,
             "codecs": codec or "alac",
         }
-        if self._verified_probe(delivery) is not None:
-            delivered["probe"] = probe
+        if carried is not None:
+            delivered["probe"] = carried
         return StreamInfo(
             urls=[],
             # Lossless stereo lands as FLAC: the staged bytes are ALAC-in-m4a

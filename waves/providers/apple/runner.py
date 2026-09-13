@@ -679,6 +679,23 @@ def place_file(staged: pathlib.Path, dest: pathlib.Path) -> None:
         raise
 
 
+def _require_codec_family(codec: str, staged: pathlib.Path, *, expect_atmos: bool) -> None:
+    """The asked codec family, or an AppleIntegrityError naming the mismatch.
+
+    Stereo is AAC on the cookies tier and ALAC once the wrapper unlocks it;
+    Atmos is E-AC-3 (AC-4 accepted as the same family). Normalized
+    (hyphens/underscores dropped): "e-ac-3" -> "eac3".
+    """
+    norm = str(codec or "").lower().replace("-", "").replace("_", "")
+    if expect_atmos:
+        if norm not in ("eac3", "ec3", "ac4"):
+            raise AppleIntegrityError(
+                f"Apple served {norm or 'an unknown codec'}, expected eac3", staged_path=str(staged)
+            )
+    elif norm not in ("aac", "alac"):
+        raise AppleIntegrityError(f"Apple served {norm or 'an unknown codec'}, expected aac", staged_path=str(staged))
+
+
 def verify_staged(
     hooks: AppleJobHooks, staged: pathlib.Path, *, expect_atmos: bool, verified_probe: dict | None = None
 ) -> None:
@@ -693,29 +710,19 @@ def verify_staged(
     identically. No conversion runs before this passes; there is no patching.
 
     A delivery that carries the engine's verified probe already passed both
-    checks on exactly these bytes, so the probe is reused instead of spending
-    a second ffprobe and decode. No ffprobe/ffmpeg anywhere means trust (their
-    absence already fails louder paths via the ffmpeg gate); a wrong codec or
-    a decode error fails the track, never the job.
+    checks on exactly these bytes: the family is re-asserted off the carried
+    codec (free) and the probe's decode is trusted, so no second ffprobe or
+    decode runs. No ffprobe/ffmpeg anywhere means trust (their absence
+    already fails louder paths via the ffmpeg gate); a wrong codec or a
+    decode error fails the track, never the job.
     """
     if isinstance(verified_probe, dict) and verified_probe:
+        _require_codec_family(str(verified_probe.get("codec") or ""), staged, expect_atmos=expect_atmos)
         return
     ffprobe = probe_binary(hooks)
     if ffprobe:
         probe = apple_engine.probe_audio_file(staged, ffprobe)
-        codec = str(probe.get("codec") or "").lower().replace("-", "").replace("_", "")
-        # Stereo is AAC on the cookies tier and ALAC once the wrapper
-        # unlocks it; Atmos is E-AC-3 (AC-4 accepted as the same family).
-        # Normalized (hyphens/underscores dropped): "e-ac-3" -> "eac3".
-        if expect_atmos:
-            if codec not in ("eac3", "ec3", "ac4"):
-                raise AppleIntegrityError(
-                    f"Apple served {codec or 'an unknown codec'}, expected eac3", staged_path=str(staged)
-                )
-        elif codec not in ("aac", "alac"):
-            raise AppleIntegrityError(
-                f"Apple served {codec or 'an unknown codec'}, expected aac", staged_path=str(staged)
-            )
+        _require_codec_family(str(probe.get("codec") or ""), staged, expect_atmos=expect_atmos)
     else:
         logger.debug("Apple codec check skipped (no ffprobe): %s", staged)
     # The decode-to-null gate: the only check that catches the outbreak's
