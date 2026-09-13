@@ -33,7 +33,7 @@ ApplicationWindow {
     title: "Waves"
     color: bg
 
-    // ---- Album-art hover tilt knobs (iteration; final home = settings) --
+    // Album-art hover tilt knobs.
     // Variant: none | tilt | tilt_gloss | tilt_shadow. Tilt is BGT's value.
     // Lift is BGT's 1.04 swell cut by a fifth (0.04 -> 0.032): the cover read
     // as jumping toward you too eagerly at BGT's number.
@@ -57,7 +57,7 @@ ApplicationWindow {
     // download folder the face says DOWNLOADED, and moving the files into
     // the library flips it through the normal rescan.
     property bool dlInLibrary: waves.downloadsInsideLibrary() === true
-    // ---- per-item quality choices ------------------------------------------
+    // per-item quality choices
     // Mirrored ONCE from the bridge, like the prefs above: media id -> tier
     // word, or "DEFAULT" for a track pinned to the setting under an album
     // that chose otherwise. A track without a choice of its own inherits its
@@ -79,7 +79,7 @@ ApplicationWindow {
         return (q === "HI-RES" || q === "VIDEO") ? goldCont : q === "LOSSLESS" ? greenCont
              : q === "HIGH" ? cyanCont : surface3
     }
-    // ---- Chooser split button (spec §7.2) -------------------------------
+    // Chooser split button (spec §7.2)
     // Mirrored once: with Apple disabled every DownloadButton keeps today's
     // single-face behavior; with Apple enabled each gains its chevron face.
     property bool appleEnabled: false
@@ -113,7 +113,7 @@ ApplicationWindow {
     // lands flat; OutCubic settles straight into place. One knob, so the
     // covers and the track discs always move the same way.
     property int artFxEase: Easing.OutCubic
-    // ---- Artwork depth: hover shadow, and a resting raise while playing --
+    // Artwork depth: hover shadow, and a resting raise while playing
     // Every cover that answers the pointer casts a shadow while it is
     // hovered, and artwork whose own preview is running stops answering the
     // pointer and settles slightly raised over that same shadow, so "what is
@@ -135,7 +135,7 @@ ApplicationWindow {
     property real artPlayBreath: 0.22        // paused: how far the breath relaxes
     property int  artPlayBreathMs: 2400      // paused: one half-breath
 
-    // ---- Console palette (phosphor-green CRT, dark only) ----------------
+    // Console palette (phosphor-green CRT, dark only)
     // Legacy names kept (values repointed) so every existing binding recolours
     // for free; new tokens add the gold / cyan / outline / surface-tier ideas.
     readonly property color accent:       "#3dff6e"   // phosphor green (primary)
@@ -180,7 +180,7 @@ ApplicationWindow {
     readonly property color redDim:       "#b23f3a"   // small-lossy pill border
     readonly property color redContTx:    "#ff9d97"
     readonly property string mono:        monoFont    // bundled JetBrains Mono (see app.py)
-    // ---- Console button spec (chosen in the Button Lab, 2026-07-02) -----
+    // Console button spec (chosen in the Button Lab, 2026-07-02)
     // One voice for every button/tab label: the native system sans, Bold,
     // UPPERCASE (nav tabs sentence case), lit-cell primaries; mono stays the
     // "data voice" (badges, numbers, ASCII art).
@@ -202,7 +202,7 @@ ApplicationWindow {
     readonly property color navIdleText:     "#8f949e"
     readonly property color navIdleTextHi:   "#bcc1c9"
 
-    // ---- View routing --------------------------------------------------
+    // View routing
     // Exactly one main surface shows at a time: Browse (default), search
     // results, an artist page, My Tidal, or Settings. The booleans below are
     // the router; search results show when none of them are on.
@@ -224,7 +224,7 @@ ApplicationWindow {
     // away below if the bridge finished its token login before QML loaded.
     property bool browseOpen: true
 
-    // ---- Window geometry persistence -----------------------------------
+    // Window geometry persistence
     // Remember the window's size, position and maximized state across launches.
     // Saves route through the bridge's waves.json store (the channel every
     // other pref uses; it writes synchronously so it survives the standalone
@@ -341,7 +341,7 @@ ApplicationWindow {
                                         || appleArtistsModel.count > 0 || appleAlbumsModel.count > 0
                                         || appleTracksModel.count > 0 || applePlaylistsModel.count > 0
                                         || searchTop !== null
-    // ---- Search results / artist page / My Tidal ------------------------
+    // Search results / artist page / My Tidal
     // Result rows live in the *Model ListModels (declared further down) and
     // are replaced wholesale on each search; these hold the sort order and
     // per-page state around them.
@@ -407,11 +407,11 @@ ApplicationWindow {
     // Where the view sat before an album or playlist row's expand pulled it
     // up to the anchor line, keyed by the row's id (the rows are recycled
     // delegates, so nothing is kept on them). Expanding a row scrolls the
-    // rows above it out of the top of the view; collapsing it used to leave
-    // the view there, with the rows the user had been looking at still off
-    // screen and a scroll back up owed every time (livetest report).
-    // Collapsing now returns the view to that spot, with the same motion the
-    // expand used, so the row folds back into the page it came out of.
+    // rows above it out of the top of the view, so a collapse must return
+    // the view to that spot, with the same motion the expand used: left
+    // there, the rows the user had been looking at stay off screen and a
+    // scroll back up is owed every time. Collapsing reads the spot back and
+    // returns the view to it, so the row folds into the page it came out of.
     property var expandReturnY: ({})
     // Replacing the expanded set WHOLESALE (a page load, a Back restore, a new
     // search) drops every remembered spot with it. A spot belongs to the page
@@ -489,7 +489,7 @@ ApplicationWindow {
         readonly property real fW: live ? flick.width : 0
         readonly property real fBottom: live ? fTop + flick.height : 0
 
-        // ---- LIP edge fades ------------------------------------------------
+        // LIP edge fades
         // Scroll-gated: a fade exists to soften rows being cut off by the
         // viewport edge, so when nothing is cut off there must be no fade.
         // At the very top of a page (contentY 0) the top fade is fully
@@ -523,7 +523,7 @@ ApplicationWindow {
             }
         }
 
-        // ---- rolodex roll ----------------------------------------------------
+        // rolodex roll
         // Each row gets a Rotation bound to its own view (captured at creation,
         // so rows on backgrounded pages keep working when the user returns).
         readonly property real rollMax: 9
@@ -601,7 +601,7 @@ ApplicationWindow {
             function onContentHeightChanged() { Qt.callLater(btt.armRoll) }
         }
 
-        // ---- the INLINE crest pill ------------------------------------------
+        // the INLINE crest pill
         // The clipping band pins the pill's travel to the scroll viewport, so
         // it slides up UNDER the chrome edge when hiding, the same way rows
         // disappear when scrolled, instead of passing over the navbar.
@@ -653,7 +653,7 @@ ApplicationWindow {
         }
     }
     // My Tidal infinite scroll: whether more pages exist PER CATEGORY (the
-    // category panes are keep-alive now, so each keeps its own pagination
+    // category panes are keep-alive, so each keeps its own pagination
     // truth while hidden), and whether a page is in flight for the active one
     // (to avoid firing duplicate page requests while scrolling). The map is
     // read only from functions, never bindings, so plain mutation is fine.
@@ -703,8 +703,8 @@ ApplicationWindow {
     // SHOW ALL beneath it, exactly like the search page's mixed view, and a
     // section the user expands is remembered (prefs) across artists and
     // launches, per section, alongside the fold state the headers already
-    // persist. These used to be per-visit only for tracks/videos and absent
-    // for albums/EPs.
+    // persist. Per-visit state would reset tracks and videos on every artist
+    // change, and albums/EPs would have no memory of the choice at all.
     property bool topTracksExpanded: waves.wavesPref("artist_sec_tracks_expanded") === true
     property bool artistAlbumsExpanded: waves.wavesPref("artist_sec_albums_expanded") === true
     property bool artistEpsExpanded: waves.wavesPref("artist_sec_eps_expanded") === true
@@ -793,7 +793,7 @@ ApplicationWindow {
     function searchRowVisible(name, count, index, expanded, cap) {
         return sectionVisible(name, count) && (filterType !== "all" || expanded || index < (cap || 5))
     }
-    // ---- Download state (mirrors the bridge) ----------------------------
+    // Download state (mirrors the bridge)
     // mediaId -> a small reactive holder { real pct; string st }, created lazily
     // when a download for that id first reports. dlPct()/dlSt() read the holder;
     // the downloadProgress/downloadState handlers set exactly one holder's
@@ -811,14 +811,13 @@ ApplicationWindow {
             // What the controls draw (dlPct reads it). It rides pct, but a
             // jump FORWARD of more than 3 points is filled at speed rather
             // than snapped: a resumed album or playlist opens with its owned
-            // tracks skipped in one burst, and the bar used to leap straight
-            // to that point (livetest report, 2026-08-17).
+            // tracks skipped in one burst, so a forward jump must fill to
+            // that point rather than snap.
             // LINEAR, and 200ms plus 22ms a point (1.5s at most): the bar's
             // blocks light in fill order, so a linear ramp lights them at an
-            // even cadence and the eye follows the fill across. The first cut
-            // at this rode OutCubic over 8ms a point, which spent half the
-            // travel in the first fifth of the ramp: at a glance the blocks
-            // all still arrived together (livetest report, 2026-08-17). An
+            // even cadence and the eye follows the fill across. OutCubic over
+            // 8ms a point would spend half the travel in the first fifth of
+            // the ramp: at a glance the blocks all still arrive together. An
             // ordinary tick (a fraction of a point) lands at once, so a bar
             // that is merely downloading is untouched; a fall (a new run
             // resetting to -1 / 0) and the very first reading snap; with
@@ -870,7 +869,7 @@ ApplicationWindow {
     // drives the header badge.
     property int activeQueueCount: 0
 
-    // ---- Download-queue grouping (Completed / Failed / Stopped / Downloading / Queued)
+    // Download-queue grouping (Completed / Failed / Stopped / Downloading / Queued)
     // A finished row lingers 5s with its ✓ DONE chip, then slides up into the
     // collapsible Completed group. These counts feed the sticky section headers;
     // compBump ticks on each promotion so the Completed header count can pulse.
@@ -921,7 +920,7 @@ ApplicationWindow {
     // has finished, so the one rebuild per gesture lands on a static screen.
     property bool queueEdgeHeld: false
 
-    // ---- Browse (TIDAL editorial pages) --------------------------------
+    // Browse (TIDAL editorial pages)
     // The landing payload (content rows + the genre/mood/decade chip sets)
     // arrives via onBrowseLoaded; drilling a chip loads that page into
     // browsePage, keyed by its TIDAL api path so a slow load for a chip the
@@ -938,7 +937,7 @@ ApplicationWindow {
     // Art.underUrl) instead of waiting on the whole track list. Empty when
     // the opener had no cover at hand (a now-playing link, a video).
     property string browseArtHint: ""
-    // --- Browse landing build veil ---------------------------------------
+    // Browse landing build veil
     // Fresh landing shelves incubate through asynchronous Loaders so the GUI
     // thread never freezes mid tab-strike, but the page must never be WATCHED
     // assembling: while building, the shelf loaders render at opacity 0
@@ -1001,9 +1000,9 @@ ApplicationWindow {
     function _browseCardTick(async) { if (async) _browseBuildTick() }
     // A loader that errors (or a miscount) must never pin the veil. Re-armed
     // by every loader that reports, so this is an inactivity timeout, not a
-    // budget for the whole build: a landing with a dozen shelves used to blow
-    // through a fixed 800ms and drop the veil mid-incubation, and the rest of
-    // the page was then watched arriving shelf by shelf.
+    // budget for the whole build: a landing with a dozen shelves would blow
+    // through a fixed 800ms and drop the veil mid-incubation, leaving the
+    // rest of the page to arrive shelf by shelf.
     Timer { id: browseBuildGuard; interval: 800; onTriggered: root.browseBuilding = false }
     // Always-on freshness: revalidate-on-tab-return alone lets the landing
     // freeze for a user who parks on Browse. The backend's 60s throttle is a
@@ -1024,7 +1023,7 @@ ApplicationWindow {
                  && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
         onTriggered: waves.refreshBrowse()   // silent, throttled; repaints only on change
     }
-    // --- Search results build veil ----------------------------------------
+    // Search results build veil
     // Same treatment for a fresh search: every result card (artists, albums,
     // tracks, videos, playlists, mixes) incubates through an asynchronous
     // Loader while searchBuilding holds the pane at opacity 0 behind the
@@ -1067,9 +1066,9 @@ ApplicationWindow {
     // A loader that errors (or a miscount) must never pin the veil, and neither
     // must a library that never answers. Re-armed by every loader that reports,
     // so this is an inactivity timeout rather than a budget for the whole
-    // build: a full result set is well over a hundred async Loaders and used to
+    // build: a full result set is well over a hundred async Loaders and would
     // blow through a fixed 800ms, dropping the veil mid-incubation so the rest
-    // of the page (its badges included) was watched arriving card by card.
+    // of the page (its badges included) arrives card by card.
     Timer {
         id: searchBuildGuard; interval: 800
         onTriggered: { root._searchAwaitingLibrary = false; root.searchBuilding = false }
@@ -1153,7 +1152,7 @@ ApplicationWindow {
     // coalescing turns dozens of full re-evaluations into a handful.
     property var _tileArtPending: ({})
 
-    // ---- Open-water launch dials -----------------------------------------
+    // Open-water launch dials
     // Driven by bootOverlay (end of file). The scrim starts light so the
     // water shows under the WAVES wordmark, and the interface starts hidden;
     // the launch sequence animates both to their resting values exactly once.
@@ -1187,7 +1186,7 @@ ApplicationWindow {
     // interface must stay inert under the launch screen.
     property bool bootWarming: false
 
-    // ---- Ambient wave-loop background -----------------------------------
+    // Ambient wave-loop background
     // A muted, seamlessly looping ocean video (public-domain loop, re-encoded
     // 720p) sits behind every page under a heavy scrim so the Console palette
     // and text contrast survive. z:-1 keeps it below all content; playback
@@ -1457,7 +1456,7 @@ ApplicationWindow {
         else if (kind === "artist") waves.downloadArtist(card.id)
     }
 
-    // ---- Dev timing: measure how long a section switch takes to process -----
+    // Dev timing: measure how long a section switch takes to process
     // markNav() stamps the start and arms a zero-interval Timer; the Timer fires
     // on the next GUI-thread event-loop turn, after the visibility bindings and
     // layout for the new section have been processed, and reports the elapsed
@@ -1502,10 +1501,10 @@ ApplicationWindow {
     // holder bumps dlHoldersGen, which dlPct()/dlSt() read, so any control
     // already bound to them re-evaluates and starts tracking the new holder;
     // that rebind happens once per download start, not once per progress
-    // tick. The map itself is only ever added to in place: it used to be
-    // cloned for the same notification, which made every new download cost
-    // a copy of every holder before it (a 10,000-album queue took 19 s of
-    // GUI thread just to be queued).
+    // tick. The map itself is only ever added to in place: cloning it per
+    // notification would make every new download cost a copy of every holder
+    // before it (a 10,000-album queue took 19 s of GUI thread just to be
+    // queued).
     property int dlHoldersGen: 0
     function dlHolder(id) {
         var h = dlHolders[id]
@@ -1567,7 +1566,7 @@ ApplicationWindow {
         return ids
     }
 
-    // --- In-app video player (simple modal overlay; first-ship scope) -----
+    // In-app video player (simple modal overlay; first-ship scope)
     // videoNow: {id, title, artist} while the overlay is up, else null. The
     // backend resolves the stream URL asynchronously (waves.playVideo); the
     // overlay shows FETCHING until videoReady lands, then streams directly.
@@ -1629,7 +1628,7 @@ ApplicationWindow {
         waves.playVideo(videoNow.id)
     }
 
-    // --- Peek to full player, without a gap ------------------------------
+    // Peek to full player, without a gap
     // The peek's pipeline is ALREADY decoding this video, so the click never
     // opens a second stream and never restarts: the running player simply
     // hands its picture to the overlay's stage and keeps sounding. A frame
@@ -1712,7 +1711,7 @@ ApplicationWindow {
         videoError = true
     }
 
-    // --- Hover video peek (floating card, sound but no controls) ---------
+    // Hover video peek (floating card, sound but no controls)
     // peekNow: {id, title, artist, art} while the card is up, else null. A
     // short dwell on a video thumbnail grows the card out of the thumb's
     // rect; the backend resolves a low variant (waves.peekVideo) and it
@@ -1754,7 +1753,7 @@ ApplicationWindow {
     }
     Timer { id: peekLinger; interval: 260; onTriggered: root.peekClose() }
 
-    // --- In-app preview control (single shared player, see previewPlayer) ---
+    // In-app preview control (single shared player, see previewPlayer)
     function pvActive(kind, id) {
         if (previewKind === kind && previewId === id) return true
         // Same underlying song, reached from a different surface: an artist/
@@ -1848,7 +1847,7 @@ ApplicationWindow {
         previewNowTitle = ""; previewNowArtist = ""; previewNowArt = ""
         previewNowArtistId = ""; previewNowAlbumId = ""; previewNowTrackId = ""; previewNowArtists = []
     }
-    // --- Now-playing bar (bottom status bar) controls ---------------------------
+    // Now-playing bar (bottom status bar) controls
     // Play/pause the shared player without touching which item is active, so the
     // bar keeps working after the user navigates away from the source row.
     function nowToggle() {
@@ -1898,7 +1897,7 @@ ApplicationWindow {
     function statusColor(s) { return s === "running" ? accent : s === "done" ? accent : s === "failed" ? red : s === "queued" ? cyanDim : textLo }
     function sectionVisible(name, count) { return count > 0 && (filterType === "all" || filterType === name) }
 
-    // ---- Console helpers: ASCII download bar + popularity-meter segments ----
+    // Console helpers: ASCII download bar + popularity-meter segments
     // asciiBar renders a monospace progress bar of filled (█) + dim (░) cells.
     function asciiBar(pct, n) { n = n || 9; var f = Math.max(0, Math.min(n, Math.round((pct / 100) * n))); return "█".repeat(f) }
     function asciiBarDim(pct, n) { n = n || 9; var f = Math.max(0, Math.min(n, Math.round((pct / 100) * n))); return "░".repeat(n - f) }
@@ -1908,7 +1907,7 @@ ApplicationWindow {
     // Back/forward navigation (triggered by the back bar, the native swipe
     // gesture, or the mouse side buttons, detected app-side in
     // WavesBridge.eventFilter; the swipe gesture stays back-only).
-    // ---- Navigation history --------------------------------------------
+    // Navigation history
     // Swipe-back / back bars return to where you actually WERE (search page,
     // a genre page, an artist), not to a fixed hierarchy. Each view change
     // pushes a snapshot of the view being left; navBack() pops and restores
@@ -2093,7 +2092,7 @@ ApplicationWindow {
         _navRestoring = false
         _navRestored = true   // survives the 0ms crumb-trim debounce (see crumbTrimTimer)
     }
-    // ---- Breadcrumb trail over the history -------------------------------
+    // Breadcrumb trail over the history
     // The artist and browse sub-page back bars render the whole navHistory as
     // a crumb trail (NavCrumbTrail) with the current page as the last, lit
     // pill. These mirror navSnapshot()'s label and navSig() WITHOUT reading
@@ -2232,7 +2231,7 @@ ApplicationWindow {
             // be the oscillation itself. A real page in the way (an artist, a
             // browse sub-page) means this is not a tab flip but a journey, and
             // dropping it would make Back skip a page the user actually opened:
-            // Browse > artist > Search tab > Browse tab used to lose the artist
+            // Browse > artist > Search tab > Browse tab would lose the artist
             // from Back entirely. Leave the history alone; the trail stays
             // short on its own, because it only shows this section (crumbBase).
             for (var j = k; j < navHistory.length; j++)
@@ -2267,7 +2266,7 @@ ApplicationWindow {
         loadLib(libraryCategory)
     }
 
-    // ---- Search tab state save/restore -----------------------------------
+    // Search tab state save/restore
     // The artist drill-in state (artistData/expandedAlbums) is SHARED between
     // tabs, and other tabs overwrite it (My Tidal opens its own artist pages,
     // loadLib clears expandedAlbums). So the Search tab's exact view is
@@ -2637,7 +2636,7 @@ ApplicationWindow {
         var fit = Math.max(1, Math.floor((avail + spacing) / (cardW + spacing)))
         return Math.max(1, Math.min(fit, count))
     }
-    // ---- browse endless scroll -------------------------------------------
+    // browse endless scroll
     // A row that carries a paging handle (data/total/offset) can grow: shelves
     // ask when scrolled to their end, drilled pages when the view hits bottom.
     // One in-flight fetch per data path; results splice into whichever views
@@ -2688,9 +2687,9 @@ ApplicationWindow {
             // survives leaving Browse via the nav tabs, so "already there"
             // is only true when Browse is the active surface. Arriving from
             // another surface (a folder row, a My Tidal shelf) must still
-            // record where the user came from: this guard used to return
-            // without pushing, so Back skipped the folder entirely and fell
-            // through to whatever was under it in the history (Search).
+            // record where the user came from: returning without pushing
+            // would make Back skip the folder entirely and fall through to
+            // whatever is under it in the history (Search).
             if (!browseOpen || artistOpen || settingsOpen || libraryOpen) navPush()
             browseHighlightId = highlight || ""
             browseHighlightPending = false
@@ -3304,12 +3303,12 @@ ApplicationWindow {
     // Warm cover-art pool
     // ====================================================================
     // Qt only keeps a small budget of decoded-but-unreferenced images, so
-    // revisiting a page used to re-decode every cover (the placeholder→art
-    // pop-in that made every visit feel like a first load). This invisible
-    // pool holds a live Image for the last ~220 covers shown, keeping their
-    // decoded pixels referenced in the pixmap cache, a rebuilt delegate with
-    // the same url+sourceSize then paints instantly. LRU-capped; worst case
-    // ~100 MB of RAM at typical tile sizes, usually far less.
+    // without this pool a revisit would re-decode every cover (the
+    // placeholder→art pop-in that makes every visit feel like a first load).
+    // This invisible pool holds a live Image for the last ~220 covers shown,
+    // keeping their decoded pixels referenced in the pixmap cache, a rebuilt
+    // delegate with the same url+sourceSize then paints instantly. LRU-capped;
+    // worst case ~100 MB of RAM at typical tile sizes, usually far less.
     // The track disc's decode size, in one place: PreviewArt asks for it and
     // the prefetch handler warms at it, and the pool keys on the exact size,
     // so two literals that drift apart would silently warm nothing.
@@ -3443,9 +3442,9 @@ ApplicationWindow {
         onUrlChanged: artWaited = false
         // Never fetch a cover the user has never been shown. Rows hidden
         // behind a section cap (search's first-5) still instantiate, and
-        // their fetches used to queue ahead of the on-screen art on the six
-        // shared connections, so a big search left visible covers hanging
-        // while invisible ones downloaded. `visible` here reads EFFECTIVE
+        // their fetches would otherwise queue ahead of the on-screen art on
+        // the six shared connections, leaving visible covers hanging while
+        // invisible ones download. `visible` here reads EFFECTIVE
         // visibility (ancestors included), so the latch flips the first time
         // the element is actually shown and the fetch starts then. Once
         // latched it never drops: a tab switch or filter change must keep
@@ -3527,14 +3526,14 @@ ApplicationWindow {
         // this goes false, which is exactly the hand-off from tilt to raise.
         readonly property bool fxOn: hoverFx && fxVariant !== "none" && !fxRaised
         // The effect waits for the pointer to REST on the cover. A scrolling
-        // list slides its rows under a stationary cursor, and every row that
-        // passed under it used to arm the tilt on the way through: dozens of
-        // 280 ms lift and tilt springs at once (and, on tilt_shadow, a layer
-        // FBO per row), for covers nobody pointed at. That was half of the
-        // playlist scroll jank reported from livetesting. 90 ms of unbroken
-        // hover is below notice when you mean it, and far longer than a row
-        // spends under the cursor mid-scroll. Disarms the instant the pointer
-        // leaves, so springing back is never delayed.
+        // list slides its rows under a stationary cursor, and arming every
+        // row that passes under it would fire dozens of 280 ms lift and tilt
+        // springs at once (and, on tilt_shadow, a layer FBO per row), for
+        // covers nobody pointed at: half of the playlist scroll jank reported
+        // from livetesting. 90 ms of unbroken hover is below notice when you
+        // mean it, and far longer than a row spends under the cursor
+        // mid-scroll. Disarms the instant the pointer leaves, so springing
+        // back is never delayed.
         property bool fxArmed: false
         readonly property bool fxHovering: fxOn && fxArmed && fxHover.hovered
         function _fxAim(p) {
@@ -3867,7 +3866,7 @@ ApplicationWindow {
         return tierFloor(target, expected)
     }
 
-    // ---- ownership batch listening ------------------------------------------
+    // ownership batch listening
     // The bridge announces cold-cache ownership answers in batches
     // (ownershipChangedBatch: one ",id1,id2,...," string per flush), because
     // per-id signals at launch ran every listening card's handler for every
@@ -4017,8 +4016,8 @@ ApplicationWindow {
     // The quality menu's own metrics, measured ONCE for the whole app: every
     // row is the same mono type, so the widest word of each column is a
     // constant and the menu can be sized to exactly the columns it shows
-    // (a menu with nothing to say about the library stays as narrow as it was
-    // before there was an IN LIBRARY mark to fit).
+    // (a menu with nothing to say about the library stays as narrow as one
+    // with no IN LIBRARY mark to fit).
     TextMetrics { id: qpmWord; font.family: root.mono; font.pixelSize: 10; font.bold: true; text: "LOSSLESS" }
     TextMetrics { id: qpmSpec; font.family: root.mono; font.pixelSize: 10; text: "16/44.1" }
     TextMetrics { id: qpmNote; font.family: root.mono; font.pixelSize: 9; text: "NOT OFFERED" }
@@ -5583,8 +5582,8 @@ ApplicationWindow {
             // Play/pause/error as a vector glyph. Loading shows no glyph:
             // the buffering animation (paVinyl spins the cover) is the activity
             // indicator, over the lightly scrimmed art. A soft dark disc
-            // behind the glyph gives the same legibility over art the
-            // Text.Outline used to.
+            // behind the glyph gives the same legibility over art a
+            // Text.Outline would.
             Item {
                 anchors.fill: parent
                 opacity: pa.st !== "loading" ? 1 : 0
@@ -6060,7 +6059,7 @@ ApplicationWindow {
             return ""
         }
         property var onTap: (function(){})
-        // ---- Chooser split button (spec 7.2) ----------------------------
+        // Chooser split button (spec 7.2)
         // chooserKind names what this control downloads (track, album,
         // playlist, mix, video, artist, folder, category). Track rows and
         // collection pages carry per-click support. Bulk sweeps keep Settings.
@@ -6502,17 +6501,15 @@ ApplicationWindow {
 
         // RUNNING, the dot matrix fills the whole button, edge to edge, five
         // rows dense; the percentage is carved into it while hovered (see
-        // DotMatrix.word). Until the progress pill lab (2026-08-17) the bar
-        // stopped 12px in and a "NN%" readout sat to its right in a slot
-        // reserved for "100%", which left a two-character hole beside a short
-        // number for most of a run.
+        // DotMatrix.word). A bar that stopped 12px in, with a "NN%" readout
+        // to its right in a slot reserved for "100%", would leave a
+        // two-character hole beside a short number for most of a run.
         // Behind a Loader rather than plain `visible: false`: an invisible
         // subtree is still BUILT, and this one is a 200-dot matrix. A row that
-        // is not downloading has no progress to draw, but every row of a
-        // 500-track playlist was paying for the matrix anyway (measured at 92
-        // of the 232 items a TrackRow created, when it was four rows). The
-        // Loader has a size, so the loaded Item is sized to it (no anchors
-        // needed inside).
+        // is not downloading has no progress to draw, but building it for
+        // every row of a 500-track playlist costs 92 of the 232 items a
+        // TrackRow creates (measured). The Loader has a size, so the loaded
+        // Item is sized to it (no anchors needed inside).
         // The percentage shows while the pointer is over the button, or over
         // whatever the caller names (a Browse card passes its whole art, the
         // way its controls already rise for the card, not the pill).
@@ -6537,18 +6534,18 @@ ApplicationWindow {
             opacity: db.st === "running" ? db.rollIn : (db.matrixRollOut ? db.rollOut : 0)
             transform: Translate { y: db.st === "running" ? 10 * (1 - db.rollIn) : -10 * (1 - db.rollOut) }
             sourceComponent: Item {
-                // Nothing beside the matrix any more: its width IS the item's,
-                // so no digit landing can ever reflow it (the case the
+                // Nothing sits beside the matrix: its width IS the item's, so
+                // no digit landing can ever reflow it (the case the
                 // stable-width test guards).
                 DotMatrix {
                     objectName: "dbMatrix"
                     anchors.left: parent.left; anchors.right: parent.right
                     // Centred to the DEVICE pixel, not the logical one: the
                     // grid is 27px in a 28px button, an offset of 0.5, which
-                    // is a whole pixel at 2x. Rounding to a logical pixel sat
-                    // the (then five-row) bar a pixel low on every retina
-                    // display (livetest report), and an anchor centre left it
-                    // on a half pixel at 1x.
+                    // is a whole pixel at 2x. Rounding to a logical pixel
+                    // would sit the bar a pixel low on every retina display,
+                    // and an anchor centre would leave it on a half pixel
+                    // at 1x.
                     y: Math.round((parent.height - implicitHeight) / 2 * Screen.devicePixelRatio) / Screen.devicePixelRatio
                     // Seven rows of 3px cells with 1px gaps fill the button
                     // top to bottom; the outer cells fade toward every edge
@@ -6561,18 +6558,17 @@ ApplicationWindow {
                     // edge: the first real block lights two columns in, where
                     // the fade is at 36% and the next at 60%, instead of under
                     // it. Rows are not padded and no more columns are: four
-                    // pad columns plus pad rows (design Q) shipped and was
-                    // reverted the same day, the fill "started several blocks
-                    // to the right of the start" (livetest report). Progress
-                    // pill lab round 7, design V, 2026-08-17.
+                    // pad columns plus pad rows would start the fill several
+                    // blocks to the right of the start. Progress pill lab
+                    // round 7, design V, 2026-08-17.
                     padCols: 2; mirrorPads: true
                     // Only loaded while st === "running", so 100% here means the
                     // final steps are still in flight: twinkle in step with the
                     // queue row for the same item.
                     finishing: db.pct >= 99.9
                     // pct is -1 until the first progress event: no word then
-                    // (the bar alone says "starting"; the readout used to show
-                    // DownIcon's "…" here).
+                    // (the bar alone says "starting"; there is no reading to
+                    // spell yet).
                     word: db.pct >= 0 ? Math.round(db.pct) + "%" : ""
                     // 460ms both ways (the dissolve wants longer than a plain
                     // fade to read as one), instant with motion off. One value
@@ -6588,7 +6584,7 @@ ApplicationWindow {
         // it up yet; the stack glyph's walking highlight says the wait is
         // alive, and the label keeps the media noun ("QUEUED ALBUM").
         readonly property string queuedLabel: "QUEUED" + label.toUpperCase().replace("DOWNLOAD", "")
-        // --- The state roll: RollSwap's belt, transplanted onto the button's
+        // The state roll: RollSwap's belt, transplanted onto the button's
         // own face changes. When the label text changes (the one reliable
         // tell that the face did), the OLD face rides out the top while the
         // new one arrives from the bottom, on RollSwap's no-overlap curve
@@ -7045,11 +7041,12 @@ ApplicationWindow {
         Component.onCompleted: shown = value
         onValueChanged: {
             // Land any roll in flight BEFORE the no-op check. Returning early
-            // on value === shown used to leave the animation running, and its
-            // ScriptAction then latched the abandoned _pending: the digit stuck
-            // on a number the badge no longer holds. LibList pools delegates
-            // (reuseItems), so a fast flick rebinds one A -> B -> A well inside
-            // the 220ms roll and a folder ends up wearing another one's count.
+            // on value === shown would leave the animation running, and its
+            // ScriptAction would then latch the abandoned _pending, sticking
+            // the digit on a number the badge no longer holds. LibList pools
+            // delegates (reuseItems), so a fast flick rebinds one A -> B -> A
+            // well inside the 220ms roll and a folder ends up wearing another
+            // one's count.
             if (odAnim.running) {
                 odAnim.stop()
                 od.shown = od._pending
@@ -7650,7 +7647,7 @@ ApplicationWindow {
             id: bclip
             anchors.fill: parent; anchors.margins: banner.inset; clip: true
 
-            // ---- parallax ASCII ocean (the same patterns as the header WaveMark) ----
+            // parallax ASCII ocean (the same patterns as the header WaveMark)
             Repeater {
                 model: [
                     { yf: 0.04, px: 8,  op: 0.50, par: 0.42, pat: "   '    .     *   :   .   ", col: root.accentContTx },
@@ -7677,7 +7674,7 @@ ApplicationWindow {
                 }
             }
 
-            // ---- legibility scrim: dark central band, transparent top & bottom ----
+            // legibility scrim: dark central band, transparent top & bottom
             Rectangle {
                 anchors.fill: parent; visible: banner.scrim
                 gradient: Gradient {
@@ -7716,7 +7713,7 @@ ApplicationWindow {
                 Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: banner.title; font.family: banner.titleFamily; font.pixelSize: banner.titleSize; font.bold: banner.bold; color: banner.ink }
             }
 
-            // ---- marquee edge fades (soften the wrap at both ends) ----
+            // marquee edge fades (soften the wrap at both ends)
             Rectangle {
                 visible: banner.marquee
                 anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 30
@@ -8345,12 +8342,11 @@ ApplicationWindow {
         // ("37%") is spelled in a 3x5 dot font in the matrix's own cells,
         // centred, always lit, on a PLATE (the glyph box plus a cell of
         // margin) knocked back to near black whatever the bar under it is
-        // doing, so the number reads the same at every percentage. Its cells
-        // used to take the INVERSE of the bar under them (a hole where the
-        // bar was lit, a lit dot where it was not), which read at either end
-        // of a run and not at all while the fill edge crossed the digits:
-        // half the number dark, half bright, for that whole stretch
-        // (livetest report, 2026-08-17).
+        // doing, so the number reads the same at every percentage. Taking the
+        // INVERSE of the bar under them instead (a hole where the bar is
+        // lit, a lit dot where it is not) would read at either end of a run
+        // and not at all while the fill edge crossed the digits: half the
+        // number dark, half bright, for that whole stretch.
         // This polarity and not the other way up (dark digits on a lit
         // plate), which the round 8 sheet settled: a 3x5 glyph is mostly
         // stroke, so punched out of a plate it reads as a blob to be decoded
@@ -8361,10 +8357,10 @@ ApplicationWindow {
         // so the number condenses out of the bar and dissolves back into it,
         // and a reveal that reverses mid-way plays back from wherever it is.
         // The zone is the WORD's own width, centred: one, two or three digits
-        // all sit in the middle. It used to be a fixed four glyphs ("100%")
-        // with the word right-aligned in it, so that 9 -> 10 and 99 -> 100
-        // moved nothing, but that hung every ordinary reading off centre to
-        // the right for the sake of the one percent of a run that is 100.
+        // all sit in the middle. A fixed four-glyph zone ("100%") with the
+        // word right-aligned in it would move nothing on 9 -> 10 and 99 ->
+        // 100, but would hang every ordinary reading off centre to the right
+        // for the sake of the one percent of a run that is 100.
         // Needs five rows (a digit is five tall); with fewer, or no word, the
         // matrix is the plain bar.
         property string word: ""
@@ -8643,7 +8639,7 @@ ApplicationWindow {
         // True only while a press is folding this row's panel shut (the panel
         // below explains why it has to outlive the press). Cleared on recycle:
         // a delegate rebinding to another album must not carry a fold that
-        // belonged to the row it used to be.
+        // belonged to the row it just left.
         property bool folding: false
         onAlbumIdChanged: { sel = ({}); folding = false }
         readonly property var trackList: root.trackCache[albumId] || []
@@ -8687,7 +8683,7 @@ ApplicationWindow {
         }
         function downloadSelected() { for (var k in sel) waves.downloadTrack(k) }
 
-        // --- Row ---
+        // Row
         Rectangle {
             width: parent.width
             height: 64
@@ -8783,7 +8779,7 @@ ApplicationWindow {
             }
         }
 
-        // --- Expanded rich panel ---
+        // Expanded rich panel
         Rectangle {
             id: abPanel
             width: parent.width
@@ -8997,7 +8993,7 @@ ApplicationWindow {
             }
         }
 
-        // --- Row ---
+        // Row
         Rectangle {
             width: parent.width
             height: 64
@@ -9040,7 +9036,7 @@ ApplicationWindow {
             MouseArea { id: pbRowMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; z: -1; onClicked: toggle() }
         }
 
-        // --- Expanded rich panel ---
+        // Expanded rich panel
         Rectangle {
             id: pbPanel
             width: parent.width
@@ -9818,7 +9814,7 @@ ApplicationWindow {
         Item {
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.margins: 8; height: 16
-            // ---- preview: ▶ PREVIEW -> ■ + mono elapsed while active ----
+            // preview: ▶ PREVIEW -> ■ + mono elapsed while active
             Item {
                 id: bcPv
                 // Named so the fit guard can measure the two halves of this
@@ -9902,7 +9898,7 @@ ApplicationWindow {
                     onClicked: root.togglePreview(bc.kind, bc.card.id || "", 0)
                 }
             }
-            // ---- download: DOWNLOAD -> dot bar + fixed-width % -> ✓ DONE ----
+            // download: DOWNLOAD -> dot bar + fixed-width % -> ✓ DONE
             Item {
                 id: bcDlBox
                 anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
@@ -9917,9 +9913,9 @@ ApplicationWindow {
                 // and this box is anchored to the right edge, so an
                 // unreserved width would walk the control left and right as a
                 // scan lands. Reserve the two widest once, the same metric
-                // trick the full button's dbMetric rows use. The queued row
-                // used to be the widest thing here and did this by accident,
-                // until it gave up the media noun to fit the line.
+                // trick the full button's dbMetric rows use. The widest live
+                // word cannot do the job by itself: the queued row gives up
+                // the media noun to fit the line.
                 Text {
                     id: bcDlWordMetric
                     visible: false; textFormat: Text.PlainText; text: "DOWNLOAD"
@@ -10005,11 +10001,10 @@ ApplicationWindow {
     // as it climbs, then drops back out. The fade runs on its own short curve
     // so the overshoot never dims or flickers the control. `visible` follows
     // opacity, which gates the children's MouseAreas: a control on its way out
-    // can never swallow a click. Place it where the control used to be
-    // anchored and put the control inside.
+    // can never swallow a click. Place it where the control belongs and put
+    // the control inside.
     // Settings > Advanced > "Hover controls slide in". Off keeps the plain
-    // fade the controls used before the motion landed, for anyone who finds
-    // the movement distracting.
+    // fade instead, for anyone who finds the movement distracting.
     property bool hoverMotion: waves.wavesPref("hover_control_motion") !== false
     Connections {
         target: waves
@@ -10051,8 +10046,8 @@ ApplicationWindow {
     // short belt. The outgoing set leaves through the top exactly as the
     // incoming arrives from the bottom, while the pill itself stretches
     // between their two natural sizes and its fill and outline cross to the
-    // arriving control's. Replaces what used to be a bare `visible:` flip in
-    // both directions.
+    // arriving control's, instead of each side appearing and vanishing on a
+    // bare `visible:` flip.
     // Shape picked in scratchpad/pv_swap_lab.qml round 2 ("ROLL snap"): a
     // 16px belt over 230ms with NO overlap, so the swap reads as a flip
     // rather than a dissolve.
@@ -10506,11 +10501,11 @@ ApplicationWindow {
                 bar: true
                 width: parent.width
                 // A hero carries its own caption on the cover's bottom edge,
-                // so the strip STACKS above it instead of standing down. It
-                // used to stand down, which made the biggest card on the
-                // landing's first shelf the one card there that could not say
-                // what you already hold, the opposite of what that card is
-                // for. Nothing about the strip needs the very edge: it is a
+                // so the strip STACKS above it instead of standing down.
+                // Standing down would make the biggest card on the landing's
+                // first shelf the one card there that cannot say what you
+                // already hold, the opposite of what that card is for.
+                // Nothing about the strip needs the very edge: it is a
                 // gradient that melts into whatever is behind it, so it gets
                 // its floor wherever it is put.
                 anchors.bottom: ac.hero ? acHeroCap.top : parent.bottom
@@ -10544,7 +10539,7 @@ ApplicationWindow {
                 readonly property string acPvSt: root.pvSt(ac.kind, ac.card.id || "")
                 readonly property string acDlSt: root.dlSt(ac.card.id || "")
                 // A finished download is not a live control: it goes back to
-                // the split strip, whose download half now reads the checkmark
+                // the split strip, whose download half reads the checkmark
                 // and DOWNLOADED, so Preview stays one click away instead of
                 // being evicted by a full-width done pill for the session.
                 // Session state OR the ownership rollup: this session's done
@@ -11163,8 +11158,8 @@ ApplicationWindow {
             width: parent.width
             Repeater {
                 model: bsec.sec.rowKind === "tracks" ? bsec.sec.items : []
-                // Fixed-height shells, content windowed: a long playlist
-                // used to create every TrackRow in one synchronous pass,
+                // Fixed-height shells, content windowed: building every
+                // TrackRow of a long playlist in one synchronous pass costs
                 // 1.7s of frozen GUI per click (measured, budget 100ms).
                 // The shells give the column its full geometry in the
                 // assignment turn (so the scroll range and highlight
@@ -11179,7 +11174,7 @@ ApplicationWindow {
                     required property int index
                     width: bsec.width; height: 62   // TrackRow's fixed height
                     readonly property bool hiRow: root.browseHighlightId !== "" && modelData.id === root.browseHighlightId
-                    // A screenful of rows, used to size the live window.
+                    // A screenful of rows: the live window's measure.
                     readonly property real rps: Math.max(1, bsec.pane.height / 62)
                     // Row 0 of THIS shelf, in the pane's scroll space, so the
                     // window is expressed in this shelf's own row indices.
@@ -11638,7 +11633,7 @@ ApplicationWindow {
         }
     }
 
-    // ---- Models ---------------------------------------------------------
+    // Models
     ListModel { id: artistsModel }
     ListModel { id: albumsModel }
     ListModel { id: tracksModel }
@@ -11677,7 +11672,7 @@ ApplicationWindow {
     // Every way out of the bulk-download confirm that is not "Download all".
     // The tick has to go with the dialog: left armed it re-opens pre-ticked for
     // a DIFFERENT category, and confirming that one silences the confirm for
-    // good, which only a full settings reset used to undo.
+    // good, which only a full settings reset can undo.
     function catDlDismiss() { catDlPrompt = null; cdSkip.checked = false }
     function openPlFolder(fid, title) {
         var st = plFolderStack.slice()
@@ -11788,7 +11783,7 @@ ApplicationWindow {
         }
         // A row that has left the queue takes its per-qid state with it: the
         // expanded track list AND the expansion flag itself. Live ticks update
-        // queueTracks in place now, but an entry outliving its row is still a
+        // queueTracks in place, but an entry outliving its row is still a
         // leak a session of finished albums would grow forever; queueExpanded
         // is the same row's state. One copy of each for the whole sweep (drops
         // are rare), not one per row.
@@ -11862,7 +11857,7 @@ ApplicationWindow {
         root.activeQueueCount = a
     }
 
-    // ---- delta bookkeeping --------------------------------------------------
+    // delta bookkeeping
     // The bridge reports what changed (rows added, rows whose fields moved,
     // rows gone) and these apply it in place: the cost is the rows named,
     // never a walk of the model. queueChanged (the whole queue) still lands
@@ -12054,11 +12049,12 @@ ApplicationWindow {
     }
 
     // The linger clock: finished rows fold into Completed on a wall clock
-    // (doneAt + 5s), whether or not the queue drawer is open. The per-row
-    // delegate used to own this timing, so with the drawer closed nothing
-    // ever moved, and opening it after a big batch animated every row at
-    // once. Rows on screen still get the leaving fade first; with the drawer
-    // closed the promotion is silent (there is nothing to animate).
+    // (doneAt + 5s), whether or not the queue drawer is open. Pinning this
+    // timing to the per-row delegate would stop it with the drawer closed
+    // (no delegate is there to run it), and opening the drawer after a big
+    // batch would animate every row at once. Rows on screen still get the
+    // leaving fade first; with the drawer closed the promotion is silent
+    // (there is nothing to animate).
     Timer {
         id: lingerClock
         interval: 1000; repeat: true; running: root.lingerCount > 0
@@ -12160,7 +12156,7 @@ ApplicationWindow {
         if (media) root.artistsById = m
     }
 
-    // ---- My Tidal: model routing + infinite-scroll prefetch ----------------
+    // My Tidal: model routing + infinite-scroll prefetch
     function libModelFor(cat) {
         return cat === "albums" ? libAlbumsModel : cat === "tracks" ? libTracksModel
              : cat === "artists" ? libArtistsModel : cat === "playlists" ? libPlaylistsModel
@@ -12174,7 +12170,7 @@ ApplicationWindow {
              : cat === "artists" ? libArtistsGrid : cat === "playlists" ? libPlaylistsList
              : cat === "mixes" ? libMixesList : cat === "videos" ? libVideosList : null
     }
-    // ---- My Tidal sort (per category) --------------------------------------
+    // My Tidal sort (per category)
     // Options adapt to the category; every category shares a "Recently added"
     // default so it matches the backend's default order with no extra fetch.
     function libSortOptions(cat) {
@@ -12379,11 +12375,11 @@ ApplicationWindow {
             root.browseLoading = false
             // The handover is the reveal itself: the wordmark zooming out and
             // the interface fading up over ~1.4s. bootOverlay.done is still
-            // false throughout, so a revalidate landing in that window took the
-            // fresh-build path, raised the veil and blanked the landing under
-            // the fade. That is precisely the "watched the page assemble
-            // itself" symptom the launch hold exists to prevent, newly
-            // reachable since the second build became asynchronous.
+            // false throughout, so a revalidate landing in that window would
+            // take the fresh-build path, raise the veil and blank the landing
+            // under the fade. That is precisely the "watched the page assemble
+            // itself" symptom the launch hold exists to prevent, and it is
+            // reachable because the second build runs asynchronously.
             // Park it and apply it on the other side, where it is an ordinary
             // in-place refresh. Only a landing that already has content can
             // wait: a first build has nothing to reveal and must go through.
@@ -12709,7 +12705,7 @@ ApplicationWindow {
             var i = root.queueRowIndexOf(qid)
             if (i >= 0) queueModel.setProperty(i, "progress", pct)
         }
-        // ---- queue-row album expansion: per-track snapshot + live updates ----
+        // queue-row album expansion: per-track snapshot + live updates
         // These three land per track EVENT (state changes, and a pct batch
         // twice a second while an album downloads), so the map is updated in
         // place with an explicit change signal: cloning the whole map per
@@ -12833,7 +12829,7 @@ ApplicationWindow {
         opacity: root.uiShown > 0 ? root.uiShown : (root.bootWarming ? 0.004 : 0)
         enabled: root.uiShown > 0
 
-        // ---- Header -----------------------------------------------------
+        // Header
         // The top bar and the search controls share one surface: the panel
         // grows downward to reveal the search tier when on a page that uses it,
         // rather than a separate strip butted against the bar. The hairline
@@ -12920,7 +12916,7 @@ ApplicationWindow {
                 }
             }
 
-            // ---- Search tier: shares the bar's surface and slides down out of
+            // Search tier: shares the bar's surface and slides down out of
             // it on Search / artist pages; collapses up on Settings / My Tidal. ----
             Item {
                 id: searchTier
@@ -12944,7 +12940,7 @@ ApplicationWindow {
                     opacity: searchTier.shown ? 1 : 0
                     Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutQuad } }
 
-                    // ---- Search + sort ---------------------------------------------
+                    // Search + sort
                     RowLayout {
                         Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 10; spacing: 10
                         enabled: root.signedIn || root.appleEnabled
@@ -13023,10 +13019,10 @@ ApplicationWindow {
                                     // backend filter swallows WindowActivate/Deactivate (the
                                     // app-switch freeze fix), so the scene keeps its focus item
                                     // across a switch and the click that brings Waves back never
-                                    // replays the transition above: the term sat unselected until
-                                    // a click away and back. Ride the window's active flag (a
+                                    // replays the transition above: the term would sit unselected
+                                    // until a click away and back. Ride the window's active flag (a
                                     // QWindow signal the swallow does not touch) to fire the same
-                                    // deferred select-all the swallowed event used to produce.
+                                    // deferred select-all a real focus transition produces.
                                     readonly property bool appActive: root.active
                                     onAppActiveChanged: if (appActive && activeFocus) Qt.callLater(function() { searchField.selectAll() })
                                     // A standard paste (a multi-char jump typing can't produce) is
@@ -13123,13 +13119,13 @@ ApplicationWindow {
                             }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.sortAsc = !root.sortAsc; waves.setWavesPref("search_sort_asc", root.sortAsc); root.applySort() } }
                         }
-                        // The audio-quality picker that used to sit here was a duplicate of
-                        // the Quality setting in Settings; it set the same value but never
-                        // filtered results. Results are now capped to the Settings quality,
-                        // so the redundant control is gone.
+                        // No audio-quality picker here: one would duplicate the Quality
+                        // setting in Settings, setting the same value but never filtering
+                        // results. Results are capped to the Settings quality, so a control
+                        // here has nothing left to say.
                     }
 
-                    // ---- Type chips -------------------------------------------------
+                    // Type chips
                     // Hidden until a search returns results; the chips then cascade
                     // in (staggered fade + downward settle) as the bar grows down.
                     RowLayout {
@@ -13192,7 +13188,7 @@ ApplicationWindow {
             }                     // Item searchTier
         }                         // Rectangle consoleHeader
 
-        // ---- Browse page (TIDAL editorial: new / top / genres / moods / decades)
+        // Browse page (TIDAL editorial: new / top / genres / moods / decades)
         // Sub-page crumb trail, pinned above the scroll area so the way back
         // is always reachable without scrolling to the top (mirrors the
         // artist page): the whole navHistory as pills, current page lit.
@@ -13355,7 +13351,7 @@ ApplicationWindow {
                     // each shelf's delegate tree then incubates across
                     // frames, so the nav-tab strike animation keeps its
                     // frames instead of freezing for the ~250 ms a
-                    // synchronous build of every shelf used to take.
+                    // synchronous build of every shelf would take.
                     Repeater {
                         model: root.browseSections
                         delegate: Loader {
@@ -13778,7 +13774,7 @@ ApplicationWindow {
         }
 
 
-        // ---- Search results --------------------------------------------
+        // Search results
         Flickable {
             id: results
             // Breathing space inside the scroll area (contentCol y), not as
@@ -13994,13 +13990,13 @@ ApplicationWindow {
                 }
                 // Expanded (SHOW ALL) or the Artists filter: the fill grid. Cards
                 // stretch edge-to-edge and the column count snaps at whole-column
-                // boundaries. A resize here re-fits the cards (the previous
-                // method), which the user opts into by expanding; the results
-                // Flickable anchors its scroll (see _resizeRatio) so the page
-                // below does not jump. The column count is how many 190px
-                // cards FIT the width, never clamped to how many artists there
-                // are: a two-artist result used to get two half-window cards,
-                // posters so tall their buttons sat below the fold.
+                // boundaries. A resize here re-fits the cards, which the user
+                // opts into by expanding; the results Flickable anchors its
+                // scroll (see _resizeRatio) so the page below does not jump.
+                // The column count is how many 190px cards FIT the width, never
+                // clamped to how many artists there are: clamping to two would
+                // give two half-window cards, posters so tall their buttons
+                // sat below the fold.
                 Flow {
                     id: artistFlow
                     visible: !root.tidalSearchGroupCollapsed && !root.searchArtistsStripMode && root.sectionVisible("artists", artistsModel.count)
@@ -14229,7 +14225,7 @@ ApplicationWindow {
                 }
 
                 // Apple catalog rows open full pages and preview 30-second clips
-                // like TIDAL rows; downloads ride the setup wizard (issue 28).
+                // like TIDAL rows; downloads ride the setup wizard.
                 SectionHeader {
                     id: appleArtistsHead
                     opacity: root.searchReveal
@@ -14354,7 +14350,7 @@ ApplicationWindow {
             }
         }
 
-        // ---- Artist page -----------------------------------------------
+        // Artist page
         ColumnLayout {
             id: artistPane
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.topMargin: 8
@@ -14388,9 +14384,10 @@ ApplicationWindow {
                 contentWidth: width; contentHeight: realContentH + restorePad
                 ScrollBar.vertical: ScrollBar {}
                 boundsBehavior: Flickable.StopAtBounds
-                // A fresh artist page starts at the top (it used to inherit the
-                // previous artist's scroll offset); a Back that arms a restore
-                // lands on the saved spot instead. Same pre-paint mechanism as
+                // A fresh artist page starts at the top; inheriting the previous
+                // artist's scroll offset would open it part way down. A Back
+                // that arms a restore lands on the saved spot instead. Same
+                // pre-paint mechanism as
                 // BrowseScroll: the restore is tagged with the artist id it
                 // belongs to and applied on the id change and during layout
                 // (onContentHeightChanged), before the frame paints, so Back
@@ -14680,7 +14677,7 @@ ApplicationWindow {
             }
         }
 
-        // ---- Settings page ---------------------------------------------
+        // Settings page
         SettingsPage {
             id: settingsPage
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.topMargin: 8
@@ -14692,7 +14689,7 @@ ApplicationWindow {
             onFactoryResetRequested: root.confirmFactoryReset = true
         }
 
-        // ---- Library page ----------------------------------------------
+        // Library page
         ColumnLayout {
             id: libraryPane
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.topMargin: 8
@@ -14916,7 +14913,7 @@ ApplicationWindow {
                                 }
                             }
                             MouseArea { id: agMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: waves.loadArtistLibrary(model.id) }
-                            // ---- compact preview row (the Browse card's control
+                            // compact preview row (the Browse card's control
                             // line, shrunk): ▶ PREVIEW -> elapsed + · STOP, playing
                             // this artist's top track via the shared preview
                             // machinery. Declared after agMa so its clicks win
@@ -15222,7 +15219,7 @@ ApplicationWindow {
             }
         }
 
-        // ---- Status bar -------------------------------------------------
+        // Status bar
         Rectangle {
             id: statusBar
             Layout.fillWidth: true; implicitHeight: 28; color: root.surface0
@@ -15696,11 +15693,11 @@ ApplicationWindow {
     // section that has the data: albums, tracks and videos all follow it.
     // Artists, playlists and mixes carry no date to sort by and stay in the
     // API's relevance order.
-    // Relevance is TIDAL's own order, kept as it arrived. It used to mean
-    // "popularity, most first", which buried exactly the result a specific
+    // Relevance is TIDAL's own order, kept as it arrived. Reading it as
+    // "popularity, most first" would bury exactly the result a specific
     // search is after: a single released this week has a popularity of 0
-    // and sat under every older track that shared one word with the query,
-    // while TIDAL had ranked it first. Popularity is its own option now.
+    // and sits under every older track that shares one word with the query,
+    // while TIDAL ranks it first. Popularity is its own option.
     function applySort(inPlace) {
         var dir = root.sortAsc ? 1 : -1
         function ordered(raw, hasPop) {
@@ -15890,8 +15887,8 @@ ApplicationWindow {
                     // an ordered per-track list (live status/progress). The
                     // per-track registry behind it is kept for every collection
                     // job, and loadQueueTracks orders it by the collection's
-                    // own list; this used to be gated to albums alone, so a
-                    // playlist or mix row had no ledger and no hover peek.
+                    // own list; gating this to albums alone would leave a
+                    // playlist or mix row with no ledger and no hover peek.
                     // Expansion state lives on root (keyed by qid) so it
                     // survives delegate recycling.
                     readonly property bool expandable: model.collection === true
@@ -15931,13 +15928,13 @@ ApplicationWindow {
                     // ledger itemizes it.
                     //
                     // Both of these come off the ROW, rolled up by the bridge
-                    // from the registry it keeps for every job. They used to be
-                    // computed here from root.queueTracks[qid], which is filled
-                    // by loadQueueTracks: a network fetch, so it only runs when
-                    // the user expands the row. A row nobody opened therefore
-                    // went on advertising the tier it had ASKED for and could
-                    // never say MIXED, which is precisely the row that needed
-                    // to, since nobody was looking at its ledger.
+                    // from the registry it keeps for every job. Computing them
+                    // here from root.queueTracks[qid] would depend on
+                    // loadQueueTracks, a network fetch that only runs when the
+                    // user expands the row: a row nobody opened would go on
+                    // advertising the tier it had ASKED for and could never
+                    // say MIXED, which is precisely the row that needed to,
+                    // since nobody was looking at its ledger.
                     readonly property var tierMix: JSON.parse(model.mixJson || "[]")
                     // The one tier they all landed at. It outranks the asked-for
                     // tier the moment the first track reports: a release with no
@@ -15970,7 +15967,7 @@ ApplicationWindow {
                     // closed drawer never folded anything.
                     onStChanged: if (qrow.lingering) chipPop.restart()
 
-                    // ---- queue card (Completed rows use the same card as
+                    // queue card (Completed rows use the same card as
                     // Downloading/Queued, art thumb, caret, hover peek and
                     // expand included, just in the quieter completed palette) ----
                     Rectangle {
@@ -16137,8 +16134,7 @@ ApplicationWindow {
                                 // The slot is the bar's own height: four rows of
                                 // 3px cells with 1px gaps (15px), the same dense
                                 // grid as the download button's running face
-                                // (queue progress lab, 2026-08-17; it was two
-                                // rows of 4px cells with 4px gaps in 12px).
+                                // (queue progress lab, 2026-08-17).
                                 Layout.preferredHeight: qrow.st === "running" ? 15 : 0
                                 opacity: qrow.st === "running" ? 1 : 0
                                 clip: true
@@ -16182,7 +16178,7 @@ ApplicationWindow {
                                     }
                                 }
                             }
-                            // ---- expanded per-track list (album order, live state) ----
+                            // expanded per-track list (album order, live state)
                             // Hovering a collapsed album card "peeks" the top of this
                             // list, the card bottom bounces down just far enough to
                             // show the track view exists, and retracts on hover-out.
@@ -16471,7 +16467,7 @@ ApplicationWindow {
             }
         }
 
-        // ---- Drag the drawer wider by its own edge ----------------------
+        // Drag the drawer wider by its own edge
         // The handle IS the border, never a bar beside it. `parent` here is the
         // Popup's own content item, which sits at leftPadding (the background's
         // 1px border), so undoing exactly that puts x=0 on the border line.
@@ -17871,7 +17867,7 @@ ApplicationWindow {
     // record of downloading it) stays clickable, and lands here.
     //
     // WHY THIS EXISTS: the match is inferred from tags, so it can be wrong,
-    // and a wrong one used to be silent and terminal: a button that says
+    // and a wrong one must never be silent and terminal: a button that says
     // DOWNLOADED, does nothing, and explains nothing. This says what was
     // matched, shows where it is so the user can judge for themselves, and
     // keeps DOWNLOAD ANYWAY one click away. Nothing is remembered, because
@@ -18289,7 +18285,7 @@ ApplicationWindow {
             onTriggered: { if (!bootOverlay.started) { bootOverlay.started = true; bootSeq.start() } }
         }
 
-        // ---- handover gate ------------------------------------------------
+        // handover gate
         // Covering the Browse landing's assembly is the whole point of this
         // sequence, so the opening frame holds until the shelves have finished
         // incubating. Without the gate the overlay lifted on its own schedule
@@ -18297,8 +18293,8 @@ ApplicationWindow {
         // scrolling itself (reported from livetesting). Capped, so a stalled
         // or endless build can never pin the launch screen. Everything that
         // signals the handover (the version drain, then the zoom) lives in
-        // bootHandover, downstream of this gate, so their timing together is
-        // exactly what it was before the gate existed.
+        // bootHandover, downstream of this gate, so with respect to each
+        // other their timing is exactly what it would be with no gate at all.
         property bool handoverHeld: false
         function handover() {
             if (done) return
@@ -18322,9 +18318,9 @@ ApplicationWindow {
                 return
             }
             // Third leg: the incubation controller's own count. Boot-paced
-            // incubation (app.py's _BootPacedIncubation, added because the
-            // full-speed build froze the boot water for ~300 ms stretches)
-            // completes the landing's CARD loaders after the veil count has
+            // incubation (app.py's _BootPacedIncubation, which paces the
+            // landing build so it cannot freeze the boot water for ~300 ms
+            // stretches) completes the landing's CARD loaders after the veil count has
             // already settled, so browseBuilding alone no longer promises a
             // finished page. The controller's count covers everything still
             // assembling, but one reading of it decides nothing: it blips to
@@ -18334,8 +18330,8 @@ ApplicationWindow {
             // handler, after the engine has already dropped that loader from
             // the count and before the shelves' card loaders exist to join it,
             // so a zero at this instant is exactly what a page that has not
-            // begun its cards looks like: the leg used to read it and reveal
-            // onto the cards popping in. So the count is not read on this path
+            // begun its cards looks like: reading it here would reveal onto
+            // the cards popping in. So the count is not read on this path
             // at all. The hold is taken, and only the poll below, quiet on two
             // readings in a row, can lift it; the cap the other legs answer to
             // ends the hold regardless of what the count ever says.
@@ -18387,7 +18383,7 @@ ApplicationWindow {
             onTriggered: { expired = true; bootOverlay.handover() }
         }
 
-        // ---- the wordmark (typography as in WelcomeBanner) ----------------
+        // the wordmark (typography as in WelcomeBanner)
         Item {
             id: bootTitle
             property real shown: 0   // faded up by bootIntro
@@ -18432,7 +18428,7 @@ ApplicationWindow {
             }
         }
 
-        // ---- version readout: read once at launch (set and forget) --------
+        // version readout: read once at launch (set and forget)
         // Outside bootTitle so it never scales with the zoom; tucked at the
         // bottom-right of the wordmark with slight padding.
         Text {
@@ -18480,10 +18476,10 @@ ApplicationWindow {
                 }
                 bootVer.text = out
                 // The zoom starts HERE, welded to the walk actually finishing.
-                // It used to run after a wall-clock pause sized to runMs, but
-                // these ticks ride the GUI thread: any boot work (the landing
-                // assembling) slips them, and the readout was still draining
-                // while the interface faded up underneath (reported from
+                // A wall-clock pause sized to runMs cannot hold: these ticks
+                // ride the GUI thread, so any boot work (the landing
+                // assembling) slips them, leaving the readout still draining
+                // while the interface fades up underneath (reported from
                 // livetesting). The drain's own last tick can never be early
                 // or late relative to itself.
                 if (tick > 3 * m) { stop(); tick = 0; bootVer.shown = 0; bootZoom.start() }

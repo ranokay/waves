@@ -485,7 +485,6 @@ class HelpSettings:
         "stereo, or both versions side by side where a track offers the choice. "
         "Atmos on its own stays a per-click choice in the Chooser."
     )
-    # TODO: Describe possible variables.
     format_album: str = "Where to download albums and how to name the items."
     format_playlist: str = (
         "Where to download playlists and how to name the items. {folder_path} mirrors the "

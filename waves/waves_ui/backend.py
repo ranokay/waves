@@ -1562,7 +1562,9 @@ def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int
     against a tier it can never be granted, and stale means force: re-fetch and
     overwrite the identical file on every download while the button never
     leaves DOWNLOAD. An Atmos copy is therefore current for a job that would
-    fetch Atmos, full stop; Redownload is the way to ask for it again.
+    fetch Atmos, full stop: the request tier is a constant this app cannot
+    raise, and a change in TIDAL's own answer is not something an ownership
+    gate can see, so Redownload is the way to ask again.
 
     Turning Atmos on does not make an owned stereo copy read as stale: a track
     can hold Atmos and stereo copies at once (different codecs and extensions,
@@ -1582,11 +1584,11 @@ def _copy_is_current(rec, target_rank: int, wants_atmos: bool, ceiling_rank: int
     when unknown, never a guess): a known ceiling caps the target, so owning
     the best that exists counts as current. A copy served by a run that
     already ASKED at this target or better counts as current even without a
-    live ceiling, unless the advertised ceiling has risen past the run's own
-    stored ceiling, in which case a genuinely better master exists and the
-    upgrade reopens. That clause lets a ceiling-blind caller (ownershipOf
-    holds only an id) settle off the stored ranks instead of flashing an
-    upgrade forever.
+    live ceiling, unless the advertised ceiling has risen past the record's
+    stored ``ceiling_rank``, in which case a genuinely better master exists
+    and the upgrade reopens. That clause lets a ceiling-blind caller
+    (ownershipOf holds only an id) settle off the stored ``requested_rank``
+    and ``ceiling_rank`` instead of flashing an upgrade forever.
 
     A DEGRADED delivery — asked high enough, served below the ceiling its run
     saw — must never settle on the request alone, or the copy freezes as
@@ -5955,7 +5957,7 @@ class WavesBridge(LibraryMixin, QObject):
                 with ThreadPoolExecutor(max_workers=min(_POP_WORKERS, len(artist_objs))) as pool:
                     list(pool.map(_enrich, artist_objs))
                 if total and gen == self._search_gen:
-                    self._save_page_cache()  # the meters are in the snapshot
+                    self._save_page_cache()
 
         self.threadpool.start(Worker(work))
 
