@@ -13,16 +13,16 @@ not load refuses the whole set instead of queueing a truncated one.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
+from support.paths import QML_MAIN
 from tidalapi.album import Album
 from tidalapi.media import AudioMode, Quality, Track, Video
 
 from waves.waves_ui.backend import _PLAYLIST_ALBUMS_GROUP_PREFIX, WavesBridge
 
-QML = (Path(__file__).parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml").read_text(encoding="utf-8")
+QML = QML_MAIN.read_text(encoding="utf-8")
 ATMOS = AudioMode.dolby_atmos.value
 
 
