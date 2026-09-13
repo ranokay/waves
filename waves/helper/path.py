@@ -12,6 +12,7 @@ import unicodedata
 from collections.abc import Callable, Collection
 from copy import deepcopy
 from urllib.parse import unquote, urlsplit
+from uuid import uuid4
 
 from pathvalidate import sanitize_filename, sanitize_filepath
 from pathvalidate.error import ErrorReason, ValidationError
@@ -1320,6 +1321,64 @@ def truncate_to_byte_limit(value: str, limit_bytes: int) -> str:
         result = result[:-1]
 
     return result
+
+
+# The characters a staging sibling adds around the destination's own name: a
+# leading dot, a dot-separated uuid4 (36) and the ".tmp" suffix.
+STAGING_NAME_OVERHEAD: int = len(f"..{uuid4()}.tmp")
+
+
+def staging_path(path_destination: pathlib.Path) -> pathlib.Path:
+    """The hidden temp sibling a destination is copied through before the swap.
+
+    The staging decoration (dot prefix, uuid, ".tmp") adds 42 characters to a
+    destination name that is itself allowed to reach the filesystem's 255 cap,
+    so a long track name would make every stage attempt raise ENAMETOOLONG
+    deterministically (all retries fail the same way). Truncate the readable
+    part; the uuid alone carries the uniqueness.
+
+    The cap is bytes, not characters. Counting characters passed a name in CJK,
+    Cyrillic or emoji straight through at three or four bytes each, so the very
+    names most likely to be long were the ones that failed.
+
+    The WHOLE staging path is capped as well, not just its name. The sanitizer
+    bounds the final path against the platform limit (260 on Windows), but the
+    staging decoration adds 42 more characters that were never budgeted: a
+    final path that fit by less than that put every staging attempt past
+    MAX_PATH, Windows answered "no such file or directory", and the
+    longest-named tracks of an album failed every retry identically. The final
+    name is untouched either way; only the throwaway readable part of the
+    staging name shrinks, down to nothing if the parent is deep enough.
+
+    Args:
+        path_destination (pathlib.Path): The final destination path.
+
+    Returns:
+        pathlib.Path: A fresh staging path beside the destination.
+    """
+    budget_name: int = FILENAME_LENGTH_MAX - STAGING_NAME_OVERHEAD
+    budget_path: int = (
+        PATH_LENGTH_MAX
+        - len(os.fsencode(str(path_destination.parent)))
+        - 1  # the separator between parent and name
+        - STAGING_NAME_OVERHEAD
+    )
+    base_name: str = truncate_to_byte_limit(path_destination.name, max(0, min(budget_name, budget_path)))
+    unique: str = str(uuid4())
+
+    # A parent so deep that even a bare ".<uuid>.tmp" overflows the cap: the
+    # readable part is already gone, so the unique part gives ground too, as
+    # far as the cap actually leaves room for. Ten hex characters whatever the
+    # arithmetic says would still be over the cap for parents in the last ten
+    # characters before it: every staging attempt fails identically while the
+    # destination itself fits. One character is the floor, because a name with
+    # nothing unique in it is shared by every track in the folder; at the very
+    # deepest parent the sanitizer can reach, that one character is what the
+    # cap still leaves for uniqueness.
+    if not base_name and budget_path < 0:
+        unique = unique.replace("-", "")[: max(1, len(unique.replace("-", "")) + budget_path)]
+
+    return path_destination.with_name(f".{base_name}.{unique}.tmp")
 
 
 def name_comparison_key(value: str) -> str:

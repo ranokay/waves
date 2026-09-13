@@ -15,8 +15,9 @@ import pathlib
 
 import pytest
 
-import waves.download as download_module
-from waves.download import _STAGING_NAME_OVERHEAD, _staging_path
+import waves.helper.path as path_module
+from waves.helper.path import STAGING_NAME_OVERHEAD
+from waves.helper.path import staging_path as _staging_path
 
 # The album from the report, respelled with POSIX separators so the length
 # arithmetic is the same on the test machine as on the reporter's Windows box.
@@ -38,7 +39,7 @@ def _path_bytes(path_file: pathlib.Path) -> int:
 class TestTheReportedAlbumStagesWithinTheWindowsCap:
     @pytest.fixture(autouse=True)
     def _windows_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(download_module, "_PATH_LENGTH_MAX", 259)
+        monkeypatch.setattr(path_module, "PATH_LENGTH_MAX", 259)
 
     def test_the_final_path_fits_while_the_undecorated_staging_name_did_not(self):
         destination = ALBUM_DIR / TRACK_NAME
@@ -73,7 +74,7 @@ class TestTheReportedAlbumStagesWithinTheWindowsCap:
 
         assert staged.name.startswith(".")
         assert staged.name.endswith(".tmp")
-        assert len(staged.name) < _STAGING_NAME_OVERHEAD, "the uuid gave ground to the parent"
+        assert len(staged.name) < STAGING_NAME_OVERHEAD, "the uuid gave ground to the parent"
         assert _path_bytes(staged) <= 259, "the whole staging path fits the cap the destination fit"
         assert _staging_path(destination) != _staging_path(destination), "still unique"
 

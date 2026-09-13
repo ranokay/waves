@@ -13,8 +13,8 @@ import pathlib
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import waves.download as download_module
-from waves.download import Download, _staging_path
+from waves.download import Download
+from waves.helper import path as path_module
 from waves.helper.folders import apply_folder_path
 from waves.helper.path import (
     PATH_LENGTH_MAX,
@@ -22,6 +22,7 @@ from waves.helper.path import (
     path_file_uniquify,
     unique_variant_name,
 )
+from waves.helper.path import staging_path as _staging_path
 
 
 def _path_bytes(p: pathlib.Path) -> int:
@@ -264,7 +265,7 @@ class TestStagingSurvivesAParentNearTheCap:
     even with the readable part already gone: the uuid gives ground now."""
 
     def test_deep_parent_staging_path_fits(self, monkeypatch):
-        monkeypatch.setattr(download_module, "_PATH_LENGTH_MAX", 259)
+        monkeypatch.setattr(path_module, "PATH_LENGTH_MAX", 259)
         destination = pathlib.Path("/" + "a" * 240) / "Song.flac"
         assert _path_bytes(destination) <= 259
 
