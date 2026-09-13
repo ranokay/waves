@@ -99,3 +99,43 @@ def isolated_settings_migrations(tmp_path, monkeypatch):
     from waves import config
 
     monkeypatch.setattr(config, "_migrations_state_path", lambda: tmp_path / "settings-migrations.json")
+
+
+# ---------------------------------------------------------------------------
+# Markers and the GUI-required run
+# ---------------------------------------------------------------------------
+
+
+def pytest_addoption(parser) -> None:
+    """The GUI-required run's switch: skips become failures."""
+    parser.addoption(
+        "--require-qml",
+        action="store_true",
+        default=False,
+        help="fail instead of skipping when QML scenarios cannot run (GUI-required)",
+    )
+
+
+def pytest_configure(config) -> None:
+    """Record --require-qml and refuse to run it without PySide6."""
+    from support import qml as qml_support
+
+    qml_support.set_require_qml(config.getoption("require_qml"))
+    if qml_support.require_qml() and qml_support.missing_qt():
+        raise pytest.UsageError("--require-qml was given but PySide6 is not importable")
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    """Auto-skip marked tests only for a positively missing dependency."""
+    from support import qml as qml_support
+
+    if shutil.which("ffmpeg") is None:
+        skip_ffmpeg = pytest.mark.skip(reason="ffmpeg is not on PATH")
+        for item in items:
+            if item.get_closest_marker("ffmpeg"):
+                item.add_marker(skip_ffmpeg)
+    if qml_support.missing_qt() and not qml_support.require_qml():
+        skip_qml = pytest.mark.skip(reason="PySide6 is not importable")
+        for item in items:
+            if item.get_closest_marker("qml"):
+                item.add_marker(skip_qml)

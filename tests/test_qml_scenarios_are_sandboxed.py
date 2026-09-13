@@ -17,10 +17,11 @@ disabled in this test" traceback was written into it as an app ERROR.
 
 HOW THIS STAYS FIXED
 --------------------
-Every test module that constructs a bridge behind a QML engine must hand
-its subprocess an ``XDG_CONFIG_HOME`` of its own. ``path_config_base()``
-honours that variable first on every platform, so a scenario given one
-can only ever touch a temporary directory.
+Every test module that constructs a bridge behind a QML engine either runs
+its child through ``support.qml.run_scenario`` (which hands it a private
+``XDG_CONFIG_HOME``) or sets that variable on its own subprocess env.
+``path_config_base()`` honours the variable first on every platform, so a
+scenario given one can only ever touch a temporary directory.
 """
 
 from __future__ import annotations
@@ -32,16 +33,19 @@ TESTS_DIR = Path(__file__).resolve().parent
 
 def test_every_offscreen_bridge_scenario_sandboxes_its_config_dir():
     unsandboxed = []
-    for path in sorted(TESTS_DIR.glob("test_*.py")):
+    for path in sorted(TESTS_DIR.rglob("test_*.py")):
         src = path.read_text()
         builds_bridge = "WavesBridge(" in src and "QQmlApplicationEngine" in src
-        if builds_bridge and "XDG_CONFIG_HOME" not in src:
-            unsandboxed.append(path.name)
+        if not builds_bridge:
+            continue
+        runs_shared = "from support.qml import" in src and "run_scenario(" in src
+        if "XDG_CONFIG_HOME" not in src and not runs_shared:
+            unsandboxed.append(str(path.relative_to(TESTS_DIR)))
 
     assert not unsandboxed, (
         "these scenarios build a real WavesBridge without an XDG_CONFIG_HOME of "
         "their own, so they run against the packaged app's config dir: they adopt "
         "the user's settings, write into the user's log, and start a real scan of "
-        "the user's library. Give each one "
-        'env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-<name>-test-"): ' + ", ".join(unsandboxed)
+        "the user's library. Run them through support.qml.run_scenario (or set "
+        'env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-<name>-test-")): ' + ", ".join(unsandboxed)
     )

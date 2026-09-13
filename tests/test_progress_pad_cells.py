@@ -38,40 +38,27 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+from support.paths import QML_MAIN
+from support.qml import run_scenario
 
 _EXIT_OK = 0
 _EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
 _EXIT_PRECONDITION = 78
 
 
-def _run_in_subprocess(flag: str) -> tuple[int, str]:
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-pad-cells-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), flag],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=180,
+@pytest.mark.qml
+def test_the_first_percent_lights_where_the_fade_has_let_go():
+    run_scenario(
+        Path(__file__),
+        "--run-pad-scenario",
+        sandbox_prefix="waves-pad-cells-test-",
+        failure_message="the download face hides its opening percent again",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-16:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    return proc.returncode, tail
 
 
 def test_only_the_download_face_pads_its_edges():
@@ -90,11 +77,6 @@ def test_only_the_download_face_pads_its_edges():
     assert "padCols: 2; mirrorPads: true" in face, "the pads belong on the download face's matrix"
     assert "padRows" not in face, "the download face pads no rows (design Q's pad rows were reverted)"
     assert "edgeFadeW: 26; edgeFadeH: 8" in face, "the fade itself is unchanged (26 / 8)"
-
-
-def test_the_first_percent_lights_where_the_fade_has_let_go():
-    code, tail = _run_in_subprocess("--run-pad-scenario")
-    assert code == _EXIT_OK, f"the download face hides its opening percent again:\n{tail}"
 
 
 # ---------------------------------------------------------------------------

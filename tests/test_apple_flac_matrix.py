@@ -24,12 +24,10 @@ from waves.providers.apple import runner
 from waves.providers.base import AudioType, StreamInfo
 from waves.waves_ui.backend import WavesBridge
 
-needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-
 
 def _ffmpeg() -> str:
     path = shutil.which("ffmpeg")
-    assert path is not None  # guarded by needs_ffmpeg
+    assert path is not None  # guarded by the ffmpeg marker
     return path
 
 
@@ -525,7 +523,7 @@ def test_atmos_stays_m4a_even_under_the_all_scope(tmp_path, monkeypatch):
     assert delivered["path"].endswith(".m4a")
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_alac_converts_to_flac_by_default(tmp_path, monkeypatch):
     import waves.providers.apple.engine as engine
 
@@ -563,7 +561,7 @@ def test_alac_converts_to_flac_by_default(tmp_path, monkeypatch):
     assert pcm_src == pcm_out
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_aac_transcodes_to_flac_under_the_all_scope_without_promotion(tmp_path, monkeypatch):
     import waves.providers.apple.engine as engine
 
@@ -627,7 +625,7 @@ def test_conversion_encodes_flac_without_resampling(tmp_path, monkeypatch):
     assert "sample_rate" not in calls[-1] and "audio_bitrate" not in calls[-1] and "ar" not in calls[-1]
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_verify_runs_before_conversion(tmp_path, monkeypatch):
     import waves.providers.apple.engine as engine
 
@@ -664,7 +662,7 @@ def test_verify_runs_before_conversion(tmp_path, monkeypatch):
     assert delivered["path"].endswith(".flac")
 
 
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_carried_probe_answers_the_landed_tier_after_flac_conversion(tmp_path, monkeypatch):
     """A carried probe survives the FLAC step: no landed re-probe, and the
     converted file's own decode check stays the only decode."""

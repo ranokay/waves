@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+from support.paths import QML_MAIN
+from support.qml import run_scenario
 
 
 def _video(media_id: str) -> dict:
@@ -73,22 +68,16 @@ def _payload(grouped: bool) -> dict:
 
 def _scenario() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    try:
-        from PySide6.QtCore import QEventLoop, QTimer, QUrl
-        from PySide6.QtGui import QGuiApplication
-        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
-    except Exception:
-        return _EXIT_NO_QT
+    from PySide6.QtCore import QEventLoop, QTimer, QUrl
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
 
     app = QGuiApplication.instance() or QGuiApplication([])
-    try:
-        from _qml_offline import PARK_LOGIN_QML, patch_offline
+    from _qml_offline import PARK_LOGIN_QML, patch_offline
 
-        patch_offline()
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
-    except Exception:
-        return _EXIT_NO_QT
+    patch_offline()
+    from waves.waves_ui.app import _load_mono
+    from waves.waves_ui.backend import WavesBridge
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -97,7 +86,7 @@ def _scenario() -> int:
     engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
     if not engine.rootObjects():
-        return _EXIT_PRECONDITION
+        raise RuntimeError("Main.qml loaded no root object")
     root = engine.rootObjects()[0]
     root.setProperty("width", 1100)
     root.setProperty("height", 900)
@@ -170,22 +159,9 @@ def _scenario() -> int:
     return 0 if grouped_ok and filter_ok and expansion_ok and blank_ok and tidal_only_ok else 1
 
 
+@pytest.mark.qml
 def test_enabled_apple_search_renders_provider_groups_and_disabled_apple_keeps_the_old_page():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-apple-search-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip("could not load Main.qml in this environment")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    run_scenario(Path(__file__), "--run-scenario", timeout=120, sandbox_prefix="waves-apple-search-test-")
 
 
 if __name__ == "__main__" and "--run-scenario" in sys.argv:

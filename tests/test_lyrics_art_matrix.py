@@ -118,10 +118,7 @@ def test_apple_cover_url_clamps_to_5000():
     assert "5000x5000" in url
 
 
-needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-
-
-@needs_ffmpeg
+@pytest.mark.ffmpeg
 def test_tidal_standalone_art_converts_to_the_selected_format(tmp_path):
     """The standalone action never writes JPEG bytes into a .png (S08)."""
     from types import SimpleNamespace

@@ -51,20 +51,26 @@ installs process-global handlers that must not leak into the suite.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
-
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT as _EXIT_NO_QT,
+)
+from support.qml import (
+    EXIT_OK as _EXIT_OK,
+)
+from support.qml import (
+    EXIT_PRECONDITION as _EXIT_PRECONDITION,
+)
+from support.qml import (
+    EXIT_REGRESSED as _EXIT_REGRESSED,
+)
+from support.qml import (
+    run_scenario,
+)
 
 _ALBUM = json.dumps(
     {
@@ -91,36 +97,24 @@ _STEPS = (5, 9, 10, 42, 99, 100)
 _STEP_SETTLE_MS = 60
 
 
-def _run_in_subprocess(flag: str) -> tuple[int, str]:
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    # Sandboxed: this scenario builds a REAL WavesBridge, and a bridge that
-    # finds the packaged app's config dir adopts its settings, writes its log,
-    # and starts a real scan of the user's music library.
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-dot-matrix-width-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), flag],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    return proc.returncode, tail
-
-
+@pytest.mark.qml
 def test_progress_matrix_keeps_its_columns_as_the_readout_grows():
-    code, tail = _run_in_subprocess("--run-scenario")
-    assert code == _EXIT_OK, f"the progress matrix resizes mid-download again:\n{tail}"
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        sandbox_prefix="waves-dot-matrix-width-test-",
+        failure_message="the progress matrix resizes mid-download again",
+    )
 
 
+@pytest.mark.qml
 def test_browse_card_matrix_fits_from_its_first_frame():
-    code, tail = _run_in_subprocess("--run-card-scenario")
-    assert code == _EXIT_OK, f"the Browse card's progress bar opens with stale columns again:\n{tail}"
+    run_scenario(
+        Path(__file__),
+        "--run-card-scenario",
+        sandbox_prefix="waves-dot-matrix-width-test-",
+        failure_message="the Browse card's progress bar opens with stale columns again",
+    )
 
 
 # The button for our album, then the DotMatrix inside it. Both are found by
@@ -158,8 +152,8 @@ def _boot():
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
         from PySide6.QtQuick import QQuickWindow
-    except Exception as exc:  # pragma: no cover - environment guard
-        print(f"Qt unavailable: {exc}", file=sys.stderr)
+    except ImportError as exc:
+        print(f"PySide6 unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT
 
     from _qml_offline import PARK_LOGIN_QML, patch_offline
@@ -167,12 +161,8 @@ def _boot():
     patch_offline()  # BEFORE the bridge: its __init__ fires the sign-in check
 
     app = QGuiApplication.instance() or QGuiApplication([])
-    try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
-    except Exception as exc:  # pragma: no cover - environment guard
-        print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+    from waves.waves_ui.app import _load_mono
+    from waves.waves_ui.backend import WavesBridge
 
     # No library scan and no browse fetch: neither is what these scenarios
     # are about, and both reach outside the sandbox.
@@ -188,12 +178,10 @@ def _boot():
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
     roots = engine.rootObjects()
     if not roots:
-        print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        raise RuntimeError("Main.qml failed to load")
     root = roots[0]
     if not isinstance(root, QQuickWindow):
-        print("root object is not a window", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        raise TypeError("Main.qml's root object is not a window")
 
     def q(expr: str):
         ctx = QQmlEngine.contextForObject(root)

@@ -76,6 +76,12 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "qml: drives the real QML tree offscreen (needs PySide6; skipped without it)",
+  "ffmpeg: uses a real ffmpeg/ffprobe binary (skipped when none is on PATH)",
+  "integration: crosses a real process, disk store or service boundary (opt-in groups)",
+  "platform: behavior that depends on the host platform",
+]
 
 [tool.ruff]
 target-version = "py312"
