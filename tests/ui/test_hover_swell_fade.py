@@ -19,17 +19,20 @@ process-global handlers that must not leak into the rest of the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 # The designed durations, and the slack the measurement is allowed. Sampling is
 # coarse (a 5ms event-loop tick) and an offscreen frame clock is not exact, so
@@ -42,51 +45,35 @@ _OUT_CEILING = 420
 _SAMPLE_MS = 5
 _GIVE_UP_MS = 1500
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
-
+@pytest.mark.qml
 def test_hover_swell_fades_in_fast_and_out_slow():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-swell-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
+        sandbox_prefix="waves-swell-test-",
+        failure_message=f"the hover swell's fade durations are inverted (in should be ~{_IN_MS}ms, out ~{_OUT_MS}ms)",
     )
-    out = (proc.stdout + proc.stderr).strip()
-    measured = "\n".join(line for line in out.splitlines() if line.startswith("swell"))
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{out.splitlines()[-8:]}")
-    assert (
-        proc.returncode == _EXIT_OK
-    ), f"the hover swell's fade durations are inverted (in should be ~{_IN_MS}ms, out ~{_OUT_MS}ms):\n{measured}"
 
 
 def _run_scenario() -> int:
-    # THIS checkout's waves, not the venv's editable install.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -97,7 +84,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -124,10 +111,10 @@ def _run_scenario() -> int:
         )
     except RuntimeError as exc:
         print(f"could not instantiate HoverSwell: {exc}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if swell is None:
         print("HoverSwell probe came back null", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     def fade_ms(to_on: bool) -> float:
         """Wall-clock time for the opacity to finish travelling."""
@@ -152,8 +139,8 @@ def _run_scenario() -> int:
         f" out={out_ms:.0f}ms (designed {_OUT_MS}, must be {_OUT_FLOOR}..{_OUT_CEILING})",
         flush=True,
     )
-    return _EXIT_OK if ok_in and ok_out else _EXIT_REGRESSED
+    return EXIT_OK if ok_in and ok_out else EXIT_REGRESSED
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())

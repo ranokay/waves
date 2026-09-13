@@ -13,13 +13,14 @@ never collide with the discography button's bare artist id.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
+from support.paths import QML_MAIN
+
 from waves.waves_ui.backend import _ARTIST_VIDEO_PAGE, _VIDEOS_GROUP_PREFIX, WavesBridge
 
-QML = (Path(__file__).parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml").read_text(encoding="utf-8")
+QML = QML_MAIN.read_text(encoding="utf-8")
 
 
 class _Signal:
