@@ -16,7 +16,7 @@ every previewable card, whether or not anything was queued. It read worst
 while actually queued, when both halves were drawing text on top of each other.
 
 The fix is the one the art card's strip already makes (see acStrip's padFull /
-padMin / availW and tests/test_browse_strip_fits_the_card.py): the words give
+padMin / availW and tests/ui/test_browse_strip_fits_the_card.py): the words give
 way rather than overrun. The queued label drops the media noun the full button
 carries, because the card is already the noun, and the preview control stands
 its word down when what is left of the line will not hold it, keeping the
@@ -36,43 +36,31 @@ installs process-global handlers that must not leak into the suite.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
-
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 CARD_ID = "al-fit"
 
 
+@pytest.mark.qml
 def test_the_console_card_controls_never_overlap():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-card-line-fits-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=240,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-20:])
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, (
-        "the console browse card's preview control and download box collided on their shared "
-        f"control line. Scenario exit={proc.returncode}:\n{tail}"
+        sandbox_prefix="waves-card-line-fits-",
+        failure_message="the console browse card's preview control and download box collided on their shared control line.",
     )
 
 
@@ -116,21 +104,21 @@ _LINE_PROBE = (
 
 
 def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -141,7 +129,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", 1400)
     root.setProperty("height", 900)
@@ -183,10 +171,10 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
         first = {r["id"]: r for r in json.loads(q(_LINE_PROBE))}
     except Exception as exc:
         print(f"control-line probe failed: {exc}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if CARD_ID not in first:
         print(f"the console browse style built no card: {first}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     # An album card is previewable by construction, so a missing preview half
     # is the collision going unwatched, not a scenario that could not be set
     # up: fail on it rather than skipping, or renaming the control would
@@ -196,7 +184,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
             f"the card built no preview control to measure against: {first[CARD_ID]!r}",
             file=sys.stderr,
         )
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     bad: list[str] = []
 
@@ -273,14 +261,14 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     )
     if not q(squeeze):
         print("could not reach the card to squeeze it", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle(200)
     measure("queued download on a squeezed card")
     tight = json.loads(q(_LINE_PROBE))
     tight_pv = next((r["pvW"] for r in tight if r["id"] == CARD_ID), -1)
     if tight_pv < 0 or roomy_pv < 0:
         print(f"the squeezed card could not be measured ({roomy_pv} -> {tight_pv})", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if tight_pv >= roomy_pv:
         bad.append(
             f"squeezed card: the preview control never gave anything up ({roomy_pv} -> {tight_pv}), "
@@ -289,9 +277,9 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
 
     if bad:
         print("\n".join(bad), file=sys.stderr)
-        return _EXIT_REGRESSED
-    return _EXIT_OK
+        return EXIT_REGRESSED
+    return EXIT_OK
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())
