@@ -25,63 +25,49 @@ of the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0  # push recorded and Back landed in the folder
-_EXIT_REGRESSED = 1  # the guard swallowed the history push again
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
-
+@pytest.mark.qml
 def test_reopening_keyed_page_from_folder_pushes_history():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-folderback-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
+        sandbox_prefix="waves-folderback-test-",
+        failure_message="Back from a reopened playlist page skipped the folder again.",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert (
-        proc.returncode == _EXIT_OK
-    ), f"Back from a reopened playlist page skipped the folder again. Scenario exit={proc.returncode}:\n{tail}"
 
 
 def _run_scenario() -> int:
-    # THIS checkout's waves, not the venv's editable install: the scenario
-    # drives this tree's Main.qml against this tree's bridge (the folder slot
-    # only exists here while the branch is unmerged).
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -92,7 +78,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
 
     def q(expr: str):
@@ -117,7 +103,7 @@ def _run_scenario() -> int:
     settle()
     if q("browsePageKey") != "item:playlist:p1":
         print("precondition lost: browsePageKey did not survive the tab switch", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 2. Playlists -> a folder -> the SAME playlist again.
     q('loadLib("playlists")')
@@ -136,8 +122,8 @@ def _run_scenario() -> int:
     in_folder = bool(q("libraryOpen")) and q("plCurrentFolder") == "f1" and q("libraryCategory") == "playlists"
 
     print(f"pushed={pushed} backLabel={label!r} backInFolder={in_folder}", flush=True)
-    return _EXIT_OK if pushed == 1 and label == "My Tidal" and in_folder else _EXIT_REGRESSED
+    return EXIT_OK if pushed == 1 and label == "My Tidal" and in_folder else EXIT_REGRESSED
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())

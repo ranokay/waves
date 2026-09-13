@@ -24,19 +24,21 @@ that must not leak into the rest of the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_DUP_SELECTION = 1  # duplicate rows still share one checkbox
-_EXIT_STALE_EXPAND = 2  # a new search kept the old playlist expansion/cache
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+_DUP_SELECTION = 1  # duplicate rows still share one checkbox
+_STALE_EXPAND = 2  # a new search kept the old playlist expansion/cache
 
 _WIN_W, _WIN_H = 1180, 800
 
@@ -75,29 +77,15 @@ _ROWS = [
 ]
 
 
+@pytest.mark.qml
 def test_playlist_selection_is_per_row_and_a_new_search_clears_it():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-plsel-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=180,
+        sandbox_prefix="waves-plsel-test-",
+        failure_message="playlist selection scenario failed",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    if proc.returncode == _EXIT_DUP_SELECTION:
-        raise AssertionError(f"duplicate playlist rows share one selection key again:\n{tail}")
-    if proc.returncode == _EXIT_STALE_EXPAND:
-        raise AssertionError(f"a new search kept the previous playlist expansion/cache:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"playlist selection scenario failed:\n{tail}"
 
 
 def _results(tag: str) -> dict:
@@ -132,22 +120,22 @@ _PROBE = (
 
 
 def _run_scenario() -> int:  # (one exit per failed step, on purpose)
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     bridge = WavesBridge(tidal=None)
     engine = QQmlApplicationEngine()
@@ -158,7 +146,7 @@ def _run_scenario() -> int:  # (one exit per failed step, on purpose)
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", _WIN_W)
     root.setProperty("height", _WIN_H)
@@ -208,13 +196,13 @@ def _run_scenario() -> int:  # (one exit per failed step, on purpose)
     bridge.searchResults.emit(_results("one"))
     if not pump(lambda: not q("searchBuilding")):
         print("first search never finished building", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     q("root.searchPlaylistsExpanded = true")
     q("root.searchReveal = 1")
     settle(500)
     if probe("onepl", "return 1;") != 1:
         print("no PlaylistBlock rendered for the search payload", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 2. Expand it and deliver a track list holding the same track twice.
     # The expand state is set directly rather than through pb.toggle(): toggle
@@ -228,19 +216,21 @@ def _run_scenario() -> int:  # (one exit per failed step, on purpose)
     settle(300)
     if probe("onepl", "return pb.trackList.length;") != len(_ROWS):
         print("delivered rows did not reach the block", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 3. Select all: every ROW counts, including the repeated track.
     n = probe("onepl", "pb.toggleAll(); return pb.selCount;")
     all_on = probe("onepl", "return pb.allSelected ? 1 : 0;")
     if n != len(_ROWS) or all_on != 1:
         print(f"Select all picked {n} of {len(_ROWS)} rows (allSelected={all_on})", file=sys.stderr)
-        return _EXIT_DUP_SELECTION
+        print("duplicate playlist rows share one selection key again", file=sys.stderr)
+        return _DUP_SELECTION
 
     # 4. ...and Select all can therefore clear again.
     if probe("onepl", "pb.toggleAll(); return pb.selCount;") != 0:
         print("Select all could not clear the selection", file=sys.stderr)
-        return _EXIT_DUP_SELECTION
+        print("duplicate playlist rows share one selection key again", file=sys.stderr)
+        return _DUP_SELECTION
 
     # 5. The two rows carrying the same track id are independent.
     probe("onepl", "pb.setSel(0, 'track', true); return 1;")
@@ -248,24 +238,24 @@ def _run_scenario() -> int:  # (one exit per failed step, on purpose)
     dup = probe("onepl", "return pb.sel[2] !== undefined ? 1 : 0;")
     if first != 1 or dup != 0:
         print(f"ticking row 0 also ticked its duplicate (row0={first} row2={dup})", file=sys.stderr)
-        return _EXIT_DUP_SELECTION
+        print("duplicate playlist rows share one selection key again", file=sys.stderr)
+        return _DUP_SELECTION
 
     # 6. A second search starts clean: no expansion, no cached rows.
     q("_searchSeq = _navSeq")
     bridge.searchResults.emit(_results("two"))
     if not pump(lambda: not q("searchBuilding")):
         print("second search never finished building", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle(300)
     ex = q("Object.keys(root.expandedPlaylists).length")
     cached = q("Object.keys(root.playlistTrackCache).length")
     print(f"afterSecondSearch expanded={ex} cached={cached}", flush=True)
     if ex != 0 or cached != 0:
-        return _EXIT_STALE_EXPAND
-    return _EXIT_OK
+        print("a new search kept the previous playlist expansion/cache", file=sys.stderr)
+        return _STALE_EXPAND
+    return EXIT_OK
 
 
-if __name__ == "__main__":
-    if "--run-scenario" in sys.argv:
-        raise SystemExit(_run_scenario())
-    raise SystemExit("run this file through pytest")
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

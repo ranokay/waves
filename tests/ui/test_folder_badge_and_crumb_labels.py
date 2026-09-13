@@ -29,18 +29,19 @@ building the bridge installs process-global handlers.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 _WIN_W, _WIN_H = 1100, 720
 
@@ -63,25 +64,15 @@ _FIND_BADGE = """
 """
 
 
+@pytest.mark.qml
 def test_folder_badge_states_and_crumb_labels():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-badgeqml-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
+        sandbox_prefix="waves-badgeqml-test-",
+        failure_message="badge or crumb labelling regressed.",
     )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, f"badge or crumb labelling regressed. Scenario exit={proc.returncode}:\n{tail}"
 
 
 def _folder_row() -> list:
@@ -102,22 +93,22 @@ def _folder_row() -> list:
 
 
 def _run_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -128,7 +119,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", _WIN_W)
     root.setProperty("height", _WIN_H)
@@ -148,7 +139,7 @@ def _run_scenario() -> int:
 
     def fail(msg: str) -> int:
         print(msg, file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     root.setProperty("libraryOpen", True)
     root.setProperty("libraryCategory", "playlists")
@@ -158,7 +149,7 @@ def _run_scenario() -> int:
     badge = q(_FIND_BADGE)
     if badge is None:
         print("could not reach the FolderBadge inside the folder row", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if badge.property("value") != "4":
         return fail(f"idle badge should read the folder total, got {badge.property('value')!r}")
 
@@ -193,10 +184,10 @@ def _run_scenario() -> int:
             break
     if digit is None:
         print("could not reach the OdoDigit inside the badge", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     if digit.property("shown") != "4":
         print(f"precondition: odometer not at rest on 4, at {digit.property('shown')!r}", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     bridge.folderRemaining.emit("f1", 1, 4)
     settle(80)  # mid-roll: the 220ms odometer is still running
     bridge.folderRemaining.emit("f1", 4, 4)
@@ -246,8 +237,8 @@ def _run_scenario() -> int:
         return fail(f"the landing kept a stale hint: {q('browseTitleHint')!r} / {q('currentNavLabel')!r}")
 
     print("badge and crumb labelling OK", flush=True)
-    return _EXIT_OK
+    return EXIT_OK
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())
