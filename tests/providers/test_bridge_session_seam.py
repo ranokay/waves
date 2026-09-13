@@ -27,6 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 import waves.waves_ui.backend as backend
+from waves.providers import Provider
 from waves.waves_ui.backend import WavesBridge
 
 # --------------------------------------------------------------------------- #
@@ -94,9 +95,11 @@ class TestTheStaticContract:
         source = BACKEND_PATH.read_text(encoding="utf-8")
         assert "getattr(self.tidal" not in source
 
-    def test_the_two_allowed_touches_are_exactly_these(self):
+    def test_the_credential_event_stays_wired_to_the_redactor(self):
+        # The one allowed touch: the engine's session credential event feeds
+        # the diagnostics redactor. The engine hand-off count is deliberately
+        # unpinned; the next test proves no account road depends on it.
         source = BACKEND_PATH.read_text(encoding="utf-8")
-        assert source.count("tidal_obj=self.tidal") == 2, "the engine hand-off"
         assert "self.tidal.on_session_credentials = self._register_session_secrets" in source
 
     def test_the_bridge_imports_no_catalog_helper_bodies(self):
@@ -199,6 +202,137 @@ class _FakeProvider:
 
     def user_collections(self):
         return self._answer("user_collections", "user_collections")
+
+
+class _ThirdProvider(Provider):
+    """A provider that is neither the TIDAL nor the Apple implementation: it
+    satisfies only the declared ``Provider`` contract and records every verb
+    the bridge calls. Any account road that works here needs no
+    provider-shaped branch."""
+
+    name = "third"
+    capabilities = frozenset()
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def _call(self, verb, *args):
+        self.calls.append((verb, *args))
+
+    def login_begin(self) -> str:
+        self._call("login_begin")
+        return "https://third.test/authorize"
+
+    def login_complete(self, payload: str) -> bool:
+        self._call("login_complete", payload)
+        return True
+
+    def logout(self) -> None:
+        self._call("logout")
+
+    def login_resume(self) -> bool:
+        self._call("login_resume")
+        return False
+
+    def reset_session(self) -> None:
+        self._call("reset_session")
+
+    def account_id(self) -> str:
+        self._call("account_id")
+        return "3"
+
+    def credential_facts(self) -> dict[str, str]:
+        self._call("credential_facts")
+        return {}
+
+    def is_logged_in(self) -> bool:
+        self._call("is_logged_in")
+        return False
+
+    def apply_quality(self, tier, audio_type) -> None:
+        self._call("apply_quality", tier, audio_type)
+
+    def search(self, needle: str) -> dict:
+        self._call("search", needle)
+        return {}
+
+    def open_url(self, url: str):
+        self._call("open_url", url)
+        return None
+
+    def get_object(self, kind: str, raw_id: str):
+        self._call("get_object", kind, raw_id)
+        return None
+
+    def collection_items(self, obj, include_videos: bool = True) -> list:
+        self._call("collection_items", obj, include_videos)
+        return []
+
+    def user_collections(self) -> dict | None:
+        self._call("user_collections")
+        return {}
+
+    # The rest of the declared interface: neutral answers, recorded like the
+    # account verbs, so the fake stays a full Provider as more roads grow.
+    def advertised_tier(self, *args, **kwargs):
+        self._call("advertised_tier", *args)
+        return None
+
+    def advertised_ceiling(self, *args, **kwargs):
+        self._call("advertised_ceiling", *args)
+        return None
+
+    def advertised_deliveries(self, *args, **kwargs):
+        self._call("advertised_deliveries", *args)
+        return ()
+
+    def browse_home(self, *args, **kwargs):
+        self._call("browse_home", *args)
+        return None
+
+    def browse_page(self, *args, **kwargs):
+        self._call("browse_page", *args)
+        return None
+
+    def browse_window(self, *args, **kwargs):
+        self._call("browse_window", *args)
+        return None
+
+    def classify_refusal(self, *args, **kwargs):
+        self._call("classify_refusal", *args)
+        return None
+
+    def cover_url(self, *args, **kwargs):
+        self._call("cover_url", *args)
+        return ""
+
+    def favorite_ids(self, *args, **kwargs):
+        self._call("favorite_ids", *args)
+        return set()
+
+    def favorites_page(self, *args, **kwargs):
+        self._call("favorites_page", *args)
+        return ([], False)
+
+    def fetch_lyrics(self, *args, **kwargs):
+        self._call("fetch_lyrics", *args)
+        return None
+
+    def folder_tree(self, *args, **kwargs):
+        self._call("folder_tree", *args)
+        return None
+
+    def resolve_stream(self, *args, **kwargs):
+        self._call("resolve_stream", *args)
+        return None
+
+    def search_tracks(self, *args, **kwargs):
+        self._call("search_tracks", *args)
+        return []
+
+    def track_facts(self, *args, **kwargs):
+        self._call("track_facts", *args)
+        return None
 
 
 class _InlinePool:
@@ -394,6 +528,30 @@ class TestTheSessionLifecycle:
         stub = self._stub(account_id=RuntimeError("gone"))
 
         assert WavesBridge._cache_user_id.__get__(stub, type(stub))() == ""
+
+    def test_a_third_provider_that_satisfies_the_contract_drives_the_roads(self):
+        """The capability check the exact-hand-off count could not give: a
+        provider implementing only the declared ``Provider`` interface drives
+        the account roads, so no road needs a TIDAL- or Apple-shaped
+        branch. The guard ``tidal`` object proves the bridge never fell back
+        to the concrete session either."""
+        provider = _ThirdProvider()
+        stub = _AuthStub(provider)
+        stub.logged_in_calls = []
+        stub.page_cache_loaded = False
+        stub.init_download_called = False
+        stub.prefetch_called = False
+
+        self._run(stub, "beginLogin")
+        self._run(stub, "completeLogin", "https://third.test/redirect?code=1")
+        assert WavesBridge._cache_user_id.__get__(stub, type(stub))() == "3"
+
+        assert provider.calls == [
+            ("login_begin",),
+            ("login_complete", "https://third.test/redirect?code=1"),
+            ("account_id",),
+        ]
+        assert stub.statuses[-1] == "Signed in"
 
 
 class TestTheRedactorRegistration:

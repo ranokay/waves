@@ -15,6 +15,7 @@ import sys
 import pytest
 from support.paths import QML_DIR, REPO_ROOT
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
+from support.qml_probe import scene_js
 
 PROVIDERS = QML_DIR / "assets" / "providers"
 TIDAL = PROVIDERS / "tidal.png"
@@ -47,33 +48,6 @@ def test_provider_marks_render_in_settings_search_and_chooser():
         failure_message="a provider mark is not rendered where it belongs",
     )
 
-
-# One scene walker for every query below: findObject matches an objectName,
-# findFirst matches a property predicate, and both descend through a Loader's
-# item and a Popup's contentItem.
-_FINDER_JS = """
-function findFirst(it, predicate) {
-    if (!it) return null;
-    if (predicate(it)) return it;
-    if (it.item) {
-        var loaded = findFirst(it.item, predicate);
-        if (loaded) return loaded;
-    }
-    if (it.contentItem) {
-        var content = findFirst(it.contentItem, predicate);
-        if (content) return content;
-    }
-    var kids = it.children || [];
-    for (var i = 0; i < kids.length; i++) {
-        var hit = findFirst(kids[i], predicate);
-        if (hit) return hit;
-    }
-    return null;
-}
-function findObject(it, name) {
-    return findFirst(it, function (o) { return o.objectName === name; });
-}
-"""
 
 # Every Image under the scope expression whose source names a provider asset,
 # as [source, visible, width, height]. Walking the live tree means a surface
@@ -118,8 +92,7 @@ _OPEN_CHOOSER_BODY = """
 _POPOVER_JS = "findObject(root.contentItem, 'chooserPopover')"
 
 
-def _js(body: str) -> str:
-    return "(function () {" + _FINDER_JS + body + "})()"
+_js = scene_js
 
 
 def _marks_expr(scope: str) -> str:

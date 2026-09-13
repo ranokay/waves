@@ -125,6 +125,26 @@ def _skip_or_fail_missing_qt() -> None:
     pytest.skip(message)
 
 
+def click_point(root, point, settle) -> None:
+    """A real left click at a scene point, with the warm-up a gate needs.
+
+    Imported lazily so a Qt-free interpreter can still import this module:
+    activate the window, move the pointer, click, then a delayed second click
+    for controls whose action only arms after a first press.
+    """
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    root.requestActivate()
+    settle(80)
+    pos = QPoint(int(point.x()), int(point.y()))
+    QTest.mouseMove(root, pos)
+    settle(60)
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, pos)
+    settle(80)
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, pos, 40)
+
+
 def run_scenario(
     script: str | Path,
     *flags: str,

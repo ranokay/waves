@@ -13,14 +13,13 @@ matrix silently cuts off its bottom row).
 
 HOW THIS STAYS FIXED
 --------------------
-Static: the row's DotMatrix (objectName queueRowMatrix) declares rows 4, dot 3,
-gap 1, and is the only site that shades its outer rows (edgeSoft). Live: the
-real Main.qml is booted offscreen, a running row is seeded through the bridge,
+On the real Main.qml offscreen: a running row is seeded through the bridge,
 and the row's matrix must be exactly as tall as its slot, span the row (its
 width is the row's content width, not a fixed number), fade its ends over 28px
 (rounds 2-4 of the lab: the download face's conveyor fade, a shade shorter
 than a shelf's) and shade its top and bottom rows' cells from 15% at their
-outer edge (a gradient on those cells only; the middle rows stay flat).
+outer edge (a gradient on those cells only; the middle rows stay flat). The
+geometry is read off the rendered matrix, never off the QML source.
 
 Runs in a SUBPROCESS like the other Main.qml scenarios (shares
 ``support.qml.boot_main_qml``).
@@ -28,12 +27,10 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
 import pytest
-from support.paths import QML_MAIN
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 
 _WALK = """
@@ -48,17 +45,6 @@ _WALK = """
  }
  function mx(){ return walk(queueDrawer.contentItem, function(it){ return it.objectName === 'queueRowMatrix' }) }
 """
-
-
-def test_queue_row_bar_is_the_dense_grid():
-    src = QML_MAIN.read_text()
-    m = re.search(r'objectName: "queueRowMatrix"\s*\n.*\n\s*rows: (\d+); dot: (\d+); gap: (\d+)', src)
-    assert m, "the queue row's DotMatrix (queueRowMatrix) moved or lost its geometry line"
-    assert (m.group(1), m.group(2), m.group(3)) == ("4", "3", "1"), m.groups()
-    assert src.count("edgeSoft: 0.15") == 1, "exactly one site (the queue row) shades its outer rows"
-    a = src.index("component DotMatrix:")
-    dm = src[a : src.index("component ", a + 1)]
-    assert "property real edgeSoft: -1" in dm, "DotMatrix.edgeSoft must default to off"
 
 
 @pytest.mark.qml
