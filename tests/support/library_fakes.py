@@ -1,4 +1,4 @@
-"""Library-bridge stand-ins shared by the scan and ownership tests.
+"""Library-bridge stand-ins shared by the library scan tests.
 
 ``make_library_bridge`` binds the real WavesBridge scan methods onto a
 minimal stand-in and opens a real per-root LibraryIndex, so the glue tests
@@ -38,7 +38,7 @@ _METHODS = (
     "artistLibraryPresence",
     # The three slots above route an unanswerable question through this one
     # guarded hop, which is a no-op unless the probe methods are bound too
-    # (test_library_probe_fallback.py binds them).
+    # (tests/library/test_library_probe_fallback.py binds them).
     "_library_probe_miss",
     "libraryIndexReady",
     "_library_root",
@@ -59,14 +59,12 @@ _METHODS = (
     "_mb_arbiter_on",
     # The scan sizes its pools from this classifier's verdict; the real one
     # runs here (tmp_path is a local disk, so these glue tests scan at full
-    # speed). Its own rules are covered in test_library_watch_classify.py.
+    # speed). Its own rules are covered in tests/library/test_library_watch_classify.py.
     "_library_root_is_local",
     "_library_root_locality",
-    # The scan's TAIL: the watcher realignment and, behind it, the coalescing
-    # read that dispatches a trailing rebuild. Missing here, every scan worker
-    # in this file died on an AttributeError before reaching either (the Worker
-    # wrapper swallows it, so the tests still passed) and the coalescing half
-    # of test_two_threads_cannot_claim_the_same_scan was never exercised at all.
+    # The scan's TAIL: the watcher realignment and the coalescing read that
+    # dispatches a trailing rebuild. Without them a dispatched scan dies on
+    # an AttributeError in the Worker wrapper, leaving the coalescing untested.
     "_resolve_watch_set",
     # The share self-heal offers: both getattr-guard the backend machinery
     # they forward to, so on these stubs they are no-ops unless a test plants
@@ -100,7 +98,7 @@ def make_library_bridge(
 ):
     # library_enabled defaults True HERE (the app's factory default is False)
     # because these are glue tests of an activated scan; the master-switch
-    # gate itself is covered by the dedicated tests below.
+    # gate itself has its own tests.
     tagmap = tagmap or {}
     s = LibraryStub()
     s.threadpool = _InlinePool()
