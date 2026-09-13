@@ -13,11 +13,9 @@ text-only headers or reintroduce the tide-lines / beamed-note glyphs.
 
 from __future__ import annotations
 
-from pathlib import Path
+from support.paths import QML_DIR, QML_MAIN, REPO_ROOT
 
-REPO = Path(__file__).resolve().parent.parent
-QML = REPO / "waves" / "waves_ui" / "qml"
-PROVIDERS = QML / "assets" / "providers"
+PROVIDERS = QML_DIR / "assets" / "providers"
 TIDAL = PROVIDERS / "tidal.png"
 APPLE = PROVIDERS / "apple-music.png"
 TIDAL_DARK = PROVIDERS / "tidal-dark.png"
@@ -35,11 +33,11 @@ def test_logos_live_in_the_providers_asset_dir_and_not_at_the_root():
         "tidal-logo-dark.png",
         "apple-music-logo-dark.png",
     ):
-        assert not (REPO / stray).exists()
+        assert not (REPO_ROOT / stray).exists()
 
 
 def test_settings_headers_use_the_logos_not_vector_glyphs():
-    src = (QML / "SettingsPage.qml").read_text()
+    src = (QML_DIR / "SettingsPage.qml").read_text()
     assert '"assets/providers/tidal.png"' in src
     assert '"assets/providers/apple-music.png"' in src
     assert "function providerLogo(id)" in src
@@ -51,7 +49,7 @@ def test_settings_headers_use_the_logos_not_vector_glyphs():
 
 
 def test_search_headers_and_chooser_segments_use_the_logos():
-    src = (QML / "Main.qml").read_text()
+    src = QML_MAIN.read_text()
     # One reference per search group header plus one per Chooser segment.
     assert src.count('"assets/providers/tidal.png"') >= 2
     assert src.count('"assets/providers/apple-music.png"') >= 2
