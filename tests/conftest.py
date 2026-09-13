@@ -23,6 +23,8 @@ import os
 import shutil
 import tempfile
 
+import pytest
+
 # Every test in this suite runs against a throwaway config directory.
 #
 # A test that builds a real WavesBridge otherwise reads and WRITES the config
@@ -83,3 +85,17 @@ class _InlineWriter:
 
     def flush(self, timeout: float = 0.0) -> None:
         pass
+
+
+@pytest.fixture
+def isolated_settings_migrations(tmp_path, monkeypatch):
+    """Keep one test's migration sidecar out of the shared config home.
+
+    The sidecar beside settings.json is what keeps a one-time migration from
+    replaying after a downgrade, so a test that drives ``_migrate_settings``
+    directly must not read a sidecar another test left behind (and must not
+    leave one for the next). Tests that need the sidecar write it themselves.
+    """
+    from waves import config
+
+    monkeypatch.setattr(config, "_migrations_state_path", lambda: tmp_path / "settings-migrations.json")

@@ -10,10 +10,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from waves.config import _migrate_settings
 from waves.constants import DefaultAudio, default_audio_is_both
 from waves.model.cfg import Settings as ModelSettings
 from waves.waves_ui.backend import WavesBridge
+
+pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
 
 
 def _migrated(raw_json: str) -> ModelSettings:

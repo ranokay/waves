@@ -212,27 +212,88 @@ class BaseConfig:
 # paced nothing, and it costs a long list half an hour of standing still.
 _RATE_LIMIT_PAUSE_PLAUSIBLE_MAX_SEC: float = 30.0
 
+# Run-once settings migrations, by name. Completion is recorded in the
+# settings model where a step has an in-file marker, and in a sidecar beside
+# the settings file either way. The sidecar is what survives a downgrade: an
+# older release rewrites settings.json from its own model and drops every
+# field it does not know, so the in-file markers vanish with it and a step
+# would run again over a choice the user has made since. The quality split is
+# not listed: its carrier is never serialized by this model, so a carrier that
+# appears can only come from a pre-split release, whose file has no
+# tidal_quality_audio at all; folding it is the recovery of that setting, not
+# a replay over a newer choice.
+_MIGRATIONS_SIDECAR_NAME = "settings-migrations.json"
+_MIGRATION_STEPS: tuple[str, ...] = (
+    "replay_gain_default",
+    "playlist_folder_default",
+    "provider_segment",
+    "rate_limit_wired",
+    "lyrics_art_providers",
+    "atmos_default",
+)
 
-def _migrate_settings(data: ModelSettings) -> bool:
+
+def _migrations_state_path() -> Path:
+    """The migration-completion sidecar beside settings.json."""
+    return Path(path_config_base()) / _MIGRATIONS_SIDECAR_NAME
+
+
+def _completed_migrations() -> set[str]:
+    """Steps recorded as applied, or an empty set when nothing is recorded."""
+    try:
+        raw = json.loads(_migrations_state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(raw, dict):
+        return set()
+    steps = raw.get("completed")
+    if not isinstance(steps, list):
+        return set()
+    return {str(step) for step in steps}
+
+
+def _remember_migrations(completed: set[str]) -> None:
+    """Record the completed run-once steps. Best-effort, never raises.
+
+    Names this build does not know (a newer build's steps, seen when the code
+    is downgraded) are carried through: dropping them would let the newer
+    build replay them on the next upgrade.
+    """
+    path = _migrations_state_path()
+    steps = sorted(completed | set(_MIGRATION_STEPS))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps({"completed": steps}, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        logger.warning("Could not record the completed settings migrations beside the settings file")
+
+
+def _migrate_settings(data: ModelSettings, *, record: bool = True) -> bool:  # noqa: C901 (sequential one-time steps)
     """Apply one-time upgrade steps to an already-loaded settings model.
 
-    Returns True when something changed, so the caller persists it. Each step is
-    guarded by a marker stored in the config, so it runs at most once and never
-    overrides a choice the user makes afterwards.
+    Returns True when something changed, so the caller persists it. A step
+    runs only when neither its in-file marker nor the sidecar beside the
+    settings file says it already ran, so a downgrade that drops the markers
+    cannot replay a step over choices the user has since made. ``record=False``
+    leaves the sidecar alone: the production caller records only after the
+    migrated settings are on disk, or a save that never landed would mark the
+    steps done forever.
     """
     changed = False
+    done = _completed_migrations()
 
-    # quality_audio split into the per-provider settings (issue #24, spec
-    # §9.2), stored as Waves tier strings. The legacy field is a
-    # migration-only carrier (never serialized): when a pre-split config
-    # handed it a value, fold that value onto the ladder into
-    # tidal_quality_audio -- identical meaning, since tidalapi's serialized
-    # tier values already are the ladder's words (low_320k serialized as
-    # "HIGH", the word the UI shows) -- then null it, so the key leaves
-    # settings.json on the next save and the migration is one-time by
-    # construction. The fold also carries the member-name spellings a
-    # hand-edited config may hold, and apple_quality_audio starts at its own
-    # default (Apple has no LOW rung); nothing else moves.
+    # quality_audio split into the per-provider settings (spec §9.2), stored
+    # as Waves tier strings. The legacy field is a migration-only carrier
+    # (never serialized): when a pre-split config handed it a value, fold
+    # that value onto the ladder into tidal_quality_audio -- identical
+    # meaning, since tidalapi's serialized tier values already are the
+    # ladder's words (low_320k serialized as "HIGH", the word the UI shows) --
+    # then null it, so the key leaves settings.json on the next save. The
+    # carrier can only be present in a file an older release wrote, and that
+    # file has no tidal_quality_audio to preserve, so folding is the recovery
+    # of the setting, never an overwrite of a newer choice.
     if data.quality_audio is not None:
         tier = tier_from_word(data.quality_audio)
         if tier is not None:
@@ -247,9 +308,9 @@ def _migrate_settings(data: ModelSettings) -> bool:
 
     # ReplayGain became on-by-default. Configs created before that carry an
     # explicit False that is really just the old default, so switch them on once.
-    # A user who turns it back off later keeps it off: the marker stops this from
-    # firing again.
-    if not data.replay_gain_default_migrated:
+    # A user who turns it back off later keeps it off: the marker and the
+    # sidecar stop this from firing again.
+    if "replay_gain_default" not in done and not data.replay_gain_default_migrated:
         data.metadata_replay_gain = True
         data.replay_gain_default_migrated = True
         changed = True
@@ -259,51 +320,55 @@ def _migrate_settings(data: ModelSettings) -> bool:
     # that exact value is upgraded. Anything else is a customized template the
     # user owns, and it is never rewritten (they can add {folder_path} where
     # they want it).
-    if not data.format_playlist_folder_migrated:
+    if "playlist_folder_default" not in done and not data.format_playlist_folder_migrated:
         old_default = "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}"
         if data.format_playlist == old_default:
             data.format_playlist = ModelSettings().format_playlist
         data.format_playlist_folder_migrated = True
         changed = True
 
-    # Download paths split by provider (issue #65): the album and track
+    # Download paths split by provider: the album and track
     # template defaults grew a leading {provider_name} segment. Like the
     # {folder_path} migration above, only stored values equal to the OLD
     # defaults are rewritten; a customized template is the user's own layout
     # and is never touched (existing files stay where they are either way:
     # ownership records absolute paths and the library scan is recursive, so
     # nothing is stranded by the new folder).
-    if _migrate_provider_segment(data):
-        changed = True
+    if "provider_segment" not in done:
+        changed = _migrate_provider_segment(data) or changed
 
     # The two rate-limit fields sat in Advanced while nothing read them, and
     # they asked a different question then ("albums to process"), so a value on
     # disk is a guess about something else that never took effect. Now that
     # they pace real downloads, a leftover of a minute between batches would
     # quietly add half an hour to a long playlist, so a pause no answer to the
-    # new question would give goes back to the default.
-    #
-    # It resets THAT and nothing else, because the marker cannot be relied on
-    # to keep this to one run: the marker is a field the previous release does
-    # not have, and that release rewrites settings.json from its own model on
-    # every launch, so a downgrade and back strips it and this runs again. A
-    # pace the user has since tuned is theirs, and stands.
-    if not data.api_rate_limit_wired_migrated:
+    # new question would give goes back to the default. The guard is the
+    # in-file marker for installs that carry it and the sidecar for configs a
+    # downgrade stripped: a pace the user has since tuned is theirs, and stands.
+    if "rate_limit_wired" not in done and not data.api_rate_limit_wired_migrated:
         if data.api_rate_limit_delay_sec > _RATE_LIMIT_PAUSE_PLAUSIBLE_MAX_SEC:
             data.api_rate_limit_delay_sec = ModelSettings().api_rate_limit_delay_sec
         data.api_rate_limit_wired_migrated = True
         changed = True
 
-    # Lyrics & artwork split per provider (issue #61): the shared toggles
+    # Lyrics & artwork split per provider: the shared toggles
     # move into each provider's card. Copy the shared values into both
     # mirrors once, so an existing install downloads exactly as configured
     # while each provider's choices become its own from here on.
-    #
-    # The Atmos toggle became the Chooser default-audio dropdown (issue #66).
-    # Assignment form (not `if step(): changed = True`) to stay under the
-    # branch budget: both steps always run either way.
-    changed = _migrate_lyrics_art_providers(data) or changed
-    changed = _migrate_atmos_default(data) or changed
+    if "lyrics_art_providers" not in done:
+        changed = _migrate_lyrics_art_providers(data) or changed
+
+    # The Atmos toggle became the Chooser default-audio dropdown.
+    # A downgrade can re-serialize the retired carrier; it is dropped either
+    # way, and only a first run lets it move the dropdown.
+    if "atmos_default" not in done:
+        changed = _migrate_atmos_default(data) or changed
+    elif data.download_dolby_atmos is not None:
+        data.download_dolby_atmos = None
+        changed = True
+
+    if record and not set(_MIGRATION_STEPS) <= done:
+        _remember_migrations(done)
 
     return changed
 
@@ -363,17 +428,27 @@ class Settings(BaseConfig, metaclass=SingletonMeta):
         self.cls_model = ModelSettings
         self.file_path = path_file_settings()
         self.read(self.file_path)
-        if _migrate_settings(self.data):
+        # Change in memory first, record nothing: a step whose settings never
+        # reach disk is not done, and the next launch must run it again.
+        changed = _migrate_settings(self.data, record=False)
+        persisted = True
+        if changed:
             # Same degrade as read()'s write-back: a still-locked file must not
             # abort startup; the migrations live in memory and persist on the
             # next successful save (their markers keep them one-time).
             try:
                 self.save()
             except OSError as e:
+                persisted = False
                 logger.warning(
                     "Settings migration persist blocked by another process; continuing in memory (%s)",
                     type(e).__name__,
                 )
+        if persisted and not set(_MIGRATION_STEPS) <= _completed_migrations():
+            # Seed the sidecar from the in-file markers on the first launch
+            # after this build, so the steps already applied are recorded even
+            # when this run had nothing of its own to write.
+            _remember_migrations(_completed_migrations())
 
 
 # Retry policy for api.tidal.com. Every catalog call the download engine makes

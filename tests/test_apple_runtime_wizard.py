@@ -526,6 +526,7 @@ def _bind_wrapper_login(stub) -> None:
     for name in (
         "_apple_wrapper_login_url",
         "_apple_wrapper_ensure_running",
+        "_apple_sidecar_guard",
         "_apple_wrapper_login_call",
         "_run_apple_wrapper_login",
         "appleWrapperLogin",

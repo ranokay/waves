@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -423,15 +424,29 @@ def test_quarantine_dir_above_the_download_root_falls_back(tmp_path):
     assert resolve_quarantine_dir(base, tmp_path / "lib") == base / QUARANTINE_DIR_NAME
 
 
-def test_quarantine_dir_case_only_difference_stays_distinct(tmp_path):
+def test_quarantine_dir_case_only_difference_stays_distinct(tmp_path, monkeypatch):
     # On a case-sensitive filesystem these are two different folders: the
-    # custom location stands, no silent fallback to the default.
-    base = tmp_path / "music"
-    base.mkdir()
-    custom = tmp_path / "MUSIC"
-    if os.path.exists(custom) and os.path.samefile(base, custom):
-        pytest.skip("case-insensitive volume: spellings alias by design")
+    # custom location stands, no silent fallback to the default. The flag is
+    # forced off so the assertion holds on every platform the suite runs on.
+    from waves import apple_integrity
+
+    monkeypatch.setattr(apple_integrity, "_CASE_INSENSITIVE_PATHS", False)
+    base = tmp_path / "Library" / "music"
+    custom = tmp_path / "library"
     assert resolve_quarantine_dir(base, custom) == custom
+
+
+def test_quarantine_dir_case_only_difference_folds_on_case_insensitive_platforms(tmp_path, monkeypatch):
+    # A case-different spelling of the download root's ancestor escapes the
+    # overlap guard without folding: normcase is a no-op on macOS and the
+    # samefile fallback only compares two existing paths, never the prefix
+    # walk. The custom spelling names the library, so the default stands.
+    from waves import apple_integrity
+
+    monkeypatch.setattr(apple_integrity, "_CASE_INSENSITIVE_PATHS", True)
+    base = tmp_path / "Library" / "music"
+    custom = tmp_path / "library"
+    assert resolve_quarantine_dir(base, custom) == base / QUARANTINE_DIR_NAME
 
 
 def test_quarantine_dest_keeps_the_intended_name(tmp_path):
@@ -447,6 +462,31 @@ def test_encoded_date_parses_creation_time_and_bare_dates():
     assert is_outbreak_era("2025-05-01") is True
     assert is_outbreak_era("2025-04-30") is False
     assert is_outbreak_era(None) is False
+
+
+def test_ffprobe_is_asked_for_every_encoded_date_key(tmp_path, monkeypatch):
+    # `_creation_candidates` reads creationdate/encoded_date too; a query
+    # that asks for creation_time only makes those branches dead and loses a
+    # Windows-style creationdate before the outbreak pre-filter sees it.
+    from waves import apple_integrity
+
+    target = tmp_path / "track.m4a"
+    target.write_bytes(b"x")
+    seen: list = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(list(argv))
+        payload = {"format": {"tags": {"creationdate": "2025-06-23 04:06:21"}}}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    parsed = apple_integrity.encoded_date_of(target, "ffprobe")
+
+    assert parsed is not None and parsed.isoformat() == "2025-06-23"
+    query = seen[0][seen[0].index("-show_entries") + 1]
+    assert "format_tags=creation_time,creationdate,encoded_date" in query
+    assert "stream_tags=creation_time,creationdate,encoded_date" in query
 
 
 def test_integrity_budget_sharpens_for_outbreak_era():
@@ -960,7 +1000,6 @@ def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
 
 
 def test_custom_quarantine_cached_rows_retire_on_rescan(tmp_path):
-    import os
 
     from waves import library_index
     from waves.library_index import LibraryIndex
@@ -1237,7 +1276,6 @@ def test_resolve_stage_failure_files_under_effective_version(tmp_path, monkeypat
 def test_quarantine_excluded_through_symlinked_root(tmp_path):
     """A scan reaching the library through a symlink still excludes a
     quarantine registered under the real root spelling (and only it)."""
-    import os
 
     from waves import library_index
     from waves.library_index import LibraryIndex

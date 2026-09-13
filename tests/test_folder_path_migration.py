@@ -5,8 +5,12 @@ every pre-folder install stores the old default string. Only that exact value
 may be rewritten; any other stored template is a customized one the user owns.
 """
 
+import pytest
+
 from waves.config import _migrate_settings
 from waves.model.cfg import Settings
+
+pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
 
 OLD_DEFAULT = "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}"
 

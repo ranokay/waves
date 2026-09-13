@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from waves.constants import CoverDimensions
 from waves.model.cfg import (
     LYRICS_ART_KEYS,
@@ -21,6 +23,8 @@ from waves.model.cfg import (
     metadata_tag_write,
     provider_setting,
 )
+
+pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
 
 
 def test_mirrors_win_then_legacy_then_default():
