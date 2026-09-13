@@ -1,12 +1,10 @@
 """Official provider logos live in qml/assets/providers/ and are the marks in use.
 
-Issue #58, extended from source spelling to rendered behavior (T6): the asset
-placement test stays, and the marks themselves are checked where the user sees
-them -- the Settings Providers tile, both search group headers and the
-Chooser's provider segments -- as visible images with a real size and the
-provider asset source. A surface that kept the string but drew nothing (a
-hidden image, a zero size, a mark on the wrong row) now fails. The scenario
-runs in a SUBPROCESS like the other Main.qml scenarios.
+The asset placement test stays; the rendered scenario drives the real
+Main.qml and asserts each mark is a visible image with a real size on its own
+surface: the Settings Providers card's dual-logo tile, both search group
+headers and the Chooser's provider segments. A mark that is hidden,
+zero-sized or left off its surface fails.
 """
 
 from __future__ import annotations
@@ -15,15 +13,8 @@ import json
 import sys
 
 import pytest
-from support.paths import QML_DIR, QML_MAIN, REPO_ROOT
-from support.qml import (
-    EXIT_NO_QT,
-    EXIT_OK,
-    EXIT_PRECONDITION,
-    EXIT_REGRESSED,
-    run_scenario,
-    sandbox_qml_settings,
-)
+from support.paths import QML_DIR, REPO_ROOT
+from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 
 PROVIDERS = QML_DIR / "assets" / "providers"
 TIDAL = PROVIDERS / "tidal.png"
@@ -57,22 +48,37 @@ def test_provider_marks_render_in_settings_search_and_chooser():
     )
 
 
+# One scene walker for every query below: findObject matches an objectName,
+# findFirst matches a property predicate, and both descend through a Loader's
+# item and a Popup's contentItem.
+_FINDER_JS = """
+function findFirst(it, predicate) {
+    if (!it) return null;
+    if (predicate(it)) return it;
+    if (it.item) {
+        var loaded = findFirst(it.item, predicate);
+        if (loaded) return loaded;
+    }
+    if (it.contentItem) {
+        var content = findFirst(it.contentItem, predicate);
+        if (content) return content;
+    }
+    var kids = it.children || [];
+    for (var i = 0; i < kids.length; i++) {
+        var hit = findFirst(kids[i], predicate);
+        if (hit) return hit;
+    }
+    return null;
+}
+function findObject(it, name) {
+    return findFirst(it, function (o) { return o.objectName === name; });
+}
+"""
+
 # Every Image under the scope expression whose source names a provider asset,
 # as [source, visible, width, height]. Walking the live tree means a surface
 # that stopped drawing its mark cannot pass on the source string alone.
-_MARKS_JS = """
-(function () {
-    function findObject(it, name) {
-        if (!it) return null;
-        if (it.objectName === name) return it;
-        if (it.item && it.item.objectName === name) return it.item;
-        var kids = it.children || [];
-        for (var i = 0; i < kids.length; i++) {
-            var hit = findObject(kids[i], name);
-            if (hit) return hit;
-        }
-        return null;
-    }
+_MARKS_BODY = """
     function marks(it) {
         var out = [];
         function walk(o) {
@@ -91,117 +97,44 @@ _MARKS_JS = """
         return JSON.stringify(out);
     }
     return marks(SCOPE);
-})()
 """
 
-_FIND_OBJECT_JS = """
-function findObject(it, name) {
-    if (!it) return null;
-    if (it.objectName === name) return it;
-    if (it.item && it.item.objectName === name) return it.item;
-    var kids = it.children || [];
-    for (var i = 0; i < kids.length; i++) {
-        var hit = findObject(kids[i], name);
-        if (hit) return hit;
-    }
-    return null;
-}
-"""
+# The Providers card's dual-logo tile: the one Rectangle carrying both marks.
+_SETTINGS_TILE_JS = "findFirst(settingsPage, function (o) { return o.dualLogo === true; })"
 
-# The search row's Chooser button: open it through the control's own action
-# (chooserBuilt -> refreshChooser -> openChooser), so the popover under test is
-# the one a click would show.
-_OPEN_CHOOSER_JS = """
-(function () {
-    function find(it) {
-        if (!it) return null;
-        if (it.chooserKind !== undefined && ("" + it.mediaId) === "t1") return it;
-        var kids = it.children || [];
-        for (var i = 0; i < kids.length; i++) {
-            var hit = find(kids[i]);
-            if (hit) return hit;
-        }
-        return null;
-    }
-    var db = find(root.contentItem);
+# The search row's Chooser button, opened through the control's own action. No
+# other state is set up here: openChooser() builds and refreshes the chooser
+# itself, exactly as the chevron's click does.
+_OPEN_CHOOSER_BODY = """
+    var db = findFirst(root.contentItem, function (o) {
+        return o.chooserKind !== undefined && ("" + o.mediaId) === "t1";
+    });
     if (!db) return "no-button";
     if (!db.showChooser) return "hidden:" + db.st + ":" + db.waiting;
-    db.chooserBuilt = true;
-    db.refreshChooser();
     db.openChooser();
     return "opened";
-})()
 """
 
 _POPOVER_JS = "findObject(root.contentItem, 'chooserPopover')"
 
 
-def _find_object_expr(name: str) -> str:
-    return "(function () {" + _FIND_OBJECT_JS + f"  return findObject(root.contentItem, '{name}');" + "})()"
+def _js(body: str) -> str:
+    return "(function () {" + _FINDER_JS + body + "})()"
 
 
 def _marks_expr(scope: str) -> str:
-    return _MARKS_JS.replace("SCOPE", scope)
+    return _js(_MARKS_BODY.replace("SCOPE", scope))
 
 
 def _run_scenario() -> int:
-    try:
-        from PySide6.QtCore import QEventLoop, QTimer, QUrl
-        from PySide6.QtGui import QGuiApplication
-        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
-    except Exception as exc:  # pragma: no cover - environment guard
-        print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return EXIT_NO_QT
+    booted = boot_main_qml()
+    if isinstance(booted, int):
+        return booted
+    _, q, settle, bridge = booted
 
-    from support.offline import PARK_LOGIN_QML, patch_offline
-
-    patch_offline()
-    app = QGuiApplication.instance() or QGuiApplication([])
-    sandbox_qml_settings()
-    try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
-    except Exception as exc:  # pragma: no cover - environment guard
-        print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return EXIT_NO_QT
-
-    engine = QQmlApplicationEngine()
-    bridge = WavesBridge(tidal=None)
-    engine.rootContext().setContextProperty("waves", bridge)
-    engine.rootContext().setContextProperty("monoFont", _load_mono())
-    engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
-    engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
-    roots = engine.rootObjects()
-    if not roots:
-        print("Main.qml failed to load", file=sys.stderr)
-        return EXIT_PRECONDITION
-    root = roots[0]
-
-    def q(expr: str):
-        e = QQmlExpression(QQmlEngine.contextForObject(root), root, expr)
-        r = e.evaluate()
-        if e.hasError():
-            raise RuntimeError(e.error().toString())
-        return r[0] if isinstance(r, tuple) else r
-
-    def settle(ms: int = 200) -> None:
-        loop = QEventLoop()
-        QTimer.singleShot(ms, loop.quit)
-        loop.exec()
-
-    def visible_mark(scope: str, asset: str) -> tuple[bool, list]:
-        found = [m for m in json.loads(q(_marks_expr(scope))) if asset in m[0]]
-        return any(m[1] and m[2] > 0 and m[3] > 0 for m in found), found
-
-    root.setProperty("width", 1200)
-    root.setProperty("height", 900)
-    settle()
-    q("bootOverlay.done = true")
-    q("bootContentShown = 1")
     q("legalSettings.termsAcceptedVersion = root.termsVersion")
     q("legalSettings.termsAccepted = true")
     q("setupSettings.providerPickerDone = true")
-    q(PARK_LOGIN_QML)
     settle(200)
 
     # Apple on: the Apple search group and the Chooser only exist with it.
@@ -211,15 +144,19 @@ def _run_scenario() -> int:
 
     problems: list[str] = []
 
-    # 1. Settings: the Providers card's dual-logo tile.
+    def visible_mark(scope: str, asset: str) -> list:
+        found = [m for m in json.loads(q(_marks_expr(scope))) if asset in m[0]]
+        return [m for m in found if m[1] and m[2] > 0 and m[3] > 0]
+
+    # 1. Settings: the Providers card's dual-logo tile, scoped to the tile so
+    # the card's provider bands cannot stand in for it.
     q("settingsOpen = true")
     settle(300)
     q("settingsPage.jumpToCard('providers')")
     settle(500)
     for name, asset in (("TIDAL", "tidal.png"), ("APPLE MUSIC", "apple-music.png")):
-        ok, found = visible_mark("settingsPage", asset)
-        if not ok:
-            problems.append(f"Settings shows no visible {name} mark (found {found})")
+        if not visible_mark(_SETTINGS_TILE_JS, asset):
+            problems.append(f"the Settings Providers tile shows no visible {name} mark")
 
     # 2. Search group headers, one per provider.
     q("openSearch()")
@@ -273,25 +210,21 @@ def _run_scenario() -> int:
         ("tidalGroupHead", "TIDAL", "tidal.png"),
         ("appleGroupHead", "APPLE MUSIC", "apple-music.png"),
     ):
-        ok, found = visible_mark(scope, asset)
-        if not ok:
-            problems.append(f"the {name} search header shows no visible mark (found {found})")
+        if not visible_mark(scope, asset):
+            problems.append(f"the {name} search header shows no visible mark")
 
-    # 3. The Chooser's provider segments, opened through the row's own control.
-    chooser = str(q(_OPEN_CHOOSER_JS))
+    # 3. The Chooser's provider segments.
+    chooser = str(q(_js(_OPEN_CHOOSER_BODY)))
     if chooser != "opened":
         problems.append(f"the Chooser button would not open ({chooser})")
     else:
         settle(400)
-        if q(_find_object_expr("chooserPopover")) is None:
-            problems.append(f"the Chooser popover did not open ({chooser})")
+        if q(_js("    return findObject(root.contentItem, 'chooserPopover');")) is None:
+            problems.append("the Chooser popover did not open")
         else:
-            ok, found = visible_mark(_POPOVER_JS, "tidal.png")
-            if not ok:
-                problems.append(f"the Chooser shows no visible TIDAL mark (found {found})")
-            ok, found = visible_mark(_POPOVER_JS, "apple-music.png")
-            if not ok:
-                problems.append(f"the Chooser shows no visible APPLE MUSIC mark (found {found})")
+            for name, asset in (("TIDAL", "tidal.png"), ("APPLE MUSIC", "apple-music.png")):
+                if not visible_mark(_POPOVER_JS, asset):
+                    problems.append(f"the Chooser shows no visible {name} mark")
 
     if problems:
         for line in problems:
