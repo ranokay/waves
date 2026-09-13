@@ -28,49 +28,35 @@ of the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0  # the restored page is one artist through and through
-_EXIT_REGRESSED = 1  # header and sections belong to different artists
-_EXIT_REGRESSED_SCOPED = 2  # the full page came back holding the favourites subset
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+_REGRESSED_SCOPED = 2  # the full page came back holding the favourites subset
 
 _WIN_W, _WIN_H = 1100, 720
 
 
+@pytest.mark.qml
 def test_the_search_tab_restores_the_artist_it_saved():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-artistrestore-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the two artist pages in this environment:\n{tail}")
-    assert proc.returncode != _EXIT_REGRESSED_SCOPED, (
-        "the restored Search view kept the library-scoped page's favourites: the same artist "
-        "opened from My Tidal fills the same four models with a subset, and matching ids alone "
-        f"let the restore skip its refill. Scenario:\n{tail}"
-    )
-    assert proc.returncode == _EXIT_OK, (
-        "the restored Search view showed one artist's header over another "
-        f"artist's albums and tracks. Scenario exit={proc.returncode}:\n{tail}"
+        sandbox_prefix="waves-artistrestore-test-",
+        failure_message=(
+            "the restored Search view showed one artist's header over another artist's albums and tracks."
+        ),
     )
 
 
@@ -131,17 +117,16 @@ def _scoped_artist(tag: str) -> dict:
 
 
 def _run_scenario() -> int:
-    # THIS checkout's waves, not the venv's editable install.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl, Slot
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from support.offline import PARK_LOGIN_QML, patch_offline
 
@@ -149,7 +134,7 @@ def _run_scenario() -> int:
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     patch_offline()
 
@@ -179,7 +164,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", _WIN_W)
     root.setProperty("height", _WIN_H)
@@ -205,12 +190,12 @@ def _run_scenario() -> int:
     settle()
     if q("navOrigin") != "search":
         print(f"scenario did not start on the Search tab (navOrigin={q('navOrigin')})", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     bridge.artistLoaded.emit(_artist("A"))
     settle()
     if not q("artistOpen") or q("artistAlbumsModel.count") == 0:
         print("artist A never rendered", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 2. My Tidal (this is what snapshots A), then artist B from its grid.
     q("openLibrary()")
@@ -219,7 +204,7 @@ def _run_scenario() -> int:
     settle()
     if q("" + "artistAlbumsModel.get(0).id") != "Bal0":
         print("artist B never took over the section models", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 3. Back to Search: every part of the page must be artist A again.
     q("openSearch()")
@@ -232,7 +217,7 @@ def _run_scenario() -> int:
     whole = header == "Aid" and album0 == "Aal0" and ep0 == "Aal10" and track0 == "Atr0"
     print(f"header={header} album0={album0} ep0={ep0} track0={track0} whole={whole}", flush=True)
     if not whole:
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
 
     # 4. The same artist again, this time the LIBRARY-SCOPED page My Tidal
     # opens: same id, same signal, same four models, but only what the user
@@ -246,7 +231,7 @@ def _run_scenario() -> int:
     settle()
     if q("artistAlbumsModel.count") != 1:
         print("the library-scoped page never took over the section models", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     q("openSearch()")
     settle()
@@ -256,7 +241,12 @@ def _run_scenario() -> int:
     full = albums == 4 and eps == 2 and tracks == 5 and not q("artistData.libraryScoped")
     print(f"albums={albums} eps={eps} tracks={tracks} full={full}", flush=True)
     if not full:
-        return _EXIT_REGRESSED_SCOPED
+        print(
+            "the restored Search view kept the library-scoped page's favourites: the same artist"
+            " opened from My Tidal filled a subset of the full page's models",
+            file=sys.stderr,
+        )
+        return _REGRESSED_SCOPED
 
     # 5. Back has the same two pages to tell apart. Standing on the scoped
     # page, going to the full one pushes the SCOPED page onto the history;
@@ -269,15 +259,21 @@ def _run_scenario() -> int:
     settle()
     if q("artistAlbumsModel.count") != 4:
         print("the full page never took over from the scoped one", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     q("navBack()")
     settle()
     back_albums = q("artistAlbumsModel.count")
     back_scoped = bool(q("artistData.libraryScoped"))
     print(f"back_albums={back_albums} back_scoped={back_scoped} loaders={loader_calls}", flush=True)
-    return _EXIT_OK if (back_albums == 1 and back_scoped) else _EXIT_REGRESSED_SCOPED
+    if back_albums == 1 and back_scoped:
+        return EXIT_OK
+    print(
+        "coming Back to Search kept the library-scoped page's favourites instead of the full page",
+        file=sys.stderr,
+    )
+    return _REGRESSED_SCOPED
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())

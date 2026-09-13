@@ -29,44 +29,32 @@ of the suite.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-_EXIT_OK = 0  # the second search rendered at the top
-_EXIT_REGRESSED = 1  # the second search kept the first search's scroll offset
-_EXIT_NO_QT = 77
-_EXIT_PRECONDITION = 78
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+)
 
 # A fixed window keeps contentHeight/maxY deterministic across machines.
 _WIN_W, _WIN_H = 1100, 720
 
 
+@pytest.mark.qml
 def test_new_search_resets_results_scroll():
-    env = dict(os.environ)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-searchscroll-test-")
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "--run-scenario"],
-        env=env,
-        capture_output=True,
-        text=True,
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
         timeout=120,
-    )
-    tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-8:])
-    import pytest
-
-    if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up a scrollable results page in this environment:\n{tail}")
-    assert proc.returncode == _EXIT_OK, (
-        "a new search rendered at the previous search's scroll offset "
-        f"(scroll-reset regression). Scenario exit={proc.returncode}:\n{tail}"
+        sandbox_prefix="waves-searchscroll-test-",
+        failure_message="a new search rendered at the previous search's scroll offset (scroll-reset regression).",
     )
 
 
@@ -134,23 +122,22 @@ def _results(tag: str) -> dict:
 
 
 def _run_scenario() -> int:
-    # THIS checkout's waves, not the venv's editable install.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
     try:
         from waves.waves_ui.app import _load_mono
         from waves.waves_ui.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return _EXIT_NO_QT
+        return EXIT_NO_QT
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -161,7 +148,7 @@ def _run_scenario() -> int:
     roots = engine.rootObjects()
     if not roots:
         print("Main.qml failed to load", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     root = roots[0]
     root.setProperty("width", _WIN_W)
     root.setProperty("height", _WIN_H)
@@ -209,7 +196,7 @@ def _run_scenario() -> int:
     bridge.searchResults.emit(_results("one"))
     if not pump(lambda: not q("searchBuilding") and q("results.contentHeight") > q("results.height") + 350):
         print("first search never became scrollable", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle()
 
     # 2. Scroll down the page and sideways along the artist strip.
@@ -217,22 +204,22 @@ def _run_scenario() -> int:
     q("artistStrip.contentX = 150")
     if q("results.contentY") < 250 or q("artistStrip.contentX") < 100:
         print("could not establish non-top offsets", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
 
     # 3. A second search renders: the page must be back at the very top.
     q("_searchSeq = _navSeq")
     bridge.searchResults.emit(_results("two"))
     if not pump(lambda: not q("searchBuilding")):
         print("second search never finished building", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     settle()
 
     y = q("results.contentY")
     x = q("artistStrip.contentX")
     reset = y <= 2 and x <= 2
     print(f"finalY={y:.0f} finalStripX={x:.0f} reset={reset}", flush=True)
-    return _EXIT_OK if reset else _EXIT_REGRESSED
+    return EXIT_OK if reset else EXIT_REGRESSED
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
     raise SystemExit(_run_scenario())

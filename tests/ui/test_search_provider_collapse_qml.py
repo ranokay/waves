@@ -1,4 +1,4 @@
-"""Collapsible provider groups in Search (issue #67).
+"""Collapsible provider groups in Search.
 
 Each provider header (TIDAL / APPLE MUSIC) collapses its whole result
 group; the fold defaults to expanded, persists per session and across
@@ -81,7 +81,6 @@ def _payload() -> dict:
 
 
 def _scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from PySide6.QtCore import QEventLoop, QTimer, QUrl
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
