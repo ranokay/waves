@@ -20,11 +20,10 @@ WHAT THIS FENCES OFF
 from __future__ import annotations
 
 import re
-from pathlib import Path
+
+from support.paths import QML_MAIN
 
 from waves.waves_ui.backend import WavesBridge
-
-QML_MAIN = Path(__file__).resolve().parent.parent / "waves" / "waves_ui" / "qml" / "Main.qml"
 
 
 class _Stub:

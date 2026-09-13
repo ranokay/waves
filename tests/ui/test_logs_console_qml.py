@@ -83,7 +83,6 @@ def _payload() -> dict:
 
 
 def _scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from PySide6.QtCore import QEventLoop, QTimer, QUrl
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
