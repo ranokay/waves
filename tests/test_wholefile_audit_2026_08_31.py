@@ -29,7 +29,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from _dispatch_stub import arm_dispatch, arm_queue
+from support.dispatch_stub import arm_dispatch, arm_queue
 
 from waves.download import Download, StreamInfo
 from waves.waves_ui import backend

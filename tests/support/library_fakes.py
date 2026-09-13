@@ -167,3 +167,38 @@ def make_library_bridge(
     # test, which is covered instead by test_library_watch_classify.py).
     s._librarySyncWatch = _Signal()
     return s
+
+
+class ScandirStub:
+    """A scandir stand-in: the entries are handed over as-is."""
+
+    def __init__(self, entries):
+        self._entries = entries
+
+    def __enter__(self):
+        return iter(self._entries)
+
+    def __exit__(self, *a):
+        return False
+
+
+def fake_listing(monkeypatch, shape):
+    """Replace os.scandir for the folders in ``shape`` ({dir: transform}) with
+    the transform applied to the real entries; every other folder lists for
+    real. A transform receives the real DirEntry list and returns the list the
+    OS will be believed to have returned."""
+    import waves.library_index as li
+
+    real = os.scandir
+    targets = {os.path.abspath(d): fn for d, fn in shape.items()}
+
+    def fake(path=".", *a, **k):
+        fn = targets.get(os.path.abspath(path))
+        if fn is None:
+            return real(path, *a, **k)
+        with real(path, *a, **k) as it:
+            entries = list(it)
+        return ScandirStub(fn(entries))
+
+    monkeypatch.setattr(li.os, "scandir", fake)
+    return real

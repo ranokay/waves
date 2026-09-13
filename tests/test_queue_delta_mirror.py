@@ -12,8 +12,8 @@ change (adds, a run/finish, failures, STOP, RETRY ALL, clears, a promote),
 and after each step the model is audited against the bridge and against its
 own mirrors, by walking it the slow way.
 
-Runs in a SUBPROCESS like the other Main.qml scenarios (shares the sibling's
-``_boot``).
+Runs in a SUBPROCESS like the other Main.qml scenarios (shares
+``support.qml.boot_main_qml``).
 """
 
 from __future__ import annotations
@@ -22,8 +22,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.qml import run_scenario
-from test_progress_matrix_stable_width import _EXIT_OK, _boot
+from support.qml import EXIT_OK, boot_main_qml, run_scenario
 
 # The audit: walk the whole model (the slow way, this is a test) and compare
 # every mirror the delta handlers maintain against what a walk finds.
@@ -87,7 +86,7 @@ def _audit(q, bridge, label: str, want: dict) -> list[str]:
 
 
 def _scenario() -> int:
-    booted = _boot()
+    booted = boot_main_qml()
     if not isinstance(booted, tuple):
         return booted
     _root, q, settle, bridge = booted
@@ -162,7 +161,7 @@ def _scenario() -> int:
         print("\n".join(problems), file=sys.stderr)
         return 1
     print("MIRROR: OK")
-    return _EXIT_OK
+    return EXIT_OK
 
 
 @pytest.mark.qml

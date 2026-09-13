@@ -71,11 +71,7 @@ from pathlib import Path
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import run_scenario
-
-_EXIT_OK = 0
-_EXIT_REGRESSED = 1
-_EXIT_PRECONDITION = 78
+from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, run_scenario
 
 # 3x5 dot font, the same table the matrix draws from; the scenario compares
 # the CELLS it finds against this rather than trusting the matrix's own idea
@@ -176,16 +172,15 @@ _WALKERS = """
 
 
 def _run_carved_scenario() -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from test_progress_matrix_stable_width import _ALBUM, _boot
+    from support.qml import ROLLING_ALBUM, boot_main_qml
 
-    booted = _boot()
+    booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
     _root, q, settle, _bridge = booted
     q("root.openSearch()")
     q("albumsModel.clear()")
-    q(f"albumsModel.append({_ALBUM})")
+    q(f"albumsModel.append({ROLLING_ALBUM})")
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
     q("root.searchAlbumsExpanded = true")
@@ -219,7 +214,7 @@ def _run_carved_scenario() -> int:
     rep = shape()
     if not str(rep).startswith("{"):
         print(f"could not locate the running face ({rep})", file=sys.stderr)
-        return _EXIT_PRECONDITION
+        return EXIT_PRECONDITION
     s = json.loads(rep)
     failures: list[str] = []
 
@@ -361,12 +356,12 @@ def _run_carved_scenario() -> int:
     if failures:
         print("the download button's carved-percent face regressed:", file=sys.stderr)
         print("\n".join(failures), file=sys.stderr)
-        return _EXIT_REGRESSED
+        return EXIT_REGRESSED
     print(f"carved percent ok: {s2}", flush=True)
-    return _EXIT_OK
+    return EXIT_OK
 
 
 if __name__ == "__main__":
     if "--run-carved-scenario" in sys.argv:
         raise SystemExit(_run_carved_scenario())
-    raise SystemExit(_EXIT_PRECONDITION)
+    raise SystemExit(EXIT_PRECONDITION)

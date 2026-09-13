@@ -13,6 +13,7 @@ the GUI-required run.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -22,12 +23,30 @@ from pathlib import Path
 
 import pytest
 
-from support.paths import REPO_ROOT, TESTS_ROOT
+from support.paths import QML_MAIN, REPO_ROOT, TESTS_ROOT
 
 EXIT_OK = 0
 EXIT_REGRESSED = 1
 EXIT_NO_QT = 77
 EXIT_PRECONDITION = 78
+
+# The album the progress/queue scenarios seed into the search model and then
+# drive through root.dlHolder("al-roll"); shared so every matrix scenario
+# reads the same row shape.
+ROLLING_ALBUM = json.dumps(
+    {
+        "id": "al-roll",
+        "title": "Rolling Album",
+        "artist": "Artist R",
+        "artist_id": "r1",
+        "art": "",
+        "year": "2026",
+        "date": "2026-01-01",
+        "tracks": 10,
+        "quality": "LOSSLESS",
+        "popularity": 50,
+    }
+)
 
 _REQUIRE_QML = False
 
@@ -146,3 +165,72 @@ def run_scenario(
         return output
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def boot_main_qml():
+    """Boot the real Main.qml offscreen inside a scenario child.
+
+    Returns ``(root, q, settle, bridge)`` ready to drive, or ``EXIT_NO_QT``
+    when this interpreter cannot host Qt. The session login, the library scan
+    and the Browse fetch are silenced so the scenario owns every payload it
+    asserts on; the root is resized, shown, and pushed past the boot overlay.
+    """
+    try:
+        from PySide6.QtCore import QEventLoop, QTimer, QUrl
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
+        from PySide6.QtQuick import QQuickWindow
+    except ImportError as exc:
+        print(f"PySide6 unavailable: {exc}", file=sys.stderr)
+        return EXIT_NO_QT
+
+    from support.offline import PARK_LOGIN_QML, patch_offline
+
+    patch_offline()  # before the bridge: its __init__ fires the sign-in check
+
+    app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
+    from waves.waves_ui.app import _load_mono
+    from waves.waves_ui.backend import WavesBridge
+
+    # Neither a library scan nor a Browse fetch is what these scenarios are
+    # about, and both reach outside the sandbox.
+    WavesBridge._library_root = lambda self: ""  # type: ignore[method-assign]
+    WavesBridge.loadBrowse = lambda self, *a: None  # type: ignore[method-assign]
+
+    bridge = WavesBridge(tidal=None)
+    engine = QQmlApplicationEngine()
+    # Main.qml resolves these at creation, so they must be set before load.
+    engine.rootContext().setContextProperty("waves", bridge)
+    engine.rootContext().setContextProperty("monoFont", _load_mono())
+    engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
+    engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
+    roots = engine.rootObjects()
+    if not roots:
+        raise RuntimeError("Main.qml failed to load")
+    root = roots[0]
+    if not isinstance(root, QQuickWindow):
+        raise TypeError("Main.qml's root object is not a window")
+
+    def q(expr: str):
+        ctx = QQmlEngine.contextForObject(root)
+        e = QQmlExpression(ctx, root, expr)
+        r = e.evaluate()
+        if e.hasError():
+            raise RuntimeError(e.error().toString())
+        return r[0] if isinstance(r, tuple) else r
+
+    def settle(ms: int) -> None:
+        loop = QEventLoop()
+        QTimer.singleShot(ms, loop.quit)
+        loop.exec()
+
+    root.resize(1280, 900)
+    root.show()
+    settle(300)
+    q("bootOverlay.done = true")
+    q("bootContentShown = 1")
+    q(PARK_LOGIN_QML)
+    # The engine owns the tree; keep it referenced for the scenario's life.
+    boot_main_qml.engine = engine  # type: ignore[attr-defined]
+    return root, q, settle, bridge

@@ -503,7 +503,7 @@ class TestJobSpecDispatch:
     """A queued row names its object; the job resolves it through the provider."""
 
     def _stub_bridge(self, provider, tmp_path, *, skip=False, claim_records=None):
-        from _dispatch_stub import arm_dispatch
+        from support.dispatch_stub import arm_dispatch
 
         class _Signal:
             def emit(self, *args) -> None:

@@ -31,7 +31,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from _dispatch_stub import arm_dispatch, arm_queue
+from support.dispatch_stub import arm_dispatch, arm_queue
 
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge

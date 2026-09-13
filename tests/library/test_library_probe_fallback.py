@@ -28,13 +28,13 @@ from types import SimpleNamespace
 from support.library_fakes import (
     LibraryStub as _Stub,
 )
+from support.library_fakes import fake_listing
 from support.library_fakes import (
     make_album_dir as _album,
 )
 from support.library_fakes import (
     make_library_bridge as _make,
 )
-from test_library_listing_truncation import _fake_listing
 
 from waves.waves_ui import bridge_library
 from waves.waves_ui.backend import WavesBridge
@@ -79,7 +79,7 @@ def _library(tmp_path, *, hide=("C",)):
 def _bridge(tmp_path, monkeypatch, *, truncated=True):
     lib, tags = _library(tmp_path)
     if truncated:
-        _fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name != "C"] * 2})
+        fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name != "C"] * 2})
     s = _make(tmp_path, library_folder=lib, tagmap=tags)
     s._library_scan_partial = False
     s._library_probe_memo = {}
@@ -262,7 +262,7 @@ def _wide_library(tmp_path, monkeypatch, hidden=("C", "D", "E")):
         folder = _album(lib, f"{artist}/[{year}] Rec{artist}", ["1.flac", "2.flac"])
         tags[folder] = {"album": f"Rec{artist}", "artist": artist, "date": year, "title": "Song"}
     hide = set(hidden)
-    _fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name not in hide] * 2})
+    fake_listing(monkeypatch, {lib: lambda e: [x for x in e if x.name not in hide] * 2})
     s = _make(tmp_path, library_folder=lib, tagmap=tags)
     s.emitted = []
     s._emit_from_worker = lambda name: s.emitted.append(name)

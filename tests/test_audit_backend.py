@@ -22,7 +22,7 @@ from __future__ import annotations
 from threading import Event, Lock
 
 import pytest
-from _dispatch_stub import arm_queue
+from support.dispatch_stub import arm_queue
 
 from waves.waves_ui.backend import WavesBridge
 
