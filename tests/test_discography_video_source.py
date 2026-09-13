@@ -180,7 +180,7 @@ def test_a_discography_marks_its_albums_for_one_hop_only():
     # above and this queueing, and an album that slipped into the scan here
     # would exit by a path that never bumps the artist rollup. Turning the merge
     # ON later is not trapped by this, because the mark is consumed on the first
-    # read (see tests/test_edition_merge_gate.py).
+    # read (see tests/metadata/test_edition_merge_gate.py).
     artist = _Artist([])
     stub = _DiscoStub(artist, video_download=False)
 

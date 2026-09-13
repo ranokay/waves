@@ -23,7 +23,7 @@ over a stub carcass (the same pattern as test_discography_video_source.py):
    beside its Deluxe left as one merged album, and a group whose merge
    declined was collapsed anyway: the switch was dead while on the page.
    Single-album clicks keep merging on their own (downloadAlbum's scan is
-   not touched here; tests/test_edition_merge_gate.py covers it).
+   not touched here; tests/metadata/test_edition_merge_gate.py covers it).
 """
 
 from __future__ import annotations
