@@ -55,7 +55,8 @@ def _norm_dir(path: str | Path) -> str:
 
 # Whether two different spellings can name the same path. Windows folds case
 # in the filesystem, and macOS volumes are case-insensitive by default while
-# normcase is a no-op there, so comparisons casefold on both.
+# normcase is a no-op there, so comparisons casefold on both. A case-sensitive
+# volume on those platforms is not distinguished.
 _CASE_INSENSITIVE_PATHS = os.name == "nt" or sys.platform == "darwin"
 
 

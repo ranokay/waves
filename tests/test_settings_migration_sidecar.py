@@ -17,7 +17,12 @@ import json
 
 import pytest
 
-from waves.config import _MIGRATION_STEPS, _completed_migrations, _migrate_settings
+from waves.config import (
+    _MIGRATION_STEPS,
+    _completed_migrations,
+    _migrate_settings,
+    _remember_migrations,
+)
 from waves.model.cfg import Settings as ModelSettings
 
 pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
@@ -40,8 +45,6 @@ def _downgraded_config() -> ModelSettings:
     data.apple_lyrics_embed = True  # the user's per-provider choice
     data.default_audio_type = "stereo"  # the user's choice
     data.download_dolby_atmos = True  # the retired carrier, re-serialized
-    data.tidal_quality_audio = "LOSSLESS"  # the user's current tier
-    data.quality_audio = "LOW_96K"  # the stale pre-split carrier
     return data
 
 
@@ -51,12 +54,9 @@ def test_a_seeded_sidecar_keeps_every_user_choice(tmp_path):
 
     changed = _migrate_settings(data)
 
-    # The carriers are dropped (they re-serialized through the downgrade),
-    # and nothing else moves.
+    # The re-serialized carrier is dropped, and nothing else moves.
     assert changed is True
-    assert data.quality_audio is None
     assert data.download_dolby_atmos is None
-    assert data.tidal_quality_audio == "LOSSLESS"
     assert data.default_audio_type == "stereo"
     # The replay gain the user turned off stays off.
     assert data.metadata_replay_gain is False
@@ -65,6 +65,21 @@ def test_a_seeded_sidecar_keeps_every_user_choice(tmp_path):
     # The per-provider mirror keeps the user's choice, not the shared value.
     assert data.apple_lyrics_embed is True
     assert _completed_migrations() == set(_MIGRATION_STEPS)
+
+
+def test_a_reappearing_quality_carrier_is_folded_and_dropped(tmp_path):
+    # The carrier is never serialized by this model, so its presence means an
+    # older release wrote the file last: its value is the newest expression of
+    # the setting, and it is folded once even when the sidecar has run before.
+    _seed_sidecar(tmp_path, _MIGRATION_STEPS)
+    data = ModelSettings()
+    data.tidal_quality_audio = "HI_RES_LOSSLESS"
+    data.quality_audio = "LOW_320K"
+
+    _migrate_settings(data)
+
+    assert data.tidal_quality_audio == "HIGH"
+    assert data.quality_audio is None
 
 
 def test_a_first_run_applies_the_steps_and_records_them(tmp_path):
@@ -138,3 +153,15 @@ def test_step_names_from_a_newer_build_are_carried_through(tmp_path):
 
     recorded = _completed_migrations()
     assert recorded == set(_MIGRATION_STEPS) | {"future_step"}
+
+
+def test_record_off_leaves_the_sidecar_alone(tmp_path):
+    # The production caller migrates with record=False, saves, and only then
+    # records: a save that never landed must not mark the steps done.
+    data = ModelSettings()
+
+    _migrate_settings(data, record=False)
+
+    assert _completed_migrations() == set()
+    _remember_migrations(_completed_migrations())
+    assert _completed_migrations() == set(_MIGRATION_STEPS)

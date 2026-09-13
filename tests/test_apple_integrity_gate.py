@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -425,30 +424,28 @@ def test_quarantine_dir_above_the_download_root_falls_back(tmp_path):
     assert resolve_quarantine_dir(base, tmp_path / "lib") == base / QUARANTINE_DIR_NAME
 
 
-def test_quarantine_dir_case_only_difference_stays_distinct(tmp_path):
+def test_quarantine_dir_case_only_difference_stays_distinct(tmp_path, monkeypatch):
     # On a case-sensitive filesystem these are two different folders: the
-    # custom location stands, no silent fallback to the default. Windows and
-    # macOS (normcase is a no-op there) fold by design, so they skip.
-    if os.name == "nt" or sys.platform == "darwin":
-        pytest.skip("case-insensitive platform: spellings alias by design")
-    base = tmp_path / "music"
-    base.mkdir()
-    custom = tmp_path / "MUSIC"
-    if os.path.exists(custom) and os.path.samefile(base, custom):
-        pytest.skip("case-insensitive volume: spellings alias by design")
+    # custom location stands, no silent fallback to the default. The flag is
+    # forced off so the assertion holds on every platform the suite runs on.
+    from waves import apple_integrity
+
+    monkeypatch.setattr(apple_integrity, "_CASE_INSENSITIVE_PATHS", False)
+    base = tmp_path / "Library" / "music"
+    custom = tmp_path / "library"
     assert resolve_quarantine_dir(base, custom) == custom
 
 
-def test_quarantine_dir_case_only_difference_folds_on_case_insensitive_platforms(tmp_path):
-    # A case-different spelling of the download root's ancestor used to slip
-    # past the overlap guard on macOS: normcase is a no-op and the samefile
-    # fallback only compares two existing paths, never the prefix walk. The
-    # custom spelling names the library, so the default stands.
-    if os.name != "nt" and sys.platform != "darwin":
-        pytest.skip("case-sensitive platform: the spellings are distinct folders")
-    base = tmp_path / "Music" / "Waves" / "Downloads"
-    base.mkdir(parents=True)
-    custom = tmp_path / "music"
+def test_quarantine_dir_case_only_difference_folds_on_case_insensitive_platforms(tmp_path, monkeypatch):
+    # A case-different spelling of the download root's ancestor escapes the
+    # overlap guard without folding: normcase is a no-op on macOS and the
+    # samefile fallback only compares two existing paths, never the prefix
+    # walk. The custom spelling names the library, so the default stands.
+    from waves import apple_integrity
+
+    monkeypatch.setattr(apple_integrity, "_CASE_INSENSITIVE_PATHS", True)
+    base = tmp_path / "Library" / "music"
+    custom = tmp_path / "library"
     assert resolve_quarantine_dir(base, custom) == base / QUARANTINE_DIR_NAME
 
 
@@ -1003,7 +1000,6 @@ def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
 
 
 def test_custom_quarantine_cached_rows_retire_on_rescan(tmp_path):
-    import os
 
     from waves import library_index
     from waves.library_index import LibraryIndex
@@ -1280,7 +1276,6 @@ def test_resolve_stage_failure_files_under_effective_version(tmp_path, monkeypat
 def test_quarantine_excluded_through_symlinked_root(tmp_path):
     """A scan reaching the library through a symlink still excludes a
     quarantine registered under the real root spelling (and only it)."""
-    import os
 
     from waves import library_index
     from waves.library_index import LibraryIndex

@@ -216,11 +216,13 @@ _RATE_LIMIT_PAUSE_PLAUSIBLE_MAX_SEC: float = 30.0
 # settings model (the boolean markers the steps set) and in a sidecar beside
 # the settings file. The sidecar is what survives a downgrade: an older
 # release rewrites settings.json from its own model and drops every field it
-# does not know, which used to strip the in-file markers and let a step run a
-# second time over a choice the user had made since.
+# does not know, so the in-file markers vanish with it and a step would run
+# again over a choice the user has made since. The quality split is not listed:
+# its carrier is never serialized by this model, and a carrier that appears
+# after a downgrade carries the newest expression of that setting, so it is
+# always folded once and dropped.
 _MIGRATIONS_SIDECAR_NAME = "settings-migrations.json"
 _MIGRATION_STEPS: tuple[str, ...] = (
-    "quality_split",
     "replay_gain_default",
     "playlist_folder_default",
     "provider_segment",
@@ -267,14 +269,16 @@ def _remember_migrations(completed: set[str]) -> None:
         logger.warning("Could not record the completed settings migrations beside the settings file")
 
 
-def _migrate_settings(data: ModelSettings) -> bool:  # noqa: C901 (seven sequential one-time steps)
+def _migrate_settings(data: ModelSettings, *, record: bool = True) -> bool:  # noqa: C901 (sequential one-time steps)
     """Apply one-time upgrade steps to an already-loaded settings model.
 
     Returns True when something changed, so the caller persists it. A step
     runs only when neither its in-file marker nor the sidecar beside the
-    settings file says it already ran; once every step is covered the sidecar
-    is written, so a downgrade that drops the markers cannot replay a step
-    over choices the user has since made.
+    settings file says it already ran, so a downgrade that drops the markers
+    cannot replay a step over choices the user has since made. ``record=False``
+    leaves the sidecar alone: the production caller records only after the
+    migrated settings are on disk, or a save that never landed would mark the
+    steps done forever.
     """
     changed = False
     done = _completed_migrations()
@@ -286,21 +290,18 @@ def _migrate_settings(data: ModelSettings) -> bool:  # noqa: C901 (seven sequent
     # tidal_quality_audio -- identical meaning, since tidalapi's serialized
     # tier values already are the ladder's words (low_320k serialized as
     # "HIGH", the word the UI shows) -- then null it, so the key leaves
-    # settings.json on the next save and the migration is one-time by
-    # construction. The fold also carries the member-name spellings a
-    # hand-edited config may hold, and apple_quality_audio starts at its own
-    # default (Apple has no LOW rung); nothing else moves. A downgrade can
-    # re-serialize the carrier: it is still dropped, never folded twice.
+    # settings.json on the next save. A downgrade can re-serialize the
+    # carrier; it carries the newest expression of the setting that survived,
+    # so it is folded once more and dropped, never left to override later.
     if data.quality_audio is not None:
-        if "quality_split" not in done:
-            tier = tier_from_word(data.quality_audio)
-            if tier is not None:
-                data.tidal_quality_audio = tier.value
-            else:
-                logger.warning(
-                    "Settings carried an unreadable audio quality %r; the TIDAL default stands",
-                    data.quality_audio,
-                )
+        tier = tier_from_word(data.quality_audio)
+        if tier is not None:
+            data.tidal_quality_audio = tier.value
+        else:
+            logger.warning(
+                "Settings carried an unreadable audio quality %r; the TIDAL default stands",
+                data.quality_audio,
+            )
         data.quality_audio = None
         changed = True
 
@@ -365,7 +366,7 @@ def _migrate_settings(data: ModelSettings) -> bool:  # noqa: C901 (seven sequent
         data.download_dolby_atmos = None
         changed = True
 
-    if not set(_MIGRATION_STEPS) <= done:
+    if record and not set(_MIGRATION_STEPS) <= done:
         _remember_migrations(done)
 
     return changed
@@ -426,17 +427,27 @@ class Settings(BaseConfig, metaclass=SingletonMeta):
         self.cls_model = ModelSettings
         self.file_path = path_file_settings()
         self.read(self.file_path)
-        if _migrate_settings(self.data):
+        # Change in memory first, record nothing: a step whose settings never
+        # reach disk is not done, and the next launch must run it again.
+        changed = _migrate_settings(self.data, record=False)
+        persisted = True
+        if changed:
             # Same degrade as read()'s write-back: a still-locked file must not
             # abort startup; the migrations live in memory and persist on the
             # next successful save (their markers keep them one-time).
             try:
                 self.save()
             except OSError as e:
+                persisted = False
                 logger.warning(
                     "Settings migration persist blocked by another process; continuing in memory (%s)",
                     type(e).__name__,
                 )
+        if persisted and not set(_MIGRATION_STEPS) <= _completed_migrations():
+            # Seed the sidecar from the in-file markers on the first launch
+            # after this build, so the steps already applied are recorded even
+            # when this run had nothing of its own to write.
+            _remember_migrations(_completed_migrations())
 
 
 # Retry policy for api.tidal.com. Every catalog call the download engine makes
