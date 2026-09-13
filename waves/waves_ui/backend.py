@@ -1419,6 +1419,25 @@ def _record_names_a_broken_copy(rec: dict | None) -> bool:
     return "[None]" in path or "{album_track_num}" in path
 
 
+def _apple_cookies_fingerprint(path: str) -> tuple:
+    """(path, mtime_ns, size) for a cookies export, or a stable empty."""
+    candidate = pathlib.Path(str(path or "").strip()).expanduser()
+    try:
+        stat = candidate.stat()
+    except OSError:
+        return ("", 0, 0)
+    return (str(candidate), int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _apple_cookies_resave_changed(values, before: str) -> bool:
+    """Whether a settings save names a different cookies export than before.
+
+    The Settings page resubmits keys on every later save in one visit, so the
+    unchanged path must not count as the user's answer to a session pause.
+    """
+    return "apple_cookies_path" in values and str(values.get("apple_cookies_path") or "") != str(before or "")
+
+
 def _cover_sidecar_format(data, key: str = "cover_file_format") -> str:
     """The sidecar cover format: jpg, png, or raw (Apple-only).
 
@@ -13244,6 +13263,21 @@ class WavesBridge(LibraryMixin, QObject):
                         )
                         break
                     except Exception as exc:
+                        if isinstance(exc, AppleCredentialsError):
+                            # The saved session no longer works: tell the
+                            # light, hold the row with the sign-in message,
+                            # and wait in place for recovery instead of
+                            # failing the run (spec §3). The wrapper guest
+                            # refreshes its tokens on its own; a cookies
+                            # export recovers when its file or path changes.
+                            # STOP lands promptly and settles the row
+                            # cancelled. The retry re-runs THIS track.
+                            self._apple_mark_session_expired()
+                            with contextlib.suppress(Exception):
+                                self._apple_set_held(qid, "Sign in again in Settings under Providers, Apple Music.")
+                            if not self._apple_wait_for_session(provider, job_abort):
+                                raise _AppleAborted() from exc
+                            continue
                         # A dead sidecar holds the row, never fails it: one
                         # clear message, automatic resume when it returns.
                         try:
@@ -13267,13 +13301,7 @@ class WavesBridge(LibraryMixin, QObject):
                                 raise _AppleAborted() from exc
                             continue
                         try:
-                            from waves.apple_supervision import THROTTLE_MAX_ATTEMPTS
-                        except Exception:
-                            THROTTLE_MAX_ATTEMPTS = len(_APPLE_THROTTLE_WAITS)
-                        try:
-                            throttled = provider.classify_refusal(exc).kind is RefusalKind.THROTTLED and int(
-                                attempts
-                            ) < int(THROTTLE_MAX_ATTEMPTS)
+                            throttled = provider.classify_refusal(exc).kind is RefusalKind.THROTTLED
                         except Exception:
                             throttled = False
                         if not throttled:
@@ -13333,12 +13361,15 @@ class WavesBridge(LibraryMixin, QObject):
                     with contextlib.suppress(Exception):
                         signals.track_event.emit({"id": track_id, "status": "failed"})
                 logger.exception("Apple track failed for %s", diagnostics.content(track_id))
-                if isinstance(exc, AppleCredentialsError):
-                    raise
                 self._apple_emit_progress(signals, collection, pos, total, media_id, qid)
                 continue
             ok += 1
             landed.append(pathlib.Path(delivered["path"]))
+            # A landed track proves the session works: lift the expiry marker
+            # even when recovery was never observed by a probe (spec §3).
+            clear = getattr(self, "_apple_clear_session_expired", None)
+            if callable(clear):
+                clear()
             # Wrapper work stamps the idle clock so an in-flight run never
             # looks idle to the sidecar stop.
             with contextlib.suppress(Exception):
@@ -13594,6 +13625,64 @@ class WavesBridge(LibraryMixin, QObject):
             self._set_status(message)
         except Exception:
             logger.debug("Apple held status failed", exc_info=True)
+
+    def _apple_mark_session_expired(self) -> None:
+        """Remember a boundary-rejected Apple session and move the light.
+
+        The marker clears when the wrapper probe authenticates again, when
+        the cookies setting is saved, or on sign-out; until then the light
+        reports needs attention even if a cached probe still reads signed in.
+        """
+        already = bool(getattr(self, "_apple_session_expired", False))
+        self._apple_session_expired = True
+        if not already:
+            with contextlib.suppress(Exception):
+                self.appleStatusChanged.emit()
+
+    def _apple_clear_session_expired(self) -> None:
+        """The Apple session works again: drop the marker and move the light."""
+        if not getattr(self, "_apple_session_expired", False):
+            return
+        self._apple_session_expired = False
+        with contextlib.suppress(Exception):
+            self.appleStatusChanged.emit()
+
+    def _apple_wait_for_session(self, provider, job_abort) -> bool:
+        """Wait (abortably) until the Apple session can serve again.
+
+        The wrapper guest refreshes its own tokens, so a cheap /me probe
+        finds it; a cookies export cannot be probed server-side, so the wait
+        watches the file the provider names and retries once it changes.
+        False when STOP lands.
+        """
+        try:
+            from waves.apple_supervision import HELD_POLL_SEC
+        except Exception:
+            HELD_POLL_SEC = 5.0
+        cookies_before = _apple_cookies_fingerprint(str(getattr(provider, "cookies_path", "") or ""))
+        while not job_abort.is_set():
+            if str(getattr(provider, "wrapper_url", "") or "").strip():
+                try:
+                    state = self._refresh_apple_wrapper_auth(timeout=5) or {}
+                    if bool(state.get("logged_in")):
+                        return True
+                except Exception:
+                    logger.debug("Apple wrapper recovery probe failed", exc_info=True)
+            cookies_now = _apple_cookies_fingerprint(str(getattr(provider, "cookies_path", "") or ""))
+            if cookies_now != cookies_before:
+                # A fresh export landed (in place or at a new path): the
+                # retried fetch is the proof.
+                return True
+            try:
+                if not self._apple_sleep_abortable(HELD_POLL_SEC, job_abort):
+                    return False
+            except Exception:
+                deadline = time.monotonic() + float(HELD_POLL_SEC)
+                while time.monotonic() < deadline:
+                    if job_abort.is_set():
+                        return False
+                    time.sleep(0.2)
+        return False
 
     def _apple_needs_wrapper(self, requested_rank: int = -1) -> bool:
         """Whether this job's ask can need the wrapper sidecar at all.
@@ -19855,6 +19944,9 @@ class WavesBridge(LibraryMixin, QObject):
                     # says "logged in" must not restore what was just cleared.
                     self._apple_session_gen = getattr(self, "_apple_session_gen", 0) + 1
                     self._apple_wrapper_auth_cache = None
+                    clear = getattr(self, "_apple_clear_session_expired", None)
+                    if callable(clear):
+                        clear()
                     self._apple_wrapper_login_result = {"ok": None, "needs_2fa": False, "error": ""}
                     provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
                     if provider is not None:
@@ -21174,7 +21266,13 @@ class WavesBridge(LibraryMixin, QObject):
                 self._schedule_apple_container_refresh()
             return dict(cache["result"])
         if self._schedule_apple_container_refresh():
-            return {"name": "", "available": False, "running": False, "hint": "Checking for a container runtime…"}
+            return {
+                "name": "",
+                "available": False,
+                "running": False,
+                "hint": "Checking for a container runtime…",
+                "checking": True,
+            }
         return self._refresh_apple_container_cache(timeout=3)
 
     def _schedule_apple_container_refresh(self) -> bool:
@@ -21258,6 +21356,11 @@ class WavesBridge(LibraryMixin, QObject):
         if provider is not None:
             with contextlib.suppress(Exception):
                 provider.wrapper_logged_in = bool(result.get("logged_in"))
+        if bool(result.get("logged_in")):
+            # The guest refreshed its own tokens: the paused session is back.
+            clear = getattr(self, "_apple_clear_session_expired", None)
+            if callable(clear):
+                clear()
         if snapshot(result) != previous_snapshot:
             with contextlib.suppress(Exception):
                 self.appleWrapperAuthChanged.emit()
@@ -21469,13 +21572,29 @@ class WavesBridge(LibraryMixin, QObject):
             "login_error": str(result.get("error") or ""),
         }
 
+    def _apple_container_serves(self) -> bool:
+        """Whether the cached container probe can serve an Apple session.
+
+        A checking probe does not downgrade the light, and neither does a
+        runtime whose daemon answers (the lazy start brings the sidecar
+        back); a missing runtime or a stopped daemon does.
+        """
+        try:
+            probe = self._apple_container_state()
+        except Exception:
+            logger.debug("Apple container health read failed", exc_info=True)
+            return True
+        if not isinstance(probe, dict) or probe.get("checking"):
+            return True
+        return bool(probe.get("available")) and bool(probe.get("running"))
+
     def _apple_live_flags(self) -> dict:
         """Live inputs for the Apple status light, read off current state."""
         data = getattr(getattr(self, "settings", None), "data", None)
         enabled = bool(getattr(data, "apple_enabled", False))
         cookies_ready = bool(self._apple_cookies_ready())
         runtime_ready = bool(self._apple_runtime_ready())
-        needs_attention = bool(self._apple_needs_attention())
+        needs_attention = bool(self._apple_needs_attention()) or bool(getattr(self, "_apple_session_expired", False))
         # A cookies export whose session expired is needs_attention, not
         # signed_in: verify the token marker, not just the file's presence.
         # Signed in additionally needs the fetch binary: the engine pulls
@@ -21505,6 +21624,12 @@ class WavesBridge(LibraryMixin, QObject):
         wrapper_ready = bool(self._apple_wrapper_signed_in())
         if not signed_in and wrapper_ready and self._apple_fetch_binary_ready():
             signed_in = True
+        serves = getattr(self, "_apple_container_serves", None)
+        if wrapper_ready and callable(serves) and not serves():
+            # A session the runtime cannot serve is not a working sign-in:
+            # the light says attention, not signed in (J6).
+            needs_attention = True
+            signed_in = False
         return {
             "enabled": enabled,
             "runtime_ready": runtime_ready,
@@ -21567,6 +21692,7 @@ class WavesBridge(LibraryMixin, QObject):
         # appleStatus(): every later save in one visit resubmits the switch
         # unchanged, and resubmitting is not a flip.
         apple_enabled_before = bool(getattr(data, "apple_enabled", False))
+        cookies_before = str(getattr(data, "apple_cookies_path", "") or "")
         for key, value in values.items():
             if key in self._waves_prefs:
                 self.setWavesPref(key, value)
@@ -21658,6 +21784,11 @@ class WavesBridge(LibraryMixin, QObject):
             # The cookies-tier paths the Apple provider resolves against (the
             # quarantine dir re-registers its scan exclusion here as well).
             self._configure_apple_provider()
+            if _apple_cookies_resave_changed(values, cookies_before):
+                # A different export is the user's answer to the expiry pause.
+                clear = getattr(self, "_apple_clear_session_expired", None)
+                if callable(clear):
+                    clear()
             # The light tracks cookies and runtime paths, not just the switch:
             # saving a cookies export moves not_set_up to signed_in at once.
             self.appleStatusChanged.emit()

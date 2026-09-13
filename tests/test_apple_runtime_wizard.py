@@ -343,6 +343,35 @@ def test_verify_cookies_missing_file(tmp_path):
         verify_cookies_file(str(tmp_path / "missing.txt"))
 
 
+def test_verify_cookies_rejects_an_expired_token(tmp_path):
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        f".apple.com\tTRUE\t/\tTRUE\t{int(time.time()) - 60}\tmedia-user-token\tabc123\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="expired"):
+        verify_cookies_file(str(path))
+
+
+def test_verify_cookies_accepts_future_and_session_tokens(tmp_path):
+    future = tmp_path / "future.txt"
+    future.write_text(
+        "# Netscape HTTP Cookie File\n"
+        f".apple.com\tTRUE\t/\tTRUE\t{int(time.time()) + 3600}\tmedia-user-token\tabc123\n",
+        encoding="utf-8",
+    )
+    assert verify_cookies_file(str(future))["has_token"] is True
+
+    # 0 is a session cookie: no static expiry to check, still a valid marker.
+    session = tmp_path / "session.txt"
+    session.write_text(
+        "# Netscape HTTP Cookie File\n.apple.com\tTRUE\t/\tTRUE\t0\tmedia-user-token\tabc123\n",
+        encoding="utf-8",
+    )
+    assert verify_cookies_file(str(session))["has_token"] is True
+
+
 # ---- wrapper guest session ---------------------------------------------------- #
 
 
@@ -688,6 +717,7 @@ def test_apple_sign_out_clears_the_account_session(tmp_path):
     stub._apple_wrapper_auth_cache = {"at": 1.0, "result": {"logged_in": True}}
     stub._apple_wrapper_login_result = {"ok": True, "needs_2fa": False, "error": ""}
     stub._apple_session_gen = 0
+    stub._apple_session_expired = True
     saved = []
     stub._save_settings = lambda: saved.append(True)
     events = []
@@ -711,6 +741,7 @@ def test_apple_sign_out_clears_the_account_session(tmp_path):
     assert provider.wrapper_logged_in is False and provider.cookies_path == ""
     assert stub._apple_wrapper_auth_cache is None
     assert stub._apple_session_gen == 1, "probes from before the sign-out are invalidated"
+    assert stub._apple_session_expired is False
     assert stub._apple_wrapper_login_result == {"ok": None, "needs_2fa": False, "error": ""}
     states = [e for e in events if e[0] == "state"]
     assert states[0][1] == "downloading"
@@ -1023,6 +1054,9 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
         stub, SimpleNamespace
     )
     stub._apple_container_state = WavesBridge._apple_container_state.__get__(stub, SimpleNamespace)
+    stub._apple_container_serves = WavesBridge._apple_container_serves.__get__(stub, SimpleNamespace)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
+    stub._apple_wait_for_session = WavesBridge._apple_wait_for_session.__get__(stub, SimpleNamespace)
     stub.appleStatus = WavesBridge.appleStatus.__get__(stub, SimpleNamespace)
     stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub, SimpleNamespace)
     stub._apple_wizard_steps = WavesBridge._apple_wizard_steps
@@ -1071,6 +1105,10 @@ def test_live_flags_read_the_wrapper_session_without_cookies(tmp_path):
     # names the full tier once the guest reports an authenticated session.
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "docker", "available": True, "running": True, "hint": ""},
+    }
     stub.apple_wrapper_auth_state = lambda *a, **k: {
         "reachable": True,
         "state": "authenticated",
@@ -1084,6 +1122,94 @@ def test_live_flags_read_the_wrapper_session_without_cookies(tmp_path):
     state = stub.appleSetupState()
     assert state["light"]["tier"] == "full"
     assert state["wrapper"]["auth"]["account"] == "me@example.com"
+
+
+def test_live_flags_report_an_expired_session_and_recover(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+
+    stub._apple_session_expired = True
+    flags = stub._apple_live_flags()
+    assert flags["needs_attention"] is True and flags["signed_in"] is False
+    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention"}
+
+    # The wrapper probe authenticating again clears the marker (its tokens
+    # refresh on their own) and moves the light back.
+    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
+    stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
+    emitted = []
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
+    monkeypatch.setattr(
+        "waves.apple_runtime.wrapper_auth_state",
+        lambda url, **kwargs: {
+            "reachable": True,
+            "state": "authenticated",
+            "logged_in": True,
+            "account": "me@example.com",
+            "error": "",
+        },
+    )
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
+
+    stub._refresh_apple_wrapper_auth()
+
+    assert stub._apple_session_expired is False
+    assert emitted, "the light re-reads when the session comes back"
+
+
+def test_live_flags_downgrade_a_wrapper_session_without_a_runtime(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    stub.apple_wrapper_auth_state = lambda *a, **k: {
+        "reachable": True,
+        "state": "authenticated",
+        "logged_in": True,
+        "account": "me@example.com",
+        "error": "",
+    }
+
+    # Daemon stopped (runtime installed, not running).
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "docker", "available": True, "running": False, "hint": "start Docker"},
+    }
+    flags = stub._apple_live_flags()
+    assert flags["needs_attention"] is True and flags["signed_in"] is False
+
+    # Runtime missing entirely.
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "", "available": False, "running": False, "hint": ""},
+    }
+    assert stub._apple_live_flags()["needs_attention"] is True
+
+    # A cold (checking) probe does not downgrade while the worker looks.
+    stub._apple_container_cache = None
+    stub.threadpool = SimpleNamespace(start=lambda worker: None)
+    flags = stub._apple_live_flags()
+    assert flags["signed_in"] is True and flags["needs_attention"] is False
+
+    # A running runtime keeps the light green.
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "docker", "available": True, "running": True, "hint": ""},
+    }
+    flags = stub._apple_live_flags()
+    assert flags["signed_in"] is True and flags["needs_attention"] is False
+
+
+def test_live_flags_ignore_container_health_for_the_cookies_tier(tmp_path):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    stub._apple_container_cache = {
+        "at": time.time(),
+        "result": {"name": "", "available": False, "running": False, "hint": ""},
+    }
+
+    flags = stub._apple_live_flags()
+
+    assert flags["signed_in"] is True and flags["wrapper_ready"] is False
+    assert flags["needs_attention"] is False
 
 
 def test_apple_provider_is_logged_in_follows_the_wrapper_session():
@@ -1510,3 +1636,46 @@ def test_download_click_with_cookies_and_binary_passes_the_gates(tmp_path):
     stub._download_gate = lambda: "block"  # stop after the setup gates: no queueing here
     WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
     assert seen == []
+
+
+def test_wait_for_session_returns_when_the_cookies_export_changes(tmp_path):
+    from threading import Event
+
+    from waves.waves_ui.backend import WavesBridge
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("old export", encoding="utf-8")
+    provider = SimpleNamespace(cookies_path=str(cookies), wrapper_url="")
+    stub = SimpleNamespace()
+
+    def _change_and_sleep(seconds, job_abort):
+        cookies.write_text("fresh export", encoding="utf-8")
+        return True
+
+    stub._apple_sleep_abortable = _change_and_sleep
+    stub._apple_wait_for_session = WavesBridge._apple_wait_for_session.__get__(stub, SimpleNamespace)
+
+    assert stub._apple_wait_for_session(provider, Event()) is True
+
+
+def test_wait_for_session_returns_false_on_stop(tmp_path):
+    from threading import Event
+
+    from waves.waves_ui.backend import WavesBridge
+
+    provider = SimpleNamespace(cookies_path="", wrapper_url="")
+    abort = Event()
+    abort.set()
+    stub = SimpleNamespace()
+
+    stub._apple_wait_for_session = WavesBridge._apple_wait_for_session.__get__(stub, SimpleNamespace)
+
+    assert stub._apple_wait_for_session(provider, abort) is False
+
+
+def test_an_unchanged_cookies_resave_does_not_lift_the_expiry_marker():
+    from waves.waves_ui.backend import _apple_cookies_resave_changed
+
+    assert _apple_cookies_resave_changed({}, "/old.txt") is False
+    assert _apple_cookies_resave_changed({"apple_cookies_path": "/old.txt"}, "/old.txt") is False
+    assert _apple_cookies_resave_changed({"apple_cookies_path": "/new.txt"}, "/old.txt") is True

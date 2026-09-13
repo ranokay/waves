@@ -27,7 +27,7 @@ feature.
 | `forwardRequested`                                                                                 | The mouse forward button asks to navigate forward (the back button fires `backRequested`)                     |
 | `hoverMotionChanged` / `artHoverTiltChanged` / `videoHoverPeekChanged`                             | The matching motion preference flipped (`setWavesPref`); the surfaces re-read it                              |
 | `diagnosticsExported(path)`                                                                        | A diagnostics export finished (`""` = failed)                                                                 |
-| `appleStatusChanged`                                                                               | A save moved `apple_enabled`; Settings re-reads `appleStatus()` and Main clears Apple search rows when off    |
+| `appleStatusChanged`                                                                               | A save moved `apple_enabled` or the session; Settings re-reads `appleStatus()`; search clears when off        |
 | `appleSetupRequested(reason)`                                                                      | Apple needs setup (`setup` on enable, `cookies` on a pre-setup download click); Main deep-links to the wizard |
 | `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull and sign-out lifecycle; Settings re-reads `appleSetupState()`          |
 
@@ -120,7 +120,10 @@ album/playlist/track, per-track `queueTrackState` events with delivered
 quality words, and ownership recorded from the same done events. The bytes
 arrive file-level (gamdl fetch plus local decrypt, verified by codec probe)
 instead of through the TIDAL segment engine, and a missing cookies export
-fails the click with a status message before anything queues.
+fails the click with a status message before anything queues. A session
+rejected at a download boundary holds its row in place and pauses the run
+(the light says Needs attention); the job retries once the wrapper guest
+refreshes its tokens or the cookies export changes, and STOP lands promptly.
 
 ## Local library presence (the "in your library" badge)
 
