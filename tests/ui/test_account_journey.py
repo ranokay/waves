@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 from support.paths import QML_MAIN
 from support.qml import run_scenario
+from support.qml_probe import scene_js
 
 _EXIT_OK = 0
 _EXIT_REGRESSED = 1
@@ -67,7 +68,7 @@ _SETTINGS_TAB = (
 )
 
 # The Apple provider band's enable switch, found by its status column (the
-# one whose switch row reads "Apple Music"), scrolled into view.
+# one whose switch row reads "Enable Apple Music"), scrolled into view.
 _SWITCH_FIND = """
   function hasText(it, text) {
     if (!it) return false;
@@ -83,55 +84,35 @@ _SWITCH_FIND = """
     for (var i = 0; i < kids.length; i++) collect(kids[i], out);
     return out;
   }
-  function find(it, pred) {
-    if (!it) return null;
-    if (pred(it)) return it;
-    var kids = it.children || [];
-    for (var i = 0; i < kids.length; i++) {
-      var hit = find(kids[i], pred);
-      if (hit) return hit;
-    }
-    return null;
-  }
   var cols = collect(settingsPage, []);
   var col = cols.length ? cols[0] : null;
-  var sw = col ? find(col, function (o) { return typeof o.toggle === "function"; }) : null;
+  var sw = col ? findFirst(col, function (o) { return typeof o.toggle === "function"; }) : null;
 """
 
-_SCROLL_TO_APPLE_SWITCH = "(function () {" + _SWITCH_FIND + """
+_SCROLL_TO_APPLE_SWITCH = scene_js(_SWITCH_FIND + """
   if (!sw) return "none";
-  var flick = find(settingsPage, function (o) { return o.contentY !== undefined && o.contentHeight !== undefined && o.height > 0; });
+  var flick = findFirst(settingsPage, function (o) {
+    return o.contentY !== undefined && o.contentHeight !== undefined && o.height > 0;
+  });
   if (flick) {
     var y = sw.mapToItem(flick.contentItem, 0, 0).y;
     var maxY = Math.max(0, flick.contentHeight - flick.height);
     flick.contentY = Math.max(0, Math.min(y - flick.height / 2, maxY));
   }
   return "scrolled";
-})()"""
+""")
 
-_APPLE_SWITCH = "(function () {" + _SWITCH_FIND + """
+_APPLE_SWITCH = scene_js(_SWITCH_FIND + """
   if (!sw) return null;
   return sw.mapToItem(null, sw.width / 2, sw.height / 2);
-})()"""
+""")
 
 
 def _text_point(text: str) -> str:
     """The scene centre of the first Text with this exact string."""
-    return (
-        "(function () {"
-        "  function find(it, text) {"
-        "    if (!it) return null;"
-        "    if (it.text === text) return it;"
-        "    var kids = it.children || [];"
-        "    for (var i = 0; i < kids.length; i++) {"
-        "      var hit = find(kids[i], text);"
-        "      if (hit) return hit;"
-        "    }"
-        "    return null;"
-        "  }"
-        f"  var t = find(settingsPage, {json.dumps(text)});"
-        "  return t ? t.mapToItem(null, t.width / 2, t.height / 2) : null;"
-        "})()"
+    return scene_js(
+        f"  var t = findFirst(settingsPage, function (o) {{ return o.text === {json.dumps(text)}; }});\n"
+        "  return t ? t.mapToItem(null, t.width / 2, t.height / 2) : null;\n"
     )
 
 
@@ -466,6 +447,18 @@ def _run_journey(reverse: bool = False) -> int:
 
     # 7. Relaunch: a fresh Main.qml over the same persisted settings still
     #    reads Apple enabled and TIDAL signed out, and both stay reachable.
+    #    The enabled switch is checked on DISK too, so the relaunch cannot
+    #    pass on the in-memory bridge alone.
+    settings_path = Path(bridge.settings.file_path)
+
+    def enabled_on_disk() -> bool:
+        try:
+            return json.loads(settings_path.read_text(encoding="utf-8")).get("apple_enabled") is True
+        except (OSError, ValueError):
+            return False
+
+    if not wait_for(enabled_on_disk, 4000):
+        problems.append("the provider switch never reached settings.json")
     if load_root() is None:
         problems.append("Main.qml did not load on relaunch")
     else:

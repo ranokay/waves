@@ -5,11 +5,15 @@ file in the pre-provider shape (the pre-split quality carrier, the retired
 Atmos toggle, a custom album template) and an ownership database in the
 baseline schema (before ``audio_type``), holding the same raw id for both
 providers, a stereo and an Atmos copy, and a recorded file path per copy.
-The upgraded app must keep every user choice and file reference, and the
-second start must change nothing.
+The launch keeps every user choice and file reference, and the second start
+changes nothing. The one deliberate exception is an implausible pacing value
+(seconds counted as albums by an older release): the one-time reset puts it
+back on the default, and the test asserts that reset explicitly.
 
-The baseline schema below is the exact CREATE TABLE at the audit's baseline
-commit; the current store migrates it with its forward-compatible ALTERs.
+The settings side drives the app's own ``Settings`` startup class (read, the
+run-once migrations, the write-back) against a baseline file; the baseline
+schema below is the exact CREATE TABLE at the audit's baseline commit, and
+the current store migrates it with its forward-compatible ALTERs.
 """
 
 from __future__ import annotations
@@ -19,8 +23,10 @@ import sqlite3
 
 import pytest
 
-from waves.config import BaseConfig, _migrate_settings
+from waves import config
+from waves.config import Settings as LaunchSettings
 from waves.constants import QualityTier
+from waves.helper.decorator import SingletonMeta
 from waves.model.cfg import Settings as ModelSettings
 from waves.ownership import OwnershipStore
 
@@ -58,24 +64,27 @@ _BASELINE_JSON = {
 }
 
 
-def _config(tmp_path) -> BaseConfig:
-    cfg = BaseConfig()
-    cfg.cls_model = ModelSettings
-    cfg.file_path = str(tmp_path / "settings.json")
-    cfg.path_base = str(tmp_path)
-    return cfg
+def _launch_settings(tmp_path, monkeypatch):
+    """The app's own startup class over a settings file in tmp_path.
+
+    ``Settings.__init__`` is read + the run-once migrations + the write-back;
+    the singleton is reset around it so each call is a real launch, and the
+    file path is patched so no test touches the shared config home.
+    """
+    monkeypatch.setattr(config, "path_file_settings", lambda: str(tmp_path / "settings.json"))
+    SingletonMeta._instances.pop(LaunchSettings, None)
+    launched = LaunchSettings()
+    # Drop it again: a shared singleton left holding this test's file would
+    # leak the baseline into every later test that asks for Settings().
+    SingletonMeta._instances.pop(LaunchSettings, None)
+    return launched.data
 
 
-def test_baseline_settings_survive_the_upgrade_and_a_second_start(tmp_path):
+def test_baseline_settings_survive_the_upgrade_and_a_second_start(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"
     path.write_text(json.dumps(_BASELINE_JSON), encoding="utf-8")
 
-    cfg = _config(tmp_path)
-    assert cfg.read(str(path)) is True
-    # The launch's upgrade step, then the write-back the app performs.
-    assert _migrate_settings(cfg.data) is True
-    cfg.save()
-    first = cfg.data
+    first = _launch_settings(tmp_path, monkeypatch)
 
     # Every user choice survives, in its upgraded spelling.
     assert first.tidal_quality_audio == QualityTier.LOSSLESS
@@ -84,20 +93,19 @@ def test_baseline_settings_survive_the_upgrade_and_a_second_start(tmp_path):
     assert first.format_album == "Custom/{album_artist}/{album_title}"
     assert first.skip_existing is True
     assert first.metadata_replay_gain is True  # the old default flipped on once
+    # The one deliberate reset: 900 s is an albums-era value, not a pause.
     assert first.api_rate_limit_delay_sec == ModelSettings().api_rate_limit_delay_sec
     # The shared lyrics/artwork toggles were copied into both provider mirrors.
     assert first.tidal_lyrics_embed is False and first.apple_lyrics_embed is False
     assert first.tidal_metadata_cover_embed is False and first.apple_metadata_cover_embed is False
-    # The retired carrier never reaches disk again.
+    # The retired carrier never reaches disk again, and the launch saved.
     assert "quality_audio" not in json.loads(path.read_text(encoding="utf-8"))
-    assert (tmp_path / "settings-migrations.json").is_file()
+    assert "tidal_quality_audio" in json.loads(path.read_text(encoding="utf-8"))
 
-    # Second start: a fresh config reads what the first wrote, the upgrade
-    # step reports nothing to change, and the serialized file is byte-stable.
-    second = _config(tmp_path)
-    assert second.read(str(path)) is True
-    assert _migrate_settings(second.data) is False
-    assert second.data.to_json() == first.to_json()
+    # Second start: a fresh launch reads what the first wrote and changes
+    # nothing, so the serialized file is byte-stable.
+    second = _launch_settings(tmp_path, monkeypatch)
+    assert second.to_json() == first.to_json()
 
 
 def test_baseline_ownership_upgrades_without_losing_copies_or_ids(tmp_path):

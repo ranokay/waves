@@ -2,8 +2,10 @@
 
 The setup refresh re-probes the container runtime on a worker precisely so a
 slow runtime (a cold Docker daemon, a stretched API call) cannot hold the GUI
-thread: the frame clock keeps ticking, a queue row's cancel still lands, and
-the drawer still opens while the probe sleeps. The scenario runs the real
+thread. The refresh has no cancel verb of its own, so responsiveness is shown
+the way a user experiences it: the frame clock keeps ticking while the probe
+sleeps, and actions a user can take in that window -- cancelling a queued
+download, opening the queue drawer -- still land. The scenario runs the real
 Main.qml with a deliberately delayed probe and counts GUI-loop heartbeats.
 """
 
@@ -41,7 +43,7 @@ def _run_scenario() -> int:
     from PySide6.QtCore import QEventLoop, QTimer
 
     def slow_probe(timeout=10):
-        time.sleep(1.2)
+        time.sleep(min(1.2, timeout))
         return {"name": "docker", "available": True, "running": False, "hint": ""}
 
     bridge._refresh_apple_container_cache = slow_probe

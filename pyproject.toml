@@ -236,8 +236,10 @@ ignore = [
 # The provider-logo scenario is the same boot -> drive -> assert shape: one
 # deliberately linear function (C901).
 "tests/providers/test_provider_logos.py" = ["C901"]
-# The setup-guidance and track-row scenarios keep the same shape: boot the real
-# Main.qml, drive one flow, assert on the rendered tree (C901).
+# The scenario files added for the T6 pass and the remaining item-21
+# additions keep the same shape: boot the real Main.qml, drive one flow and
+# assert on the rendered tree, as one deliberately linear function (C901).
+# The subprocess call itself lives in support.qml's runner.
 "tests/providers/apple/test_apple_setup_guidance.py" = ["C901"]
 "tests/providers/apple/test_apple_probe_responsive.py" = ["C901"]
 "tests/ui/test_dual_version_queue_scenario.py" = ["C901"]

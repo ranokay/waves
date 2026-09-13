@@ -19,6 +19,7 @@ from waves.providers.apple.runtime import (
 
 def test_the_engine_client_surface_still_exists():
     from gamdl.api.apple_music import AppleMusicApi
+    from gamdl.api.wrapper import WrapperApi
     from gamdl.downloader.base import AppleMusicBaseDownloader
     from gamdl.downloader.downloader import DownloadMode
     from gamdl.downloader.song import AppleMusicSongDownloader
@@ -31,20 +32,27 @@ def test_the_engine_client_surface_still_exists():
 
     assert callable(AppleMusicApi.create_from_netscape_cookies)
     assert callable(AppleMusicApi.create_from_wrapper)
-    # The engine reads the song's media list through this interface member.
+    assert callable(AppleMusicBaseInterface.create)
+    assert callable(WrapperApi.create)
+    # The engine reads the song's media list and drives the song downloader
+    # through these members.
     assert callable(AppleMusicInterface._get_song_media)
+    assert callable(AppleMusicSongDownloader.get_download_item)
+    assert callable(AppleMusicSongDownloader.download)
     # The codecs and the download mode the engine's wiring names.
-    assert {SongCodec.ATMOS, SongCodec.AAC_WEB, SongCodec.AAC} <= set(SongCodec)
+    assert {SongCodec.ATMOS, SongCodec.AAC_WEB, SongCodec.AAC, SongCodec.ASK} <= set(SongCodec)
     assert DownloadMode.NM3U8DLRE in set(DownloadMode)
-    for cls in (
-        AppleMusicBaseInterface,
-        AppleMusicBaseDownloader,
-        AppleMusicSongDownloader,
-        AppleMusicMusicVideoInterface,
-        AppleMusicSongInterface,
-        AppleMusicUploadedVideoInterface,
-    ):
-        assert isinstance(cls, type)
+    # The classes the engine instantiates (import success is the real check;
+    # naming them here keeps the imports load-bearing).
+    assert all(
+        isinstance(cls, type)
+        for cls in (
+            AppleMusicBaseDownloader,
+            AppleMusicMusicVideoInterface,
+            AppleMusicSongInterface,
+            AppleMusicUploadedVideoInterface,
+        )
+    )
 
 
 def test_every_nm3u8dlre_asset_pin_is_versioned_and_hashed():
