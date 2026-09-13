@@ -29,8 +29,10 @@ def _scenario() -> int:
 
     app = QGuiApplication.instance() or QGuiApplication([])
     from _qml_offline import patch_offline
+    from support.qml import sandbox_qml_settings
 
     patch_offline()
+    sandbox_qml_settings()
     from waves.waves_ui.app import _load_mono
     from waves.waves_ui.backend import WavesBridge
 

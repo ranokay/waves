@@ -31,5 +31,5 @@ def patch_offline() -> None:
 # Since issue #63 the gate is whichever of the provider picker (first run)
 # and the login panel is showing: the two are mutually exclusive by design,
 # so one statement parks both. Scenarios actually about login keep this
-# parked-out state away (see test_startup_provider_picker_qml).
+# parked-out state away (see tests/ui/test_startup_provider_picker_qml.py).
 PARK_LOGIN_QML = "loginPanel.visible = false; providerPicker.visible = false"
