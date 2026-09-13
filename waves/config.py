@@ -212,15 +212,16 @@ class BaseConfig:
 # paced nothing, and it costs a long list half an hour of standing still.
 _RATE_LIMIT_PAUSE_PLAUSIBLE_MAX_SEC: float = 30.0
 
-# Run-once settings migrations, by name. Completion is recorded both in the
-# settings model (the boolean markers the steps set) and in a sidecar beside
-# the settings file. The sidecar is what survives a downgrade: an older
-# release rewrites settings.json from its own model and drops every field it
-# does not know, so the in-file markers vanish with it and a step would run
-# again over a choice the user has made since. The quality split is not listed:
-# its carrier is never serialized by this model, and a carrier that appears
-# after a downgrade carries the newest expression of that setting, so it is
-# always folded once and dropped.
+# Run-once settings migrations, by name. Completion is recorded in the
+# settings model where a step has an in-file marker, and in a sidecar beside
+# the settings file either way. The sidecar is what survives a downgrade: an
+# older release rewrites settings.json from its own model and drops every
+# field it does not know, so the in-file markers vanish with it and a step
+# would run again over a choice the user has made since. The quality split is
+# not listed: its carrier is never serialized by this model, so a carrier that
+# appears can only come from a pre-split release, whose file has no
+# tidal_quality_audio at all; folding it is the recovery of that setting, not
+# a replay over a newer choice.
 _MIGRATIONS_SIDECAR_NAME = "settings-migrations.json"
 _MIGRATION_STEPS: tuple[str, ...] = (
     "replay_gain_default",
@@ -283,16 +284,16 @@ def _migrate_settings(data: ModelSettings, *, record: bool = True) -> bool:  # n
     changed = False
     done = _completed_migrations()
 
-    # quality_audio split into the per-provider settings (issue #24, spec
-    # §9.2), stored as Waves tier strings. The legacy field is a
-    # migration-only carrier (never serialized): when a pre-split config
-    # handed it a value, fold that value onto the ladder into
-    # tidal_quality_audio -- identical meaning, since tidalapi's serialized
-    # tier values already are the ladder's words (low_320k serialized as
-    # "HIGH", the word the UI shows) -- then null it, so the key leaves
-    # settings.json on the next save. A downgrade can re-serialize the
-    # carrier; it carries the newest expression of the setting that survived,
-    # so it is folded once more and dropped, never left to override later.
+    # quality_audio split into the per-provider settings (spec §9.2), stored
+    # as Waves tier strings. The legacy field is a migration-only carrier
+    # (never serialized): when a pre-split config handed it a value, fold
+    # that value onto the ladder into tidal_quality_audio -- identical
+    # meaning, since tidalapi's serialized tier values already are the
+    # ladder's words (low_320k serialized as "HIGH", the word the UI shows) --
+    # then null it, so the key leaves settings.json on the next save. The
+    # carrier can only be present in a file an older release wrote, and that
+    # file has no tidal_quality_audio to preserve, so folding is the recovery
+    # of the setting, never an overwrite of a newer choice.
     if data.quality_audio is not None:
         tier = tier_from_word(data.quality_audio)
         if tier is not None:
@@ -326,7 +327,7 @@ def _migrate_settings(data: ModelSettings, *, record: bool = True) -> bool:  # n
         data.format_playlist_folder_migrated = True
         changed = True
 
-    # Download paths split by provider (issue #65): the album and track
+    # Download paths split by provider: the album and track
     # template defaults grew a leading {provider_name} segment. Like the
     # {folder_path} migration above, only stored values equal to the OLD
     # defaults are rewritten; a customized template is the user's own layout
@@ -350,14 +351,14 @@ def _migrate_settings(data: ModelSettings, *, record: bool = True) -> bool:  # n
         data.api_rate_limit_wired_migrated = True
         changed = True
 
-    # Lyrics & artwork split per provider (issue #61): the shared toggles
+    # Lyrics & artwork split per provider: the shared toggles
     # move into each provider's card. Copy the shared values into both
     # mirrors once, so an existing install downloads exactly as configured
     # while each provider's choices become its own from here on.
     if "lyrics_art_providers" not in done:
         changed = _migrate_lyrics_art_providers(data) or changed
 
-    # The Atmos toggle became the Chooser default-audio dropdown (issue #66).
+    # The Atmos toggle became the Chooser default-audio dropdown.
     # A downgrade can re-serialize the retired carrier; it is dropped either
     # way, and only a first run lets it move the dropdown.
     if "atmos_default" not in done:

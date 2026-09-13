@@ -158,10 +158,12 @@ def test_step_names_from_a_newer_build_are_carried_through(tmp_path):
 def test_record_off_leaves_the_sidecar_alone(tmp_path):
     # The production caller migrates with record=False, saves, and only then
     # records: a save that never landed must not mark the steps done.
+    given = [step for step in _MIGRATION_STEPS if step != "replay_gain_default"]
+    _seed_sidecar(tmp_path, given)
     data = ModelSettings()
 
     _migrate_settings(data, record=False)
 
-    assert _completed_migrations() == set()
+    assert _completed_migrations() == set(given), "record=False wrote the sidecar"
     _remember_migrations(_completed_migrations())
     assert _completed_migrations() == set(_MIGRATION_STEPS)
