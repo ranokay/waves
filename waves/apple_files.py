@@ -13,7 +13,6 @@ files carry the generic WAVES_* family only, never the TIDAL legacy trio.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
 import re
@@ -21,23 +20,19 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from pathvalidate import sanitize_filename
-
 from waves.constants import (
     FORMAT_TEMPLATE_EXPLICIT,
     METADATA_LOOKUP_UPC,
-    PLAYLIST_EXTENSION,
-    PLAYLIST_PREFIX,
     MetadataTargetUPC,
 )
 from waves.helper.path import (
     _drop_empty_segments,
     calculate_number_padding,
     path_file_numbered_candidate,
-    path_file_sanitize,
     sanitize_name_component,
 )
 from waves.metadata import Metadata, sniff_image_format
+from waves.playlists import populate_playlists
 
 logger = logging.getLogger("waves.apple_files")
 
@@ -250,38 +245,32 @@ def _write_cover_sidecar_file(directory: str | Path, image: bytes, name: str) ->
 def write_collection_playlist(
     landed: list[Path],
     name: str,
+    is_album: bool = False,
     illegal_replacement: str = "",
     illegal_map: dict[str, str] | None = None,
 ) -> None:
     """The _Name.m3u8 the playlist_create setting promises, per directory.
 
-    Compact mirror of the engine's playlist_populate for Apple landings:
-    landed paths in collection order, one file per directory this run filled,
-    basenames as entries, written through a temp sibling and swapped in.
+    Delegates to the shared writer the engine also uses: entries in collection
+    order when the folder agrees, the folder listing when it does not (a
+    partial run must never shrink a complete playlist), legacy .m3u names
+    kept, symlink entries, AppleDouble cleanup and the atomic swap.
     Best-effort throughout: a playlist file must never fail landed tracks.
     """
     if not landed:
         return
-    ordered: dict[Path, list[Path]] = {}
-    for path in landed:
-        ordered.setdefault(path.parent, []).append(path)
-    for directory, paths in ordered.items():
-        playlist_name = sanitize_filename(
-            f"{PLAYLIST_PREFIX}{sanitize_name_component(name, illegal_replacement, illegal_map)}{PLAYLIST_EXTENSION}"
+    try:
+        populate_playlists(
+            {path.parent for path in landed},
+            name,
+            is_album=is_album,
+            sort_alphabetically=is_album,
+            paths_ordered=landed,
+            illegal_replacement=illegal_replacement,
+            illegal_map=illegal_map,
         )
-        target = Path(path_file_sanitize(directory / playlist_name, adapt=True))
-        tmp = target.with_name(f"{target.name}.tmp")
-        try:
-            with tmp.open(mode="w", encoding="utf-8") as handle:
-                for path in paths:
-                    handle.write(path.name + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(tmp, target)
-        except OSError:
-            logger.debug("Could not write the Apple playlist file", exc_info=True)
-            with contextlib.suppress(OSError):
-                tmp.unlink()
+    except (OSError, ValueError):
+        logger.debug("Could not write the Apple playlist file", exc_info=True)
 
 
 def tag_apple_file(

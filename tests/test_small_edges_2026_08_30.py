@@ -28,9 +28,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from waves import download as download_mod
-from waves.download import Download, _staging_path
+from waves.download import Download
 from waves.helper import path as path_helper
+from waves.helper import path as path_mod
 from waves.helper.path import PATH_LENGTH_MAX, _longest_stem_that_fits
+from waves.helper.path import staging_path as _staging_path
 from waves.waves_ui import diagnostics
 from waves.waves_ui.backend import _FACTORY_WIPE_SUBDIRS
 
@@ -146,7 +148,7 @@ def test_a_deep_parent_still_gets_a_staging_name_that_fits(parent_len, monkeypat
     """The band the ten-character floor could not reach. The destination itself
     fits at these depths (a one-character stem plus '.flac'), so the staging
     name has to as well or the track can never land."""
-    monkeypatch.setattr(download_mod, "_PATH_LENGTH_MAX", 259)
+    monkeypatch.setattr(path_mod, "PATH_LENGTH_MAX", 259)
     parent = pathlib.PurePosixPath("/" + "d" * (parent_len - 1))
     destination = pathlib.Path(str(parent)) / "X.flac"
 
@@ -158,7 +160,7 @@ def test_a_deep_parent_still_gets_a_staging_name_that_fits(parent_len, monkeypat
 
 def test_the_staging_name_keeps_something_unique_however_deep(monkeypatch):
     """A name with nothing unique in it is shared by every track in the folder."""
-    monkeypatch.setattr(download_mod, "_PATH_LENGTH_MAX", 259)
+    monkeypatch.setattr(path_mod, "PATH_LENGTH_MAX", 259)
     destination = pathlib.Path("/" + "d" * 251) / "X.flac"
 
     staged = _staging_path(destination)

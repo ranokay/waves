@@ -12,6 +12,7 @@ from waves.apple_files import (
     format_apple_path,
     pick_destination,
     tag_apple_file,
+    write_collection_playlist,
     write_cover_sidecar,
     write_text_sidecar,
 )
@@ -311,3 +312,31 @@ def test_embed_cover_bytes_converts_png_for_the_tag(tmp_path):
     jpeg = _image_bytes(tmp_path, "c.jpg", "mjpeg")
     assert stub._embed_cover_bytes(jpeg) is jpeg
     assert stub._embed_cover_bytes(None) is None
+
+
+def test_an_apple_partial_run_keeps_a_complete_playlist(tmp_path):
+    # A re-run that skipped owned tracks lands one path; the folder already
+    # holds the full album, so the playlist must not shrink to that one line.
+    album = tmp_path / "Album"
+    album.mkdir()
+    for name in ("01 One.m4a", "02 Two.m4a", "03 Three.m4a"):
+        (album / name).write_bytes(b"x")
+    playlist = album / "_Album.m3u8"
+    playlist.write_text("01 One.m4a\n02 Two.m4a\n03 Three.m4a\n", encoding="utf-8")
+
+    write_collection_playlist([album / "01 One.m4a"], "Album", is_album=True)
+
+    assert playlist.read_text().splitlines() == ["01 One.m4a", "02 Two.m4a", "03 Three.m4a"]
+
+
+def test_an_apple_playlist_keeps_an_existing_legacy_name(tmp_path):
+    album = tmp_path / "Album"
+    album.mkdir()
+    (album / "01 One.m4a").write_bytes(b"x")
+    legacy = album / "_Album.m3u"
+    legacy.write_text("01 One.m4a\n", encoding="utf-8")
+
+    write_collection_playlist([album / "01 One.m4a"], "Album", is_album=True)
+
+    assert legacy.read_text() == "01 One.m4a\n"
+    assert not (album / "_Album.m3u8").exists()

@@ -13393,6 +13393,7 @@ class WavesBridge(LibraryMixin, QObject):
             write_collection_playlist(
                 landed,
                 header_title or spec.name,
+                is_album=type_media == "album",
                 illegal_replacement=str(getattr(data, "filename_illegal_replacement", "") or ""),
                 illegal_map=getattr(data, "filename_illegal_map", None),
             )
