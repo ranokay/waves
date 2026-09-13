@@ -174,7 +174,7 @@ class TestPlaylistLineEndings:
         # Force os.linesep to CRLF to prove the writer does not concatenate it directly.
         monkeypatch.setattr("waves.download.os.linesep", "\r\n")
 
-        with patch("waves.download.AudioExtensionsValid", [".m4a"]):
+        with patch("waves.playlists.AudioExtensionsValid", [".m4a"]):
             created = dl.playlist_populate({tmp_path}, name_list="MyList", is_album=True, sort_alphabetically=True)
 
         assert len(created) == 1

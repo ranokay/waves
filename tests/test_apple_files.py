@@ -340,3 +340,27 @@ def test_an_apple_playlist_keeps_an_existing_legacy_name(tmp_path):
 
     assert legacy.read_text() == "01 One.m4a\n"
     assert not (album / "_Album.m3u8").exists()
+
+
+def test_one_failing_directory_does_not_drop_the_others(tmp_path, monkeypatch):
+    from waves import playlists as playlists_mod
+
+    good = tmp_path / "Good"
+    bad = tmp_path / "Bad"
+    for folder in (good, bad):
+        folder.mkdir()
+        (folder / "01 One.m4a").write_bytes(b"x")
+
+    real = playlists_mod._write_one_playlist
+
+    def flaky(directory, *args, **kwargs):
+        if directory == bad:
+            raise OSError("locked")
+        return real(directory, *args, **kwargs)
+
+    monkeypatch.setattr(playlists_mod, "_write_one_playlist", flaky)
+
+    write_collection_playlist([good / "01 One.m4a", bad / "01 One.m4a"], "Album", is_album=True)
+
+    assert (good / "_Album.m3u8").is_file()
+    assert not (bad / "_Album.m3u8").exists()

@@ -245,32 +245,32 @@ def _write_cover_sidecar_file(directory: str | Path, image: bytes, name: str) ->
 def write_collection_playlist(
     landed: list[Path],
     name: str,
+    *,
     is_album: bool = False,
     illegal_replacement: str = "",
     illegal_map: dict[str, str] | None = None,
 ) -> None:
     """The _Name.m3u8 the playlist_create setting promises, per directory.
 
-    Delegates to the shared writer the engine also uses: entries in collection
-    order when the folder agrees, the folder listing when it does not (a
-    partial run must never shrink a complete playlist), legacy .m3u names
-    kept, symlink entries, AppleDouble cleanup and the atomic swap.
-    Best-effort throughout: a playlist file must never fail landed tracks.
+    Delegates to the shared writer the engine also uses, best-effort: entries
+    in collection order when the folder agrees, the folder listing when it does
+    not (a partial run must never shrink a complete playlist), legacy .m3u
+    names kept, symlink entries, AppleDouble cleanup and the atomic swap. A
+    playlist file must never fail landed tracks, and one directory's failure
+    must not drop the others.
     """
     if not landed:
         return
-    try:
-        populate_playlists(
-            {path.parent for path in landed},
-            name,
-            is_album=is_album,
-            sort_alphabetically=is_album,
-            paths_ordered=landed,
-            illegal_replacement=illegal_replacement,
-            illegal_map=illegal_map,
-        )
-    except (OSError, ValueError):
-        logger.debug("Could not write the Apple playlist file", exc_info=True)
+    populate_playlists(
+        {path.parent for path in landed},
+        name,
+        is_album=is_album,
+        sort_alphabetically=is_album,
+        paths_ordered=landed,
+        illegal_replacement=illegal_replacement,
+        illegal_map=illegal_map,
+        best_effort=True,
+    )
 
 
 def tag_apple_file(

@@ -1368,14 +1368,13 @@ def staging_path(path_destination: pathlib.Path) -> pathlib.Path:
 
     # A parent so deep that even a bare ".<uuid>.tmp" overflows the cap: the
     # readable part is already gone, so the unique part gives ground too, as
-    # far as the cap actually leaves room for. The floor used to be ten hex
-    # characters whatever the arithmetic said, which for parents in the last
-    # ten characters before the cap was still over it: every staging attempt
-    # failed identically while the destination itself fit, one step deeper.
-    # One character is the floor now, because a name with nothing unique in it
-    # is shared by every track in the folder; at the very deepest parent the
-    # sanitizer can reach, that one character is the only thing still over the
-    # cap, where it used to be thirty-six.
+    # far as the cap actually leaves room for. Ten hex characters whatever the
+    # arithmetic says would still be over the cap for parents in the last ten
+    # characters before it: every staging attempt fails identically while the
+    # destination itself fits. One character is the floor, because a name with
+    # nothing unique in it is shared by every track in the folder; at the very
+    # deepest parent the sanitizer can reach, that one character is what the
+    # cap still leaves for uniqueness.
     if not base_name and budget_path < 0:
         unique = unique.replace("-", "")[: max(1, len(unique.replace("-", "")) + budget_path)]
 
