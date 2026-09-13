@@ -81,6 +81,7 @@ markers = [
   "ffmpeg: uses a real ffmpeg/ffprobe binary (skipped when none is on PATH)",
   "integration: crosses a real process, disk store or service boundary (opt-in groups)",
   "platform: behavior that depends on the host platform",
+  "account: runs against the real Apple/TIDAL accounts (opt-in via WAVES_ACCOUNT_TESTS=1)",
 ]
 
 [tool.ruff]

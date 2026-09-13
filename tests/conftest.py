@@ -39,7 +39,13 @@ import pytest
 # conftest import, before any test module is imported and before any path is
 # resolved from it. The subprocess scenarios copy this environment, so they
 # land in the same throwaway home unless they name one of their own.
+#
+# The live account suite is the one deliberate exception: its explicit gate
+# (WAVES_ACCOUNT_TESTS=1) plus an explicit account-run selection means the
+# app's real profile is the subject, so the redirect is undone in
+# pytest_configure below. The default here is always the throwaway home.
 _TEST_CONFIG_HOME = tempfile.mkdtemp(prefix="waves-test-config-")
+_ORIGINAL_XDG_CONFIG_HOME = os.environ.get("XDG_CONFIG_HOME")
 os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
 atexit.register(shutil.rmtree, _TEST_CONFIG_HOME, True)
 
@@ -116,19 +122,41 @@ def pytest_addoption(parser) -> None:
     )
 
 
+_ACCOUNT_RUN = False
+
+
 def pytest_configure(config) -> None:
     """Record --require-qml and refuse to run it without PySide6."""
+    global _ACCOUNT_RUN
     from support import qml as qml_support
 
     qml_support.set_require_qml(config.getoption("require_qml"))
     if qml_support.require_qml() and qml_support.missing_qt():
         raise pytest.UsageError("--require-qml was given but PySide6 is not importable")
+    # The live account run is the only one that may touch the real profile:
+    # the env gate AND an explicit selection of tests/account or -m account
+    # both have to be present, so a full-suite run that happens to export the
+    # variable still stays sandboxed.
+    selected = any(str(arg).rstrip("/").endswith("tests/account") for arg in config.args)
+    _ACCOUNT_RUN = bool(
+        os.environ.get("WAVES_ACCOUNT_TESTS") == "1" and (config.getoption("markexpr") == "account" or selected)
+    )
+    if _ACCOUNT_RUN:
+        if _ORIGINAL_XDG_CONFIG_HOME is None:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+        else:
+            os.environ["XDG_CONFIG_HOME"] = _ORIGINAL_XDG_CONFIG_HOME
 
 
 def pytest_collection_modifyitems(config, items) -> None:
     """Auto-skip marked tests only for a positively missing dependency."""
     from support import qml as qml_support
 
+    if not _ACCOUNT_RUN:
+        skip_account = pytest.mark.skip(reason="live account tests; set WAVES_ACCOUNT_TESTS=1 and select tests/account")
+        for item in items:
+            if item.get_closest_marker("account"):
+                item.add_marker(skip_account)
     if shutil.which("ffmpeg") is None:
         skip_ffmpeg = pytest.mark.skip(reason="ffmpeg is not on PATH")
         for item in items:
