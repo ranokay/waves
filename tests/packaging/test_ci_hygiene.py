@@ -31,8 +31,10 @@ def test_dependabot_updates_develop_and_leaves_the_deliberate_pins_alone():
     poetry = _entry(cfg, "pip")
     assert poetry["target-branch"] == "develop"
     assert poetry["groups"], "a week of bumps should arrive as one grouped PR"
+    # Exact set: adding a pin to the ignore list means updating the playbook's
+    # story too, and this fails until it does.
     ignored = {entry["dependency-name"] for entry in poetry["ignore"]}
-    assert {"gamdl", "yt-dlp", "nuitka", "pyside6"} <= ignored
+    assert ignored == {"gamdl", "yt-dlp", "nuitka", "pyside6"}
 
     actions = _entry(cfg, "github-actions")
     assert actions["target-branch"] == "develop"
@@ -43,18 +45,34 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
     steps = wf["jobs"]["build"]["steps"]
 
     cache_index = next(
-        index for index, step in enumerate(steps) if str(step.get("uses", "")).startswith("actions/cache")
+        (index for index, step in enumerate(steps) if str(step.get("uses", "")).startswith("actions/cache")),
+        None,
     )
+    assert cache_index is not None, "the build job lost its Nuitka cache step"
     build_index = next(
-        index for index, step in enumerate(steps) if str(step.get("name", "")).startswith("Build Waves for")
+        (index for index, step in enumerate(steps) if str(step.get("name", "")).startswith("Build Waves for")),
+        None,
     )
-    assert cache_index < build_index
+    assert build_index is not None, "the build job lost its build step"
+    assert cache_index < build_index, "the cache must restore before the build"
 
     with_block = steps[cache_index]["with"]
-    assert "dist/waves.build" in with_block["path"]
+    path = str(with_block["path"])
+    assert "dist/waves.build" in path
+    # Each platform's Nuitka cache root carries ccache, the module cache and
+    # downloads; the Windows path follows appdirs' appname/appname/Cache layout.
+    assert "~/.cache/Nuitka" in path
+    assert "~/Library/Caches/Nuitka" in path
+    assert "~/AppData/Local/Nuitka/Nuitka/Cache" in path
+
     # One cache per matrix leg (the legacy macOS flavors build different Qt
-    # bindings), invalidated by the lockfile, with a fallback that warms the
-    # first build after a dependency bump.
-    assert "matrix.OS_ARCH" in with_block["key"]
-    assert "poetry.lock" in with_block["key"]
-    assert with_block["restore-keys"]
+    # bindings), invalidated by the lockfile and by the build recipe itself,
+    # with a fallback salted the same way.
+    key = str(with_block["key"])
+    assert "matrix.OS_ARCH" in key and "poetry.lock" in key
+    assert "release-or-test-build.yml" in key
+    restore_keys = str(with_block["restore-keys"])
+    assert "matrix.OS_ARCH" in restore_keys and "release-or-test-build.yml" in restore_keys
+
+    # The cached ccache must stay inside the repository cache budget.
+    assert wf["jobs"]["build"]["env"]["CCACHE_MAXSIZE"] == "2G"

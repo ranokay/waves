@@ -29,13 +29,13 @@ never leaks into the default run or CI.
 
 ## What is already automated
 
-| Mechanism                                | What it covers                                                                                                                                                                                                                                                   |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wrapper-upstream-check` (Mondays 09:00) | Opens one deduped issue when `glomatico/wrapper-v2` moves past `.github/wrapper-upstream.sha`. Never builds or publishes.                                                                                                                                        |
-| Pin-drift tests                          | Fail when the image tag, digest, APK pin, guest-lib pin and runbook drift (`test_wrapper_image_pins.py`), when gamdl drops a member the engine calls (`test_pinned_client_contract.py`), or when the files on this page lose their shape (`test_ci_hygiene.py`). |
-| Dependabot (`.github/dependabot.yml`)    | Weekly grouped PRs for `poetry.lock` and GitHub Actions, targeting `develop`. Ignores the deliberate pins below.                                                                                                                                                 |
-| The in-app updater                       | Ships app and engine bumps to users through normal releases; no side channel (spec §10.4).                                                                                                                                                                       |
-| The release build cache                  | Carries Nuitka's build tree between runs so a routine release relinks instead of recompiling every module.                                                                                                                                                       |
+| Mechanism                                | What it covers                                                                                                                                                                                                                                                                      |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wrapper-upstream-check` (Mondays 09:00) | Opens one deduped issue when `glomatico/wrapper-v2` moves past `.github/wrapper-upstream.sha`. Never builds or publishes.                                                                                                                                                           |
+| Pin-drift tests                          | Fail when the image tag, digest, APK pin, guest-lib pin and runbook drift (`test_wrapper_image_pins.py`), when gamdl drops a member the engine calls (`test_pinned_client_contract.py`), or when the Dependabot ignores or the release cache step disappear (`test_ci_hygiene.py`). |
+| Dependabot (`.github/dependabot.yml`)    | Weekly grouped PRs for `poetry.lock` and GitHub Actions, targeting `develop`. Ignores the deliberate pins below.                                                                                                                                                                    |
+| The in-app updater                       | Ships app and engine bumps to users through normal releases; no side channel (spec §10.4).                                                                                                                                                                                          |
+| The release build cache                  | Carries Nuitka's build tree between runs so a routine release relinks instead of recompiling every module.                                                                                                                                                                          |
 
 ## The update table
 
@@ -103,20 +103,25 @@ honor their macOS 12 tag. Treat a Qt bump like a release, not a chore.
 
 A clean release build compiles roughly 1,780 generated C modules for about
 an hour; yt-dlp's lazily generated extractor module alone took thirty
-minutes locally. Nuitka keeps `dist/waves.build` between invocations: scons
-skips C compilation for modules whose generated C is unchanged (content
-signatures), and Nuitka's bytecode cache lives in the same tree.
+minutes locally. Two trees make that cost disappear from later runs:
 
-The `build` job restores that tree plus Nuitka's own download cache with
-`actions/cache`, keyed `nuitka-v1-<leg>-<poetry.lock hash>`. The
-restore-key fallback warms the first build after a dependency bump, with
-unchanged modules still skipping. Legs are keyed separately because the
-legacy macOS flavors overlay different Qt bindings. ccache is deliberately
-not cached: scons already covers it, and a second multi-gigabyte cache would
-crowd the repository's 10 GB budget. The first run on a cold cache still
-pays the full compile; later releases mostly relink. GitHub evicts caches
-unused for seven days, and the `v1` prefix allows a full invalidation if the
-build layout ever changes.
+- `dist/waves.build` holds the generated C and object files. Nuitka
+  regenerates the C each run, but scons hashes the content, so modules whose
+  generated C is unchanged are not recompiled.
+- Nuitka's cache root (per platform: `~/.cache/Nuitka` on Linux,
+  `~/Library/Caches/Nuitka` on macOS, `%LOCALAPPDATA%\Nuitka\Nuitka\Cache`
+  on Windows) holds `ccache/`, `module-cache/` and `downloads/`.
+
+The `build` job restores both with `actions/cache`, keyed per leg, on the
+lockfile and on the workflow file's own bytes, so a recipe change (the
+legacy legs' PySide6 overlay, the macOS floors, Nuitka flags) can never
+reuse a tree built by a different recipe. The restore-key fallback is
+salted the same way and warms the first build after a dependency bump, with
+unchanged modules still skipping. `CCACHE_MAXSIZE=2G` caps ccache so the
+eight leg caches stay inside GitHub's 10 GB repository budget. The first run
+on a cold cache still pays the full compile; later releases mostly relink.
+GitHub evicts caches unused for seven days, and bumping the `nuitka-` key
+prefix invalidates everything.
 
 ## Escalation: match the symptom to the link
 
