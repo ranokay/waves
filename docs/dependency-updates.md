@@ -113,15 +113,15 @@ minutes locally. Two trees make that cost disappear from later runs:
   on Windows) holds `ccache/`, `module-cache/` and `downloads/`.
 
 The `build` job restores both with `actions/cache`, keyed per leg, on the
-lockfile and on the workflow file's own bytes, so a recipe change (the
-legacy legs' PySide6 overlay, the macOS floors, Nuitka flags) can never
-reuse a tree built by a different recipe. The restore-key fallback is
-salted the same way and warms the first build after a dependency bump, with
-unchanged modules still skipping. `CCACHE_MAXSIZE=2G` caps ccache so the
-eight leg caches stay inside GitHub's 10 GB repository budget. The first run
-on a cold cache still pays the full compile; later releases mostly relink.
-GitHub evicts caches unused for seven days, and bumping the `nuitka-` key
-prefix invalidates everything.
+lockfile and on the build recipe (the Makefile and the workflow file), so a
+flag change (the legacy legs' PySide6 overlay, the macOS floors, the Windows
+low-memory mode) can never reuse a tree built by a different recipe. The
+restore-key fallback is salted the same way and warms the first build after a
+dependency bump, with unchanged modules still skipping. `CCACHE_MAXSIZE=2G`
+caps ccache so the eight leg caches stay inside GitHub's 10 GB repository
+budget. The first run on a cold cache still pays the full compile; later
+releases mostly relink. GitHub evicts caches unused for seven days, and
+bumping the `nuitka-` key prefix invalidates everything.
 
 ## Escalation: match the symptom to the link
 

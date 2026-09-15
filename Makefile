@@ -12,6 +12,14 @@ app_path_dist = "dist"
 # demands something newer than the flavor's declared floor.
 WAVES_MACOS_MIN ?= 15.0
 
+# The bundled Apple engine pulls in yt-dlp, whose generated C is huge; on
+# hosted Windows runners MSVC dies compiling several of those modules at once
+# ("fatal error C1002: compiler is out of heap space in pass 2"). Windows
+# builds therefore default to Nuitka's low-memory mode: one C compiler job at
+# a time and cheaper options. The release build cache makes the slower first
+# pass a one-time cost; set the variable empty to opt back into parallelism.
+WAVES_NUITKA_LOW_MEMORY ?= $(if $(filter Windows_NT,$(OS)),--low-memory,)
+
 .PHONY: install
 install: ## Install the poetry environment and install the pre-commit hooks
 	@echo "🚀 Creating virtual environment using pyenv and poetry"
@@ -51,6 +59,7 @@ gui-waves: ## Build the Waves QML app (standalone). On macOS this yields dist/wa
 	@# the build host's own macOS version as its floor, and CI's "Assert macOS
 	@# version floor" step rejects the bundle. Harmless on Linux/Windows.
 	@MACOSX_DEPLOYMENT_TARGET=$(WAVES_MACOS_MIN) poetry run python -m nuitka \
+		$(WAVES_NUITKA_LOW_MEMORY) \
 		--macos-app-version=$(WAVES_VERSION) \
 		--file-version=$(WAVES_VERSION) \
 		--product-version=$(WAVES_VERSION) \

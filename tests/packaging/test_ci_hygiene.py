@@ -70,9 +70,28 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
     # with a fallback salted the same way.
     key = str(with_block["key"])
     assert "matrix.OS_ARCH" in key and "poetry.lock" in key
-    assert "release-or-test-build.yml" in key
+    assert "Makefile" in key and "release-or-test-build.yml" in key
     restore_keys = str(with_block["restore-keys"])
-    assert "matrix.OS_ARCH" in restore_keys and "release-or-test-build.yml" in restore_keys
+    assert "matrix.OS_ARCH" in restore_keys
+    assert "Makefile" in restore_keys and "release-or-test-build.yml" in restore_keys
 
     # The cached ccache must stay inside the repository cache budget.
     assert wf["jobs"]["build"]["env"]["CCACHE_MAXSIZE"] == "2G"
+
+
+def test_windows_builds_ask_nuitka_for_low_memory():
+    """MSVC dies compiling yt-dlp's generated C at full parallelism, so both
+    Windows legs must build with one C compiler job (docs/dependency-updates.md
+    has the numbers; docs/platform-enablement-review.md has the failure)."""
+    makefile = (REPO_ROOT / "Makefile").read_text()
+    assert "$(WAVES_NUITKA_LOW_MEMORY)" in makefile, "the Makefile must pass the flag to Nuitka"
+
+    wf = yaml.safe_load(RELEASE_WORKFLOW.read_text())
+    windows_legs = [
+        leg
+        for leg in wf["jobs"]["build"]["strategy"]["matrix"]["include"]
+        if str(leg.get("os", "")).startswith("windows")
+    ]
+    assert len(windows_legs) == 2, "expected both Windows legs in the matrix"
+    for leg in windows_legs:
+        assert "WAVES_NUITKA_LOW_MEMORY=--low-memory" in str(leg["CMD_BUILD"]), leg["os"]
