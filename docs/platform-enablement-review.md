@@ -79,11 +79,11 @@ The bundled engine needs Nuitka's low-memory mode on Windows:
   workflow, so the slower cold pass is paid once per leg and a flag change
   never reuses a mismatched tree.
 
-Verification: the two Windows legs are dispatched from this branch; the run
-ID lands here and in the evidence file once it exists. If the heap failure
-survives serial compilation, the next options are a larger runner for those
-two legs or excluding yt-dlp's lazy extractors from the bundle (the Option C
-territory recorded in the audit).
+Verification: run `35019374456` builds both Windows legs from this branch
+(dispatched 2026-09-15); the outcome lands here and in the evidence file. If
+the heap failure survives serial compilation, the next options are a larger
+runner for those two legs or excluding yt-dlp's lazy extractors from the
+bundle (the Option C territory recorded in the audit).
 
 ## Gaps and risks
 
