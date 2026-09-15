@@ -1,7 +1,7 @@
 # 0004: open-source client libraries ship; Apple-derived engine material is provisioned
 
-- Status: proposed — needs the spec owner's ratification (audit item 23 / S12)
-- Decided: 2026-09-14 (issue #200, audit item 23 / S12)
+- Status: accepted
+- Decided: 2026-09-14, ratified 2026-09-15 (issue #200, audit item 23 / S12)
 - Scope: spec §10.1 ("Nothing Apple-engine ships inside Waves' own package")
 
 ## Decision
@@ -33,10 +33,13 @@ separately provisioned executables, not a general-purpose open-source client.
 ## Alternatives considered
 
 The strict reading provisions gamdl/yt-dlp as a downloaded, checksum-pinned
-wheelhouse loaded from the managed-runtime area. It is spec-faithful but is a
-new distribution and trust pipeline of its own; if the spec owner prefers it,
-`tools/inspect_bundle.py --strict-clients` makes the client report a failure
-and a new implementation item carries the wheelhouse design.
+wheelhouse loaded from the managed-runtime area. It was considered and **not
+adopted** (ratified 2026-09-15): it would make the cookies tier, which needs
+no runtime today, depend on a provisioned Python environment with ABI-matched
+compiled wheels, and it buys only a stricter reading of §10.1. The option
+stays reachable: `tools/inspect_bundle.py --strict-clients` makes the client
+report a failure, and the wheelhouse design would be a new implementation
+item if that reading is ever adopted.
 
 ## Consequences
 

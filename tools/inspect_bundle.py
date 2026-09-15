@@ -5,7 +5,7 @@ The signed application must not carry Apple-derived engine material: no APK,
 no N_m3u8DL-RE binary, no wrapper image and no wrapper session/guest
 libraries. Those are provisioned at setup through the managed-runtime flow.
 The open-source client libraries (gamdl, yt-dlp) are ordinary dependencies
-under ADR 0004 (proposed) and are reported, never failed unless
+under ADR 0004 and are reported, never failed unless
 ``--strict-clients`` is given. Pure-Python packages are often compiled into
 the main executable, so its module markers are scanned as well as the
 bundle's files.
