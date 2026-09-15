@@ -1,0 +1,37 @@
+# Weekly dependency updates. Dependabot reads Poetry v2 through the "pip"
+# ecosystem: it edits pyproject.toml constraints and poetry.lock together.
+#
+# The deliberate pins below stay human decisions, and are ignored so they
+# never ride a grouped PR: gamdl and yt-dlp move bottom-up behind a live
+# account-suite run (docs/dependency-updates.md), the wrapper image and
+# N_m3u8DL-RE live outside PyPI, Nuitka is the exact-pinned build tool, and
+# PySide6 carries the macOS version floor.
+version: 2
+
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      # One reviewable PR per week instead of one per dependency.
+      python-dependencies:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "gamdl"
+      - dependency-name: "yt-dlp"
+      - dependency-name: "nuitka"
+      - dependency-name: "pyside6"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      actions:
+        patterns: ["*"]

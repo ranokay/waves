@@ -335,6 +335,27 @@ jobs:
       - name: Set up the environment
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         uses: ./.github/actions/setup-poetry-env
+      # Nuitka's dist/waves.build tree is incremental: scons skips C
+      # compilation for modules whose generated C is unchanged, and Nuitka's
+      # bytecode cache lives in the same tree. A fresh runner starts cold and
+      # recompiles every module (yt-dlp's lazy extractor alone took thirty
+      # minutes locally), so carry the tree between runs and let an unchanged
+      # release relink. Keyed per leg (the legacy macOS flavors build different
+      # Qt bindings) and on the lockfile, with a restore-key fallback that
+      # warms the first build after a dependency bump. ccache is deliberately
+      # not cached: scons' content signatures already cover it, and a second
+      # multi-gigabyte cache would crowd the repository cache budget.
+      - name: Restore the Nuitka build cache
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/waves.build
+            ~/.cache/Nuitka
+            ~/Library/Caches/Nuitka
+          key: nuitka-v1-${{ matrix.OS_ARCH }}-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            nuitka-v1-${{ matrix.OS_ARCH }}-
       - name: Build Waves for ${{matrix.TARGET}}
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         run: ${{matrix.CMD_BUILD}}
