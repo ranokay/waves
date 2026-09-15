@@ -73,6 +73,13 @@ gui-waves: ## Build the Waves QML app (standalone). On macOS this yields dist/wa
 	elif [ -d "$(app_path_dist)/waves.dist" ]; then \
 		bash tools/trim_qt_bundle.sh "$(app_path_dist)/waves.dist"; \
 	fi
+	@# Spec §10.1 (ADR 0004): no Apple-derived engine material may ship; the
+	@# open-source clients are reported. Fails the build on forbidden material.
+	@if [ -d "$(app_path_dist)/waves.app" ]; then \
+		poetry run python tools/inspect_bundle.py "$(app_path_dist)/waves.app"; \
+	elif [ -d "$(app_path_dist)/waves.dist" ]; then \
+		poetry run python tools/inspect_bundle.py "$(app_path_dist)/waves.dist"; \
+	fi
 
 # Per-OS aliases used by CI (release-or-test-build.yml). The build + trim already
 # happens in gui-waves; CI zips the result (macOS = waves.app, Linux/Windows =

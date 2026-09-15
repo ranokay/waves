@@ -1,7 +1,7 @@
 # 0004: open-source client libraries ship; Apple-derived engine material is provisioned
 
 - Status: proposed — needs the spec owner's ratification (audit item 23 / S12)
-- Decided: 2026-09-14
+- Decided: 2026-09-14 (issue #200, audit item 23 / S12)
 - Scope: spec §10.1 ("Nothing Apple-engine ships inside Waves' own package")
 
 ## Decision
@@ -30,13 +30,27 @@ separately provisioned executables, not a general-purpose open-source client.
 - gamdl is MIT-licensed and contains no Apple code; item 24's distribution
   review is where licensing can overrule this decision.
 
-## Alternative if not ratified
+## Alternatives considered
 
 The strict reading provisions gamdl/yt-dlp as a downloaded, checksum-pinned
 wheelhouse loaded from the managed-runtime area. It is spec-faithful but is a
 new distribution and trust pipeline of its own; if the spec owner prefers it,
-the inspector's client report becomes a failure and a new implementation item
-carries the wheelhouse design.
+`tools/inspect_bundle.py --strict-clients` makes the client report a failure
+and a new implementation item carries the wheelhouse design.
+
+## Consequences
+
+- `make gui-waves` runs `tools/inspect_bundle.py` after trimming and signing,
+  so every local and CI matrix build fails on forbidden material.
+- The client report is informational by default; `--strict-clients` flips it
+  to a failure for the strict reading.
+- `--require-developer-id` fails an ad-hoc or Apple Development signature, for
+  a release pipeline that signs and notarizes.
+- The classification is name-based; a content audit belongs to item 24's
+  distribution review.
+- Building this locally needs `--disable-cache=ccache` because Nuitka's
+  downloaded x86_64 ccache cannot run `xcrun` on Apple silicon with this
+  Command Line Tools install.
 
 ## Conditions
 
