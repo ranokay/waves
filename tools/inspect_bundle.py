@@ -5,7 +5,9 @@ The signed application must not carry Apple-derived engine material: no APK,
 no N_m3u8DL-RE binary, no wrapper image and no wrapper session/guest
 libraries. Those are provisioned at setup through the managed-runtime flow.
 The open-source client libraries (gamdl, yt-dlp) are ordinary dependencies
-under ADR 0004 and are reported, never failed.
+under ADR 0004 and are reported, never failed. Pure-Python packages are often
+compiled into the main executable, so the executable's module markers are
+scanned as well as the bundle's files.
 
 Usage:
 
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -32,10 +35,15 @@ _FORBIDDEN = (
     (re.compile(r"^waves-wrapper-v2.*", re.IGNORECASE), "wrapper image"),
 )
 # Open-source clients that legitimately ship (ADR 0004): reported for the
-# record, never a failure.
+# record, never a failure. Pure-Python packages are often compiled into the
+# main executable, so the binary's module markers are scanned too.
 _CLIENTS = (
     (re.compile(r"^gamdl(\.dist-info)?$", re.IGNORECASE), "gamdl"),
     (re.compile(r"^yt_dlp(\.dist-info)?$", re.IGNORECASE), "yt-dlp"),
+)
+_EMBEDDED_MARKERS = (
+    (re.compile(r"^gamdl(\.|$)"), "gamdl"),
+    (re.compile(r"^yt_dlp(\.|$)"), "yt-dlp"),
 )
 
 
@@ -48,7 +56,7 @@ def _signature(bundle: Path, runner) -> dict:
     if sys.platform != "darwin" or bundle.suffix != ".app":
         return {"checked": False, "verified": False, "kind": "not-applicable", "detail": ""}
     verify = runner(["codesign", "--verify", "--deep", "--strict", str(bundle)])
-    detail = runner(["codesign", "--verify", "--verbose=2", str(bundle)])
+    detail = runner(["codesign", "-dv", "--verbose=2", str(bundle)])
     text = f"{detail.stderr or ''}{detail.stdout or ''}"
     if "Signature=adhoc" in text:
         kind = "ad-hoc"
@@ -56,12 +64,36 @@ def _signature(bundle: Path, runner) -> dict:
         kind = "Developer ID"
     else:
         kind = "unknown"
-    return {
-        "checked": True,
-        "verified": verify.returncode == 0,
-        "kind": kind,
-        "detail": text.strip().splitlines()[-1] if text.strip() else "",
-    }
+    detail_line = ""
+    for line in text.splitlines():
+        if "Signature=" in line or "Authority=" in line:
+            detail_line = line.strip()
+    return {"checked": True, "verified": verify.returncode == 0, "kind": kind, "detail": detail_line}
+
+
+def _executables(bundle: Path) -> list[Path]:
+    """The bundle's top-level executable files (where modules are embedded)."""
+    roots = [bundle / "Contents" / "MacOS"] if bundle.suffix == ".app" else [bundle]
+    out: list[Path] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        out.extend(entry for entry in sorted(root.iterdir()) if entry.is_file() and os.access(entry, os.X_OK))
+    return out
+
+
+def _embedded_clients(binaries: list[Path], runner) -> list[str]:
+    """Client module markers inside the executables, by name."""
+    found: dict[str, str] = {}
+    for binary in binaries:
+        try:
+            text = runner(["strings", "-a", str(binary)]).stdout or ""
+        except FileNotFoundError:  # strings is not on every platform
+            return []
+        for pattern, client in _EMBEDDED_MARKERS:
+            if client not in found and any(pattern.match(line) for line in text.splitlines()):
+                found[client] = f"{client}: embedded in {binary.name}"
+    return list(found.values())
 
 
 def inspect_bundle(bundle: str | Path, *, runner=None, verify_signature: bool = True) -> dict:
@@ -84,6 +116,8 @@ def inspect_bundle(bundle: str | Path, *, runner=None, verify_signature: bool = 
                 if pattern.match(name):
                     clients.append(f"{client}: {rel}")
                     break
+    seen = {item.split(":", 1)[0] for item in clients}
+    clients.extend(item for item in _embedded_clients(_executables(path), runner) if item.split(":", 1)[0] not in seen)
     signature = (
         _signature(path, runner)
         if verify_signature

@@ -94,6 +94,22 @@ def test_a_failed_signature_fails_the_inspection(tmp_path):
     assert report["ok"] is False
 
 
+def test_embedded_client_markers_are_found_in_the_executable(tmp_path):
+    bundle = _bundle(tmp_path, ())
+    (bundle / "Contents" / "MacOS" / "waves").chmod(0o755)
+
+    def runner(args):
+        if args[0] == "strings":
+            return SimpleNamespace(returncode=0, stdout="yt_dlp\nyt_dlp.YoutubeDL\ngamdl.api\n", stderr="")
+        return _fake()
+
+    report = inspect_bundle_tool.inspect_bundle(bundle, runner=runner, verify_signature=False)
+
+    assert any(item.startswith("gamdl: embedded") for item in report["clients"])
+    assert any(item.startswith("yt-dlp: embedded") for item in report["clients"])
+    assert report["ok"] is True
+
+
 def test_a_missing_bundle_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         inspect_bundle_tool.inspect_bundle(tmp_path / "nope.app", verify_signature=False)
