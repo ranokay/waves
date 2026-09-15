@@ -827,13 +827,18 @@ class AppleRuntimeManager:
         return self.runtime_dir / "wrapper-image.json"
 
     def image_pulled(self) -> bool:
-        """Whether the pinned wrapper-v2 image was pulled by this manager."""
+        """Whether the pinned wrapper-v2 image was pulled and verified by this manager."""
         try:
             with open(self.image_manifest_path, encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception:
             return False
-        return isinstance(data, dict) and data.get("image") == WRAPPER_V2_IMAGE and bool(data.get("pulled_at"))
+        if not isinstance(data, dict) or data.get("image") != WRAPPER_V2_IMAGE or not data.get("pulled_at"):
+            return False
+        # A receipt that recorded a mismatch (a hand-edited or future legacy
+        # file) never counts as pulled; a missing field is an old receipt from
+        # before digest verification, which pull-time checks cover on refresh.
+        return data.get("digest_ok") is not False
 
     def ensure_image(self, runner=None, binary: str = "docker", log_cb=None) -> dict:
         """Pull the pinned Waves-built wrapper-v2 image and record it.
@@ -904,11 +909,12 @@ class AppleRuntimeManager:
         except ValueError:
             return ""
         repo = WRAPPER_V2_IMAGE.rsplit(":", 1)[0]
-        for entry in entries if isinstance(entries, list) else []:
-            text = str(entry or "")
-            if text.startswith(repo + "@"):
-                return text.split("@", 1)[1]
-        return ""
+        matches = [str(entry).split("@", 1)[1] for entry in entries if str(entry).startswith(repo + "@")]
+        if not matches:
+            return ""
+        # A containerd runtime can report more than one digest (an index and a
+        # platform manifest); the pin itself wins when present.
+        return WRAPPER_V2_IMAGE_DIGEST if WRAPPER_V2_IMAGE_DIGEST in matches else matches[0]
 
     def _download(self, sess, url: str, dest: Path, progress_cb, abort: Event | None) -> None:
         with sess.get(url, stream=True, timeout=_HTTP_TIMEOUT) as resp:

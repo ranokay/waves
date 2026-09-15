@@ -1291,6 +1291,36 @@ def test_ensure_image_tolerates_an_unreportable_digest(tmp_path):
     assert mgr.image_pulled() is True
 
 
+def test_the_pin_wins_among_multiple_repo_digests(tmp_path):
+    from waves.providers.apple.runtime import WRAPPER_V2_IMAGE_DIGEST
+
+    mgr = AppleRuntimeManager(tmp_path)
+    repo = WRAPPER_V2_IMAGE.rsplit(":", 1)[0]
+    platform_digest = "sha256:" + "1" * 64
+
+    def runner(cmd, **_k):
+        if "image" in cmd and "inspect" in cmd:
+            payload = [f"{repo}@{platform_digest}", f"{repo}@{WRAPPER_V2_IMAGE_DIGEST}"]
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        return SimpleNamespace(returncode=0, stdout="Pulled", stderr="")
+
+    mani = mgr.ensure_image(runner=runner)
+
+    assert mani["digest"] == WRAPPER_V2_IMAGE_DIGEST
+    assert mani["digest_ok"] is True
+
+
+def test_a_receipt_that_recorded_a_mismatch_never_reads_pulled(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+    mgr.runtime_dir.mkdir(parents=True, exist_ok=True)
+    mgr.image_manifest_path.write_text(
+        json.dumps({"image": WRAPPER_V2_IMAGE, "pulled_at": 1, "digest": "sha256:" + "2" * 64, "digest_ok": False}),
+        encoding="utf-8",
+    )
+
+    assert mgr.image_pulled() is False
+
+
 def test_ensure_image_failure_raises_and_records_nothing(tmp_path):
     mgr = AppleRuntimeManager(tmp_path)
 

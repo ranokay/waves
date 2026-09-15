@@ -16,10 +16,11 @@ runbook: one-time setup, how to publish, and the version lockstep.
   contains Apple's native `.so` files (that is what makes ALAC decryption
   possible). It was built from the pinned upstream source plus the blessed
   APK below; the publish summary in Actions records the exact source SHA
-  and guest-lib pins, so anyone can audit what went in. The image also ships
-  its third-party notices under `/licenses` and OCI provenance labels, and
-  the app verifies the pinned digest when it pulls; the distribution
-  decision and its accepted risk are recorded in
+  and guest-lib pins, so anyone can audit what went in. Images published after
+  2026-09-15 also ship their third-party notices under `/licenses` and OCI
+  provenance labels (the currently published `0.2.3` predates them; the next
+  publish carries them), and the app verifies the pinned digest when it pulls;
+  the distribution decision and its accepted risk are recorded in
   `wrapper-image-license-review.md`.
 - **You fork or clone Waves to hack on it.** Still nothing to do: the app
   pin points at the public image, which pulls anonymously. Develop, run,
@@ -110,7 +111,7 @@ instead of baking in.
 
 ## Version lockstep
 
-These four move together; bump them as one change:
+These five move together; bump them as one change:
 
 | Piece        | Where                                                                                                                                                                                                                                                                                                | Current                   |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |

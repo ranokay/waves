@@ -80,12 +80,18 @@ def test_the_pinned_image_digest_matches_the_runbook():
 
 def test_the_publish_adds_notices_and_provenance_labels():
     steps = _workflow()["jobs"]["build"]["steps"]
-    step = next((s for s in steps if s.get("name") == "Add notices and OCI labels"), None)
-    assert step is not None, "the publish lost its notices/labels stage"
-    run = str(step.get("run", ""))
-    assert "tools/wrapper-image/NOTICE" in run
-    assert "org.opencontainers.image.licenses" in run
-    assert "org.opencontainers.image.revision" in run
+    prepare = next((s for s in steps if s.get("name") == "Prepare notices"), None)
+    assert prepare is not None, "the publish lost its notices stage"
+    run = str(prepare.get("run", ""))
+    for name in ("NOTICE", "Apache-2.0.txt", "BSD-3-Clause.txt", "BSD-2-Clause.txt"):
+        assert f"tools/wrapper-image/{name}" in run
+    assert "COPY notices/NOTICE /licenses/NOTICE" in run
+
+    build = next(s for s in steps if s.get("name") == "Build and push")
+    labels = str(build.get("with", {}).get("labels", ""))
+    assert "org.opencontainers.image.licenses" in labels
+    assert "org.opencontainers.image.revision" in labels
+    assert "org.opencontainers.image.source" in labels
 
 
 def test_the_notice_names_every_bundled_component():

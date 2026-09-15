@@ -188,6 +188,23 @@ jobs:
         working-directory: wrapper-v2
         run: ./tools/stage-system.sh --arch "${TARGET_ARCH}"
 
+      - name: Prepare notices
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p wrapper-v2/notices
+          cp tools/wrapper-image/NOTICE wrapper-v2/notices/NOTICE
+          cp tools/wrapper-image/Apache-2.0.txt wrapper-v2/notices/Apache-2.0.txt
+          cp tools/wrapper-image/BSD-3-Clause.txt wrapper-v2/notices/BSD-3-Clause.txt
+          cp tools/wrapper-image/BSD-2-Clause.txt wrapper-v2/notices/BSD-2-Clause.txt
+          cat >> wrapper-v2/Dockerfile <<'EOF'
+
+          # Waves (item 24): third-party notices shipped with the image.
+          COPY notices/NOTICE /licenses/NOTICE
+          COPY notices/Apache-2.0.txt /licenses/Apache-2.0
+          COPY notices/BSD-3-Clause.txt /licenses/BSD-3-Clause
+          COPY notices/BSD-2-Clause.txt /licenses/BSD-2-Clause
+          EOF
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -195,33 +212,16 @@ jobs:
           platforms: linux/arm64
           push: true
           tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          labels: |
+            org.opencontainers.image.title=Waves wrapper v2
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.WRAPPER_SHA }}
+            org.opencontainers.image.licenses=Unlicense AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause
+            org.opencontainers.image.description=Pinned wrapper-v2 image with the blessed APK guest libs; contains proprietary Apple libraries (see /licenses/NOTICE).
           build-args: |
             BUILD_PLATFORM=linux/amd64
             RUNTIME_PLATFORM=${{ env.RUNTIME_PLATFORM }}
             TARGET_ARCH=${{ env.TARGET_ARCH }}
-
-      - name: Add notices and OCI labels
-        working-directory: ${{ github.workspace }}
-        run: |
-          mkdir -p notices
-          cp tools/wrapper-image/NOTICE notices/NOTICE
-          docker create --name wrapper-licenses "${IMAGE}:${TAG}" >/dev/null
-          for lic in Apache-2.0 BSD; do
-            docker cp "wrapper-licenses:/usr/share/common-licenses/${lic}" "notices/${lic}" 2>/dev/null || true
-          done
-          docker rm wrapper-licenses >/dev/null
-          cat > notices/Dockerfile <<EOF
-          FROM ${IMAGE}:${TAG}
-          LABEL org.opencontainers.image.title="Waves wrapper v2" \
-                org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY}" \
-                org.opencontainers.image.revision="${WRAPPER_SHA}" \
-                org.opencontainers.image.licenses="Unlicense AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause" \
-                org.opencontainers.image.description="Pinned wrapper-v2 image with the blessed APK guest libs; contains proprietary Apple libraries (see /licenses/NOTICE)."
-          COPY NOTICE /licenses/NOTICE
-          COPY Apache-2.0 /licenses/Apache-2.0
-          COPY BSD /licenses/BSD
-          EOF
-          docker buildx build --platform "${RUNTIME_PLATFORM}" --push -t "${IMAGE}:${TAG}" notices
 
       - name: Smoke test (HTTP and TCP)
         run: |
