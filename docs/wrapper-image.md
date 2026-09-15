@@ -16,7 +16,12 @@ runbook: one-time setup, how to publish, and the version lockstep.
   contains Apple's native `.so` files (that is what makes ALAC decryption
   possible). It was built from the pinned upstream source plus the blessed
   APK below; the publish summary in Actions records the exact source SHA
-  and guest-lib pins, so anyone can audit what went in.
+  and guest-lib pins, so anyone can audit what went in. Images published after
+  2026-09-15 also ship their third-party notices under `/licenses` and OCI
+  provenance labels (the currently published `0.2.3` predates them; the next
+  publish carries them), and the app verifies the pinned digest when it pulls;
+  the distribution decision and its accepted risk are recorded in
+  `wrapper-image-license-review.md`.
 - **You fork or clone Waves to hack on it.** Still nothing to do: the app
   pin points at the public image, which pulls anonymously. Develop, run,
   test Apple downloads — no secrets, no builds.
@@ -97,21 +102,29 @@ end users would see. Open the package page
 Package settings → Change visibility → **Public**.
 
 One honest caveat (spec §10.2): the image bakes Apple's `.so` files, so
-a public image redistributes Apple binaries. That trade-off is the
-maintainer's call; the alternatives are a private image (kills one-click
-setup — every user would need `docker login` plus a grant) or a future
-redesign where user-supplied libs mount at runtime instead of baking in.
+a public image redistributes Apple binaries. The trade-off was reviewed and
+accepted on 2026-09-15 (`wrapper-image-license-review.md`), with the notice,
+provenance-label and digest fixes that go with it; the alternatives are a
+private image (kills one-click setup — every user would need `docker login`
+plus a grant) or a future redesign where user-supplied libs mount at runtime
+instead of baking in.
 
 ## Version lockstep
 
-These four move together; bump them as one change:
+These five move together; bump them as one change:
 
-| Piece       | Where                                                                                                                                                                                                                                                                                                | Current                   |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| Image tag   | workflow `image_tag` input                                                                                                                                                                                                                                                                           | `0.2.3`                   |
-| Image pin   | `WRAPPER_V2_IMAGE`, `waves/providers/apple/runtime.py`                                                                                                                                                                                                                                               | `…:0.2.3`                 |
-| APK version | `APK_PINNED_VERSION`, same file + `APK_URL` content                                                                                                                                                                                                                                                  | `3.6.0-beta` (build 1109) |
-| Guest libs  | regenerated from the blessed APK at build time (issue #82): upstream's pin file matched 3.6.0-1109 when last checked, but nothing guarantees it tracks the blessed APK, so CI pins deterministically from the file itself; `WRAPPER_LIBS_VERSION` (`17.0.0`) is still recorded in the image manifest | 18 arm64 libs             |
+| Piece        | Where                                                                                                                                                                                                                                                                                                | Current                   |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| Image tag    | workflow `image_tag` input                                                                                                                                                                                                                                                                           | `0.2.3`                   |
+| Image pin    | `WRAPPER_V2_IMAGE`, `waves/providers/apple/runtime.py`                                                                                                                                                                                                                                               | `…:0.2.3`                 |
+| Image digest | `WRAPPER_V2_IMAGE_DIGEST`, same file + the digest named at the top of this page                                                                                                                                                                                                                      | `sha256:1aac…be15`        |
+| APK version  | `APK_PINNED_VERSION`, same file + `APK_URL` content                                                                                                                                                                                                                                                  | `3.6.0-beta` (build 1109) |
+| Guest libs   | regenerated from the blessed APK at build time (issue #82): upstream's pin file matched 3.6.0-1109 when last checked, but nothing guarantees it tracks the blessed APK, so CI pins deterministically from the file itself; `WRAPPER_LIBS_VERSION` (`17.0.0`) is still recorded in the image manifest | 18 arm64 libs             |
+
+The digest pin is what a _pull_ reports (`docker pull` then
+`docker image inspect --format '{{index .RepoDigests 0}}' <image>`); the
+workflow's publish summary prints the same value with `docker buildx
+imagetools inspect`, so a republish updates the pin from a copy-paste.
 
 When upstream `wrapper-v2` fixes something you need (or Apple breaks
 something it must adapt to): pick the upstream SHA, rebuild with the same

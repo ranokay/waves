@@ -55,8 +55,11 @@ _UA = "Waves-apple-runtime"
 
 # Waves-built wrapper-v2 image, pinned. Waves builds from source (Unlicense)
 # and never vendors the image into its own package (spec 10.1); the setup
-# flow pulls this exact tag.
+# flow pulls this exact tag. The digest is the registry manifest the runbook
+# documents; ensure_image checks it when the runtime can report one, so a
+# retagged or mutated registry copy is refused (item 24).
 WRAPPER_V2_IMAGE = "ghcr.io/ranokay/waves-wrapper-v2:0.2.3"
+WRAPPER_V2_IMAGE_DIGEST = "sha256:1aac416aae06995095fac19a12d180d869a3bc615b83d31b0773281a9801be15"
 # The wrapper's guest-lib set this image was built against, mirrored from
 # wrapper-v2's LIBS_VERSION.json. Surfaced in the wizard's image detail and
 # in the custom-build extraction plan, so an image and an APK can never
@@ -824,13 +827,18 @@ class AppleRuntimeManager:
         return self.runtime_dir / "wrapper-image.json"
 
     def image_pulled(self) -> bool:
-        """Whether the pinned wrapper-v2 image was pulled by this manager."""
+        """Whether the pinned wrapper-v2 image was pulled and verified by this manager."""
         try:
             with open(self.image_manifest_path, encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception:
             return False
-        return isinstance(data, dict) and data.get("image") == WRAPPER_V2_IMAGE and bool(data.get("pulled_at"))
+        if not isinstance(data, dict) or data.get("image") != WRAPPER_V2_IMAGE or not data.get("pulled_at"):
+            return False
+        # A receipt that recorded a mismatch (a hand-edited or future legacy
+        # file) never counts as pulled; a missing field is an old receipt from
+        # before digest verification, which pull-time checks cover on refresh.
+        return data.get("digest_ok") is not False
 
     def ensure_image(self, runner=None, binary: str = "docker", log_cb=None) -> dict:
         """Pull the pinned Waves-built wrapper-v2 image and record it.
@@ -850,8 +858,24 @@ class AppleRuntimeManager:
         proc = run([binary, "pull", WRAPPER_V2_IMAGE], capture_output=True, text=True, timeout=600)
         if proc.returncode != 0:
             raise RuntimeError(describe_image_pull_error((proc.stderr or proc.stdout or "").strip(), WRAPPER_V2_IMAGE))
+        digest = self._local_image_digest(run, binary)
+        if digest and digest != WRAPPER_V2_IMAGE_DIGEST:
+            raise RuntimeError(
+                "The pulled wrapper image does not match its pinned digest "
+                f"({digest} instead of {WRAPPER_V2_IMAGE_DIGEST}); refusing to use it."
+            )
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        manifest = {"image": WRAPPER_V2_IMAGE, "libs": WRAPPER_LIBS_VERSION, "pulled_at": int(time.time())}
+        manifest = {
+            "image": WRAPPER_V2_IMAGE,
+            "libs": WRAPPER_LIBS_VERSION,
+            "pulled_at": int(time.time()),
+            # Provenance (item 24): the registry digest when the runtime can
+            # report one, and whether it matched the pin. None means the
+            # runtime could not say (podman's inspect format may differ);
+            # a mismatch never reaches the receipt.
+            "digest": digest,
+            "digest_ok": (digest == WRAPPER_V2_IMAGE_DIGEST) if digest else None,
+        }
         tmp_fd, tmp_name = tempfile.mkstemp(dir=self.runtime_dir, prefix="wrapper-image.", suffix=".tmp")
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
@@ -866,6 +890,31 @@ class AppleRuntimeManager:
         if log_cb:
             log_cb(f"pulled {WRAPPER_V2_IMAGE}")
         return manifest
+
+    def _local_image_digest(self, run, binary: str) -> str:
+        """The pulled image's repo digest, or "" when the runtime cannot say."""
+        try:
+            proc = run(
+                [binary, "image", "inspect", "--format", "{{json .RepoDigests}}", WRAPPER_V2_IMAGE],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:
+            return ""
+        if proc.returncode != 0:
+            return ""
+        try:
+            entries = json.loads(proc.stdout or "[]")
+        except ValueError:
+            return ""
+        repo = WRAPPER_V2_IMAGE.rsplit(":", 1)[0]
+        matches = [str(entry).split("@", 1)[1] for entry in entries if str(entry).startswith(repo + "@")]
+        if not matches:
+            return ""
+        # A containerd runtime can report more than one digest (an index and a
+        # platform manifest); the pin itself wins when present.
+        return WRAPPER_V2_IMAGE_DIGEST if WRAPPER_V2_IMAGE_DIGEST in matches else matches[0]
 
     def _download(self, sess, url: str, dest: Path, progress_cb, abort: Event | None) -> None:
         with sess.get(url, stream=True, timeout=_HTTP_TIMEOUT) as resp:

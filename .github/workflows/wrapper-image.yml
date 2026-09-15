@@ -188,6 +188,23 @@ jobs:
         working-directory: wrapper-v2
         run: ./tools/stage-system.sh --arch "${TARGET_ARCH}"
 
+      - name: Prepare notices
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p wrapper-v2/notices
+          cp tools/wrapper-image/NOTICE wrapper-v2/notices/NOTICE
+          cp tools/wrapper-image/Apache-2.0.txt wrapper-v2/notices/Apache-2.0.txt
+          cp tools/wrapper-image/BSD-3-Clause.txt wrapper-v2/notices/BSD-3-Clause.txt
+          cp tools/wrapper-image/BSD-2-Clause.txt wrapper-v2/notices/BSD-2-Clause.txt
+          cat >> wrapper-v2/Dockerfile <<'EOF'
+
+          # Waves (item 24): third-party notices shipped with the image.
+          COPY notices/NOTICE /licenses/NOTICE
+          COPY notices/Apache-2.0.txt /licenses/Apache-2.0
+          COPY notices/BSD-3-Clause.txt /licenses/BSD-3-Clause
+          COPY notices/BSD-2-Clause.txt /licenses/BSD-2-Clause
+          EOF
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -195,6 +212,12 @@ jobs:
           platforms: linux/arm64
           push: true
           tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          labels: |
+            org.opencontainers.image.title=Waves wrapper v2
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.WRAPPER_SHA }}
+            org.opencontainers.image.licenses=Unlicense AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause
+            org.opencontainers.image.description=Pinned wrapper-v2 image with the blessed APK guest libs; contains proprietary Apple libraries (see /licenses/NOTICE).
           build-args: |
             BUILD_PLATFORM=linux/amd64
             RUNTIME_PLATFORM=${{ env.RUNTIME_PLATFORM }}
@@ -254,6 +277,7 @@ jobs:
             echo "| Fact | Value |"
             echo "| ---- | ----- |"
             echo "| Image | \`${IMAGE}:${TAG}\` |"
+            echo "| Digest | \`$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{.Manifest.Digest}}' 2>/dev/null || echo unknown)\` |"
             echo "| Upstream ref | \`${{ inputs.wrapper_ref }}\` (\`${WRAPPER_SHA}\`) |"
             echo "| Blessed APK | \`${APK_VERSION}\` build \`${APK_BUILD}\` (pins regenerated from it) |"
             echo "| Arch | \`${TARGET_ARCH}\` / \`${RUNTIME_PLATFORM}\` |"
