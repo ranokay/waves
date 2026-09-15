@@ -323,6 +323,10 @@ jobs:
               zip -9 -r ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_WINDOWS_ARM64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
               cd ..
     runs-on: ${{ matrix.os }}
+    env:
+      # ccache lives in the cached Nuitka cache root; its 5 GB default would
+      # crowd GitHub's 10 GB repository budget across eight leg caches.
+      CCACHE_MAXSIZE: "2G"
     steps:
       # Skip checkout + setup on legs the `only` filter excludes, so a targeted
       # dispatch (e.g. only=windows-x64) does not spin the other legs (notably the
@@ -335,6 +339,26 @@ jobs:
       - name: Set up the environment
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         uses: ./.github/actions/setup-poetry-env
+      # Carry Nuitka's build tree and its cache root (ccache, module cache,
+      # downloads) between runs: content signatures skip recompiling modules
+      # whose generated C is unchanged, so a warm cache turns a routine
+      # release into a relink. Keyed per leg, on the lockfile and on this
+      # workflow's own bytes, so a recipe change (the legacy Qt overlay, the
+      # macOS floors, Nuitka flags) can never reuse a tree built by another
+      # one; the restore-key fallback is salted the same way. The policy and
+      # the size budget live in docs/dependency-updates.md.
+      - name: Restore the Nuitka build cache
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/waves.build
+            ~/.cache/Nuitka
+            ~/Library/Caches/Nuitka
+            ~/AppData/Local/Nuitka/Nuitka/Cache
+          key: nuitka-v2-${{ matrix.OS_ARCH }}-${{ hashFiles('.github/workflows/release-or-test-build.yml') }}-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            nuitka-v2-${{ matrix.OS_ARCH }}-${{ hashFiles('.github/workflows/release-or-test-build.yml') }}-
       - name: Build Waves for ${{matrix.TARGET}}
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         run: ${{matrix.CMD_BUILD}}
