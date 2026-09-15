@@ -199,3 +199,4 @@ cookies.txt
 *.apk
 *.apkm
 *.apks
+nuitka-crash-report.xml

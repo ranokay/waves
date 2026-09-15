@@ -200,6 +200,29 @@ jobs:
             RUNTIME_PLATFORM=${{ env.RUNTIME_PLATFORM }}
             TARGET_ARCH=${{ env.TARGET_ARCH }}
 
+      - name: Add notices and OCI labels
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p notices
+          cp tools/wrapper-image/NOTICE notices/NOTICE
+          docker create --name wrapper-licenses "${IMAGE}:${TAG}" >/dev/null
+          for lic in Apache-2.0 BSD; do
+            docker cp "wrapper-licenses:/usr/share/common-licenses/${lic}" "notices/${lic}" 2>/dev/null || true
+          done
+          docker rm wrapper-licenses >/dev/null
+          cat > notices/Dockerfile <<EOF
+          FROM ${IMAGE}:${TAG}
+          LABEL org.opencontainers.image.title="Waves wrapper v2" \
+                org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY}" \
+                org.opencontainers.image.revision="${WRAPPER_SHA}" \
+                org.opencontainers.image.licenses="Unlicense AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause" \
+                org.opencontainers.image.description="Pinned wrapper-v2 image with the blessed APK guest libs; contains proprietary Apple libraries (see /licenses/NOTICE)."
+          COPY NOTICE /licenses/NOTICE
+          COPY Apache-2.0 /licenses/Apache-2.0
+          COPY BSD /licenses/BSD
+          EOF
+          docker buildx build --platform "${RUNTIME_PLATFORM}" --push -t "${IMAGE}:${TAG}" notices
+
       - name: Smoke test (HTTP and TCP)
         run: |
           docker rm -f wrapper-smoke 2>/dev/null || true
@@ -254,6 +277,7 @@ jobs:
             echo "| Fact | Value |"
             echo "| ---- | ----- |"
             echo "| Image | \`${IMAGE}:${TAG}\` |"
+            echo "| Digest | \`$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{.Manifest.Digest}}' 2>/dev/null || echo unknown)\` |"
             echo "| Upstream ref | \`${{ inputs.wrapper_ref }}\` (\`${WRAPPER_SHA}\`) |"
             echo "| Blessed APK | \`${APK_VERSION}\` build \`${APK_BUILD}\` (pins regenerated from it) |"
             echo "| Arch | \`${TARGET_ARCH}\` / \`${RUNTIME_PLATFORM}\` |"

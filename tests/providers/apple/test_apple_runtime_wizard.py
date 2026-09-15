@@ -1234,9 +1234,12 @@ def test_resolve_prefers_override_then_managed(tmp_path, monkeypatch):
 # ---- wrapper image -------------------------------------------------------------- #
 
 
-def _ok_runner(seen):
+def _ok_runner(seen, digest=""):
     def run(cmd, **_k):
         seen.append(cmd)
+        if "image" in cmd and "inspect" in cmd:
+            payload = [f"{WRAPPER_V2_IMAGE.rsplit(':', 1)[0]}@{digest}"] if digest else []
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
         return SimpleNamespace(returncode=0, stdout="Pulled", stderr="")
 
     return run
@@ -1247,8 +1250,44 @@ def test_ensure_image_pulls_the_pinned_tag_and_records_it(tmp_path):
     assert mgr.image_pulled() is False
     seen = []
     mani = mgr.ensure_image(runner=_ok_runner(seen))
-    assert seen == [["docker", "pull", WRAPPER_V2_IMAGE]]
+    assert seen[0] == ["docker", "pull", WRAPPER_V2_IMAGE]
+    assert seen[1][:3] == ["docker", "image", "inspect"]
     assert mani["image"] == WRAPPER_V2_IMAGE
+    assert mgr.image_pulled() is True
+
+
+def test_ensure_image_records_the_pinned_digest(tmp_path):
+    from waves.providers.apple.runtime import WRAPPER_V2_IMAGE_DIGEST
+
+    mgr = AppleRuntimeManager(tmp_path)
+    mani = mgr.ensure_image(runner=_ok_runner([], digest=WRAPPER_V2_IMAGE_DIGEST))
+
+    assert mani["digest"] == WRAPPER_V2_IMAGE_DIGEST
+    assert mani["digest_ok"] is True
+    assert mgr.image_pulled() is True
+
+
+def test_ensure_image_refuses_a_digest_mismatch(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+    wrong = "sha256:" + "0" * 64
+
+    with pytest.raises(RuntimeError, match="pinned digest"):
+        mgr.ensure_image(runner=_ok_runner([], digest=wrong))
+
+    assert mgr.image_pulled() is False
+
+
+def test_ensure_image_tolerates_an_unreportable_digest(tmp_path):
+    mgr = AppleRuntimeManager(tmp_path)
+
+    def runner(cmd, **_k):
+        if "image" in cmd and "inspect" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="no format")
+        return SimpleNamespace(returncode=0, stdout="Pulled", stderr="")
+
+    mani = mgr.ensure_image(runner=runner)
+
+    assert mani["digest"] == "" and mani["digest_ok"] is None
     assert mgr.image_pulled() is True
 
 
@@ -1267,7 +1306,8 @@ def test_ensure_image_uses_the_detected_compatible_binary(tmp_path):
     mgr = AppleRuntimeManager(tmp_path)
     seen = []
     mgr.ensure_image(runner=_ok_runner(seen), binary="podman")
-    assert seen == [["podman", "pull", WRAPPER_V2_IMAGE]]
+    assert seen[0] == ["podman", "pull", WRAPPER_V2_IMAGE]
+    assert seen[1][:3] == ["podman", "image", "inspect"]
 
 
 # ---- wizard steps ----------------------------------------------------------------- #

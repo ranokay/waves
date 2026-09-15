@@ -72,6 +72,29 @@ def test_runbook_names_the_current_pins():
     assert "APK_URL" in doc and "Public" in doc
 
 
+def test_the_pinned_image_digest_matches_the_runbook():
+    from waves.providers.apple.runtime import WRAPPER_V2_IMAGE_DIGEST
+
+    assert WRAPPER_V2_IMAGE_DIGEST in RUNBOOK.read_text(), "the image digest pin and the runbook disagree"
+
+
+def test_the_publish_adds_notices_and_provenance_labels():
+    steps = _workflow()["jobs"]["build"]["steps"]
+    step = next((s for s in steps if s.get("name") == "Add notices and OCI labels"), None)
+    assert step is not None, "the publish lost its notices/labels stage"
+    run = str(step.get("run", ""))
+    assert "tools/wrapper-image/NOTICE" in run
+    assert "org.opencontainers.image.licenses" in run
+    assert "org.opencontainers.image.revision" in run
+
+
+def test_the_notice_names_every_bundled_component():
+    notice = (REPO_ROOT / "tools" / "wrapper-image" / "NOTICE").read_text()
+    assert "Unlicense" in notice and "wrapper-v2" in notice
+    assert "Apache-2.0" in notice and "AOSP" in notice
+    assert "com.apple.android.music" in notice and "remain" in notice
+
+
 def test_upstream_pin_file_is_a_valid_sha_and_the_watcher_uses_it():
     import re
 
