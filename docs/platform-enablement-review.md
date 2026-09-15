@@ -4,36 +4,42 @@
   verification run is pending (issue #205)
 - Scope: what the Windows and Linux builds ship, how the platform-dependent
   code branches behave, and which claims are verified versus still open
-- Method: code audit of every `platform`/`sys.platform` branch and the release
-  matrix, plus real CI runs on the fork's runners
+- Method: code audit of the platform branches in production code (paths,
+  mounts, runtime assets, child processes, updater) and the release matrix,
+  plus real CI runs on the fork's runners
 
 ## Platform matrix
 
 The release workflow builds eight legs: macOS intel/arm64 (regular, floor 15)
 and legacy (PySide6 6.9.3, floor 12), Linux x64/arm64, Windows x64/arm64.
 Linux legs ship a zip and an AppImage; Windows legs ship a zip. A
-smoke-launch step runs the trimmed bundle offscreen for **non-arm64** legs
-only; the arm64 legs build but do not launch their artifacts.
+smoke-launch step runs the trimmed bundle offscreen on every leg whose
+`OS_ARCH` does not end in `-arm64` — all four macOS legs and both x64 legs;
+only the Linux and Windows arm64 legs build without launching.
 
 Tests run in the manual `master` workflow on ubuntu-24.04 only (Python 3.12
 and 3.13 plus the quality job). There is no Windows or macOS test leg.
 
 ## Code audit: platform branches and their intent
 
-| Area                                                | Branch                | Behavior                                                                                                                                                 |
-| --------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Config location (`helper/path.py`)                  | darwin / win32 / else | Native Application Support / `%APPDATA%` / XDG; legacy `~/.config` migration preserved                                                                   |
-| Reveal and open (`backend.py`, `bridge_library.py`) | all                   | `QDesktopServices.openUrl`, Qt's per-platform handler (no shell-specific calls)                                                                          |
-| Taskbar identity (`app.py`)                         | win32                 | Explicit AppUserModelID before the first window; applies to frozen builds too                                                                            |
-| Launch tuning (`app.py`)                            | darwin                | Proxy lookup memoization; a no-op elsewhere                                                                                                              |
-| Network mounts (`netmount.py`, `smb_relist.py`)     | darwin                | macOS volume watching; other platforms use the plain watcher                                                                                             |
-| Remote-folder detection (`bridge_library.py`)       | win32                 | Mapped-drive device strings + `GetDriveTypeW(DRIVE_REMOTE)` on top of the fstype check                                                                   |
-| Memory units (`diagnostics.py`)                     | darwin / else         | Correct units per platform                                                                                                                               |
-| Apple runtime (`providers/apple/runtime.py`)        | all                   | Per-platform N_m3u8DL-RE asset table with SHA-256, `.exe` naming on Windows; gentle container start is macOS-only by design (others get wizard guidance) |
-| Library scanner child (`library_proc.py`)           | all                   | Frozen builds re-exec themselves; source runs use `sys.executable -m`; `CREATE_NO_WINDOW` on Windows                                                     |
-| Updater (`updater.py`)                              | all                   | os/arch asset selection, macOS legacy flavor, package-manager guards (AppImage/Snap/Flatpak/Homebrew/Scoop)                                              |
-| FFmpeg manager (`ffmpeg_manager.py`)                | all                   | martin-riedl for macOS/Linux, BtbN builds for Windows; `.exe` naming                                                                                     |
-| Library worker (`library_worker.py`)                | all                   | Stdlib-only child process; symlink-aware walk                                                                                                            |
+| Area                                                           | Branch                | Behavior                                                                                                                                                                          |
+| -------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Config location (`helper/path.py`)                             | darwin / win32 / else | Native Application Support / `%APPDATA%` / XDG; legacy `~/.config` migration preserved                                                                                            |
+| Path length cap (`helper/path.py`)                             | win32 / else          | Whole-path cap 259 on Windows / 1023 elsewhere, measured the way the platform measures it (UTF-16 units, bytes on POSIX); rename and download planning trust it, not pathvalidate |
+| Mount recovery (`backend.py`)                                  | darwin                | `/Volumes` watcher and keep-warm probe, `diskutil unmount force` after idle ejections; a no-op elsewhere                                                                          |
+| Settings writes (`config.py`)                                  | win32                 | Bounded retry when `os.replace` hits a `WinError 32` sharing violation; a single attempt elsewhere                                                                                |
+| Path identity (`providers/apple/integrity.py`, `ownership.py`) | nt / darwin           | Case-folded comparisons where the platform folds them (Windows, macOS); exact on Linux                                                                                            |
+| Reveal and open (`backend.py`, `bridge_library.py`)            | all                   | `QDesktopServices.openUrl`, Qt's per-platform handler (no shell-specific calls)                                                                                                   |
+| Taskbar identity (`app.py`)                                    | win32                 | Explicit AppUserModelID before the first window; applies to frozen builds too                                                                                                     |
+| Launch tuning (`app.py`)                                       | darwin                | Proxy lookup memoization; a no-op elsewhere                                                                                                                                       |
+| Network mounts (`netmount.py`, `smb_relist.py`)                | darwin                | macOS volume watching; other platforms use the plain watcher                                                                                                                      |
+| Remote-folder detection (`bridge_library.py`)                  | win32                 | Mapped-drive device strings + `GetDriveTypeW(DRIVE_REMOTE)` on top of the fstype check                                                                                            |
+| Memory units (`diagnostics.py`)                                | darwin / else         | Correct units per platform                                                                                                                                                        |
+| Apple runtime (`providers/apple/runtime.py`)                   | all                   | Per-platform N_m3u8DL-RE asset table with SHA-256, `.exe` naming on Windows; gentle container start is macOS-only by design (others get wizard guidance)                          |
+| Library scanner child (`library_proc.py`)                      | all                   | Frozen builds re-exec themselves; source runs use `sys.executable -m`; `CREATE_NO_WINDOW` on Windows                                                                              |
+| Updater (`updater.py`)                                         | all                   | os/arch asset selection, macOS legacy flavor, package-manager guards (AppImage/Snap/Flatpak/Homebrew/Scoop)                                                                       |
+| FFmpeg manager (`ffmpeg_manager.py`)                           | all                   | martin-riedl for macOS/Linux, BtbN builds for Windows; `.exe` naming                                                                                                              |
+| Library worker (`library_worker.py`)                           | all                   | Stdlib-only child process; symlink-aware walk                                                                                                                                     |
 
 ## CI evidence (2026-09-15, all at `b67bc72`)
 
@@ -70,20 +76,22 @@ fork. Upstream's 14-minute build is the same workflow without the engine.
 
 The bundled engine needs Nuitka's low-memory mode on Windows:
 
-- `WAVES_NUITKA_LOW_MEMORY` in the Makefile defaults to `--low-memory` on
-  Windows (`OS=Windows_NT`) and is empty elsewhere; the release workflow's two
-  Windows legs also set it explicitly, so the flag cannot be lost to make's
+- `WAVES_NUITKA_FLAGS` in the Makefile defaults to `--low-memory` on Windows
+  (`OS=Windows_NT`) and is empty elsewhere; the release workflow's two Windows
+  legs also set it explicitly, so the flag cannot be lost to make's
   environment detection. Nuitka then runs one C compiler job at a time with
   cheaper options.
-- The release build cache's recipe hash now covers the Makefile as well as the
-  workflow, so the slower cold pass is paid once per leg and a flag change
-  never reuses a mismatched tree.
+- The release build cache's input hash now covers the Makefile, `pyproject.toml`
+  and the workflow, so the slower cold pass is paid once per leg and a flag or
+  toolchain change never reuses a mismatched tree.
 
 Verification: run `35019374456` builds both Windows legs from this branch
-(dispatched 2026-09-15); the outcome lands here and in the evidence file. If
-the heap failure survives serial compilation, the next options are a larger
-runner for those two legs or excluding yt-dlp's lazy extractors from the
-bundle (the Option C territory recorded in the audit).
+(dispatched 2026-09-15); the outcome lands here and in
+`docs/audits/apple-music-2026-09-11/evidence/platform-builds-2026-09-15.md`.
+If the heap failure survives serial compilation, the next options are a larger
+runner for those two legs or dropping yt-dlp's lazily generated extractor
+module from the bundle — which would change the bundling contract ADR 0004
+decided and needs its own decision, not a build-flag tweak.
 
 ## Gaps and risks
 

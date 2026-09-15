@@ -113,9 +113,9 @@ minutes locally. Two trees make that cost disappear from later runs:
   on Windows) holds `ccache/`, `module-cache/` and `downloads/`.
 
 The `build` job restores both with `actions/cache`, keyed per leg, on the
-lockfile and on the build recipe (the Makefile and the workflow file), so a
-flag change (the legacy legs' PySide6 overlay, the macOS floors, the Windows
-low-memory mode) can never reuse a tree built by a different recipe. The
+lockfile and on the build inputs that change the compiled objects (the
+Makefile, `pyproject.toml` and the workflow file), so a flag or toolchain
+change does not silently reuse a tree built by a different configuration. The
 restore-key fallback is salted the same way and warms the first build after a
 dependency bump, with unchanged modules still skipping. `CCACHE_MAXSIZE=2G`
 caps ccache so the eight leg caches stay inside GitHub's 10 GB repository

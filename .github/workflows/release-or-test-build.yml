@@ -300,13 +300,18 @@ jobs:
               zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_LINUX_ARM64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
               bash ../tools/build_appimage.sh Waves ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_LINUX_ARM64}}.AppImage &&
               cd ..
+          # Both Windows legs set the low-memory flag explicitly as well as
+          # inheriting the Makefile default: Nuitka's parallel C compilation
+          # runs MSVC out of heap on the bundled yt-dlp ("fatal error C1002"),
+          # and an explicit setting survives any environment where make's
+          # OS=Windows_NT detection is unavailable.
           - os: "windows-2022"
             TARGET: "windows-2022"
             OS_ARCH: ${{needs.compute.outputs.ARCH_WINDOWS_X64}}
             CMD_BUILD: >
               choco install zip make -y &&
               source $VENV &&
-              WAVES_NUITKA_LOW_MEMORY=--low-memory poetry run make gui-waves-windows &&
+              WAVES_NUITKA_FLAGS=--low-memory poetry run make gui-waves-windows &&
               cd dist &&
               mv waves.dist Waves &&
               zip -9 -r ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_WINDOWS_X64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
@@ -317,7 +322,7 @@ jobs:
             CMD_BUILD: >
               choco install zip make -y &&
               source $VENV &&
-              WAVES_NUITKA_LOW_MEMORY=--low-memory poetry run make gui-waves-windows &&
+              WAVES_NUITKA_FLAGS=--low-memory poetry run make gui-waves-windows &&
               cd dist &&
               mv waves.dist Waves &&
               zip -9 -r ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_WINDOWS_ARM64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
@@ -343,10 +348,10 @@ jobs:
       # downloads) between runs: content signatures skip recompiling modules
       # whose generated C is unchanged, so a warm cache turns a routine
       # release into a relink. Keyed per leg, on the lockfile and on the build
-      # recipe (the Makefile and this workflow), so a flag change can never
-      # reuse a tree built by another recipe; the restore-key fallback is
-      # salted the same way. The policy and the size budget live in
-      # docs/dependency-updates.md.
+      # inputs that change the objects (the Makefile, pyproject.toml and this
+      # workflow), so a flag or toolchain change never reuses a tree built by
+      # another configuration; the restore-key fallback is salted the same
+      # way. The policy and the size budget live in docs/dependency-updates.md.
       - name: Restore the Nuitka build cache
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         uses: actions/cache@v4
@@ -356,9 +361,9 @@ jobs:
             ~/.cache/Nuitka
             ~/Library/Caches/Nuitka
             ~/AppData/Local/Nuitka/Nuitka/Cache
-          key: nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('Makefile', '.github/workflows/release-or-test-build.yml') }}-${{ hashFiles('poetry.lock') }}
+          key: nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('Makefile', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-${{ hashFiles('poetry.lock') }}
           restore-keys: |
-            nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('Makefile', '.github/workflows/release-or-test-build.yml') }}-
+            nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('Makefile', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-
       - name: Build Waves for ${{matrix.TARGET}}
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         run: ${{matrix.CMD_BUILD}}
