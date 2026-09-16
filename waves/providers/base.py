@@ -137,6 +137,47 @@ class QualityOption:
     detail: str = ""
 
 
+class StatusKind(StrEnum):
+    """The shape of live status a provider's card carries.
+
+    The status itself is composed by the bridge — the probes (a session, a
+    runtime) are the bridge's to run — while the descriptor names which shape
+    the card needs, so the schema can generate it without provider branches.
+    """
+
+    SESSION = "session"  # a sign-in/sign-out status row from is_logged_in
+    SETUP = "setup"  # the provider owns its status rows and wizard (Apple)
+    NONE = "none"  # no status row; the card lists its fields only
+
+
+@dataclass(frozen=True)
+class ProviderDescriptor:
+    """A provider's static identity for every surface that lists providers.
+
+    The bridge composes this with live status (session state, setup steps)
+    into the schema QML renders; the live data stays bridge-owned because the
+    probes are, and the descriptor's ``status_kind`` tells the bridge which
+    status shape the card needs. A new provider contributes one descriptor;
+    the surfaces render from this shape, so it needs no QML branch.
+
+    ``settings_fields`` names the Settings field keys the provider's card
+    owns, in display order. The status keys among them are bridge-owned; a
+    status key the descriptor omits is still generated from ``status_kind``,
+    so a provider that contributes nothing but identity renders.
+    """
+
+    id: str
+    name: str
+    logo: str = ""  # QML asset path; "" renders no mark in the card's tile
+    logo_width: int = 20  # the card tile's mark width, px
+    logo_header_width: int = 14  # the section header tile's mark width, px
+    logo_header_height: int = 14  # the section header tile's mark height, px
+    capability_summary: str = ""  # one honest line, for onboarding cards
+    card_desc: str = ""  # the Settings card's longer blurb
+    settings_fields: tuple[str, ...] = ()
+    status_kind: StatusKind = StatusKind.SESSION
+
+
 class RefusalKind(StrEnum):
     """How to read an engine error, shared across providers.
 
@@ -262,6 +303,15 @@ class Provider(ABC):
     """The settings-card namespace this provider's per-provider mirrors live
     under (``apple_lyrics_embed``). The neutral default is "": the provider's
     mirrors stay under its id namespace, with the shared keys as fallback."""
+
+    @classmethod
+    def descriptor(cls) -> ProviderDescriptor:
+        """Static identity for the surfaces that list providers.
+
+        The neutral default carries the id and name every provider has; a
+        provider adds its logo, its capability line and the Settings fields
+        its card owns. See :class:`ProviderDescriptor`."""
+        return ProviderDescriptor(id=cls.id, name=cls.name)
 
     # ----- session / auth
 

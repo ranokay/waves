@@ -8,9 +8,24 @@ waves-prefs half on its own.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as ModelSettings
+from waves.providers.apple.provider import AppleProvider
+from waves.providers.tidal import TidalProvider
 from waves.waves_ui.backend import WavesBridge
+
+# The Apple status row's action pills, built by the same helper the schema
+# and the live status payload share: the management pills always, sign-out
+# only while a session stands.
+APPLE_SETUP_PILLS = [
+    {"label": "Setup wizard", "action": "apple_setup"},
+    {"label": "Update runtime", "action": "apple_update_runtime"},
+    {"label": "Remove runtime", "action": "apple_remove_runtime"},
+]
+APPLE_SIGN_OUT_PILL = {"label": "Sign out", "action": "apple_signout"}
 
 
 class _Stub:
@@ -31,7 +46,9 @@ def prefs_stub():
 
 def schema_stub(apple_enabled: bool = False, logged_in: bool = False):
     """A bridge stub with just enough state for settingsSchema(): a fresh
-    defaults-only config, the given Apple switch and TIDAL session state."""
+    defaults-only config, the given Apple switch and TIDAL session state, and
+    the provider registry the schema composes its cards from (the real
+    descriptors, not test copies)."""
 
     class _Cfg:
         data = ModelSettings()
@@ -47,4 +64,8 @@ def schema_stub(apple_enabled: bool = False, logged_in: bool = False):
     stub._user_ffmpeg_path = lambda: ""
     stub._ffmpeg_detected_path = lambda: ""
     stub._logged_in = logged_in
+    stub.providers = {
+        CTX_TIDAL: SimpleNamespace(id=CTX_TIDAL, descriptor=TidalProvider.descriptor, is_logged_in=logged_in),
+        CTX_APPLE: SimpleNamespace(id=CTX_APPLE, descriptor=AppleProvider.descriptor, is_logged_in=False),
+    }
     return stub

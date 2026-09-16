@@ -8,6 +8,12 @@ Waves is a native desktop app for saving music from the user's own accounts, sea
 A music service Waves can search and save from (today TIDAL; Apple Music as the second).
 _Avoid_: source, backend
 
+**Provider descriptor**:
+A provider's static identity as the surfaces that list providers need it — its
+name, mark, one honest capability line and the Settings fields its card owns —
+composed by the bridge with live status into what those surfaces render.
+_Avoid_: provider config, provider metadata
+
 **Engine**:
 The component that performs a provider's fetching and decryption, possibly a wrapped external tool; each provider plugs into Waves through one.
 _Avoid_: downloader, backend

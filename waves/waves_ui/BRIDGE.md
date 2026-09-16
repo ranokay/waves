@@ -31,6 +31,15 @@ feature.
 | `appleSetupRequested(reason)`                                                                      | Apple needs setup (`setup` on enable, `cookies` on a pre-setup download click); Main deep-links to the wizard |
 | `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull and sign-out lifecycle; Settings re-reads `appleSetupState()`          |
 
+The provider cards' action pills dispatch through one slot, not per-provider
+handlers: `providerAction(providerId, actionKey)` runs the key the schema
+carried (`<provider id>_<verb>`). The generic verbs run through the provider
+seam (`signin` starts the provider's login flow; `signout` runs its sign-out
+or the app-level flow registered for it), and bridge-owned verbs (Apple's
+runtime management) come from the registry built where the providers are
+wired. `appleStatus()` answers `{state, word, actions}` — the same action
+list the schema bakes — so a live light flip moves its pills with it.
+
 ## Search, artist pages, library
 
 | Signal                                                     | Fires when                                                                                                                                                 |

@@ -35,6 +35,7 @@ from types import SimpleNamespace
 
 import pytest
 from support.paths import REPO_ROOT
+from support.settings_fakes import APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL
 
 from waves.providers.apple.runtime import (
     APK_PINNED_VERSION,
@@ -1000,7 +1001,7 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
 
 def test_fresh_machine_light_is_not_set_up(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
-    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up"}
+    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up", "actions": APPLE_SETUP_PILLS}
 
 
 def _stub_binary(tmp_path: Path) -> str:
@@ -1015,7 +1016,11 @@ def test_cookies_plus_binary_unlocks_signed_in_without_container(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
     stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
     stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
-    assert stub.appleStatus() == {"state": "signed_in", "word": "Signed in"}
+    assert stub.appleStatus() == {
+        "state": "signed_in",
+        "word": "Signed in",
+        "actions": [*APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL],
+    }
     state = stub.appleSetupState()
     assert state["light"]["tier"] == "cookies"
     assert state["cookies"]["verified"] is True
@@ -1029,7 +1034,7 @@ def test_cookies_without_any_binary_is_not_signed_in(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
     stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
     assert stub.settings.data.path_binary_nm3u8dlre == ""
-    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up"}
+    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up", "actions": APPLE_SETUP_PILLS}
     state = stub.appleSetupState()
     assert state["cookies"]["verified"] is True
     assert state["light"]["state"] == "not_set_up"
@@ -1053,7 +1058,11 @@ def test_live_flags_read_the_wrapper_session_without_cookies(tmp_path):
     }
     flags = stub._apple_live_flags()
     assert flags["signed_in"] is True and flags["wrapper_ready"] is True
-    assert stub.appleStatus() == {"state": "signed_in", "word": "Signed in"}
+    assert stub.appleStatus() == {
+        "state": "signed_in",
+        "word": "Signed in",
+        "actions": [*APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL],
+    }
     state = stub.appleSetupState()
     assert state["light"]["tier"] == "full"
     assert state["wrapper"]["auth"]["account"] == "me@example.com"
@@ -1066,7 +1075,7 @@ def test_live_flags_report_an_expired_session_and_recover(tmp_path, monkeypatch)
     stub._apple_session_expired = True
     flags = stub._apple_live_flags()
     assert flags["needs_attention"] is True and flags["signed_in"] is False
-    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention"}
+    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention", "actions": APPLE_SETUP_PILLS}
 
     # The wrapper probe authenticating again clears the marker (its tokens
     # refresh on their own) and moves the light back.
@@ -1159,13 +1168,13 @@ def test_apple_provider_is_logged_in_follows_the_wrapper_session():
 def test_stale_cookies_export_needs_attention(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=False))
     stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
-    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention"}
+    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention", "actions": APPLE_SETUP_PILLS}
 
 
 def test_missing_saved_cookies_file_needs_attention(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies=str(tmp_path / "gone.txt"))
     stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
-    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention"}
+    assert stub.appleStatus() == {"state": "needs_attention", "word": "Needs attention", "actions": APPLE_SETUP_PILLS}
 
 
 def test_managed_runtime_alone_is_runtime_ready(tmp_path, monkeypatch):
@@ -1184,19 +1193,19 @@ def test_managed_runtime_alone_is_runtime_ready(tmp_path, monkeypatch):
     # What _configure_apple_provider writes after provisioning: the resolved
     # managed path on the provider.
     stub.providers["apple"] = SimpleNamespace(cookies_path="", nm3u8dlre_path=str(mgr.binary_path))
-    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready"}
+    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready", "actions": APPLE_SETUP_PILLS}
 
 
 def test_override_binary_counts_as_runtime_ready(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
-    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready"}
+    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready", "actions": APPLE_SETUP_PILLS}
 
 
 def test_path_binary_counts_as_runtime_ready(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/N_m3u8DL-RE" if name == "N_m3u8DL-RE" else None)
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
-    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready"}
+    assert stub.appleStatus() == {"state": "runtime_ready", "word": "Runtime ready", "actions": APPLE_SETUP_PILLS}
 
 
 def test_setup_state_carries_wizard_pins_and_high_port(tmp_path):
@@ -1476,7 +1485,7 @@ def test_non_executable_override_does_not_light_the_tier(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
     stub.providers["apple"] = SimpleNamespace(cookies_path=stub.settings.data.apple_cookies_path)
     stub.settings.data.path_binary_nm3u8dlre = str(plain)
-    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up"}
+    assert stub.appleStatus() == {"state": "not_set_up", "word": "Not set up", "actions": APPLE_SETUP_PILLS}
 
 
 def test_port_override_wins_over_persisted_pick(tmp_path):
