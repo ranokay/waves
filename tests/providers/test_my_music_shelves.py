@@ -15,11 +15,10 @@ pane's Text binds a property rather than a literal.
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
-from support.provider_fakes import BareProvider
+from support.provider_fakes import StubProvider, stub_bridge
 
-from waves.providers import Capability, ProviderDescriptor
+from waves.providers import Capability
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
 
@@ -27,37 +26,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MAIN_QML = REPO_ROOT / "waves" / "waves_ui" / "qml" / "Main.qml"
 
 
-class _ShelfProvider(BareProvider):
+def _shelf_provider(provider_id, name, *, logged_in=True, capabilities=None):
     """A provider whose saved shelves My Music can render.
 
     The neutral descriptor is a session-kind one, so the readiness read is
     the provider's own ``is_logged_in`` unless the bridge tracks it.
     """
-
-    def __init__(self, provider_id: str, name: str, *, logged_in: bool = True, capabilities=None):
-        self.id = provider_id
-        self.name = name
-        self.capabilities = frozenset({Capability.FAVORITES}) if capabilities is None else capabilities
-        self._logged_in = logged_in
-
-    @property
-    def is_logged_in(self):
-        return self._logged_in
-
-    def descriptor(self):
-        # The neutral classmethod reads class attributes; this stand-in's
-        # identity lives on the instance.
-        return ProviderDescriptor(id=self.id, name=self.name)
-
-
-def _stub(providers, *, logged_in: bool = False, tracked=frozenset()) -> SimpleNamespace:
-    return SimpleNamespace(providers=dict(providers), _logged_in=logged_in, _tracked_sessions=tracked)
+    return StubProvider(
+        provider_id,
+        name,
+        capabilities=frozenset({Capability.FAVORITES}) if capabilities is None else capabilities,
+        logged_in=logged_in,
+    )
 
 
 def test_a_lone_saved_shelf_source_carries_no_label():
     # One provider contributes: the pane's rows are that provider, so the
     # label stays "" and the pane renders exactly as it did (issue #221).
-    sources = backend._saved_shelf_sources(_stub({"tidal": _ShelfProvider("tidal", "TIDAL")}))
+    sources = backend._saved_shelf_sources(stub_bridge({"tidal": _shelf_provider("tidal", "TIDAL")}))
 
     assert sources == [{"id": "tidal", "name": "TIDAL", "label": ""}]
 
@@ -67,10 +53,10 @@ def test_a_second_saved_shelf_source_qualifies_every_label():
     # section from its descriptor and its session alone -- the labels become
     # source-qualified together, with no QML edit.
     sources = backend._saved_shelf_sources(
-        _stub(
+        stub_bridge(
             {
-                "tidal": _ShelfProvider("tidal", "TIDAL"),
-                "fake": _ShelfProvider("fake", "Fake Music"),
+                "tidal": _shelf_provider("tidal", "TIDAL"),
+                "fake": _shelf_provider("fake", "Fake Music"),
             }
         )
     )
@@ -82,33 +68,35 @@ def test_a_second_saved_shelf_source_qualifies_every_label():
 def test_a_provider_that_cannot_fill_shelves_is_not_a_source():
     # A provider with no favourites capability and a signed-out provider
     # cannot fill saved shelves, so neither contributes a section.
-    no_capability = _ShelfProvider("apple", "Apple Music", capabilities=frozenset({Capability.SEARCH}))
-    signed_out = _ShelfProvider("tidal", "TIDAL", logged_in=False)
-    assert backend._saved_shelf_sources(_stub({"tidal": signed_out, "apple": no_capability})) == []
+    no_capability = _shelf_provider("apple", "Apple Music", capabilities=frozenset({Capability.SEARCH}))
+    signed_out = _shelf_provider("tidal", "TIDAL", logged_in=False)
+    assert backend._saved_shelf_sources(stub_bridge({"tidal": signed_out, "apple": no_capability})) == []
 
     # A tracked session answers from the bridge's flag (the one the login
     # flow and every catalog read move together), not the provider's.
-    tracked = _ShelfProvider("tidal", "TIDAL", logged_in=True)
-    assert backend._saved_shelf_sources(_stub({"tidal": tracked}, tracked=frozenset({"tidal"}))) == []
-    sourced = backend._saved_shelf_sources(_stub({"tidal": tracked}, logged_in=True, tracked=frozenset({"tidal"})))
+    tracked = _shelf_provider("tidal", "TIDAL", logged_in=True)
+    assert backend._saved_shelf_sources(stub_bridge({"tidal": tracked}, tracked=frozenset({"tidal"}))) == []
+    sourced = backend._saved_shelf_sources(
+        stub_bridge({"tidal": tracked}, logged_in=True, tracked=frozenset({"tidal"}))
+    )
     assert [s["id"] for s in sourced] == ["tidal"]
 
 
 def test_the_pane_label_is_empty_until_a_second_source_contributes():
-    tidal = _ShelfProvider("tidal", "TIDAL")
+    tidal = _shelf_provider("tidal", "TIDAL")
 
-    assert WavesBridge._get_my_music_source_label(_stub({"tidal": tidal})) == ""
+    assert WavesBridge._get_my_music_source_label(stub_bridge({"tidal": tidal})) == ""
 
-    paired = _stub({"tidal": tidal, "fake": _ShelfProvider("fake", "Fake Music")})
+    paired = stub_bridge({"tidal": tidal, "fake": _shelf_provider("fake", "Fake Music")})
     assert WavesBridge._get_my_music_source_label(paired) == "Saved from TIDAL"
 
     # TIDAL's shelves are the pane's rows: while TIDAL is signed out the pane
     # shows its sign-in state, and no label stands over absent sections.
-    signed_out = _stub(
+    signed_out = stub_bridge(
         {
-            "tidal": _ShelfProvider("tidal", "TIDAL", logged_in=False),
-            "fake": _ShelfProvider("fake", "Fake Music"),
-            "x": _ShelfProvider("x", "X"),
+            "tidal": _shelf_provider("tidal", "TIDAL", logged_in=False),
+            "fake": _shelf_provider("fake", "Fake Music"),
+            "x": _shelf_provider("x", "X"),
         }
     )
     assert WavesBridge._get_my_music_source_label(signed_out) == ""

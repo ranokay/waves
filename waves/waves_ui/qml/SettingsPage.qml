@@ -5,6 +5,7 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 import QtQuick.Shapes
 import "HeartGib.js" as HeartGib
+import "StatusLight.js" as StatusLight
 
 // Schema-driven settings page. The bridge (`waves`) supplies the grouped field
 // schema; this renders a control per field type and applies only changed keys.
@@ -2552,15 +2553,6 @@ Item {
                                                 && (page.editMap[modelData.enabled_key] !== undefined
                                                     ? page.editMap[modelData.enabled_key]
                                                     : modelData.switch_value === true)
-                                            function dotColor(state) {
-                                                // The FFmpeg light's vocabulary: accent is healthy,
-                                                // gold says be aware, red says broken, and anything
-                                                // else (a switched-off component) goes quiet.
-                                                if (state === "signed_in" || state === "runtime_ready") return page.accent
-                                                if (state === "not_signed_in" || state === "not_set_up") return page.gold
-                                                if (state === "needs_attention") return page.red
-                                                return page.textDim
-                                            }
                                             RowLayout {
                                                 width: parent.width; spacing: 10
                                                 Item {
@@ -2620,7 +2612,10 @@ Item {
                                                     Rectangle {
                                                         width: 8; height: 8; radius: 4
                                                         anchors.verticalCenter: parent.verticalCenter
-                                                        color: statusCol.dotColor(statusCol.stateKey)
+                                                        // The shared status-light vocabulary
+                                                        // (StatusLight.js), so this dot and the
+                                                        // header's provider marks agree.
+                                                        color: StatusLight.colorFor(page, statusCol.stateKey)
                                                         Behavior on color { ColorAnimation { duration: 220 } }
                                                     }
                                                     Text {

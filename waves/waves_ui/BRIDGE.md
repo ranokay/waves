@@ -45,13 +45,16 @@ The header's per-provider marks come from two answer-only slots, both
 composed from the descriptors so a third provider needs no QML edit
 (issue #223). `providerLights()` answers `[{id, name, state, word}]`, one
 entry per provider with a status to report: a session-kind provider's
-sign-in state (`signed_in` / `signed_out`) or a setup-kind provider's setup
-light (Apple's five states, `off` contributing none). The QML renders a dot
-per entry and re-reads on `loggedInChanged` / `appleStatusChanged`;
-sign-out lives on the TIDAL card, never in the header. `browseNav()` answers
-`{available, signed_in}`: Browse exists while a configured provider declares
+sign-in state (`signed_in` / `signed_out`, worded with the card's own
+"Signed in" / "Signed out") or a setup-kind provider's setup light (Apple's
+five states, `off` contributing none). The QML renders a dot per entry — the
+colour is the shared status-light vocabulary in `qml/StatusLight.js` — and
+re-reads on `loggedInChanged` / `appleStatusChanged`; sign-out lives on the
+TIDAL card, never in the header. `browseNav()` answers `{available,
+signed_in}`: Browse exists while a configured provider declares
 `Capability.BROWSE` and is hidden when none does (never a permanently blank
-tab), and `signed_in` is that provider's live session, which the landing
+tab), and `signed_in` is the live session of the browse-capable provider
+whose pages fill the pane (the first in registry order), which the landing
 pane offers its sign-in call to action for.
 
 ## Search, artist pages, library

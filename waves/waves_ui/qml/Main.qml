@@ -5,6 +5,7 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import QtCore
 import QtMultimedia
+import "StatusLight.js" as StatusLight
 
 ApplicationWindow {
     id: root
@@ -237,23 +238,16 @@ ApplicationWindow {
     property var providerLights: []
     property var browseNav: ({ available: false, signed_in: false })
     readonly property bool browseAvailable: !!(root.browseNav && root.browseNav.available)
+    // The browse source's session, not the header's TIDAL flag: the bridge
+    // names the provider that fills the pane, so the call to action follows
+    // the source that would actually load it.
+    readonly property bool browseSignedIn: !!(root.browseNav && root.browseNav.signed_in)
     function refreshProviderLights() {
         try { root.providerLights = waves.providerLights() } catch (e) { root.providerLights = [] }
     }
     function refreshBrowseNav() {
         try { root.browseNav = waves.browseNav() }
         catch (e) { root.browseNav = { available: false, signed_in: false } }
-    }
-    // The colour a provider light's dot reads, the same vocabulary as the
-    // Settings status lights: accent healthy, gold be aware, red needs
-    // attention, dim switched off. A signed-out session reads gold and is
-    // worded for what it is, never as a global offline claim: a usable
-    // second provider is never contradicted by it.
-    function providerLightColor(state) {
-        if (state === "signed_in" || state === "runtime_ready") return root.accent
-        if (state === "not_signed_in" || state === "signed_out" || state === "not_set_up") return root.gold
-        if (state === "needs_attention") return root.red
-        return root.textDim
     }
     // First-run welcome: nothing answered and nothing set up yet.
     readonly property bool welcomeDue: waves.sessionResolved && !signedIn && !waves.appleEnabled
@@ -12815,9 +12809,12 @@ ApplicationWindow {
         function onDownloadFolderRecovered() { root.folderUnreachable = false }
         function onFfmpegMissingBlocked() { root.ffmpegBlocked = true }
         function onLoggedInChanged() {
-            // The header's lights follow the session: the TIDAL mark flips
-            // with the flag every catalog read moves with (issue #223).
+            // The header's lights follow the session, and so does Browse's
+            // answer: the TIDAL mark flips with the flag every catalog read
+            // moves with, and the landing's call to action retires with it
+            // (issue #223).
             root.refreshProviderLights()
+            root.refreshBrowseNav()
             // Drop every QML-side copy of Browse data when the account flips:
             // the landing embeds personalized For You rows, and the backend's
             // own logout cache-clear can't reach these copies. Re-fetch right
@@ -13479,7 +13476,10 @@ ApplicationWindow {
                                 objectName: "providerLightDot_" + light.providerId
                                 anchors.centerIn: parent
                                 width: 7; height: 7; radius: 3.5
-                                color: root.providerLightColor(light.lightState)
+                                // The shared status-light vocabulary
+                                // (StatusLight.js), the same one the Settings
+                                // status rows read.
+                                color: StatusLight.colorFor(root, light.lightState)
                             }
                             Text {
                                 visible: lightHover.containsMouse
@@ -13841,12 +13841,12 @@ ApplicationWindow {
                     // the pane names the provider and offers the sign-in
                     // click instead of staying blank (issue #220). The
                     // destination itself exists while a configured provider
-                    // declares Browse (issue #223); the page content is
-                    // TIDAL's today, so its session is the one the pane
-                    // waits on.
+                    // declares Browse (issue #223) and its session is the
+                    // bridge's browse answer: the CTA follows that, never a
+                    // hardcoded TIDAL state.
                     Item {
                         objectName: "browseSignInCta"
-                        visible: root.browseAvailable && !root.signedIn
+                        visible: root.browseAvailable && !root.browseSignedIn
                         width: parent.width
                         height: browseCtaCol.height
                         Column {

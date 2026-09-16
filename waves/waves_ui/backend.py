@@ -3917,7 +3917,11 @@ def _provider_light(bridge, provider) -> dict | None:
     """One provider's header light, or None when it has no status to report.
 
     The word is the user-facing truth for the mark; nothing here is provider
-    identity logic, only the shape the descriptor's status_kind names.
+    identity logic, only the shape the descriptor's status_kind names. A
+    SETUP provider's light is the shared setup-light vocabulary (spec
+    §9.2.3): its live flags come from the probe registered where the
+    provider is wired, and a provider that needs different words grows the
+    descriptor contract, not a branch here.
     """
     descriptor = provider.descriptor()
     if descriptor.status_kind == StatusKind.SESSION:
@@ -3926,7 +3930,9 @@ def _provider_light(bridge, provider) -> dict | None:
             "id": descriptor.id,
             "name": descriptor.name,
             "state": "signed_in" if logged_in else "signed_out",
-            "word": "Connected" if logged_in else "Signed out",
+            # The same words as the provider card's session row, so the
+            # header and Settings never disagree about one account state.
+            "word": "Signed in" if logged_in else "Signed out",
         }
     if descriptor.status_kind == StatusKind.SETUP:
         flags = _provider_setup_flags(bridge, provider)
@@ -3960,18 +3966,22 @@ def _browse_nav(bridge) -> dict:
     Browse is editorial and account-scoped: the destination exists while a
     configured provider declares ``Capability.BROWSE`` and is absent when none
     does (the capability is the whole rule; provider identity never enters
-    it). ``signed_in`` answers whether any such provider holds a live session,
-    which decides between the page and the sign-in call to action -- never a
-    blank pane.
+    it). The pane is filled by the first browse-capable provider in the
+    registry's order, so ``signed_in`` reports that source's live session:
+    false, and the landing pane offers its sign-in call to action -- never a
+    blank page.
     """
-    providers = [
-        provider
-        for provider in _provider_registry(bridge)
-        if Capability.BROWSE in getattr(provider, "capabilities", frozenset())
-    ]
+    source = next(
+        (
+            provider
+            for provider in _provider_registry(bridge)
+            if Capability.BROWSE in getattr(provider, "capabilities", frozenset())
+        ),
+        None,
+    )
     return {
-        "available": bool(providers),
-        "signed_in": any(_session_logged_in(bridge, provider) for provider in providers),
+        "available": source is not None,
+        "signed_in": bool(source is not None and _session_logged_in(bridge, source)),
     }
 
 
