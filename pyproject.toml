@@ -257,6 +257,10 @@ ignore = [
 # isolate the Qt boot (S603, fixed argv), and its build -> click -> assert
 # scenario is one deliberately linear function (C901).
 "tests/ui/test_tidal_signin_reachable_qml.py" = ["S603", "C901"]
+# The setup-CTA scenarios keep the same boot -> drive -> assert shape as one
+# deliberately linear function (C901); the subprocess call itself lives in
+# support.qml's runner.
+"tests/ui/test_setup_ctas_qml.py" = ["C901"]
 "tests/ui/test_offscreen_qt_is_usable.py" = ["S603"]
 # Runs the bundle size report for real, on a root wide enough to fill the pipe
 # buffer, through the shell it is written for (S603/S607, fixed argv).
