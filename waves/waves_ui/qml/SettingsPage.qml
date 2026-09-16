@@ -2456,6 +2456,7 @@ Item {
                                             visible: (modelData.type !== "str" || modelData.inline === true)
                                                      && modelData.type !== "cover_sizes" && modelData.type !== "library"
                                                      && modelData.type !== "status" && modelData.type !== "apple_setup"
+                                                     && modelData.type !== "action"
                                             width: parent.width; spacing: 14
                                             ColumnLayout {
                                                 Layout.fillWidth: true; spacing: 2
@@ -2684,9 +2685,9 @@ Item {
                                         }
 
                                         // Action row: one command pill, no value and
-                                        // no edit. The schema names the action; the
-                                        // bridge owns what it does (today: re-open
-                                        // the welcome surface).
+                                        // no edit. The page maps the schema's action
+                                        // name to its bridge slot; a second action adds
+                                        // one line here.
                                         Column {
                                             id: actionCol
                                             visible: modelData.type === "action"

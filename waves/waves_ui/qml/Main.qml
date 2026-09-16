@@ -228,7 +228,7 @@ ApplicationWindow {
         && !setupSettings.firstRunAnswered
     // The "Finish setup" chip: onboarding answered, but no provider can
     // download yet, and the user has not dismissed it.
-    readonly property bool setupUnfinished: setupSettings.firstRunAnswered && !signedIn
+    readonly property bool downloadsNeedSetup: setupSettings.firstRunAnswered && !signedIn
         && String(appleLight.state || "") !== "signed_in" && !setupSettings.setupChipDismissed
     // A newer release found by the updater (startup check or a manual one on
     // the Settings page). Drives the gold notice in the status bar's right
@@ -2131,7 +2131,8 @@ ApplicationWindow {
         navForwardHistory = navForwardHistory.concat([fwd]).slice(-50)
         if (levelUp) {
             // Nothing recorded (fresh session view): the old level-up fallback.
-            if (settingsOpen) { settingsOpen = false; setupOpen = false }
+            if (setupOpen) setupOpen = false
+            else if (settingsOpen) settingsOpen = false
             else if (libraryOpen) libraryOpen = false
             else if (artistOpen) artistOpen = false
             else if (browseOpen && browsePageKey !== "") browseBack()
@@ -2556,6 +2557,10 @@ ApplicationWindow {
         setupOpen = false; settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
         Qt.callLater(function() { settingsPage.jumpToCard("ffmpeg") })
     }
+    // The chip's ✕ and its test both come through here.
+    function dismissSetupChip() {
+        setupSettings.setupChipDismissed = true
+    }
     // The welcome surface was answered: persist the answer, route the choice,
     // and close the surface. TIDAL opens the passive sign-in panel for this
     // session only (the inline panel lands with #218); Apple enables and the
@@ -2567,11 +2572,10 @@ ApplicationWindow {
         setupOpen = false
     }
     // Re-open the welcome surface as a page (Settings -> Providers, or the
-    // "Finish setup" chip). markNav first: its navOrigin change clears
-    // setupOpen, so the assignment after it wins.
+    // "Finish setup" chip): the other surfaces close, the page opens.
     function openSetupPage() {
         navPush(); markNav("setup")
-        settingsOpen = false; setupOpen = false; artistOpen = false; libraryOpen = false; browseOpen = false
+        settingsOpen = false; artistOpen = false; libraryOpen = false; browseOpen = false
         setupOpen = true
     }
     // Deep-link to the Apple setup wizard (from enabling Apple Music or a
@@ -13289,7 +13293,7 @@ ApplicationWindow {
                 // dismisses this chip permanently (Settings -> Providers ->
                 // "Set up providers" remains the way back).
                 Row {
-                    visible: root.setupUnfinished && !root.setupOpen && !root.welcomeDue
+                    visible: root.downloadsNeedSetup && !root.setupOpen && !root.welcomeDue
                     spacing: 6; Layout.alignment: Qt.AlignVCenter
                     Rectangle {
                         objectName: "setupChip"
@@ -13308,8 +13312,9 @@ ApplicationWindow {
                         color: "transparent"; border.color: root.border1
                         Text { anchors.centerIn: parent; text: "✕"; color: root.textDim; font.pixelSize: 11 }
                         MouseArea {
+                            objectName: "setupChipDismissArea"
                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: setupSettings.setupChipDismissed = true
+                            onClicked: root.dismissSetupChip()
                         }
                     }
                 }
@@ -14230,6 +14235,7 @@ ApplicationWindow {
             // an outer margin; see BrowseScroll.
             Layout.fillWidth: true; Layout.fillHeight: true
             visible: !root.artistOpen && !root.settingsOpen && !root.libraryOpen && !root.browseOpen
+                && !root.setupOpen
             clip: true
             contentWidth: width; contentHeight: contentCol.height + 32
             ScrollBar.vertical: ScrollBar {}
@@ -17338,13 +17344,13 @@ ApplicationWindow {
         // sessionResolved gates the overlay so an already-signed-in launch
         // doesn't flash the logged-out screen while the cached-token network
         // check is still in flight.
-        // The provider picker owns the first run: the panel shows once the
-        // picker was answered with Apple off, and whenever a login is in
-        // progress no matter which provider is enabled, so a sign-in started
-        // from Settings keeps its paste field. Nothing here starts a login
-        // on its own: the browser opens solely on a button click. No
-        // MouseArea covers the window, so the nav underneath stays clickable;
-        // the dim is paint only.
+        // The provider welcome surface owns the first run: the panel shows
+        // only once TIDAL was chosen there (or on a provider card) for this
+        // session, and whenever a login is in progress no matter which
+        // provider is enabled, so a sign-in started from Settings keeps its
+        // paste field. Nothing here starts a login on its own: the browser
+        // opens solely on a button click. No MouseArea covers the window, so
+        // the nav underneath stays clickable; the dim is paint only.
         visible: waves.sessionResolved && !root.signedIn
                  && (loginPanel.urlOpened || (!waves.appleEnabled && root.setupChoiceTidal))
         // A logged-out cold launch fades in with the rest of the interface.
@@ -17439,70 +17445,48 @@ ApplicationWindow {
                 text: "Choose where to start. You can enable the other provider later in Settings."
                 color: root.textLo; font.pixelSize: 13
             }
-            // TIDAL card: sign in with a TIDAL account.
-            Rectangle {
-                Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
-                implicitHeight: tidalPickRow.implicitHeight + 24
-                RowLayout {
-                    id: tidalPickRow
-                    anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
-                    Image {
-                        id: tidalPickLogo
-                        objectName: "tidalPickLogo"
-                        Layout.alignment: Qt.AlignVCenter
-                        // RowLayout sizes children from their implicit
-                        // size (the PNG pixels) unless told otherwise:
-                        // plain width/height are ignored here.
-                        Layout.preferredWidth: 30; Layout.preferredHeight: 20
-                        source: "assets/providers/tidal.png"
-                        fillMode: Image.PreserveAspectFit
-                        smooth: true; cache: true
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true; spacing: 6
-                        Text { text: "TIDAL"; color: root.textHi; font.pixelSize: 15; font.weight: Font.DemiBold }
-                        Text {
-                            Layout.fillWidth: true; wrapMode: Text.WordWrap
-                            text: "Sign in with your TIDAL account."
-                            color: root.textLo; font.pixelSize: 12
+            // One card per registered provider, straight from the
+            // descriptors: a provider the welcome has never heard of renders
+            // through this same delegate (issue #215).
+            Repeater {
+                model: waves.providerCards()
+                delegate: Rectangle {
+                    required property var modelData
+                    Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
+                    implicitHeight: pickRow.implicitHeight + 24
+                    RowLayout {
+                        id: pickRow
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
+                        Image {
+                            objectName: "welcomeProviderLogo"
+                            Layout.alignment: Qt.AlignVCenter
+                            // RowLayout sizes children from their implicit
+                            // size (the PNG pixels) unless told otherwise:
+                            // plain width/height are ignored here.
+                            Layout.preferredWidth: modelData.logo_width !== undefined ? Number(modelData.logo_width) : 20
+                            Layout.preferredHeight: 20
+                            source: modelData.logo !== undefined ? String(modelData.logo) : ""
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true; cache: true
                         }
-                        GateAction {
-                            label: "CONTINUE WITH TIDAL"
-                            onClicked: pickCard.picked("tidal")
-                        }
-                    }
-                }
-            }
-            // Apple Music card: search needs no account; downloads ride
-            // the one-time setup wizard.
-            Rectangle {
-                Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
-                implicitHeight: applePickRow.implicitHeight + 24
-                RowLayout {
-                    id: applePickRow
-                    anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
-                    Image {
-                        id: applePickLogo
-                        objectName: "applePickLogo"
-                        Layout.alignment: Qt.AlignVCenter
-                        Layout.preferredWidth: 22; Layout.preferredHeight: 22
-                        source: "assets/providers/apple-music.png"
-                        fillMode: Image.PreserveAspectFit
-                        smooth: true; cache: true
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true; spacing: 6
-                        Text { text: "Apple Music"; color: root.textHi; font.pixelSize: 15; font.weight: Font.DemiBold }
-                        Text {
-                            Layout.fillWidth: true; wrapMode: Text.WordWrap
-                            text: "Search works with no account; downloads need the one-time setup."
-                            color: root.textLo; font.pixelSize: 12
-                        }
-                        GateAction {
-                            label: "CONTINUE WITH APPLE MUSIC"
-                            onClicked: pickCard.picked("apple")
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 6
+                            Text {
+                                text: String(modelData.name); color: root.textHi
+                                textFormat: Text.PlainText
+                                font.pixelSize: 15; font.weight: Font.DemiBold
+                            }
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                text: String(modelData.summary || "")
+                                textFormat: Text.PlainText
+                                color: root.textLo; font.pixelSize: 12
+                            }
+                            GateAction {
+                                label: "CONTINUE WITH " + String(modelData.name).toUpperCase()
+                                onClicked: pickCard.picked(String(modelData.id))
+                            }
                         }
                     }
                 }

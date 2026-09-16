@@ -187,13 +187,15 @@ def run_scenario(
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
-def boot_main_qml():
+def boot_main_qml(keep_settings: bool = False):
     """Boot the real Main.qml offscreen inside a scenario child.
 
     Returns ``(root, q, settle, bridge)`` ready to drive, or ``EXIT_NO_QT``
     when this interpreter cannot host Qt. The session login, the library scan
     and the Browse fetch are silenced so the scenario owns every payload it
     asserts on; the root is resized, shown, and pushed past the boot overlay.
+    ``keep_settings`` skips the store clear, so a second child can read what
+    a first one persisted (the restart scenarios).
     """
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
@@ -209,7 +211,8 @@ def boot_main_qml():
     patch_offline()  # before the bridge: its __init__ fires the sign-in check
 
     app = QGuiApplication.instance() or QGuiApplication([])
-    sandbox_qml_settings()
+    if not keep_settings:
+        sandbox_qml_settings()
     from waves.waves_ui.app import _load_mono
     from waves.waves_ui.backend import WavesBridge
 

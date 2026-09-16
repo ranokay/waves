@@ -69,15 +69,21 @@ def _scenario() -> int:  # noqa: C901 (one straight scenario)
     bridge.sessionResolvedChanged.emit()
     settle(100)
 
-    # First run: the picker owns the screen, the TIDAL panel stays hidden,
-    # and no browser opened on its own. The card logos render at tile size,
-    # not source pixels (issue #84: RowLayout ignores width/height); the
-    # marks now live inside the welcome component, so find them by name.
-    def _logo_width(name: str) -> str:
+    # First run: the welcome owns the screen, the TIDAL panel stays hidden,
+    # and no browser opened on its own. The cards come from the provider
+    # descriptors; their marks render at the descriptor's tile width, not at
+    # source pixels (issue #84: RowLayout ignores width/height).
+    def _logo_widths() -> str:
         return scene_js(
-            'var hit = findFirst(root, function (o) { return o.objectName === "'
-            + name
-            + '"; }); return hit ? hit.width : -1;'
+            "var out = [];"
+            "function walk(it) {"
+            "  if (it.objectName === 'welcomeProviderLogo') out.push(it.width);"
+            "  var ks = it.children || [];"
+            "  for (var i = 0; i < ks.length; i++) walk(ks[i]);"
+            "  if (it.item) walk(it.item);"
+            "}"
+            "walk(providerPicker);"
+            "return JSON.stringify(out);"
         )
 
     problems: list[str] = []
@@ -87,10 +93,8 @@ def _scenario() -> int:  # noqa: C901 (one straight scenario)
         problems.append("the TIDAL panel was up before any choice")
     if q("waves.appleEnabled"):
         problems.append("Apple was enabled before any choice")
-    if q(_logo_width("tidalPickLogo")) != 30:
-        problems.append(f"the TIDAL mark rendered {q(_logo_width('tidalPickLogo'))} wide, not 30")
-    if q(_logo_width("applePickLogo")) != 22:
-        problems.append(f"the Apple mark rendered {q(_logo_width('applePickLogo'))} wide, not 22")
+    if q(_logo_widths()) != "[24,20]":
+        problems.append(f"the provider marks rendered {q(_logo_widths())}, not their descriptor tile widths")
 
     # Choosing TIDAL lands on the login panel (still click-to-open).
     q("setupSettings.firstRunAnswered = true; root.setupChoiceTidal = true")

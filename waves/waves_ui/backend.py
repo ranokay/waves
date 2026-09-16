@@ -5402,6 +5402,28 @@ class WavesBridge(LibraryMixin, QObject):
         """The TIDAL sign-in entry (the landing panel's and the card's)."""
         _begin_login(self, CTX_TIDAL)
 
+    @Slot(result="QVariant")
+    def providerCards(self) -> list:
+        """The welcome surface's provider cards, straight from the descriptors.
+
+        One entry per registered provider: identity, mark and the one-line
+        capability truth. The welcome renders these instead of hardcoding
+        the providers, so a third provider is a descriptor (issue #215).
+        """
+        cards = []
+        for provider in _provider_registry(self):
+            descriptor = provider.descriptor()
+            cards.append(
+                {
+                    "id": descriptor.id,
+                    "name": descriptor.name,
+                    "logo": descriptor.logo,
+                    "logo_width": descriptor.logo_width,
+                    "summary": descriptor.capability_summary,
+                }
+            )
+        return cards
+
     @Slot()
     def showSetup(self) -> None:
         """Re-open the provider welcome surface (Settings -> Providers).
