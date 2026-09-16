@@ -57,6 +57,21 @@ tab), and `signed_in` is the live session of the browse-capable provider
 whose pages fill the pane (the first in registry order), which the landing
 pane offers its sign-in call to action for.
 
+The welcome surface's cards come from `providerCards()`: one entry per
+registered provider with its descriptor identity (id/name/logo), its
+`summary` (the one-line capability truth) and `action` (the provider's own
+action words — a setup for Apple, a sign-in for TIDAL), plus `state`/`word`
+from the same light composer as the header's marks ("" when the provider has
+nothing to report, e.g. Apple switched off). The surface re-reads the list
+at boot, when the surface opens and on the same flips as the lights, so a
+card never states a stale account state (issue #219).
+
+`appleSetupRequested(reason)` carries the wizard step a pre-setup click was
+missing: `"cookies"` (no account yet — the cookies/wrapper tier) or
+`"runtime"` (no fetch binary), or `"setup"` / `""` for the wizard's top. The
+Apple wizard marks the named step in place, and SKIP FOR NOW leaves the page
+for Search with Apple still enabled.
+
 ## Search, artist pages, library
 
 | Signal                                                     | Fires when                                                                                                                                                 |

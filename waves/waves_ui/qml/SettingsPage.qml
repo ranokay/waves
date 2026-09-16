@@ -20,6 +20,15 @@ Item {
     // reset) tells the page to re-read the freshly-defaulted schema.
     signal resetSettingsRequested()
     signal factoryResetRequested()
+    // The Apple wizard's "skip for now": the host decides where skipping
+    // lands (the step is deferred, never undone; Apple stays enabled).
+    signal appleSetupSkipped()
+    // The wizard step the last setup request named ("" = the top). Set by the
+    // host before showing the page, so a pre-setup download click lands on
+    // the step that would have made it work. The mark lives for the visit:
+    // leaving the page clears it.
+    property string appleFocusStep: ""
+    onVisibleChanged: if (!visible) appleFocusStep = ""
     // TIDAL's sign-in is hosted by the welcome surface (the browser opens
     // only from its own OPEN BROWSER LOGIN button), so the session card's
     // Sign in asks the host to open it instead of starting a login here.
@@ -2735,6 +2744,15 @@ Item {
                                             id: setupCol
                                             visible: modelData.type === "apple_setup"
                                             width: parent.width; spacing: 8
+                                            // Whether a download can start from the live
+                                            // state (the bridge's own verdict, never a
+                                            // re-derivation of tier words here): once one
+                                            // can, there is nothing left for "skip for
+                                            // now" to defer.
+                                            readonly property bool skippable: !(
+                                                page.appleSetupLive && page.appleSetupLive.light
+                                                && page.appleSetupLive.light.downloads_ready === true
+                                            )
                                             Component.onCompleted: {
                                                 if (modelData.type === "apple_setup") page.appleSetupLive = waves.appleSetupState()
                                             }
@@ -2744,6 +2762,11 @@ Item {
                                                 return page.gold
                                             }
                                             function runStepAction(actKey) {
+                                                // Acting on the marked step retires the
+                                                // mark: it pointed at what a blocked
+                                                // click was missing, and that click's
+                                                // job is now the user's.
+                                                if (String(actKey) === page.appleFocusStep) page.appleFocusStep = ""
                                                 if (actKey === "apple_update_runtime") waves.installAppleRuntime()
                                                 else if (actKey === "apple_remove_runtime") waves.removeAppleRuntime()
                                                 else if (actKey === "apple_pull_image") waves.installAppleImage()
@@ -2781,6 +2804,13 @@ Item {
                                                 model: (page.appleSetupLive && page.appleSetupLive.steps) ? page.appleSetupLive.steps : []
                                                 delegate: Column {
                                                     required property var modelData
+                                                    // The step the last setup request named (a
+                                                    // pre-setup download click): marked so the
+                                                    // eye lands where the click was blocked.
+                                                    // The host clears it when the page closes,
+                                                    // so a later visit starts unmarked.
+                                                    readonly property bool focused: page.appleFocusStep !== ""
+                                                        && String(modelData.key) === page.appleFocusStep
                                                     width: parent.width; spacing: 2
                                                     Row {
                                                         spacing: 8; width: parent.width
@@ -2790,9 +2820,18 @@ Item {
                                                             color: setupCol.stepColor(String(modelData.state))
                                                         }
                                                         Text {
-                                                            text: modelData.label; color: page.textHi
+                                                            objectName: "appleStepLabel_" + String(modelData.key)
+                                                            text: modelData.label
+                                                            color: focused ? page.accent : page.textHi
                                                             textFormat: Text.PlainText
                                                             font.pixelSize: 13; font.weight: Font.Medium
+                                                        }
+                                                        Text {
+                                                            objectName: "appleStepMark_" + String(modelData.key)
+                                                            visible: focused
+                                                            text: "← START HERE"; color: page.accent
+                                                            textFormat: Text.PlainText
+                                                            font.pixelSize: 11; font.family: page.mono
                                                         }
                                                     }
                                                     Text {
@@ -2805,7 +2844,8 @@ Item {
                                                         x: 16; width: stepTxt.implicitWidth + page.btnPadH * 2
                                                         height: stepTxt.implicitHeight + page.btnPadV * 2
                                                         radius: page.btnRad
-                                                        color: "transparent"; border.color: page.border1
+                                                        color: "transparent"
+                                                        border.color: parent.focused ? page.accentDim : page.border1
                                                         Text {
                                                             id: stepTxt
                                                             anchors.centerIn: parent
@@ -2922,6 +2962,31 @@ Item {
                                                 text: "Sign-in: " + hint
                                                 color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
                                                 textFormat: Text.PlainText
+                                            }
+                                            // "Skip for now" (the onboarding spec,
+                                            // #213): leave the remaining steps for
+                                            // later without undoing the choice.
+                                            // Apple stays enabled, so search and
+                                            // previews keep working; the status row
+                                            // above still reports the truth, and
+                                            // Settings (or any empty state) is the
+                                            // way back.
+                                            Text {
+                                                objectName: "appleSetupSkip"
+                                                visible: setupCol.skippable
+                                                text: "SKIP FOR NOW"
+                                                color: skipMa.containsMouse ? page.accent : page.textDim
+                                                textFormat: Text.PlainText
+                                                font.pixelSize: 12; font.letterSpacing: 0.85
+                                                Accessible.role: Accessible.Button
+                                                Accessible.name: "Skip Apple Music setup for now"
+                                                MouseArea {
+                                                    id: skipMa
+                                                    anchors.fill: parent; anchors.margins: -6
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: page.appleSetupSkipped()
+                                                }
                                             }
                                         }
 

@@ -357,7 +357,7 @@ def _run_journey(reverse: bool = False) -> int:
     # applySettings. TIDAL's choice swaps the welcome surface to its inline
     # sign-in steps and stays up: the first run is answered by a completed
     # sign-in, not by starting one.
-    first_label = "CONTINUE WITH TIDAL" if reverse else "CONTINUE WITH APPLE MUSIC"
+    first_label = "CONTINUE WITH TIDAL" if reverse else "SET UP APPLE MUSIC"
     first_point = q(_center("providerPicker", first_label))
     if not points_to(first_point):
         print(f"the picker exposes no {first_label} action", file=sys.stderr)

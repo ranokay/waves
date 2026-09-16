@@ -242,8 +242,23 @@ ApplicationWindow {
     // names the provider that fills the pane, so the call to action follows
     // the source that would actually load it.
     readonly property bool browseSignedIn: !!(root.browseNav && root.browseNav.signed_in)
+    // The welcome surface's provider cards (identity, copy, live status),
+    // composed by the bridge from the descriptors. Re-read at boot and on
+    // every flip that moves a session or the Apple light, and again when the
+    // surface opens, so a card never states a stale account state.
+    property var providerCards: []
     function refreshProviderLights() {
         try { root.providerLights = waves.providerLights() } catch (e) { root.providerLights = [] }
+    }
+    function refreshProviderCards() {
+        try { root.providerCards = waves.providerCards() } catch (e) { root.providerCards = [] }
+    }
+    // The two provider surfaces always move together (a session or setup flip
+    // changes both the header's marks and the welcome cards), so one call
+    // keeps the BRIDGE.md rule in one place.
+    function refreshProviderSurfaces() {
+        root.refreshProviderLights()
+        root.refreshProviderCards()
     }
     function refreshBrowseNav() {
         try { root.browseNav = waves.browseNav() }
@@ -369,7 +384,7 @@ ApplicationWindow {
         else root.visible = true
         root._geomReady = true
         try { root.refreshAppleEnabled() } catch (e) {}
-        root.refreshProviderLights()
+        root.refreshProviderSurfaces()
         root.refreshBrowseNav()
 
         // No configured provider fills Browse: the launch view falls
@@ -2616,7 +2631,15 @@ ApplicationWindow {
         setupSettings.firstRunAnswered = true
         setupOpen = false
         setupCards()
-        if (choice === "apple") waves.applySettings({"apple_enabled": true})
+        if (choice === "apple") {
+            // Choosing the card means set it up, whether Apple was already on
+            // (a re-opened welcome page after Skip) or not: the enable's own
+            // wizard request only fires on a real flip, so an already-enabled
+            // Apple would otherwise close the surface and open nothing.
+            var wasEnabled = root.appleEnabled
+            waves.applySettings({"apple_enabled": true})
+            if (wasEnabled) root.openAppleSetup("")
+        }
     }
     // One reset for every path that leaves the TIDAL steps: the mode and the
     // paste-field latch fall back together, so no exit can leave a late URL
@@ -2651,18 +2674,25 @@ ApplicationWindow {
     }
     // Re-open the welcome surface as a page (Settings -> Providers, or the
     // "Finish setup" chip): the other surfaces close, the page opens on the
-    // provider cards whatever the last session left behind.
+    // provider cards whatever the last session left behind, with their live
+    // statuses re-read for this visit.
     function openSetupPage() {
         navPush(); markNav("setup")
         settingsOpen = false; artistOpen = false; libraryOpen = false; browseOpen = false
         setupCards()
+        root.refreshProviderSurfaces()
         setupOpen = true
     }
     // Deep-link to the Apple setup wizard (from enabling Apple Music or a
-    // pre-setup Apple download click): the in-place steps in Providers.
-    function openAppleSetup() {
+    // pre-setup Apple download click): the in-place steps in Providers. The
+    // reason names the step the click was missing (a wizard step key) or
+    // "" / "setup" for the top of the wizard, so the click lands on the
+    // affordance that would have let it work.
+    function openAppleSetup(reason) {
         navPush(); markNav("settings")
         setupOpen = false; settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
+        var step = String(reason || "")
+        settingsPage.appleFocusStep = (step === "setup") ? "" : step
         Qt.callLater(function() { settingsPage.jumpToCard("providers_apple") })
     }
     // Browse: open the tab (fetching the landing page once per session) and
@@ -12724,14 +12754,14 @@ ApplicationWindow {
             // The chip's "can any provider download yet" test and Apple's
             // search-group clearing both read the same fresh light.
             root.appleLight = waves.appleStatus()
-            root.refreshProviderLights()
+            root.refreshProviderSurfaces()
             if (waves.appleStatus().state === "off") root.clearAppleSearch()
         }
         function onSetupRequested() {
             root.openSetupPage()
         }
         function onAppleSetupRequested(reason) {
-            root.openAppleSetup()
+            root.openAppleSetup(reason)
         }
         function onLibraryLoaded(cat, items, more) {
             root.libCatHasMore[cat] = more
@@ -12812,8 +12842,8 @@ ApplicationWindow {
             // The header's lights follow the session, and so does Browse's
             // answer: the TIDAL mark flips with the flag every catalog read
             // moves with, and the landing's call to action retires with it
-            // (issue #223).
-            root.refreshProviderLights()
+            // (issue #223). The welcome's cards follow the same flips.
+            root.refreshProviderSurfaces()
             root.refreshBrowseNav()
             // Drop every QML-side copy of Browse data when the account flips:
             // the landing embeds personalized For You rows, and the backend's
@@ -15380,6 +15410,11 @@ ApplicationWindow {
             active: root.settingsOpen
             ff: appFfmpeg            // share the one app-wide FFmpeg manager
             onClosed: { root.settingsOpen = false; setupOpen = false }
+            // The Apple wizard's own skip: setup is deferred, not undone.
+            // Apple stays enabled (search and previews keep working) and the
+            // app lands on Search with the field focused, the same useful
+            // landing a completed TIDAL sign-in gets.
+            onAppleSetupSkipped: root.openSearch()
             onResetSettingsRequested: root.confirmSettingsReset = true
             onFactoryResetRequested: root.confirmFactoryReset = true
         }
@@ -17655,7 +17690,7 @@ ApplicationWindow {
                     color: root.textLo; font.pixelSize: 13
                 }
                 Repeater {
-                    model: waves.providerCards()
+                    model: root.providerCards
                     delegate: Rectangle {
                         required property var modelData
                         Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
@@ -17689,8 +17724,36 @@ ApplicationWindow {
                                     textFormat: Text.PlainText
                                     color: root.textLo; font.pixelSize: 12
                                 }
+                                // The provider's live state, where its
+                                // account is shown (issue #219): the same
+                                // light shape the header marks read. A
+                                // provider with nothing to report (Apple
+                                // still off) shows no row.
+                                Row {
+                                    objectName: "welcomeProviderStatus"
+                                    visible: String(modelData.word || "") !== ""
+                                    spacing: 7
+                                    Rectangle {
+                                        width: 7; height: 7; radius: 3.5
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: StatusLight.colorFor(root, String(modelData.state || ""))
+                                    }
+                                    Text {
+                                        textFormat: Text.PlainText
+                                        text: String(modelData.word || "")
+                                        color: root.textLo; font.pixelSize: 12
+                                    }
+                                }
+                                // The action's words are the provider's own
+                                // (descriptor data): an Apple card offers a
+                                // one-time setup, never a sign-in (the
+                                // onboarding spec, #213). A provider that
+                                // states none keeps the neutral invite.
                                 GateAction {
-                                    label: "CONTINUE WITH " + String(modelData.name).toUpperCase()
+                                    objectName: "welcomeProviderAction"
+                                    label: String(modelData.action || "") !== ""
+                                           ? String(modelData.action).toUpperCase()
+                                           : ("CONTINUE WITH " + String(modelData.name).toUpperCase())
                                     onClicked: pickCard.picked(String(modelData.id))
                                 }
                             }
