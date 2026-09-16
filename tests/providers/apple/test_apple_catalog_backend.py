@@ -202,6 +202,58 @@ def test_apple_artist_page_loads_albums_and_top_tracks():
     assert [t["id"] for t in payload["tracks"]] == ["apple:song-1"]
 
 
+def test_standalone_apple_artist_ignores_a_cached_summary():
+    """The LYRICS/COVER standalone path must not build an artist page from a
+    cached search summary: its album entries are reference stubs, so the
+    canonical artist is fetched instead (issue #216)."""
+    summary = {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin"},
+        "relationships": {
+            "albums": {"data": [{"id": "album-1", "type": "albums", "href": "/v1/catalog/us/albums/album-1"}]}
+        },
+    }
+    canonical = {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin"},
+        "relationships": {"albums": {"data": [_album()]}},
+        "views": {"top-songs": {"data": [_song()]}},
+    }
+
+    class _StrictCatalog(_Catalog):
+        """The shared fake answers any id; the resolver walks kinds and must
+        only hit the one the id names."""
+
+        def _one(self, wanted, ident, resource):
+            if ident != wanted:
+                raise KeyError(ident)
+            return {"data": [resource]}
+
+        async def get_album(self, album_id):
+            return self._one("album-1", album_id, self._album)
+
+        async def get_artist(self, artist_id):
+            return self._one("artist-1", artist_id, self._artist)
+
+        async def get_playlist(self, playlist_id):
+            raise KeyError(playlist_id)
+
+        async def get_song(self, song_id):
+            return self._one("song-1", song_id, self._song)
+
+    provider = AppleProvider(catalog=_StrictCatalog(album=_album(), artist=canonical, song=_song()))
+    provider._remember("artist", summary)
+    stub = SimpleNamespace(providers={"apple": provider})
+
+    rows = WavesBridge._standalone_apple_tracks(stub, "apple:artist-1")
+
+    assert rows, "the standalone path served nothing from a cached summary"
+    assert any(row[0]["title"] == "Xtal" for row in rows)
+    assert any(row[1] is not None and row[1]["title"] == "Selected Ambient Works 85-92" for row in rows)
+
+
 def _apple_artist_catalog():
     artist = {
         "id": "artist-1",

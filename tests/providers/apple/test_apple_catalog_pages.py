@@ -190,6 +190,22 @@ def _search_summary_catalog():
                                     "name": "Aphex Twin",
                                     "artwork": {"url": "https://img/{w}x{h}bb.jpg"},
                                 },
+                                # Apple's search summary lists the artist's albums as
+                                # reference stubs: ids and hrefs, no attributes, no
+                                # views (captured live for issue #216). A page built
+                                # from these renders blank rows, so get_object must
+                                # treat them as incomplete and fetch canonically.
+                                "relationships": {
+                                    "albums": {
+                                        "data": [
+                                            {
+                                                "id": "album-1",
+                                                "type": "albums",
+                                                "href": "/v1/catalog/us/albums/album-1",
+                                            }
+                                        ]
+                                    }
+                                },
                             }
                         ]
                     },
@@ -215,12 +231,21 @@ def _search_summary_catalog():
 
 
 def _full_artist_resource():
+    """A canonical artist, in the shape Apple's own endpoint returns.
+
+    Captured live for issue #216: the relationships carry attributed
+    resources and the named views (top-songs among them) live on the
+    resource, not on the relationship.
+    """
     return {
         "id": "artist-1",
         "type": "artists",
         "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
         "relationships": {
             "albums": {"data": [_album_resource()]},
+        },
+        "views": {
+            "full-albums": {"data": [_album_resource()]},
             "top-songs": {"data": [_song_resource()]},
         },
     }
@@ -253,9 +278,40 @@ def test_get_object_refetches_a_search_summary_artist_before_building_pages():
     provider = AppleProvider(catalog=_search_summary_catalog())
     provider.search("aphex")
 
-    provider.get_object("artist", "apple:artist-1")
+    artist = provider.get_object("artist", "apple:artist-1")
 
     assert ("artist", "artist-1") in provider._catalog.calls
+    # The refetch is only worth it when the page it feeds is populated:
+    # named album rows with art and counts, and top tracks beside them.
+    page = provider.artist_page(artist)
+    assert [(row["title"], row["tracks"]) for row in page["albums"]] == [("Selected Ambient Works 85-92", 13)]
+    assert page["albums"][0]["art"] == "https://img/album/320x320bb.jpg"
+    assert page["albums"][0]["artist"] == "Aphex Twin"
+    assert (page["albums"][0]["date"], page["albums"][0]["year"]) == ("1992-02-12", "1992")
+    assert [row["title"] for row in page["tracks"]] == ["Xtal"]
+    # And the fetched copy is the cached one from then on.
+    assert provider.get_object("artist", "apple:artist-1") is artist
+    assert provider._catalog.calls == [("artist", "artist-1")]
+
+
+def test_artist_view_stubs_are_not_data_and_never_mask_a_named_copy():
+    """A view of reference stubs is not a page (issue #216, second shape):
+    the artist must refetch, and a stub must not claim an id that a later
+    named copy of the same song carries."""
+    stub = {"id": "song-9", "type": "songs"}
+    stub_only = {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin"},
+        "views": {"top-songs": {"data": [stub]}},
+    }
+    assert AppleProvider._is_complete("artist", stub_only) is False
+
+    named = _song_resource("song-9")
+    stub_only["views"] = {"top-songs": {"data": [stub, named]}}
+    page = AppleProvider(catalog=_Catalog()).artist_page(stub_only)
+
+    assert [(t["id"], t["title"]) for t in page["tracks"]] == [("apple:song-9", "Xtal")]
 
 
 def test_a_later_search_summary_invalidates_a_fetched_album():
