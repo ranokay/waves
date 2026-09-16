@@ -38,7 +38,14 @@ who pulls it.
    Dockerfile and ships `NOTICE`, `Apache-2.0`, `BSD-3-Clause` and
    `BSD-2-Clause` under `/licenses` (`tools/wrapper-image/`). The currently
    published `0.2.3` predates this; the next publish carries it. No retag
-   happens — republishes take a new tag per the runbook.
+   happens — republishes take a new tag per the runbook. The three-clause text
+   is byte-identical to Debian's `/usr/share/common-licenses/BSD` (verified
+   from `debian:bookworm-slim`, 2026-09-16), the generic UC Regents form
+   Debian ships in the image's own base; AOSP's
+   `aosp-mirror/platform_bionic` notices (`libc/NOTICE`, `linker/NOTICE`)
+   carry the same clauses with per-file year ranges for the vendor'd `libc`,
+   `libm` and `linker64` binaries. The image ships one generic text per
+   license family, not per-file excerpts.
 3. **No image provenance labels.** Fixed in the same pipeline change: OCI
    title, source, revision (the exact wrapper-v2 commit), licenses and
    description labels are set through the build action. The current `0.2.3`
