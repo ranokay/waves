@@ -22,7 +22,6 @@ Item {
     // TIDAL's sign-in is hosted by the welcome surface (the browser opens
     // only from its own OPEN BROWSER LOGIN button), so the session card's
     // Sign in asks the host to open it instead of starting a login here.
-    signal tidalSignInRequested()
     function externalReset() { editMap = ({}); dirty = false; refreshSchema(); syncLibraryMirrors() }
 
     // Waves palette (kept local so this file is self-contained)
@@ -2670,17 +2669,12 @@ Item {
                                                         opacity: actPill.actLive ? 1.0 : 0.45
                                                         function runAction() {
                                                             if (actPill.actKey === "" || actPill.providerId === "") return
-                                                            // TIDAL's sign-in lives on the welcome
-                                                            // surface's inline steps (the browser opens
-                                                            // only from its own button), so the card
-                                                            // opens that page instead of starting a
-                                                            // login from Settings (issue #218). Every
-                                                            // other action dispatches through the
-                                                            // bridge's generic slot.
-                                                            if (actPill.actKey === "tidal_signin") {
-                                                                page.tidalSignInRequested()
-                                                                return
-                                                            }
+                                                            // One generic slot for every provider
+                                                            // action. Sign in comes back as the
+                                                            // bridge's signInRequested signal, which
+                                                            // Main routes into the welcome surface's
+                                                            // inline steps (issue #218) -- the page
+                                                            // holds no provider-specific branch.
                                                             waves.providerAction(actPill.providerId, actPill.actKey)
                                                         }
                                                         Text {

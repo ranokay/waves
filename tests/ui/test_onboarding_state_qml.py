@@ -258,6 +258,12 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
             failures.append("CANCEL closed the welcome instead of returning to the cards")
         if q("setupSettings.firstRunAnswered"):
             failures.append("CANCEL answered the first run")
+        # A URL that lands after CANCEL must not open a browser or latch the
+        # paste field (issue #218, review finding).
+        q('waves.loginUrlReady("https://tidal.test/authorize")')
+        settle(200)
+        if q("root.setupUrlOpened"):
+            failures.append("a late login URL latched the paste field after CANCEL")
 
     # Escape is the keyboard exit, the same return to the cards.
     if not click(_text_point("providerPicker", "CONTINUE WITH TIDAL"), "root.setupMode === 'tidal'"):

@@ -594,8 +594,9 @@ def test_a_third_provider_renders_a_card_and_actions_with_no_qml_branch():
 
 
 def test_provider_action_dispatches_by_descriptor_key():
-    """The one slot a card's pills call: generic verbs run through the seam,
-    and a provider the bridge has never heard of still dispatches."""
+    """The one slot a card's pills call: sign-in asks the welcome surface to
+    open, sign-out runs the provider's, and a provider the bridge has never
+    heard of still dispatches."""
     from waves.providers.base import ProviderDescriptor
 
     calls: list[str] = []
@@ -608,19 +609,16 @@ def test_provider_action_dispatches_by_descriptor_key():
         logout=lambda: calls.append("logout"),
     )
 
-    class _Pool:
-        def start(self, _worker):
-            calls.append("worker")
-
     stub = _schema_stub()
     stub.providers["newco"] = newco
-    stub.threadpool = _Pool()
+    stub.signInRequested = SimpleNamespace(emit=lambda provider_id: calls.append(f"signin:{provider_id}"))
     stub.providerAction = _bind(stub, "providerAction")
 
     stub.providerAction("newco", "newco_signin")
     stub.providerAction("newco", "newco_signout")
     stub.providerAction("newco", "newco_unknown_verb")
-    assert calls == ["worker", "logout"]
+    # No hidden browser flow: sign-in only requests the surface (issue #218).
+    assert calls == ["signin:newco", "logout"]
 
 
 def test_provider_action_ignores_an_unregistered_provider():

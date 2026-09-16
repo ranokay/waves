@@ -4053,6 +4053,10 @@ class WavesBridge(LibraryMixin, QObject):
     # The welcome surface was asked to re-open (Settings -> Providers); QML
     # owns where it renders, the bridge only forwards the command.
     setupRequested = Signal()
+    # A card asked to sign a provider in. The welcome surface owns the flow
+    # (inline steps, one explicit browser click); QML opens it in sign-in
+    # mode, so no provider action can start a browser behind the user's back.
+    signInRequested = Signal(str)
     # A download was HELD because FFmpeg is missing: without it the files
     # would be degraded (no FLAC extraction, no video conversion, no track
     # length repair, so strict players can read 0:00). QML shows a blocking
@@ -5437,12 +5441,11 @@ class WavesBridge(LibraryMixin, QObject):
     def providerAction(self, provider_id: str, action_key: str) -> None:
         """Run a provider card's action by the key its descriptor carries.
 
-        The card's action keys are ``<provider id>_<verb>``. The generic
-        verbs run through the seam (sign in starts the provider's login flow;
-        sign out runs its sign-out); a setup-kind provider's management verbs
-        run the bridge flows that own the runtime. QML calls this one slot
-        for every provider, so a provider's card dispatches without a QML
-        branch.
+        The card's action keys are ``<provider id>_<verb>``. Sign in asks the
+        welcome surface to open (``signInRequested``), sign out runs the
+        provider's sign-out, and a setup-kind provider's management verbs run
+        the bridge flows that own the runtime. QML calls this one slot for
+        every provider, so a provider's card dispatches without a QML branch.
         """
         provider_id = str(provider_id or "")
         action_key = str(action_key or "")
@@ -5451,7 +5454,9 @@ class WavesBridge(LibraryMixin, QObject):
             return
         verb = action_key[len(provider_id) + 1 :] if action_key.startswith(provider_id + "_") else action_key
         if verb == "signin":
-            _begin_login(self, provider_id)
+            # The welcome surface runs the flow: opening its steps is the
+            # request; the browser opens only from the steps' own button.
+            self.signInRequested.emit(provider_id)
             return
         if verb == "signout":
             _provider_sign_out(self, provider_id)

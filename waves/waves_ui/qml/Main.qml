@@ -2581,16 +2581,21 @@ ApplicationWindow {
         }
         setupSettings.firstRunAnswered = true
         setupOpen = false
+        setupCards()
+        if (choice === "apple") waves.applySettings({"apple_enabled": true})
+    }
+    // One reset for every path that leaves the TIDAL steps: the mode and the
+    // paste-field latch fall back together, so no exit can leave a late URL
+    // opening a browser or a stale "REOPEN" step behind.
+    function setupCards() {
         setupMode = "cards"
         setupUrlOpened = false
-        if (choice === "apple") waves.applySettings({"apple_enabled": true})
     }
     // Cancel/Escape from the TIDAL sign-in steps: back to the provider cards.
     // The abandoned browser flow is not retried or reported, and the surface
     // stays exactly where it was (the first-run gate or the welcome page).
     function cancelSetupSignIn() {
-        setupMode = "cards"
-        setupUrlOpened = false
+        setupCards()
     }
     // The TIDAL provider card's Sign in (Settings -> Providers) opens the
     // welcome page on the same inline steps. No browser opens here: the
@@ -2602,9 +2607,10 @@ ApplicationWindow {
     // A completed sign-in answers the first run, closes the welcome/sign-in
     // surface and lands on Search with its field focused.
     function finishSetupSignIn() {
-        if (setupMode !== "tidal") return
-        setupMode = "cards"
-        setupUrlOpened = false
+        // No early return on a cancelled mode: a login that lands after the
+        // user left the steps still closes the surface and answers the first
+        // run, or a completed sign-in would strand the welcome page.
+        setupCards()
         setupOpen = false
         setupSettings.firstRunAnswered = true
         openSearch()
@@ -2615,8 +2621,7 @@ ApplicationWindow {
     function openSetupPage() {
         navPush(); markNav("setup")
         settingsOpen = false; artistOpen = false; libraryOpen = false; browseOpen = false
-        setupMode = "cards"
-        setupUrlOpened = false
+        setupCards()
         setupOpen = true
     }
     // Deep-link to the Apple setup wizard (from enabling Apple Music or a
@@ -13251,7 +13256,14 @@ ApplicationWindow {
             root.previewNowTrackId = trackId
             root.previewNowArtists = artists || []
         }
-        function onLoginUrlReady(url) { Qt.openUrlExternally(url); root.setupUrlOpened = true }
+        function onLoginUrlReady(url) {
+            // Only the inline steps are listening: a URL landing after CANCEL
+            // must not open a browser or latch the paste field (issue #218).
+            if (root.setupMode !== "tidal") return
+            Qt.openUrlExternally(url)
+            root.setupUrlOpened = true
+        }
+        function onSignInRequested(providerId) { root.openSetupSignIn() }
         function onBackRequested() { root.navBack() }
         function onForwardRequested() { root.navForward() }
         function onAppUpdateChecked(available, current, latest, manual) {
@@ -15213,7 +15225,6 @@ ApplicationWindow {
             onClosed: { root.settingsOpen = false; setupOpen = false }
             onResetSettingsRequested: root.confirmSettingsReset = true
             onFactoryResetRequested: root.confirmFactoryReset = true
-            onTidalSignInRequested: root.openSetupSignIn()
         }
 
         // Library page
@@ -17553,6 +17564,16 @@ ApplicationWindow {
                     visible: root.setupUrlOpened
                     label: "COMPLETE SIGN-IN"
                     onClicked: waves.completeLogin(redirectField.text)
+                }
+                // The bridge's status line, shown inside the steps: the
+                // status bar sits under the first-run gate's scrim, so this
+                // is where "that isn't the sign-in link" is read (issue #218).
+                Text {
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                    textFormat: Text.PlainText
+                    visible: String(waves.status || "") !== ""
+                    text: String(waves.status || "")
+                    color: root.textLo; font.family: root.mono; font.pixelSize: 12
                 }
                 // The keyboard exit is the same: the Esc Shortcut above.
                 GateAction {
