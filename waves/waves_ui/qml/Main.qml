@@ -2443,7 +2443,12 @@ ApplicationWindow {
             : { resultsY: results.contentY }
     }
     function openSearch() {
+        // The setup surface counts as another page even when it was opened
+        // from Search (the empty-state sign-in CTA): leaving it is one nav
+        // click, and the Search tab uncovers the view it was opened from
+        // instead of blanking the search behind the still-open surface.
         var onSearchTab = navOrigin === "search" && !settingsOpen && !libraryOpen && !browseOpen
+                            && !setupOpen
         if (!onSearchTab) {
             navPush()
             markNav("search restore")
@@ -13756,6 +13761,44 @@ ApplicationWindow {
                         onScreen: root.onScreen
                     }
 
+                    // TIDAL signed out: the landing has nothing to show, so
+                    // the pane names the provider and offers the sign-in
+                    // click instead of staying blank (issue #220). TIDAL has
+                    // no disable today, so "no session" is the only way this
+                    // pane is empty.
+                    Item {
+                        objectName: "browseSignInCta"
+                        visible: !root.signedIn
+                        width: parent.width
+                        height: browseCtaCol.height
+                        Column {
+                            id: browseCtaCol
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: Math.min(parent.width, 460)
+                            topPadding: 96
+                            spacing: 12
+                            Text {
+                                width: parent.width; horizontalAlignment: Text.AlignHCenter
+                                textFormat: Text.PlainText
+                                text: "Browse the TIDAL catalog"
+                                color: root.textHi; font.pixelSize: 22
+                            }
+                            Text {
+                                width: parent.width; horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.WordWrap
+                                textFormat: Text.PlainText
+                                text: "Sign in to explore playlists, genres, moods and new releases."
+                                color: root.textLo; font.pixelSize: 13
+                            }
+                            GateAction {
+                                objectName: "browseSignInAction"
+                                width: parent.width
+                                label: "Sign in to TIDAL"
+                                onClicked: root.openSetupSignIn()
+                            }
+                        }
+                    }
+
                     Column {
                         visible: root.signedIn && root.browseError
                         width: parent.width; spacing: 12
@@ -14341,7 +14384,10 @@ ApplicationWindow {
 
                 Text {
                     id: emptyHint
-                    visible: root.signedIn && !root.hasResults
+                    // The invitation is provider-agnostic: an Apple-only
+                    // signed-out search reaches it too (issue #220). The
+                    // actions below carry whichever provider can fill it.
+                    visible: !root.hasResults
                     width: parent.width; horizontalAlignment: Text.AlignHCenter
                     textFormat: Text.PlainText; elide: Text.ElideMiddle
                     // A search that found nothing says so: the invitation left
@@ -14355,6 +14401,39 @@ ApplicationWindow {
                         running: emptyHint.visible; loops: Animation.Infinite
                         NumberAnimation { from: 0.5; to: 1.0; duration: 1500; easing.type: Easing.InOutSine }
                         NumberAnimation { from: 1.0; to: 0.5; duration: 1500; easing.type: Easing.InOutSine }
+                    }
+                }
+
+                // The empty state's one-click setup actions: instead of a
+                // blank page, offer the click that would fill it. Apple search
+                // needs no account; TIDAL needs a session. Each action retires
+                // itself the moment its provider is set up (issue #220).
+                Item {
+                    objectName: "emptySetupCtas"
+                    visible: emptyHint.visible && (!root.appleEnabled || !root.signedIn)
+                    width: parent.width
+                    height: emptyCtaCol.height
+                    Column {
+                        id: emptyCtaCol
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: Math.min(parent.width, 460)
+                        spacing: 10
+                        GateAction {
+                            objectName: "emptyAppleCta"
+                            width: parent.width
+                            visible: !root.appleEnabled
+                            label: "Enable Apple Music — search works without an account"
+                            // The bridge owns the rest of the enable flow
+                            // (search row, status light, the in-place wizard).
+                            onClicked: waves.applySettings({"apple_enabled": true})
+                        }
+                        GateAction {
+                            objectName: "emptyTidalCta"
+                            width: parent.width
+                            visible: !root.signedIn
+                            label: "Sign in to TIDAL"
+                            onClicked: root.openSetupSignIn()
+                        }
                     }
                 }
 
@@ -15254,6 +15333,10 @@ ApplicationWindow {
                 // Flows in this file use.
                 Item {
                     Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter
+                    // Signed out, the category strip is a row of dead ends:
+                    // the body shows one provider-named empty state instead
+                    // (issue #220).
+                    visible: root.signedIn
                     implicitHeight: libTabsFlow.implicitHeight
                     Flow {
                         id: libTabsFlow
@@ -15289,6 +15372,8 @@ ApplicationWindow {
                     // when switching to or from Home.
                     opacity: root.libraryCategory === "home" ? 0 : 1
                     enabled: root.libraryCategory !== "home"
+                    // No rows to order while signed out (issue #220).
+                    visible: root.signedIn
                     Layout.alignment: Qt.AlignVCenter
                     implicitHeight: 40; implicitWidth: 160
                     model: root.libSortLabels(root.libraryCategory)
@@ -15337,6 +15422,7 @@ ApplicationWindow {
                     // so the header height and tab positions never shift.
                     opacity: root.libraryCategory === "home" ? 0 : 1
                     enabled: root.libraryCategory !== "home"
+                    visible: root.signedIn
                     Layout.alignment: Qt.AlignVCenter
                     implicitHeight: 40; implicitWidth: 40; radius: 8
                     color: root.surface2; border.color: root.outline
@@ -15748,12 +15834,49 @@ ApplicationWindow {
                     }
                 }
 
-                // No placeholder while a category loads or when it is empty. The
-                // pane is transparent, so the ambient wave-loop background fills it
-                // on its own; a loading or empty category simply shows the moving
-                // water, never a card or glyph that flashes in for a beat and fades
-                // out. (The waves are the brand presence here, so nothing else needs
-                // to stand in.)
+                // TIDAL signed out: one provider-named empty state for the
+                // whole pane instead of seven empty category lists (issue
+                // #220). The tabs and sort above are hidden on the same flag,
+                // so no category can be a dead end.
+                Item {
+                    objectName: "libSignInCta"
+                    visible: !root.signedIn
+                    anchors.fill: parent
+                    Column {
+                        id: libCtaCol
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: Math.min(parent.width - 44, 460)
+                        topPadding: 96
+                        spacing: 12
+                        Text {
+                            width: parent.width; horizontalAlignment: Text.AlignHCenter
+                            textFormat: Text.PlainText
+                            text: "My Tidal is your TIDAL library"
+                            color: root.textHi; font.pixelSize: 22
+                        }
+                        Text {
+                            width: parent.width; horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                            text: "Sign in to see your albums, tracks, artists, playlists, mixes and videos."
+                            color: root.textLo; font.pixelSize: 13
+                        }
+                        GateAction {
+                            objectName: "libSignInAction"
+                            width: parent.width
+                            label: "Sign in to TIDAL"
+                            onClicked: root.openSetupSignIn()
+                        }
+                    }
+                }
+
+                // No placeholder for a signed-in category while it loads or
+                // when it is empty. The pane is transparent, so the ambient
+                // wave-loop background fills it on its own; a loading or
+                // empty category simply shows the moving water, never a card
+                // or glyph that flashes in for a beat and fades out. (The
+                // waves are the brand presence here, so nothing else needs to
+                // stand in.)
             }
         }
 
