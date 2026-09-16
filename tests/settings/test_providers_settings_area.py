@@ -71,7 +71,11 @@ def test_the_providers_area_is_one_section_with_two_provider_cards():
     assert "providers_tidal" not in ids and "providers_apple" not in ids
     section = next(s for s in schema if s["id"] == "providers")
     assert section["group"] == "Providers"
-    assert section["fields"] == []
+    # The section's only loose field is the re-open command: everything
+    # provider-specific lives on the cards.
+    assert [(f["key"], f["type"], f["action"]) for f in section["fields"]] == [
+        ("provider_setup_action", "action", "show_setup")
+    ]
     cards = _providers({s["id"]: s for s in schema})
     assert set(cards) == {"providers_tidal", "providers_apple"}
     assert cards["providers_tidal"]["name"] == "TIDAL"

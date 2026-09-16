@@ -148,7 +148,7 @@ def _run_scenario() -> int:
     # already answered: the passive TIDAL login panel owns the screen.
     bridge._session_resolved = True
     bridge.sessionResolvedChanged.emit()
-    q("setupSettings.providerPickerDone = true")
+    q("setupSettings.firstRunAnswered = true; root.setupChoiceTidal = true")
     settle(200)
 
     bad: list[str] = []
@@ -277,7 +277,7 @@ def _run_signout_scenario() -> int:
         settle(50)
     # A resolved install that is signed in, with the first-run picker
     # answered: no login overlay, and the session card offers sign-out.
-    q("setupSettings.providerPickerDone = true")
+    q("setupSettings.firstRunAnswered = true")
     bridge._logged_in = True
     bridge.loggedInChanged.emit()
     settle(150)

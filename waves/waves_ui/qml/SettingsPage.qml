@@ -2443,6 +2443,7 @@ Item {
                                                       : modelData.type === "library" ? libraryLoader.implicitHeight
                                                       : modelData.type === "status" ? statusCol.implicitHeight
                                                       : modelData.type === "apple_setup" ? setupCol.implicitHeight
+                                                      : modelData.type === "action" ? actionCol.implicitHeight
                                                       : inlineRow.implicitHeight
 
                                         // Enum / int / float / short str: label + help on
@@ -2679,6 +2680,41 @@ Item {
                                                         }
                                                     }
                                                 }
+                                            }
+                                        }
+
+                                        // Action row: one command pill, no value and
+                                        // no edit. The schema names the action; the
+                                        // bridge owns what it does (today: re-open
+                                        // the welcome surface).
+                                        Column {
+                                            id: actionCol
+                                            visible: modelData.type === "action"
+                                            width: parent.width; spacing: 6
+                                            Rectangle {
+                                                width: actionTxt.implicitWidth + page.btnPadH * 2
+                                                height: actionTxt.implicitHeight + page.btnPadV * 2
+                                                radius: page.btnRad
+                                                color: "transparent"; border.color: page.border1
+                                                Text {
+                                                    id: actionTxt; anchors.centerIn: parent
+                                                    text: String(modelData.label).toUpperCase()
+                                                    textFormat: Text.PlainText
+                                                    color: page.textHi; font.pixelSize: 12
+                                                    font.family: page.uiFont; font.bold: true; font.letterSpacing: page.btnTrack
+                                                }
+                                                MouseArea {
+                                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        if (String(modelData.action) === "show_setup") waves.showSetup()
+                                                    }
+                                                }
+                                            }
+                                            Text {
+                                                visible: modelData.help !== ""; width: parent.width
+                                                text: modelData.help; color: page.textDim
+                                                font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                textFormat: Text.PlainText
                                             }
                                         }
 

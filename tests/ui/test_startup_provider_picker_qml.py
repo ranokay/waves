@@ -19,9 +19,10 @@ from pathlib import Path
 import pytest
 from support.paths import QML_MAIN
 from support.qml import run_scenario
+from support.qml_probe import scene_js
 
 
-def _scenario() -> int:
+def _scenario() -> int:  # noqa: C901 (one straight scenario)
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from PySide6.QtCore import QEventLoop, QTimer, QUrl
     from PySide6.QtGui import QGuiApplication
@@ -70,35 +71,53 @@ def _scenario() -> int:
 
     # First run: the picker owns the screen, the TIDAL panel stays hidden,
     # and no browser opened on its own. The card logos render at tile size,
-    # not source pixels (issue #84: RowLayout ignores width/height).
-    picker_ok = (
-        q("providerPicker.visible")
-        and not q("loginPanel.visible")
-        and not q("loginPanel.urlOpened")
-        and not q("waves.appleEnabled")
-        and q("tidalPickLogo.width") == 30
-        and q("applePickLogo.width") == 22
-    )
+    # not source pixels (issue #84: RowLayout ignores width/height); the
+    # marks now live inside the welcome component, so find them by name.
+    def _logo_width(name: str) -> str:
+        return scene_js(
+            'var hit = findFirst(root, function (o) { return o.objectName === "'
+            + name
+            + '"; }); return hit ? hit.width : -1;'
+        )
+
+    problems: list[str] = []
+    if not q("providerPicker.visible"):
+        problems.append("the first-run welcome did not show")
+    if q("loginPanel.visible") or q("loginPanel.urlOpened"):
+        problems.append("the TIDAL panel was up before any choice")
+    if q("waves.appleEnabled"):
+        problems.append("Apple was enabled before any choice")
+    if q(_logo_width("tidalPickLogo")) != 30:
+        problems.append(f"the TIDAL mark rendered {q(_logo_width('tidalPickLogo'))} wide, not 30")
+    if q(_logo_width("applePickLogo")) != 22:
+        problems.append(f"the Apple mark rendered {q(_logo_width('applePickLogo'))} wide, not 22")
 
     # Choosing TIDAL lands on the login panel (still click-to-open).
-    q("setupSettings.providerPickerDone = true")
+    q("setupSettings.firstRunAnswered = true; root.setupChoiceTidal = true")
     settle(100)
-    tidal_ok = not q("providerPicker.visible") and q("loginPanel.visible") and not q("loginPanel.urlOpened")
+    if q("providerPicker.visible"):
+        problems.append("the welcome stayed up after choosing TIDAL")
+    if not q("loginPanel.visible") or q("loginPanel.urlOpened"):
+        problems.append("choosing TIDAL did not raise the click-to-open login panel")
 
     # Choosing Apple enables the provider (persisted) and never shows the
     # TIDAL panel; the setup wizard opens itself off the flip signal.
-    q("setupSettings.providerPickerDone = false")
+    q("setupSettings.firstRunAnswered = false; root.setupChoiceTidal = false")
     settle(50)
     q('waves.applySettings({"apple_enabled": true})')
     settle(200)
-    apple_ok = (
-        not q("providerPicker.visible")
-        and not q("loginPanel.visible")
-        and q("waves.appleEnabled")
-        and bridge.settings.data.apple_enabled is True
-    )
+    if q("providerPicker.visible"):
+        problems.append("the welcome stayed up after enabling Apple")
+    if q("loginPanel.visible"):
+        problems.append("the TIDAL panel showed with Apple enabled")
+    if not q("waves.appleEnabled") or bridge.settings.data.apple_enabled is not True:
+        problems.append("choosing Apple did not persist the enable")
 
-    return 0 if picker_ok and tidal_ok and apple_ok else 1
+    if problems:
+        for line in problems:
+            print(line, file=sys.stderr)
+        return 1
+    return 0
 
 
 @pytest.mark.qml
