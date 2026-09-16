@@ -1,21 +1,20 @@
-"""TIDAL sign-in stays reachable under the login overlay and with Apple on.
+"""TIDAL sign-in stays reachable without any latched overlay, with Apple on.
 
 WHAT THIS FENCES OFF
 --------------------
-1. The login overlay swallowing the whole window. With the first-run picker
-   answered and Apple off, the TIDAL login panel owns the screen; its old
-   full-window MouseArea meant Settings could not be clicked from underneath
-   it. The dim is paint only now: a real click on the Settings nav must open
-   the page.
+1. A sign-in surface covering the app for the rest of the session. With the
+   first-run picker answered and Apple off, NOTHING is up: the old latched
+   full-window login panel is gone, so a real click on the Settings nav must
+   open the page directly. A reintroduced full-window panel fails here.
 
 2. Sign-in being unreachable from the provider card. The TIDAL session row
    carries a SIGN IN action while signed out (see the schema test in
-   test_providers_settings_area.py); a real click on that pill must start the
-   same beginLogin flow the landing panel's button does.
+   test_providers_settings_area.py); a real click on that pill must open the
+   welcome surface on its inline sign-in steps, NOT start a browser login.
 
-3. Starting that flow leaving nowhere to paste the redirect. The login panel
-   shows whenever a login is in progress, even with Apple enabled, and the
-   paste field comes with it.
+3. The explicit click opening the flow. OPEN BROWSER LOGIN is the only caller
+   of beginLogin; a real click on it must open the browser and bring the
+   paste field back with it.
 
 4. Sign-out only living in the top bar. The TIDAL session row carries a
    SIGN OUT action while signed in; a real click must end the session and
@@ -37,11 +36,31 @@ from pathlib import Path
 import pytest
 from support.paths import QML_MAIN
 from support.qml import run_scenario
+from support.qml_probe import scene_js
 
 _EXIT_OK = 0
 _EXIT_REGRESSED = 1
 _EXIT_NO_QT = 77
 _EXIT_PRECONDITION = 78
+
+
+def _center(scope: str, predicate: str) -> str:
+    """Scene coordinates of the first item matching ``predicate``."""
+    return scene_js(
+        f"  var hit = findFirst({scope}, function (o) {{ return {predicate}; }});\n"
+        "  if (!hit || hit.width <= 0 || hit.height <= 0) return null;\n"
+        "  var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);\n"
+        "  return (p.x < 0 || p.y < 0) ? null : p;\n"
+    )
+
+
+def _visible(scope: str, predicate: str) -> str:
+    """Whether a matching item exists and is itself visible."""
+    return scene_js(
+        f"  var hit = findFirst({scope}, function (o) {{ return {predicate}; }});\n"
+        "  return hit !== null && hit.visible === true;\n"
+    )
+
 
 # The Settings nav tab's centre in window coordinates. NavTab exposes its
 # label, so the tab is found by name rather than by index or pixel guess.
@@ -80,7 +99,7 @@ def _pill_point(key: str) -> str:
 
 
 @pytest.mark.qml
-def test_tidal_signin_stays_reachable_under_the_overlay_and_with_apple_on():
+def test_tidal_signin_stays_reachable_without_a_latched_overlay_and_with_apple_on():
     run_scenario(Path(__file__), "--run-scenario", timeout=120, sandbox_prefix="waves-tidal-signin-test-")
 
 
@@ -145,19 +164,21 @@ def _run_scenario() -> int:
     q("bootOverlay.done = true")
     q("bootContentShown = 1")
     # A fresh install that resolved logged-out, with the first-run picker
-    # already answered: the passive TIDAL login panel owns the screen.
+    # already answered and Apple off: no sign-in surface is up (a started
+    # sign-in never latches over the app), so the nav is directly clickable.
     bridge._session_resolved = True
     bridge.sessionResolvedChanged.emit()
-    q("setupSettings.firstRunAnswered = true; root.setupChoiceTidal = true")
+    q("setupSettings.firstRunAnswered = true; root.setupMode = 'cards'; root.setupUrlOpened = false")
     settle(200)
 
     bad: list[str] = []
 
-    if not bool(q("loginPanel.visible")) or bool(q("root.settingsOpen")):
-        print("the scenario needs the login overlay up with Settings closed", file=sys.stderr)
+    if bool(q("providerPicker.visible")) or bool(q("root.setupOpen")) or bool(q("root.setupUrlOpened")):
+        print("the scenario needs no sign-in surface up with Settings closed", file=sys.stderr)
         return _EXIT_PRECONDITION
 
-    # 1. A real click on the Settings nav reaches it through the overlay.
+    # 1. A real click on the Settings nav lands with nothing in the way: a
+    #    full-window sign-in panel reintroduced here would swallow it.
     point = q(_SETTINGS_TAB_POINT)
     if point is None:
         print("could not locate the Settings nav tab", file=sys.stderr)
@@ -171,14 +192,15 @@ def _run_scenario() -> int:
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())), 40)
     settle(250)
     if not bool(q("root.settingsOpen")):
-        bad.append("the login overlay swallowed the Settings nav click")
+        bad.append("a sign-in surface swallowed the Settings nav click")
 
-    # 2. With Apple enabled the panel hides; the card's sign-in action is now
-    #    the only way in, and a real click on it must start the flow.
+    # 2. With Apple enabled no sign-in surface is up either; the card's
+    #    sign-in action opens the welcome page on its inline steps and must
+    #    NOT open a browser.
     q('waves.applySettings({"apple_enabled": true})')
     settle(300)
-    if bool(q("loginPanel.visible")) or bool(q("loginPanel.urlOpened")):
-        print("the login panel stayed up after Apple was enabled", file=sys.stderr)
+    if bool(q("root.setupUrlOpened")) or bool(q("root.setupMode") != "cards"):
+        print("a sign-in surface was up after Apple was enabled", file=sys.stderr)
         return _EXIT_PRECONDITION
 
     q('settingsPage.jumpToCard("providers_tidal")')
@@ -194,17 +216,45 @@ def _run_scenario() -> int:
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())))
     settle(80)
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(point.x()), int(point.y())), 40)
+    settle(400)
+
+    if not bool(q("root.setupOpen")) or bool(q("root.setupMode") != "tidal"):
+        bad.append("the card's sign-in action did not open the welcome page on its sign-in steps")
+    if bool(q("root.setupUrlOpened")):
+        bad.append("the card's sign-in action opened a browser on its own")
+    if not q(_visible("setupPane", "o.label === 'OPEN BROWSER LOGIN'")):
+        bad.append("the inline sign-in steps expose no OPEN BROWSER LOGIN action")
+
+    # 3. The explicit click starts the flow, and the paste field comes with
+    #    it, with pixels to click.
+    open_point = q(_center("setupPane", "o.label === 'OPEN BROWSER LOGIN'"))
+    if open_point is None:
+        print("the inline steps expose no OPEN BROWSER LOGIN action", file=sys.stderr)
+        return _EXIT_PRECONDITION
+    QTest.mouseMove(root, QPoint(int(open_point.x()), int(open_point.y())))
+    settle(60)
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(open_point.x()), int(open_point.y())))
+    settle(80)
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(int(open_point.x()), int(open_point.y())), 40)
     settle(1200)
 
-    # 3. The flow opened in the browser and the panel came back with the
-    #    paste field, Apple enabled or not.
-    if not bool(q("loginPanel.urlOpened")):
-        bad.append("clicking the card's sign-in action did not start the login flow")
-    if not bool(q("loginPanel.visible")):
-        bad.append("the login panel stayed hidden while a login was in progress")
-    if not bool(q("redirectBox.visible")):
-        bad.append("the login panel came back without the paste field")
-    if float(q("redirectField.width")) <= 0 or float(q("redirectField.height")) <= 0:
+    if not bool(q("root.setupUrlOpened")):
+        bad.append("clicking OPEN BROWSER LOGIN did not start the login flow")
+    if bool(q("root.setupMode") != "tidal") or not bool(q("root.setupOpen")):
+        bad.append("the sign-in surface left while a login was in progress")
+    if not q(_visible("setupPane", "o.objectName === 'signInPaste'")):
+        bad.append("the sign-in surface came back without the paste field")
+    if (
+        not float(
+            q(
+                scene_js(
+                    "  var f = findFirst(setupPane, function (o) { return o.objectName === 'signInField'; });\n"
+                    "  return f ? f.width * f.height : 0;\n"
+                )
+            )
+        )
+        > 0
+    ):
         bad.append("the paste field has no pixels to click")
 
     for line in bad:
@@ -293,11 +343,12 @@ def _run_signout_scenario() -> int:
     # the nav click is covered by the reachability scenario above.
     q("root.settingsOpen = true")
     settle(250)
-    if not bool(q("root.settingsOpen")) or bool(q("loginPanel.visible")):
+    if not bool(q("root.settingsOpen")) or bool(q("providerPicker.visible")) or bool(q("root.setupOpen")):
         print(
-            "the scenario needs Settings open with no login overlay"
-            f" (settingsOpen={bool(q('root.settingsOpen'))} loginPanel={bool(q('loginPanel.visible'))}"
-            f" signedIn={bool(q('root.signedIn'))} picker={bool(q('providerPicker.visible'))})",
+            "the scenario needs Settings open with no sign-in surface"
+            f" (settingsOpen={bool(q('root.settingsOpen'))} setupOpen={bool(q('root.setupOpen'))}"
+            f" mode={q('root.setupMode')} signedIn={bool(q('root.signedIn'))}"
+            f" picker={bool(q('providerPicker.visible'))})",
             file=sys.stderr,
         )
         return _EXIT_PRECONDITION

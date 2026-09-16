@@ -2,10 +2,10 @@
 
 First run offers the provider choice instead of dropping straight into the
 TIDAL browser login: a picker overlay with the official marks, TIDAL
-continuing into the login panel, Apple Music enabling the provider (its
-setup wizard opens itself), "Not now" falling back to the passive panel.
-Answered once and persisted; nothing ever opens a browser on its own
-(beginLogin stays click-only).
+swapping the same surface to its inline sign-in steps (still click-to-open),
+Apple Music enabling the provider (its setup wizard opens itself), "Not
+now" landing in the app. Answered once and persisted; nothing ever opens a
+browser on its own (beginLogin stays click-only).
 
 Runs offscreen through the real bridge on a temp config: fresh installs
 resolve logged-out with Apple off, which is exactly the picker state.
@@ -20,6 +20,14 @@ import pytest
 from support.paths import QML_MAIN
 from support.qml import run_scenario
 from support.qml_probe import scene_js
+
+
+def _visible(scope: str, predicate: str) -> str:
+    """Whether the scope contains a matching item that is itself visible."""
+    return scene_js(
+        f"var hit = findFirst({scope}, function (o) {{ return {predicate}; }});"
+        "return hit !== null && hit.visible === true;"
+    )
 
 
 def _scenario() -> int:  # noqa: C901 (one straight scenario)
@@ -89,31 +97,48 @@ def _scenario() -> int:  # noqa: C901 (one straight scenario)
     problems: list[str] = []
     if not q("providerPicker.visible"):
         problems.append("the first-run welcome did not show")
-    if q("loginPanel.visible") or q("loginPanel.urlOpened"):
-        problems.append("the TIDAL panel was up before any choice")
+    # No browser ran before any choice: setupUrlOpened is set only from
+    # onLoginUrlReady, which only a beginLogin call emits.
+    if q("root.setupMode") != "cards" or q("root.setupUrlOpened"):
+        problems.append("a TIDAL sign-in surface was up before any choice")
+    if q(_visible("providerPicker", "o.objectName === 'welcomeSignIn'")):
+        problems.append("the TIDAL sign-in steps were on screen before any choice")
     if q("waves.appleEnabled"):
         problems.append("Apple was enabled before any choice")
     if q(_logo_widths()) != "[24,20]":
         problems.append(f"the provider marks rendered {q(_logo_widths())}, not their descriptor tile widths")
 
-    # Choosing TIDAL lands on the login panel (still click-to-open).
-    q("setupSettings.firstRunAnswered = true; root.setupChoiceTidal = true")
+    # Choosing TIDAL keeps the welcome surface up, swapped to its inline
+    # sign-in steps; the first run is not answered until sign-in succeeds,
+    # and no browser opened. The real card click is covered by the
+    # onboarding journey.
+    q('root.answerWelcome("tidal")')
     settle(100)
-    if q("providerPicker.visible"):
-        problems.append("the welcome stayed up after choosing TIDAL")
-    if not q("loginPanel.visible") or q("loginPanel.urlOpened"):
-        problems.append("choosing TIDAL did not raise the click-to-open login panel")
+    if not q("providerPicker.visible"):
+        problems.append("the welcome left the screen when TIDAL was chosen")
+    if q("root.setupMode") != "tidal":
+        problems.append("choosing TIDAL did not switch the welcome to its sign-in steps")
+    if not q(_visible("providerPicker", "o.label === 'OPEN BROWSER LOGIN'")):
+        problems.append("the inline sign-in steps expose no OPEN BROWSER LOGIN action")
+    if q(_visible("providerPicker", "o.objectName === 'signInPaste'")):
+        problems.append("the paste field showed before the browser login was opened")
+    if q("root.setupUrlOpened"):
+        problems.append("choosing TIDAL opened the browser on its own")
+    if q("setupSettings.firstRunAnswered"):
+        problems.append("choosing TIDAL answered the first run before signing in")
 
-    # Choosing Apple enables the provider (persisted) and never shows the
-    # TIDAL panel; the setup wizard opens itself off the flip signal.
-    q("setupSettings.firstRunAnswered = false; root.setupChoiceTidal = false")
+    # Choosing Apple enables the provider (persisted), answers the first run
+    # and never shows a TIDAL sign-in surface; the setup wizard opens itself
+    # off the flip signal.
+    q("root.cancelSetupSignIn()")
+    q("setupSettings.firstRunAnswered = false")
     settle(50)
-    q('waves.applySettings({"apple_enabled": true})')
+    q('root.answerWelcome("apple")')
     settle(200)
     if q("providerPicker.visible"):
         problems.append("the welcome stayed up after enabling Apple")
-    if q("loginPanel.visible"):
-        problems.append("the TIDAL panel showed with Apple enabled")
+    if q("root.setupMode") != "cards" or q("root.setupUrlOpened"):
+        problems.append("a TIDAL sign-in surface showed with Apple enabled")
     if not q("waves.appleEnabled") or bridge.settings.data.apple_enabled is not True:
         problems.append("choosing Apple did not persist the enable")
 

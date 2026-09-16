@@ -116,12 +116,11 @@ def _run_scenario() -> int:
 
     settle(300)
     # Freeze the boot machinery so overlay state is driven purely by this
-    # scenario, and take the sign-in overlay (its own full-window shield,
-    # correct behavior) out of the way. Since issue #63 the first-run gate
-    # is the provider picker, so both go.
+    # scenario, and take the first-run welcome gate (its own full-window
+    # shield, correct behavior) out of the way, back on its provider cards.
     for anim in ("bootSeq", "bootHandover", "bootBlk", "bootZoom", "bootIntro", "handoverCap"):
         q(f"{anim}.stop()")
-    q("loginPanel.visible = false; providerPicker.visible = false")
+    q("setupMode = 'cards'; setupUrlOpened = false; providerPicker.visible = false")
     settle(60)
 
     # A pointing-hand, hover-enabled control to aim at. Stashed in the
