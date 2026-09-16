@@ -155,6 +155,7 @@ class TidalProvider(Provider):
             card_desc=(
                 "Your TIDAL session, the audio quality its downloads ask for, and its lyrics and cover options."
             ),
+            card_action="Continue with TIDAL",
             settings_fields=(
                 "provider_tidal_session",
                 "tidal_quality_audio",

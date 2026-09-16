@@ -4201,7 +4201,7 @@ class WavesBridge(LibraryMixin, QObject):
     # An Apple download was requested before setup completed (spec §7.1):
     # QML routes this into the setup wizard at the sign-in step instead of
     # leaving a dead button.
-    appleSetupRequested = Signal(str)  # reason: "cookies" | "runtime" | "setup"
+    appleSetupRequested = Signal(str)  # reason: the wizard step to open ("cookies" | "runtime") or "setup" for the top
     # The welcome surface was asked to re-open (Settings -> Providers); QML
     # owns where it renders, the bridge only forwards the command.
     setupRequested = Signal()
@@ -5568,13 +5568,17 @@ class WavesBridge(LibraryMixin, QObject):
     def providerCards(self) -> list:
         """The welcome surface's provider cards, straight from the descriptors.
 
-        One entry per registered provider: identity, mark and the one-line
-        capability truth. The welcome renders these instead of hardcoding
-        the providers, so a third provider is a descriptor (issue #215).
+        One entry per registered provider: identity, mark, the one-line
+        capability truth, the provider's own action words and its live status
+        (the same light shape the header's marks read; "" when the provider
+        has nothing to report). The welcome renders these instead of
+        hardcoding the providers, so a third provider is a descriptor
+        (issues #215, #219).
         """
         cards = []
         for provider in _provider_registry(self):
             descriptor = provider.descriptor()
+            light = _provider_light(self, provider) or {}
             cards.append(
                 {
                     "id": descriptor.id,
@@ -5582,6 +5586,9 @@ class WavesBridge(LibraryMixin, QObject):
                     "logo": descriptor.logo,
                     "logo_width": descriptor.logo_width,
                     "summary": descriptor.capability_summary,
+                    "action": descriptor.card_action,
+                    "state": light.get("state", ""),
+                    "word": light.get("word", ""),
                 }
             )
         return cards
@@ -13428,7 +13435,10 @@ class WavesBridge(LibraryMixin, QObject):
                 "export or sign in to the wrapper"
             )
             try:
-                self.appleSetupRequested.emit("setup")
+                # The reason routes the wizard to the step the click was
+                # missing: the cookies tier is the first way to an account
+                # (the wrapper sign-in sits under the same step's detail).
+                self.appleSetupRequested.emit("cookies")
             except Exception:
                 logger.debug("Apple setup route emit failed", exc_info=True)
             self.downloadState.emit(media_id, "")

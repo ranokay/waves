@@ -1572,7 +1572,9 @@ def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):
     stub._apple_wrapper_signed_in = WavesBridge._apple_wrapper_signed_in.__get__(stub, SimpleNamespace)
     stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub, SimpleNamespace)
     WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
-    assert "setup" in seen
+    # The no-account click names the cookies step: that tier (or the wrapper
+    # sign-in under it) is the missing piece the click routes to (issue #219).
+    assert "cookies" in seen
 
 
 def test_download_click_without_fetch_binary_routes_to_the_runtime_step(tmp_path):

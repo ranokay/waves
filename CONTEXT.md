@@ -10,8 +10,9 @@ _Avoid_: source, backend
 
 **Provider descriptor**:
 A provider's static identity as the surfaces that list providers need it — its
-name, mark, one honest capability line and the Settings fields its card owns —
-composed by the bridge with live status into what those surfaces render.
+name, mark, one honest capability line, its card's own action words and the
+Settings fields its card owns — composed by the bridge with live status into
+what those surfaces render.
 _Avoid_: provider config, provider metadata
 
 **Engine**:

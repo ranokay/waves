@@ -132,6 +132,9 @@ class AppleProvider(Provider):
                 "Turn on Apple Music catalog search here. A cookies export unlocks AAC 256 and Atmos "
                 "downloads at once with no runtime; the managed runtime plus wrapper sign-in unlock the full tier."
             ),
+            # Story 16: the first tier needs no Apple account, so the card
+            # offers a setup, never a sign-in.
+            card_action="Set up Apple Music",
             settings_fields=(
                 "provider_apple_status",
                 "apple_setup_wizard",

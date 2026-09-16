@@ -233,7 +233,9 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     # actions are rendered by the same generic delegate.
     if q(_text_point("providerPicker", "CONTINUE WITH TIDAL")) in ("", None):
         failures.append("the TIDAL card did not render from its descriptor")
-    if q(_text_point("providerPicker", "CONTINUE WITH APPLE MUSIC")) in ("", None):
+    # The Apple card's action is its descriptor's own words (issue #219): a
+    # one-time setup, never a sign-in.
+    if q(_text_point("providerPicker", "SET UP APPLE MUSIC")) in ("", None):
         failures.append("the Apple Music card did not render from its descriptor")
 
     # The TIDAL path: choosing it never answers the welcome, no browser opens
