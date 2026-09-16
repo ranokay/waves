@@ -18,7 +18,14 @@ WAVES_MACOS_MIN ?= 15.0
 # builds therefore default to Nuitka's low-memory mode: one C compiler job at
 # a time and cheaper options. The release build cache makes the slower first
 # pass a one-time cost; an empty value opts back into parallelism.
-WAVES_NUITKA_FLAGS ?= $(if $(filter Windows_NT,$(OS)),--low-memory,)
+#
+# On Apple silicon, Nuitka's auto-downloaded ccache is an x86-64 binary (its
+# cache holds one build per version), so Scons runs it under Rosetta and clang
+# then fails with "unable to load libxcrun ... need 'x86_64'" (issue #243).
+# Keep ccache out on Darwin/arm64 until an arm64 binary is provisioned; the
+# other hosts keep it.
+WAVES_HOST := $(shell uname -s 2>/dev/null)-$(shell uname -m 2>/dev/null)
+WAVES_NUITKA_FLAGS ?= $(if $(filter Windows_NT,$(OS)),--low-memory,$(if $(filter Darwin-arm64,$(WAVES_HOST)),--disable-ccache,))
 
 .PHONY: install
 install: ## Install the poetry environment and install the pre-commit hooks
