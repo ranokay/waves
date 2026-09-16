@@ -15529,10 +15529,16 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(str, str)
     def previewMedia(self, kind: str, media_id: str) -> None:
         """Preview an album / playlist / mix by streaming one of its tracks,
-        picked at random, addressed to the collection so its card lights up."""
+        picked at random, addressed to the collection so its card lights up.
+
+        Apple previews ride the documented 30-second clip: no session, no
+        wrapper, no setup (spec §7.4), so the Apple branch answers before the
+        TIDAL session gate. A missing URL is a visible error state, never a
+        silent return that leaves the button buffering (issue #217).
+        """
         kind = str(kind or "")
         media_id = str(media_id or "")
-        if kind not in ("album", "playlist", "mix") or not self._logged_in:
+        if kind not in ("album", "playlist", "mix"):
             return
         if media_id.startswith(f"{CTX_APPLE}:") and kind in ("album", "playlist"):
             self.previewState.emit(kind, media_id, "loading")
@@ -15568,6 +15574,9 @@ class WavesBridge(LibraryMixin, QObject):
                     self.previewState.emit(kind, media_id, "error")
 
             self.threadpool.start(Worker(apple_work))
+            return
+        # The TIDAL path still needs its session: sign nothing, show nothing.
+        if not self._logged_in:
             return
         self.previewState.emit(kind, media_id, "loading")
 

@@ -182,6 +182,66 @@ def test_apple_preview_track_without_a_clip_reports_error():
     assert ("track", "apple:song-1", "error") in stub.previewState.emits
 
 
+def test_apple_album_preview_plays_for_a_signed_out_user():
+    """Apple previews need no session (spec §7.4): a signed-out TIDAL bridge
+    must not gate an Apple album preview, which used to return silently and
+    leave the button buffering forever (issue #217)."""
+    apple = _apple_provider(album=_album(), song=_song())
+    stub = SimpleNamespace(
+        providers={"apple": apple},
+        _logged_in=False,
+        threadpool=_InlinePool(),
+        previewReady=_Signal(),
+        previewState=_Signal(),
+        previewMeta=_Signal(),
+    )
+    stub._emit_apple_preview_meta = lambda *a: WavesBridge._emit_apple_preview_meta(stub, *a)
+    stub.previewMedia = lambda kind, ident: WavesBridge.previewMedia(stub, kind, ident)
+
+    stub.previewMedia("album", "apple:album-1")
+
+    assert ("album", "apple:album-1", "loading") in stub.previewState.emits
+    assert stub.previewReady.emits == [("album", "apple:album-1", "https://audio-preview/song-1.m4a")]
+    kind, ident, title, *_ = stub.previewMeta.emits[0]
+    assert (kind, ident, title) == ("album", "apple:album-1", "Xtal")
+
+
+def test_apple_album_preview_without_a_clip_reports_error():
+    """No preview URL is a visible failure, never a silent return."""
+    track = _song(preview=False)
+    album = _album()
+    album["relationships"]["tracks"]["data"] = [track]
+    stub = SimpleNamespace(
+        providers={"apple": _apple_provider(album=album, song=track)},
+        _logged_in=False,
+        threadpool=_InlinePool(),
+        previewReady=_Signal(),
+        previewState=_Signal(),
+        previewMeta=_Signal(),
+    )
+    stub._emit_apple_preview_meta = lambda *a: WavesBridge._emit_apple_preview_meta(stub, *a)
+
+    WavesBridge.previewMedia(stub, "album", "apple:album-1")
+
+    assert stub.previewReady.emits == []
+    assert ("album", "apple:album-1", "error") in stub.previewState.emits
+
+
+def test_tidal_album_preview_stays_gated_on_the_session():
+    """The fix is Apple's; a signed-out TIDAL preview still does nothing."""
+    stub = SimpleNamespace(
+        providers={"apple": _apple_provider(album=_album(), song=_song())},
+        _logged_in=False,
+        threadpool=_InlinePool(),
+        previewReady=_Signal(),
+        previewState=_Signal(),
+    )
+
+    WavesBridge.previewMedia(stub, "album", "tidal:album-1")
+
+    assert stub.previewState.emits == [] and stub.previewReady.emits == []
+
+
 def test_apple_artist_page_loads_albums_and_top_tracks():
     artist = {
         "id": "artist-1",
