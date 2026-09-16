@@ -28,6 +28,10 @@ from threading import Lock
 from types import SimpleNamespace
 
 from support.paths import QML_DIR
+from support.settings_fakes import (
+    APPLE_SETUP_PILLS,
+    APPLE_SIGN_OUT_PILL,
+)
 from support.settings_fakes import schema_stub as _schema_stub
 
 from waves.model.cfg import HelpSettings
@@ -130,11 +134,7 @@ def test_the_apple_card_holds_the_switch_row_and_the_quality():
     assert "apple_enabled" not in apple
     # The status light sits at its not-set-up vocabulary, with the setup
     # wizard + runtime-manage actions behind it (issue #31 ships them live).
-    assert status["actions"] == [
-        {"label": "Setup wizard", "action": "apple_setup"},
-        {"label": "Update runtime", "action": "apple_update_runtime"},
-        {"label": "Remove runtime", "action": "apple_remove_runtime"},
-    ]
+    assert status["actions"] == APPLE_SETUP_PILLS
     # The in-place wizard card follows the status row: bridge-computed, not
     # a pref, rendered from the live setup mirror.
     wizard = _providers()["providers_apple"]["fields"][1]
@@ -215,7 +215,7 @@ def test_the_apple_card_offers_sign_out_only_while_signed_in():
     sections = {s["id"]: s for s in WavesBridge.settingsSchema(stub)}
     signed = _providers(sections)["providers_apple"]["fields"][0]
     assert signed["value"] == "signed_in"
-    assert signed["actions"] == [*base, {"label": "Sign out", "action": "apple_signout"}]
+    assert signed["actions"] == [*base, APPLE_SIGN_OUT_PILL]
 
 
 def test_one_helper_serves_the_slot_and_the_schema():
@@ -232,22 +232,14 @@ def test_the_apple_status_slot_reports_off_and_not_set_up():
     assert stub.appleStatus() == {
         "state": "off",
         "word": "Off",
-        "actions": [
-            {"label": "Setup wizard", "action": "apple_setup"},
-            {"label": "Update runtime", "action": "apple_update_runtime"},
-            {"label": "Remove runtime", "action": "apple_remove_runtime"},
-        ],
+        "actions": APPLE_SETUP_PILLS,
     }
     stub2 = _schema_stub(apple_enabled=True)
     stub2.appleStatus = _bind(stub2, "appleStatus")
     assert stub2.appleStatus() == {
         "state": "not_set_up",
         "word": "Not set up",
-        "actions": [
-            {"label": "Setup wizard", "action": "apple_setup"},
-            {"label": "Update runtime", "action": "apple_update_runtime"},
-            {"label": "Remove runtime", "action": "apple_remove_runtime"},
-        ],
+        "actions": APPLE_SETUP_PILLS,
     }
 
 
@@ -435,8 +427,8 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     assert "Accessible.role: Accessible.CheckBox" in qml
     assert "Keys.onPressed" in qml
     assert "!event.isAutoRepeat" in qml
-    # Both provider cards have glyphs of their own (the QML resolves them
-    # through providerLogo, keyed by card id).
+    # Both provider cards carry their marks in the descriptor (the QML reads
+    # modelData.logo, never a card-id switch).
     assert '"providers_tidal"' in qml and '"providers_apple"' in qml
 
 
@@ -536,6 +528,7 @@ def test_both_providers_expose_a_descriptor_with_their_card_identity():
     tidal = TidalProvider.descriptor()
     assert (tidal.id, tidal.name) == ("tidal", "TIDAL")
     assert tidal.logo == "assets/providers/tidal.png" and tidal.logo_width == 24
+    assert (tidal.logo_header_width, tidal.logo_header_height) == (18, 12)
     assert tidal.status_kind == "session"
     assert tidal.capability_summary
     assert tidal.settings_fields[0] == "provider_tidal_session"
@@ -543,6 +536,7 @@ def test_both_providers_expose_a_descriptor_with_their_card_identity():
     apple = AppleProvider.descriptor()
     assert (apple.id, apple.name) == ("apple", "Apple Music")
     assert apple.logo == "assets/providers/apple-music.png"
+    assert (apple.logo_header_width, apple.logo_header_height) == (14, 14)
     assert apple.status_kind == "setup"
     assert apple.capability_summary
     assert apple.settings_fields[:2] == ("provider_apple_status", "apple_setup_wizard")

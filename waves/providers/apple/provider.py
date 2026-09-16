@@ -17,6 +17,7 @@ from waves.providers.base import (
     QualityOption,
     Refusal,
     RefusalKind,
+    StatusKind,
     StreamInfo,
 )
 
@@ -153,7 +154,7 @@ class AppleProvider(Provider):
                 "apple_quarantine_dir",
                 "apple_quarantine_keep",
             ),
-            status_kind="setup",
+            status_kind=StatusKind.SETUP,
         )
 
     def __init__(self, catalog=None, catalog_factory=None) -> None:

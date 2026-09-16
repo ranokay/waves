@@ -1892,12 +1892,12 @@ Item {
                                             required property var modelData
                                             anchors.verticalCenter: parent.verticalCenter
                                             source: modelData.logo !== undefined ? String(modelData.logo) : ""
-                                            // The header row scales the card mark down;
-                                            // the descriptor's width keeps each mark's
-                                            // aspect true (TIDAL's is wider than tall).
-                                            width: modelData.logo_width !== undefined
-                                                ? Math.round(Number(modelData.logo_width) * 0.7) : 14
-                                            height: 14
+                                            // The descriptor carries the header size pair
+                                            // (each mark's own aspect, no magic ratio).
+                                            width: modelData.logo_header_width !== undefined
+                                                ? Number(modelData.logo_header_width) : 14
+                                            height: modelData.logo_header_height !== undefined
+                                                ? Number(modelData.logo_header_height) : 14
                                             fillMode: Image.PreserveAspectFit
                                             smooth: true; cache: true
                                         }

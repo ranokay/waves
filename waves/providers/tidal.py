@@ -51,6 +51,7 @@ from waves.providers.base import (
     QualityOption,
     Refusal,
     RefusalKind,
+    StatusKind,
     StreamInfo,
 )
 from waves.waves_ui.manifest import overgenerated_tail_urls
@@ -148,6 +149,8 @@ class TidalProvider(Provider):
             name=cls.name,
             logo="assets/providers/tidal.png",
             logo_width=24,
+            logo_header_width=18,
+            logo_header_height=12,
             capability_summary="Sign in to search, browse and download.",
             card_desc=(
                 "Your TIDAL session, the audio quality its downloads ask for, and its lyrics and cover options."
@@ -163,7 +166,7 @@ class TidalProvider(Provider):
                 "tidal_cover_album_file",
                 "tidal_cover_file_format",
             ),
-            status_kind="session",
+            status_kind=StatusKind.SESSION,
         )
 
     def __init__(self, tidal: Tidal, stream_resolver=None):

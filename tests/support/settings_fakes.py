@@ -17,6 +17,16 @@ from waves.providers.apple.provider import AppleProvider
 from waves.providers.tidal import TidalProvider
 from waves.waves_ui.backend import WavesBridge
 
+# The Apple status row's action pills, built by the same helper the schema
+# and the live status payload share: the management pills always, sign-out
+# only while a session stands.
+APPLE_SETUP_PILLS = [
+    {"label": "Setup wizard", "action": "apple_setup"},
+    {"label": "Update runtime", "action": "apple_update_runtime"},
+    {"label": "Remove runtime", "action": "apple_remove_runtime"},
+]
+APPLE_SIGN_OUT_PILL = {"label": "Sign out", "action": "apple_signout"}
+
 
 class _Stub:
     """Bare object the real methods get bound onto."""

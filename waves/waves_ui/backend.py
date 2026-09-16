@@ -126,6 +126,7 @@ from waves.providers import (
     Capability,
     Provider,
     RefusalKind,
+    StatusKind,
     TidalProvider,
 )
 from waves.providers.apple import runner
@@ -3735,18 +3736,17 @@ def _begin_login(bridge, provider_id: str) -> None:
 def _provider_sign_out(bridge, provider_id: str) -> None:
     """Sign a provider out by id.
 
-    TIDAL and Apple run app-level sign-out flows that own more than the
-    provider's own logout (stopping queued jobs, clearing caches, wiping the
-    guest); a provider without one falls back to its neutral ``logout``.
+    A provider can register an app-level sign-out flow that owns more than
+    the provider's own logout (stopping queued jobs, clearing caches, wiping
+    the guest); without one, the provider's neutral ``logout`` runs.
     """
     provider = bridge.providers.get(provider_id)
     if provider is None:
         return
-    if provider_id == CTX_TIDAL:
-        bridge.logout()
-        return
-    if provider_id == CTX_APPLE:
-        bridge.appleSignOut()
+    flows = getattr(bridge, "_provider_signout_flows", {})
+    flow = flows.get(provider_id)
+    if flow is not None:
+        flow()
         return
     try:
         provider.logout()
@@ -3755,7 +3755,8 @@ def _provider_sign_out(bridge, provider_id: str) -> None:
 
 
 def _provider_registry(bridge) -> list:
-    """The configured providers, in registry order (TIDAL first)."""
+    """The configured providers, in the registry's insertion order (TIDAL is
+    registered first today, so its card leads the section)."""
     providers = getattr(bridge, "providers", None)
     return list(providers.values()) if isinstance(providers, dict) else []
 
@@ -3763,12 +3764,12 @@ def _provider_registry(bridge) -> list:
 def _session_logged_in(bridge, provider) -> bool:
     """Whether a session-kind provider's card reads signed in.
 
-    TIDAL's session truth is the bridge's own flag: the login flow, the
-    header and every catalog read move it together, and the provider's live
-    check can trail a fresh sign-in. A provider the bridge does not track
-    answers for itself.
+    A provider whose session the bridge tracks answers from the bridge's own
+    flag: the login flow, the header and every catalog read move it together,
+    and the provider's live check can trail a fresh sign-in. A provider the
+    bridge does not track answers for itself.
     """
-    if getattr(provider, "id", "") == CTX_TIDAL:
+    if getattr(provider, "id", "") in getattr(bridge, "_tracked_sessions", ()):
         return bool(getattr(bridge, "_logged_in", False))
     try:
         return bool(provider.is_logged_in)
@@ -3816,7 +3817,7 @@ def _provider_card(provider) -> dict:
     """
     descriptor = provider.descriptor()
     fields = list(descriptor.settings_fields)
-    if descriptor.status_kind == "session":
+    if descriptor.status_kind == StatusKind.SESSION:
         session_key = f"provider_{descriptor.id}_session"
         if session_key not in fields:
             fields.insert(0, session_key)
@@ -3826,6 +3827,8 @@ def _provider_card(provider) -> dict:
         "desc": descriptor.card_desc,
         "logo": descriptor.logo,
         "logo_width": descriptor.logo_width,
+        "logo_header_width": descriptor.logo_header_width,
+        "logo_header_height": descriptor.logo_header_height,
         "fields": fields,
     }
 
@@ -4159,6 +4162,25 @@ class WavesBridge(LibraryMixin, QObject):
         self.providers: dict[str, Provider] = {
             CTX_TIDAL: TidalProvider(self.tidal),
             CTX_APPLE: AppleProvider(),
+        }
+        # App-level flows a provider's card actions run where the provider's
+        # own seam call is not enough, registered where the providers are
+        # wired so the generic card dispatcher names no provider: TIDAL's
+        # sign-out stops its queued jobs, Apple's clears the guest, and
+        # Apple's runtime verbs run the flows that own the container. TIDAL's
+        # session is also tracked here (its flag is what the login flow, the
+        # header and every catalog read move together).
+        self._tracked_sessions = frozenset({CTX_TIDAL})
+        self._provider_signout_flows = {
+            CTX_TIDAL: self.logout,
+            CTX_APPLE: self.appleSignOut,
+        }
+        self._provider_verb_flows = {
+            CTX_APPLE: {
+                "setup": self.refreshAppleSetup,
+                "update_runtime": self.installAppleRuntime,
+                "remove_runtime": self.removeAppleRuntime,
+            }
         }
         # Configured below once the FFmpeg manager exists (_configure_apple_provider).
         # Quick metadata/UI work (search, album tracks, artist pages) runs on
@@ -5394,17 +5416,19 @@ class WavesBridge(LibraryMixin, QObject):
         if provider is None:
             return
         verb = action_key[len(provider_id) + 1 :] if action_key.startswith(provider_id + "_") else action_key
-        if verb in ("signin", "login"):
+        if verb == "signin":
             _begin_login(self, provider_id)
-        elif verb in ("signout", "logout"):
+            return
+        if verb == "signout":
             _provider_sign_out(self, provider_id)
-        elif provider.descriptor().status_kind == "setup":
-            if verb == "setup":
-                self.refreshAppleSetup()
-            elif verb == "update_runtime":
-                self.installAppleRuntime()
-            elif verb == "remove_runtime":
-                self.removeAppleRuntime()
+            return
+        # Bridge-owned verbs (Apple's runtime management today) are registered
+        # where the providers are wired, so the dispatcher names no provider.
+        flow = getattr(self, "_provider_verb_flows", {}).get(provider_id, {}).get(verb)
+        if flow is not None:
+            flow()
+            return
+        logger.debug("Unknown provider action %s for %s", action_key, provider_id)
 
     @Slot(str)
     def completeLogin(self, redirect_url: str) -> None:
@@ -19451,7 +19475,7 @@ class WavesBridge(LibraryMixin, QObject):
         # panel and the top bar use.)
         for _provider in _provider_registry(self):
             _descriptor = _provider.descriptor()
-            if _descriptor.status_kind != "session":
+            if _descriptor.status_kind != StatusKind.SESSION:
                 continue
             waves_fields[f"provider_{_descriptor.id}_session"] = _provider_session_field(
                 _descriptor, _session_logged_in(self, _provider)
