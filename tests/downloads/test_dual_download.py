@@ -144,6 +144,7 @@ def _bridge_for_button(store, *, atmos_on, tracks):
         data=SimpleNamespace(
             tidal_quality_audio=Quality.high_lossless.value,
             default_audio_type="both" if atmos_on else "stereo",
+            download_dolby_atmos=atmos_on,
         )
     )
     b._objs = {"track": dict(tracks)}
@@ -191,7 +192,7 @@ def test_button_stays_single_when_default_is_stereo(tmp_path):
 
 def test_dual_button_need_is_cache_only_and_default_gated():
     b = backend.WavesBridge.__new__(backend.WavesBridge)
-    b.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both"))
+    b.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both", download_dolby_atmos=True))
     b._objs = {"track": {"1": _track("1", modes=[ATMOS, "STEREO"])}}
     b.providers = {}
     assert b._dual_button_need("1") == "both"

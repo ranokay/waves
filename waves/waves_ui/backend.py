@@ -1456,6 +1456,7 @@ class _TrackedDownload(Download):
         *args,
         track_signals: _ProgressSignals | None = None,
         ownership_of=None,
+        ownership_stamp=None,
         target_rank: int = -1,
         pinned_quality=None,
         library_claim=None,
@@ -1479,6 +1480,11 @@ class _TrackedDownload(Download):
         # quality and overwrite in place when the run is a genuine upgrade, so
         # raising the quality setting re-fetches, a plain re-click does not.
         self._ownership_of = ownership_of
+        # OwnershipStore.stamp_ceiling, so a ceiling this gate reads off the
+        # track lands on a record that has none: every id-only reader (the
+        # button, the album card) then settles the way this gate did, instead
+        # of offering an upgrade the gate will skip (issue #40).
+        self._ownership_stamp = ownership_stamp
         self._target_rank = int(target_rank)
         # The Waves rung this job was queued at. A download asks the SHARED
         # session for its stream, so without this a quality change in Settings
@@ -1868,8 +1874,29 @@ class _TrackedDownload(Download):
         # setting says: _wants_atmos carries the engine's own "nothing else to
         # fetch" clause, so the copy is ranked on the scale the next fetch
         # would really deliver on.
-        current = _copy_is_current(rec, self._target_rank, self._wants_atmos(media), _advertised_ceiling(media))
+        ceiling = _advertised_ceiling(media)
+        self._stamp_learned_ceiling(media_id, rec, ceiling)
+        current = _copy_is_current(rec, self._target_rank, self._wants_atmos(media), ceiling)
         return ("skip" if current else "force"), rec
+
+    def _stamp_learned_ceiling(self, media_id, rec: dict, ceiling: int | None) -> None:
+        """Write a ceiling read off the track onto a record that has none (see
+        OwnershipStore.stamp_ceiling). Runs on this worker; a failure never
+        gates, the verdict below is made on the live ceiling regardless."""
+        stamp = getattr(self, "_ownership_stamp", None)
+        if stamp is None or ceiling is None or int(ceiling) < 0:
+            return
+        stored = rec.get("ceiling_rank")
+        if stored is not None and int(stored) >= 0:
+            return
+        path = str(rec.get("path") or "")
+        if not path:
+            return
+        try:
+            if stamp(str(media_id), path, int(ceiling)):
+                rec["ceiling_rank"] = int(ceiling)
+        except Exception:
+            logger.debug("Could not stamp the advertised ceiling onto the ownership record", exc_info=True)
 
     def _destination_dir(self, media, file_template: str | None, placement: dict | None = None) -> pathlib.Path | None:
         """The folder this job would write ``media`` into, or None if it can't
@@ -9983,6 +10010,25 @@ class WavesBridge(LibraryMixin, QObject):
         q = self.settings.data.tidal_quality_audio if quality is None else quality
         return quality_rank(str(getattr(q, "value", q) or ""))
 
+    def _learn_ceiling(self, tid: str, rec: dict | None, ceiling: int | None) -> None:
+        """A ceiling learned from a track in hand is written onto the record
+        that has none, on the pool (a store write never runs on the GUI
+        thread), and the cached record is corrected at once so the next
+        answer, with or without the track, reads the same. See
+        OwnershipStore.stamp_ceiling for why: the gate and the button must
+        not depend on what the page cache happens to hold (issue #40)."""
+        if not rec or ceiling is None or int(ceiling) < 0:
+            return
+        stored = rec.get("ceiling_rank")
+        if stored is not None and int(stored) >= 0:
+            return
+        path = str(rec.get("path") or "")
+        if not path:
+            return
+        rec["ceiling_rank"] = int(ceiling)
+        store = self._ownership
+        self._own_pool.start(Worker(lambda: store.stamp_ceiling(tid, path, int(ceiling))))
+
     def _own_refresh(self, tid: str) -> None:
         """Worker-thread cache refresh: the store query plus the disk stat run
         here, and QML is nudged (queued, cross-thread) only when the answer
@@ -10153,9 +10199,30 @@ class WavesBridge(LibraryMixin, QObject):
                 at_cur = _copy_is_current(rec_at, self._override_target_rank(tid), True, None)
                 return {**rec_st, "up_to_date": bool(st_cur and at_cur)}
         path = str(rec.get("path") or "")
+        # The track itself, when a page holds it (every row on screen was
+        # built through _remember). Its advertised tags cap the target the
+        # way the download gate caps it, and its audio modes name the scale
+        # the gate ranks on, so the button and the gate answer alike. Blind
+        # to the track, this answer offered an upgrade for a LOSSLESS copy of
+        # a release with no hi-res master while the gate, which always holds
+        # the track, skipped that copy as the best there is: every 16-bit
+        # track of a mixed playlist read DOWNLOAD TRACK under a Max setting,
+        # and a click on it finished in a millisecond having fetched nothing
+        # (issue #40). Without the track the stored ranks decide, as before.
+        # The record's own Atmos answer stays as the floor: a held object
+        # that lists no audio modes must not un-say an Atmos copy.
+        obj = self._objs["track"].get(tid) if hasattr(self, "_objs") else None
+        wants_atmos = self._would_refetch_atmos(rec) or (
+            obj is not None and _delivers_atmos(obj, bool(self.settings.data.download_dolby_atmos))
+        )
+        ceiling = _advertised_ceiling(obj) if obj is not None else None
+        # Learned once, kept: the answer must not swing with the page cache
+        # (a long playlist evicts its first rows, a search clears the lot).
+        if ceiling is not None:
+            self._learn_ceiling(tid, rec, ceiling)
         return {
             **rec,
-            "up_to_date": _copy_is_current(rec, self._override_target_rank(tid), self._would_refetch_atmos(rec)),
+            "up_to_date": _copy_is_current(rec, self._override_target_rank(tid), wants_atmos, ceiling),
             # Where THIS copy lives, not where downloads go now (issue #38): a
             # copy written before the download folder moved reads DOWNLOADED,
             # and the redownload gate names its folder.
@@ -11855,6 +11922,7 @@ class WavesBridge(LibraryMixin, QObject):
             album_artist_tag_clean=lambda: self._waves_pref_bool("clean_album_artist"),
             track_signals=signals,
             ownership_of=self._ownership.ownership_of,
+            ownership_stamp=self._ownership.stamp_ceiling,
             # Both the skip/upgrade decision and the fetch follow the job's
             # own quality, so a job queued at LOSSLESS keeps treating a
             # LOSSLESS copy as current even if the setting has since moved.
