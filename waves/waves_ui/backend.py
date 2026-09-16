@@ -4050,6 +4050,9 @@ class WavesBridge(LibraryMixin, QObject):
     # QML routes this into the setup wizard at the sign-in step instead of
     # leaving a dead button.
     appleSetupRequested = Signal(str)  # reason: "cookies" | "runtime" | "setup"
+    # The welcome surface was asked to re-open (Settings -> Providers); QML
+    # owns where it renders, the bridge only forwards the command.
+    setupRequested = Signal()
     # A download was HELD because FFmpeg is missing: without it the files
     # would be degraded (no FLAC extraction, no video conversion, no track
     # length repair, so strict players can read 0:00). QML shows a blocking
@@ -5398,6 +5401,37 @@ class WavesBridge(LibraryMixin, QObject):
     def beginLogin(self) -> None:
         """The TIDAL sign-in entry (the landing panel's and the card's)."""
         _begin_login(self, CTX_TIDAL)
+
+    @Slot(result="QVariant")
+    def providerCards(self) -> list:
+        """The welcome surface's provider cards, straight from the descriptors.
+
+        One entry per registered provider: identity, mark and the one-line
+        capability truth. The welcome renders these instead of hardcoding
+        the providers, so a third provider is a descriptor (issue #215).
+        """
+        cards = []
+        for provider in _provider_registry(self):
+            descriptor = provider.descriptor()
+            cards.append(
+                {
+                    "id": descriptor.id,
+                    "name": descriptor.name,
+                    "logo": descriptor.logo,
+                    "logo_width": descriptor.logo_width,
+                    "summary": descriptor.capability_summary,
+                }
+            )
+        return cards
+
+    @Slot()
+    def showSetup(self) -> None:
+        """Re-open the provider welcome surface (Settings -> Providers).
+
+        The onboarding state lives in QML (its settings store); the bridge
+        only forwards the command, so the surface has one owner.
+        """
+        self.setupRequested.emit()
 
     @Slot(str, str)
     def providerAction(self, provider_id: str, action_key: str) -> None:
@@ -19480,6 +19514,20 @@ class WavesBridge(LibraryMixin, QObject):
                     "live": "apple_setup",
                     "value": "",
                 },
+                {
+                    # A pure command row: re-opens the welcome surface as a
+                    # page, where each provider is enabled and set up. It
+                    # stages no edit and carries no value.
+                    "key": "provider_setup_action",
+                    "label": "Set up providers",
+                    "help": (
+                        "Re-opens the welcome surface: turn a provider on, sign in, or run its "
+                        "one-time setup. The same cards the first run shows."
+                    ),
+                    "type": "action",
+                    "action": "show_setup",
+                    "value": "",
+                },
             ]
         }
         # Session-kind provider cards get their status row here: one generic
@@ -19682,9 +19730,9 @@ class WavesBridge(LibraryMixin, QObject):
                 # is built above. A new provider is a descriptor, not a
                 # QML branch.
                 "providers": [_provider_card(p) for p in _provider_registry(self)],
-                # No loose fields: everything provider-specific lives on the
-                # cards above, so the generic field filters render nothing here.
-                "fields": [],
+                # No loose fields except the re-open command: everything
+                # provider-specific lives on the cards above.
+                "fields": ["provider_setup_action"],
             },
             {
                 "group": "Downloads",

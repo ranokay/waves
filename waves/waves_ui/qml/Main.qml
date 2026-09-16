@@ -213,6 +213,23 @@ ApplicationWindow {
     property bool artistOpen: false
     property bool settingsOpen: false
     property bool libraryOpen: false
+    // The provider welcome surface re-opened as a page (Settings -> Providers
+    // or the "Finish setup" chip). The first-run presentation is the gate
+    // below; this flag drives the non-blocking page variant.
+    property bool setupOpen: false
+    // The TIDAL card was chosen this session: only then does the sign-in
+    // panel open passively. Skip never opens it (the chip and Settings do).
+    property bool setupChoiceTidal: false
+    // The live Apple light, refreshed on appleStatusChanged; the chip's
+    // "can any provider download yet" test reads it.
+    property var appleLight: ({})
+    // First-run welcome: nothing answered and nothing set up yet.
+    readonly property bool welcomeDue: waves.sessionResolved && !signedIn && !waves.appleEnabled
+        && !setupSettings.firstRunAnswered
+    // The "Finish setup" chip: onboarding answered, but no provider can
+    // download yet, and the user has not dismissed it.
+    readonly property bool downloadsNeedSetup: setupSettings.firstRunAnswered && !signedIn
+        && String(appleLight.state || "") !== "signed_in" && !setupSettings.setupChipDismissed
     // A newer release found by the updater (startup check or a manual one on
     // the Settings page). Drives the gold notice in the status bar's right
     // slot so the news is visible from any page, not just Settings.
@@ -292,6 +309,10 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        // One-time onboarding seed: an existing user's answered picker keeps
+        // them out of the new welcome surface; the legacy key is cleared.
+        setupSettings.migrateOnboarding()
+        root.appleLight = waves.appleStatus()
         // Restore the saved window frame BEFORE the first present (see the
         // block above): apply the frame, seed the normal-frame trackers, then
         // show. The try/catch guarantees the window is shown even if the
@@ -2110,7 +2131,8 @@ ApplicationWindow {
         navForwardHistory = navForwardHistory.concat([fwd]).slice(-50)
         if (levelUp) {
             // Nothing recorded (fresh session view): the old level-up fallback.
-            if (settingsOpen) settingsOpen = false
+            if (setupOpen) setupOpen = false
+            else if (settingsOpen) settingsOpen = false
             else if (libraryOpen) libraryOpen = false
             else if (artistOpen) artistOpen = false
             else if (browseOpen && browsePageKey !== "") browseBack()
@@ -2139,14 +2161,14 @@ ApplicationWindow {
         navOrigin = s.o || (s.v === "library" ? "library" : s.v === "browse" ? "browse"
                           : s.v === "search" ? "search" : navOrigin)
         _navRestoring = true
-        if (s.v === "settings") { settingsOpen = true; artistOpen = false; libraryOpen = false }
+        if (s.v === "settings") { setupOpen = false; settingsOpen = true; artistOpen = false; libraryOpen = false }
         else if (s.v === "library") {
-            libraryOpen = true; settingsOpen = false; artistOpen = false
+            libraryOpen = true; settingsOpen = false; setupOpen = false; artistOpen = false
             if (libraryCategory !== s.cat) loadLib(s.cat)
         } else if (s.v === "artist") {
             if (artistData && ("" + artistData.id) === s.id
                     && !!artistData.libraryScoped === !!s.scoped) {
-                artistOpen = true; settingsOpen = false; libraryOpen = false
+                artistOpen = true; settingsOpen = false; setupOpen = false; libraryOpen = false
                 // The page's content is still loaded; put back the state other
                 // tabs may have clobbered (loadLib clears expandedAlbums), and
                 // land on the saved spot same-frame, pre-paint (the pane only
@@ -2173,7 +2195,7 @@ ApplicationWindow {
                 return   // flag cleared in onArtistLoaded
             }
         } else if (s.v === "browse") {
-            browseOpen = true; settingsOpen = false; artistOpen = false; libraryOpen = false
+            browseOpen = true; settingsOpen = false; setupOpen = false; artistOpen = false; libraryOpen = false
             browseStack = s.stack || []
             browseHighlightId = s.hi || ""
             var bkey = s.key || ""
@@ -2218,7 +2240,7 @@ ApplicationWindow {
                 waves.refreshBrowse()   // silent, throttled; repaints only on change
             }
         } else {   // search
-            settingsOpen = false; artistOpen = false; libraryOpen = false; browseOpen = false
+            settingsOpen = false; setupOpen = false; artistOpen = false; libraryOpen = false; browseOpen = false
         }
         _navRestoring = false
         _navRestored = true   // survives the 0ms crumb-trim debounce (see crumbTrimTimer)
@@ -2302,14 +2324,14 @@ ApplicationWindow {
             browseArtHint = ""
             browsePageLoading = false; browsePageError = false
             browsePageKey = ""
-            artistOpen = false; settingsOpen = false; libraryOpen = false
+            artistOpen = false; settingsOpen = false; setupOpen = false; libraryOpen = false
             browseOpen = true
         } else if (navOrigin === "library") {
-            artistOpen = false; settingsOpen = false; browseOpen = false
+            artistOpen = false; settingsOpen = false; setupOpen = false; browseOpen = false
             libraryOpen = true
         } else {
             // Search: uncover the results pane exactly as it stands.
-            artistOpen = false; settingsOpen = false; libraryOpen = false
+            artistOpen = false; settingsOpen = false; setupOpen = false; libraryOpen = false
             browseOpen = false
         }
     }
@@ -2390,7 +2412,7 @@ ApplicationWindow {
         var alreadyActive = libraryOpen && !artistOpen && !settingsOpen && navOrigin === "library"
         if (alreadyActive) { navPush(); markNav("library home"); loadLib("home"); return }
         navPush(); markNav("library"); navOrigin = "library"
-        libraryOpen = true; settingsOpen = false; artistOpen = false
+        libraryOpen = true; settingsOpen = false; setupOpen = false; artistOpen = false
         // RETURN to the category the user left, not always Home. loadLib is
         // keep-alive: a category whose rows are already on screen keeps them
         // (and its scroll) untouched and only revalidates quietly.
@@ -2458,18 +2480,18 @@ ApplicationWindow {
                     resetExpandedAlbums(s.expandedAlbums)
                     bioExpanded = !!s.bio
                     artistOpen = true
-                    browseOpen = false; libraryOpen = false; settingsOpen = false
+                    browseOpen = false; libraryOpen = false; settingsOpen = false; setupOpen = false
                     // Same-frame restore: the pane becomes visible this frame,
                     // so clamping contentY now lands pre-paint (no visible jump).
                     artistView.contentY = Math.min(s.artistY || 0, Math.max(0, artistView.contentHeight - artistView.height))
                 } else {
                     artistOpen = false
-                    browseOpen = false; libraryOpen = false; settingsOpen = false
+                    browseOpen = false; libraryOpen = false; settingsOpen = false; setupOpen = false
                     if (s) results.contentY = Math.min(s.resultsY || 0, Math.max(0, results.contentHeight - results.height))
                 }
             } else {
                 // Only Settings was covering the Search view: uncover it as-is.
-                settingsOpen = false; browseOpen = false; libraryOpen = false
+                settingsOpen = false; setupOpen = false; browseOpen = false; libraryOpen = false
             }
             // Ready to type immediately: the Search press hands the keyboard
             // to the field (existing text selected, so typing replaces it).
@@ -2526,20 +2548,41 @@ ApplicationWindow {
     // same instant jump the update notice uses, no scroll animation.
     function openDownloadSetting() {
         navPush(); markNav("settings")
-        settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
+        setupOpen = false; settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
         Qt.callLater(function() { settingsPage.jumpToCard("downloads") })
     }
     // Deep-link to the FFmpeg card (from the pre-download gate).
     function openFfmpegSetting() {
         navPush(); markNav("settings")
-        settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
+        setupOpen = false; settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
         Qt.callLater(function() { settingsPage.jumpToCard("ffmpeg") })
+    }
+    // The chip's ✕ and its test both come through here.
+    function dismissSetupChip() {
+        setupSettings.setupChipDismissed = true
+    }
+    // The welcome surface was answered: persist the answer, route the choice,
+    // and close the surface. TIDAL opens the passive sign-in panel for this
+    // session only (the inline panel lands with #218); Apple enables and the
+    // existing wizard routing takes over; Skip just lands in the app.
+    function answerWelcome(choice) {
+        setupSettings.firstRunAnswered = true
+        setupChoiceTidal = (choice === "tidal")
+        if (choice === "apple") waves.applySettings({"apple_enabled": true})
+        setupOpen = false
+    }
+    // Re-open the welcome surface as a page (Settings -> Providers, or the
+    // "Finish setup" chip): the other surfaces close, the page opens.
+    function openSetupPage() {
+        navPush(); markNav("setup")
+        settingsOpen = false; artistOpen = false; libraryOpen = false; browseOpen = false
+        setupOpen = true
     }
     // Deep-link to the Apple setup wizard (from enabling Apple Music or a
     // pre-setup Apple download click): the in-place steps in Providers.
     function openAppleSetup() {
         navPush(); markNav("settings")
-        settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
+        setupOpen = false; settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
         Qt.callLater(function() { settingsPage.jumpToCard("providers_apple") })
     }
     // Browse: open the tab (fetching the landing page once per session) and
@@ -2556,7 +2599,7 @@ ApplicationWindow {
             markNav("browse return")
             navOrigin = "browse"
             browseOpen = true
-            settingsOpen = false; artistOpen = false; libraryOpen = false
+            settingsOpen = false; setupOpen = false; artistOpen = false; libraryOpen = false
             if (root.signedIn && browseSections.length === 0 && !browseLoading) {
                 browseLoading = true; browseError = false
                 waves.loadBrowse()
@@ -2578,7 +2621,7 @@ ApplicationWindow {
         browsePageError = false
         browseHighlightId = ""
         browseOpen = true
-        settingsOpen = false; artistOpen = false; libraryOpen = false
+        settingsOpen = false; setupOpen = false; artistOpen = false; libraryOpen = false
         // The tab button is an explicit "take me to the top of Browse":
         // cancel any armed hold and reset the landing's scroll directly
         // (the pane is alive, so a plain set is exact).
@@ -2878,7 +2921,7 @@ ApplicationWindow {
         if (!albumId || onAlbumPage(albumId)) return
         markNav("browse")
         openBrowseItem("album", albumId, highlight || "", title || "", art || "")   // snapshots the view being left
-        settingsOpen = false; artistOpen = false; libraryOpen = false
+        settingsOpen = false; setupOpen = false; artistOpen = false; libraryOpen = false
         browseOpen = true
         if (root.signedIn && browseSections.length === 0 && !browseLoading) {
             browseLoading = true; browseError = false
@@ -2894,7 +2937,7 @@ ApplicationWindow {
             && browsePageKey === "item:playlist:" + playlistId) return
         markNav("browse")
         openBrowseItem("playlist", playlistId, "", title || "", art || "")
-        settingsOpen = false; artistOpen = false; libraryOpen = false
+        settingsOpen = false; setupOpen = false; artistOpen = false; libraryOpen = false
         browseOpen = true
         if (root.signedIn && browseSections.length === 0 && !browseLoading) {
             browseLoading = true; browseError = false
@@ -2920,7 +2963,7 @@ ApplicationWindow {
         // This card is reused on My Tidal's Home shelves, which live in the
         // library pane, so make Browse the active surface; when the click came
         // from within Browse these flags are already set, so it is a no-op.
-        browseOpen = true; settingsOpen = false; artistOpen = false; libraryOpen = false
+        browseOpen = true; settingsOpen = false; setupOpen = false; artistOpen = false; libraryOpen = false
     }
     // Browse rows carry per-item `artists` arrays; stash them in the same
     // artistsById side map the search/library rows use, so ArtistLinks inside
@@ -12585,7 +12628,13 @@ ApplicationWindow {
     Connections {
         target: waves
         function onAppleStatusChanged() {
+            // The chip's "can any provider download yet" test and Apple's
+            // search-group clearing both read the same fresh light.
+            root.appleLight = waves.appleStatus()
             if (waves.appleStatus().state === "off") root.clearAppleSearch()
+        }
+        function onSetupRequested() {
+            root.openSetupPage()
         }
         function onAppleSetupRequested(reason) {
             root.openAppleSetup()
@@ -13237,7 +13286,37 @@ ApplicationWindow {
                 NavTab {
                     label: "Settings"
                     active: root.settingsOpen
-                    onClicked: { root.navPush(); root.markNav("settings"); root.settingsOpen = true; root.artistOpen = false; root.libraryOpen = false }
+                    onClicked: { root.navPush(); root.markNav("settings"); root.setupOpen = false; settingsOpen = true; root.artistOpen = false; root.libraryOpen = false }
+                }
+                // "Finish setup": onboarding is answered but no provider can
+                // download yet. The body re-opens the welcome page; the ✕
+                // dismisses this chip permanently (Settings -> Providers ->
+                // "Set up providers" remains the way back).
+                Row {
+                    visible: root.downloadsNeedSetup && !root.setupOpen && !root.welcomeDue
+                    spacing: 6; Layout.alignment: Qt.AlignVCenter
+                    Rectangle {
+                        objectName: "setupChip"
+                        implicitHeight: 26; implicitWidth: finishTxt.implicitWidth + 20; radius: 13
+                        color: "transparent"; border.color: root.accentDim
+                        Text {
+                            id: finishTxt; anchors.centerIn: parent
+                            text: "FINISH SETUP"; color: root.accent
+                            font.pixelSize: 11; font.family: root.uiFont; font.bold: true; font.letterSpacing: 1.0
+                        }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openSetupPage() }
+                    }
+                    Rectangle {
+                        objectName: "setupChipDismiss"
+                        implicitHeight: 26; implicitWidth: 26; radius: 13
+                        color: "transparent"; border.color: root.border1
+                        Text { anchors.centerIn: parent; text: "✕"; color: root.textDim; font.pixelSize: 11 }
+                        MouseArea {
+                            objectName: "setupChipDismissArea"
+                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: root.dismissSetupChip()
+                        }
+                    }
                 }
                 // queue (outlined) with count badge
                 Rectangle {
@@ -14156,6 +14235,7 @@ ApplicationWindow {
             // an outer margin; see BrowseScroll.
             Layout.fillWidth: true; Layout.fillHeight: true
             visible: !root.artistOpen && !root.settingsOpen && !root.libraryOpen && !root.browseOpen
+                && !root.setupOpen
             clip: true
             contentWidth: width; contentHeight: contentCol.height + 32
             ScrollBar.vertical: ScrollBar {}
@@ -15057,6 +15137,19 @@ ApplicationWindow {
             }
         }
 
+        // Provider welcome surface, re-opened as a page: no dim and no
+        // click shield, so the nav stays usable and leaving is one click.
+        Item {
+            id: setupPane
+            Layout.fillWidth: true; Layout.fillHeight: true; Layout.topMargin: 8
+            visible: root.setupOpen
+            WelcomePicker {
+                anchors.centerIn: parent
+                onPicked: function(provider) { root.answerWelcome(provider) }
+                onSkipped: root.answerWelcome("skip")
+            }
+        }
+
         // Settings page
         SettingsPage {
             id: settingsPage
@@ -15064,7 +15157,7 @@ ApplicationWindow {
             visible: root.settingsOpen
             active: root.settingsOpen
             ff: appFfmpeg            // share the one app-wide FFmpeg manager
-            onClosed: root.settingsOpen = false
+            onClosed: { root.settingsOpen = false; setupOpen = false }
             onResetSettingsRequested: root.confirmSettingsReset = true
             onFactoryResetRequested: root.confirmFactoryReset = true
         }
@@ -15748,7 +15841,7 @@ ApplicationWindow {
                             // onActiveChanged refresh has run.
                             onClicked: {
                                 root.navPush(); root.markNav("settings")
-                                root.settingsOpen = true; root.artistOpen = false; root.libraryOpen = false
+                                root.setupOpen = false; settingsOpen = true; root.artistOpen = false; root.libraryOpen = false
                                 Qt.callLater(function() { settingsPage.jumpToCard("updates") })
                             }
                         }
@@ -17240,6 +17333,7 @@ ApplicationWindow {
                  : root.libraryCategory === "videos" ? libVideosList : null)
              : root.browseOpen ? (root.browsePageKey === "" ? browseLanding : browseDrill)
              : root.settingsOpen ? null
+             : root.setupOpen ? null
              : results
     }
 
@@ -17250,15 +17344,15 @@ ApplicationWindow {
         // sessionResolved gates the overlay so an already-signed-in launch
         // doesn't flash the logged-out screen while the cached-token network
         // check is still in flight.
-        // The provider picker owns the first run: the panel shows once the
-        // picker was answered with Apple off, and whenever a login is in
-        // progress no matter which provider is enabled, so a sign-in started
-        // from Settings keeps its paste field. Nothing here starts a login
-        // on its own: the browser opens solely on a button click. No
-        // MouseArea covers the window, so the nav underneath stays clickable;
-        // the dim is paint only.
+        // The provider welcome surface owns the first run: the panel shows
+        // only once TIDAL was chosen there (or on a provider card) for this
+        // session, and whenever a login is in progress no matter which
+        // provider is enabled, so a sign-in started from Settings keeps its
+        // paste field. Nothing here starts a login on its own: the browser
+        // opens solely on a button click. No MouseArea covers the window, so
+        // the nav underneath stays clickable; the dim is paint only.
         visible: waves.sessionResolved && !root.signedIn
-                 && (loginPanel.urlOpened || (!waves.appleEnabled && setupSettings.providerPickerDone))
+                 && (loginPanel.urlOpened || (!waves.appleEnabled && root.setupChoiceTidal))
         // A logged-out cold launch fades in with the rest of the interface.
         opacity: root.bootContentShown
         color: "#d606070e"
@@ -17331,112 +17425,99 @@ ApplicationWindow {
         }
     }
 
-    // Provider picker: first run offers the choice of provider
-    // instead of dropping straight into the TIDAL login above. Two cards
-    // with the official marks; TIDAL continues into the login panel, Apple
-    // Music enables the provider (its setup wizard opens itself) and never
-    // shows the TIDAL panel. "Not now" dismisses to today's passive login
-    // panel. Answered once, persisted, never nags. Nothing auto-opens a
-    // browser: every login starts on an explicit click.
-    Rectangle {
-        id: providerPicker
-        anchors.fill: parent
-        visible: waves.sessionResolved && !root.signedIn && !waves.appleEnabled && !setupSettings.providerPickerDone
-        // A fresh cold launch fades in with the rest of the interface.
-        opacity: root.bootContentShown
-        color: "#d606070e"
-        MouseArea { anchors.fill: parent }
-        Rectangle {
-            anchors.centerIn: parent; width: 480; radius: 14; color: root.surface2; border.color: root.outline
-            implicitHeight: pickCol.implicitHeight + 40
-            ColumnLayout {
-                id: pickCol; anchors.centerIn: parent; width: parent.width - 40; spacing: 13
-                WelcomeBanner { Layout.fillWidth: true; Layout.preferredHeight: 75 }
-                Text {
-                    Layout.fillWidth: true; wrapMode: Text.WordWrap
-                    text: "Choose where to start. You can enable the other provider later in Settings."
-                    color: root.textLo; font.pixelSize: 13
-                }
-                // TIDAL card: sign in with a TIDAL account.
-                Rectangle {
+    // Provider welcome surface: the first-run gate, and the same cards
+    // re-opened as a non-blocking page from Settings -> Providers (or the
+    // "Finish setup" chip). One card per provider, from the descriptors the
+    // schema carries; every answer ends the first-run state. Nothing
+    // auto-opens a browser: a card is a click, and only TIDAL opens the
+    // sign-in panel (for this session).
+    component WelcomePicker: Rectangle {
+        id: pickCard
+        implicitWidth: 480; radius: 14; color: root.surface2; border.color: root.outline
+        implicitHeight: pickCol.implicitHeight + 40
+        signal picked(string provider)
+        signal skipped()
+        ColumnLayout {
+            id: pickCol; anchors.fill: parent; anchors.margins: 20; spacing: 13
+            WelcomeBanner { Layout.fillWidth: true; Layout.preferredHeight: 75 }
+            Text {
+                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                text: "Choose where to start. You can enable the other provider later in Settings."
+                color: root.textLo; font.pixelSize: 13
+            }
+            // One card per registered provider, straight from the
+            // descriptors: a provider the welcome has never heard of renders
+            // through this same delegate (issue #215).
+            Repeater {
+                model: waves.providerCards()
+                delegate: Rectangle {
+                    required property var modelData
                     Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
-                    implicitHeight: tidalPickRow.implicitHeight + 24
+                    implicitHeight: pickRow.implicitHeight + 24
                     RowLayout {
-                        id: tidalPickRow
+                        id: pickRow
                         anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                         anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
                         Image {
-                            id: tidalPickLogo
+                            objectName: "welcomeProviderLogo"
                             Layout.alignment: Qt.AlignVCenter
                             // RowLayout sizes children from their implicit
                             // size (the PNG pixels) unless told otherwise:
                             // plain width/height are ignored here.
-                            Layout.preferredWidth: 30; Layout.preferredHeight: 20
-                            source: "assets/providers/tidal.png"
+                            Layout.preferredWidth: modelData.logo_width !== undefined ? Number(modelData.logo_width) : 20
+                            Layout.preferredHeight: 20
+                            source: modelData.logo !== undefined ? String(modelData.logo) : ""
                             fillMode: Image.PreserveAspectFit
                             smooth: true; cache: true
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; spacing: 6
-                            Text { text: "TIDAL"; color: root.textHi; font.pixelSize: 15; font.weight: Font.DemiBold }
+                            Text {
+                                text: String(modelData.name); color: root.textHi
+                                textFormat: Text.PlainText
+                                font.pixelSize: 15; font.weight: Font.DemiBold
+                            }
                             Text {
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                text: "Sign in with your TIDAL account."
+                                text: String(modelData.summary || "")
+                                textFormat: Text.PlainText
                                 color: root.textLo; font.pixelSize: 12
                             }
                             GateAction {
-                                label: "CONTINUE WITH TIDAL"
-                                onClicked: setupSettings.providerPickerDone = true
+                                label: "CONTINUE WITH " + String(modelData.name).toUpperCase()
+                                onClicked: pickCard.picked(String(modelData.id))
                             }
                         }
-                    }
-                }
-                // Apple Music card: search needs no account; downloads ride
-                // the one-time setup wizard.
-                Rectangle {
-                    Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
-                    implicitHeight: applePickRow.implicitHeight + 24
-                    RowLayout {
-                        id: applePickRow
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                        anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
-                        Image {
-                            id: applePickLogo
-                            Layout.alignment: Qt.AlignVCenter
-                            Layout.preferredWidth: 22; Layout.preferredHeight: 22
-                            source: "assets/providers/apple-music.png"
-                            fillMode: Image.PreserveAspectFit
-                            smooth: true; cache: true
-                        }
-                        ColumnLayout {
-                            Layout.fillWidth: true; spacing: 6
-                            Text { text: "Apple Music"; color: root.textHi; font.pixelSize: 15; font.weight: Font.DemiBold }
-                            Text {
-                                Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                text: "Search works with no account; downloads need the one-time setup."
-                                color: root.textLo; font.pixelSize: 12
-                            }
-                            GateAction {
-                                label: "CONTINUE WITH APPLE MUSIC"
-                                onClicked: {
-                                    setupSettings.providerPickerDone = true
-                                    waves.applySettings({"apple_enabled": true})
-                                }
-                            }
-                        }
-                    }
-                }
-                Text {
-                    Layout.alignment: Qt.AlignHCenter
-                    text: "Not now"
-                    color: root.textDim; font.pixelSize: 12; font.underline: true
-                    MouseArea {
-                        anchors.fill: parent; anchors.margins: -6
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: setupSettings.providerPickerDone = true
                     }
                 }
             }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: "Not now"
+                color: root.textDim; font.pixelSize: 12; font.underline: true
+                MouseArea {
+                    anchors.fill: parent; anchors.margins: -6
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: pickCard.skipped()
+                }
+            }
+        }
+    }
+
+    // First-run gate: the only place the welcome is not optional. Skip is
+    // inside the card, so the surface can always be answered.
+    Rectangle {
+        id: providerPicker
+        anchors.fill: parent
+        visible: root.welcomeDue
+        // A fresh cold launch fades in with the rest of the interface.
+        opacity: root.bootContentShown
+        color: "#d606070e"
+        MouseArea { anchors.fill: parent }
+        WelcomePicker {
+            anchors.centerIn: parent
+            onPicked: function(provider) { root.answerWelcome(provider) }
+            onSkipped: root.answerWelcome("skip")
         }
     }
 
@@ -17472,10 +17553,25 @@ ApplicationWindow {
         // Exit warning (exitGate): "Don't warn me again" mutes the
         // downloads-still-running close prompt permanently.
         property bool exitWarnMuted: false
-        // Provider picker: answered = a provider card or "Not
-        // now" was clicked, the picker never returns. Persisted like every
-        // other first-run gate above.
+        // Onboarding: answered = the welcome surface was answered (a
+        // provider card or Skip), so it never returns automatically.
+        // Seeded once from the legacy provider-picker bit by
+        // migrateOnboarding(); the setup popup below is the deliberate way
+        // back.
+        property bool firstRunAnswered: false
+        // The "Finish setup" chip's ✕ is permanent; Settings -> Providers ->
+        // "Set up providers" remains the way back.
+        property bool setupChipDismissed: false
+        // Legacy (pre-#215) key, kept one release so the seed below can read
+        // it. Nothing else may write it; delete with the next migration.
         property bool providerPickerDone: false
+        // One-time seed: an answered picker means the user has seen the
+        // first-run surface, and the old key is cleared so a later version
+        // cannot resurrect the picker.
+        function migrateOnboarding() {
+            if (providerPickerDone && !firstRunAnswered) firstRunAnswered = true
+            if (providerPickerDone) providerPickerDone = false
+        }
     }
     FfmpegManager { id: appFfmpeg; objectName: "appFfmpeg" }
 

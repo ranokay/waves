@@ -29,6 +29,7 @@ feature.
 | `diagnosticsExported(path)`                                                                        | A diagnostics export finished (`""` = failed)                                                                 |
 | `appleStatusChanged`                                                                               | A save moved `apple_enabled` or the session; Settings re-reads `appleStatus()`; search clears when off        |
 | `appleSetupRequested(reason)`                                                                      | Apple needs setup (`setup` on enable, `cookies` on a pre-setup download click); Main deep-links to the wizard |
+| `setupRequested()`                                                                                 | Settings -> Providers -> "Set up providers" asks to re-open the provider welcome surface as a page            |
 | `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull and sign-out lifecycle; Settings re-reads `appleSetupState()`          |
 
 The provider cards' action pills dispatch through one slot, not per-provider

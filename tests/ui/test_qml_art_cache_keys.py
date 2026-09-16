@@ -106,8 +106,11 @@ def test_every_cached_image_asks_for_the_same_pixels() -> None:
     wrong = []
     for line, block in _cached_image_blocks():
         span = raw_lines[line - 1 : line + block.count("\n")]
-        if any("assets/providers/" in raw for raw in span):
-            continue  # provider marks are not covers and keep their own aspect
+        joined = "\n".join(span)
+        if "assets/providers/" in joined or "modelData.logo" in joined:
+            # Provider marks are not covers and keep their own aspect; the
+            # welcome surface takes its marks from the provider descriptors.
+            continue
         found = re.search(r"\bfillMode\s*:\s*(Image\.\w+)", block)
         if not found or found.group(1) != ART_FILL_MODE:
             wrong.append(f"Main.qml:{line} has fillMode {found.group(1) if found else '(unset, so Image.Stretch)'}")

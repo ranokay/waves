@@ -107,7 +107,7 @@ def _run_scenario() -> int:
 
     q("legalSettings.termsAcceptedVersion = root.termsVersion")
     q("legalSettings.termsAccepted = true")
-    q("setupSettings.providerPickerDone = true")
+    q("setupSettings.firstRunAnswered = true")
     settle(200)
 
     # Apple on: the Apple search group and the Chooser only exist with it.
