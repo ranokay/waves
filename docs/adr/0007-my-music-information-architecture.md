@@ -28,6 +28,10 @@ The section list, the source labels and the empty-state choice are **bridge
 data derived from provider capabilities and live sessions**, never QML
 branches on a provider's name.
 
+This is the settled destination, not a description of every pane today: the
+pane's first provider-shaped views are the starting point, and what remains
+to move onto the rule is recorded under Consequences.
+
 ## Why
 
 - "What is in my TIDAL account?" was the old home; a user who enabled only
@@ -58,10 +62,11 @@ branches on a provider's name.
   provenance; that track-row addition is the implementation dependency of
   the Library section (staged after the rename and labels).
 - While the Library section and the generic per-provider shelves land, the
-  pane's existing per-category tabs stay as they are for a signed-in source;
-  the ADR records the destination, and the source-label rule is already the
-  bridge data those renderers will read (the shelf renderer is tracked
-  separately).
+  pane keeps its existing TIDAL-shaped views: the per-category tabs for a
+  signed-in source and the signed-out empty state's TIDAL words. The ADR
+  records the destination, the source-label rule is already the bridge data
+  those renderers will read, and the remaining renderer work is tracked
+  separately.
 - A hand-edited provenance tag can misreport a file's source; the All-files
   view remains the honest fallback, and the limitation is documented.
 - Tab, expanded-section and scroll positions survive the rename, so the

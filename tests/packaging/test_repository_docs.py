@@ -4,20 +4,21 @@ WHAT THIS FENCES OFF
 --------------------
 The onboarding, My Music and provider-surface decisions are recorded as ADRs,
 and the vocabulary they rest on (Onboarding, Saved vs Library, My Music) is
-defined in the glossary. The guard is mechanical: a decision record missing
-its decision, its alternatives or its consequences, or a glossary that lost
-one of the shared terms, fails here instead of surfacing in a later review.
+defined in the glossary. The guard is mechanical: an ADR missing its status,
+its decision, its reasoning or its consequences, or a glossary that lost one
+of the shared terms, fails here instead of surfacing in a later review.
 
-Only the three #224 records are held to the full shape (Decision /
-Alternatives considered / Consequences); older ADRs predate that convention
-and only carry the mandatory header fields.
+Three markers are mandatory for every record (Status/Decided headers plus
+Decision/Why/Consequences sections); the three #224 records are additionally
+held to the "Alternatives considered" section the onboarding spec asked for.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from support.paths import REPO_ROOT
+
 ADR_DIR = REPO_ROOT / "docs" / "adr"
 CONTEXT = REPO_ROOT / "CONTEXT.md"
 
@@ -30,6 +31,8 @@ DECISION_SLUGS = (
 
 GLOSSARY_TERMS = ("**Onboarding**", "**My Music**", "**Saved vs Library**")
 
+_MANDATORY = ("- Status:", "- Decided:", "## Decision", "## Why", "## Consequences")
+
 
 def _adrs() -> list[Path]:
     files = sorted(ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
@@ -40,7 +43,7 @@ def _adrs() -> list[Path]:
 def test_every_decision_record_states_its_status_and_decision():
     for path in _adrs():
         text = path.read_text(encoding="utf-8")
-        for marker in ("- Status:", "- Decided:", "## Decision", "## Consequences"):
+        for marker in _MANDATORY:
             assert marker in text, f"{path.name} is missing {marker!r}"
 
 
@@ -49,8 +52,7 @@ def test_the_settled_onboarding_decisions_are_recorded():
         hits = sorted(ADR_DIR.glob(f"*-{slug}.md"))
         assert len(hits) == 1, f"expected one decision record for {slug!r}, found {hits}"
         text = hits[0].read_text(encoding="utf-8")
-        for heading in ("## Decision", "## Alternatives considered", "## Consequences"):
-            assert heading in text, f"{hits[0].name} is missing {heading!r}"
+        assert "## Alternatives considered" in text, f"{hits[0].name} is missing its alternatives"
 
 
 def test_the_glossary_defines_the_shared_terms():

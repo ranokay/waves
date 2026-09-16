@@ -21,9 +21,9 @@ Skip. Every path out of it is cancellable and lands in a usable app.
   chip in the header while no provider can download yet. Settings →
   Providers → "Set up providers" re-opens the same surface as a normal page.
 
-Persistence is **one key**, `firstRunAnswered`, in the QML `Settings` store
-(category `setup`), plus `setupChipDismissed` for the chip's ✕. The legacy
-picker bit is migrated by a **one-time shim inside that store**
+Persistence is **two keys** in the QML `Settings` store (category `setup`):
+`firstRunAnswered` and the chip's `setupChipDismissed`. The legacy picker
+bit is migrated by a **one-time shim inside that store**
 (`migrateOnboarding()`): it seeds `firstRunAnswered` from the old
 `providerPickerDone` and clears it. Everything else about the surface —
 which mode it is on, whether a login URL arrived — is session state that
@@ -39,8 +39,8 @@ cancel discards.
   a shim in the QML store is the honest mechanism; a second state store
   would have meant two owners for one answer.
 - An existing install must not be onboarded again: the shim seeds from the
-  bit every prior release wrote, and the chip only appears when nothing at
-  all is set up.
+  bit every prior release wrote, and the chip only appears while no
+  provider can download yet.
 
 ## Alternatives considered
 
@@ -66,4 +66,5 @@ cancel discards.
   fresh, either provider, cancel from each panel, skip, restart and the
   shim's one-time seed all run in the offscreen scenarios.
 - The setup chip's test is "can any provider download yet", read from the
-  live provider lights, so it retires itself the moment one can.
+  live provider state (the session flag and the Apple light), so it retires
+  itself the moment one can.

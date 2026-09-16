@@ -10,8 +10,13 @@ A provider describes itself **once**, in a descriptor composed next to its
 implementation (`ProviderDescriptor`: id, name, mark, one honest capability
 line, its card's own action words, the Settings fields its card owns, and the
 shape of live status it carries). What a provider _can do_ is its
-`Capability` set. Surfaces render from those two, and the bridge composes the
-live state (a session, a setup light) on top:
+`Capability` set, and its chooser metadata (the option ladder a download can
+ask for) sits on the provider beside them. The spec's sketch also listed
+`status` and `actions` on the descriptor: here the bridge composes them at
+read time (the probes are the bridge's), and Apple's wizard steps are
+bridge-built live data, so the descriptor stays static identity. Surfaces
+render from the seam's metadata, and the bridge composes the live state on
+top:
 
 - the welcome cards, the Settings provider cards and the header's
   per-provider marks;

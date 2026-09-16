@@ -51,11 +51,11 @@ _Avoid_: history, cache
 The standing principle that anything possibly configurable is exposed in Settings rather than hardcoded.
 
 **Onboarding**:
-The first-run conversation that offers each provider and a skip, answered at most once per install; every path through it is cancellable, and setup can be resumed later without starting over.
+The first-run conversation that offers each provider and a skip, answered at most once per install; every step is cancellable and setup can be resumed later.
 _Avoid_: first-run wizard, setup flow
 
 **My Music**:
-The home surface for the user's music: the Library first, in its Saved and All-files views, then the saved shelves each enabled provider can fill, labelled by source only when more than one contributes.
+The home surface for the user's music: the Library first, then the saved shelves each enabled provider can fill, labelled by source only when more than one contributes.
 _Avoid_: My Tidal, account home
 
 **Saved vs Library**:
