@@ -204,7 +204,7 @@ ApplicationWindow {
 
     // View routing
     // Exactly one main surface shows at a time: Browse (default), search
-    // results, an artist page, My Tidal, or Settings. The booleans below are
+    // results, an artist page, My Music, or Settings. The booleans below are
     // the router; search results show when none of them are on.
     property string filterType: "all"     // search-results chip: all/artists/albums/...
     property var trackCache: ({})         // albumId -> [tracks], filled by albumTracksLoaded
@@ -380,7 +380,7 @@ ApplicationWindow {
         root.lastSearchQuery = q
         waves.search(q)
     }
-    // ---- Search results / artist page / My Tidal ------------------------
+    // ---- Search results / artist page / My Music ------------------------
     // Result rows live in the *Model ListModels (declared further down) and
     // are replaced wholesale on each search; these hold the sort order and
     // per-page state around them.
@@ -405,12 +405,12 @@ ApplicationWindow {
     // album, track, video or playlist), or null. Pinned above every section
     // of the mixed All view; the item still sits in its own section below.
     property var searchTop: null
-    // Default "home": the first My Tidal press of a session lands there, and
+    // Default "home": the first My Music press of a session lands there, and
     // later presses return to whichever category this last held (openLibrary).
     property string libraryCategory: "home"
     // Album expand state lives here (keyed by album id) rather than inside each
     // AlbumBlock, so it survives ListView delegate recycling in the virtualised
-    // My Tidal lists.
+    // My Music lists.
     property var expandedAlbums: ({})
     // Same, for the search PLAYLISTS rows (PlaylistBlock).
     property var expandedPlaylists: ({})
@@ -691,7 +691,7 @@ ApplicationWindow {
         }
         }
     }
-    // My Tidal infinite scroll: whether more pages exist PER CATEGORY (the
+    // My Music infinite scroll: whether more pages exist PER CATEGORY (the
     // category panes are keep-alive, so each keeps its own pagination
     // truth while hidden), and whether a page is in flight for the active one
     // (to avoid firing duplicate page requests while scrolling). The map is
@@ -703,7 +703,7 @@ ApplicationWindow {
     // spot instead of snapping to the top. Sort changes and fresh loads
     // disarm it: those genuinely restart the list from the top.
     property bool libPinRefill: false
-    // My Tidal per-category sort, {cat: {key, asc}}. Kept in step with the
+    // My Music per-category sort, {cat: {key, asc}}. Kept in step with the
     // backend's own per-category sort (both mutate only via libApplySort).
     property var libSort: ({})
     // Download-folder gate dialogs: the blocking "no folder set" gate and the
@@ -2081,18 +2081,18 @@ ApplicationWindow {
     property var _artistRestoreState: null
     // Which top-level section the user is "in" for the nav tabs: drilling into
     // an artist or album page keeps the tab of the section it was opened from
-    // lit (to the user they never left Browse/Search/My Tidal). Only explicit
+    // lit (to the user they never left Browse/Search/My Music). Only explicit
     // section switches (tab clicks, a new search, Back/Forward across sections)
     // move it.
     property string navOrigin: "browse"
     function navSig(s) { return s.v + "|" + (s.key || "") + "|" + (s.id || "") + "|" + (s.cat || "") }
     function navSnapshot() {
         if (settingsOpen) return { v: "settings", label: "Settings" }
-        if (libraryOpen) return { v: "library", cat: libraryCategory, label: "My Tidal" }
+        if (libraryOpen) return { v: "library", cat: libraryCategory, label: "My Music" }
         if (artistOpen) return { v: "artist", id: artistData ? "" + artistData.id : "",
                                  label: artistData ? (artistData.name || "Artist") : "Artist",
                                  // Which of the artist's TWO pages this is. My
-                                 // Tidal opens a library-scoped one through the
+                                 // Music opens a library-scoped one through the
                                  // same signal, with the same id, holding only
                                  // the favourites; without this the restore
                                  // below reads them as one page and a Back off
@@ -2261,7 +2261,7 @@ ApplicationWindow {
     // trail holds the crumb back rather than flash "Browse" and then swap in
     // the real name when the payload arrives (reported from livetesting).
     readonly property string currentNavLabel: settingsOpen ? "Settings"
-        : libraryOpen ? "My Tidal"
+        : libraryOpen ? "My Music"
         : artistOpen ? (artistData ? (artistData.name || "Artist") : "Artist")
         : browseOpen ? (browsePageKey === "" ? "Browse"
                         : browsePage ? (browsePage.title || "Browse")
@@ -2305,7 +2305,7 @@ ApplicationWindow {
     // way up was the tab button or the Back gesture (reported from
     // livetesting: "stuck in a playlist with no breadcrumbs"). Whenever the
     // trail of a drilled page does not begin at a section root, a synthetic
-    // root pill ("Browse", "Search", "My Tidal") leads it, and clicking it
+    // root pill ("Browse", "Search", "My Music") leads it, and clicking it
     // climbs out of the drill within the section (the keep-alive panes make
     // that a pure flip). It is display-only: history is untouched until it
     // is clicked, which records the drilled page like any navigation.
@@ -2316,7 +2316,7 @@ ApplicationWindow {
         return !navIsRoot(navHistory[crumbBase])
     }
     readonly property string crumbSynthLabel:
-        navOrigin === "library" ? "My Tidal" : navOrigin === "browse" ? "Browse" : "Search"
+        navOrigin === "library" ? "My Music" : navOrigin === "browse" ? "Browse" : "Search"
     function crumbSynthGo() {
         navPush()
         markNav("crumb root")
@@ -2348,10 +2348,10 @@ ApplicationWindow {
         if (currentNavLabel !== "") out.push(currentNavLabel)   // "" = name not known yet
         return out
     }
-    // TRIM-ON-REVISIT: arriving at a SECTION ROOT (Search, My Tidal, Browse
+    // TRIM-ON-REVISIT: arriving at a SECTION ROOT (Search, My Music, Browse
     // home, Settings) that is already in the history cuts the history back
     // to just before it, so flipping between two tabs bounces between two
-    // crumbs instead of stacking Search > My Tidal > Search > ... twenty
+    // crumbs instead of stacking Search > My Music > Search > ... twenty
     // deep (and Back stops replaying the oscillation). Deep pages (artist,
     // browse sub-pages) are deliberately NOT trimmed: reopening a playlist
     // page from inside a folder must keep the folder in the history or Back
@@ -2413,7 +2413,7 @@ ApplicationWindow {
     // animation mid-switch. Target-first keeps Search inactive throughout.
     function openLibrary() {
         saveSearchView()
-        // Second press, My Tidal already active: land on Home, mirroring the
+        // Second press, My Music already active: land on Home, mirroring the
         // Browse tab's second press landing on its main page.
         var alreadyActive = libraryOpen && !artistOpen && !settingsOpen && navOrigin === "library"
         if (alreadyActive) { navPush(); markNav("library home"); loadLib("home"); return }
@@ -2427,7 +2427,7 @@ ApplicationWindow {
 
     // Search tab state save/restore
     // The artist drill-in state (artistData/expandedAlbums) is SHARED between
-    // tabs, and other tabs overwrite it (My Tidal opens its own artist pages,
+    // tabs, and other tabs overwrite it (My Music opens its own artist pages,
     // loadLib clears expandedAlbums). So the Search tab's exact view is
     // snapshotted the moment the user leaves the tab, and the Search nav
     // button restores it: first press returns exactly where you were (artist
@@ -2469,7 +2469,7 @@ ApplicationWindow {
                     // tracks. The payload the page was built from IS the
                     // snapshot, so the sections are refilled from it: no
                     // refetch, and nothing to go wrong offline.
-                    // The id alone does not identify a page. My Tidal opens a
+                    // The id alone does not identify a page. My Music opens a
                     // LIBRARY-SCOPED page of the same artist (loadArtistLibrary,
                     // same id, same signal) whose payload carries only the
                     // favourited albums, EPs and tracks and no videos at all,
@@ -2528,7 +2528,7 @@ ApplicationWindow {
         libraryCategory = cat
         libLoadingMore = false
         // "Home" is a self-contained, Browse-shaped landing kept on screen:
-        // re-opening My Tidal shows the shelves it already has, instantly. The
+        // re-opening My Music shows the shelves it already has, instantly. The
         // backend serves the first load from its disk snapshot and every visit
         // triggers a quiet, throttled revalidation (repainting only when the
         // favourites changed), so an app left running still stays current. The
@@ -2911,7 +2911,7 @@ ApplicationWindow {
             // Already keyed to this page, nothing to fetch. But the key
             // survives leaving Browse via the nav tabs, so "already there"
             // is only true when Browse is the active surface. Arriving from
-            // another surface (a folder row, a My Tidal shelf) must still
+            // another surface (a folder row, a My Music shelf) must still
             // record where the user came from: returning without pushing
             // would make Back skip the folder entirely and fall through to
             // whatever is under it in the history (Search).
@@ -2979,7 +2979,7 @@ ApplicationWindow {
             waves.loadBrowse()
         }
     }
-    // Same page for a playlist from anywhere (My Tidal rows included): the
+    // Same page for a playlist from anywhere (My Music rows included): the
     // synthesized art-header + track-list browse page, switching the Browse
     // surface in just like openAlbumPage does for albums.
     function openPlaylistPage(playlistId, title, art) {
@@ -3011,7 +3011,7 @@ ApplicationWindow {
             if (card.album_id) openBrowseItem("album", card.album_id, card.id, card.album || "", card.art || "")
             else { if (card.artist_id) waves.loadArtist(card.artist_id); return }
         } else return
-        // This card is reused on My Tidal's Home shelves, which live in the
+        // This card is reused on My Music's Home shelves, which live in the
         // library pane, so make Browse the active surface; when the click came
         // from within Browse these flags are already set, so it is a no-op.
         browseOpen = true; settingsOpen = false; setupOpen = false; artistOpen = false; libraryOpen = false
@@ -7450,7 +7450,7 @@ ApplicationWindow {
         OdoDigit { id: digit; anchors.centerIn: parent; value: fb.value }
     }
 
-    // One "My Tidal > Playlists" row: a playlist, or a playlist folder that
+    // One "My Music > Playlists" row: a playlist, or a playlist folder that
     // drills in like a file manager. Shared by the root list and the
     // drilled-in folder list.
     component LibPlaylistRow: Rectangle {
@@ -8956,7 +8956,7 @@ ApplicationWindow {
         property string quality: ""
         property int popularity: 0
         // Expand state is held globally (keyed by album id) so it survives
-        // ListView delegate recycling in the virtualised My Tidal lists.
+        // ListView delegate recycling in the virtualised My Music lists.
         readonly property bool expanded: root.expandedAlbums[albumId] === true
         property var sel: ({})
         // sel holds raw track ids, so a recycled delegate rebinding to a new
@@ -12030,7 +12030,7 @@ ApplicationWindow {
         }
     }
 
-    // A virtualised My Tidal list: only the rows in (and near) the viewport are
+    // A virtualised My Music list: only the rows in (and near) the viewport are
     // instantiated, so a multi-thousand-item category renders instantly and
     // scrolls smoothly. Each instance sets its own `cat`, `model` and `delegate`.
     // It prefetches the next page as it scrolls and shows a footer while loading.
@@ -12609,7 +12609,7 @@ ApplicationWindow {
         if (media) root.artistsById = m
     }
 
-    // My Tidal: model routing + infinite-scroll prefetch
+    // My Music: model routing + infinite-scroll prefetch
     function libModelFor(cat) {
         return cat === "albums" ? libAlbumsModel : cat === "tracks" ? libTracksModel
              : cat === "artists" ? libArtistsModel : cat === "playlists" ? libPlaylistsModel
@@ -12623,7 +12623,7 @@ ApplicationWindow {
              : cat === "artists" ? libArtistsGrid : cat === "playlists" ? libPlaylistsList
              : cat === "mixes" ? libMixesList : cat === "videos" ? libVideosList : null
     }
-    // My Tidal sort (per category)
+    // My Music sort (per category)
     // Options adapt to the category; every category shares a "Recently added"
     // default so it matches the backend's default order with no extra fetch.
     function libSortOptions(cat) {
@@ -12650,7 +12650,7 @@ ApplicationWindow {
         libCatHasMore[cat] = false
         waves.setLibrarySort(cat, key, asc ? "asc" : "desc")
     }
-    // From a Home "Recently added" preview shelf, open the full My Tidal tab for
+    // From a Home "Recently added" preview shelf, open the full My Music tab for
     // that kind, forced to newest-first so it lands on the very items the preview
     // showed and the complete list beneath them. If the tab is already
     // newest-first, just switch to it (loadLib reuses its cache, no re-fetch);
@@ -12811,7 +12811,7 @@ ApplicationWindow {
             root.catPendingDl = ""
             root.catPendingPv = ""
             root.catDlPrompt = null
-            // The keep-alive My Tidal panes hold the previous account's
+            // The keep-alive My Music panes hold the previous account's
             // favourites for their whole life; only the account flip may
             // clear them (loadLib no longer clears on category switches).
             libAlbumsModel.clear(); libTracksModel.clear(); libArtistsModel.clear()
@@ -12891,7 +12891,7 @@ ApplicationWindow {
             // itself. The row's own timer then scrolls into place and reveals;
             // hiRevealGuard (re-armed by this pending change) clears the hide if the
             // row never appears. Without this the pane flashed the top then scrolled
-            // for an uncached album, e.g. one opened from a My Tidal Home shelf.
+            // for an uncached album, e.g. one opened from a My Music Home shelf.
             if (!p.error && root.browseHighlightId !== "") root.browseHighlightPending = true
             // A revalidate re-emit of the page already showing swaps it in
             // place; hold the user's spot across the rebuild (see holdScroll).
@@ -13349,7 +13349,7 @@ ApplicationWindow {
                     onClicked: root.openSearch()
                 }
                 NavTab {
-                    label: "My Tidal"
+                    label: "My Music"
                     active: root.navOrigin === "library" && !root.settingsOpen
                     onClicked: root.openLibrary()
                 }
@@ -13424,7 +13424,7 @@ ApplicationWindow {
             }
 
             // Search tier: shares the bar's surface and slides down out of
-            // it on Search / artist pages; collapses up on Settings / My Tidal. ----
+            // it on Search / artist pages; collapses up on Settings / My Music. ----
             Item {
                 id: searchTier
                 anchors.top: headerRow.bottom
@@ -13434,7 +13434,7 @@ ApplicationWindow {
                 // (visible stays true through the height animation). clip alone
                 // is not enough: the sort dropdown's caret is a QtQuick.Shapes
                 // item, and Shapes can leak through an ancestor's clip/opacity,
-                // it kept painting over Browse / My Tidal at the tier's old spot.
+                // it kept painting over Browse / My Music at the tier's old spot.
                 visible: height > 0
                 readonly property bool shown: !root.settingsOpen && !root.libraryOpen && !root.browseOpen
                 height: shown ? tierContent.implicitHeight : 0
@@ -13598,7 +13598,7 @@ ApplicationWindow {
                                 // Blank the stroke as soon as the tier starts collapsing (not when
                                 // it finishes hiding): the caret is a QtQuick.Shapes node, and a
                                 // hidden Shape can keep painting its last-synced stroke, this
-                                // bled over Browse / My Tidal at the tier's old position.
+                                // bled over Browse / My Music at the tier's old position.
                                 stroke: searchTier.shown ? root.accent : "transparent"
                                 open: sortBox.popup.visible
                             }
@@ -15092,7 +15092,7 @@ ApplicationWindow {
                                 onTap: function(){ waves.downloadArtist(root.artistData.id) }
                             }
                             StandalonePair { mediaId: root.artistData.id || ""; anchors.verticalCenter: parent.verticalCenter }
-                            // A library-scoped artist page (opened from My Tidal)
+                            // A library-scoped artist page (opened from My Music)
                             // shows only owned releases; offer a jump to the artist's
                             // full catalogue page. loadArtist() is the full path and
                             // onArtistLoaded swaps the view (Back returns here).
@@ -15322,7 +15322,7 @@ ApplicationWindow {
                 Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 2
                 spacing: 14
                 Text {
-                    textFormat: Text.PlainText; text: "My Tidal"; color: root.textHi
+                    textFormat: Text.PlainText; text: "My Music"; color: root.textHi
                     font.pixelSize: 18; font.bold: true; Layout.alignment: Qt.AlignVCenter
                 }
                 // Wrap the tab strip in a plain Item that carries Layout.fillWidth,
@@ -15436,6 +15436,25 @@ ApplicationWindow {
                         onClicked: { var g = root.libSortGet(root.libraryCategory); root.libApplySort(root.libraryCategory, g.key, !g.asc) }
                     }
                 }
+            }
+
+            // Source label for the saved shelves below. The rows are one
+            // provider's today (TIDAL's), and the label only earns its
+            // place once a second provider contributes shelves -- the
+            // bridge decides (waves.myMusicSourceLabel), so the text is
+            // data, never QML copy, and a provider rename or a third
+            // provider needs no QML edit here (issue #221). Empty while
+            // TIDAL is the only source, so nothing renders above the
+            // lists and the pane looks exactly as it did.
+            Text {
+                objectName: "libSourceLabel"
+                Layout.fillWidth: true
+                Layout.leftMargin: 22; Layout.rightMargin: 22
+                Layout.bottomMargin: 4
+                visible: text !== ""
+                textFormat: Text.PlainText
+                text: waves.myMusicSourceLabel
+                color: root.textLo; font.pixelSize: 12
             }
 
             Item {
@@ -15633,7 +15652,7 @@ ApplicationWindow {
                                 readonly property string target: homeSec.modelData.target || ""
                                 width: homeCol.width; spacing: 10
                                 // Clickable shelf heading: drills into the matching
-                                // My Tidal tab, newest-first, showing the full list
+                                // My Music tab, newest-first, showing the full list
                                 // this shelf previews. The hit area hugs the text.
                                 Item {
                                     implicitWidth: headRow.implicitWidth
@@ -15851,7 +15870,7 @@ ApplicationWindow {
                         Text {
                             width: parent.width; horizontalAlignment: Text.AlignHCenter
                             textFormat: Text.PlainText
-                            text: "My Tidal is your TIDAL library"
+                            text: "My Music is your TIDAL library"
                             color: root.textHi; font.pixelSize: 22
                         }
                         Text {

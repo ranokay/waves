@@ -3833,6 +3833,57 @@ def _provider_card(provider) -> dict:
     }
 
 
+# ----- My Music's saved-shelf sources (issue #221) -----
+#
+# Which providers contribute saved shelves to the My Music pane, and what
+# the pane's source label reads. Module-level and answer-only on purpose: a
+# provider that contributes shelves does so from its capability and its live
+# session, so a third provider needs no QML branch, and the label rule is
+# the part a stub bridge can drive in tests without a Qt session.
+
+
+def _provider_can_fill_shelves(bridge, provider) -> bool:
+    """Whether a provider has a live account session to fill saved shelves.
+
+    Shelf sources are account libraries: a provider that declares
+    Capability.FAVORITES but is signed out cannot fill them, so it is not a
+    source (its pane shows its own empty state). The session truth is the
+    bridge's own (a tracked session reads the bridge's flag, see
+    ``_session_logged_in``); the descriptor's status kind says whether the
+    provider has a session to read at all.
+    """
+    if provider.descriptor().status_kind != StatusKind.SESSION:
+        return False
+    return _session_logged_in(bridge, provider)
+
+
+def _saved_shelf_sources(bridge) -> list[dict]:
+    """One descriptor per provider whose saved shelves My Music can render.
+
+    A provider contributes when it declares Capability.FAVORITES and its
+    account session is live. ``label`` is source-qualified only when more
+    than one provider contributes: with a single source the pane's rows ARE
+    that source, so a label would only repeat it, and the pane renders
+    exactly as it did before (issue #221). A third provider contributes a
+    descriptor here without a QML edit.
+    """
+    descriptors = [
+        provider.descriptor()
+        for provider in _provider_registry(bridge)
+        if Capability.FAVORITES in getattr(provider, "capabilities", frozenset())
+        and _provider_can_fill_shelves(bridge, provider)
+    ]
+    qualified = len(descriptors) > 1
+    return [
+        {
+            "id": descriptor.id,
+            "name": descriptor.name,
+            "label": f"Saved from {descriptor.name}" if qualified else "",
+        }
+        for descriptor in descriptors
+    ]
+
+
 class WavesBridge(LibraryMixin, QObject):
     """The single object exposed to QML as the ``waves`` context property.
 
@@ -9319,6 +9370,30 @@ class WavesBridge(LibraryMixin, QObject):
             return False
 
     appleEnabled = Property(bool, _get_apple_enabled, notify=appleStatusChanged)
+
+    def _get_my_music_source_label(self) -> str:
+        """The source label above My Music's saved shelves.
+
+        One string for the pane the QML renders: its shelves are TIDAL's
+        today, so the label names TIDAL's descriptor, and it reads "" until
+        a second provider contributes shelves (see
+        ``_saved_shelf_sources``) -- a lone source needs no label. The text
+        is bridge data, so a provider's own name reaches the pane without a
+        QML edit (issue #221).
+        """
+        sources = _saved_shelf_sources(self)
+        if len(sources) < 2:
+            return ""
+        pane_source = (getattr(self, "providers", None) or {}).get(CTX_TIDAL)
+        if pane_source is None:
+            return ""
+        source_id = pane_source.descriptor().id
+        return next((s["label"] for s in sources if s["id"] == source_id), "")
+
+    # notify: a second saved-shelf source can only arrive with a session
+    # (Capability.FAVORITES plus a live login); the registry itself is built
+    # once at launch.
+    myMusicSourceLabel = Property(str, _get_my_music_source_label, notify=loggedInChanged)
 
     @Slot(result=bool)
     def isAppleEnabled(self) -> bool:

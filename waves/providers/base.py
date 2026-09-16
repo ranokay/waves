@@ -109,7 +109,7 @@ class AudioType(StrEnum):
 
 class Capability(StrEnum):
     """What a provider can do. The bridge consults these instead of
-    branching on provider identity, so Browse / My TIDAL / mixes / videos
+    branching on provider identity, so Browse / My Music / mixes / videos
     stay TIDAL-only without if-branches."""
 
     SEARCH = "search"

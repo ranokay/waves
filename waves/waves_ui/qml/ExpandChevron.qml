@@ -46,7 +46,7 @@ Item {
             // Gate the stroke on effective visibility: a hidden QQuickShape's
             // scene-graph node can keep painting after its ancestors hide
             // (observed: the search tier's sort caret bleeding over Browse /
-            // My Tidal after the tier collapsed). Item.visible reads as the
+            // My Music after the tier collapsed). Item.visible reads as the
             // EFFECTIVE value in QML, so this reliably blanks the orphan node.
             strokeColor: chev.visible ? chev.stroke : "transparent"
             strokeWidth: 2.1; fillColor: "transparent"

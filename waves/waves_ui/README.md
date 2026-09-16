@@ -36,7 +36,7 @@ Lossless.
   popularity meter, and per-artist links so every credited artist is clickable.
 - **Artist pages**, bio, full discography, EPs/singles, and top tracks, with a
   one-click "download discography".
-- **My Tidal**, your favourites (albums, tracks, artists, videos, playlists,
+- **My Music**, your favourites (albums, tracks, artists, videos, playlists,
   mixes) with virtualised infinite scroll, so large libraries stay smooth.
 - **Download queue**, grouped into **Completed**, **Failed**, **Stopped**,
   **Downloading**, and **Queued** sections. Active rows show live per-track progress on an LED
