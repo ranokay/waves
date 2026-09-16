@@ -49,8 +49,8 @@ who pulls it.
    canonical two-clause terms (verified against SPDX's `BSD-2-Clause` text,
    2026-09-16) under a provenance header that points at the per-file AOSP
    notices. It replaced an unfilled SPDX template on 2026-09-16, and the
-   notices test rejects `<year>`/`<owner>` markers, so a template cannot ship
-   again.
+   notices test rejects `<year>`/`<owner>` markers, so the placeholder form
+   cannot ship again.
 3. **No image provenance labels.** Fixed in the same pipeline change: OCI
    title, source, revision (the exact wrapper-v2 commit), licenses and
    description labels are set through the build action. The current `0.2.3`
