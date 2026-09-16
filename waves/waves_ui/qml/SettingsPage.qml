@@ -19,6 +19,9 @@ Item {
     // reset) tells the page to re-read the freshly-defaulted schema.
     signal resetSettingsRequested()
     signal factoryResetRequested()
+    // TIDAL's sign-in is hosted by the welcome surface (the browser opens
+    // only from its own OPEN BROWSER LOGIN button), so the session card's
+    // Sign in asks the host to open it instead of starting a login here.
     function externalReset() { editMap = ({}); dirty = false; refreshSchema(); syncLibraryMirrors() }
 
     // Waves palette (kept local so this file is self-contained)
@@ -2650,9 +2653,11 @@ Item {
                                                         required property var modelData
                                                         readonly property string actKey: modelData.action !== undefined ? String(modelData.action) : ""
                                                         // The provider the status row belongs to, carried by the
-                                                        // schema field. Action pills dispatch through the bridge's
-                                                        // one provider-action slot by (provider, key), so a
-                                                        // provider's card needs no QML branch.
+                                                        // schema field. Action pills dispatch through the
+                                                        // bridge's one provider-action slot by (provider, key);
+                                                        // a provider's card renders with no QML branch. Only
+                                                        // TIDAL's sign-in is re-routed: its flow is hosted by
+                                                        // the welcome surface, not a provider verb.
                                                         readonly property string providerId: statusCol.row.provider !== undefined
                                                             ? String(statusCol.row.provider) : ""
                                                         // A pill without an action key stays inert.
@@ -2664,6 +2669,12 @@ Item {
                                                         opacity: actPill.actLive ? 1.0 : 0.45
                                                         function runAction() {
                                                             if (actPill.actKey === "" || actPill.providerId === "") return
+                                                            // One generic slot for every provider
+                                                            // action. Sign in comes back as the
+                                                            // bridge's signInRequested signal, which
+                                                            // Main routes into the welcome surface's
+                                                            // inline steps (issue #218) -- the page
+                                                            // holds no provider-specific branch.
                                                             waves.providerAction(actPill.providerId, actPill.actKey)
                                                         }
                                                         Text {

@@ -67,6 +67,24 @@ _SETTINGS_TAB = (
     "})()"
 )
 
+
+# The inline TIDAL sign-in's paste field, found by objectName inside whichever
+# welcome surface is on screen (the first-run gate or the page). The decoder
+# is a non-visual QtObject reached through the box, so pinning `decoding`
+# keeps a programmatic text set from auto-completing while the visible
+# COMPLETE SIGN-IN action drives the step.
+def _pin_paste(scope: str, text: str) -> str:
+    return scene_js(
+        f"  var b = findFirst({scope}, function (o) {{ return o.objectName === 'signInPaste'; }});\n"
+        "  if (!b) return false;\n"
+        "  b.pasteDecoder.decoding = true;\n"
+        "  var f = findFirst(b, function (o) { return o.objectName === 'signInField'; });\n"
+        "  if (!f) return false;\n"
+        f"  f.text = {json.dumps(text)};\n"
+        "  return true;\n"
+    )
+
+
 # The Apple provider band's enable switch, found by its status column (the
 # one whose switch row reads "Enable Apple Music"), scrolled into view.
 _SWITCH_FIND = """
@@ -153,6 +171,14 @@ def _pill_point_prefix(prefix: str) -> str:
         "  if (!pill) return null;"
         "  return pill.mapToItem(null, pill.width / 2, pill.height / 2);"
         "})()"
+    )
+
+
+def _visible(scope: str, object_name: str) -> str:
+    """Whether a named object exists under the scope and is itself visible."""
+    return scene_js(
+        f"  var hit = findFirst({scope}, function (o) {{ return o.objectName === {json.dumps(object_name)}; }});\n"
+        "  return hit !== null && hit.visible === true;\n"
     )
 
 
@@ -264,6 +290,26 @@ def _run_journey(reverse: bool = False) -> int:
         settle(80)
         QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, pos, 40)
 
+    def press_release(point) -> None:
+        """A click with the press and release split by a settle.
+
+        The focus-dismiss catcher releases the search field's focus on the
+        press; QTest.mouseClick delivers press and release in one go, so the
+        catcher still holds the grab when the release lands and the nav tab
+        never sees a completed click while a text field has active focus.
+        The app is measured with real input; the harness needs the beat.
+        """
+        root = holder["root"]
+        root.requestActivate()
+        settle(80)
+        pos = QPoint(int(point.x()), int(point.y()))
+        QTest.mouseMove(root, pos)
+        settle(60)
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, pos)
+        settle(120)
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, pos)
+        settle(200)
+
     def wait_for(predicate, timeout_ms: int = 6000, step_ms: int = 100) -> bool:
         waited = 0
         while waited < timeout_ms:
@@ -288,6 +334,10 @@ def _run_journey(reverse: bool = False) -> int:
             q("legalSettings.termsAccepted = true")
             q("setupSettings.ffmpegSetupDone = true")
             q("ffmpegGate.sessionSnoozed = true")
+            # The one-time update opt-in prompt is another full-window gate;
+            # this journey is about the account wiring, so it is pre-walked
+            # too (see the other gate walks above).
+            q("setupSettings.updatePromptAnswered = true")
         settle(150)
 
     if load_root() is None:
@@ -304,48 +354,90 @@ def _run_journey(reverse: bool = False) -> int:
         return _EXIT_PRECONDITION
 
     # 1. Choose the first provider by clicking the card's action, never
-    # applySettings.
+    # applySettings. TIDAL's choice swaps the welcome surface to its inline
+    # sign-in steps and stays up: the first run is answered by a completed
+    # sign-in, not by starting one.
     first_label = "CONTINUE WITH TIDAL" if reverse else "CONTINUE WITH APPLE MUSIC"
     first_point = q(_center("providerPicker", first_label))
     if not points_to(first_point):
         print(f"the picker exposes no {first_label} action", file=sys.stderr)
         return _EXIT_PRECONDITION
-    click(first_point)
+    tap(first_point)
     settle(300)
-    if bool(q("providerPicker.visible")):
-        problems.append("the picker stayed up after the provider choice")
-
     if reverse:
         if bool(bridge.settings.data.apple_enabled):
             problems.append("choosing TIDAL enabled Apple too")
-        # The landing's login panel takes over; its visible action starts login.
-        panel = q(_center("loginPanel", "OPEN BROWSER LOGIN"))
-        if not points_to(panel):
-            problems.append("the landing login panel exposes no sign-in action")
+        if not bool(q("providerPicker.visible")) or q("root.setupMode") != "tidal":
+            problems.append("choosing TIDAL did not keep the welcome up on its sign-in steps")
+        if bool(q("setupSettings.firstRunAnswered")):
+            problems.append("choosing TIDAL answered the first run before signing in")
+        if bool(q("root.setupUrlOpened")):
+            problems.append("choosing TIDAL opened the browser on its own")
+        # The steps' explicit click is the only caller of beginLogin.
+        open_login = q(_center("providerPicker", "OPEN BROWSER LOGIN"))
+        if not points_to(open_login):
+            problems.append("the inline sign-in steps expose no OPEN BROWSER LOGIN action")
         else:
-            click(panel)
-            settle(600)
-            if not (bool(q("loginPanel.urlOpened")) and bool(q("redirectBox.visible"))):
-                problems.append("the landing sign-in action did not open the paste flow")
+            tap(open_login)
+            if not wait_for(lambda: bool(q("root.setupUrlOpened"))):
+                problems.append("OPEN BROWSER LOGIN did not start the sign-in flow")
+            elif not q(_visible("providerPicker", "signInPaste")):
+                problems.append("the sign-in steps came back without the paste field")
+    elif bool(q("providerPicker.visible")):
+        problems.append("the picker stayed up after the provider choice")
     elif not (bool(q("waves.appleEnabled")) and bool(bridge.settings.data.apple_enabled)):
         problems.append("the Apple card click did not enable and persist the provider")
 
-    # 2. The Settings nav is clickable and opens the page.
-    tab_point = q(_SETTINGS_TAB)
-    if not points_to(tab_point):
+    # 2. The Settings nav is clickable and opens the page. In the reverse
+    # order the inline sign-in comes first (the first-run gate owns the
+    # screen until it is answered).
+    def open_settings() -> bool:
+        tab_point = q(_SETTINGS_TAB)
+        if not points_to(tab_point):
+            return False
+        # Not the plain click helper: after a sign-in the search field holds
+        # focus, and the full-window focus-dismiss catcher needs the press
+        # and release split to release it before the tab's click completes.
+        press_release(tab_point)
+        settle(300)
+        # The scroll dressing floats above every page; it is presentation,
+        # not account wiring, and would sit over the provider card's pills.
+        q("scrollDressing.visible = false")
+        return bool(q("root.settingsOpen"))
+
+    if reverse:
+        # Complete the inline sign-in from the first-run welcome surface;
+        # the faked account service accepts the https redirect.
+        if not q(_pin_paste("providerPicker", "https://tidal.test/redirect")):
+            problems.append("the sign-in steps expose no paste field to drive")
+        complete = q(_center("providerPicker", "COMPLETE SIGN-IN"))
+        if not points_to(complete):
+            problems.append("the sign-in steps expose no COMPLETE SIGN-IN action")
+        else:
+            tap(complete)
+            if not wait_for(lambda: bool(bridge._logged_in)):
+                problems.append("completing the paste did not sign the session in")
+        if bool(q("providerPicker.visible")) or q("root.setupMode") != "cards":
+            problems.append("the welcome surface stayed up after a completed sign-in")
+        if bool(bridge.settings.data.apple_enabled):
+            problems.append("the completed sign-in enabled Apple too")
+        # The success lands on Search with the field focused (issue #218),
+        # before any later navigation in this scenario.
+        if q("root.navOrigin") != "search" or not bool(q("searchField.activeFocus")):
+            problems.append("a completed sign-in did not land on Search with the field focused")
+        if not open_settings():
+            print("could not locate the Settings nav tab", file=sys.stderr)
+            return _EXIT_PRECONDITION
+    elif not open_settings():
         print("could not locate the Settings nav tab", file=sys.stderr)
         return _EXIT_PRECONDITION
-    click(tab_point)
-    settle(300)
     if not bool(q("root.settingsOpen")):
         problems.append("the Settings nav click did not open Settings")
-    # The scroll dressing floats above every page; it is presentation, not
-    # account wiring, and would sit over the provider card's pills here.
-    q("scrollDressing.visible = false")
 
     # 3. TIDAL sign-in from the provider card's visible action: the
-    #    Apple-first path. The reverse path already started it on the landing
-    #    panel, so it has nothing to click here.
+    #    Apple-first path. The card opens the welcome page on its sign-in
+    #    steps; only the steps' own button opens the browser. The reverse
+    #    path completed its sign-in above.
     if not reverse:
         q('settingsPage.jumpToCard("providers_tidal")')
         settle(400)
@@ -353,29 +445,52 @@ def _run_journey(reverse: bool = False) -> int:
         if not points_to(sign_in):
             problems.append("the TIDAL card exposes no sign-in action with Apple on")
         else:
-            click(sign_in)
-            settle(600)
-        if not (bool(q("loginPanel.urlOpened")) and bool(q("redirectBox.visible"))):
-            problems.append("the card's sign-in action did not open the paste flow")
+            tap(sign_in)
+            settle(400)
+        if not bool(q("root.setupOpen")) or q("root.setupMode") != "tidal":
+            problems.append("the card's sign-in action did not open the welcome page on its sign-in steps")
+        if bool(q("root.setupUrlOpened")):
+            problems.append("the card's sign-in action opened the browser on its own")
+        open_login = q(_center("setupPane", "OPEN BROWSER LOGIN"))
+        if not points_to(open_login):
+            problems.append("the welcome page exposes no OPEN BROWSER LOGIN action")
+        else:
+            tap(open_login)
+            if not wait_for(lambda: bool(q("root.setupUrlOpened"))):
+                problems.append("OPEN BROWSER LOGIN did not start the sign-in flow")
+            elif not q(_visible("setupPane", "signInPaste")):
+                problems.append("the welcome page came back without the paste field")
 
     # 4. Complete through the paste field's visible action; the faked
     #    account service accepts the https redirect.
-    if bool(q("redirectBox.visible")):
+    scope = "providerPicker" if reverse else "setupPane"
+    if q(_visible(scope, "signInPaste")):
         # Pin the paste decoder busy so a programmatic text set cannot
         # auto-complete; the visible COMPLETE action drives the step.
-        q("loginDecoder.decoding = true")
-        q('redirectField.text = "https://tidal.test/redirect"')
-        complete = q(_center("loginPanel", "COMPLETE SIGN-IN"))
+        if not q(_pin_paste(scope, "https://tidal.test/redirect")):
+            problems.append("the sign-in surface exposes no paste field to drive")
+        complete = q(_center(scope, "COMPLETE SIGN-IN"))
         if not points_to(complete):
-            problems.append("the login panel exposes no COMPLETE SIGN-IN action")
+            problems.append("the sign-in surface exposes no COMPLETE SIGN-IN action")
         else:
-            click(complete)
+            tap(complete)
             if not wait_for(lambda: bool(bridge._logged_in)):
                 problems.append("completing the paste did not sign the session in")
-    if bool(q("loginPanel.visible")):
-        problems.append("the login panel stayed up after a completed sign-in")
+    if bool(q("providerPicker.visible")) or bool(q("root.setupOpen")):
+        problems.append("a sign-in surface stayed up after a completed sign-in")
+    if q("root.setupMode") != "cards":
+        problems.append("the welcome surface latched on its sign-in steps")
     if not bool(q("root.signedIn")):
         problems.append("the window still reads signed out after a completed sign-in")
+    # The success lands on Search with the field focused (issue #218). The
+    # reverse path asserted this right where its sign-in completed, before
+    # it navigated back to Settings.
+    if not reverse and (q("root.navOrigin") != "search" or not bool(q("searchField.activeFocus"))):
+        problems.append("a completed sign-in did not land on Search with the field focused")
+    # The sign-in landing closed Settings; the card pills below need it back.
+    if not open_settings():
+        print("could not return to Settings after the sign-in", file=sys.stderr)
+        return _EXIT_PRECONDITION
 
     # 4b. Reverse order: Apple joins through the Settings band's own enable
     #     switch now that TIDAL is signed in.
@@ -421,14 +536,17 @@ def _run_journey(reverse: bool = False) -> int:
     if not points_to(sign_out):
         problems.append("the signed-in card exposes no sign-out action")
     else:
-        click(sign_out)
+        # One click: the pill is replaced by SIGN IN the moment the session
+        # flips, so the two-click helper's second press would land on it and
+        # re-open the sign-in surface.
+        tap(sign_out)
         settle(250)
         if bool(bridge._logged_in):
             # The first synthetic click after a session flip can land on the
             # replaced delegate; re-query and try once more.
             retry = q(_pill_point("tidal_signout"))
             if retry is not None:
-                click(retry)
+                tap(retry)
         if not wait_for(lambda: not bool(bridge._logged_in)):
             problems.append("the card's sign-out action did not end the session")
 

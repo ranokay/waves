@@ -217,9 +217,15 @@ ApplicationWindow {
     // or the "Finish setup" chip). The first-run presentation is the gate
     // below; this flag drives the non-blocking page variant.
     property bool setupOpen: false
-    // The TIDAL card was chosen this session: only then does the sign-in
-    // panel open passively. Skip never opens it (the chip and Settings do).
-    property bool setupChoiceTidal: false
+    // The welcome surface's mode: "cards" (the provider choice) or "tidal"
+    // (the inline sign-in steps). Cancel/Escape returns to the cards; a
+    // completed sign-in closes the surface. Session state only, never
+    // persisted: starting a sign-in is not a commitment (issue #218).
+    property string setupMode: "cards"
+    // The explicit OPEN BROWSER LOGIN click happened in this signing, so the
+    // paste steps (and their field) can appear. Set from onLoginUrlReady,
+    // which only beginLogin emits; nothing else opens a browser.
+    property bool setupUrlOpened: false
     // The live Apple light, refreshed on appleStatusChanged; the chip's
     // "can any provider download yet" test reads it.
     property var appleLight: ({})
@@ -2562,20 +2568,60 @@ ApplicationWindow {
         setupSettings.setupChipDismissed = true
     }
     // The welcome surface was answered: persist the answer, route the choice,
-    // and close the surface. TIDAL opens the passive sign-in panel for this
-    // session only (the inline panel lands with #218); Apple enables and the
-    // existing wizard routing takes over; Skip just lands in the app.
+    // and close the surface. TIDAL swaps the SAME surface to its inline
+    // sign-in steps and stays up: the first run is not answered until the
+    // sign-in succeeds, so a cancel leaves nothing behind (issue #218).
+    // Apple enables and the existing wizard routing takes over; Skip just
+    // lands in the app.
     function answerWelcome(choice) {
+        if (choice === "tidal") {
+            setupMode = "tidal"
+            setupUrlOpened = false
+            return
+        }
         setupSettings.firstRunAnswered = true
-        setupChoiceTidal = (choice === "tidal")
-        if (choice === "apple") waves.applySettings({"apple_enabled": true})
         setupOpen = false
+        setupCards()
+        if (choice === "apple") waves.applySettings({"apple_enabled": true})
+    }
+    // One reset for every path that leaves the TIDAL steps: the mode and the
+    // paste-field latch fall back together, so no exit can leave a late URL
+    // opening a browser or a stale "REOPEN" step behind.
+    function setupCards() {
+        setupMode = "cards"
+        setupUrlOpened = false
+    }
+    // Cancel/Escape from the TIDAL sign-in steps: back to the provider cards.
+    // The abandoned browser flow is not retried or reported, and the surface
+    // stays exactly where it was (the first-run gate or the welcome page).
+    function cancelSetupSignIn() {
+        setupCards()
+    }
+    // The TIDAL provider card's Sign in (Settings -> Providers) opens the
+    // welcome page on the same inline steps. No browser opens here: the
+    // steps' own button is the only caller of beginLogin.
+    function openSetupSignIn() {
+        openSetupPage()
+        setupMode = "tidal"
+    }
+    // A completed sign-in answers the first run, closes the welcome/sign-in
+    // surface and lands on Search with its field focused.
+    function finishSetupSignIn() {
+        // No early return on a cancelled mode: a login that lands after the
+        // user left the steps still closes the surface and answers the first
+        // run, or a completed sign-in would strand the welcome page.
+        setupCards()
+        setupOpen = false
+        setupSettings.firstRunAnswered = true
+        openSearch()
     }
     // Re-open the welcome surface as a page (Settings -> Providers, or the
-    // "Finish setup" chip): the other surfaces close, the page opens.
+    // "Finish setup" chip): the other surfaces close, the page opens on the
+    // provider cards whatever the last session left behind.
     function openSetupPage() {
         navPush(); markNav("setup")
         settingsOpen = false; artistOpen = false; libraryOpen = false; browseOpen = false
+        setupCards()
         setupOpen = true
     }
     // Deep-link to the Apple setup wizard (from enabling Apple Music or a
@@ -3271,6 +3317,14 @@ ApplicationWindow {
     }
     Shortcut { sequence: "Esc"; enabled: root.peekNow !== null && root.videoNow === null; onActivated: root.peekClose() }
     Shortcut { sequence: "Esc"; enabled: root.videoNow !== null; onActivated: root.closeVideo() }
+    // The inline TIDAL sign-in's keyboard exit, the same as its CANCEL
+    // button. Only while the welcome surface is the one on screen.
+    Shortcut {
+        sequence: "Esc"
+        enabled: root.setupMode === "tidal" && (root.setupOpen || root.welcomeDue)
+                 && root.peekNow === null && root.videoNow === null
+        onActivated: root.cancelSetupSignIn()
+    }
     Shortcut {
         sequence: "Space"; enabled: root.videoNow !== null && !root.videoLoading && !root.videoError
         onActivated: root.vPlayer.playbackState === MediaPlayer.PlayingState ? root.vPlayer.pause() : root.vPlayer.play()
@@ -7929,9 +7983,10 @@ ApplicationWindow {
                     Text { textFormat: Text.PlainText; id: wtile; text: modelData.pat.repeat(8); font.family: root.mono; font.pixelSize: Math.round(modelData.px * banner.waveScale); color: modelData.col; opacity: modelData.op; font.letterSpacing: -1 }
                     Text { textFormat: Text.PlainText; text: modelData.pat.repeat(8); font.family: root.mono; font.pixelSize: Math.round(modelData.px * banner.waveScale); color: modelData.col; opacity: modelData.op; font.letterSpacing: -1 }
                     NumberAnimation on x {
-                        // Only run while the login panel is actually showing (banner
-                        // lives on it, visible: !root.signedIn). QML animations don't
-                        // stop on invisibility, so gate them off once signed in.
+                        // Only run while the banner can actually show (it rides
+                        // the welcome surface, which is signed-out only). QML
+                        // animations don't stop on invisibility, so gate them
+                        // off once signed in.
                         running: wtile.width > 0 && !root.signedIn && root.onScreen
                         from: 0; to: -wtile.width
                         duration: Math.max(1, Math.round(wtile.width / (banner.wavePxPerSec * modelData.par) * 1000))
@@ -12768,6 +12823,9 @@ ApplicationWindow {
                 root.browseLoading = true
                 waves.loadBrowse()
             }
+            // A sign-in that lands while the welcome surface is on its TIDAL
+            // steps is finished there: close it and land on Search.
+            if (root.signedIn) root.finishSetupSignIn()
         }
         function onBrowseLoaded(p) {
             root.markRender("browse render")
@@ -13198,7 +13256,14 @@ ApplicationWindow {
             root.previewNowTrackId = trackId
             root.previewNowArtists = artists || []
         }
-        function onLoginUrlReady(url) { Qt.openUrlExternally(url); loginPanel.urlOpened = true }
+        function onLoginUrlReady(url) {
+            // Only the inline steps are listening: a URL landing after CANCEL
+            // must not open a browser or latch the paste field (issue #218).
+            if (root.setupMode !== "tidal") return
+            Qt.openUrlExternally(url)
+            root.setupUrlOpened = true
+        }
+        function onSignInRequested(providerId) { root.openSetupSignIn() }
         function onBackRequested() { root.navBack() }
         function onForwardRequested() { root.navForward() }
         function onAppUpdateChecked(available, current, latest, manual) {
@@ -17311,7 +17376,7 @@ ApplicationWindow {
     }
 
     // ====================================================================
-    // Login overlay
+    // Scroll dressing
     // ====================================================================
     // One badge serves every page; it targets whichever scrollable is on
     // screen and stays hidden near the top of each.
@@ -17337,60 +17402,138 @@ ApplicationWindow {
              : results
     }
 
-    Rectangle {
-        id: loginPanel
-        property bool urlOpened: false
-        anchors.fill: parent
-        // sessionResolved gates the overlay so an already-signed-in launch
-        // doesn't flash the logged-out screen while the cached-token network
-        // check is still in flight.
-        // The provider welcome surface owns the first run: the panel shows
-        // only once TIDAL was chosen there (or on a provider card) for this
-        // session, and whenever a login is in progress no matter which
-        // provider is enabled, so a sign-in started from Settings keeps its
-        // paste field. Nothing here starts a login on its own: the browser
-        // opens solely on a button click. No MouseArea covers the window, so
-        // the nav underneath stays clickable; the dim is paint only.
-        visible: waves.sessionResolved && !root.signedIn
-                 && (loginPanel.urlOpened || (!waves.appleEnabled && root.setupChoiceTidal))
-        // A logged-out cold launch fades in with the rest of the interface.
-        opacity: root.bootContentShown
-        color: "#d606070e"
-        Rectangle {
-            anchors.centerIn: parent; width: 460; radius: 14; color: root.surface2; border.color: root.outline
-            implicitHeight: loginCol.implicitHeight + 40
+    // Provider welcome surface: the first-run gate, and the same cards
+    // re-opened as a non-blocking page from Settings -> Providers (or the
+    // "Finish setup" chip). One card per provider, from the descriptors the
+    // schema carries; Skip and the Apple card end the first-run state.
+    // Choosing TIDAL swaps the cards for its inline sign-in steps on this
+    // same surface: the browser opens only from the explicit OPEN BROWSER
+    // LOGIN click, CANCEL/Escape returns to the cards without answering
+    // anything, and a sign-in that is started never covers the app
+    // afterwards (issue #218).
+    component WelcomePicker: Rectangle {
+        id: pickCard
+        implicitWidth: 480; radius: 14; color: root.surface2; border.color: root.outline
+        implicitHeight: pickCol.implicitHeight + 40
+        signal picked(string provider)
+        signal skipped()
+        ColumnLayout {
+            id: pickCol; anchors.fill: parent; anchors.margins: 20; spacing: 13
+            WelcomeBanner { Layout.fillWidth: true; Layout.preferredHeight: 75 }
+            // One card per registered provider, straight from the
+            // descriptors: a provider the welcome has never heard of renders
+            // through this same delegate (issue #215).
             ColumnLayout {
-                id: loginCol; anchors.centerIn: parent; width: parent.width - 40; spacing: 13
-                WelcomeBanner { Layout.fillWidth: true; Layout.preferredHeight: 75 }
+                id: cardsCol
+                objectName: "welcomeCards"
+                Layout.fillWidth: true; spacing: 13
+                visible: root.setupMode === "cards"
+                Text {
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                    textFormat: Text.PlainText
+                    text: "Choose where to start. You can enable the other provider later in Settings."
+                    color: root.textLo; font.pixelSize: 13
+                }
+                Repeater {
+                    model: waves.providerCards()
+                    delegate: Rectangle {
+                        required property var modelData
+                        Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
+                        implicitHeight: pickRow.implicitHeight + 24
+                        RowLayout {
+                            id: pickRow
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                            anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
+                            Image {
+                                objectName: "welcomeProviderLogo"
+                                Layout.alignment: Qt.AlignVCenter
+                                // RowLayout sizes children from their implicit
+                                // size (the PNG pixels) unless told otherwise:
+                                // plain width/height are ignored here.
+                                Layout.preferredWidth: modelData.logo_width !== undefined ? Number(modelData.logo_width) : 20
+                                Layout.preferredHeight: 20
+                                source: modelData.logo !== undefined ? String(modelData.logo) : ""
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true; cache: true
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                Text {
+                                    text: String(modelData.name); color: root.textHi
+                                    textFormat: Text.PlainText
+                                    font.pixelSize: 15; font.weight: Font.DemiBold
+                                }
+                                Text {
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                    text: String(modelData.summary || "")
+                                    textFormat: Text.PlainText
+                                    color: root.textLo; font.pixelSize: 12
+                                }
+                                GateAction {
+                                    label: "CONTINUE WITH " + String(modelData.name).toUpperCase()
+                                    onClicked: pickCard.picked(String(modelData.id))
+                                }
+                            }
+                        }
+                    }
+                }
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    textFormat: Text.PlainText
+                    text: "Not now"
+                    color: root.textDim; font.pixelSize: 12; font.underline: true
+                    MouseArea {
+                        anchors.fill: parent; anchors.margins: -6
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: pickCard.skipped()
+                    }
+                }
+            }
+            // TIDAL's sign-in steps, inline on the same card. Step one is an
+            // explicit click, the only caller of beginLogin; the paste field
+            // and COMPLETE action appear with the redirect. Same
+            // matrix-decrypt paste field as the search bar: a pasted redirect
+            // URL auto-attempts sign-in once it has decoded in.
+            ColumnLayout {
+                id: signInCol
+                objectName: "welcomeSignIn"
+                Layout.fillWidth: true; spacing: 13
+                visible: root.setupMode === "tidal"
                 RowLayout {
                     Layout.fillWidth: true; spacing: 10
-                    Text { text: "1"; color: root.accent; font.family: root.mono; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignTop }
+                    Text { textFormat: Text.PlainText; text: "1"; color: root.accent; font.family: root.mono; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignTop }
                     Text {
                         Layout.fillWidth: true; wrapMode: Text.WordWrap
+                        textFormat: Text.PlainText
                         text: "Open the TIDAL login in your browser and sign in."
                         color: root.textLo; font.pixelSize: 13
                     }
                 }
                 GateAction {
-                    label: loginPanel.urlOpened ? "REOPEN BROWSER LOGIN" : "OPEN BROWSER LOGIN"
+                    label: root.setupUrlOpened ? "REOPEN BROWSER LOGIN" : "OPEN BROWSER LOGIN"
                     onClicked: waves.beginLogin()
                 }
                 RowLayout {
                     Layout.fillWidth: true; spacing: 10
-                    visible: loginPanel.urlOpened
-                    Text { text: "2"; color: root.accent; font.family: root.mono; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignTop }
+                    visible: root.setupUrlOpened
+                    Text { textFormat: Text.PlainText; text: "2"; color: root.accent; font.family: root.mono; font.pixelSize: 12; font.bold: true; Layout.alignment: Qt.AlignTop }
                     Text {
                         Layout.fillWidth: true; wrapMode: Text.WordWrap
+                        textFormat: Text.PlainText
                         text: "Paste the URL you land on back here."
                         color: root.textLo; font.pixelSize: 13
                     }
                 }
-                // Same matrix-decrypt paste field as the search bar; a pasted redirect
-                // URL auto-attempts sign-in once it has decoded in.
                 Rectangle {
                     id: redirectBox
+                    objectName: "signInPaste"
+                    // The decoder is a non-visual QtObject, so scenarios reach
+                    // it through the box: they hold the decode animation
+                    // (decoding = true) while driving the visible
+                    // COMPLETE SIGN-IN action with the field's text.
+                    readonly property var pasteDecoder: loginDecoder
                     Layout.fillWidth: true; implicitHeight: 44; radius: 8; color: root.surface
-                    visible: loginPanel.urlOpened
+                    visible: root.setupUrlOpened
                     border.color: (redirectField.activeFocus || loginDecoder.decoding) ? root.accent : root.outline
                     Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
                     DecodeController {
@@ -17401,6 +17544,7 @@ ApplicationWindow {
                         anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 6; spacing: 8
                         TextField {
                             id: redirectField
+                            objectName: "signInField"
                             Layout.fillWidth: true
                             placeholderText: "Paste redirect URL here…"
                             color: loginDecoder.decoding ? root.accent : root.textHi
@@ -17417,95 +17561,36 @@ ApplicationWindow {
                     }
                 }
                 GateAction {
-                    visible: loginPanel.urlOpened
+                    visible: root.setupUrlOpened
                     label: "COMPLETE SIGN-IN"
                     onClicked: waves.completeLogin(redirectField.text)
                 }
-            }
-        }
-    }
-
-    // Provider welcome surface: the first-run gate, and the same cards
-    // re-opened as a non-blocking page from Settings -> Providers (or the
-    // "Finish setup" chip). One card per provider, from the descriptors the
-    // schema carries; every answer ends the first-run state. Nothing
-    // auto-opens a browser: a card is a click, and only TIDAL opens the
-    // sign-in panel (for this session).
-    component WelcomePicker: Rectangle {
-        id: pickCard
-        implicitWidth: 480; radius: 14; color: root.surface2; border.color: root.outline
-        implicitHeight: pickCol.implicitHeight + 40
-        signal picked(string provider)
-        signal skipped()
-        ColumnLayout {
-            id: pickCol; anchors.fill: parent; anchors.margins: 20; spacing: 13
-            WelcomeBanner { Layout.fillWidth: true; Layout.preferredHeight: 75 }
-            Text {
-                Layout.fillWidth: true; wrapMode: Text.WordWrap
-                text: "Choose where to start. You can enable the other provider later in Settings."
-                color: root.textLo; font.pixelSize: 13
-            }
-            // One card per registered provider, straight from the
-            // descriptors: a provider the welcome has never heard of renders
-            // through this same delegate (issue #215).
-            Repeater {
-                model: waves.providerCards()
-                delegate: Rectangle {
-                    required property var modelData
-                    Layout.fillWidth: true; radius: 10; color: root.surface; border.color: root.outline
-                    implicitHeight: pickRow.implicitHeight + 24
-                    RowLayout {
-                        id: pickRow
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                        anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
-                        Image {
-                            objectName: "welcomeProviderLogo"
-                            Layout.alignment: Qt.AlignVCenter
-                            // RowLayout sizes children from their implicit
-                            // size (the PNG pixels) unless told otherwise:
-                            // plain width/height are ignored here.
-                            Layout.preferredWidth: modelData.logo_width !== undefined ? Number(modelData.logo_width) : 20
-                            Layout.preferredHeight: 20
-                            source: modelData.logo !== undefined ? String(modelData.logo) : ""
-                            fillMode: Image.PreserveAspectFit
-                            smooth: true; cache: true
-                        }
-                        ColumnLayout {
-                            Layout.fillWidth: true; spacing: 6
-                            Text {
-                                text: String(modelData.name); color: root.textHi
-                                textFormat: Text.PlainText
-                                font.pixelSize: 15; font.weight: Font.DemiBold
-                            }
-                            Text {
-                                Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                text: String(modelData.summary || "")
-                                textFormat: Text.PlainText
-                                color: root.textLo; font.pixelSize: 12
-                            }
-                            GateAction {
-                                label: "CONTINUE WITH " + String(modelData.name).toUpperCase()
-                                onClicked: pickCard.picked(String(modelData.id))
-                            }
-                        }
-                    }
+                // The bridge's status line, shown inside the steps: the
+                // status bar sits under the first-run gate's scrim, so this
+                // is where "that isn't the sign-in link" is read (issue #218).
+                Text {
+                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                    textFormat: Text.PlainText
+                    visible: String(waves.status || "") !== ""
+                    text: String(waves.status || "")
+                    color: root.textLo; font.family: root.mono; font.pixelSize: 12
                 }
-            }
-            Text {
-                Layout.alignment: Qt.AlignHCenter
-                text: "Not now"
-                color: root.textDim; font.pixelSize: 12; font.underline: true
-                MouseArea {
-                    anchors.fill: parent; anchors.margins: -6
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: pickCard.skipped()
+                // The keyboard exit is the same: the Esc Shortcut above.
+                GateAction {
+                    objectName: "welcomeSignInCancel"
+                    label: "CANCEL"
+                    neutral: true; showArrow: false
+                    onClicked: root.cancelSetupSignIn()
                 }
             }
         }
     }
 
     // First-run gate: the only place the welcome is not optional. Skip is
-    // inside the card, so the surface can always be answered.
+    // inside the card, so the surface can always be answered. Choosing TIDAL
+    // does not answer it (answerWelcome leaves firstRunAnswered false), so
+    // the gate stays up on the sign-in steps until they succeed or the user
+    // cancels back to the cards (issue #218).
     Rectangle {
         id: providerPicker
         anchors.fill: parent
@@ -17554,10 +17639,10 @@ ApplicationWindow {
         // downloads-still-running close prompt permanently.
         property bool exitWarnMuted: false
         // Onboarding: answered = the welcome surface was answered (a
-        // provider card or Skip), so it never returns automatically.
-        // Seeded once from the legacy provider-picker bit by
-        // migrateOnboarding(); the setup popup below is the deliberate way
-        // back.
+        // provider card, a completed TIDAL sign-in, or Skip), so it never
+        // returns automatically. Seeded once from the legacy provider-picker
+        // bit by migrateOnboarding(); the setup popup below is the deliberate
+        // way back.
         property bool firstRunAnswered: false
         // The "Finish setup" chip's ✕ is permanent; Settings -> Providers ->
         // "Set up providers" remains the way back.
