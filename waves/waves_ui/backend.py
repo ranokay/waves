@@ -16741,10 +16741,17 @@ class WavesBridge(LibraryMixin, QObject):
         if provider is None:
             return None
         for kind in ("track", "album", "playlist", "artist"):
-            try:
-                raw = provider.cached(kind, media_id)
-            except Exception:
-                raw = None
+            raw = None
+            # An artist's cached form can be a search summary whose album
+            # rows are reference stubs; artist_page needs the canonical
+            # resource, and the completeness check makes the fetch a no-op
+            # when a real artist is cached (issue #216). Every other kind's
+            # cached shortcut stays.
+            if kind != "artist":
+                try:
+                    raw = provider.cached(kind, media_id)
+                except Exception:
+                    raw = None
             if raw is None:
                 try:
                     raw = provider.get_object(kind, media_id.removeprefix(f"{CTX_APPLE}:"))

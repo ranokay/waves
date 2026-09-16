@@ -286,7 +286,32 @@ def test_get_object_refetches_a_search_summary_artist_before_building_pages():
     page = provider.artist_page(artist)
     assert [(row["title"], row["tracks"]) for row in page["albums"]] == [("Selected Ambient Works 85-92", 13)]
     assert page["albums"][0]["art"] == "https://img/album/320x320bb.jpg"
+    assert page["albums"][0]["artist"] == "Aphex Twin"
+    assert (page["albums"][0]["date"], page["albums"][0]["year"]) == ("1992-02-12", "1992")
     assert [row["title"] for row in page["tracks"]] == ["Xtal"]
+    # And the fetched copy is the cached one from then on.
+    assert provider.get_object("artist", "apple:artist-1") is artist
+    assert provider._catalog.calls == [("artist", "artist-1")]
+
+
+def test_artist_view_stubs_are_not_data_and_never_mask_a_named_copy():
+    """A view of reference stubs is not a page (issue #216, second shape):
+    the artist must refetch, and a stub must not claim an id that a later
+    named copy of the same song carries."""
+    stub = {"id": "song-9", "type": "songs"}
+    stub_only = {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin"},
+        "views": {"top-songs": {"data": [stub]}},
+    }
+    assert AppleProvider._is_complete("artist", stub_only) is False
+
+    named = _song_resource("song-9")
+    stub_only["views"] = {"top-songs": {"data": [stub, named]}}
+    page = AppleProvider(catalog=_Catalog()).artist_page(stub_only)
+
+    assert [(t["id"], t["title"]) for t in page["tracks"]] == [("apple:song-9", "Xtal")]
 
 
 def test_a_later_search_summary_invalidates_a_fetched_album():

@@ -679,13 +679,21 @@ class AppleProvider(Provider):
 
     @staticmethod
     def _has_view_data(views: object) -> bool:
-        """Whether a JSON:API views map holds any rows."""
+        """Whether a JSON:API views map holds a renderable row.
+
+        Rows are renderable when named: a view of reference stubs (id/type,
+        no attributes) is no more usable than an empty one, and treating it
+        as data would skip the canonical refetch an artist page needs.
+        """
         if not isinstance(views, dict):
             return False
         for view in views.values():
             view_data = (view or {}).get("data") if isinstance(view, dict) else None
-            if isinstance(view_data, list) and view_data:
-                return True
+            if not isinstance(view_data, list):
+                continue
+            for res in view_data:
+                if isinstance(res, dict) and res.get("attributes"):
+                    return True
         return False
 
     @classmethod
@@ -705,23 +713,32 @@ class AppleProvider(Provider):
         if kind in ("album", "playlist"):
             return bool(cls._relationship_items(item, "tracks"))
         if kind == "artist":
-            # Complete means the page builders can actually read it:
-            # attributed relationship entries, or view data somewhere. An
-            # Apple search summary lists an artist's albums as reference
-            # stubs (id/type/href, no attributes) with no views; accepting
-            # those left every artist page with blank album rows and no top
-            # tracks (issue #216).
-            relationships = item.get("relationships") or {}
-            for rel in relationships.values():
-                if not isinstance(rel, dict):
-                    continue
-                for res in rel.get("data") or []:
-                    if isinstance(res, dict) and cls._attributes(res).get("name"):
-                        return True
-                if cls._has_view_data(rel.get("views")):
-                    return True
-            return cls._has_view_data(item.get("views"))
+            return cls._artist_has_renderable_data(item)
         return False
+
+    @classmethod
+    def _artist_has_renderable_data(cls, item: dict) -> bool:
+        """Whether a page builder could actually read this artist resource.
+
+        Complete means attributed relationship entries, or a named view row.
+        An Apple search summary lists an artist's albums as reference stubs
+        (id/type/href, no attributes) with no views; accepting those left
+        every artist page with blank album rows and no top tracks (issue
+        #216).
+        """
+        relationships = item.get("relationships") or {}
+        for rel in relationships.values():
+            if not isinstance(rel, dict):
+                continue
+            if cls._has_view_data(rel.get("views")):
+                return True
+            data = rel.get("data")
+            if not isinstance(data, list):
+                continue
+            for res in data:
+                if isinstance(res, dict) and cls._attributes(res).get("name"):
+                    return True
+        return cls._has_view_data(item.get("views"))
 
     async def _ensure_catalog(self):
         """The shared catalog client, created lazily on first use."""
@@ -954,7 +971,10 @@ class AppleProvider(Provider):
                 continue
             rtype = str(res.get("type") or "").lower()
             if rtype == "songs" or (("top" in lowered or "song" in lowered) and rtype in ("", "songs")):
-                if rtype == "" and not self._attributes(res).get("albumName"):
+                # A nameless entry is a reference stub, not a renderable row;
+                # skipping without marking it seen lets a later named copy of
+                # the same song still render.
+                if not self._attributes(res).get("name"):
                     continue
                 seen.add(rid)
                 tracks.append(self._track_row(res, artist_ids))
