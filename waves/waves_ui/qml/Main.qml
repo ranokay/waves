@@ -5,6 +5,7 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import QtCore
 import QtMultimedia
+import "StatusLight.js" as StatusLight
 
 ApplicationWindow {
     id: root
@@ -26,7 +27,7 @@ ApplicationWindow {
     width: 1040
     height: 780
     // Never allow a width that clips the header: the top bar's content
-    // (logo, wordmark, nav tabs, queue, connection pill, sign out) sets the
+    // (logo, wordmark, nav tabs, queue, provider lights) sets the
     // real floor. headerRow reports 0 until it is laid out, hence the max.
     minimumWidth: Math.max(880, Math.ceil(headerRow.implicitWidth) + 44)
     minimumHeight: 560
@@ -229,6 +230,25 @@ ApplicationWindow {
     // The live Apple light, refreshed on appleStatusChanged; the chip's
     // "can any provider download yet" test reads it.
     property var appleLight: ({})
+    // The header's per-provider status lights and Browse's availability,
+    // both composed by the bridge from the provider descriptors (issue
+    // #223): the header renders one mark per light, and Browse exists only
+    // while a configured provider declares it. Re-read at boot and on the
+    // same flips that move a session or the Apple light.
+    property var providerLights: []
+    property var browseNav: ({ available: false, signed_in: false })
+    readonly property bool browseAvailable: !!(root.browseNav && root.browseNav.available)
+    // The browse source's session, not the header's TIDAL flag: the bridge
+    // names the provider that fills the pane, so the call to action follows
+    // the source that would actually load it.
+    readonly property bool browseSignedIn: !!(root.browseNav && root.browseNav.signed_in)
+    function refreshProviderLights() {
+        try { root.providerLights = waves.providerLights() } catch (e) { root.providerLights = [] }
+    }
+    function refreshBrowseNav() {
+        try { root.browseNav = waves.browseNav() }
+        catch (e) { root.browseNav = { available: false, signed_in: false } }
+    }
     // First-run welcome: nothing answered and nothing set up yet.
     readonly property bool welcomeDue: waves.sessionResolved && !signedIn && !waves.appleEnabled
         && !setupSettings.firstRunAnswered
@@ -349,8 +369,17 @@ ApplicationWindow {
         else root.visible = true
         root._geomReady = true
         try { root.refreshAppleEnabled() } catch (e) {}
+        root.refreshProviderLights()
+        root.refreshBrowseNav()
 
-        if (root.signedIn && browseSections.length === 0 && !browseLoading) {
+        // No configured provider fills Browse: the launch view falls
+        // through to Search instead of a hidden tab's dead pane (issue
+        // #223). With a browse provider, Browse stays the launch view.
+        if (!root.browseAvailable) {
+            browseOpen = false
+            navOrigin = "search"
+        }
+        if (root.signedIn && root.browseAvailable && browseSections.length === 0 && !browseLoading) {
             browseLoading = true
             waves.loadBrowse()
         }
@@ -2639,6 +2668,10 @@ ApplicationWindow {
     // Browse: open the tab (fetching the landing page once per session) and
     // drill into an editorial page. Target-first flag order, same as above.
     function openBrowse() {
+        // No configured provider fills Browse (issue #223): the tab is
+        // hidden, and a programmatic open (a deep link, the login
+        // hand-off) falls through to Search instead of a dead pane.
+        if (!root.browseAvailable) { openSearch(); return }
         // Coming from another section, the tab RETURNS to Browse exactly as it
         // was left (open sub-page, stack, scroll all intact). Only a second
         // click, Browse already active and highlighted, goes home.
@@ -12691,6 +12724,7 @@ ApplicationWindow {
             // The chip's "can any provider download yet" test and Apple's
             // search-group clearing both read the same fresh light.
             root.appleLight = waves.appleStatus()
+            root.refreshProviderLights()
             if (waves.appleStatus().state === "off") root.clearAppleSearch()
         }
         function onSetupRequested() {
@@ -12775,6 +12809,12 @@ ApplicationWindow {
         function onDownloadFolderRecovered() { root.folderUnreachable = false }
         function onFfmpegMissingBlocked() { root.ffmpegBlocked = true }
         function onLoggedInChanged() {
+            // The header's lights follow the session, and so does Browse's
+            // answer: the TIDAL mark flips with the flag every catalog read
+            // moves with, and the landing's call to action retires with it
+            // (issue #223).
+            root.refreshProviderLights()
+            root.refreshBrowseNav()
             // Drop every QML-side copy of Browse data when the account flips:
             // the landing embeds personalized For You rows, and the backend's
             // own logout cache-clear can't reach these copies. Re-fetch right
@@ -13338,6 +13378,10 @@ ApplicationWindow {
                     // Lit by origin, not by view flags: drilling into an artist
                     // or album keeps the tab you came from highlighted.
                     active: root.navOrigin === "browse" && !root.settingsOpen
+                    // No configured provider fills Browse (issue #223): the
+                    // destination is hidden rather than left permanently
+                    // empty. The bridge's capability answer is the rule.
+                    visible: root.browseAvailable
                     onClicked: root.openBrowse()
                 }
                 NavTab {
@@ -13404,22 +13448,54 @@ ApplicationWindow {
                     }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: queueDrawer.open() }
                 }
-                // connection pill
-                Rectangle {
-                    implicitHeight: 26; implicitWidth: connRow.implicitWidth + 22; radius: 13
-                    color: root.surface2; border.color: root.border1
-                    RowLayout {
-                        id: connRow; anchors.centerIn: parent; spacing: 7
-                        Rectangle { width: 7; height: 7; radius: 3.5; color: root.signedIn ? root.green : root.textDim }
-                        Text { textFormat: Text.PlainText; text: root.signedIn ? "CONNECTED" : "OFFLINE"; color: root.signedIn ? root.green : root.textDim; font.pixelSize: 11; font.family: root.uiFont; font.bold: true; font.letterSpacing: 1.1 }
+                // Per-provider status lights (issue #223): one compact dot
+                // per provider the bridge reports, replacing the old
+                // TIDAL-only connection pill. The account actions live with
+                // the accounts now: sign-out is on the TIDAL card in
+                // Settings. The dot's colour states availability; the word
+                // rides the accessible name and a hover label, so the
+                // header stays compact and no global offline word exists
+                // to contradict a usable provider.
+                Row {
+                    id: providerLightsRow
+                    objectName: "providerLights"
+                    spacing: 10
+                    Repeater {
+                        model: root.providerLights
+                        delegate: Item {
+                            id: light
+                            required property var modelData
+                            objectName: "providerLight_" + modelData.id
+                            readonly property string providerId: String(modelData.id)
+                            readonly property string lightState: String(modelData.state)
+                            readonly property string statusName: String(modelData.name) + ": " + String(modelData.word)
+                            implicitWidth: 16; implicitHeight: 26
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: light.statusName
+                            Rectangle {
+                                objectName: "providerLightDot_" + light.providerId
+                                anchors.centerIn: parent
+                                width: 7; height: 7; radius: 3.5
+                                // The shared status-light vocabulary
+                                // (StatusLight.js), the same one the Settings
+                                // status rows read.
+                                color: StatusLight.colorFor(root, light.lightState)
+                            }
+                            Text {
+                                visible: lightHover.containsMouse
+                                anchors.right: parent.left; anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                textFormat: Text.PlainText
+                                text: light.statusName
+                                color: root.textLo; font.pixelSize: 11; font.family: root.uiFont
+                            }
+                            MouseArea {
+                                id: lightHover
+                                anchors.fill: parent; hoverEnabled: true
+                                cursorShape: Qt.ArrowCursor
+                            }
+                        }
                     }
-                }
-                // sign out, uppercase, red on hover
-                Text {
-                    visible: root.signedIn; text: "SIGN OUT"
-                    color: soMa.containsMouse ? root.red : root.textDim
-                    font.pixelSize: 12; font.letterSpacing: 0.85
-                    MouseArea { id: soMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: waves.logout() }
                 }
             }
 
@@ -13763,12 +13839,14 @@ ApplicationWindow {
 
                     // TIDAL signed out: the landing has nothing to show, so
                     // the pane names the provider and offers the sign-in
-                    // click instead of staying blank (issue #220). TIDAL has
-                    // no disable today, so "no session" is the only way this
-                    // pane is empty.
+                    // click instead of staying blank (issue #220). The
+                    // destination itself exists while a configured provider
+                    // declares Browse (issue #223) and its session is the
+                    // bridge's browse answer: the CTA follows that, never a
+                    // hardcoded TIDAL state.
                     Item {
                         objectName: "browseSignInCta"
-                        visible: !root.signedIn
+                        visible: root.browseAvailable && !root.browseSignedIn
                         width: parent.width
                         height: browseCtaCol.height
                         Column {

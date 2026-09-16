@@ -3,11 +3,18 @@
 ``BareProvider`` implements the whole fused interface with no bodies: the
 seam tests instantiate it to read the neutral defaults (chooser metadata,
 capabilities, session verbs) with no real provider behind them.
+
+``StubProvider`` on top of it carries the live facts a provider-surface test
+drives (identity, capabilities, a status kind and a session flag), and
+``stub_bridge`` is the minimal bridge the module-level surface helpers read,
+so a descriptor-driven test names only what it asserts on.
 """
 
 from __future__ import annotations
 
-from waves.providers.base import Provider
+from types import SimpleNamespace
+
+from waves.providers.base import Provider, ProviderDescriptor, StatusKind
 
 
 class BareProvider(Provider):
@@ -49,3 +56,41 @@ class BareProvider(Provider):
     def browse_page(self, title, api_path): ...
     def browse_home(self): ...
     def browse_window(self, title, data_path, mod_type, offset, limit=50): ...
+
+
+class StubProvider(BareProvider):
+    """A provider whose identity, capabilities and session live on the instance.
+
+    The descriptor is composed from those instance facts (the neutral
+    classmethod reads class attributes, which a stand-in does not carry), so
+    a test drives the real descriptor contract without a real provider.
+    """
+
+    def __init__(self, provider_id, name, *, capabilities=frozenset(), status_kind=StatusKind.SESSION, logged_in=False):
+        self.id = provider_id
+        self.name = name
+        self.capabilities = frozenset(capabilities)
+        self._status_kind = status_kind
+        self._logged_in = logged_in
+
+    @property
+    def is_logged_in(self):
+        return self._logged_in
+
+    def descriptor(self):
+        return ProviderDescriptor(id=self.id, name=self.name, status_kind=self._status_kind)
+
+
+def stub_bridge(providers, *, logged_in=False, tracked=frozenset(), probes=None) -> SimpleNamespace:
+    """The minimal bridge the module-level provider-surface helpers read.
+
+    Only the attributes those helpers touch: the provider registry, the
+    bridge's own session flag (what a tracked provider's light reads), the
+    tracked-session set and the setup-status probes.
+    """
+    return SimpleNamespace(
+        providers=dict(providers),
+        _logged_in=logged_in,
+        _tracked_sessions=tracked,
+        _provider_status_probes=dict(probes or {}),
+    )
