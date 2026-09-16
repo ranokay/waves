@@ -229,10 +229,26 @@ def test_one_helper_serves_the_slot_and_the_schema():
 def test_the_apple_status_slot_reports_off_and_not_set_up():
     stub = _schema_stub(apple_enabled=False)
     stub.appleStatus = _bind(stub, "appleStatus")
-    assert stub.appleStatus() == {"state": "off", "word": "Off"}
+    assert stub.appleStatus() == {
+        "state": "off",
+        "word": "Off",
+        "actions": [
+            {"label": "Setup wizard", "action": "apple_setup"},
+            {"label": "Update runtime", "action": "apple_update_runtime"},
+            {"label": "Remove runtime", "action": "apple_remove_runtime"},
+        ],
+    }
     stub2 = _schema_stub(apple_enabled=True)
     stub2.appleStatus = _bind(stub2, "appleStatus")
-    assert stub2.appleStatus() == {"state": "not_set_up", "word": "Not set up"}
+    assert stub2.appleStatus() == {
+        "state": "not_set_up",
+        "word": "Not set up",
+        "actions": [
+            {"label": "Setup wizard", "action": "apple_setup"},
+            {"label": "Update runtime", "action": "apple_update_runtime"},
+            {"label": "Remove runtime", "action": "apple_remove_runtime"},
+        ],
+    }
 
 
 # ---- applySettings: the switch persists and flips the light ----------------------
@@ -487,17 +503,129 @@ def test_factory_reset_reaches_inside_the_provider_cards():
 def test_the_page_renders_provider_bands_with_logos_and_deep_links():
     src = QML_DIR / "SettingsPage.qml"
     qml = src.read_text(encoding="utf-8")
-    # One band per provider entry, each headed by its official logo and
-    # name, fields through the shared renderers.
+    # One band per provider entry, each headed by the logo its descriptor
+    # carries and its name, fields through the shared renderers. The page
+    # holds no per-provider switch: a new provider's descriptor travels the
+    # same path (issue #214).
     assert "card.modelData.providers" in qml
-    assert "page.providerLogo(modelData.id)" in qml
+    assert "modelData.logo" in qml
+    assert "modelData.logo_width" in qml
+    assert "providerLogo" not in qml
     assert "modelData.name" in qml
     assert "page.rowFields(modelData.fields)" in qml
     assert "page.boolFields(modelData.fields)" in qml
-    # The section header carries both marks and counts the nested fields.
+    # Action pills dispatch through the bridge's one provider-action slot,
+    # addressed by the provider the status row names — never by identity.
+    assert "waves.providerAction(" in qml
+    assert "statusCol.row.provider" in qml
+    # The seeded app still resolves the legacy deep-links onto the one
+    # section (bands stay expanded while it is open).
     assert "dualLogo" in qml
     assert "providerFieldCount" in qml
-    # Provider deep-links resolve onto the one section (bands stay
-    # expanded while it is open).
     assert 'cardId === "providers_tidal"' in qml
     assert 'cardId === "providers_apple"' in qml
+
+
+# ---- the descriptor contract (issue #214) ----------------------------------------
+
+
+def test_both_providers_expose_a_descriptor_with_their_card_identity():
+    from waves.providers.apple.provider import AppleProvider
+    from waves.providers.tidal import TidalProvider
+
+    tidal = TidalProvider.descriptor()
+    assert (tidal.id, tidal.name) == ("tidal", "TIDAL")
+    assert tidal.logo == "assets/providers/tidal.png" and tidal.logo_width == 24
+    assert tidal.status_kind == "session"
+    assert tidal.capability_summary
+    assert tidal.settings_fields[0] == "provider_tidal_session"
+
+    apple = AppleProvider.descriptor()
+    assert (apple.id, apple.name) == ("apple", "Apple Music")
+    assert apple.logo == "assets/providers/apple-music.png"
+    assert apple.status_kind == "setup"
+    assert apple.capability_summary
+    assert apple.settings_fields[:2] == ("provider_apple_status", "apple_setup_wizard")
+
+
+def test_the_schema_cards_come_from_the_descriptors():
+    from waves.providers.tidal import TidalProvider
+
+    cards = _providers()
+    tidal = cards["providers_tidal"]
+    descriptor = TidalProvider.descriptor()
+    assert (tidal["name"], tidal["desc"], tidal["logo"], tidal["logo_width"]) == (
+        descriptor.name,
+        descriptor.card_desc,
+        descriptor.logo,
+        descriptor.logo_width,
+    )
+    assert [f["key"] for f in tidal["fields"]] == list(descriptor.settings_fields)
+
+
+def test_a_third_provider_renders_a_card_and_actions_with_no_qml_branch():
+    """The ticket's paper test: a provider registered after the card renderer
+    was written contributes a descriptor and gets a card, a generated session
+    row and working action keys through the same generic path."""
+    from waves.providers.base import ProviderDescriptor
+
+    descriptor = ProviderDescriptor(
+        id="newco",
+        name="NewCo",
+        logo="assets/providers/newco.png",
+        logo_width=22,
+        capability_summary="A provider the page has never heard of.",
+        card_desc="NewCo's card, rendered from its descriptor.",
+        status_kind="session",
+    )
+    stub = _schema_stub()
+    stub.providers["newco"] = SimpleNamespace(id="newco", descriptor=lambda: descriptor, is_logged_in=True)
+    cards = _providers({s["id"]: s for s in WavesBridge.settingsSchema(stub)})
+    new = cards["providers_newco"]
+    assert (new["name"], new["desc"], new["logo"], new["logo_width"]) == (
+        "NewCo",
+        "NewCo's card, rendered from its descriptor.",
+        "assets/providers/newco.png",
+        22,
+    )
+    # Its session status row and matching action are generated, not copied.
+    row = new["fields"][0]
+    assert row["key"] == "provider_newco_session" and row["provider"] == "newco"
+    assert row["word"] == "Signed in"
+    assert row["actions"] == [{"label": "Sign out", "action": "newco_signout"}]
+
+
+def test_provider_action_dispatches_by_descriptor_key():
+    """The one slot a card's pills call: generic verbs run through the seam,
+    and a provider the bridge has never heard of still dispatches."""
+    from waves.providers.base import ProviderDescriptor
+
+    calls: list[str] = []
+    descriptor = ProviderDescriptor(id="newco", name="NewCo")
+    newco = SimpleNamespace(
+        id="newco",
+        descriptor=lambda: descriptor,
+        is_logged_in=False,
+        login_begin=lambda: calls.append("login_begin") or "https://example.invalid/login",
+        logout=lambda: calls.append("logout"),
+    )
+
+    class _Pool:
+        def start(self, _worker):
+            calls.append("worker")
+
+    stub = _schema_stub()
+    stub.providers["newco"] = newco
+    stub.threadpool = _Pool()
+    stub.providerAction = _bind(stub, "providerAction")
+
+    stub.providerAction("newco", "newco_signin")
+    stub.providerAction("newco", "newco_signout")
+    stub.providerAction("newco", "newco_unknown_verb")
+    assert calls == ["worker", "logout"]
+
+
+def test_provider_action_ignores_an_unregistered_provider():
+    stub = _schema_stub()
+    stub.providerAction = _bind(stub, "providerAction")
+    stub.providerAction("ghost", "ghost_signin")  # no provider, no crash

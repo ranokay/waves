@@ -556,8 +556,8 @@ Item {
     function iconPath(id) {
         switch (id) {
         case "downloads":   return "M8 2.5V9.3 M5.2 6.6 L8 9.4 L10.8 6.6 M3.4 12.6H12.6"
-        // Provider sections show their official logo (see `providerLogo`)
-        // instead of line art, so they carry no iconPath case here.
+        // Provider sections show their descriptors' logos instead of line
+        // art, so they carry no iconPath case here.
         case "files":       return "M2.6 5.4H6.2L7.4 6.7H13.4V11.9H2.6Z"
         case "metadata":    return "M8.6 2.6H3.1V8L9 13.9L14.4 8.5Z M5.7 4.9A0.55 0.55 0 1 1 4.6 4.9A0.55 0.55 0 1 1 5.7 4.9Z"
         case "processing":  return "M5.2 5.2H10.8V10.8H5.2Z M6.7 5.2V3.6 M9.3 5.2V3.6 M6.7 10.8V12.4 M9.3 10.8V12.4 M5.2 6.7H3.6 M5.2 9.3H3.6 M10.8 6.7H12.4 M10.8 9.3H12.4"
@@ -569,19 +569,6 @@ Item {
         // Pulse/heartbeat trace: diagnostics watch the app's vitals.
         case "diagnostics": return "M2.6 8H5.4L6.8 4.6L9.2 11.4L10.6 8H13.4"
         default:            return "M3 5.4H13 M3 10.6H13 M5.4 5.4A1.5 1.5 0 1 0 8.4 5.4A1.5 1.5 0 1 0 5.4 5.4Z M7.6 10.6A1.5 1.5 0 1 0 10.6 10.6A1.5 1.5 0 1 0 7.6 10.6Z"
-        }
-    }
-
-    // Official provider logo for a section id, or "" when the section keeps
-    // its line-art glyph. The PNGs are white-on-transparent artwork, drawn
-    // for the app's dark surfaces — never tinted, never used as a mask.
-    // Black-on-transparent twins (tidal-dark.png, apple-music-dark.png) sit
-    // alongside for light backdrops; nothing references them yet.
-    function providerLogo(id) {
-        switch (id) {
-        case "providers_tidal": return "assets/providers/tidal.png"
-        case "providers_apple": return "assets/providers/apple-music.png"
-        default:                return ""
         }
     }
 
@@ -1857,10 +1844,9 @@ Item {
                             spacing: 12
                             Rectangle {
                                 id: glyphTile
-                                // The Providers tile holds both provider marks
-                                // side by side, so it earns a wider tile (a
-                                // third provider reworks this row, note the
-                                // providerLogo helper beside iconPath).
+                                // The Providers tile holds every provider mark
+                                // side by side (from the descriptors), so it
+                                // earns a wider tile.
                                 Layout.preferredWidth: glyphTile.dualLogo ? 56 : 34
                                 Layout.preferredHeight: 34; radius: 8
                                 color: page.surface3; Layout.alignment: Qt.AlignVCenter
@@ -1883,46 +1869,38 @@ Item {
                                 // only outlined section, which looked out of place. The status
                                 // still reads from the glyph colour (red/gold/green) below.
                                 border.width: 0
-                                // Provider sections show their official logo; every
-                                // other section keeps the line-art glyph. The
-                                // one Providers section holds both marks.
-                                readonly property string logoSrc: page.providerLogo(card.modelData.id !== undefined ? card.modelData.id : "")
+                                // Provider sections show their official logos (from the
+                                // provider descriptors); every other section keeps the
+                                // line-art glyph. The one Providers section shows every
+                                // registered provider's mark, so the row grows with the
+                                // registry instead of hardcoding two.
                                 readonly property bool dualLogo: card.modelData.id === "providers"
                                 SectionIcon {
                                     anchors.centerIn: parent
-                                    visible: glyphTile.logoSrc === "" && !glyphTile.dualLogo
+                                    visible: !glyphTile.dualLogo
                                     glyph: card.modelData.id !== undefined ? card.modelData.id : ""
                                     stroke: glyphTile.statusColor
                                     px: 20
                                 }
-                                Image {
-                                    anchors.centerIn: parent
-                                    visible: glyphTile.logoSrc !== ""
-                                    source: glyphTile.logoSrc
-                                    // TIDAL artwork is wider than tall; fit the
-                                    // tile without stretching either logo.
-                                    width: glyphTile.logoSrc.indexOf("tidal") !== -1 ? 24 : 20
-                                    height: 20
-                                    fillMode: Image.PreserveAspectFit
-                                    smooth: true
-                                    cache: true
-                                }
                                 Row {
                                     anchors.centerIn: parent; spacing: 5
                                     visible: glyphTile.dualLogo
-                                    Image {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        source: "assets/providers/tidal.png"
-                                        width: 18; height: 12
-                                        fillMode: Image.PreserveAspectFit
-                                        smooth: true; cache: true
-                                    }
-                                    Image {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        source: "assets/providers/apple-music.png"
-                                        width: 14; height: 14
-                                        fillMode: Image.PreserveAspectFit
-                                        smooth: true; cache: true
+                                    Repeater {
+                                        model: (card.modelData.providers !== undefined && glyphTile.dualLogo)
+                                            ? card.modelData.providers : []
+                                        delegate: Image {
+                                            required property var modelData
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            source: modelData.logo !== undefined ? String(modelData.logo) : ""
+                                            // The header row scales the card mark down;
+                                            // the descriptor's width keeps each mark's
+                                            // aspect true (TIDAL's is wider than tall).
+                                            width: modelData.logo_width !== undefined
+                                                ? Math.round(Number(modelData.logo_width) * 0.7) : 14
+                                            height: 14
+                                            fillMode: Image.PreserveAspectFit
+                                            smooth: true; cache: true
+                                        }
                                     }
                                 }
                             }
@@ -2055,8 +2033,8 @@ Item {
                                                     anchors.verticalCenter: parent.verticalCenter
                                                     Image {
                                                         anchors.centerIn: parent
-                                                        source: page.providerLogo(modelData.id)
-                                                        width: modelData.id.indexOf("tidal") !== -1 ? 24 : 20
+                                                        source: modelData.logo !== undefined ? String(modelData.logo) : ""
+                                                        width: modelData.logo_width !== undefined ? Number(modelData.logo_width) : 20
                                                         height: 20
                                                         fillMode: Image.PreserveAspectFit
                                                         smooth: true; cache: true
@@ -2557,6 +2535,10 @@ Item {
                                             id: statusCol
                                             visible: modelData.type === "status"
                                             width: parent.width; spacing: 8
+                                            // The row's own descriptor data, named so the
+                                            // action pills below can reach it from their
+                                            // inner delegate (modelData is the delegate's).
+                                            readonly property var row: modelData
                                             readonly property var live: (modelData.live === "apple_status" && page.appleStatusLive) ? page.appleStatusLive : null
                                             readonly property string stateKey: live ? String(live.state) : String(modelData.value || "")
                                             readonly property string word: live ? String(live.word) : String(modelData.word || "")
@@ -2652,44 +2634,25 @@ Item {
                                                 visible: modelData.actions !== undefined && modelData.actions.length > 0
                                                 width: parent.width; spacing: 8
                                                 Repeater {
-                                                    model: {
-                                                        var acts = modelData.actions !== undefined ? modelData.actions : []
-                                                        // The live light, not the baked schema, decides
-                                                        // the Apple sign-out pill: the mirror flips on
-                                                        // appleStatusChanged, while a sign-in or
-                                                        // sign-out only moves the mirror.
-                                                        if (modelData.key === "provider_apple_status") {
-                                                            var signedIn = statusCol.stateKey === "signed_in"
-                                                            var kept = []
-                                                            var hasSignOut = false
-                                                            for (var i = 0; i < acts.length; i++) {
-                                                                if (String(acts[i].action) === "apple_signout") {
-                                                                    hasSignOut = true
-                                                                    if (signedIn) kept.push(acts[i])
-                                                                } else {
-                                                                    kept.push(acts[i])
-                                                                }
-                                                            }
-                                                            if (!hasSignOut && signedIn)
-                                                                kept.push({"label": "Sign out", "action": "apple_signout"})
-                                                            acts = kept
-                                                        }
-                                                        return acts
-                                                    }
+                                                    // Actions come from the live status payload when one
+                                                    // exists (its actions are built by the same helper as
+                                                    // the schema's, so they flip with the light), and from
+                                                    // the baked schema otherwise. No provider is special-cased
+                                                    // here: a provider contributes its action list, the page
+                                                    // renders it.
+                                                    model: (statusCol.live && statusCol.live.actions !== undefined)
+                                                        ? statusCol.live.actions
+                                                        : (modelData.actions !== undefined ? modelData.actions : [])
                                                     delegate: Rectangle {
                                                         id: actPill
                                                         required property var modelData
                                                         readonly property string actKey: modelData.action !== undefined ? String(modelData.action) : ""
-                                                        // Action pills dispatch to the bridge by
-                                                        // action key: the setup-wizard actions
-                                                        // re-probe the live setup state and rebuild
-                                                        // the steps below (a bare re-read would serve
-                                                        // cached probes and look dead), install or
-                                                        // remove the managed runtime, the TIDAL
-                                                        // session's sign-in starts the same login
-                                                        // flow the landing panel uses and its sign-out
-                                                        // the same logout the top bar runs, and the
-                                                        // Apple sign-out clears the account session.
+                                                        // The provider the status row belongs to, carried by the
+                                                        // schema field. Action pills dispatch through the bridge's
+                                                        // one provider-action slot by (provider, key), so a
+                                                        // provider's card needs no QML branch.
+                                                        readonly property string providerId: statusCol.row.provider !== undefined
+                                                            ? String(statusCol.row.provider) : ""
                                                         // A pill without an action key stays inert.
                                                         readonly property bool actLive: actPill.actKey !== ""
                                                         width: actTxt.implicitWidth + page.btnPadH * 2
@@ -2698,12 +2661,8 @@ Item {
                                                         color: "transparent"; border.color: page.border1
                                                         opacity: actPill.actLive ? 1.0 : 0.45
                                                         function runAction() {
-                                                            if (actPill.actKey === "tidal_signin") waves.beginLogin()
-                                                            else if (actPill.actKey === "tidal_signout") waves.logout()
-                                                            else if (actPill.actKey === "apple_signout") waves.appleSignOut()
-                                                            else if (actPill.actKey === "apple_update_runtime") waves.installAppleRuntime()
-                                                            else if (actPill.actKey === "apple_remove_runtime") waves.removeAppleRuntime()
-                                                            else if (actPill.actKey === "apple_setup") { page.appleSetupLive = waves.appleSetupState(); waves.refreshAppleSetup() }
+                                                            if (actPill.actKey === "" || actPill.providerId === "") return
+                                                            waves.providerAction(actPill.providerId, actPill.actKey)
                                                         }
                                                         Text {
                                                             id: actTxt

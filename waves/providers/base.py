@@ -137,6 +137,35 @@ class QualityOption:
     detail: str = ""
 
 
+@dataclass(frozen=True)
+class ProviderDescriptor:
+    """A provider's static identity for every surface that lists providers.
+
+    The bridge composes this with live status (session state, setup steps)
+    into the schema QML renders, and composes the card's actions from it. A
+    new provider contributes one descriptor and its status data; the surfaces
+    render from this shape, so a new provider needs no QML branch.
+
+    ``settings_fields`` names the Settings field keys the provider's card
+    owns, in display order. The status keys among them are bridge-owned (the
+    live state is the bridge's to know); ``status_kind`` names the shape that
+    status takes, so the bridge can generate it:
+
+    - ``"session"``: a sign-in/sign-out status row from ``is_logged_in``.
+    - ``"setup"``: the provider owns its status rows and wizard (Apple).
+    - ``"none"``: the card lists its fields with no status row.
+    """
+
+    id: str
+    name: str
+    logo: str = ""  # QML asset path; "" keeps the generic section glyph
+    logo_width: int = 20
+    capability_summary: str = ""  # one honest line, for onboarding cards
+    card_desc: str = ""  # the Settings card's longer blurb
+    settings_fields: tuple[str, ...] = ()
+    status_kind: str = "session"
+
+
 class RefusalKind(StrEnum):
     """How to read an engine error, shared across providers.
 
@@ -263,7 +292,14 @@ class Provider(ABC):
     under (``apple_lyrics_embed``). The neutral default is "": the provider's
     mirrors stay under its id namespace, with the shared keys as fallback."""
 
-    # ----- session / auth
+    @classmethod
+    def descriptor(cls) -> ProviderDescriptor:
+        """Static identity for the surfaces that list providers.
+
+        The neutral default carries the id and name every provider has; a
+        provider adds its logo, its capability line and the Settings fields
+        its card owns. See :class:`ProviderDescriptor`."""
+        return ProviderDescriptor(id=cls.id, name=cls.name)  # ----- session / auth
 
     @abstractmethod
     def login_begin(self) -> str:

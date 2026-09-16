@@ -9,7 +9,16 @@ from threading import Lock
 from urllib.parse import urlparse
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
-from waves.providers.base import AudioType, Capability, Provider, QualityOption, Refusal, RefusalKind, StreamInfo
+from waves.providers.base import (
+    AudioType,
+    Capability,
+    Provider,
+    ProviderDescriptor,
+    QualityOption,
+    Refusal,
+    RefusalKind,
+    StreamInfo,
+)
 
 
 class _QuietCatalogLog:
@@ -103,6 +112,49 @@ class AppleProvider(Provider):
     # per-click Atmos fetch is a real delivery, so Apple serves both types.
     audio_types = frozenset({AudioType.STEREO, AudioType.ATMOS})
     settings_card = "apple"
+
+    @classmethod
+    def descriptor(cls) -> ProviderDescriptor:
+        """Apple Music's card identity and the fields its Providers card owns.
+
+        The card's status rows and wizard steps are bridge-built live data
+        (the runtime and cookies probes are the bridge's to run), so this
+        descriptor names them through ``settings_fields`` and leaves their
+        shape to the ``setup`` status kind.
+        """
+        return ProviderDescriptor(
+            id=cls.id,
+            name=cls.name,
+            logo="assets/providers/apple-music.png",
+            capability_summary="Search and preview now; downloads need a one-time setup.",
+            card_desc=(
+                "Turn on Apple Music catalog search here. A cookies export unlocks AAC 256 and Atmos "
+                "downloads at once with no runtime; the managed runtime plus wrapper sign-in unlock the full tier."
+            ),
+            settings_fields=(
+                "provider_apple_status",
+                "apple_setup_wizard",
+                "apple_quality_audio",
+                "apple_lyrics_embed",
+                "apple_lyrics_file",
+                "apple_lyrics_prefer_lrclib",
+                "apple_lyrics_word_timed",
+                "apple_lyrics_ttml_file",
+                "apple_metadata_cover_dimension",
+                "apple_metadata_cover_embed",
+                "apple_cover_album_file",
+                "apple_cover_file_format",
+                "apple_cookies_path",
+                "path_binary_nm3u8dlre",
+                "apple_wrapper_port",
+                "apple_pacing_batch_size",
+                "apple_pacing_delay_sec",
+                "apple_wrapper_idle_sec",
+                "apple_quarantine_dir",
+                "apple_quarantine_keep",
+            ),
+            status_kind="setup",
+        )
 
     def __init__(self, catalog=None, catalog_factory=None) -> None:
         self._catalog = catalog

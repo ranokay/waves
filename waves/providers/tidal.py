@@ -47,6 +47,7 @@ from waves.providers.base import (
     Capability,
     FavoritesUnavailable,
     Provider,
+    ProviderDescriptor,
     QualityOption,
     Refusal,
     RefusalKind,
@@ -138,6 +139,32 @@ class TidalProvider(Provider):
     # and no stereo at all.
     audio_types = frozenset({AudioType.STEREO, AudioType.ATMOS})
     settings_card = "tidal"
+
+    @classmethod
+    def descriptor(cls) -> ProviderDescriptor:
+        """TIDAL's card identity and the fields its Providers card owns."""
+        return ProviderDescriptor(
+            id=cls.id,
+            name=cls.name,
+            logo="assets/providers/tidal.png",
+            logo_width=24,
+            capability_summary="Sign in to search, browse and download.",
+            card_desc=(
+                "Your TIDAL session, the audio quality its downloads ask for, and its lyrics and cover options."
+            ),
+            settings_fields=(
+                "provider_tidal_session",
+                "tidal_quality_audio",
+                "tidal_lyrics_embed",
+                "tidal_lyrics_file",
+                "tidal_lyrics_prefer_lrclib",
+                "tidal_metadata_cover_dimension",
+                "tidal_metadata_cover_embed",
+                "tidal_cover_album_file",
+                "tidal_cover_file_format",
+            ),
+            status_kind="session",
+        )
 
     def __init__(self, tidal: Tidal, stream_resolver=None):
         self._tidal = tidal

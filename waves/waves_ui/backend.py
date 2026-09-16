@@ -1180,6 +1180,23 @@ def _apple_status(
     return {"state": described["state"], "word": described["word"]}
 
 
+def _apple_status_actions(state: str) -> list[dict]:
+    """The Apple status row's actions for a light state.
+
+    One builder for the schema's baked value and the live mirror the page
+    re-reads, so the two can never disagree about which pills exist: sign-out
+    only while a session stands, the runtime management always.
+    """
+    actions = [
+        {"label": "Setup wizard", "action": "apple_setup"},
+        {"label": "Update runtime", "action": "apple_update_runtime"},
+        {"label": "Remove runtime", "action": "apple_remove_runtime"},
+    ]
+    if state == "signed_in":
+        actions.append({"label": "Sign out", "action": "apple_signout"})
+    return actions
+
+
 # Button words for the wizard steps' actions. A step button says what it
 # does ("Remove", not "Continue"), so a destructive action never wears a
 # next-step mask. QML uppercases for the pill style.
@@ -3683,6 +3700,136 @@ def _record_in_library(bridge, path: str) -> bool:
         return False
 
 
+# ----- provider descriptor composition (the cards the page renders) -----
+#
+# Module-level on purpose: the schema builder and its tests carry stubs that
+# bind real methods selectively, so these helpers take the bridge as an
+# argument and read only the attributes they need.
+
+
+def _begin_login(bridge, provider_id: str) -> None:
+    """Start a provider's login flow and hand the URL to the GUI.
+
+    One body for the landing panel and the provider card's action, so a
+    card's Sign in and the panel's button can never diverge.
+    """
+    provider = bridge.providers.get(provider_id)
+    if provider is None:
+        return
+
+    def work() -> None:
+        try:
+            # The provider owns the flow entry (and rebuilds the session a
+            # prior sign-out tore down, so a fresh PKCE login can start).
+            url = provider.login_begin()
+        except Exception:
+            logger.exception("Could not obtain login URL")
+            bridge._set_status("Could not start login")
+            return
+        bridge.loginUrlReady.emit(url)
+        bridge._set_status("Finish signing in, then paste the URL back")
+
+    bridge.threadpool.start(Worker(work))
+
+
+def _provider_sign_out(bridge, provider_id: str) -> None:
+    """Sign a provider out by id.
+
+    TIDAL and Apple run app-level sign-out flows that own more than the
+    provider's own logout (stopping queued jobs, clearing caches, wiping the
+    guest); a provider without one falls back to its neutral ``logout``.
+    """
+    provider = bridge.providers.get(provider_id)
+    if provider is None:
+        return
+    if provider_id == CTX_TIDAL:
+        bridge.logout()
+        return
+    if provider_id == CTX_APPLE:
+        bridge.appleSignOut()
+        return
+    try:
+        provider.logout()
+    except Exception:
+        logger.exception("Provider sign-out failed")
+
+
+def _provider_registry(bridge) -> list:
+    """The configured providers, in registry order (TIDAL first)."""
+    providers = getattr(bridge, "providers", None)
+    return list(providers.values()) if isinstance(providers, dict) else []
+
+
+def _session_logged_in(bridge, provider) -> bool:
+    """Whether a session-kind provider's card reads signed in.
+
+    TIDAL's session truth is the bridge's own flag: the login flow, the
+    header and every catalog read move it together, and the provider's live
+    check can trail a fresh sign-in. A provider the bridge does not track
+    answers for itself.
+    """
+    if getattr(provider, "id", "") == CTX_TIDAL:
+        return bool(getattr(bridge, "_logged_in", False))
+    try:
+        return bool(provider.is_logged_in)
+    except Exception:
+        logger.debug("Provider session read failed", exc_info=True)
+        return False
+
+
+def _provider_session_field(descriptor, logged_in: bool) -> dict:
+    """The status row a session-kind provider card carries.
+
+    One shape for every provider: the row reports the session and offers the
+    matching action, so a second session-kind provider renders its card
+    without a QML or schema branch. It stages no edit.
+    """
+    return {
+        "key": f"provider_{descriptor.id}_session",
+        "provider": descriptor.id,
+        "label": "Session",
+        "help": (
+            f"The {descriptor.name} account Waves is working from. This row "
+            "reports the session and offers the matching action: "
+            "sign in while signed out, sign out while signed in."
+        ),
+        "type": "status",
+        "value": "signed_in" if logged_in else "not_signed_in",
+        "word": "Signed in" if logged_in else "Not signed in",
+        "actions": [
+            {
+                "label": "Sign out" if logged_in else "Sign in",
+                "action": f"{descriptor.id}_{'signout' if logged_in else 'signin'}",
+            }
+        ],
+    }
+
+
+def _provider_card(provider) -> dict:
+    """One Providers card, composed from the provider's descriptor.
+
+    The card's identity, blurb and field list are the provider's; the live
+    data behind those keys stays the bridge's (built where the probes live).
+    A session-kind provider's generated status row leads the card even when
+    its descriptor does not list the key, so a provider that contributes
+    nothing but identity still renders.
+    """
+    descriptor = provider.descriptor()
+    fields = list(descriptor.settings_fields)
+    if descriptor.status_kind == "session":
+        session_key = f"provider_{descriptor.id}_session"
+        if session_key not in fields:
+            fields.insert(0, session_key)
+    return {
+        "name": descriptor.name,
+        "id": f"providers_{descriptor.id}",
+        "desc": descriptor.card_desc,
+        "logo": descriptor.logo,
+        "logo_width": descriptor.logo_width,
+        "fields": fields,
+    }
+
+
 class WavesBridge(LibraryMixin, QObject):
     """The single object exposed to QML as the ``waves`` context property.
 
@@ -5227,19 +5374,37 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot()
     def beginLogin(self) -> None:
-        def work() -> None:
-            try:
-                # The provider owns the flow entry (and rebuilds the session a
-                # prior sign-out tore down, so a fresh PKCE login can start).
-                url = self.providers[CTX_TIDAL].login_begin()
-            except Exception:
-                logger.exception("Could not obtain login URL")
-                self._set_status("Could not start login")
-                return
-            self.loginUrlReady.emit(url)
-            self._set_status("Finish signing in, then paste the URL back")
+        """The TIDAL sign-in entry (the landing panel's and the card's)."""
+        _begin_login(self, CTX_TIDAL)
 
-        self.threadpool.start(Worker(work))
+    @Slot(str, str)
+    def providerAction(self, provider_id: str, action_key: str) -> None:
+        """Run a provider card's action by the key its descriptor carries.
+
+        The card's action keys are ``<provider id>_<verb>``. The generic
+        verbs run through the seam (sign in starts the provider's login flow;
+        sign out runs its sign-out); a setup-kind provider's management verbs
+        run the bridge flows that own the runtime. QML calls this one slot
+        for every provider, so a provider's card dispatches without a QML
+        branch.
+        """
+        provider_id = str(provider_id or "")
+        action_key = str(action_key or "")
+        provider = getattr(self, "providers", {}).get(provider_id)
+        if provider is None:
+            return
+        verb = action_key[len(provider_id) + 1 :] if action_key.startswith(provider_id + "_") else action_key
+        if verb in ("signin", "login"):
+            _begin_login(self, provider_id)
+        elif verb in ("signout", "logout"):
+            _provider_sign_out(self, provider_id)
+        elif provider.descriptor().status_kind == "setup":
+            if verb == "setup":
+                self.refreshAppleSetup()
+            elif verb == "update_runtime":
+                self.installAppleRuntime()
+            elif verb == "remove_runtime":
+                self.removeAppleRuntime()
 
     @Slot(str)
     def completeLogin(self, redirect_url: str) -> None:
@@ -18231,23 +18396,27 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(result="QVariant")
     def appleStatus(self) -> dict:
         """The Apple provider's status-light state (spec §9.2.3), for the
-        settings page's live mirror: ``{"state", "word"}``. Five states —
-        off / not set up / runtime ready / signed in / needs attention —
-        read live off the managed runtime and the cookies export, so the
-        light tracks each wizard stage. The schema bakes the same value at
-        build time; the signal exists for the flip the moment a save lands."""
+        settings page's live mirror: ``{"state", "word", "actions"}``. Five
+        states — off / not set up / runtime ready / signed in / needs
+        attention — read live off the managed runtime and the cookies export,
+        so the light tracks each wizard stage. The schema bakes the same
+        value at build time; the signal exists for the flip the moment a save
+        lands, and the actions ride along so the row's pills flip with it
+        without the page special-casing this provider."""
         try:
             flags = self._apple_live_flags()
         except Exception:
             logger.debug("Apple status flags failed", exc_info=True)
             flags = {"enabled": bool(getattr(getattr(self.settings, "data", None), "apple_enabled", False))}
-        return _apple_status(
+        described = _apple_status(
             bool(flags.get("enabled", False)),
             runtime_ready=bool(flags.get("runtime_ready", False)),
             signed_in=bool(flags.get("signed_in", False)),
             needs_attention=bool(flags.get("needs_attention", False)),
             cookies_ready=bool(flags.get("cookies_ready", False)),
         )
+        described["actions"] = _apple_status_actions(described["state"])
+        return described
 
     @Slot(result="QVariant")
     def appleSetupState(self) -> dict:
@@ -18909,7 +19078,6 @@ class WavesBridge(LibraryMixin, QObject):
             needs_attention=bool(_flags.get("needs_attention", False)),
             cookies_ready=bool(_flags.get("cookies_ready", False)),
         )
-        logged_in = bool(getattr(self, "_logged_in", False))
 
         def field(key: str, ftype: str, value, extra: dict | None = None) -> dict:
             out = {
@@ -19224,26 +19392,6 @@ class WavesBridge(LibraryMixin, QObject):
                     "options": _enum_options("update_cadence", ["launch", "daily"]),
                 },
                 {
-                    # Bridge-computed status row, not a pref: the TIDAL
-                    # session the app is running on. The status row carries
-                    # the session action that matches its state (attached
-                    # below): sign-in while signed out and sign-out while
-                    # signed in, so a hidden landing panel or top bar never
-                    # strands an account switch. It stages no edit; it only
-                    # reports, with the same state/word vocabulary the Apple
-                    # light below uses.
-                    "key": "provider_tidal_session",
-                    "label": "Session",
-                    "help": (
-                        "The TIDAL account Waves is working from. This row "
-                        "reports the session and offers the matching action: "
-                        "sign in while signed out, sign out while signed in."
-                    ),
-                    "type": "status",
-                    "value": "signed_in" if logged_in else "not_signed_in",
-                    "word": "Signed in" if logged_in else "Not signed in",
-                },
-                {
                     # The Apple section's master switch, status light and
                     # runtime-manage actions in one row (spec §9.2.3).
                     # apple_enabled rides as enabled_key: the switch
@@ -19255,6 +19403,7 @@ class WavesBridge(LibraryMixin, QObject):
                     # "action" names the slot channel QML calls. "live" names
                     # the channel the page re-reads when a save moves the switch.
                     "key": "provider_apple_status",
+                    "provider": CTX_APPLE,
                     "enabled_key": "apple_enabled",
                     "switch_value": bool(getattr(d, "apple_enabled", False)),
                     "live": "apple_status",
@@ -19270,18 +19419,7 @@ class WavesBridge(LibraryMixin, QObject):
                     "type": "status",
                     "value": apple_status["state"],
                     "word": apple_status["word"],
-                    "actions": (
-                        [
-                            {"label": "Setup wizard", "action": "apple_setup"},
-                            {"label": "Update runtime", "action": "apple_update_runtime"},
-                            {"label": "Remove runtime", "action": "apple_remove_runtime"},
-                        ]
-                        + (
-                            [{"label": "Sign out", "action": "apple_signout"}]
-                            if apple_status["state"] == "signed_in"
-                            else []
-                        )
-                    ),
+                    "actions": _apple_status_actions(apple_status["state"]),
                 },
                 {
                     # The in-place setup wizard steps (spec §2):
@@ -19291,6 +19429,7 @@ class WavesBridge(LibraryMixin, QObject):
                     # and calls back the actions the steps name. It stages
                     # no edit and carries no factory default.
                     "key": "apple_setup_wizard",
+                    "provider": CTX_APPLE,
                     "label": "Setup wizard",
                     "help": (
                         "Walks the setup in order: cookies unlock AAC 256 and Atmos at once, "
@@ -19303,17 +19442,20 @@ class WavesBridge(LibraryMixin, QObject):
                 },
             ]
         }
-        # The TIDAL card carries the session action that matches its state:
-        # sign-in while signed out (with no session the landing panel can be
-        # hidden by the Apple provider or a dismissed first-run picker, so
-        # the card is the entry point that always exists) and sign-out while
-        # signed in, so an account switch never needs the top bar. Both
-        # start the same flows the panel and the top bar use.
-        waves_fields["provider_tidal_session"]["actions"] = (
-            [{"label": "Sign in", "action": "tidal_signin"}]
-            if not logged_in
-            else [{"label": "Sign out", "action": "tidal_signout"}]
-        )
+        # Session-kind provider cards get their status row here: one generic
+        # row per provider, its state read from the bridge's session truth,
+        # so a second session-kind provider needs no schema or QML branch.
+        # (With no session the landing panel can be hidden by another
+        # provider or a dismissed first-run picker, so the card's action is
+        # the entry point that always exists; it starts the same flow the
+        # panel and the top bar use.)
+        for _provider in _provider_registry(self):
+            _descriptor = _provider.descriptor()
+            if _descriptor.status_kind != "session":
+                continue
+            waves_fields[f"provider_{_descriptor.id}_session"] = _provider_session_field(
+                _descriptor, _session_logged_in(self, _provider)
+            )
 
         def get_field(key: str) -> dict:
             f = dict(waves_fields[key]) if key in waves_fields else auto_field(key)
@@ -19494,66 +19636,12 @@ class WavesBridge(LibraryMixin, QObject):
                 "group": "Providers",
                 "id": "providers",
                 "desc": "Your music services. Each provider keeps its own session, quality default and setup.",
-                "providers": [
-                    {
-                        # TIDAL is the only provider with a session today. Its
-                        # lyrics/artwork options ride this card, so
-                        # what TIDAL embeds need not match Apple. Word-timed
-                        # and TTML have no TIDAL source and stay off this card.
-                        "name": "TIDAL",
-                        "id": "providers_tidal",
-                        "desc": (
-                            "Your TIDAL session, the audio quality its downloads ask for, and its lyrics and cover options."
-                        ),
-                        "fields": [
-                            "provider_tidal_session",
-                            "tidal_quality_audio",
-                            "tidal_lyrics_embed",
-                            "tidal_lyrics_file",
-                            "tidal_lyrics_prefer_lrclib",
-                            "tidal_metadata_cover_dimension",
-                            "tidal_metadata_cover_embed",
-                            "tidal_cover_album_file",
-                            "tidal_cover_file_format",
-                        ],
-                    },
-                    {
-                        # Always visible, per the optional-component decision: the
-                        # card renders while Apple is off, so the switch stays
-                        # discoverable and the light shows what is (not) set up.
-                        # The in-place setup wizard (spec §2) lives here:
-                        # cookies export for the fallback tier, managed runtime plus
-                        # wrapper sign-in for the full tier, wrapper port override.
-                        "name": "Apple Music",
-                        "id": "providers_apple",
-                        "desc": (
-                            "Turn on Apple Music catalog search here. A cookies export unlocks AAC 256 and Atmos "
-                            "downloads at once with no runtime; the managed runtime plus wrapper sign-in unlock the full tier."
-                        ),
-                        "fields": [
-                            "provider_apple_status",
-                            "apple_setup_wizard",
-                            "apple_quality_audio",
-                            "apple_lyrics_embed",
-                            "apple_lyrics_file",
-                            "apple_lyrics_prefer_lrclib",
-                            "apple_lyrics_word_timed",
-                            "apple_lyrics_ttml_file",
-                            "apple_metadata_cover_dimension",
-                            "apple_metadata_cover_embed",
-                            "apple_cover_album_file",
-                            "apple_cover_file_format",
-                            "apple_cookies_path",
-                            "path_binary_nm3u8dlre",
-                            "apple_wrapper_port",
-                            "apple_pacing_batch_size",
-                            "apple_pacing_delay_sec",
-                            "apple_wrapper_idle_sec",
-                            "apple_quarantine_dir",
-                            "apple_quarantine_keep",
-                        ],
-                    },
-                ],
+                # One card per registered provider, composed from its
+                # descriptor: a provider contributes its identity, blurb
+                # and field list; the live status data behind those keys
+                # is built above. A new provider is a descriptor, not a
+                # QML branch.
+                "providers": [_provider_card(p) for p in _provider_registry(self)],
                 # No loose fields: everything provider-specific lives on the
                 # cards above, so the generic field filters render nothing here.
                 "fields": [],
