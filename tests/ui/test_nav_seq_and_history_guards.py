@@ -136,7 +136,7 @@ def _run_scenario() -> int:
     settle()
     q(
         "navHistory = [{v:'search',label:'Search'},"
-        " {v:'library',cat:'home',label:'My Tidal'},"
+        " {v:'library',cat:'home',label:'My Music'},"
         " {v:'search',label:'Search'}]"
     )
     # No settle here on purpose: the 0ms trim timer must not run between

@@ -8,11 +8,11 @@ WHAT THIS FENCES OFF
 
 2. Dead-end empty states. Search offers "Enable Apple Music - search works
    without an account" (the bridge's own enable flow) and "Sign in to TIDAL"
-   (the welcome surface's inline steps); Browse and My Tidal name TIDAL and
+   (the welcome surface's inline steps); Browse and My Music name TIDAL and
    offer the same sign-in click instead of rendering blank.
 
 3. CTAs that outlive their provider. Enabling Apple retires the Apple action;
-   a completed sign-in retires every TIDAL action and brings the My Tidal
+   a completed sign-in retires every TIDAL action and brings the My Music
    category tabs back.
 
 Runs in a SUBPROCESS like the other Main.qml scenarios: building the bridge
@@ -67,6 +67,20 @@ def _text_visible(scope: str, text: str) -> str:
     return scene_js(
         f"  var hit = findFirst({scope}, function (o) {{ return o.text !== undefined && String(o.text) === {json.dumps(text)}; }});\n"
         "  return hit !== null && hit.visible === true;\n"
+    )
+
+
+def _visible_text(scope: str, text: str) -> str:
+    """Whether a VISIBLE Text with this exact string exists under the scope.
+
+    ``_text_visible`` below returns the first text match, which is the
+    hidden metric inside a NavTab; the predicate here skips invisible nodes
+    so a nav label is pinned by what the user can actually see.
+    """
+    return scene_js(
+        f"  var hit = findFirst({scope}, function (o) {{ return o.visible === true"
+        f" && o.text !== undefined && String(o.text) === {json.dumps(text)}; }});\n"
+        "  return hit !== null;\n"
     )
 
 
@@ -261,6 +275,10 @@ def _run_tidal_cta_scenario() -> int:
     if bool(q("root.signedIn")):
         return 78  # the scenario needs a signed-out profile
 
+    # The rename (issue #221): the nav tab reads My Music.
+    if not q(_visible_text("headerRow", "My Music")):
+        failures.append("the nav tab does not read My Music")
+
     # Browse, signed out: the pane names TIDAL and offers the sign-in click
     # instead of staying blank.
     q("root.openBrowse()")
@@ -278,22 +296,24 @@ def _run_tidal_cta_scenario() -> int:
     q("root.cancelSetupSignIn()")
     settle(150)
 
-    # My Tidal, signed out: one provider-named empty state, no category tabs
+    # My Music, signed out: one provider-named empty state, no category tabs
     # left as dead ends.
     q("root.openLibrary()")
     settle(300)
     q("scrollDressing.visible = false")
     settle(120)
+    if not q(_text_visible("libraryPane", "My Music")):
+        failures.append("the pane title does not read My Music")
     if not q(_visible("libArea", "libSignInCta")):
-        failures.append("the signed-out My Tidal pane showed no empty state")
+        failures.append("the signed-out My Music pane showed no empty state")
     if q(_visible("libraryPane", "libTabsFlow")):
-        failures.append("the signed-out My Tidal pane left its category tabs up")
+        failures.append("the signed-out My Music pane left its category tabs up")
     if not q(_text_visible("libCtaCol", "Sign in to TIDAL")):
-        failures.append("the My Tidal empty state did not offer the sign-in action")
+        failures.append("the My Music empty state did not offer the sign-in action")
     if not _click(root, q, settle, _point("libArea", "libSignInAction"), "root.setupOpen === true"):
-        failures.append("the My Tidal action did not open the sign-in surface")
+        failures.append("the My Music action did not open the sign-in surface")
     elif q("root.setupMode") != "tidal" or not q(_visible("setupPane", "welcomeSignIn")):
-        failures.append("the My Tidal action did not open the inline sign-in steps")
+        failures.append("the My Music action did not open the inline sign-in steps")
 
     # Complete the sign-in through the visible steps; the account service is
     # the fake, everything around it is the real bridge.
@@ -308,7 +328,7 @@ def _run_tidal_cta_scenario() -> int:
         elif not _click(root, q, settle, _text_point("setupPane", "COMPLETE SIGN-IN"), "root.signedIn === true"):
             failures.append("completing the paste did not sign the session in")
 
-    # Signed in: every TIDAL action retires, and My Tidal's categories return.
+    # Signed in: every TIDAL action retires, and My Music's categories return.
     if not bool(q("root.signedIn")):
         failures.append("the scenario never reached a signed-in session")
     else:
@@ -325,9 +345,16 @@ def _run_tidal_cta_scenario() -> int:
         q("scrollDressing.visible = false")
         settle(120)
         if q(_visible("libArea", "libSignInCta")):
-            failures.append("the My Tidal sign-in empty state outlived the sign-in")
+            failures.append("the My Music sign-in empty state outlived the sign-in")
         if not q(_visible("libraryPane", "libTabsFlow")):
-            failures.append("the My Tidal category tabs did not come back after sign-in")
+            failures.append("the My Music category tabs did not come back after sign-in")
+        # One saved-shelf source (TIDAL signed in): no source label over the
+        # shelves. The rule is the bridge's; a second source qualifies it
+        # (tests/providers/test_my_music_shelves.py drives that data rule).
+        if q("String(waves.myMusicSourceLabel)") != "":
+            failures.append("a lone saved-shelf source grew a source label")
+        if q(_visible("libraryPane", "libSourceLabel")):
+            failures.append("the My Music source label rendered with one source")
 
     for line in failures:
         print(f"REGRESSED: {line}", file=sys.stderr)
@@ -346,13 +373,13 @@ def test_the_empty_search_offers_the_apple_and_tidal_setup_actions():
 
 
 @pytest.mark.qml
-def test_browse_and_my_tidal_offer_tidal_sign_in_until_signed_in():
+def test_browse_and_my_music_offer_tidal_sign_in_until_signed_in():
     run_scenario(
         Path(__file__),
         "--run-tidal-cta",
         timeout=180,
         sandbox_prefix="waves-setup-ctas-tidal-",
-        failure_message="the Browse / My Tidal setup actions regressed",
+        failure_message="the Browse / My Music setup actions regressed",
     )
 
 

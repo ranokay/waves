@@ -4,7 +4,7 @@ THE BUG WE ARE FENCING OFF
 --------------------------
 ``browsePageKey`` survives leaving Browse via the nav tabs. ``openBrowseItem``
 treated a matching key as "already there" and returned before ``navPush()``,
-so reopening that page from ANOTHER surface (a playlist inside a My Tidal
+so reopening that page from ANOTHER surface (a playlist inside a My Music
 folder, a Home shelf card) switched to the cached page without recording
 where the user came from. Back then skipped the folder entirely and fell
 through to whatever sat under it in the history (Search, typically), which
@@ -15,7 +15,7 @@ HOW THIS STAYS FIXED
 The guard now pushes a snapshot whenever Browse is not the active surface
 (the cached page is still reused, nothing is re-fetched). This scenario boots
 the REAL Main.qml and walks the reported flow: open a playlist page, leave it
-via the My Tidal tab, drill into a playlist folder, reopen the same playlist,
+via the My Music tab, drill into a playlist folder, reopen the same playlist,
 then assert one snapshot was pushed and that Back returns to the folder.
 
 Runs in a SUBPROCESS for the same reason as test_browse_back_scroll: building
@@ -95,7 +95,7 @@ def _run_scenario() -> int:
         loop.exec()
 
     settle()
-    # 1. Open a playlist page, then leave it via the My Tidal nav tab: the
+    # 1. Open a playlist page, then leave it via the My Music nav tab: the
     #    browse key stays behind, which is the bug's precondition.
     q('openPlaylistPage("p1")')
     settle()
@@ -122,7 +122,7 @@ def _run_scenario() -> int:
     in_folder = bool(q("libraryOpen")) and q("plCurrentFolder") == "f1" and q("libraryCategory") == "playlists"
 
     print(f"pushed={pushed} backLabel={label!r} backInFolder={in_folder}", flush=True)
-    return EXIT_OK if pushed == 1 and label == "My Tidal" and in_folder else EXIT_REGRESSED
+    return EXIT_OK if pushed == 1 and label == "My Music" and in_folder else EXIT_REGRESSED
 
 
 if __name__ == "__main__" and "--run-scenario" in sys.argv:

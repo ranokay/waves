@@ -10,10 +10,10 @@ trail. Four behaviours make that trail livable and must not regress:
    extends it. Back and Forward still walk the WHOLE history across
    sections, they just stop spelling the crossing out in crumbs. This is
    what bounds the trail's depth.
-2. TRIM-ON-REVISIT: arriving at a SECTION ROOT (Search, My Tidal, Browse
+2. TRIM-ON-REVISIT: arriving at a SECTION ROOT (Search, My Music, Browse
    home, Settings) already in the history cuts the history back to just
    before it. Without this, flipping between two tabs stacks Search >
-   My Tidal > Search > ... twenty deep (reported from livetesting) and
+   My Music > Search > ... twenty deep (reported from livetesting) and
    every crumb and Back press replays the oscillation. Deep pages are NOT
    trimmed (test_folder_back_navigation covers why).
 3. The trim may only discard section roots. Anything real in the way (an
@@ -125,7 +125,7 @@ def _run_scenario() -> int:
     q("navHistory = []")
     settle()
 
-    # Journey: Search -> My Tidal -> Settings. Two history entries.
+    # Journey: Search -> My Music -> Settings. Two history entries.
     q("openLibrary()")
     settle()
     # The settings gear's click path, one statement per expression (QML
@@ -138,7 +138,7 @@ def _run_scenario() -> int:
     settle()
     # Both entries are recorded, but the trail only shows the section the user
     # is in: the Search crumb belongs to the tab they left behind.
-    grew = q("navHistory.length") == 2 and q("crumbLabels.join('|')") == "My Tidal|Settings"
+    grew = q("navHistory.length") == 2 and q("crumbLabels.join('|')") == "My Music|Settings"
 
     # 1. TRIM-ON-REVISIT: going back to Search (already crumb 0) must trim
     #    the whole oscillation away, not stack a third and fourth entry.
@@ -152,7 +152,7 @@ def _run_scenario() -> int:
     # trims to empty and the trail is just the lit Search pill.
     trimmed = q("navHistory.length") == 0 and q("crumbLabels.join('|')") == "Search"
 
-    # 2. navTo: rebuild Search -> My Tidal -> Settings, then jump straight
+    # 2. navTo: rebuild Search -> My Music -> Settings, then jump straight
     #    to crumb 0 (Search). The history must pop whole, not one step.
     q("openLibrary()")
     settle()
