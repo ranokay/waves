@@ -705,13 +705,19 @@ class AppleProvider(Provider):
         if kind in ("album", "playlist"):
             return bool(cls._relationship_items(item, "tracks"))
         if kind == "artist":
+            # Complete means the page builders can actually read it:
+            # attributed relationship entries, or view data somewhere. An
+            # Apple search summary lists an artist's albums as reference
+            # stubs (id/type/href, no attributes) with no views; accepting
+            # those left every artist page with blank album rows and no top
+            # tracks (issue #216).
             relationships = item.get("relationships") or {}
             for rel in relationships.values():
                 if not isinstance(rel, dict):
                     continue
-                data = rel.get("data")
-                if isinstance(data, list) and data:
-                    return True
+                for res in rel.get("data") or []:
+                    if isinstance(res, dict) and cls._attributes(res).get("name"):
+                        return True
                 if cls._has_view_data(rel.get("views")):
                     return True
             return cls._has_view_data(item.get("views"))
@@ -880,33 +886,45 @@ class AppleProvider(Provider):
         return [entry for entry in data if isinstance(entry, dict)]
 
     def artist_page(self, artist_item: dict) -> dict:
-        """An artist's albums, singles and top tracks as Waves row dicts."""
+        """An artist's albums, singles and top tracks as Waves row dicts.
+
+        A canonical artist carries the same releases twice — once in the
+        ``albums`` relationship (the complete list) and once in the named
+        views (the classified shelves, top-songs among them) — so the views
+        are read first and every later entry with the same id is skipped:
+        each release renders on exactly one shelf, and the three rows the
+        views omit still land as albums. Entries without a name never
+        become rows.
+        """
         attrs = self._attributes(artist_item)
         albums: list[dict] = []
         singles: list[dict] = []
         tracks: list[dict] = []
+        seen: set[str] = set()
         artist_ids = {
             str(attrs.get("name") or "").casefold(): self._id(artist_item.get("id")) if artist_item.get("id") else ""
         }
+        views = artist_item.get("views") or {}
+        if isinstance(views, dict):
+            for view_name, view in views.items():
+                view_data = (view or {}).get("data") if isinstance(view, dict) else None
+                if isinstance(view_data, list):
+                    self._sort_artist_resources(view_data, str(view_name), albums, singles, tracks, artist_ids, seen)
         relationships = artist_item.get("relationships") or {}
         for key, rel in relationships.items():
             if not isinstance(rel, dict):
                 continue
             data = rel.get("data")
             items = data if isinstance(data, list) else []
-            views = rel.get("views") if isinstance(rel.get("views"), dict) else None
-            if views:
-                for view_name, view in views.items():
+            rel_views = rel.get("views") if isinstance(rel.get("views"), dict) else None
+            if rel_views:
+                for view_name, view in rel_views.items():
                     view_data = (view or {}).get("data") if isinstance(view, dict) else None
                     if isinstance(view_data, list):
-                        self._sort_artist_resources(view_data, str(view_name), albums, singles, tracks, artist_ids)
-            self._sort_artist_resources(items, str(key), albums, singles, tracks, artist_ids)
-        views = artist_item.get("views") or {}
-        if isinstance(views, dict):
-            for view_name, view in views.items():
-                view_data = (view or {}).get("data") if isinstance(view, dict) else None
-                if isinstance(view_data, list):
-                    self._sort_artist_resources(view_data, str(view_name), albums, singles, tracks, artist_ids)
+                        self._sort_artist_resources(
+                            view_data, str(view_name), albums, singles, tracks, artist_ids, seen
+                        )
+            self._sort_artist_resources(items, str(key), albums, singles, tracks, artist_ids, seen)
         return {
             "id": self._id(artist_item.get("id")),
             "name": str(attrs.get("name") or ""),
@@ -925,17 +943,27 @@ class AppleProvider(Provider):
         singles: list[dict],
         tracks: list[dict],
         artist_ids: dict[str, str],
+        seen: set[str],
     ) -> None:
         lowered = view_name.lower()
         for res in resources:
             if not isinstance(res, dict) or not res.get("id"):
                 continue
+            rid = str(res.get("id"))
+            if rid in seen:
+                continue
             rtype = str(res.get("type") or "").lower()
             if rtype == "songs" or (("top" in lowered or "song" in lowered) and rtype in ("", "songs")):
                 if rtype == "" and not self._attributes(res).get("albumName"):
                     continue
+                seen.add(rid)
                 tracks.append(self._track_row(res, artist_ids))
             elif rtype in ("albums", ""):
+                # A nameless entry is a reference stub, not a renderable row;
+                # the completeness check should have refetched it away.
+                if not self._attributes(res).get("name"):
+                    continue
+                seen.add(rid)
                 row = self._album_row(res, artist_ids)
                 if "single" in lowered or "ep" in lowered:
                     singles.append(row)
