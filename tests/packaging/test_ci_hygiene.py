@@ -9,6 +9,10 @@ module from a cold runner.
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+
 import yaml
 from support.paths import REPO_ROOT
 
@@ -66,13 +70,50 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
     assert "~/AppData/Local/Nuitka/Nuitka/Cache" in path
 
     # One cache per matrix leg (the legacy macOS flavors build different Qt
-    # bindings), invalidated by the lockfile and by the build recipe itself,
-    # with a fallback salted the same way.
+    # bindings), invalidated by the lockfile and by the build inputs that
+    # change the objects. The fallback prefix spans dependency bumps but not
+    # recipe changes.
     key = str(with_block["key"])
-    assert "matrix.OS_ARCH" in key and "poetry.lock" in key
-    assert "release-or-test-build.yml" in key
     restore_keys = str(with_block["restore-keys"])
-    assert "matrix.OS_ARCH" in restore_keys and "release-or-test-build.yml" in restore_keys
+    for part in ("matrix.OS_ARCH", "Makefile", "pyproject.toml", "release-or-test-build.yml"):
+        assert part in key, part
+        assert part in restore_keys, part
+    assert "poetry.lock" in key
+    assert key == restore_keys.strip() + "${{ hashFiles('poetry.lock') }}"
 
     # The cached ccache must stay inside the repository cache budget.
     assert wf["jobs"]["build"]["env"]["CCACHE_MAXSIZE"] == "2G"
+
+
+def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:
+    make = shutil.which("make")
+    assert make, "make is not on PATH; every release build needs it"
+    result = subprocess.run(  # noqa: S603 (fixed argv: the resolved make, one dry-run target)
+        [make, "-n", "gui-waves"],
+        cwd=REPO_ROOT,
+        env={**os.environ, **extra_env},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def test_windows_builds_ask_nuitka_for_low_memory():
+    """MSVC dies compiling yt-dlp's generated C at full parallelism, so both
+    Windows legs must build with one C compiler job (the numbers live in
+    docs/platform-enablement-review.md and its evidence file)."""
+    wf = yaml.safe_load(RELEASE_WORKFLOW.read_text())
+    windows_legs = [
+        leg
+        for leg in wf["jobs"]["build"]["strategy"]["matrix"]["include"]
+        if str(leg.get("os", "")).startswith("windows")
+    ]
+    assert len(windows_legs) == 2, "expected both Windows legs in the matrix"
+    for leg in windows_legs:
+        assert "WAVES_NUITKA_FLAGS=--low-memory" in str(leg["CMD_BUILD"]), leg["os"]
+
+    # The Makefile default is what local Windows builds get; it must resolve
+    # from OS=Windows_NT alone and stay out of the other platforms' commands.
+    assert "--low-memory" in _dry_run_nuitka_command({"OS": "Windows_NT"})
+    assert "--low-memory" not in _dry_run_nuitka_command({"OS": ""})
