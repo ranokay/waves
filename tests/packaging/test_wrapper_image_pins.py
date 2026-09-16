@@ -9,6 +9,8 @@ APK and guest-lib pins, so a pin bump without a runbook update fails here.
 
 from __future__ import annotations
 
+import re
+
 import yaml
 from support.paths import REPO_ROOT
 
@@ -83,8 +85,16 @@ def test_the_publish_adds_notices_and_provenance_labels():
     prepare = next((s for s in steps if s.get("name") == "Prepare notices"), None)
     assert prepare is not None, "the publish lost its notices stage"
     run = str(prepare.get("run", ""))
-    for name in ("NOTICE", "Apache-2.0.txt", "BSD-3-Clause.txt", "BSD-2-Clause.txt"):
+    notices = ("NOTICE", "Apache-2.0.txt", "BSD-3-Clause.txt", "BSD-2-Clause.txt")
+    for name in notices:
         assert f"tools/wrapper-image/{name}" in run
+    # Every source the stage copies must exist in the repo: a notice the
+    # workflow names but git does not carry fails the publish in this step,
+    # before the build (issue #208).
+    copied = set(re.findall(r"cp (tools/wrapper-image/\S+)", run))
+    assert copied == {f"tools/wrapper-image/{name}" for name in notices}
+    for src in copied:
+        assert (REPO_ROOT / src).is_file(), f"the publish copies {src}, which is not in the repo"
     assert "COPY notices/NOTICE /licenses/NOTICE" in run
 
     build = next(s for s in steps if s.get("name") == "Build and push")
