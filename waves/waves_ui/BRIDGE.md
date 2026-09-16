@@ -41,6 +41,19 @@ runtime management) come from the registry built where the providers are
 wired. `appleStatus()` answers `{state, word, actions}` — the same action
 list the schema bakes — so a live light flip moves its pills with it.
 
+The header's per-provider marks come from two answer-only slots, both
+composed from the descriptors so a third provider needs no QML edit
+(issue #223). `providerLights()` answers `[{id, name, state, word}]`, one
+entry per provider with a status to report: a session-kind provider's
+sign-in state (`signed_in` / `signed_out`) or a setup-kind provider's setup
+light (Apple's five states, `off` contributing none). The QML renders a dot
+per entry and re-reads on `loggedInChanged` / `appleStatusChanged`;
+sign-out lives on the TIDAL card, never in the header. `browseNav()` answers
+`{available, signed_in}`: Browse exists while a configured provider declares
+`Capability.BROWSE` and is hidden when none does (never a permanently blank
+tab), and `signed_in` is that provider's live session, which the landing
+pane offers its sign-in call to action for.
+
 ## Search, artist pages, library
 
 | Signal                                                     | Fires when                                                                                                                                                 |

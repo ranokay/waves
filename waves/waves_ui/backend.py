@@ -3884,6 +3884,97 @@ def _saved_shelf_sources(bridge) -> list[dict]:
     ]
 
 
+# ----- the header's per-provider lights (issue #223) -----
+#
+# The top bar's compact status marks, one per provider that has a status to
+# report. Composed here from the provider's descriptor and the live state its
+# ``status_kind`` names, so a third provider appears in the header with no QML
+# edit and no surface says "OFFLINE" about an account the app can still work
+# without. A provider with no status (StatusKind.NONE) contributes no light,
+# and neither does a SETUP provider that is off: a disabled provider is not
+# availability to report. TIDAL sign-out lives on its provider card, never
+# here (the card already renders the state-matched action).
+
+
+def _provider_setup_flags(bridge, provider) -> dict:
+    """The live flags behind a SETUP provider's light.
+
+    The probe lives where the provider is wired (the bridge owns the runtime
+    and cookies reads); a provider whose probe is missing or fails reads as
+    disabled, so it contributes no light rather than a false one.
+    """
+    probe = getattr(bridge, "_provider_status_probes", {}).get(getattr(provider, "id", ""))
+    if probe is None:
+        return {}
+    try:
+        return dict(probe() or {})
+    except Exception:
+        logger.debug("A provider's setup-status probe failed", exc_info=True)
+        return {}
+
+
+def _provider_light(bridge, provider) -> dict | None:
+    """One provider's header light, or None when it has no status to report.
+
+    The word is the user-facing truth for the mark; nothing here is provider
+    identity logic, only the shape the descriptor's status_kind names.
+    """
+    descriptor = provider.descriptor()
+    if descriptor.status_kind == StatusKind.SESSION:
+        logged_in = _session_logged_in(bridge, provider)
+        return {
+            "id": descriptor.id,
+            "name": descriptor.name,
+            "state": "signed_in" if logged_in else "signed_out",
+            "word": "Connected" if logged_in else "Signed out",
+        }
+    if descriptor.status_kind == StatusKind.SETUP:
+        flags = _provider_setup_flags(bridge, provider)
+        described = _apple_status(
+            bool(flags.get("enabled", False)),
+            runtime_ready=bool(flags.get("runtime_ready", False)),
+            signed_in=bool(flags.get("signed_in", False)),
+            needs_attention=bool(flags.get("needs_attention", False)),
+            cookies_ready=bool(flags.get("cookies_ready", False)),
+        )
+        if described["state"] == "off":
+            return None
+        return {
+            "id": descriptor.id,
+            "name": descriptor.name,
+            "state": described["state"],
+            "word": described["word"],
+        }
+    return None
+
+
+def _provider_lights(bridge) -> list[dict]:
+    """Every provider light, in the registry's insertion order."""
+    lights = (_provider_light(bridge, provider) for provider in _provider_registry(bridge))
+    return [light for light in lights if light is not None]
+
+
+def _browse_nav(bridge) -> dict:
+    """Browse's availability for the header and its landing pane.
+
+    Browse is editorial and account-scoped: the destination exists while a
+    configured provider declares ``Capability.BROWSE`` and is absent when none
+    does (the capability is the whole rule; provider identity never enters
+    it). ``signed_in`` answers whether any such provider holds a live session,
+    which decides between the page and the sign-in call to action -- never a
+    blank pane.
+    """
+    providers = [
+        provider
+        for provider in _provider_registry(bridge)
+        if Capability.BROWSE in getattr(provider, "capabilities", frozenset())
+    ]
+    return {
+        "available": bool(providers),
+        "signed_in": any(_session_logged_in(bridge, provider) for provider in providers),
+    }
+
+
 class WavesBridge(LibraryMixin, QObject):
     """The single object exposed to QML as the ``waves`` context property.
 
@@ -4232,6 +4323,12 @@ class WavesBridge(LibraryMixin, QObject):
         self._provider_signout_flows = {
             CTX_TIDAL: self.logout,
             CTX_APPLE: self.appleSignOut,
+        }
+        # The live flags behind a SETUP provider's header light (issue #223):
+        # registered where the provider is wired, like the flows above, so
+        # the light composer names no provider.
+        self._provider_status_probes = {
+            CTX_APPLE: self._apple_live_flags,
         }
         self._provider_verb_flows = {
             CTX_APPLE: {
@@ -5478,6 +5575,30 @@ class WavesBridge(LibraryMixin, QObject):
                 }
             )
         return cards
+
+    @Slot(result="QVariant")
+    def providerLights(self) -> list:
+        """The header's compact per-provider status marks (issue #223).
+
+        One light per provider that has a status to report, composed from the
+        descriptors and the live state (a session, a setup light); re-read
+        whenever the session or the Apple status moves. The header renders
+        these instead of hardcoding the providers, so a third provider needs
+        no QML edit and no global "OFFLINE" word exists.
+        """
+        return _provider_lights(self)
+
+    @Slot(result="QVariant")
+    def browseNav(self) -> dict:
+        """Browse's availability: ``{available, signed_in}`` (issue #223).
+
+        ``available`` is capability-driven -- no configured provider declares
+        BROWSE, and the destination is hidden rather than left permanently
+        empty. ``signed_in`` says whether the browse provider holds a live
+        session, which is what the landing pane offers its sign-in call to
+        action for.
+        """
+        return _browse_nav(self)
 
     @Slot()
     def showSetup(self) -> None:
