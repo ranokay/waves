@@ -18,6 +18,8 @@ from support.paths import REPO_ROOT
 
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "wrapper-image.yml"
 RUNBOOK = REPO_ROOT / "docs" / "wrapper-image.md"
+# SPDX templates that must never ship as a notice (issue #210).
+TEMPLATE_MARKERS = ("<year>", "<owner>")
 
 
 def _workflow() -> dict:
@@ -117,7 +119,7 @@ def test_the_publish_adds_notices_and_provenance_labels():
         # The text must be a real license, not an SPDX template: #210 shipped
         # `Copyright (c) <year> <owner>` for a while because nothing read it.
         text = path.read_text()
-        assert "<year>" not in text and "<owner>" not in text, f"{src} is still a license template"
+        assert not any(marker in text for marker in TEMPLATE_MARKERS), f"{src} is still a license template"
     assert "COPY notices/NOTICE /licenses/NOTICE" in run
 
     build = next(s for s in steps if s.get("name") == "Build and push")

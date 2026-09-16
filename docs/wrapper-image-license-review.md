@@ -45,11 +45,12 @@ who pulls it.
    `aosp-mirror/platform_bionic` notices (`libc/NOTICE`, `linker/NOTICE`)
    carry the same clauses with per-file year ranges for the vendor'd `libc`,
    `libm` and `linker64` binaries. The image ships one generic text per
-   license family, not per-file excerpts; the two-clause file is bionic
-   `libm/NOTICE`'s AOSP-authored entry (`Copyright (C) 2014 The Android Open
-Source Project`), replaced on 2026-09-16 after a review found an unfilled
-   SPDX template in its place. The notices test now rejects `<year>`/`<owner>`
-   markers, so a template cannot ship again.
+   license family, not per-file excerpts; the two-clause file is the
+   canonical two-clause terms (verified against SPDX's `BSD-2-Clause` text,
+   2026-09-16) under a provenance header that points at the per-file AOSP
+   notices. It replaced an unfilled SPDX template on 2026-09-16, and the
+   notices test rejects `<year>`/`<owner>` markers, so a template cannot ship
+   again.
 3. **No image provenance labels.** Fixed in the same pipeline change: OCI
    title, source, revision (the exact wrapper-v2 commit), licenses and
    description labels are set through the build action. The current `0.2.3`
