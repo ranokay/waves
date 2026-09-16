@@ -111,8 +111,13 @@ def test_the_publish_adds_notices_and_provenance_labels():
     # is exactly how that hid from the previous check.
     tracked = _tracked_wrapper_files()
     for src in copied:
-        assert (REPO_ROOT / src).is_file(), f"the publish copies {src}, which is not on disk"
+        path = REPO_ROOT / src
+        assert path.is_file(), f"the publish copies {src}, which is not on disk"
         assert src in tracked, f"the publish copies {src}, which git does not track"
+        # The text must be a real license, not an SPDX template: #210 shipped
+        # `Copyright (c) <year> <owner>` for a while because nothing read it.
+        text = path.read_text()
+        assert "<year>" not in text and "<owner>" not in text, f"{src} is still a license template"
     assert "COPY notices/NOTICE /licenses/NOTICE" in run
 
     build = next(s for s in steps if s.get("name") == "Build and push")
