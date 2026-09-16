@@ -4201,7 +4201,7 @@ class WavesBridge(LibraryMixin, QObject):
     # An Apple download was requested before setup completed (spec §7.1):
     # QML routes this into the setup wizard at the sign-in step instead of
     # leaving a dead button.
-    appleSetupRequested = Signal(str)  # reason: the wizard step to open ("cookies" | "runtime") or "setup" for the top
+    appleSetupRequested = Signal(str)  # reason: the wizard step to open ("cookies"/"runtime"); "" or "setup" = the top
     # The welcome surface was asked to re-open (Settings -> Providers); QML
     # owns where it renders, the bridge only forwards the command.
     setupRequested = Signal()
@@ -5586,7 +5586,7 @@ class WavesBridge(LibraryMixin, QObject):
                     "logo": descriptor.logo,
                     "logo_width": descriptor.logo_width,
                     "summary": descriptor.capability_summary,
-                    "action": descriptor.card_action,
+                    "action": descriptor.welcome_action,
                     "state": light.get("state", ""),
                     "word": light.get("word", ""),
                 }

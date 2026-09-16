@@ -2744,12 +2744,15 @@ Item {
                                             id: setupCol
                                             visible: modelData.type === "apple_setup"
                                             width: parent.width; spacing: 8
-                                            // The tier the live light reports: cookies/full
-                                            // mean downloads are unlocked, so there is
-                                            // nothing left for "skip for now" to defer.
-                                            readonly property string appleTier: page.appleSetupLive
-                                                ? String(page.appleSetupLive.tier || "none") : "none"
-                                            readonly property bool skippable: appleTier !== "cookies" && appleTier !== "full"
+                                            // Whether a download can start from the live
+                                            // state (the bridge's own verdict, never a
+                                            // re-derivation of tier words here): once one
+                                            // can, there is nothing left for "skip for
+                                            // now" to defer.
+                                            readonly property bool skippable: !(
+                                                page.appleSetupLive && page.appleSetupLive.light
+                                                && page.appleSetupLive.light.downloads_ready === true
+                                            )
                                             Component.onCompleted: {
                                                 if (modelData.type === "apple_setup") page.appleSetupLive = waves.appleSetupState()
                                             }
@@ -2960,14 +2963,15 @@ Item {
                                                 color: page.textDim; font.pixelSize: 12; wrapMode: Text.WordWrap
                                                 textFormat: Text.PlainText
                                             }
-                                            // "Skip for now" (story 20): leave the
-                                            // remaining steps for later without undoing
-                                            // the choice. Apple stays enabled, so search
-                                            // and previews keep working; the status row
-                                            // above still reports the truth, and Settings
-                                            // (or any empty state) is the way back.
+                                            // "Skip for now" (the onboarding spec,
+                                            // #213): leave the remaining steps for
+                                            // later without undoing the choice.
+                                            // Apple stays enabled, so search and
+                                            // previews keep working; the status row
+                                            // above still reports the truth, and
+                                            // Settings (or any empty state) is the
+                                            // way back.
                                             Text {
-                                                id: appleSkipTxt
                                                 objectName: "appleSetupSkip"
                                                 visible: setupCol.skippable
                                                 text: "SKIP FOR NOW"

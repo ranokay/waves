@@ -558,6 +558,10 @@ def describe_setup(
         "state": state,
         "word": _STATE_WORDS[state],
         "tier": tier,
+        # Whether an Apple download can start at all from this state (an
+        # account exists): the wizard's "skip for now" retires once true,
+        # and callers read this rather than re-deriving the tier words.
+        "downloads_ready": tier in ("cookies", "full"),
         "next_step": next_step,
     }
 

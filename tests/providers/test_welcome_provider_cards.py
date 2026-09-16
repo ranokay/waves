@@ -28,14 +28,14 @@ from waves.providers.tidal import TidalProvider
 from waves.waves_ui import backend
 
 
-def test_both_providers_state_their_card_action():
-    # Story 16: the Apple card says what it does (a one-time setup, no Apple
-    # account needed for search), never "Sign in".
+def test_both_providers_state_their_welcome_action():
+    # The onboarding spec (#213), Apple card: it says what it does (a one-time
+    # setup, no Apple account needed for search), never "Sign in".
     tidal = TidalProvider.descriptor()
     apple = AppleProvider.descriptor()
 
-    assert tidal.card_action == "Continue with TIDAL"
-    assert apple.card_action == "Set up Apple Music"
+    assert tidal.welcome_action == "Continue with TIDAL"
+    assert apple.welcome_action == "Set up Apple Music"
 
 
 def test_a_card_carries_its_live_status():
@@ -66,7 +66,7 @@ def test_a_third_provider_contributes_its_action_and_status():
     assert (card["state"], card["word"]) == ("signed_in", "Signed in")
 
 
-def test_the_card_action_is_descriptor_data_not_qml_copy():
+def test_the_welcome_action_is_descriptor_data_not_qml_copy():
     # The welcome renders the bridge's card fields; the copy lives in the
     # descriptors, so a provider's own words reach the surface unedited.
     qml = (Path(backend.__file__).resolve().parent / "qml" / "Main.qml").read_text(encoding="utf-8")

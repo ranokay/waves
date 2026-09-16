@@ -68,9 +68,9 @@ card never states a stale account state (issue #219).
 
 `appleSetupRequested(reason)` carries the wizard step a pre-setup click was
 missing: `"cookies"` (no account yet — the cookies/wrapper tier) or
-`"runtime"` (no fetch binary), or `"setup"` for the wizard's top. The Apple
-wizard marks the named step in place; `appleSetupSkipped()` travels the other
-way (Settings → Main) so a skip lands on Search with Apple still enabled.
+`"runtime"` (no fetch binary), or `"setup"` / `""` for the wizard's top. The
+Apple wizard marks the named step in place, and SKIP FOR NOW leaves the page
+for Search with Apple still enabled.
 
 ## Search, artist pages, library
 

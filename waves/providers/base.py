@@ -174,7 +174,7 @@ class ProviderDescriptor:
     logo_header_height: int = 14  # the section header tile's mark height, px
     capability_summary: str = ""  # one honest line, for onboarding cards
     card_desc: str = ""  # the Settings card's longer blurb
-    card_action: str = ""  # the welcome card's action label (the provider's own words)
+    welcome_action: str = ""  # the welcome card's action label (the provider's own words)
     settings_fields: tuple[str, ...] = ()
     status_kind: StatusKind = StatusKind.SESSION
 

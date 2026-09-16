@@ -104,6 +104,19 @@ def _step_y(key: str) -> str:
     )
 
 
+def _download_tap_point(media_id: str) -> str:
+    """Scene coordinates of one rendered row's real download tap area."""
+    return scene_js(
+        "  var hit = findFirst(root, function (o) {"
+        f" return o.objectName === 'dbTapArea' && o.visible === true"
+        f" && o.parent && String(o.parent.mediaId) === {json.dumps(media_id)}; }});\n"
+        "  if (!hit || hit.width <= 0 || hit.height <= 0) return null;\n"
+        "  var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);\n"
+        "  if (p.x < 0 || p.y < 0 || p.x > root.width || p.y > root.height) return null;\n"
+        "  return JSON.stringify([p.x, p.y]);\n"
+    )
+
+
 _APPLE_TRACK_ROW = {
     "id": "apple:900",
     "title": "Selected Ambient Works",
@@ -282,6 +295,23 @@ def _run_scenario() -> int:  # noqa: C901 (one straight journey)
     if q("settingsPage.appleFocusStep") != "":
         failures.append("the wizard's step mark survived leaving the page")
 
+    # Re-opened welcome page, Apple already enabled (the state Skip leaves
+    # behind): choosing the card still opens the wizard, or the re-open is a
+    # dead end that closes the surface and opens nothing.
+    q("waves.showSetup()")
+    settle(400)
+    if not q("setupPane.visible"):
+        failures.append("the Settings pill did not re-open the welcome page")
+    elif not _click(root, q, settle, _text_point("setupPane", "SET UP APPLE MUSIC"), "root.settingsOpen === true"):
+        failures.append("choosing an already-enabled Apple did not open the wizard")
+    else:
+        if q("setupPane.visible"):
+            failures.append("the re-opened welcome page stayed up after choosing Apple")
+        if q("settingsPage.appleFocusStep") != "":
+            failures.append("the re-open's Apple choice marked a step instead of the wizard top")
+    q("root.openSearch()")
+    settle(300)
+
     # Search works before setup completes: an Apple-only answer renders its
     # group with no TIDAL session in the picture.
     q("root._searchSeq = root._navSeq; root.lastSearchQuery = 'ambient'")
@@ -292,13 +322,15 @@ def _run_scenario() -> int:  # noqa: C901 (one straight journey)
     if bool(q("emptyHint.visible")):
         failures.append("the Search empty state stayed over an answered search")
 
-    # 4. A pre-setup download click routes to the step that was missing. The
-    #    bridge emits the reason (the click's own seam); the page opens on the
-    #    Apple card and marks that step.
-    bridge.appleSetupRequested.emit("cookies")
-    settle(500)
-    if not q("root.settingsOpen"):
-        failures.append("the pre-setup click did not open the setup surface")
+    # 4. A pre-setup download click routes to the step that was missing. This
+    #    is the REAL click: the row's tap area calls waves.downloadTrack, the
+    #    bridge's setup gate finds no account and asks for the cookies step.
+    apple_provider = bridge.providers["apple"]
+    apple_provider.cached = lambda kind, raw_id: {"id": raw_id} if str(raw_id) == "apple:900" else None
+    apple_provider.row_for = lambda kind, raw: dict(_APPLE_TRACK_ROW)
+    if not _click(root, q, settle, _download_tap_point("apple:900"), "root.settingsOpen === true"):
+        failures.append("the pre-setup download click did not open the setup surface")
+    settle(400)
     if q("settingsPage.appleFocusStep") != "cookies":
         failures.append(f"the pre-setup click did not name the cookies step: {q('settingsPage.appleFocusStep')}")
     if not q(_visible("settingsPage", "appleStepMark_cookies")):
@@ -306,8 +338,24 @@ def _run_scenario() -> int:  # noqa: C901 (one straight journey)
     if q(_visible("settingsPage", "appleStepMark_runtime")):
         failures.append("an unrelated step is marked for the pre-setup click")
 
-    bridge.appleSetupRequested.emit("runtime")
-    settle(500)
+    # The missing fetch binary routes the next click to the runtime step: the
+    # account gate opens (a real cookies export), the binary gate asks for the
+    # managed runtime instead.
+    import tempfile
+
+    cookies = Path(tempfile.mkdtemp(prefix="waves-apple-journey-")) / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    bridge.settings.data.apple_cookies_path = str(cookies)
+    bridge._configure_apple_provider()
+    # The fetch-binary probe is the host's to answer (this machine's PATH may
+    # already carry N_m3u8DL-RE); the scenario owns it so the missing-binary
+    # route is what is under test, not the host's toolchain.
+    bridge._apple_fetch_binary_ready = lambda: False
+    q("root.openSearch()")
+    settle(300)
+    if not _click(root, q, settle, _download_tap_point("apple:900"), "root.settingsOpen === true"):
+        failures.append("the missing-binary click did not open the setup surface")
+    settle(400)
     if q("settingsPage.appleFocusStep") != "runtime":
         failures.append(f"the missing-binary click did not name the runtime step: {q('settingsPage.appleFocusStep')}")
     if not q(_visible("settingsPage", "appleStepMark_runtime")):
