@@ -49,3 +49,15 @@ _Avoid_: history, cache
 
 **Config-first**:
 The standing principle that anything possibly configurable is exposed in Settings rather than hardcoded.
+
+**Onboarding**:
+The first-run conversation that offers each provider and a skip, answered at most once per install; every path through it is cancellable, and setup can be resumed later without starting over.
+_Avoid_: first-run wizard, setup flow
+
+**My Music**:
+The home surface for the user's music: the Library first, in its Saved and All-files views, then the saved shelves each enabled provider can fill, labelled by source only when more than one contributes.
+_Avoid_: My Tidal, account home
+
+**Saved vs Library**:
+Two different collections. Saved means the files Waves itself downloaded, each carrying the provider it came from; Library means every audio file in the folder Waves scans, whoever put it there. A saved file is normally part of the library, but the two answer different questions: what Waves saved, and what is on disk.
+_Avoid_: downloads (for Library), collection (for either)
