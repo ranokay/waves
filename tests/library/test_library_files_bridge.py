@@ -192,6 +192,47 @@ def test_a_reload_drops_the_first_pages_answer_in_flight(tmp_path):
     assert [e[0] for e in bridge.libraryFilesLoaded.emits] == ["saved"]
 
 
+def test_a_superseded_append_neither_leaks_nor_steals_the_scroll_guard(tmp_path):
+    """The in-flight append guard is keyed by the load it belongs to.
+
+    Both simpler shapes are wrong: clearing it before the stale check let a
+    superseded worker drop a NEWER append's guard, and clearing it only after
+    the check leaked the guard when a reload raced the append -- and either
+    way every later append for that view returned early, stopping infinite
+    scroll for the rest of the session.
+    """
+    from conftest import _InlinePool
+
+    bridge, _pathmap, _ids = _seed(tmp_path)
+    bridge.loadLibraryFiles("all")  # the inline pool: page one loaded
+    held = []
+
+    class _HeldPool:
+        def start(self, worker, priority=0):
+            held.append(worker)
+
+    bridge.threadpool = _HeldPool()
+    bridge.loadMoreLibraryFiles("all", 0)
+    stale_gen = bridge._library_files_loading["all"]
+
+    # A reload ships while the append is in flight (a scan publish).
+    bridge.threadpool = _InlinePool()
+    bridge.loadLibraryFiles("all")
+    assert "all" not in bridge._library_files_loading  # no leaked guard
+
+    # A newer append starts; the stale worker landing must keep its guard.
+    bridge.threadpool = _HeldPool()
+    bridge.loadMoreLibraryFiles("all", 0)
+    fresh_gen = bridge._library_files_loading["all"]
+    assert fresh_gen != stale_gen
+    held[0].run()
+    assert bridge._library_files_loading["all"] == fresh_gen
+    assert bridge.libraryFilesMore.emits == []  # the stale page was dropped
+    held[1].run()
+    assert bridge.libraryFilesMore.emits  # the newer append answered
+    assert "all" not in bridge._library_files_loading
+
+
 def test_a_scan_that_loses_a_file_empties_its_saved_row(tmp_path):
     """The acceptance's moved-out file: after the rescan the file is gone from
     the scan, and the next page must not keep claiming it."""

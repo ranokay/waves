@@ -64,6 +64,17 @@ def _album_tags(title="Alb", artist="A", date="2000"):
     return {"album": title, "artist": artist, "date": date}
 
 
+def _expire_item_id_capture(idx):
+    """Put a scanned cache back in the pre-#222 state: its rows exist with the
+    item_id column NULL, exactly what the ALTER leaves an existing cache's
+    track rows. The public seam cannot produce that state (its probe always
+    answers something), so the migration fixture reaches the schema directly
+    -- the same way this suite's other legacy-cache tests do."""
+    with idx._lock:
+        idx._conn.execute("UPDATE tracks SET item_id = NULL")
+        idx._conn.commit()
+
+
 # --- the scan reads and stores the id ---------------------------------------
 
 
@@ -170,10 +181,7 @@ def test_a_pre_item_id_cache_backfills_once_then_rests(tmp_path):
         read_item_id=lambda p: "42",
     )
     idx.refresh(lib)
-    # Simulate the pre-#222 cache: the column arrives with NULL on every row.
-    with idx._lock:
-        idx._conn.execute("UPDATE tracks SET item_id = NULL")
-        idx._conn.commit()
+    _expire_item_id_capture(idx)  # the pre-#222 cache's NULL rows
     reads.clear()
     idx.refresh(lib)
     assert reads == [os.path.join(d, "1.flac")]  # the one backfill re-read
@@ -384,20 +392,19 @@ def test_a_transient_id_read_failure_retries_instead_of_settling_untagged(tmp_pa
     _tag_mp4(str(track), name="First", item_id="apple:91")
 
     real_file = mutagen.File
-    state = {"full_opens": 0}
+    state = {"failed": False}
 
     def flaky_file(path, *args, **kwargs):
-        if not kwargs.get("easy"):
-            state["full_opens"] += 1
-            # The first full open is the Version probe, the second the item
-            # id: fail THAT one once, exactly like a NAS hiccup between two
-            # reads of a file whose easy tags just read fine.
-            if state["full_opens"] == 2:
-                raise OSError("transient open failure")
+        # The Version probe is injected below, so the item-id read is the only
+        # full open this scan makes: fail it once, exactly like a NAS hiccup a
+        # moment after the file's easy tags read fine.
+        if not kwargs.get("easy") and not state["failed"]:
+            state["failed"] = True
+            raise OSError("transient open failure")
         return real_file(path, *args, **kwargs)
 
     monkeypatch.setattr(mutagen, "File", flaky_file)
-    idx = LibraryIndex(str(tmp_path / "library.sqlite3"))
+    idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_audio_type=lambda p: "stereo")
     idx.refresh(str(tmp_path / "lib"))
     assert idx.files_page("saved")[0] == []  # unknown, not untagged
     idx.refresh(str(tmp_path / "lib"))  # the NULL row owes the retry

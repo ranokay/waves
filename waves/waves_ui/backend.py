@@ -4829,10 +4829,12 @@ class WavesBridge(LibraryMixin, QObject):
         # The Library section's own load state (ADR 0007, issue #222), keyed
         # by view ("saved"/"all") instead of (source, category): one counter
         # per view so a reload of one view drops only its own in-flight
-        # answer, plus one in-flight guard per view so a fast scroll cannot
-        # append the same window twice.
+        # answer, plus the in-flight append's generation per view, so a
+        # superseded worker can neither leak the guard (infinite scroll would
+        # stall) nor clear a newer append's guard (a second window could
+        # start).
         self._library_files_gen: dict[str, int] = {}
-        self._library_files_loading: set[str] = set()
+        self._library_files_loading: dict[str, tuple] = {}
         # Per-(source, category) sort, {(source, category): (order_key,
         # "asc"|"desc")}. Absent = the default (date-added, descending) order.
         # Session-only: a non-default sort is never persisted to the disk page
@@ -7947,7 +7949,7 @@ class WavesBridge(LibraryMixin, QObject):
         without a second call."""
         view = _library_files_view(view)
         gen, lib = self._library_files_start(view)
-        self._library_files_loading.discard(view)
+        self._library_files_loading.pop(view, None)
         if lib is None:
             self.libraryFilesLoaded.emit(view, [], False, 0)
             return
@@ -7956,13 +7958,17 @@ class WavesBridge(LibraryMixin, QObject):
             try:
                 rows, more = lib.files_page(view, 0, _LIBRARY_PAGE)
                 total = lib.files_count(view)
+                # The row build rides inside the guarded block: a bad row must
+                # answer the section with a failure, never die in the worker
+                # with the load state still busy.
+                logos = _provider_logos(self)
+                items = [_library_file_row(row, logos) for row in rows]
             except Exception:
                 logger.exception("Could not load the library files view %s", view)
-                rows, more, total = [], False, -1
+                items, more, total = [], False, -1
             if self._library_files_stale(view, gen):
                 return
-            logos = _provider_logos(self)
-            self.libraryFilesLoaded.emit(view, [_library_file_row(row, logos) for row in rows], more, total)
+            self.libraryFilesLoaded.emit(view, items, more, total)
 
         self.threadpool.start(Worker(work))
 
@@ -7980,23 +7986,25 @@ class WavesBridge(LibraryMixin, QObject):
         if lib is None:
             self.libraryFilesMore.emit(view, [], False, -1)
             return
-        self._library_files_loading.add(view)
+        self._library_files_loading[view] = gen
         start = max(0, int(offset))
 
         def work() -> None:
             try:
                 rows, more = lib.files_page(view, start, _LIBRARY_PAGE)
+                logos = _provider_logos(self)
+                items = [_library_file_row(row, logos) for row in rows]
             except Exception:
                 logger.exception("Could not load more of the library files view %s", view)
-                rows, more = [], True
+                items, more = [], True
+            # The guard clears only when it is still OURS: a superseded worker
+            # must neither leak it (a newer load already replaced it) nor drop
+            # a newer append's guard.
+            if self._library_files_loading.get(view) == gen:
+                del self._library_files_loading[view]
             if self._library_files_stale(view, gen):
                 return
-            # The guard clears HERE, not before the stale check: a superseded
-            # worker must not open the window a newer append for this view is
-            # already using (the check and the clear stay one decision).
-            self._library_files_loading.discard(view)
-            logos = _provider_logos(self)
-            self.libraryFilesMore.emit(view, [_library_file_row(row, logos) for row in rows], more, -1)
+            self.libraryFilesMore.emit(view, items, more, -1)
 
         self.threadpool.start(Worker(work))
 

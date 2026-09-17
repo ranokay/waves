@@ -12319,7 +12319,14 @@ ApplicationWindow {
         }
         function select(v) {
             v = String(v || "")
-            if (v === category) return
+            // The strip is bridge data, so an id it does not name is a wiring
+            // bug: assigning it would blank the section (no list's visibility
+            // gate would match). Only a known view switches.
+            var known = false
+            for (var i = 0; i < views.length; ++i) {
+                if (String(views[i].id) === v) { known = true; break }
+            }
+            if (v === category || !known) return
             category = v
             if (configured) reload()
         }

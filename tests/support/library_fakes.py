@@ -182,7 +182,7 @@ def make_library_bridge(
     s._library_scan_read_t0 = 0.0
     # The Library section's file-page state (ADR 0007, issue #222).
     s._library_files_gen = {}
-    s._library_files_loading = set()
+    s._library_files_loading = {}
     s.libraryPresenceChanged = _Signal()
     s.libraryScanStatusChanged = _Signal()
     s.librarySourceChanged = _Signal()

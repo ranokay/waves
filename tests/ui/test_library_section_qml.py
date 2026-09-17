@@ -217,7 +217,9 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
     root, q, settle, bridge = booted
 
     lib, tags, ids = _seed_library()
-    _register_fake_provider(bridge, "assets/providers/apple-music.png")
+    # A mark no other provider uses: a fallback to Apple's or TIDAL's asset
+    # would then fail the assertion instead of passing by coincidence.
+    _register_fake_provider(bridge, "assets/providers/fake-music.png")
     _install_library(bridge, lib, tags, ids)
     q("root.refreshProviderSurfaces()")
     q("root.openLibrary()")
@@ -254,7 +256,7 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
     # provider's descriptor mark, from the bridge's own registry.
     if q(_row_badge_provider("libSavedList", 2)) != "fake":
         failures.append("a third provider's namespace lost its identity")
-    if q(_row_badge_logo("libSavedList", 2)) != "assets/providers/apple-music.png":
+    if q(_row_badge_logo("libSavedList", 2)) != "assets/providers/fake-music.png":
         failures.append("a third provider's badge did not render its own descriptor mark")
     if q(_row_count("libSavedList")) != 3:
         failures.append("Saved listed a file it should not (or lost one)")
