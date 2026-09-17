@@ -541,6 +541,7 @@ class TestJobSpecDispatch:
 
         def _build_download(signals, **kwargs):
             stub.dl.library_claim = kwargs.get("library_claim")
+            stub.dl.built_kwargs = kwargs
             return stub.dl
 
         class _Pool:
@@ -585,7 +586,7 @@ class TestJobSpecDispatch:
         arm_dispatch(stub)
         return stub
 
-    def _spec(self, *, collection=True, kind="album", object_id="tidal:m1", media_id="m1"):
+    def _spec(self, *, collection=True, kind="album", object_id="tidal:m1", media_id="m1", audio_type=None):
         from waves.waves_ui.backend import _JobSpec
 
         return _JobSpec(
@@ -597,6 +598,7 @@ class TestJobSpecDispatch:
             collection=collection,
             media_id=media_id,
             merge_plan=None,
+            audio_type=audio_type,
         )
 
     def _drive(self, stub, spec):
@@ -661,3 +663,18 @@ class TestJobSpecDispatch:
         self._drive(stub, self._spec())
 
         assert records == [album]
+
+    def test_the_built_download_carries_the_rows_request(self, tmp_path):
+        """The runner hands the download the row's own rung and Version (R-13),
+        never a live Settings read: that carry is what makes a per-click ask
+        independent of the saved defaults. The source guard in
+        tests/settings/test_quality_pinned_per_job.py pairs with this."""
+        provider = _StubProvider()
+        provider.get_object = lambda kind, raw_id: SimpleNamespace(id=raw_id)
+        stub = self._stub_bridge(provider, tmp_path)
+        stub._job_quality = lambda qid: QualityTier.HI_RES_LOSSLESS
+
+        self._drive(stub, self._spec(audio_type="atmos"))
+
+        assert stub.dl.built_kwargs["pinned_quality"] == QualityTier.HI_RES_LOSSLESS
+        assert stub.dl.built_kwargs["audio_type"] == "atmos"
