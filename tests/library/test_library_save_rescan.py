@@ -85,6 +85,10 @@ def _stub(*, enabled=False, source="separate", folder="", download_base="/dl"):
     s.librarySourceChanged = _signal()
     s._logged_in = False
     s._set_status = lambda text: None
+    # applySettings checks whether a saved download folder left an existing
+    # custom quarantine folder overlapping it; the stub answers with the real
+    # helper (no custom value set, so it reads "").
+    s._apple_quarantine_note = WavesBridge._apple_quarantine_note.__get__(s, _Stub)
     return s
 
 
