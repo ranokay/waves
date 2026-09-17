@@ -355,7 +355,8 @@ _FLAG_FIELDS = [
     "lyrics_file_synced_only",
     "lyrics_prefer_lrclib",
     # Lyrics & art matrix (spec section 9.1): word-timed source
-    # toggle (default on) and the verbatim Apple TTML sidecar (default off).
+    # toggle (default on) and the verbatim Apple TTML sidecar (default on,
+    # the ratified best-quality fresh-install set).
     "lyrics_word_timed",
     "lyrics_ttml_file",
     # Per-provider mirrors: each provider's own lyrics/artwork
@@ -401,12 +402,6 @@ _FLAG_FIELDS = [
     "metadata_tag_bpm",
     "metadata_tag_initial_key",
     "metadata_tag_upc",
-    "skip_existing",
-    "confirm_category_download",
-    "symlink_to_track",
-    "playlist_create",
-    "mark_explicit",
-    "use_primary_album_artist",
     # Providers area: the Apple component's enable switch. It is
     # never rendered as a flag tile: the Apple status row carries it as the
     # section's master switch, so it only needs the persistence coercion.
@@ -14942,9 +14937,10 @@ class WavesBridge(LibraryMixin, QObject):
         """Whether this job fetches cover art at all (runner policy)."""
         return runner.wants_cover(self._apple_job_hooks(), collection, options=options)
 
-    def _apple_cover_bytes(self, provider, raw: dict) -> bytes | None:
-        """The collection cover at the embedded size, or None."""
-        return runner.cover_bytes(self._apple_job_hooks(), provider, raw)
+    def _apple_cover_bytes(self, provider, raw: dict, *, for_file: bool = False) -> bytes | None:
+        """The collection cover at the embedded size (or the sidecar's own
+        size with ``for_file``), or None."""
+        return runner.cover_bytes(self._apple_job_hooks(), provider, raw, for_file=for_file)
 
     def _apple_write_sidecars(
         self,
@@ -17723,7 +17719,9 @@ class WavesBridge(LibraryMixin, QObject):
                     continue
                 cover = None
                 try:
-                    cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row)
+                    # The standalone COVER action writes only the sidecar, so
+                    # it fetches at the separate file's own size (issue #236).
+                    cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row, for_file=True)
                 except Exception:
                     cover = None
                 if not cover:

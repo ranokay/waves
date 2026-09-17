@@ -32,6 +32,7 @@ from waves.constants import (
     TIER_RANK,
     CoverDimensions,
     QualityTier,
+    cover_file_dimension,
     provider_folder_name,
     quality_rank,
     tier_from_word,
@@ -1136,8 +1137,14 @@ def wants_cover(hooks: AppleJobHooks, collection: bool, options: _JobOptions | N
     )
 
 
-def cover_bytes(hooks: AppleJobHooks, provider, raw: dict) -> bytes | None:
-    """The collection cover at the embedded size, or None.
+def cover_bytes(hooks: AppleJobHooks, provider, raw: dict, *, for_file: bool = False) -> bytes | None:
+    """The collection cover at the requested size, or None.
+
+    ``for_file`` asks for the SEPARATE cover file's size: "follow" (the
+    default preference) keeps the embedded size, any explicit choice fetches
+    at that size -- the same rule the TIDAL engine applies to its own
+    ``metadata_cover_file_dimension`` mirror, so the Apple card's control
+    governs the Apple sidecar too (issue #236).
 
     ORIGIN maps per provider (spec section 9.1): TIDAL keeps
     its exact current behavior (embedded cap included); Apple's ORIGIN
@@ -1148,6 +1155,9 @@ def cover_bytes(hooks: AppleJobHooks, provider, raw: dict) -> bytes | None:
     and embedding normalizes to jpg.
     """
     dimension = hooks.psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
+    if for_file:
+        pref = str(hooks.psetting(CTX_APPLE, "metadata_cover_file_dimension", "follow") or "follow")
+        dimension = cover_file_dimension(dimension, pref)
     is_origin = str(getattr(dimension, "value", dimension)) == "origin"
     if is_origin:
         try:
@@ -1939,6 +1949,15 @@ def deliver_track(
             break
     lyrics_synced, lyrics_unsynced, lyrics_ttml = lyrics_full(hooks, provider, row, facts, options=options)
     cover_data = cover_bytes(hooks, provider, raw) if wants_cover(hooks, collection, options=options) else None
+    # The separate cover file can carry its own size (issue #236): "follow"
+    # (the default) reuses the embedded fetch, an explicit choice fetches once
+    # more at that size, so the Apple card's control is not silently ignored.
+    cover_file_data = cover_data
+    if cover_data is not None:
+        embedded_dim = hooks.psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
+        file_pref = str(hooks.psetting(CTX_APPLE, "metadata_cover_file_dimension", "follow") or "follow")
+        if cover_file_dimension(embedded_dim, file_pref) != embedded_dim:
+            cover_file_data = cover_bytes(hooks, provider, raw, for_file=True)
     # Embedded art stays jpg (spec 9.1): an original-master PNG is
     # converted for the tag while the sidecar keeps the master bytes.
     embed_cover = embed_cover_bytes(hooks, cover_data) if options.option("metadata_cover_embed", True) else None
@@ -1963,7 +1982,7 @@ def deliver_track(
         dest,
         lyrics_synced,
         lyrics_unsynced,
-        cover_data,
+        cover_file_data,
         collection,
         ttml_verbatim=lyrics_ttml,
         options=options,

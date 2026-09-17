@@ -16,6 +16,15 @@ from waves.constants import (
 @dataclass
 class Settings:
     skip_existing: bool = True
+    # ----- shared lyrics/artwork keys: migration carriers only -----
+    # The twelve keys below predate the per-provider mirrors further down and
+    # are read ONLY as provider_setting's fallback for a data object that lacks
+    # the mirror attribute (stub or legacy shapes): the real dataclass always
+    # defines every mirror, and the one-time migration
+    # (config._migrate_settings) is their last writer on a real install. They
+    # stay serialized so a pre-split settings.json keeps its meaning until that
+    # migration runs; editing one by hand after it has run changes nothing
+    # (audit LM-04).
     lyrics_embed: bool = False
     # Best-quality lyrics out of the box: sidecars on, so a track keeps its
     # finest timed source next to it -- .lrc on both providers, plus the
@@ -313,7 +322,6 @@ class HelpSettings:
         'Turning the dialog off with its "Don\'t ask again" box switches this off; '
         "switch it back on here."
     )
-    album_cover_save: str = "Save cover to album folder."
     lyrics_embed: str = "Embed lyrics in audio file, if lyrics are available. Applies to every enabled provider."
     use_primary_album_artist: str = "Use only the primary album artist for folder paths instead of track artists."
     lyrics_file: str = (
@@ -416,10 +424,7 @@ class HelpSettings:
     metadata_tag_bpm: str = "Write the BPM tag (Custom template only)."
     metadata_tag_initial_key: str = "Write the initial-key tag (Custom template only)."
     metadata_tag_upc: str = "Write the UPC tag (Custom template only)."
-    api_key_index: str = "Set the device API KEY."
-    album_info_save: str = "Save album info to track?"
     video_download: str = "Allow download of videos."
-    multi_thread: str = "Download several tracks in parallel."
     download_delay: str = "Activate randomized download delay to mimic human behaviour."
     download_base_path: str = "Where to store the downloaded media."
     tidal_quality_audio: str = (

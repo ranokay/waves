@@ -120,6 +120,58 @@ def test_apple_cover_url_clamps_to_5000():
     assert "5000x5000" in url
 
 
+def test_apple_cover_file_size_is_read(monkeypatch):
+    """The Apple card's 'Separate cover file size' governs the sidecar fetch
+    (issue #236 / audit LM-01): 'follow' keeps the embedded size, an explicit
+    choice fetches at that size, and the embedded bytes stay the embed's."""
+    from waves.constants import CoverDimensions
+    from waves.providers.apple import runner
+
+    asked: list = []
+
+    class _Provider:
+        @staticmethod
+        def cover_url(obj, dimension):
+            asked.append(dimension)
+            return f"https://cover/{dimension}.jpg"
+
+    class _Response:
+        content = b"jpeg-bytes"
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    class _Session:
+        @staticmethod
+        def get(url, timeout=30):
+            return _Response()
+
+    monkeypatch.setattr(runner, "_pooled_session", lambda: _Session())
+
+    def _hooks(embedded, pref):
+        return runner.AppleJobHooks(
+            psetting=lambda provider_id, key, default=None: {
+                "metadata_cover_dimension": embedded,
+                "metadata_cover_file_dimension": pref,
+            }.get(key, default)
+        )
+
+    # Follow: the embedded fetch answers the sidecar too (no second request).
+    hooks = _hooks(CoverDimensions.Px640, "follow")
+    assert runner.cover_bytes(hooks, _Provider(), {"id": "album-1"}) is not None
+    assert asked == [640]
+    assert runner.cover_bytes(hooks, _Provider(), {"id": "album-1"}, for_file=True) is not None
+    # The explicit sidecar size is a fetch of its own.
+    assert asked == [640, 640]
+    asked.clear()
+    hooks = _hooks(CoverDimensions.Px640, "Px1280")
+    assert runner.cover_bytes(hooks, _Provider(), {"id": "album-1"}) is not None
+    assert asked == [640]
+    assert runner.cover_bytes(hooks, _Provider(), {"id": "album-1"}, for_file=True) is not None
+    assert asked == [640, 1280], "the sidecar fetch must use the chosen size"
+
+
 @pytest.mark.ffmpeg
 def test_tidal_standalone_art_converts_to_the_selected_format(tmp_path):
     """The standalone action never writes JPEG bytes into a .png (S08)."""

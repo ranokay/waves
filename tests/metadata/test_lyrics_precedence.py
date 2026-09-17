@@ -367,7 +367,7 @@ def _standalone_bridge(tmp_path, *, psettings, lyrics=None, lyrics_error=False):
         stub._apple_lyrics_full = _raise
     else:
         stub._apple_lyrics_full = lambda provider, row, facts, options=None: lyrics or ("[00:01.00]hi", "hi", "")
-    stub._apple_cover_bytes = lambda provider, raw: b"\xff\xd8\xff\xdbjpeg-bytes"
+    stub._apple_cover_bytes = lambda provider, raw, for_file=False: b"\xff\xd8\xff\xdbjpeg-bytes"
     for name in (
         "_standalone_fetch",
         "_standalone_base_dir",

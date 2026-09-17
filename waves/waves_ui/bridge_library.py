@@ -943,7 +943,6 @@ class LibraryMixin:
             by_folder.setdefault(t["id"], []).append(t)
         folded, folded_rows = _fold_atmos_subfolders(albums, by_folder, fragments)
         local: dict = {}
-        local: dict = {}
         for a in albums:
             # A folded Atmos subfolder is not an album: its row drops out
             # here, its tracks re-home to the parent below.

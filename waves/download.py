@@ -54,6 +54,7 @@ from waves.constants import (
     MetadataTargetUPC,
     QualityTier,
     QualityVideo,
+    cover_file_dimension,
     provider_folder_name,
     tier_from_word,
     wants_atmos_delivery,
@@ -4002,17 +4003,6 @@ class Download:
         single-track download qualifies only when the user opted in (single_track)."""
         return bool(save_cover) and (bool(is_parent_album) or bool(single_track))
 
-    @staticmethod
-    def _cover_file_dimension(embedded: CoverDimensions, pref: str) -> CoverDimensions:
-        """Resolve the saved cover.jpg size. 'follow' (or an unknown value) uses
-        the embedded size; otherwise a CoverDimensions member name."""
-        if pref == "follow":
-            return embedded
-        try:
-            return CoverDimensions[pref]
-        except KeyError:
-            return embedded
-
     def _album_cover_file_data(
         self, track: Track, embedded_data, embedded_dim: CoverDimensions, file_dim: CoverDimensions
     ):
@@ -4133,7 +4123,7 @@ class Download:
         # The separately-saved cover.jpg can use its own size (see the helpers
         # above); "follow" keeps the historical behaviour of matching embedded.
         cover_file_pref = self._psetting("metadata_cover_file_dimension", "follow") or "follow"
-        cover_file_dimension = self._cover_file_dimension(cover_dimension, cover_file_pref)
+        cover_file_dim = cover_file_dimension(cover_dimension, cover_file_pref)
         want_cover_file = self._want_cover_file(
             self._psetting("cover_album_file", True),
             is_parent_album,
@@ -4148,9 +4138,7 @@ class Download:
             cover_data = self.cover_data_cached(url_cover)
 
         if cover_data and want_cover_file:
-            cover_data_album_file = self._album_cover_file_data(
-                track, cover_data, cover_dimension, cover_file_dimension
-            )
+            cover_data_album_file = self._album_cover_file_data(track, cover_data, cover_dimension, cover_file_dim)
             path_cover = self.cover_to_file(path_media.parent, cover_data_album_file)
 
         metadata_target_upc = MetadataTargetUPC(self.settings.data.metadata_target_upc)
