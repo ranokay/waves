@@ -13507,6 +13507,9 @@ ApplicationWindow {
     function fill(model, arr) { model.clear(); appendPlain(model, arr) }
     function clearAppleSearch() {
         appleSearchGrouped = false
+        // The error goes with the rows: a stale message would keep the ghost
+        // group head mounted after Apple is turned off (issue #241).
+        appleSearchError = ""
         appleAlbumsRaw = []
         appleTracksRaw = []
         appleArtistsModel.clear()
