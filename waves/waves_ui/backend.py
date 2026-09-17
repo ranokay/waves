@@ -82,6 +82,7 @@ from waves.helper.tidal import (
     name_builder_title,
     quality_audio_highest,
 )
+from waves.ids import namespaced_id
 from waves.library_index import (
     POLL_GAUGE,
     READ_GAUGE,
@@ -4032,6 +4033,51 @@ def _my_music_empty(bridge) -> dict:
     return {}
 
 
+# ----- the Library section's file rows (ADR 0007, issue #222) -----
+# The pane's Library section is provider-independent: its rows come from the
+# scan's own file pages, never a provider fetch. These rows carry the two
+# things the scan cannot: the provider the file came from, named by the item
+# id's own namespace, and the readable duration the UI prints.
+
+
+def _library_file_row(row: dict) -> dict:
+    """One local library file as a My Music row (ADR 0007, issue #222).
+
+    The provider is derived from the file's item id -- the namespace the
+    download gate wrote, a bare id reading as TIDAL's (``namespaced_id``'s own
+    rule), never guessed from the folder or the row -- so a legacy file
+    badges like a new one and an untagged file carries no provider at all.
+    """
+    item_id = str(row.get("item_id") or "")
+    length = int(row.get("length", 0) or 0)
+    return {
+        "id": item_id,
+        "item_id": item_id,
+        "provider": namespaced_id(item_id).partition(":")[0] if item_id else "",
+        "title": str(row.get("title") or ""),
+        "artist": str(row.get("artist") or row.get("album_artist") or ""),
+        "album": str(row.get("album") or ""),
+        "album_artist": str(row.get("album_artist") or ""),
+        "year": str(row.get("year") or ""),
+        "folder": str(row.get("folder_path") or ""),
+        "duration": _fmt_duration(length),
+        "duration_sec": length,
+        "codec": str(row.get("codec") or ""),
+        "audio_type": str(row.get("audio_type") or ""),
+    }
+
+
+def _library_files_view(view) -> str:
+    """One of the Library section's two view ids, defaulting to Saved.
+
+    QML reads the ids from ``myMusicLibrary()``, so an unknown value is a
+    wiring bug rather than a third view: it is answered with the section's
+    default view instead of an empty list the user cannot explain.
+    """
+    text = str(view or "")
+    return text if text in ("saved", "all") else "saved"
+
+
 # ----- the header's per-provider lights (issue #223) -----
 #
 # The top bar's compact status marks, one per provider that has a status to
@@ -4187,6 +4233,11 @@ class WavesBridge(LibraryMixin, QObject):
     # second source's panes fill independently with no QML branch (issue #259).
     libraryLoaded = Signal(str, str, "QVariant", bool)  # source, category, items (replace), hasMore
     libraryMore = Signal(str, str, "QVariant", bool)  # source, category, items (append), hasMore
+    # The Library section's per-file pages (ADR 0007, issue #222): the scan's
+    # own file rows, not a provider's. total is the view's file count on a
+    # first page, -1 on an append page (the section already holds it).
+    libraryFilesLoaded = Signal(str, "QVariant", bool, int)  # view, items (replace), hasMore, total
+    libraryFilesMore = Signal(str, "QVariant", bool, int)  # view, items (append), hasMore, total
     # "Home" tab: a Browse-shaped, account-scoped landing, one per source.
     # Carries a list of shelf sections ({rowKind, title, target, source, items})
     # so the SAME card/track shelves that render Browse render Home too.
@@ -4747,6 +4798,13 @@ class WavesBridge(LibraryMixin, QObject):
         # silently cancelled another source's in-flight load.
         self._lib_epoch = 0
         self._lib_gen: dict[tuple[str, str], int] = {}
+        # The Library section's own load state (ADR 0007, issue #222), keyed
+        # by view ("saved"/"all") instead of (source, category): one counter
+        # per view so a reload of one view drops only its own in-flight
+        # answer, plus one in-flight guard per view so a fast scroll cannot
+        # append the same window twice.
+        self._library_files_gen: dict[str, int] = {}
+        self._library_files_loading: set[str] = set()
         # Per-(source, category) sort, {(source, category): (order_key,
         # "asc"|"desc")}. Absent = the default (date-added, descending) order.
         # Session-only: a non-default sort is never persisted to the disk page
@@ -7823,6 +7881,92 @@ class WavesBridge(LibraryMixin, QObject):
 
         self.threadpool.start(Worker(work))
 
+    # ----- the Library section's file pages (ADR 0007, issue #222) -----
+    #
+    # The section is provider-independent: its rows are the scan's own file
+    # rows (LibraryIndex.files_page), so a signed-out pane still lists what is
+    # on disk and nothing here crosses to a provider. The pages run on the
+    # pool with a generation pair: a library-root change (the scan's own
+    # counter) or a reload of the same view drops an in-flight answer that no
+    # longer describes what is on screen.
+
+    def _library_files_state(self, view: str) -> tuple:
+        """The load state one Library-section view runs under: its generation
+        (the scan's counter plus this view's own) and the scan index the pair
+        belongs to. Captured under the index lock, so a load can never take
+        the NEW index with the OLD generation (the pairing that let a stale
+        queued scan write the wrong root's cache)."""
+        with self._library_index_lock:
+            return (self._library_gen, self._library_files_gen.get(view, 0)), self._library
+
+    def _library_files_start(self, view: str) -> tuple:
+        """Start a first-page load: bump this view's counter (dropping any
+        in-flight page for it) and return the new state."""
+        with self._library_index_lock:
+            self._library_files_gen[view] = self._library_files_gen.get(view, 0) + 1
+            return (self._library_gen, self._library_files_gen[view]), self._library
+
+    def _library_files_stale(self, view: str, gen: tuple) -> bool:
+        with self._library_index_lock:
+            return gen != (self._library_gen, self._library_files_gen.get(view, 0))
+
+    @Slot(str)
+    def loadLibraryFiles(self, view: str) -> None:
+        """Load the first page of one Library-section view and REPLACE its
+        list (ADR 0007, issue #222): the first open, and the refresh a scan
+        publish triggers. ``view`` is one of ``myMusicLibrary()``'s ids;
+        ``total`` rides the emission so the section can show its own count
+        without a second call."""
+        view = _library_files_view(view)
+        gen, lib = self._library_files_start(view)
+        self._library_files_loading.discard(view)
+        if lib is None:
+            self.libraryFilesLoaded.emit(view, [], False, 0)
+            return
+
+        def work() -> None:
+            try:
+                rows, more = lib.files_page(view, 0, _LIBRARY_PAGE)
+                total = lib.files_count(view)
+            except Exception:
+                logger.exception("Could not load the library files view %s", view)
+                rows, more, total = [], False, -1
+            if self._library_files_stale(view, gen):
+                return
+            self.libraryFilesLoaded.emit(view, [_library_file_row(row) for row in rows], more, total)
+
+        self.threadpool.start(Worker(work))
+
+    @Slot(str, int)
+    def loadMoreLibraryFiles(self, view: str, offset: int) -> None:
+        """Append the next page of one Library-section view. ``offset`` is the
+        number of rows the section already holds, so the bridge keeps no
+        second copy of the scroll state. A failed page never exhausts the
+        scroll (the pane retries on the next scroll), and ``total`` is -1:
+        an append changes no count."""
+        view = _library_files_view(view)
+        if view in self._library_files_loading:
+            return
+        gen, lib = self._library_files_state(view)
+        if lib is None:
+            self.libraryFilesMore.emit(view, [], False, -1)
+            return
+        self._library_files_loading.add(view)
+        start = max(0, int(offset))
+
+        def work() -> None:
+            try:
+                rows, more = lib.files_page(view, start, _LIBRARY_PAGE)
+            except Exception:
+                logger.exception("Could not load more of the library files view %s", view)
+                rows, more = [], True
+            self._library_files_loading.discard(view)
+            if self._library_files_stale(view, gen):
+                return
+            self.libraryFilesMore.emit(view, [_library_file_row(row) for row in rows], more, -1)
+
+        self.threadpool.start(Worker(work))
+
     @Slot(str, str, str, str)
     def setLibrarySort(self, source: str, category: str, order: str, direction: str) -> None:
         """Re-sort one source's shelf category and reload its first page.
@@ -9826,6 +9970,26 @@ class WavesBridge(LibraryMixin, QObject):
         edit.
         """
         return _my_music_empty(self)
+
+    @Slot(result="QVariant")
+    def myMusicLibrary(self) -> dict:
+        """The Library section's shape (ADR 0007, issue #222): its two views,
+        Saved first (the section's default), and whether a library folder is
+        configured at all.
+
+        The views are bridge data because the pane's section list is
+        bridge-owned; the section is provider-independent, so its rows come
+        from the scan's own file pages (loadLibraryFiles) and never a
+        provider fetch. Unconfigured means the section says how to point
+        Waves at a folder instead of showing two empty lists.
+        """
+        return {
+            "configured": bool(self._library_root()),
+            "views": [
+                {"id": "saved", "label": "Saved"},
+                {"id": "all", "label": "All files"},
+            ],
+        }
 
     @Slot(result=bool)
     def isAppleEnabled(self) -> bool:

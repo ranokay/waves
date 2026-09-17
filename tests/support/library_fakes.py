@@ -50,6 +50,14 @@ _METHODS = (
     "libraryIndexReady",
     "libraryStamp",
     "_library_root",
+    # The Library section's file pages (ADR 0007, issue #222): the pane loads
+    # them from the scan's own index, so the glue tests drive the real slots.
+    "loadLibraryFiles",
+    "loadMoreLibraryFiles",
+    "_library_files_state",
+    "_library_files_start",
+    "_library_files_stale",
+    "myMusicLibrary",
     "_waves_pref_bool",
     "rescanLibrary",
     "setWavesPref",
@@ -103,12 +111,24 @@ def make_album_dir(base, rel, files):
 
 
 def make_library_bridge(
-    tmp_path, *, library_enabled=True, library_source="separate", library_folder="", download_base="", tagmap=None
+    tmp_path,
+    *,
+    library_enabled=True,
+    library_source="separate",
+    library_folder="",
+    download_base="",
+    tagmap=None,
+    path_tags=None,
+    item_ids=None,
 ):
     # library_enabled defaults True HERE (the app's factory default is False)
     # because these are glue tests of an activated scan; the master-switch
-    # gate itself has its own tests.
+    # gate itself has its own tests. ``tagmap`` answers per folder (the
+    # album-level tests); ``path_tags`` answers per file and wins when given
+    # (the per-track tests, whose files must differ).
     tagmap = tagmap or {}
+    path_tags = path_tags or {}
+    item_ids = item_ids or {}
     s = LibraryStub()
     s.threadpool = _InlinePool()
     s._waves_prefs = {
@@ -121,12 +141,13 @@ def make_library_bridge(
 
     # The bridge's real _open_library_index resolves one cache file per root
     # (cache_file_for_root) and is re-invoked on a root change; mirror that
-    # here with the test's fake tag reader kept across reopens, so the glue
+    # here with the test's fake tag readers kept across reopens, so the glue
     # tests exercise the per-root file behaviour without mutagen.
     def _reopen():
         return LibraryIndex(
             cache_file_for_root(str(tmp_path), s._library_root()),
-            read_tags=lambda p: tagmap.get(os.path.dirname(p)),
+            read_tags=(lambda p: path_tags.get(p)) if path_tags else (lambda p: tagmap.get(os.path.dirname(p))),
+            read_item_id=lambda p: item_ids.get(p, ""),
         )
 
     s._open_library_index = _reopen
@@ -159,9 +180,14 @@ def make_library_bridge(
     s._library_scan_status = "unset"
     s._library_scan_progress = {}
     s._library_scan_read_t0 = 0.0
+    # The Library section's file-page state (ADR 0007, issue #222).
+    s._library_files_gen = {}
+    s._library_files_loading = set()
     s.libraryPresenceChanged = _Signal()
     s.libraryScanStatusChanged = _Signal()
     s.librarySourceChanged = _Signal()
+    s.libraryFilesLoaded = _Signal()
+    s.libraryFilesMore = _Signal()
     # The change-of-source path tears down the file watcher and persists prefs;
     # both are Qt/disk side effects out of scope for this glue test, so stub them
     # to no-ops. _logged_in is False so nothing re-initialises Download.

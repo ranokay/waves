@@ -200,7 +200,9 @@ def test_track_rows_prefetch_their_album_only_after_a_longer_rest():
     # dwell at every internal edge.
     before = trow.split("root.hoverPrefetch(trow.prefetchCard, 450)", 1)[0].splitlines()[-4:]
     assert any("HoverHandler {" in ln for ln in before), before
-    assert 'enabled: trow.kind !== "video" && trow.albumId !== ""' in trow
+    # A local file's row (the Library section, ADR 0007) has no catalog album
+    # to warm: the gate keeps the prefetch to rows that name one.
+    assert 'enabled: !trow.local && trow.kind !== "video" && trow.albumId !== ""' in trow
 
 
 def test_prefetched_covers_warm_at_the_sizes_the_page_asks_for():

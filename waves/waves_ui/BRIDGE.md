@@ -90,6 +90,8 @@ for Search with Apple still enabled.
 | `artistLoadFailed(artistId)`                               | An artist page could not load and nothing is cached; clears the Back-restore latch so history recording continues                                          |
 | `libraryLoaded(source, category, items, hasMore)`          | First page of one My Music source's shelf category (replace); `source` is a provider id (issue #259)                                                       |
 | `libraryMore(source, category, items, hasMore)`            | Next page of that shelf (append, infinite scroll)                                                                                                          |
+| `libraryFilesLoaded(view, items, hasMore, total)`          | First page of one Library-section view (replace); `view` is `saved`/`all`, `total` its file count (ADR 0007, issue #222)                                   |
+| `libraryFilesMore(view, items, hasMore, total)`            | Next page of that view (append, infinite scroll); `total` is -1 (an append changes no count)                                                               |
 | `homeLoaded(source, sections)`                             | One My Music source's Home landing (Browse-shaped shelves, account-scoped; each section names its source)                                                  |
 | `playlistCategoryResolved(apiPath, title, count, firstId)` | A Browse playlist category's members are known, so DOWNLOAD ALL can confirm with a count                                                                   |
 | `playlistFolderLoaded(source, folderId, rows, path)`       | One source's My Music playlist folder contents arrive (issue #11); empty rows and path on failure                                                          |
@@ -106,6 +108,17 @@ for playlists and mixes), and every favourites/playlist/mix row is built by
 that provider's `row_for` -- folder navigation rows keep the bridge's own
 folder vocabulary. A provider that later declares FAVORITES appears with no
 QML edit.
+
+Above the source groups sits the **Library section** (ADR 0007, issue #222):
+provider-independent, it lists the files the scan found on disk.
+`myMusicLibrary()` answers its shape (`configured` plus the two view ids, Saved
+first), and `loadLibraryFiles(view)` / `loadMoreLibraryFiles(view, offset)`
+page the scan's own file rows — Saved is the files carrying an on-disk Waves
+item id, All files every audio file the walk sees. Each row's provider comes
+from that id's namespace (a bare id reads as TIDAL's, `waves.ids`), so an
+untagged row carries no provider and no row ever guesses one; nothing in the
+section crosses to a provider, and its rows are the same file facts the scan
+publishes, so its counts and the search badges cannot disagree.
 
 ## Browse (editorial pages)
 
@@ -319,7 +332,9 @@ them too: `loadLibrary(source, category[, quiet])`,
 direction)`, `loadHome(source[, haveCached])` and
 `openPlaylistFolder(source, folderId)`; `myMusicSources()` /
 `myMusicEmpty()` are the pane's answer-only data (see Search, artist pages,
-library above).
+library above). The Library section's slots are the one provider-free pair:
+`loadLibraryFiles(view)`, `loadMoreLibraryFiles(view, offset)`, with
+`myMusicLibrary()` as their answer-only shape.
 
 ## Adding a new signal
 

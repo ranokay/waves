@@ -97,6 +97,12 @@ ApplicationWindow {
         function onLibrarySourceChanged() {
             root.libraryOn = waves.wavesPref("library_enabled") === true
             root.dlInLibrary = waves.downloadsInsideLibrary() === true
+            // The Library section's shape moves with the folder (a saved
+            // configuration flips `configured`), so the pane's data re-reads
+            // here, where the card's own commit announces the change, and the
+            // section drops the old folder's rows.
+            root.refreshMyMusicSources()
+            libSection.reset()
         }
         function onArtHoverTiltChanged() {
             root.artHoverTilt = waves.wavesPref("art_hover_tilt") !== false
@@ -242,6 +248,11 @@ ApplicationWindow {
     // with its own categories and no QML edit.
     property var myMusicSources: []
     property var myMusicEmpty: ({})
+    // The Library section's shape (ADR 0007, issue #222): its two views
+    // (Saved first, the section's default) and whether a library folder is
+    // configured. Provider-independent, so it is read with the other pane
+    // data but never moves with a session.
+    property var myMusicLibrary: ({})
     property var browseNav: ({ available: false, signed_in: false })
     readonly property bool browseAvailable: !!(root.browseNav && root.browseNav.available)
     // The browse source's session, not the header's TIDAL flag: the bridge
@@ -267,6 +278,7 @@ ApplicationWindow {
         // sources as they were must not cost the pane its rows and scroll.
         if (JSON.stringify(next) !== JSON.stringify(root.myMusicSources)) root.myMusicSources = next
         try { root.myMusicEmpty = waves.myMusicEmpty() } catch (e) { root.myMusicEmpty = ({}) }
+        try { root.myMusicLibrary = waves.myMusicLibrary() } catch (e) { root.myMusicLibrary = ({}) }
     }
     // The provider surfaces always move together (a session or setup flip
     // changes the header's marks, the welcome cards and My Music's sources),
@@ -2496,6 +2508,9 @@ ApplicationWindow {
         if (alreadyActive) { navPush(); markNav("library home"); loadLib("home"); return }
         navPush(); markNav("library"); navOrigin = "library"
         libraryOpen = true; settingsOpen = false; setupOpen = false; artistOpen = false
+        // The Library section loads with the pane (Saved is its default
+        // view): it is provider-independent, so no source group loads it.
+        libSection.ensureLoaded()
         // RETURN to the category the user left, not always Home. loadLib is
         // keep-alive: a category whose rows are already on screen keeps them
         // (and its scroll) untouched and only revalidates quietly.
@@ -2624,6 +2639,13 @@ ApplicationWindow {
         navPush(); markNav("settings")
         setupOpen = false; settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
         Qt.callLater(function() { settingsPage.jumpToCard("ffmpeg") })
+    }
+    // Deep-link to the Music library card (from the Library section's
+    // configure CTA): the one place that owns the scanned folder.
+    function openLibrarySetting() {
+        navPush(); markNav("settings")
+        setupOpen = false; settingsOpen = true; artistOpen = false; libraryOpen = false; browseOpen = false
+        Qt.callLater(function() { settingsPage.jumpToCard("library") })
     }
     // The chip's ✕ and its test both come through here.
     function dismissSetupChip() {
@@ -9840,6 +9862,16 @@ ApplicationWindow {
         property bool hi: false          // "you came here for this track" marker
         property int num: 0              // track # (album position, or playlist order); 0 hides
         property string albumId: ""      // set -> the title links to the album page
+        // A file on disk (the Library section's rows, ADR 0007): the row's
+        // provider actions have no catalog item to act on, so they stand
+        // down, and the row's own action is revealing its folder instead.
+        property bool local: false
+        // The provider the file was saved from, "" when untagged: the badge
+        // an untagged row must NOT grow (ADR 0007). Only local rows read it.
+        property string provider: ""
+        // The album folder on disk: where a local row's reveal lands.
+        property string folderPath: ""
+        readonly property bool revealable: local && folderPath !== ""
         height: 62
         color: "transparent"
         // A pointer that settles on a row is often about to open the album
@@ -9853,7 +9885,7 @@ ApplicationWindow {
         // warmed properly when the prefetch lands).
         readonly property var prefetchCard: ({ kind: "album", id: trow.albumId, art: "" })
         HoverHandler {
-            enabled: trow.kind !== "video" && trow.albumId !== ""
+            enabled: !trow.local && trow.kind !== "video" && trow.albumId !== ""
             onHoveredChanged: hovered ? root.hoverPrefetch(trow.prefetchCard, 450)
                                       : root.hoverPrefetchCancel(trow.prefetchCard)
         }
@@ -9874,10 +9906,13 @@ ApplicationWindow {
                 anchors.fill: parent; hoverEnabled: true
                 readonly property bool linkable: trow.kind === "video"
                                                  || (trow.albumId !== "" && !root.onAlbumPage(trow.albumId))
-                acceptedButtons: linkable ? Qt.LeftButton : Qt.NoButton
-                cursorShape: linkable ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onClicked: trow.kind === "video" ? root.openVideo(trow.tId, trow.title, trow.artistName)
-                                                 : root.openAlbumPage(trow.albumId, trow.tId, trow.album, trow.art)
+                acceptedButtons: (trow.revealable || (!trow.local && linkable)) ? Qt.LeftButton : Qt.NoButton
+                cursorShape: (trow.revealable || (!trow.local && linkable)) ? Qt.PointingHandCursor : Qt.ArrowCursor
+                // A local row reveals the file's album folder in the file
+                // manager: the row's own copy IS the action on disk.
+                onClicked: trow.revealable ? waves.revealLibraryAlbum(trow.folderPath)
+                                           : trow.kind === "video" ? root.openVideo(trow.tId, trow.title, trow.artistName)
+                                                                   : root.openAlbumPage(trow.albumId, trow.tId, trow.album, trow.art)
             }
             // Highlight = the "Fade" treatment: a green tint strongest at the
             // left, gone before the metadata columns so numbers and badges sit
@@ -9908,8 +9943,10 @@ ApplicationWindow {
                     // Video rows get a 16:9 thumb, the shape alone says "video".
                     Layout.preferredWidth: trow.kind === "video" ? 78 : 44
                     Layout.preferredHeight: 44; Layout.alignment: Qt.AlignVCenter
-                    PreviewArt { visible: trow.kind !== "video"; anchors.fill: parent; kind: "track"; pid: tId; url: art }
-                    Art { visible: trow.kind === "video"; anchors.fill: parent; url: art }
+                    // A local file has nothing to preview: the cover, not the
+                    // disc with a play glyph, is the honest face.
+                    PreviewArt { visible: trow.kind !== "video" && !trow.local; anchors.fill: parent; kind: "track"; pid: tId; url: art }
+                    Art { visible: trow.kind === "video" || trow.local; anchors.fill: parent; url: art }
                     PlayBadge { visible: trow.kind === "video"; lit: thumbMa.containsMouse; radius: 0 }
                     MouseArea {
                         id: thumbMa
@@ -9942,16 +9979,20 @@ ApplicationWindow {
                             id: trTitleMa
                             anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
                             width: Math.min(parent.width, parent.implicitWidth)
-                            enabled: trow.kind === "video" || (albumId !== "" && !root.onAlbumPage(albumId))
+                            enabled: trow.revealable || trow.kind === "video" || (albumId !== "" && !root.onAlbumPage(albumId))
                             hoverEnabled: enabled
                             cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: trow.kind === "video" ? root.openVideo(trow.tId, trow.title, trow.artistName)
-                                                             : root.openAlbumPage(albumId, tId, trow.album, trow.art)
+                            onClicked: trow.revealable ? waves.revealLibraryAlbum(trow.folderPath)
+                                                       : trow.kind === "video" ? root.openVideo(trow.tId, trow.title, trow.artistName)
+                                                                               : root.openAlbumPage(albumId, tId, trow.album, trow.art)
                         }
                         // Declared after the title's MouseArea so the pill sits
                         // on top of it and takes its own click (reveal folder).
+                        // A library file needs no "in your library" pill: the
+                        // section it sits in already says it.
                         TrackPresencePill {
                             id: trPill
+                            visible: !trow.local && !!(presence && presence.present)
                             anchors.verticalCenter: parent.verticalCenter
                             x: Math.min(trTitle.contentWidth + 8,
                                         trTitle.width - width - (trNew.visible ? trNew.width + 6 : 0))
@@ -9972,7 +10013,7 @@ ApplicationWindow {
                                               : Math.min(trTitle.contentWidth + 8, trTitle.width - width)
                         }
                     }
-                    ArtistLinks { Layout.fillWidth: true; artists: root.artistsById[tId] || []; suffix: album; albumId: trow.albumId }
+                    ArtistLinks { Layout.fillWidth: true; artists: trow.local ? (trow.artistName !== "" ? [{ id: "", name: trow.artistName }] : []) : (root.artistsById[tId] || []); suffix: album; albumId: trow.albumId }
                 }
                 PopMeter { value: popularity; Layout.alignment: Qt.AlignVCenter }
                 Text { textFormat: Text.PlainText; text: date !== "" ? date : year; color: root.textLo; font.family: root.mono; font.pixelSize: 12; Layout.preferredWidth: 84; Layout.alignment: Qt.AlignVCenter }
@@ -9985,15 +10026,28 @@ ApplicationWindow {
                 // to admit its caret when hovered, without moving the row.
                 Item {
                     QualTag { id: qtMetric; visible: false; q: "LOSSLESS" }
-                    Layout.preferredWidth: qtMetric.implicitWidth + 14; Layout.preferredHeight: 22; Layout.alignment: Qt.AlignVCenter
+                    // A local row's slot holds only the provenance badge (or
+                    // nothing): its quality is a file fact, not a catalog
+                    // pick, and an untagged file carries no provider to show.
+                    Layout.preferredWidth: trow.local ? 40 : qtMetric.implicitWidth + 14
+                    Layout.preferredHeight: trow.local ? 24 : 22; Layout.alignment: Qt.AlignVCenter
+                    ProviderBadge {
+                        objectName: "trackProviderBadge"
+                        anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                        visible: trow.local && trow.provider !== ""
+                        provider: trow.provider
+                    }
                     QualPick {
                         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                        visible: !trow.local
                         mediaId: trow.tId; albumId: trow.albumId; catalog: trow.quality
                         pickable: trow.kind !== "video"
                     }
                 }
                 DownloadButton {
                     id: trDl
+                    // A file already on disk has nothing to download.
+                    visible: !trow.local
                     Layout.alignment: Qt.AlignVCenter; mediaId: tId; ownedCheck: true
                     chooserKind: trow.kind === "video" ? "video" : "track"
                     label: trow.kind === "video" ? "Download video" : "Download track"
@@ -10009,11 +10063,12 @@ ApplicationWindow {
                 }
                 // Per-track standalone pair beside the track's split button:
                 // always visible, so hovering never reflows the row. Videos
-                // have no standalone lyrics/art.
+                // have no standalone lyrics/art, and a local file has no
+                // catalog item to fetch them for.
                 StandalonePair {
                     Layout.alignment: Qt.AlignVCenter
                     mediaId: tId; compact: true
-                    visible: trow.kind !== "video"
+                    visible: trow.kind !== "video" && !trow.local
                 }
             }
         }
@@ -12166,6 +12221,290 @@ ApplicationWindow {
         }
     }
 
+    // The Library section (ADR 0007, issue #222): the files the folder scan
+    // found on disk, the pane's first section and the one section that is not
+    // a provider's. Saved is the default view (the files carrying an on-disk
+    // Waves item id, each badged by that id's namespace); All files is every
+    // audio file the walk sees, where an untagged row carries no badge. Both
+    // views are the bridge's own (myMusicLibrary) and every page is the
+    // scan's (waves.loadLibraryFiles), so a signed-out pane still lists the
+    // library and its counts cannot disagree with the search badges. The
+    // section is never hidden: with no folder configured it says how to point
+    // Waves at one.
+    component LibLibrarySection: ColumnLayout {
+        id: libSection
+        // The bridge's shape: {configured, views: [{id, label}]}. An absent
+        // answer reads as unconfigured, so the section explains itself
+        // instead of rendering two empty lists.
+        property var sectionData: ({})
+        readonly property var views: sectionData.views || []
+        readonly property bool configured: sectionData.configured === true
+        // The visible view (Saved is the default, ADR 0007). Keep-alive per
+        // view: rows, scroll, counts and pagination flags survive a flip.
+        property string category: "saved"
+        property var counts: ({})       // {view: total}
+        property var more: ({})         // {view: hasMore}
+        property bool loading: false
+        property bool loadingMore: false
+        // A scan that has not published yet is "still reading", never
+        // "nothing found": the empty state must not claim an empty library
+        // while the first sweep is running (see libraryScanStatus /
+        // libraryIndexReady).
+        property bool scanning: false
+        property bool indexReady: true
+
+        // The pane gives the section its share explicitly (see the usage in
+        // libraryPane): a layout item that carries a size hint takes the
+        // whole pane from its fill siblings, so this component never sets
+        // its own fillHeight.
+        Layout.fillWidth: true
+        spacing: 0
+
+        function countLabel(v) {
+            var total = counts[v]
+            return (total === undefined || total < 0) ? "" : " · " + total
+        }
+        function modelFor(v) { return v === "all" ? libAllModel : libSavedModel }
+        function listFor(v) { return v === "all" ? libAllList : libSavedList }
+        // Open the pane: load the visible view unless it already has rows.
+        function ensureLoaded() {
+            if (configured && listFor(category).count === 0) reload()
+        }
+        function reload() {
+            if (!configured) return
+            // A reload supersedes any in-flight append for this view (the
+            // bridge drops the stale page), and pins the list's spot so a
+            // refresh landing under the user keeps it (LibList's own
+            // revalidate pattern).
+            var lv = listFor(category)
+            if (lv && lv.count > 0) lv.pendingY = lv.contentY
+            loading = true
+            loadingMore = false
+            waves.loadLibraryFiles(category)
+        }
+        function select(v) {
+            v = String(v || "")
+            if (v === category) return
+            category = v
+            if (configured) reload()
+        }
+        // The library folder moved (a library pref committed, see Main.qml's
+        // onLibrarySourceChanged): every row on screen belongs to the folder
+        // being left, so they go, and the new folder's Saved loads.
+        function reset() {
+            libSavedModel.clear()
+            libAllModel.clear()
+            counts = ({})
+            more = ({})
+            loading = false
+            loadingMore = false
+            if (configured) reload()
+        }
+        // A load's answer belongs to the view it was asked for, whichever
+        // view is on screen when it lands: flipping mid-load must not lose
+        // the rows (the bridge drops only genuinely stale ones).
+        function applyLoaded(v, items, hasMore, total) {
+            var model = modelFor(v)
+            model.clear()
+            for (var i = 0; i < items.length; ++i) model.append(items[i])
+            var m = Object.assign({}, more); m[v] = hasMore === true; more = m
+            if (total >= 0) { var c = Object.assign({}, counts); c[v] = total; counts = c }
+            if (v === category) {
+                loading = false
+                listFor(v).applyRestore()
+            }
+        }
+        function applyMore(v, items, hasMore) {
+            var model = modelFor(v)
+            for (var i = 0; i < items.length; ++i) model.append(items[i])
+            var m = Object.assign({}, more); m[v] = hasMore === true; more = m
+            loadingMore = false
+        }
+        function maybeLoadMore(view, cat) {
+            if (cat !== category || !configured) return
+            if (loading || loadingMore || more[cat] !== true) return
+            var model = modelFor(cat)
+            if (model.count === 0) return
+            if (view.contentHeight - view.height - view.contentY > 600) return
+            loadingMore = true
+            waves.loadMoreLibraryFiles(cat, model.count)
+        }
+        // The one status the section shows in place of rows: the configure
+        // ask, a scan still reading, or the view's own empty sentence.
+        function statusText() {
+            if (!configured) return ""
+            if (loading || listFor(category).count > 0) return ""
+            if (scanning || !indexReady) return "Scanning your music folder…"
+            return category === "all" ? "No audio files found" : "No saved files yet"
+        }
+        function statusHint() {
+            if (!configured || loading || listFor(category).count > 0) return ""
+            if (scanning || !indexReady) return "Everything on disk appears here as the scan finds it."
+            return category === "all"
+                ? "Waves found no audio files in your music folder."
+                : "Files Waves downloads land here, badged with the provider they came from."
+        }
+        function readScanState() {
+            var st = ""
+            try { st = String(waves.libraryScanStatus() || "") } catch (e) { st = "" }
+            scanning = st === "scanning"
+            try { indexReady = waves.libraryIndexReady() === true } catch (e) { indexReady = true }
+        }
+        Component.onCompleted: readScanState()
+        Connections {
+            target: waves
+            function onLibraryScanStatusChanged() { libSection.readScanState() }
+        }
+
+        // Header: the pane's title (the section is always present, so the
+        // title rides it) and the two views, mirroring a source group's strip.
+        RowLayout {
+            Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 2
+            Layout.bottomMargin: 6
+            spacing: 14
+            Text {
+                textFormat: Text.PlainText; text: "My Music"; color: root.textHi
+                font.pixelSize: 18; font.bold: true; Layout.alignment: Qt.AlignVCenter
+            }
+            Item {
+                // Definite width for the Flow (see LibSourceGroup's strip).
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter
+                implicitHeight: libViewsFlow.implicitHeight
+                Flow {
+                    id: libViewsFlow
+                    objectName: "libViewsFlow"
+                    width: parent.width; spacing: 8
+                    Repeater {
+                        model: libSection.views
+                        delegate: Rectangle {
+                            id: vchip
+                            required property var modelData
+                            readonly property bool on: libSection.category === modelData.id
+                            objectName: "libViewChip-" + modelData.id
+                            radius: 8; implicitHeight: 30; implicitWidth: vcRow.implicitWidth + 26
+                            color: on ? root.accentCont : "transparent"
+                            border.color: on ? root.accentDim : root.border1
+                            Row {
+                                id: vcRow; anchors.centerIn: parent; spacing: 7
+                                Rectangle { width: 6; height: 6; radius: 3; anchors.verticalCenter: parent.verticalCenter; color: vchip.on ? root.accent : root.textDim }
+                                Text {
+                                    textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter
+                                    text: vchip.modelData.label + libSection.countLabel(vchip.modelData.id)
+                                    color: vchip.on ? root.accent : root.textLo; font.pixelSize: 13
+                                }
+                            }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: libSection.select(vchip.modelData.id) }
+                        }
+                    }
+                }
+            }
+        }
+
+        Item {
+            Layout.fillWidth: true; Layout.fillHeight: true
+
+            // One keep-alive pane per view: the LibList contract the source
+            // groups use, so each view owns its rows, scroll and paging.
+            LibList {
+                id: libSavedList
+                objectName: "libSavedList"
+                cat: "saved"; host: libSection; model: libSavedModel; delegate: libFileDelegate
+                visible: libSection.configured && libSection.category === "saved"
+            }
+            LibList {
+                id: libAllList
+                objectName: "libAllList"
+                cat: "all"; host: libSection; model: libAllModel; delegate: libFileDelegate
+                visible: libSection.configured && libSection.category === "all"
+            }
+
+            // No folder configured: the section explains the one click that
+            // would fill it instead of disappearing (ADR 0007).
+            Item {
+                objectName: "libConfigureCta"
+                visible: !libSection.configured
+                anchors.fill: parent
+                Column {
+                    id: libConfigureCol
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: Math.min(parent.width - 44, 460)
+                    topPadding: 40
+                    spacing: 12
+                    Text {
+                        width: parent.width; horizontalAlignment: Text.AlignHCenter
+                        textFormat: Text.PlainText; text: "Point Waves at your music"
+                        color: root.textHi; font.pixelSize: 18
+                    }
+                    Text {
+                        width: parent.width; horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                        textFormat: Text.PlainText
+                        text: "Choose the folder Waves should scan and everything on disk shows up here, badged with the provider it came from."
+                        color: root.textLo; font.pixelSize: 13
+                    }
+                    GateAction {
+                        objectName: "libConfigureAction"
+                        width: parent.width
+                        label: "Choose a music folder"
+                        onClicked: root.openLibrarySetting()
+                    }
+                }
+            }
+
+            // Configured but nothing to show: the view's own empty state, or
+            // the scan still reading. (The provider sign-in empty state below
+            // is a different question and lives in libArea.)
+            Item {
+                objectName: "libFilesEmpty"
+                visible: libSection.statusText() !== ""
+                anchors.fill: parent
+                Column {
+                    id: libFilesEmptyCol
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: Math.min(parent.width - 44, 460)
+                    topPadding: 40
+                    spacing: 10
+                    Text {
+                        width: parent.width; horizontalAlignment: Text.AlignHCenter
+                        textFormat: Text.PlainText; text: libSection.statusText()
+                        color: root.textHi; font.pixelSize: 18
+                    }
+                    Text {
+                        width: parent.width; horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                        textFormat: Text.PlainText; text: libSection.statusHint()
+                        color: root.textLo; font.pixelSize: 13
+                        visible: text !== ""
+                    }
+                }
+            }
+        }
+
+        // The file row: TrackRow in its local mode (no catalog actions, the
+        // provider badge instead of the quality picker), fed by the scan's
+        // own row vocabulary.
+        Component {
+            id: libFileDelegate
+            TrackRow {
+                required property var model
+                width: ListView.view.width
+                local: true
+                provider: String(model.provider || "")
+                folderPath: String(model.folder || "")
+                tId: String(model.id || "")
+                title: String(model.title || "")
+                artistName: String(model.artist || "")
+                album: String(model.album || "")
+                year: String(model.year || "")
+                date: ""
+                duration: String(model.duration || "")
+                durationSec: model.duration_sec || 0
+            }
+        }
+        ListModel { id: libSavedModel }
+        ListModel { id: libAllModel }
+    }
+
     // One My Music source group (issue #259): everything one provider's saved
     // shelves need, and nothing provider-specific. The strip, its labels and
     // the sort come from the source descriptor's categories; the panes are the
@@ -12420,19 +12759,15 @@ ApplicationWindow {
             folderList.applyRestore()
         }
 
-        // One row: the source's label (only when more than one source
-        // contributes -- a lone source's rows ARE that source), the category
-        // strip, the sort and the direction toggle. The title rides the first
-        // group's row, so a lone source renders exactly as it always has.
+        // Header row: the group's own label (only when more than one source
+        // contributes -- a lone source's rows ARE that source) and its category
+        // strip, the sort and the direction toggle. The pane's title lives on
+        // the Library section above, which is always present, so a group never
+        // repeats it.
         RowLayout {
             Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 2
             Layout.bottomMargin: 6
             spacing: 14
-            Text {
-                textFormat: Text.PlainText; text: "My Music"; color: root.textHi
-                font.pixelSize: 18; font.bold: true; Layout.alignment: Qt.AlignVCenter
-                visible: group.primary
-            }
             Text {
                 objectName: "libSourceLabel"
                 visible: group.sourceLabel !== ""
@@ -13516,6 +13851,14 @@ ApplicationWindow {
             var g = root.libGroupFor(source)
             if (g) g.applyMore(cat, items, more)
         }
+        // The Library section's pages (ADR 0007, issue #222): provider-free,
+        // so they land on the section itself, not on a source group.
+        function onLibraryFilesLoaded(view, items, more, total) {
+            libSection.applyLoaded(view, items, more, total)
+        }
+        function onLibraryFilesMore(view, items, more, total) {
+            libSection.applyMore(view, items, more)
+        }
         function onPlaylistFolderLoaded(source, fid, rows, path) {
             var g = root.libGroupFor(source)
             if (g) g.applyFolder(fid, rows, path)
@@ -13688,6 +14031,10 @@ ApplicationWindow {
         function onLibraryPresenceChanged() {
             root.libStamp = waves.libraryStamp()
             root._resolveLibraryPresence()
+            // The Library section's file lists are the scan's own: a publish
+            // can have added, retagged or pruned rows, so the visible view
+            // reloads (a no-op on an unconfigured or unopened section).
+            if (root.libraryOpen) libSection.reload()
             // A search page waiting behind the veil for its badges can have
             // them now. Handed to a zero-interval timer rather than revealed
             // here: this handler belongs to a Connections created when the
@@ -16129,10 +16476,12 @@ ApplicationWindow {
             onFactoryResetRequested: root.confirmFactoryReset = true
         }
 
-        // Library page (My Music): one source group per bridge source (issue
-        // #259), each with its own category strip and keep-alive panes, plus
-        // the one empty state while no source can fill a shelf. All of it is
-        // bridge data, so a second provider adds no QML here.
+        // Library page (My Music): the Library section first (ADR 0007, issue
+        // #222 -- the files on disk, provider-independent), then one source
+        // group per bridge source (issue #259), each with its own category
+        // strip and keep-alive panes, plus the one empty state while no
+        // source can fill a shelf. The section list is bridge data, so a
+        // second provider adds no QML here.
         ColumnLayout {
             id: libraryPane
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.topMargin: 8
@@ -16141,17 +16490,17 @@ ApplicationWindow {
             // each list carries its own 8px inside the scroll area.
             spacing: 0
 
-            // Title row for the no-source case only: a source group's own row
-            // carries the title, so the pane gains nothing when one exists
-            // (and a hidden row costs no layout space).
-            RowLayout {
-                visible: root.myMusicSources.length === 0
-                Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 2
-                spacing: 14
-                Text {
-                    textFormat: Text.PlainText; text: "My Music"; color: root.textHi
-                    font.pixelSize: 18; font.bold: true; Layout.alignment: Qt.AlignVCenter
-                }
+            LibLibrarySection {
+                id: libSection
+                // The section shares the pane with the source groups. Its
+                // share is bound, not fillHeight: QML's layout gives a
+                // min/pref-hinting item the whole pane from its fill
+                // siblings, and a bound share also keeps every section's
+                // height stable while pages load into it.
+                Layout.fillWidth: true
+                Layout.fillHeight: false
+                Layout.preferredHeight: Math.max(220, Math.round(libraryPane.height * 0.5))
+                sectionData: root.myMusicLibrary
             }
 
             Item {

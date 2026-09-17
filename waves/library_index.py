@@ -633,6 +633,35 @@ def _is_atmos_file(audio_type: str | None) -> bool:
     return str(audio_type or "").strip().lower() == "atmos"
 
 
+def _default_item_id(path: str) -> str | None:
+    """The Waves item id one audio file carries: "" when untagged, the id
+    otherwise, None when the file could not be read at all.
+
+    The same generic-first, legacy-fallback read the download gate performs
+    (waves.metadata.read_item_id), so a file answers here exactly as it does
+    there: the WAVES_ITEM_ID tag both providers write now wins, a file from
+    before that family answers through its legacy WAVES_TIDAL_ID, and a
+    tidal id comes back bare while another provider's keeps its namespace --
+    which is what lets the Library section badge a saved file by the id's
+    own namespace (ADR 0007, issue #222).
+
+    "" is the settled answer for a file no provider saved (every plain
+    library file); None means the read failed, and the row is then persisted
+    unknown so the folder retries rather than hardening "untagged" into a
+    fact. The reader's own contract already answers "" for both cases, so
+    None is only reachable through the injectable seam; the distinction is
+    kept because a failed probe must never read as "not Waves' file".
+    """
+    try:
+        from waves.metadata import read_item_id
+    except Exception:
+        return None  # the tag reader is unavailable; the folder retries
+    try:
+        return str(read_item_id(path) or "")
+    except Exception:
+        return None
+
+
 class _RateLimitedEmit:
     """The scan's progress-event gate: forwards to the callback at most once per
     ``interval`` seconds, so a live per-item count cannot flood the GUI with
@@ -700,6 +729,19 @@ def _track_keys(title, artist) -> tuple[str, str]:
     return title_key or "", artist_key or ""
 
 
+# The Library section's two views, as the bridge asks for them (ADR 0007,
+# issue #222). Anything else is a bug in the caller, not a third view.
+FILES_VIEWS = ("saved", "all")
+
+
+def _require_files_view(view) -> str:
+    """One of FILES_VIEWS, or the caller made a mistake that must be loud."""
+    text = str(view or "")
+    if text not in FILES_VIEWS:
+        raise ValueError(f"unknown library files view: {text!r}")  # noqa: TRY003 (the caller's bug, named)
+    return text
+
+
 class LibraryIndex:
     """A sqlite cache of album folders found under a library root: one row per
     folder that directly holds audio, storing the tag-read album/artist/date, the
@@ -734,6 +776,7 @@ class LibraryIndex:
         read_tags: Callable[[str], dict | None] = _read_album_tags,
         is_audio: Callable[[str], bool] = _is_audio,
         read_audio_type: Callable[[str], str | None] | None = None,
+        read_item_id: Callable[[str], str | None] | None = None,
     ) -> None:
         self._path = str(db_path)
         parent = os.path.dirname(self._path)
@@ -746,6 +789,11 @@ class LibraryIndex:
         # folder, while the audio type is per file, and the real reader needs
         # the non-easy interface the tag reader never opens.
         self._read_audio_type = read_audio_type or _default_audio_type
+        # Which Waves item one file was saved as (ADR 0007, issue #222): the
+        # Library section's Saved view IS this answer. A second per-file probe
+        # for the same reason as the Version probe above, and the real one
+        # reads the non-easy tag family the easy reader cannot see.
+        self._read_item_id = read_item_id or _default_item_id
         # Outcome of the most recent refresh() (see the SCAN_* constants). Read by
         # the backend on the same worker that refreshed, so no cross-thread race.
         self.last_scan_status = SCAN_UNSET
@@ -929,6 +977,17 @@ class LibraryIndex:
             # rows are always written explicitly by _upsert.
             with contextlib.suppress(sqlite3.OperationalError):  # column already exists
                 self._conn.execute("ALTER TABLE tracks ADD COLUMN audio_type TEXT NOT NULL DEFAULT ''")
+            # ADR 0007 / issue #222: the Waves item id one file was saved as.
+            # NULL is a row from before item-id capture (the freshness gate
+            # forces the folder's one backfill re-read, rewriting it); '' is a
+            # file with no Waves id at all, which is a FINISHED answer -- every
+            # plain library file is untagged, and a default instead of NULL
+            # would have marked those files unread forever, re-reading the
+            # whole library on every scan. Only a failed probe (see
+            # _default_item_id) writes NULL, so the folder retries and never
+            # hardens "untagged" over a file Waves really did save.
+            with contextlib.suppress(sqlite3.OperationalError):  # column already exists
+                self._conn.execute("ALTER TABLE tracks ADD COLUMN item_id TEXT")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_folder ON tracks(folder_path)")
             for col in ("tkey_title TEXT", "tkey_artist TEXT"):
                 with contextlib.suppress(sqlite3.OperationalError):  # column already exists
@@ -2085,9 +2144,11 @@ class LibraryIndex:
                           (SELECT COUNT(*) FROM tracks WHERE tracks.folder_path = albums.folder_path),
                           declared, runtime, has_atmos,
                           (SELECT COUNT(*) FROM tracks
-                            WHERE tracks.folder_path = albums.folder_path AND tracks.audio_type = '')
+                            WHERE tracks.folder_path = albums.folder_path AND tracks.audio_type = ''),
+                          (SELECT COUNT(*) FROM tracks
+                            WHERE tracks.folder_path = albums.folder_path AND tracks.item_id IS NULL)
                    FROM albums""").fetchall()
-        for path, mtime, codec, count, recorded, tracks, declared, runtime, has_atmos, unknown in rows:
+        for path, mtime, codec, count, recorded, tracks, declared, runtime, has_atmos, unknown, unprobed in rows:
             resting = now - float(recorded or 0) < _UNREADABLE_RETRY_S
             # Unknown is a file whose tags read but whose Version did not (a
             # transient probe failure): the folder re-reads until every file
@@ -2096,12 +2157,15 @@ class LibraryIndex:
             # pathologically, so unlike an unreadable file this rests no
             # window -- a folder that cannot classify retries every scan, and
             # each retry is one folder's tag reads, not the library's.
+            # unprobed counts the same shape for item ids: NULL is a pre-#222
+            # row (or a failed probe), both of which owe the folder one re-read.
             fresh = (
                 codec is not None
                 and declared is not None
                 and runtime is not None
                 and has_atmos is not None
                 and unknown == 0
+                and unprobed == 0
             )
             out[path] = (mtime, fresh and tracks > 0 and (tracks >= count or resting))
         return out
@@ -2196,7 +2260,7 @@ class LibraryIndex:
                 progress(batch[-1], committed=True)
 
     @staticmethod
-    def _track_row(dirpath: str, tags: dict, audio_type: str | None = "stereo") -> tuple:
+    def _track_row(dirpath: str, tags: dict, audio_type: str | None = "stereo", item_id: str | None = "") -> tuple:
         """One file's row for the tracks table: its own title and track artist
         (falling back to the album artist when the per-track credit is blank)
         plus its stream quality. An untagged file still gets a row, empty title
@@ -2209,7 +2273,14 @@ class LibraryIndex:
         or None/"" when the Version could not be read at all. Unknown reads
         as canonical until classified, but it is persisted as unknown (never
         laundered into "stereo") so the freshness gate retries the folder on
-        the next scan instead of believing the guess forever."""
+        the next scan instead of believing the guess forever.
+
+        ``item_id`` is which Waves item the file was saved as (ADR 0007, issue
+        #222): None when the probe failed, persisted as NULL so the folder
+        retries (see the column's comment in __init__); "" for a file with no
+        Waves id, a finished answer; the id itself otherwise, its namespace
+        naming the provider the file came from.
+        """
         atype = str(audio_type or "").strip().lower()
         if atype not in ("stereo", "atmos"):
             atype = ""
@@ -2223,6 +2294,7 @@ class LibraryIndex:
             int(tags.get("rate", 0) or 0),
             int(tags.get("length", 0) or 0),
             atype,
+            None if item_id is None else str(item_id),
         )
 
     def _read_row(self, job: _Candidate, alive: Callable[[], bool]) -> tuple | None:
@@ -2283,10 +2355,13 @@ class LibraryIndex:
         first_type: str | None = None
         with contextlib.suppress(Exception):
             first_type = self._read_audio_type(first_path)
-        # Every file is read (tags plus its Version) before anything is
-        # judged, so the partition below sees the whole folder: an Atmos
-        # Version can only attach to a twin this read has actually seen.
-        read: list[tuple[str, dict, str | None]] = [(first_audio, tags, first_type)]
+        first_id: str | None = None
+        with contextlib.suppress(Exception):
+            first_id = self._read_item_id(first_path)
+        # Every file is read (tags plus its Version and its item id) before
+        # anything is judged, so the partition below sees the whole folder: an
+        # Atmos Version can only attach to a twin this read has actually seen.
+        read: list[tuple[str, dict, str | None, str | None]] = [(first_audio, tags, first_type, first_id)]
         for name in audio:
             if name == first_audio:
                 continue
@@ -2303,7 +2378,10 @@ class LibraryIndex:
             atype: str | None = None
             with contextlib.suppress(Exception):
                 atype = self._read_audio_type(os.path.join(dirpath, name))
-            read.append((name, other, atype))
+            iid: str | None = None
+            with contextlib.suppress(Exception):
+                iid = self._read_item_id(os.path.join(dirpath, name))
+            read.append((name, other, atype, iid))
 
         # The partition: stereo files are canonical; an Atmos file with a
         # same-titled canonical sibling attaches to that track, one without
@@ -2322,8 +2400,8 @@ class LibraryIndex:
         def _key(tags: dict) -> tuple:
             return matching.twin_key(tags.get("title", ""), tags.get("track_artist", "") or tags.get("artist", ""))
 
-        stereo = [(n, t) for (n, t, a) in read if not _is_atmos_file(a)]
-        atmos = [(n, t) for (n, t, a) in read if _is_atmos_file(a)]
+        stereo = [(n, t) for (n, t, a, _i) in read if not _is_atmos_file(a)]
+        atmos = [(n, t) for (n, t, a, _i) in read if _is_atmos_file(a)]
         stereo_twins = [
             (_key(t), int(t.get("length", 0) or 0)) for (_, t) in stereo if str(t.get("title", "") or "").strip()
         ]
@@ -2355,7 +2433,7 @@ class LibraryIndex:
         # for counting but testifies to nothing, so it can neither badge nor
         # block. Legacy rows classify on their one backfill re-read, so the
         # badge follows a folder change by at most one scan.
-        has_atmos = bool(atmos) and any(str(a or "").strip().lower() == "stereo" for (_, _, a) in read)
+        has_atmos = bool(atmos) and any(str(a or "").strip().lower() == "stereo" for (_, _, a, _i) in read)
         # The album-level facts come from a canonical file, never an attached
         # Version: with flat placement the walk's first file can be an Atmos
         # twin whose provider spells the album differently, and judging the
@@ -2365,7 +2443,7 @@ class LibraryIndex:
         # steps in when no classified stereo row exists, and a promoted
         # Atmos row only when nothing else can. The per-file rows keep walk
         # order (the representative row first) -- order carries nothing.
-        classified = [(n, t) for (n, t, a) in read if str(a or "").strip().lower() == "stereo"]
+        classified = [(n, t) for (n, t, a, _i) in read if str(a or "").strip().lower() == "stereo"]
         if classified:
             rep = classified[0][1]
         elif stereo:
@@ -2375,7 +2453,7 @@ class LibraryIndex:
         # The representative's row carries its read Version through, unknown
         # included: persisting a guess would retire the folder from its
         # classification retry (see _track_row and the freshness gate).
-        tracks = [self._track_row(dirpath, tags, first_type)]
+        tracks = [self._track_row(dirpath, tags, first_type, first_id)]
         want = str(rep.get("album", "") or "").strip().casefold()
         # What the folder's files SAY the release is, believed only when they
         # speak with one voice. Silence is not disagreement (the same principle
@@ -2395,7 +2473,7 @@ class LibraryIndex:
         # already built above); the vote below is the whole electorate.
         agree, dissent = 0, 0
         canon_names = {n for (n, _) in canonical}
-        for name, other, atype in read:
+        for name, other, atype, iid in read:
             got = str(other.get("album", "") or "").strip().casefold()
             if name in canon_names and want and got:
                 if got == want:
@@ -2406,7 +2484,7 @@ class LibraryIndex:
                 for key, seen in shape.items():
                     seen.add(int(other.get(key, 0) or 0))
             if name != first_audio:
-                tracks.append(self._track_row(dirpath, other, atype))
+                tracks.append(self._track_row(dirpath, other, atype, iid))
         if dissent:
             # Only the files that positively voted for the majority album are
             # counted. Subtracting the dissenters from the raw file count
@@ -2547,13 +2625,13 @@ class LibraryIndex:
             return []
         rows = self._read(
             "SELECT t.title, t.artist, t.folder_path, t.codec, t.bitrate, t.bits, t.rate, t.length, "
-            "a.album, a.year "
+            "t.item_id, a.album, a.year "
             "FROM tracks t LEFT JOIN albums a ON a.folder_path = t.folder_path "
             "WHERE t.tkey_artist = ? AND t.tkey_title = ?",
             (artist_key, title_key),
         )
         out = []
-        for title, artist, path, codec, bitrate, bits, rate, length, album, album_year in rows:
+        for title, artist, path, codec, bitrate, bits, rate, length, item_id, album, album_year in rows:
             out.append(
                 {
                     "id": str(path or ""),
@@ -2564,6 +2642,10 @@ class LibraryIndex:
                     "album": str(album or ""),
                     "album_year": str(album_year or ""),
                     "length": int(length or 0),
+                    # The Waves item this file was saved as, "" when untagged
+                    # (ADR 0007, issue #222); the Library section's Saved view
+                    # is this answer, and a legacy row's NULL reads as "" here.
+                    "item_id": str(item_id or ""),
                     "guests": sorted(matching.feat_guests(str(title or ""), str(artist or ""))),
                 }
             )
@@ -2739,10 +2821,23 @@ class LibraryIndex:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT t.title, t.artist, t.folder_path, t.codec, t.bitrate, t.bits, t.rate, t.length, "
-                "t.audio_type, a.album, a.year "
+                "t.audio_type, t.item_id, a.album, a.year "
                 "FROM tracks t LEFT JOIN albums a ON a.folder_path = t.folder_path"
             ).fetchall()
-        for title, artist, path, codec, bitrate, bits, rate, length, audio_type, album, album_year in rows:
+        for (
+            title,
+            artist,
+            path,
+            codec,
+            bitrate,
+            bits,
+            rate,
+            length,
+            audio_type,
+            item_id,
+            album,
+            album_year,
+        ) in rows:
             yield {
                 "title": str(title or ""),
                 "artist": str(artist or ""),
@@ -2759,7 +2854,96 @@ class LibraryIndex:
                 # "atmos", or "" for a pre-Atmos row (reads as canonical
                 # until its folder's one backfill re-read rewrites it).
                 "audio_type": str(audio_type or ""),
+                # The Waves item the file was saved as (ADR 0007, issue
+                # #222): "" for a plain library file, NULL read as "".
+                "item_id": str(item_id or ""),
             }
+
+    # --- The Library section's per-file pages (ADR 0007, issue #222) --------
+    # The My Music pane's Library section lists FILES, not albums: Saved is
+    # every file Waves itself saved (the per-file item id above), All files is
+    # everything the walk sees. The unit is the file because that is what the
+    # id tag marks; the album facts are joined in for the row's own words.
+
+    def _file_fact(self, row: tuple) -> dict:
+        """One tracks-table row as the Library section's file fact: the file's
+        own title/artist/quality plus the holding folder's identity and the
+        item id that names its provenance."""
+        (
+            folder_path,
+            title,
+            artist,
+            item_id,
+            codec,
+            bitrate,
+            bits,
+            rate,
+            length,
+            audio_type,
+            album,
+            album_artist,
+            year,
+        ) = row
+        return {
+            "folder_path": str(folder_path or ""),
+            "title": str(title or ""),
+            "artist": str(artist or ""),
+            "album": str(album or ""),
+            "album_artist": str(album_artist or ""),
+            "year": str(year or ""),
+            "item_id": str(item_id or ""),
+            "codec": str(codec or ""),
+            "bitrate": int(bitrate or 0),
+            "bits": int(bits or 0),
+            "rate": int(rate or 0),
+            "length": int(length or 0),
+            "audio_type": str(audio_type or ""),
+        }
+
+    _FILE_FACT_COLUMNS = (
+        "t.folder_path, t.title, t.artist, t.item_id, t.codec, t.bitrate, t.bits, t.rate, t.length,"
+        " t.audio_type, a.album, a.artist, a.year"
+    )
+
+    def files_page(self, view: str, offset: int = 0, limit: int = 100) -> tuple[list[dict], bool]:
+        """One page of the Library section's file list for ``view``, ordered by
+        album folder and then the walk's own file order.
+
+        ``view`` is "saved" (files carrying a Waves item id -- the files Waves
+        itself saved, whatever provider) or "all" (every audio file the scan
+        sees). The Saved filter runs on the stored id, never on a path or a
+        second tag read, so it cannot drift from what the download gate wrote.
+        Folder-major order is the order the tracks index already provides
+        (idx_tracks_folder), which keeps a paged read cheap on a library of any
+        size: no sort over the whole table, and consecutive rows share their
+        album.
+
+        Returns the page and whether more rows exist (one extra row is read to
+        answer that without a COUNT). ``limit`` is clamped to at least 1 so a
+        caller can never ask for an empty, never-advancing page.
+        """
+        view = _require_files_view(view)
+        size = max(1, int(limit))
+        start = max(0, int(offset))
+        where = "WHERE t.item_id IS NOT NULL AND t.item_id <> ''" if view == "saved" else ""
+        rows = self._read(
+            f"SELECT {self._FILE_FACT_COLUMNS} FROM tracks t"  # noqa: S608 (a column list, no caller text)
+            " LEFT JOIN albums a ON a.folder_path = t.folder_path"
+            f" {where}"
+            " ORDER BY t.folder_path, t.rowid LIMIT ? OFFSET ?",
+            (size + 1, start),
+        )
+        more = len(rows) > size
+        return [self._file_fact(row) for row in rows[:size]], more
+
+    def files_count(self, view: str) -> int:
+        """How many files one Library-section view holds, for the section's
+        count. A COUNT over the tracks index: no join, no sort, and it runs on
+        a worker with the page it belongs to, never on the GUI thread."""
+        view = _require_files_view(view)
+        where = " WHERE item_id IS NOT NULL AND item_id <> ''" if view == "saved" else ""
+        rows = self._read(f"SELECT COUNT(*) FROM tracks{where}")  # noqa: S608 (one static branch)
+        return int(rows[0][0] or 0) if rows else 0
 
     def poll_containers_changed(self, root: str) -> bool | None:
         """Cheap change check for the watcher's background poll: stat ONLY the
@@ -2836,7 +3020,9 @@ class LibraryIndex:
                           (SELECT COUNT(*) FROM tracks WHERE tracks.folder_path = albums.folder_path),
                           declared, runtime, raw_count, has_atmos,
                           (SELECT COUNT(*) FROM tracks
-                            WHERE tracks.folder_path = albums.folder_path AND tracks.audio_type = '')
+                            WHERE tracks.folder_path = albums.folder_path AND tracks.audio_type = ''),
+                          (SELECT COUNT(*) FROM tracks
+                            WHERE tracks.folder_path = albums.folder_path AND tracks.item_id IS NULL)
                    FROM albums WHERE folder_path = ?""",
                 (folder_path,),
             ).fetchone()
@@ -2850,10 +3036,12 @@ class LibraryIndex:
         count, and the verdict itself is plain Python (_unchanged_verdict)."""
         with self._lock:
             rows = self._conn.execute("""SELECT albums.folder_path, dir_mtime, track_count, codec, recorded_at,
-                          COALESCE(tc.n, 0), declared, runtime, raw_count, has_atmos, COALESCE(tc.u, 0)
+                          COALESCE(tc.n, 0), declared, runtime, raw_count, has_atmos, COALESCE(tc.u, 0),
+                          COALESCE(tc.p, 0)
                    FROM albums
                    LEFT JOIN (SELECT folder_path, COUNT(*) AS n,
-                                     SUM(CASE WHEN audio_type = '' THEN 1 ELSE 0 END) AS u
+                                     SUM(CASE WHEN audio_type = '' THEN 1 ELSE 0 END) AS u,
+                                     SUM(CASE WHEN item_id IS NULL THEN 1 ELSE 0 END) AS p
                               FROM tracks GROUP BY folder_path) tc
                      ON tc.folder_path = albums.folder_path""").fetchall()
         return {r[0]: r[1:] for r in rows}
@@ -2893,6 +3081,10 @@ class LibraryIndex:
             # failure mid-read, never a finished answer: the folder re-reads
             # until every file classifies (§8.4).
             and row[9] == 0
+            # NULL item_id rows are from before item-id capture (ADR 0007,
+            # issue #222) or a failed probe: the folder re-reads until every
+            # file answers ('' is the finished "no Waves id").
+            and row[10] == 0
             and row[4] > 0
             and (row[4] >= row[1] or time.time() - float(row[3] or 0) < _UNREADABLE_RETRY_S)
         )
@@ -2928,8 +3120,8 @@ class LibraryIndex:
             self._conn.executemany("DELETE FROM tracks WHERE folder_path = ?", [(row[0],) for row in batch])
             self._conn.executemany(
                 "INSERT INTO tracks (folder_path, title, artist, codec, bitrate, bits, rate, length,"
-                " audio_type, tkey_title, tkey_artist)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " audio_type, item_id, tkey_title, tkey_artist)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 tracks,
             )
             self._conn.commit()
