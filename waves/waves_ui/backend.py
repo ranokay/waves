@@ -59,6 +59,7 @@ from waves.constants import (
     MetadataTargetUPC,
     QualityTier,
     QualityVideo,
+    cover_file_dimension,
     default_audio_is_both,
     provider_folder_name,
     quality_rank,
@@ -17719,8 +17720,9 @@ class WavesBridge(LibraryMixin, QObject):
                     continue
                 cover = None
                 try:
-                    # The standalone COVER action writes only the sidecar, so
-                    # it fetches at the separate file's own size (issue #236).
+                    # The standalone COVER action writes the sidecar at its own
+                    # size (issue #236); the embed below wants the embedded
+                    # size, so it fetches that separately when the two differ.
                     cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row, for_file=True)
                 except Exception:
                     cover = None
@@ -17737,7 +17739,17 @@ class WavesBridge(LibraryMixin, QObject):
                 ):
                     served += 1
                 if bool(self._psetting(CTX_APPLE, "metadata_cover_embed", True)):
-                    self._apple_standalone_embed_cover(folder, stem, cover, track_row, facts)
+                    embed_cover = cover
+                    try:
+                        embedded_dim = self._psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
+                        file_pref = str(
+                            self._psetting(CTX_APPLE, "metadata_cover_file_dimension", "follow") or "follow"
+                        )
+                        if cover_file_dimension(embedded_dim, file_pref) != embedded_dim:
+                            embed_cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row)
+                    except Exception:
+                        embed_cover = cover
+                    self._apple_standalone_embed_cover(folder, stem, embed_cover, track_row, facts)
         return served
 
     def _apple_standalone_embed(

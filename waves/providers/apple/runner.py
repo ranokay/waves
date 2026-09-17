@@ -1192,6 +1192,21 @@ def cover_bytes(hooks: AppleJobHooks, provider, raw: dict, *, for_file: bool = F
         return response.content or None
 
 
+def cover_file_bytes(hooks: AppleJobHooks, provider, raw: dict, embedded: bytes | None) -> bytes | None:
+    """The bytes the SEPARATE cover file gets.
+
+    "follow" (the default) answers the embedded fetch unchanged -- no second
+    request; an explicit size fetches once more at that size (issue #236:
+    the Apple card's 'Separate cover file size' used to be saved and never
+    read).
+    """
+    embedded_dimension = hooks.psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
+    pref = str(hooks.psetting(CTX_APPLE, "metadata_cover_file_dimension", "follow") or "follow")
+    if cover_file_dimension(embedded_dimension, pref) == embedded_dimension:
+        return embedded
+    return cover_bytes(hooks, provider, raw, for_file=True)
+
+
 def write_sidecars(
     hooks: AppleJobHooks,
     dest: pathlib.Path,
@@ -1952,12 +1967,7 @@ def deliver_track(
     # The separate cover file can carry its own size (issue #236): "follow"
     # (the default) reuses the embedded fetch, an explicit choice fetches once
     # more at that size, so the Apple card's control is not silently ignored.
-    cover_file_data = cover_data
-    if cover_data is not None:
-        embedded_dim = hooks.psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
-        file_pref = str(hooks.psetting(CTX_APPLE, "metadata_cover_file_dimension", "follow") or "follow")
-        if cover_file_dimension(embedded_dim, file_pref) != embedded_dim:
-            cover_file_data = cover_bytes(hooks, provider, raw, for_file=True)
+    cover_file_data = cover_file_bytes(hooks, provider, raw, cover_data) if cover_data is not None else None
     # Embedded art stays jpg (spec 9.1): an original-master PNG is
     # converted for the tag while the sidecar keeps the master bytes.
     embed_cover = embed_cover_bytes(hooks, cover_data) if options.option("metadata_cover_embed", True) else None
