@@ -41,6 +41,12 @@ def test_tier_mapping_is_honest_and_detail_never_ranks():
     assert apple_tier_for_delivery("aac", None, "44100") == QualityTier.HIGH.value
     assert apple_tier_for_delivery("alac", 16, 44100) == QualityTier.LOSSLESS.value
     assert apple_tier_for_delivery("alac", 16, 48000) == QualityTier.LOSSLESS.value
+    # 24-bit is Lossless class at 44.1/48 kHz and Hi-Res only above 48 kHz
+    # (Apple's own boundary, issue #239); an unreadable rate cannot promote.
+    assert apple_tier_for_delivery("alac", 24, 44100) == QualityTier.LOSSLESS.value
+    assert apple_tier_for_delivery("alac", 24, 48000) == QualityTier.LOSSLESS.value
+    assert apple_tier_for_delivery("alac", 24, None) == QualityTier.LOSSLESS.value
+    assert apple_tier_for_delivery("alac", 24, 88200) == QualityTier.HI_RES_LOSSLESS.value
     assert apple_tier_for_delivery("alac", 24, 96000) == QualityTier.HI_RES_LOSSLESS.value
     assert apple_tier_for_delivery("alac", 24, 192000) == QualityTier.HI_RES_LOSSLESS.value
     # Depth unknown never promotes from rate alone.
@@ -150,23 +156,30 @@ def test_alac_playlist_choice_honors_the_ceiling():
 
     cd = {"uri": "16-441.m3u8", "stream_info": {"audio": "audio-alac-stereo-44100-16", "average_bandwidth": 900000}}
     cd48 = {"uri": "16-48.m3u8", "stream_info": {"audio": "audio-alac-stereo-48000-16"}}
+    hd48 = {"uri": "24-48.m3u8", "stream_info": {"audio": "audio-alac-stereo-48000-24"}}
     hires = {"uri": "24-96.m3u8", "stream_info": {"audio": "audio-alac-stereo-96000-24", "average_bandwidth": 2800000}}
     hires192 = {"uri": "24-192.m3u8", "stream_info": {"audio": "audio-alac-stereo-192000-24"}}
 
-    # LOSSLESS caps at 16-bit and prefers the highest rate under the cap;
-    # HI_RES takes the best rendition the master holds.
-    assert engine._choose_alac_playlist([cd, cd48, hires, hires192], 16) is cd48
+    # A LOSSLESS ask caps at the LOSSLESS rung (issue #239: 16-bit at any
+    # rate, or 24-bit at 44.1/48 kHz) and prefers the best under it; HI_RES
+    # takes the best rendition the master holds.
+    assert engine._choose_alac_playlist([cd, cd48, hires, hires192], QualityTier.LOSSLESS.value) is cd48
+    assert engine._choose_alac_playlist([cd, cd48, hd48, hires, hires192], QualityTier.LOSSLESS.value) is hd48
     assert engine._choose_alac_playlist([cd, cd48, hires, hires192], None) is hires192
-    # A 24-bit-only master cannot satisfy the LOSSLESS cap.
-    assert engine._choose_alac_playlist([hires], 16) is None
+    # A 24/48-only master satisfies the LOSSLESS ask instead of being refused
+    # into the lossy fallback.
+    assert engine._choose_alac_playlist([hd48], QualityTier.LOSSLESS.value) is hd48
+    # A 24-bit master above 48 kHz is HI_RES class and cannot satisfy it.
+    assert engine._choose_alac_playlist([hires], QualityTier.LOSSLESS.value) is None
+    assert engine._choose_alac_playlist([hires192], QualityTier.LOSSLESS.value) is None
     # A suffixed tag still parses (gamdl's own ALAC family is permissive).
     suffixed = {"uri": "16-b.m3u8", "stream_info": {"audio": "audio-alac-stereo-44100-16-binaural"}}
-    assert engine._choose_alac_playlist([suffixed], 16) is suffixed
+    assert engine._choose_alac_playlist([suffixed], QualityTier.LOSSLESS.value) is suffixed
     # Non-ALAC, unparseable and empty lists never qualify.
     aac = {"uri": "aac.m3u8", "stream_info": {"audio": "audio-stereo-256"}}
     unknown = {"uri": "x.m3u8", "stream_info": {"audio": "audio-alac-unknown"}}
     assert engine._choose_alac_playlist([aac, unknown], None) is None
-    assert engine._choose_alac_playlist([], 16) is None
+    assert engine._choose_alac_playlist([], QualityTier.LOSSLESS.value) is None
 
 
 def test_resolve_stream_asks_the_alac_fetch_at_the_pinned_tier(tmp_path, monkeypatch):
