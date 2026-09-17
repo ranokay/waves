@@ -50,7 +50,9 @@ def test_playlist_and_mix_rows_expand_to_a_ledger():
 
 def _bridge_for_fetch(monkeypatch):
     """A bridge whose worker pool runs inline, so the fetch is synchronous."""
-    pytest.importorskip("PySide6")
+    from support.qml import require_qt
+
+    require_qt()
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtGui import QGuiApplication
 
@@ -83,6 +85,7 @@ def _bridge_for_fetch(monkeypatch):
     return be, bridge, fetched
 
 
+@pytest.mark.qml
 def test_load_queue_tracks_orders_a_playlist_by_its_own_list(monkeypatch):
     be, bridge, fetched = _bridge_for_fetch(monkeypatch)
 
@@ -104,6 +107,7 @@ def test_load_queue_tracks_orders_a_playlist_by_its_own_list(monkeypatch):
     assert [(r["id"], r["num"], r["title"]) for r in fetched[-1][1]] == [("t-a", 1, "First"), ("t-b", 2, "Second")]
 
 
+@pytest.mark.qml
 def test_load_queue_tracks_orders_a_mix_by_its_own_list(monkeypatch):
     be, bridge, fetched = _bridge_for_fetch(monkeypatch)
     t = be.Track.__new__(be.Track)

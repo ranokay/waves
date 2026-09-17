@@ -125,6 +125,19 @@ def _skip_or_fail_missing_qt() -> None:
     pytest.skip(message)
 
 
+def require_qt() -> None:
+    """Skip this test when PySide6 is absent, or fail under --require-qml.
+
+    The one call a Qt test makes at its entry point: a Qt-less contributor
+    gets a skip, and a strict run treats the missing dependency as the
+    failure it is. Tests that boot a scenario through :func:`run_scenario`
+    never call this (the runner owns the check); tests that construct Qt
+    in-process do.
+    """
+    if missing_qt():
+        _skip_or_fail_missing_qt()
+
+
 def make_tidal_my_music_source(root, q, settle, bridge) -> None:
     """Seed a signed-in TIDAL session so My Music renders its source group.
 

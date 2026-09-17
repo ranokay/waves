@@ -48,6 +48,31 @@ test: ## Test the code with pytest
 	@echo "🚀 Testing code: Running pytest"
 	@poetry run pytest --doctest-modules
 
+.PHONY: test-fast
+test-fast: ## Run the fast group (no Qt, ffmpeg, slow, integration or account; < 1 min)
+	@echo "🚀 Testing code: fast group"
+	@poetry run pytest --doctest-modules -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests
+
+.PHONY: test-qml
+test-qml: ## Run the quick QML group (Qt required; < 5 min)
+	@echo "🚀 Testing code: quick QML group"
+	@poetry run pytest --doctest-modules -rs -q -m "qml and not slow and not integration and not account" --require-qml tests
+
+.PHONY: test-default
+test-default: ## Run the default group (all but the live account tests; < 10 min)
+	@echo "🚀 Testing code: default group"
+	@poetry run pytest --doctest-modules -rs -m "not account" tests
+
+.PHONY: test-strict
+test-strict: ## Run the merge gate (everything but the live account tests; < 10 min)
+	@echo "🚀 Testing code: strict group"
+	@poetry run pytest --doctest-modules -rs --require-qml -m "not account" tests
+
+.PHONY: test-ffmpeg
+test-ffmpeg: ## Run the ffmpeg group (assumes ffmpeg on PATH; < 1 min)
+	@echo "🚀 Testing code: ffmpeg group"
+	@poetry run pytest --doctest-modules -rs -q -m "ffmpeg and not account" tests
+
 .PHONY: star-history
 star-history: ## Copy the star-history chart from the public repo into this tree
 	@bash tools/sync_star_history.sh

@@ -1388,6 +1388,7 @@ def test_fresh_machine_steps_walk_in_order():
     assert "no apk" in steps["image"]["detail"].lower()
 
 
+@pytest.mark.platform
 def test_container_step_offers_the_gentle_start_when_idle():
     steps = _steps(container={"name": "docker", "available": True, "running": False, "hint": "Start Docker Desktop"})
     assert steps["container"]["state"] == "todo"

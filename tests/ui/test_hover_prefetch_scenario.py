@@ -27,6 +27,9 @@ from support.qml import (
     sandbox_qml_settings,
 )
 
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
+
 
 @pytest.mark.qml
 def test_resting_on_a_playlist_card_prefetches_its_page_and_the_click_paints_whole():

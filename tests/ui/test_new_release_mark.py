@@ -229,7 +229,10 @@ def test_an_album_page_header_carries_the_date_its_rows_show(monkeypatch) -> Non
 # ----- the live UI ----------------------------------------------------------------
 
 
+# The heaviest QML boot: excluded from the quick QML pass (the file's
+# structural cases are fast and stay in the fast group).
 @pytest.mark.qml
+@pytest.mark.slow
 def test_the_mark_follows_the_date_on_every_surface_and_the_clock() -> None:
     run_scenario(
         __file__,

@@ -81,6 +81,7 @@ markers = [
   "ffmpeg: uses a real ffmpeg/ffprobe binary (skipped when none is on PATH)",
   "integration: crosses a real process, disk store or service boundary (opt-in groups)",
   "platform: behavior that depends on the host platform",
+  "slow: the long tail of the qml group: one of the heaviest boots (8 s or more), always marked beside qml",
   "account: runs against the real Apple/TIDAL accounts (opt-in via WAVES_ACCOUNT_TESTS=1)",
 ]
 

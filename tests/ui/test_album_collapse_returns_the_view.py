@@ -36,6 +36,9 @@ from support.qml import (
     sandbox_qml_settings,
 )
 
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
+
 
 @pytest.mark.qml
 def test_collapsing_an_album_row_returns_the_view_to_where_it_was():

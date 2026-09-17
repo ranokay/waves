@@ -21,6 +21,7 @@ from __future__ import annotations
 import atexit
 import os
 import shutil
+import sys
 import tempfile
 
 import pytest
@@ -138,6 +139,54 @@ def _skip_marked(items, marker: str, reason: str) -> None:
             item.add_marker(skip)
 
 
+# Node ids of tests that carry the qml or integration marker, so the
+# session-end check can tell an expected Qt skip from an unmarked test that
+# quietly skipped the whole GUI surface (audit TT-08: a scenario without the
+# marker is invisible to --require-qml and stays a silent skip).
+_MARKED_FOR_QT: set[str] = set()
+_UNMARKED_QT_SKIPS: list[str] = []
+
+
+def pytest_runtest_logreport(report) -> None:
+    """Record a Qt-absence skip from a test that carries no Qt marker.
+
+    Setup and call phases both count: `require_qt()` and `run_scenario()`
+    skip from inside the test body, while conftest's own auto-skip happens
+    at setup.
+    """
+    if not report.skipped or report.when == "teardown" or report.nodeid in _MARKED_FOR_QT:
+        return
+    reason = str(report.longrepr)
+    if "PySide6" in reason or "offscreen Qt" in reason:
+        _UNMARKED_QT_SKIPS.append(report.nodeid)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Under --require-qml, an unmarked Qt skip fails the session.
+
+    The marked tests convert Qt absence to a failure themselves; this is the
+    net for the one that forgot its marker, which would otherwise pass the
+    strict run by skipping.
+    """
+    if not _UNMARKED_QT_SKIPS:
+        return None
+    from support import qml as qml_support
+
+    if not qml_support.require_qml():
+        return None
+    print(
+        "\nUnmarked tests skipped for missing Qt under --require-qml, so the "
+        "GUI surface they cover was never exercised:\n  "
+        + "\n  ".join(_UNMARKED_QT_SKIPS)
+        + "\nMark them qml (Qt) or integration (non-Qt).",
+        file=sys.stderr,
+    )
+    # Setting the exit status is what pytest reads; the hook's return value
+    # is ignored.
+    session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    return None
+
+
 def pytest_collection_modifyitems(config, items) -> None:
     """Auto-skip marked tests only for a positively missing dependency."""
     from support import qml as qml_support
@@ -148,3 +197,9 @@ def pytest_collection_modifyitems(config, items) -> None:
         _skip_marked(items, "ffmpeg", "ffmpeg is not on PATH")
     if qml_support.missing_qt() and not qml_support.require_qml():
         _skip_marked(items, "qml", "PySide6 is not importable")
+    # Recorded here, where collection has the markers: the session-end check
+    # below needs to tell a marked test's own Qt handling from an unmarked
+    # test that silently skipped the surface the marker exists for.
+    for item in items:
+        if item.get_closest_marker("qml") or item.get_closest_marker("integration"):
+            _MARKED_FOR_QT.add(item.nodeid)

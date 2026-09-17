@@ -36,10 +36,11 @@ from waves.waves_ui import diagnostics
 
 
 def _qt_app():
-    try:
-        from PySide6.QtCore import QCoreApplication
-    except Exception:  # pragma: no cover - environment guard
-        pytest.skip("PySide6 unavailable")
+    from support.qml import require_qt
+
+    require_qt()
+    from PySide6.QtCore import QCoreApplication
+
     return QCoreApplication.instance() or QCoreApplication([])
 
 
@@ -53,6 +54,7 @@ def _armed_watchdog(tmp_path, monkeypatch):
     return crash, handle
 
 
+@pytest.mark.qml
 def test_a_pending_dump_fires_when_the_thread_blocks(tmp_path, monkeypatch):
     """The control. Without this the test below proves nothing: it would pass
     just as happily if the watchdog never armed anything in the first place."""
@@ -66,6 +68,7 @@ def test_a_pending_dump_fires_when_the_thread_blocks(tmp_path, monkeypatch):
     assert "Timeout" in crash.read_text(), "the watchdog never armed, so this file's other test is vacuous"
 
 
+@pytest.mark.qml
 def test_stopping_the_watchdog_cancels_the_pending_dump(tmp_path, monkeypatch):
     crash, handle = _armed_watchdog(tmp_path, monkeypatch)
     try:
@@ -157,6 +160,7 @@ diagnostics._watchdog.start(None)  # arms the countdown, and nothing stops it
 """
 
 
+@pytest.mark.qml
 def test_a_countdown_still_armed_at_exit_is_cancelled_before_teardown():
     """A countdown left armed when the interpreter exits fires from inside
     Py_FinalizeEx, where faulthandler walks frames that are already being
@@ -165,7 +169,9 @@ def test_a_countdown_still_armed_at_exit_is_cancelled_before_teardown():
     bridge started the watchdog. shutdown() covers the normal quit; this pins
     the net for every other exit: the module cancels the dump at atexit, which
     runs before faulthandler's own teardown."""
-    pytest.importorskip("PySide6")
+    from support.qml import require_qt
+
+    require_qt()
     proc = subprocess.run(
         [sys.executable, "-c", _EXIT_PROBE],
         capture_output=True,

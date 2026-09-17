@@ -18,6 +18,9 @@ import pytest
 from support.paths import QML_MAIN
 from support.qml import run_scenario
 
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
+
 
 def _album(media_id: str) -> dict:
     return {

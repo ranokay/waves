@@ -569,6 +569,7 @@ def test_taking_over_a_staged_swap_reports_it_as_previously_staged_too(tmp_path,
 
 
 # ---- the size report must never fail a build --------------------------------
+@pytest.mark.platform
 @pytest.mark.skipif(sys.platform.startswith("win") or not shutil.which("bash"), reason="needs bash + du")
 def test_the_bundle_size_report_survives_a_wide_bundle_root(tmp_path):
     """`set -o pipefail` plus a `head -25` on the end of the top-items pipeline.
