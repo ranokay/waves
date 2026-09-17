@@ -159,7 +159,16 @@ def test_presence_facts_carry_atmos_presence_through_the_sql_path(tmp_path):
     ``decide_presence`` reads ``best["has_atmos"]`` for the ATMOS TOO badge;
     the dict presence build carried it, the sqlite fact columns did not, so
     the fact's availability rested on an invariant no code enforced. Every
-    presence fact now carries it, and the matcher's verdict keeps it."""
+    presence fact now carries it, and the bridge really picks the SQL pair
+    when the cache holds no Atmos rows (its documented gate)."""
+    from types import SimpleNamespace
+
+    from waves.waves_ui.bridge_library import SqlPresenceIndex
+
+    def _sql_pair(lib):
+        stub = SimpleNamespace()
+        return WavesBridge._sql_presence_indexes(stub, lib)
+
     root_a = tmp_path / "case_a"
     d = _mk(root_a, "lib/Artist/Album", ["01.flac", "02.m4a"])
     stereo_only = _index(root_a, {d: _tags()}, audiomap={"02.m4a": "stereo"})
@@ -168,6 +177,11 @@ def test_presence_facts_carry_atmos_presence_through_the_sql_path(tmp_path):
     facts = stereo_only.presence_facts(key)
     assert facts and all(f["has_atmos"] is False for f in facts)
     assert matching.decide_presence("Album", "Artist", "2024", 2, {key: facts})["has_atmos"] is False
+    # A cache with no Atmos track row answers through the SQL pair, and that
+    # pair's verdict carries the badge fact.
+    pair = _sql_pair(stereo_only)
+    assert pair is not None and isinstance(pair[0], SqlPresenceIndex)
+    assert matching.decide_presence("Album", "Artist", "2024", 2, pair[0])["has_atmos"] is False
 
     root_b = tmp_path / "case_b"
     d = _mk(root_b, "lib/Artist/Album", ["01.flac", "02.m4a"])
@@ -177,6 +191,10 @@ def test_presence_facts_carry_atmos_presence_through_the_sql_path(tmp_path):
     facts = with_atmos.presence_facts(key)
     assert facts and any(f["has_atmos"] is True for f in facts)
     assert matching.decide_presence("Album", "Artist", "2024", 2, {key: facts})["has_atmos"] is True
+    # An Atmos-bearing cache takes the dict road (its gate), so the same fact
+    # must travel there; the point of the column is that a future gate change
+    # cannot recreate the False answer.
+    assert _sql_pair(with_atmos) is None
 
 
 def test_stereo_only_folder_reports_no_atmos(tmp_path):

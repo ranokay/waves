@@ -71,17 +71,23 @@ def test_batch_answers_match_the_single_answer_for_a_version_filter(tmp_path):
     single one, filtered or not -- the batch used to omit the column and fall
     back to the legacy mode."""
     store = _store(tmp_path)
-    path = _track_file(tmp_path, "song.m4a")
-    store.record("123", path, "LOW", audio_type="atmos")
+    atmos = _track_file(tmp_path, "song.m4a")
+    stereo = _track_file(tmp_path, "song.flac")
+    store.record("123", atmos, "LOW", audio_type="atmos")
+    store.record("456", stereo, "LOSSLESS", audio_type="stereo")
 
-    single = store.ownership_of("123", audio_type="atmos")
-    assert single is not None and single["audio_type"] == "atmos"
-    assert store.ownership_of_many(["123"], audio_type="atmos")["123"] == single
-    # Unfiltered, both answer the whole-track best copy.
-    assert store.ownership_of_many(["123"])["123"] == store.ownership_of("123")
-    # The other Version does not exist on disk, so the filter answers None.
+    for tid, want in (("123", "atmos"), ("123", "stereo"), ("456", "stereo"), ("456", "atmos")):
+        assert store.ownership_of_many([tid], audio_type=want)[tid] == store.ownership_of(tid, audio_type=want)
+    assert store.ownership_of_many(["123", "456"]) == {
+        "123": store.ownership_of("123"),
+        "456": store.ownership_of("456"),
+    }
+    assert store.ownership_of_many(["123"], audio_type="atmos")["123"]["audio_type"] == "atmos"
+    assert store.ownership_of_many(["456"], audio_type="stereo")["456"]["audio_type"] == "stereo"
+    # Each filter refuses the other Version's copy.
     assert store.ownership_of("123", audio_type="stereo") is None
     assert store.ownership_of_many(["123"], audio_type="stereo")["123"] is None
+    assert store.ownership_of_many(["456"], audio_type="atmos")["456"] is None
 
 
 def test_best_surviving_quality_wins(tmp_path):
