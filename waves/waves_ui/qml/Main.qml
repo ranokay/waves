@@ -12290,7 +12290,8 @@ ApplicationWindow {
         }
         // The library folder moved (a library pref committed, see Main.qml's
         // onLibrarySourceChanged): every row on screen belongs to the folder
-        // being left, so they go, and the new folder's Saved loads.
+        // being left, so they go, and the current view reloads from the new
+        // folder (the section stays where the user was looking).
         function reset() {
             libSavedModel.clear()
             libAllModel.clear()
@@ -12318,7 +12319,11 @@ ApplicationWindow {
             var model = modelFor(v)
             for (var i = 0; i < items.length; ++i) model.append(items[i])
             var m = Object.assign({}, more); m[v] = hasMore === true; more = m
-            loadingMore = false
+            // The rows land in their own view's keep-alive list either way,
+            // but the spinner flag belongs to the VISIBLE view: a late append
+            // for the view the user just left must not clear the one on
+            // screen (see applyLoaded).
+            if (v === category) loadingMore = false
         }
         function maybeLoadMore(view, cat) {
             if (cat !== category || !configured) return

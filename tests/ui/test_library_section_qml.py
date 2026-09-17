@@ -87,7 +87,8 @@ def _click(root, q, settle, point_expr: str, done_expr: str, wait: int = 350) ->
 
 def _write_book(path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    open(path, "w").close()
+    with open(path, "w"):
+        pass
 
 
 def _seed_library() -> tuple[str, dict, dict]:
