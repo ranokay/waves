@@ -22,7 +22,7 @@ import ast
 from support.paths import TESTS_ROOT
 
 # Qt types whose construction means the test cannot run without PySide6.
-_QT_TYPES = frozenset({"QGuiApplication", "QQmlApplicationEngine", "QQmlEngine", "QQuickWindow"})
+_QT_TYPES = frozenset({"QCoreApplication", "QGuiApplication", "QQmlApplicationEngine", "QQmlEngine", "QQuickWindow"})
 
 
 def _called_name(call: ast.Call) -> str:
@@ -40,19 +40,54 @@ def _constructs_qt(node: ast.AST) -> bool:
     return any(isinstance(call, ast.Call) and _called_name(call) in _QT_TYPES for call in ast.walk(node))
 
 
-def _boots_qml(node: ast.FunctionDef | ast.AsyncFunctionDef, src: str) -> bool:
+def _uses_this_file(node: ast.AST) -> bool:
+    return any(isinstance(name, ast.Name) and name.id == "__file__" for name in ast.walk(node))
+
+
+def _boots_qml(node: ast.AST) -> bool:
     """Whether this test boots the shared QML harness or spawns itself."""
-    segment = ast.get_source_segment(src, node) or ""
-    if "run_scenario(" in segment and "__file__" in segment:
-        # The standalone-script pattern: the test runs its own module as a
-        # child process to boot Main.qml. The runner's own tests pass a
-        # throwaway script instead, so they stay exempt.
-        return True
-    if "str(Path(__file__).resolve())" in segment and "subprocess.run(" in segment:
-        # The same pattern spelled directly: the test runs this very file
-        # with a scenario flag (the restart journeys do this).
-        return True
-    return any(isinstance(call, ast.Call) and _called_name(call) == "boot_main_qml" for call in ast.walk(node))
+    for call in ast.walk(node):
+        if not isinstance(call, ast.Call):
+            continue
+        name = _called_name(call)
+        if name == "boot_main_qml":
+            return True
+        if name in ("run_scenario", "subprocess.run") and _uses_this_file(call):
+            # The standalone-script patterns: run_scenario(Path(__file__), ...)
+            # or a subprocess of this very file with a scenario flag. The
+            # runner's own tests pass a throwaway script instead.
+            return True
+    return False
+
+
+def _module_helpers(tree: ast.Module) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Module-level functions, by name, so the check can follow a test into
+    the helper that really builds the app (e.g. `_qt_app()`)."""
+    return {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+
+def _drives_qt(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    helpers: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+) -> bool:
+    """Whether this test, or a module helper it reaches, touches Qt."""
+    seen: set[str] = set()
+    worklist: list[ast.AST] = [node]
+    while worklist:
+        current = worklist.pop()
+        if _constructs_qt(current):
+            return True
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)) and _boots_qml(current):
+            return True
+        for call in ast.walk(current):
+            if not isinstance(call, ast.Call):
+                continue
+            name = _called_name(call)
+            helper = helpers.get(name)
+            if helper is not None and name not in seen:
+                seen.add(name)
+                worklist.append(helper)
+    return False
 
 
 def _module_pytestmark_has_qml(tree: ast.Module) -> bool:
@@ -86,11 +121,11 @@ def test_every_qt_driving_test_declares_the_qml_marker():
         if module_constructs and not module_marked:
             offenders.append(f"{path.relative_to(TESTS_ROOT)} (module scope)")
             continue
+        helpers = _module_helpers(tree)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("test_"):
                 continue
-            drives_qt = _constructs_qt(node) or _boots_qml(node, src)
-            if drives_qt and not (module_marked or _node_has_qml_mark(node)):
+            if _drives_qt(node, helpers) and not (module_marked or _node_has_qml_mark(node)):
                 offenders.append(f"{path.relative_to(TESTS_ROOT)}::{node.name}")
 
     assert not offenders, (
