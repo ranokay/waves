@@ -57,6 +57,10 @@ def test_missing_qt_skips_normally_and_fails_under_require_qml(tmp_path, monkeyp
     monkeypatch.setattr(qml, "missing_qt", lambda: True)
     script = _script(tmp_path, "raise AssertionError('the child must not run')\n")
 
+    # The skip half asks for the non-strict state explicitly: the suite may
+    # itself be running under --require-qml, where the runner refuses to
+    # skip at all (and that refusal is the second half's whole point).
+    monkeypatch.setattr(qml, "_REQUIRE_QML", False)
     with pytest.raises(pytest.skip.Exception):
         run_scenario(script)
 
