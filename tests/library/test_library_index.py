@@ -41,6 +41,20 @@ def _mk(base, rel, files):
     return d
 
 
+@pytest.fixture(autouse=True)
+def _unreadable_fixture_files_have_no_ids(monkeypatch):
+    """Empty fixture files answer "" to the item-id probe.
+
+    This module's files are empty and their tags are fiction, so their ids
+    are fiction too. Without this the REAL probe would call every one of them
+    unreadable (an empty container has no header to parse), the folders would
+    retry forever, and the warm-scan assertions would fail. The real reader's
+    own rules live in tests/library/test_library_item_id_scan.py and
+    tests/metadata.
+    """
+    monkeypatch.setattr("waves.library_index._default_item_id", lambda path: "")
+
+
 def _reader(tagmap, counter=None):
     """A fake tag reader keyed by the file's parent folder."""
 

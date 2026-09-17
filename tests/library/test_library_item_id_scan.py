@@ -115,8 +115,9 @@ def test_the_files_page_exposes_the_stored_id(tmp_path):
 
 def test_the_default_probe_reads_through_the_download_gates_reader(tmp_path, monkeypatch):
     """The real wiring (no injected probe) reads the tag family the download
-    gate wrote, legacy fallback included: the scan must not invent its own
-    tag read, or a file Waves saved would be invisible to Saved."""
+    gate wrote, legacy fallback included, through the tri-state reader that
+    can also say "could not read": the scan must not invent its own tag read,
+    or a file Waves saved would be invisible to Saved."""
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/A/Alb", ["1.flac"])
     pathmap = {os.path.join(d, "1.flac"): {**_album_tags(), "title": "One"}}
@@ -126,7 +127,7 @@ def test_the_default_probe_reads_through_the_download_gates_reader(tmp_path, mon
         asked.append(path)
         return "1234"  # what a legacy WAVES_TIDAL_ID answers
 
-    monkeypatch.setattr("waves.metadata.read_item_id", fake_read_item_id)
+    monkeypatch.setattr("waves.metadata.read_item_id_or_none", fake_read_item_id)
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=_path_reader(pathmap))
     idx.refresh(lib)
     assert asked == [os.path.join(d, "1.flac")]
@@ -367,3 +368,37 @@ def test_real_tags_scan_into_saved_through_the_download_gates_own_reader(tmp_pat
     opens.clear()
     idx.refresh(str(tmp_path / "lib"))
     assert opens == []  # warm: the ids are stored, nothing is re-probed
+
+
+@pytest.mark.ffmpeg
+def test_a_transient_id_read_failure_retries_instead_of_settling_untagged(tmp_path, monkeypatch):
+    """A failed id read must persist as unknown, not as "no Waves id": the
+    file's tags ARE there, a transient open failed, and only a retry (never a
+    permanent UNTAGGED) keeps a file Waves saved visible to Saved."""
+    import mutagen
+    from support.audio_fixtures import tone
+
+    lib = str(tmp_path / "lib" / "A" / "Album")
+    os.makedirs(lib)
+    track = tone(os.path.join(lib, "01.m4a"))
+    _tag_mp4(str(track), name="First", item_id="apple:91")
+
+    real_file = mutagen.File
+    state = {"full_opens": 0}
+
+    def flaky_file(path, *args, **kwargs):
+        if not kwargs.get("easy"):
+            state["full_opens"] += 1
+            # The first full open is the Version probe, the second the item
+            # id: fail THAT one once, exactly like a NAS hiccup between two
+            # reads of a file whose easy tags just read fine.
+            if state["full_opens"] == 2:
+                raise OSError("transient open failure")
+        return real_file(path, *args, **kwargs)
+
+    monkeypatch.setattr(mutagen, "File", flaky_file)
+    idx = LibraryIndex(str(tmp_path / "library.sqlite3"))
+    idx.refresh(str(tmp_path / "lib"))
+    assert idx.files_page("saved")[0] == []  # unknown, not untagged
+    idx.refresh(str(tmp_path / "lib"))  # the NULL row owes the retry
+    assert [r["item_id"] for r in idx.files_page("saved")[0]] == ["apple:91"]

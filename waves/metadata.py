@@ -195,6 +195,35 @@ def read_custom_ids(path_file: str | pathlib.Path, tag: str) -> list[str]:
     return _ids_in_tags(m.tags, tag)
 
 
+def read_item_id_or_none(path_file: str | pathlib.Path) -> str | None:
+    """The item id a file was downloaded as; None when the read FAILED, ""
+    when the file opened with no Waves id (including a container with no tag
+    block at all).
+
+    :func:`read_item_id`'s tri-state sibling, for the library scan (ADR 0007,
+    issue #222): the scan persists "" as the finished "not Waves' file" and
+    None as "could not read this file, try again", so a transient open
+    failure on a NAS must not harden into an untagged row that Saved misses
+    forever. A caller that only wants the id keeps ``read_item_id``, which
+    answers "" for both cases; both ask the two tag names of ONE open.
+    """
+    try:
+        m = mutagen.File(path_file)
+    except Exception:
+        return None
+    if m is None:
+        # Not a container mutagen can parse at all: there is no tag block to
+        # read, so "" is the settled answer (what the gate's reader gives too,
+        # and what an empty fixture file answers). Only a read that FAILED
+        # -- an I/O error, a file gone between two opens -- still retries.
+        return ""
+    tags = getattr(m, "tags", None)
+    if not tags:
+        return ""
+    ids = _ids_in_tags(tags, GENERIC_ITEM_ID_TAG) or _ids_in_tags(tags, ITEM_ID_TAG)
+    return _bare_legacy_id(ids[0]) if ids else ""
+
+
 def read_item_id(path_file: str | pathlib.Path) -> str:
     """The item id a file was downloaded as, or "" when untagged.
 
@@ -213,17 +242,10 @@ def read_item_id(path_file: str | pathlib.Path) -> str:
 
     Files from releases before any id tag existed (or raw .ts videos, which
     have no tag atoms) return "": callers must treat that as "identity
-    unknown", never as "different item".
+    unknown", never as "different item". A caller that must tell an unreadable
+    file from an untagged one asks :func:`read_item_id_or_none`.
     """
-    try:
-        m = mutagen.File(path_file)
-    except Exception:
-        m = None
-    tags = getattr(m, "tags", None) if m is not None else None
-    if not tags:
-        return ""
-    ids = _ids_in_tags(tags, GENERIC_ITEM_ID_TAG) or _ids_in_tags(tags, ITEM_ID_TAG)
-    return _bare_legacy_id(ids[0]) if ids else ""
+    return read_item_id_or_none(path_file) or ""
 
 
 def normalize_audio_type_tag(value: str | None) -> str | None:

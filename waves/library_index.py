@@ -638,27 +638,26 @@ def _default_item_id(path: str) -> str | None:
     otherwise, None when the file could not be read at all.
 
     The same generic-first, legacy-fallback read the download gate performs
-    (waves.metadata.read_item_id), so a file answers here exactly as it does
-    there: the WAVES_ITEM_ID tag both providers write now wins, a file from
-    before that family answers through its legacy WAVES_TIDAL_ID, and a
-    tidal id comes back bare while another provider's keeps its namespace --
-    which is what lets the Library section badge a saved file by the id's
-    own namespace (ADR 0007, issue #222).
+    (waves.metadata), so a file answers here exactly as it does there: the
+    WAVES_ITEM_ID tag both providers write now wins, a file from before that
+    family answers through its legacy WAVES_TIDAL_ID, and a tidal id comes
+    back bare while another provider's keeps its namespace -- which is what
+    lets the Library section badge a saved file by the id's own namespace
+    (ADR 0007, issue #222).
 
     "" is the settled answer for a file no provider saved (every plain
     library file); None means the read failed, and the row is then persisted
     unknown so the folder retries rather than hardening "untagged" into a
-    fact. The reader cannot tell "no tag" from "could not read" -- both
-    answer "" -- so None comes from this probe's own failures (the reader
-    unreachable, or raising) and from an injectable seam that answers it;
-    either way a failed probe must never read as "not Waves' file".
+    fact -- a transient NAS hiccup must not hide a file Waves saved forever.
+    ``read_item_id_or_none`` is the reader that can tell those apart: it
+    answers None when the container cannot be opened at all.
     """
     try:
-        from waves.metadata import read_item_id
+        from waves.metadata import read_item_id_or_none
     except Exception:
         return None  # the tag reader is unavailable; the folder retries
     try:
-        return str(read_item_id(path) or "")
+        return read_item_id_or_none(path)
     except Exception:
         return None
 

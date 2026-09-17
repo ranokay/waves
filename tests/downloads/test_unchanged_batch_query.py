@@ -19,7 +19,20 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from waves.library_index import LibraryIndex
+
+
+@pytest.fixture(autouse=True)
+def _unreadable_fixture_files_have_no_ids(monkeypatch):
+    """Empty fixture files answer "" to the item-id probe.
+
+    The warm-scan assertions here measure which folders are re-read; the real
+    probe would call every empty fixture unreadable and re-read them all (see
+    tests/library/test_library_item_id_scan.py for the reader's own rules).
+    """
+    monkeypatch.setattr("waves.library_index._default_item_id", lambda path: "")
 
 
 def _mk(base, rel, files):
