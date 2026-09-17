@@ -35,6 +35,7 @@ from support.qml import (
     EXIT_OK,
     EXIT_PRECONDITION,
     EXIT_REGRESSED,
+    make_tidal_my_music_source,
     run_scenario,
     sandbox_qml_settings,
 )
@@ -105,10 +106,12 @@ def _run_scenario() -> int:
         print("precondition lost: browsePageKey did not survive the tab switch", file=sys.stderr)
         return EXIT_PRECONDITION
 
-    # 2. Playlists -> a folder -> the SAME playlist again.
-    q('loadLib("playlists")')
-    settle()
-    q('openPlFolder("f1", "Some Music")')
+    # 2. Playlists -> a folder -> the SAME playlist again. My Music renders
+    #    one group per live source (issue #259), so the scenario seeds the
+    #    session and pins the group's visible category.
+    make_tidal_my_music_source(root, q, settle, bridge)
+    q('root.libGroupFor("tidal").category = "playlists"')
+    q('root.libGroupFor("tidal").openFolder("f1", "Some Music")')
     settle()
     before = q("navHistory.length")
     q('openPlaylistPage("p1")')
@@ -119,7 +122,11 @@ def _run_scenario() -> int:
     # 3. Back must land in the folder, not fall through the skipped snapshot.
     q("navBack()")
     settle()
-    in_folder = bool(q("libraryOpen")) and q("plCurrentFolder") == "f1" and q("libraryCategory") == "playlists"
+    in_folder = (
+        bool(q("libraryOpen"))
+        and q('root.libGroupFor("tidal").currentFolder') == "f1"
+        and q("libraryCategory") == "playlists"
+    )
 
     print(f"pushed={pushed} backLabel={label!r} backInFolder={in_folder}", flush=True)
     return EXIT_OK if pushed == 1 and label == "My Music" and in_folder else EXIT_REGRESSED

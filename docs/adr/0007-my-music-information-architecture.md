@@ -61,12 +61,16 @@ to move onto the rule is recorded under Consequences.
 - The Saved view needs the scan to expose each file's item id and
   provenance; that track-row addition is the implementation dependency of
   the Library section (staged after the rename and labels).
-- While the Library section and the generic per-provider shelves land, the
-  pane keeps its existing TIDAL-shaped views: the per-category tabs for a
-  signed-in source and the signed-out empty state's TIDAL words. The ADR
-  records the destination, the source-label rule is already the bridge data
-  those renderers will read, and the remaining renderer work is tracked
-  separately.
+- The pane's first provider-shaped views are the starting point, and the
+  staged work is now partly done: the **saved shelves are per source**
+  (#259). The bridge answers a list of source groups (descriptor + the
+  categories its capabilities can fill), each source renders its own label,
+  strip and keep-alive panes, and every page loads through that source's
+  provider, so a second FAVORITES provider appears with no QML edit. The
+  pane's **Library section** (Saved and All files) is the remaining stage
+  (#222); until it lands the pane opens on each source's Home landing, as it
+  did before. A source's group is what a second provider fills; the Library
+  section is provider-independent and sits above them.
 - A hand-edited provenance tag can misreport a file's source; the All-files
   view remains the honest fallback, and the limitation is documented.
 - Tab, expanded-section and scroll positions survive the rename, so the

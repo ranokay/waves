@@ -27,6 +27,7 @@ from support.qml import (
     EXIT_OK,
     EXIT_PRECONDITION,
     EXIT_REGRESSED,
+    make_tidal_my_music_source,
     run_scenario,
     sandbox_qml_settings,
 )
@@ -139,33 +140,41 @@ def _run_scenario() -> int:
         print(msg, file=sys.stderr)
         return EXIT_REGRESSED
 
-    # 1. Land on the playlists tab with a folder row + a playlist row.
+    # 1. Land on a signed-in TIDAL source's playlists tab with a folder row +
+    #    a playlist row. The pane's groups are the bridge's live sources
+    #    (issue #259), so the scenario seeds the session the real sign-in would
+    #    flip and works through the group.
+    make_tidal_my_music_source(root, q, settle, bridge)
     root.setProperty("libraryOpen", True)
-    root.setProperty("libraryCategory", "playlists")
-    bridge.libraryLoaded.emit("playlists", _rows_root(), False)
+    group = 'root.libGroupFor("tidal")'
+    q(group + '.category = "playlists"')
+    bridge.libraryLoaded.emit("tidal", "playlists", _rows_root(), False)
     settle()
-    if q("libPlaylistsModel.count") != 2:
+    if q(group + '.modelFor("playlists").count') != 2:
         return fail("root rows did not land")
-    if q("libPlaylistsModel.get(0).kind") != "folder" or q("libPlaylistsModel.get(0).plCount") != 3:
+    if (
+        q(group + '.modelFor("playlists").get(0).kind') != "folder"
+        or q(group + '.modelFor("playlists").get(0).plCount') != 3
+    ):
         return fail("folder row lost its kind/plCount roles")
-    if not q("libPlaylistsList.visible"):
+    if not q(group + '.viewFor("playlists").visible'):
         return fail("root list should be visible before drill-in")
 
     # 2. Drill in; the folder's rows arrive under its id.
-    q('openPlFolder("f1", "Country")')
-    bridge.playlistFolderLoaded.emit("f1", _rows_folder(), "Country")
+    q(group + '.openFolder("f1", "Country")')
+    bridge.playlistFolderLoaded.emit("tidal", "f1", _rows_folder(), "Country")
     settle()
-    if q("plCurrentFolder") != "f1" or q("plFolderStack.length") != 1:
+    if q(group + ".currentFolder") != "f1" or q(group + ".folderStack.length") != 1:
         return fail("drill-in did not push the stack")
-    if q("libPlaylistsList.visible"):
+    if q(group + '.viewFor("playlists").visible'):
         return fail("root list still visible while drilled in")
-    if q("libFolderModel.count") != 1 or q("libFolderModel.get(0).id") != "p1":
+    if q(group + '.modelFor("folder").count') != 1 or q(group + '.modelFor("folder").get(0).id') != "p1":
         return fail("folder rows did not fill the folder model")
 
     # 3. A stale answer for a folder the user is no longer in must be dropped.
-    bridge.playlistFolderLoaded.emit("f2", [], "Elsewhere")
+    bridge.playlistFolderLoaded.emit("tidal", "f2", [], "Elsewhere")
     settle(50)
-    if q("libFolderModel.count") != 1:
+    if q(group + '.modelFor("folder").count') != 1:
         return fail("stale playlistFolderLoaded wiped the open folder")
 
     # 4. Badge plumbing: countdown map + live state under the folder id.
@@ -178,13 +187,13 @@ def _run_scenario() -> int:
         return fail("folder state did not flow through downloadState")
 
     # 5. Crumb back to the root list: state intact, folder view gone.
-    q("plCrumbTo(-1)")
+    q(group + ".crumbTo(-1)")
     settle(50)
-    if q("plFolderStack.length") != 0 or q("plCurrentFolder") != "":
+    if q(group + ".folderStack.length") != 0 or q(group + ".currentFolder") != "":
         return fail("crumb-to-root did not clear the stack")
-    if not q("libPlaylistsList.visible"):
+    if not q(group + '.viewFor("playlists").visible'):
         return fail("root list did not come back")
-    if q("libPlaylistsModel.count") != 2:
+    if q(group + '.modelFor("playlists").count') != 2:
         return fail("root rows were lost while drilled in")
 
     print("folder drill-in scenario ok", flush=True)

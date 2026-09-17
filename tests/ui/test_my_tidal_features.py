@@ -171,7 +171,7 @@ def test_library_page_default_sort_is_date_desc():
     b.tidal.session.user.favorites = favorites
     b.providers = {"tidal": TidalProvider(b.tidal)}
 
-    rows, more = WavesBridge._library_page(b, "albums", 0, 10)
+    rows, more = WavesBridge._library_page(b, "tidal", "albums", 0, 10)
 
     assert rows == [] and more is False
     _, kwargs = favorites.albums.call_args

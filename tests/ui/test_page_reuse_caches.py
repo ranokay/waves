@@ -21,9 +21,9 @@ from waves.waves_ui.backend import WavesBridge
 
 def _sweep_bridge(monkeypatch, calls):
     b = WavesBridge.__new__(WavesBridge)
-    b._media_lists_cache = None
+    b._media_lists_cache = {}
     b._media_lists_lock = Lock()
-    b._folder_tree = None
+    b._folder_tree = {}
     b.tidal = MagicMock()
 
     def fake_sweep(*_args):
@@ -35,6 +35,9 @@ def _sweep_bridge(monkeypatch, calls):
         "tidal": SimpleNamespace(
             user_collections=fake_sweep,
             folder_tree=lambda root_folders=None: SimpleNamespace(nodes=[], playlist_paths={}, partial=False),
+            # The pane's rows come through the source's own row vocabulary
+            # (issue #259).
+            row_for=lambda kind, item: {"id": item},
         )
     }
     return b
@@ -43,28 +46,28 @@ def _sweep_bridge(monkeypatch, calls):
 def test_media_lists_scroll_pages_reuse_the_sweep(monkeypatch):
     calls: list = []
     b = _sweep_bridge(monkeypatch, calls)
-    first, _ = b._media_lists(refresh=True)  # tab open: fetches
-    again, _ = b._media_lists(refresh=False)  # scroll page: reuses
+    first, _ = b._media_lists("tidal", refresh=True)  # tab open: fetches
+    again, _ = b._media_lists("tidal", refresh=False)  # scroll page: reuses
     assert first is again and len(calls) == 1
 
 
 def test_media_lists_refresh_is_ttl_limited(monkeypatch):
     calls: list = []
     b = _sweep_bridge(monkeypatch, calls)
-    b._media_lists(refresh=True)
-    b._media_lists(refresh=True)  # e.g. an immediate re-sort: still cached
+    b._media_lists("tidal", refresh=True)
+    b._media_lists("tidal", refresh=True)  # e.g. an immediate re-sort: still cached
     assert len(calls) == 1
     # Age the cache past the TTL: the next first-page load re-sweeps.
-    ts, data, tree = b._media_lists_cache
-    b._media_lists_cache = (ts - WavesBridge._MEDIA_LISTS_TTL - 1, data, tree)
-    b._media_lists(refresh=True)
+    ts, data, tree = b._media_lists_cache["tidal"]
+    b._media_lists_cache["tidal"] = (ts - WavesBridge._MEDIA_LISTS_TTL - 1, data, tree)
+    b._media_lists("tidal", refresh=True)
     assert len(calls) == 2
 
 
 def test_media_lists_no_cache_fetches_even_without_refresh(monkeypatch):
     calls: list = []
     b = _sweep_bridge(monkeypatch, calls)
-    assert b._media_lists(refresh=False)[0]["mixes"] == ["m1", "m2"]
+    assert b._media_lists("tidal", refresh=False)[0]["mixes"] == ["m1", "m2"]
     assert len(calls) == 1
 
 
@@ -73,9 +76,8 @@ def test_library_page_playlists_pages_locally_from_one_sweep(monkeypatch):
     b = _sweep_bridge(monkeypatch, calls)
     b._lib_sort = {}
     b._sort_local_library = lambda full, spec: full
-    b._mix_dict = lambda m: {"id": m}
-    rows0, more0 = WavesBridge._library_page(b, "mixes", 0, 1)
-    rows1, more1 = WavesBridge._library_page(b, "mixes", 1, 1)
+    rows0, more0 = WavesBridge._library_page(b, "tidal", "mixes", 0, 1)
+    rows1, more1 = WavesBridge._library_page(b, "tidal", "mixes", 1, 1)
     assert rows0 == [{"id": "m1"}] and more0 is True
     assert rows1 == [{"id": "m2"}] and more1 is False
     assert len(calls) == 1  # the scroll page never re-swept the account
@@ -194,7 +196,7 @@ def _cache_bridge(tmp_path):
     b._browse_pages = {}
     b._artist_cache = {}
     b._search_cache = {}
-    b._home_cache = None
+    b._home_cache = {}
     b._page_cache_path = str(tmp_path / "page_cache.json")
     b._page_cache_lock = Lock()
     b.tidal = MagicMock()
@@ -207,22 +209,22 @@ def _cache_bridge(tmp_path):
 def test_home_landing_round_trips_through_page_cache(tmp_path):
     shelves = [{"rowKind": "cards", "title": "Recent albums", "target": "albums", "items": [{"id": "a1"}]}]
     saver = _cache_bridge(tmp_path)
-    saver._home_cache = shelves
+    saver._home_cache = {"tidal": shelves}
     saver._save_page_cache()
     with open(saver._page_cache_path) as fh:
-        assert json.load(fh)["home"] == shelves
+        assert json.load(fh)["home"] == {"tidal": shelves}
 
     loader = _cache_bridge(tmp_path)
     loader._load_page_cache()
-    assert loader._home_cache == shelves
+    assert loader._home_cache == {"tidal": shelves}
 
 
 def test_home_landing_snapshot_ignored_for_other_account(tmp_path):
     saver = _cache_bridge(tmp_path)
-    saver._home_cache = [{"rowKind": "cards", "title": "Recent albums", "items": []}]
+    saver._home_cache = {"tidal": [{"rowKind": "cards", "title": "Recent albums", "items": []}]}
     saver._save_page_cache()
 
     loader = _cache_bridge(tmp_path)
     loader.providers["tidal"].account_id = lambda: "43"  # a different account
     loader._load_page_cache()
-    assert loader._home_cache is None
+    assert loader._home_cache == {}

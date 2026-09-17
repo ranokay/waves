@@ -357,12 +357,15 @@ def test_a_failed_first_favourites_load_is_not_cached():
 
 class _LoadLibStub:
     loadLibrary = WavesBridge.loadLibrary
+    _lib_generation = WavesBridge._lib_generation
+    _lib_start = WavesBridge._lib_start
     _lib_status = WavesBridge._lib_status
     _lib_count = staticmethod(WavesBridge._lib_count)
 
     def __init__(self, page=None, fail=False):
         self._logged_in = True
-        self._lib_gen = 0
+        self._lib_epoch = 0
+        self._lib_gen: dict = {}
         self._lib_cache: dict = {}
         self._lib_loading: set = set()
         self._lib_reval_ts: dict = {}
@@ -372,6 +375,9 @@ class _LoadLibStub:
         self.saved = 0
         self._page = page
         self._fail = fail
+        # The loader resolves its source's provider first; a live one keeps
+        # the fetch path under test.
+        self.providers = {"tidal": object()}
 
     def _set_busy(self, on):
         pass
@@ -379,7 +385,7 @@ class _LoadLibStub:
     def _set_status(self, text):
         self.statuses.append(text)
 
-    def _library_page(self, category, offset, limit, order_override=None):
+    def _library_page(self, source, category, offset, limit, order_override=None):
         if self._fail:
             raise RuntimeError("first load failed")
         return self._page
@@ -390,15 +396,15 @@ class _LoadLibStub:
 
 def test_a_failed_first_library_load_is_published_but_never_cached():
     stub = _LoadLibStub(fail=True)
-    stub.loadLibrary("albums")
-    assert stub.libraryLoaded.emits == [("albums", [], False)]
+    stub.loadLibrary("tidal", "albums")
+    assert stub.libraryLoaded.emits == [("tidal", "albums", [], False)]
     assert stub._lib_cache == {} and stub.saved == 0, "the next tab visit must retry cold"
 
 
 def test_a_successful_first_library_load_still_caches():
     stub = _LoadLibStub(page=([{"id": "r1"}], True))
-    stub.loadLibrary("albums")
-    assert stub._lib_cache["albums"]["items"] == [{"id": "r1"}]
+    stub.loadLibrary("tidal", "albums")
+    assert stub._lib_cache[("tidal", "albums")]["items"] == [{"id": "r1"}]
     assert stub.saved == 1
 
 

@@ -34,7 +34,6 @@ import pytest
 from support.qml import (
     EXIT_NO_QT,
     EXIT_OK,
-    EXIT_PRECONDITION,
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
@@ -151,13 +150,12 @@ def _run_scenario() -> int:
 
     bridge = WavesBridge(tidal=None)
     loop = QEventLoop()
-    # What a real launch does between construction and the reveal: the
-    # landing page is asked for, the water plays, the interface warms.
-    try:
-        bridge.loadHome()
-    except Exception as exc:
-        print(f"loadHome unavailable: {exc}", file=sys.stderr)
-        return EXIT_PRECONDITION
+    # What a real launch does between construction and the reveal: the library
+    # sweep is dispatched with the sandbox's folder configured, the water
+    # plays, the interface warms. The landing loads (Browse, and each My Music
+    # source's Home, issue #259) are session-gated and this launch is signed
+    # out, so the sweep is the job the launch actually masks -- and the one the
+    # marker below waits for.
     # Closed on the sweep, not on a stopwatch (see _SWEEP above). The cap is
     # only there so a launch that never dispatches it still ends; the assertion
     # on the far side is what calls that a failure.

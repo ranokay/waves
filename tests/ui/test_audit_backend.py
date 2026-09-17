@@ -41,6 +41,9 @@ class _Stub:
     """Bare stand-in for a WavesBridge, with the attributes the bound methods
     read/write. Real behaviour comes from binding WavesBridge methods below."""
 
+    _lib_generation = WavesBridge._lib_generation
+    _lib_start = WavesBridge._lib_start
+
     def __init__(self):
         self._queue: list[dict] = []
         self._queue_index: dict[int, dict] = {}
@@ -59,16 +62,18 @@ class _Stub:
         self._event_run.set()
         self._lib_cache: dict = {}
         self._lib_loading: set = set()
-        self._lib_gen = 0
+        self._lib_epoch = 0
+        self._lib_gen: dict = {}
         self._lib_sort: dict = {}
         self._fav_ids: dict = {}
         self._album_tracks_cache: dict = {}
         self._edition_tracks_cache: dict = {}
-        self._home_cache: list | None = None
-        self._home_loading = False
-        self._home_reval_ts = 0.0
+        self._home_cache: dict = {}
+        self._home_loading: set = set()
+        self._home_reval_ts: dict = {}
         self._lib_reval_ts: dict = {}
-        self._media_lists_cache: tuple | None = None
+        self._media_lists_cache: dict = {}
+        self._folder_tree: dict = {}
         self._search_cache: dict = {}
         self._search_gen = 0  # logout supersedes in-flight search workers by bumping this
         self._artist_pop_cache: dict = {}
@@ -207,9 +212,18 @@ def test_clear_queue_aborts_removed_queued_items():
 # --------------------------------------------------------------------------- #
 def test_logout_bumps_lib_gen_and_clears_cache():
     stub = _Stub()
-    stub._lib_cache = {"albums": {"items": [1, 2], "offset": 100, "more": True}}
-    stub._lib_loading = {"albums"}
-    stub._lib_gen = 5
+    stub._lib_cache = {
+        ("tidal", "albums"): {"items": [1, 2], "offset": 100, "more": True},
+        ("fake", "albums"): {"items": [3], "offset": 100, "more": False},
+    }
+    stub._lib_loading = {("tidal", "albums")}
+    stub._lib_gen = {("tidal", "albums"): 5}
+    # The rest of the per-source shelves (issue #259): a warm Home landing,
+    # the media-lists sweep and the folder tree each keyed by source.
+    stub._home_cache = {"tidal": [{"title": "Recent albums"}]}
+    stub._media_lists_cache = {"tidal": (0.0, {"playlists": []}, object())}
+    stub._folder_tree = {"tidal": object()}
+    captured = (stub._lib_epoch, stub._lib_gen[("tidal", "albums")])
     # logout() also resets the browse caches on the current build; provide them
     # so the SUT (the _lib_gen bump) runs regardless of that co-located cleanup.
     stub._browse_root_cache = object()
@@ -247,7 +261,10 @@ def test_logout_bumps_lib_gen_and_clears_cache():
 
     assert stub._lib_cache == {}, "cache cleared on logout"
     assert stub._lib_loading == set()
-    assert stub._lib_gen == 6, "generation bumped so a stale in-flight load is dropped"
+    assert stub._lib_gen == {}, "per-page counters dropped with the account"
+    assert stub._home_cache == {} and stub._media_lists_cache == {}, "no source's pages survive the account"
+    assert stub._folder_tree == {}, "nor its folder tree"
+    assert (stub._lib_epoch, 0) != captured, "the epoch moved, so a stale in-flight load is dropped"
     assert stub._prefetch_key is None and stub._prefetch_claimed is False, "no prefetch survives the account"
     assert stub._prefetch_unrecorded == set(), "a hover-built page of the old account is never recorded for the new one"
     assert (
@@ -257,14 +274,30 @@ def test_logout_bumps_lib_gen_and_clears_cache():
 
 
 def test_stale_lib_gen_guards_cache_write_semantics():
-    # Mirrors the loadLibrary worker's guard: a page whose captured gen no longer
-    # matches must NOT write the cache. We assert the predicate the fix relies on.
+    # Mirrors the loadLibrary worker's guard: a page whose captured generation
+    # no longer matches must NOT write the cache. The generation has two halves
+    # and either moving under a worker drops its answer.
     stub = _Stub()
-    stub._lib_gen = 4
-    captured_gen = 4
-    # Simulate a logout bumping the generation mid-flight.
-    stub._lib_gen = 5
-    assert captured_gen != stub._lib_gen  # -> worker skips the cache write
+    key = ("tidal", "albums")
+    other_key = ("fake", "albums")
+
+    same = stub._lib_start(key)
+    assert same == stub._lib_generation(key), "a fresh load matches its own generation"
+
+    # 1. Another page's load leaves it alone: two sources loading their shelves
+    # in one turn must not cancel each other (issue #259).
+    other = stub._lib_start(other_key)
+    assert same == stub._lib_generation(key)
+    assert other == stub._lib_generation(other_key)
+
+    # 2. A reload or re-sort of the SAME page bumps its counter, dropping the
+    # older worker's answer.
+    stub._lib_start(key)
+    assert same != stub._lib_generation(key)
+
+    # 3. An account flip moves the epoch, so every in-flight page is dropped.
+    stub._lib_epoch += 1
+    assert other != stub._lib_generation(other_key), "the epoch drops every page, not just one"
 
 
 # --------------------------------------------------------------------------- #
@@ -345,14 +378,14 @@ def test_retry_plain_track_passes_no_merge_plan():
 # --------------------------------------------------------------------------- #
 def test_load_more_library_transient_error_keeps_more(monkeypatch):
     stub = _Stub()
-    stub._lib_cache = {"albums": {"items": [1, 2], "offset": 100, "more": True}}
+    stub._lib_cache = {("tidal", "albums"): {"items": [1, 2], "offset": 100, "more": True}}
     stub.libraryMore = _Signal()
     stub._lib_status = lambda cat, count, more: f"{count} {cat}"
     stub._lib_count = WavesBridge._lib_count
     stub._logged_in = True
 
     # Make the page fetch raise, and run the worker synchronously.
-    def boom(category, offset, limit):
+    def boom(source, category, offset, limit):
         raise RuntimeError("transient network blip")
 
     stub._library_page = boom
@@ -372,13 +405,13 @@ def test_load_more_library_transient_error_keeps_more(monkeypatch):
     monkeypatch.setattr(backend.devlog, "clock", lambda: 0.0, raising=True)
     monkeypatch.setattr(backend.devlog, "done", lambda *a, **k: None, raising=True)
 
-    _bind(stub, "loadMoreLibrary")("albums")
+    _bind(stub, "loadMoreLibrary")("tidal", "albums")
 
     assert ran.get("done"), "worker ran synchronously"
-    entry = stub._lib_cache["albums"]
+    entry = stub._lib_cache[("tidal", "albums")]
     assert entry["more"] is True, "category stays scrollable after a transient error"
     assert entry["offset"] == 100, "offset unchanged so the same window is retried"
-    assert "albums" not in stub._lib_loading, "loading flag cleared for a retry"
+    assert ("tidal", "albums") not in stub._lib_loading, "loading flag cleared for a retry"
 
 
 # --------------------------------------------------------------------------- #
@@ -428,7 +461,14 @@ def test_page_cache_round_trip_and_account_guard(tmp_path):
     stub._browse_root_cache = {"sections": [{"rowKind": "cards"}], "genres": [], "error": False}
     stub._browse_pages = {"pages/rock": {"key": "pages/rock", "sections": [1], "error": False}}
     stub._artist_cache = {"42": {"id": "42", "name": "A"}}
-    stub._lib_cache = {"albums": {"items": list(range(150)), "offset": 300, "more": False}}
+    stub._lib_cache = {
+        ("tidal", "albums"): {"items": list(range(150)), "offset": 300, "more": False},
+        ("fake", "albums"): {"items": list(range(150)), "offset": 300, "more": False},
+    }
+    stub._home_cache = {
+        "tidal": [{"rowKind": "cards", "title": "Recent albums", "items": []}],
+        "fake": [{"rowKind": "cards", "title": "Fake recent", "items": []}],
+    }
     _bind(stub, "_save_page_cache")()
 
     fresh = _cache_stub(path, "7")
@@ -437,10 +477,17 @@ def test_page_cache_round_trip_and_account_guard(tmp_path):
     assert fresh._browse_pages == stub._browse_pages
     assert fresh._artist_cache == stub._artist_cache
     # Library persists only its first page and resets paging so infinite
-    # scroll re-fetches from the second window (_LIBRARY_PAGE = 100).
-    assert len(fresh._lib_cache["albums"]["items"]) == 100
-    assert fresh._lib_cache["albums"]["offset"] == 100
-    assert fresh._lib_cache["albums"]["more"] is True, "truncated tail must stay pageable"
+    # scroll re-fetches from the second window (_LIBRARY_PAGE = 100), keyed
+    # by (source, category) so a second provider's shelves restore as theirs.
+    assert len(fresh._lib_cache[("tidal", "albums")]["items"]) == 100
+    assert fresh._lib_cache[("tidal", "albums")]["offset"] == 100
+    assert fresh._lib_cache[("tidal", "albums")]["more"] is True, "truncated tail must stay pageable"
+    assert fresh._home_cache["tidal"][0]["title"] == "Recent albums"
+    # A second source's shelves round-trip as their own (issue #259): same
+    # truncation, same account tag, keyed by (source, category).
+    assert len(fresh._lib_cache[("fake", "albums")]["items"]) == 100
+    assert fresh._lib_cache[("fake", "albums")]["more"] is True
+    assert fresh._home_cache["fake"][0]["title"] == "Fake recent"
 
     other = _cache_stub(path, "8")  # different account
     _bind(other, "_load_page_cache")()

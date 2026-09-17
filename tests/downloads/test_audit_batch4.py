@@ -200,7 +200,7 @@ class _SaveStub:
     def __init__(self, path: pathlib.Path, lib=None):
         self._logged_in = True
         self._factory_reset = False
-        self._lib_cache = {"albums": {"items": [{"id": "a1"}], "more": False}} if lib is None else lib
+        self._lib_cache = {("tidal", "albums"): {"items": [{"id": "a1"}], "more": False}} if lib is None else lib
         self._lib_sort = {}
         self._browse_root_cache = {}
         self._browse_pages = {}
@@ -224,7 +224,7 @@ def test_a_normal_save_still_writes_valid_json(tmp_path: pathlib.Path) -> None:
     stub = _SaveStub(tmp_path / "page_cache.json")
     stub._save_page_cache()
     data = json.loads((tmp_path / "page_cache.json").read_text(encoding="utf-8"))
-    assert data["library"]["albums"]["items"] == [{"id": "a1"}]
+    assert data["library"]["tidal:albums"]["items"] == [{"id": "a1"}]
 
 
 def test_the_save_serializes_one_shot_never_incrementally(tmp_path: pathlib.Path) -> None:

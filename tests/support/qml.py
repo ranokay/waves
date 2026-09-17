@@ -125,6 +125,19 @@ def _skip_or_fail_missing_qt() -> None:
     pytest.skip(message)
 
 
+def make_tidal_my_music_source(root, q, settle, bridge) -> None:
+    """Seed a signed-in TIDAL session so My Music renders its source group.
+
+    The pane's groups come from the bridge's live sources (issue #259): a
+    scenario that drives one flips the session flag the real sign-in would
+    flip and re-reads the provider surfaces the same way the app does, then
+    works through ``root.libGroupFor("tidal")``.
+    """
+    bridge._logged_in = True
+    q("root.refreshProviderSurfaces()")
+    settle(150)
+
+
 def click_point(root, point, settle) -> None:
     """A real left click at a scene point, with the warm-up a gate needs.
 
