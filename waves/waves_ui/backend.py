@@ -92,6 +92,7 @@ from waves.library_index import (
     cache_file_for_root,
     root_comparison_key,
 )
+from waves.metadata import normalize_audio_type_tag
 from waves.model.cfg import (
     METADATA_TAG_FLAGS,
     HelpSettings,
@@ -1494,9 +1495,8 @@ class _TrackedDownload(Download):
         self._skip_existing_base = False
         # The job's pinned Version crosses to the engine BEFORE super(): the
         # engine's pre-stream skip gate needs it, and it must be set before any
-        # engine method can run.
-        at = str(audio_type or "").strip().lower() or None
-        at = at if at in ("stereo", "atmos") else None
+        # engine method can run. The shared normalizer is the one clamp.
+        at = normalize_audio_type_tag(audio_type)
         super().__init__(*args, pinned_audio_type=at, **kwargs)
         self._track_signals = track_signals
         # Live "do I already have this" lookup (waves/ownership.py's

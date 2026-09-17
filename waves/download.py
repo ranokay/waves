@@ -81,7 +81,14 @@ from waves.helper.tidal import (
     name_builder_title,
 )
 from waves.lyrics import fetch_lrclib_lyrics, lyrics_file_choice
-from waves.metadata import Metadata, MetadataUnreadable, read_item_id
+from waves.metadata import (
+    Metadata,
+    MetadataUnreadable,
+    normalize_audio_type_tag,
+    occupant_is_version,
+    read_file_audio_type,
+    read_item_id,
+)
 from waves.model.cfg import metadata_tag_write, provider_setting
 from waves.model.downloader import DownloadSegmentResult, TrackStreamInfo
 from waves.model.gui_data import ProgressBars
@@ -278,7 +285,7 @@ def _waves_owned_ids(media) -> set[str]:
 def _file_audio_mode_is_atmos(path_file: pathlib.Path) -> bool | None:
     """Whether the audio file at this path is a Dolby Atmos copy.
 
-    The shared reader (waves.metadata.read_audio_mode) answers which Version
+    The shared reader (waves.metadata.read_file_audio_type) answers which Version
     the file is: tag first, codec second (§5.3), so a file Waves wrote can
     never be misread because its container shares an extension, and an
     untagged library falls back to the codec sniff. Only an MP4 container can
@@ -293,12 +300,10 @@ def _file_audio_mode_is_atmos(path_file: pathlib.Path) -> bool | None:
             when the file cannot be read. Callers treat None as "unknown"
             and keep their historical answer rather than guessing.
     """
-    from waves.metadata import read_audio_mode
-
-    mode = read_audio_mode(path_file)
-    if mode is None:
+    version = read_file_audio_type(path_file)
+    if version is None:
         return None
-    return mode == AudioType.ATMOS
+    return version == AudioType.ATMOS
 
 
 # TODO: Set appropriate client string and use it for video download.
@@ -530,10 +535,9 @@ class Download:
         # Per-click Chooser pins for this job's lyrics/art options; empty for
         # every click that kept the stored defaults.
         self._chooser_toggles = {str(key): value for key, value in dict(chooser_toggles or {}).items()}
-        # The Version this job pins (dual download rows), clamped the same way
-        # the bridge clamps it. None is a legacy single row.
-        pinned = str(pinned_audio_type or "").strip().lower() or None
-        self._pinned_audio_type = pinned if pinned in ("stereo", "atmos") else None
+        # The Version this job pins (dual download rows). None is a legacy
+        # single row; the shared normalizer is the one spelling of the clamp.
+        self._pinned_audio_type = normalize_audio_type_tag(pinned_audio_type)
 
         # Destination directories already ensured by this instance (one
         # instance = one queued item, so this resets naturally per album).
@@ -1839,52 +1843,28 @@ class Download:
                 return directory / old.name
         return directory / tidied.name
 
-    def _pinned_is_atmos(self) -> bool | None:
-        """What THIS job pins, as the occupant gate wants it: True/False for a
-        dual-download Version row, None when the job did not pin one and the
-        resolver decides (from the live settings, or a Version the stream
-        carries)."""
-        pinned = self._pinned_audio_type
-        if pinned == AudioType.ATMOS:
-            return True
-        if pinned == AudioType.STEREO:
-            return False
-        return None
-
     @staticmethod
-    def _delivered_is_atmos(stream_info: StreamInfo) -> bool | None:
-        """What the resolved stream says it will deliver, or None when it does
-        not say (then the job's own pin answers; see :meth:`_pinned_is_atmos`)."""
-        delivered = str((getattr(stream_info, "delivered", None) or {}).get("audio_type") or "").strip().lower()
-        if delivered == AudioType.ATMOS:
-            return True
-        if delivered == AudioType.STEREO:
-            return False
-        return None
+    def _delivered_version(stream_info: StreamInfo) -> str | None:
+        """Which Version the resolved stream says it will deliver, or None when
+        it does not say (then the job's own pin answers; see
+        :meth:`_fetch_version`)."""
+        return normalize_audio_type_tag((getattr(stream_info, "delivered", None) or {}).get("audio_type"))
 
-    def _occupant_is_this_version(self, path_file: pathlib.Path, fetch_is_atmos: bool | None) -> bool:
-        """Whether the file at ``path_file`` can stand in for THIS Version's copy.
-
-        A dual download keeps one file per Version (§5.2), and with a blank
-        Atmos template both aim at one name (§5.4): a stereo file must not
-        answer for the Atmos job, nor the reverse, however its item id reads.
-        The rule itself lives in waves.metadata.occupant_is_version, beside
-        the reader it asks, so this gate and the Apple runner's cannot drift.
-
-        ``fetch_is_atmos`` is what THIS job is pinned to bring, or None when
-        it is unpinned (a legacy single row): both unknown cases keep the
-        historical answer, "yes".
-        """
-        version = None if fetch_is_atmos is None else ("atmos" if fetch_is_atmos else "stereo")
-        from waves.metadata import occupant_is_version
-
-        return occupant_is_version(path_file, version)
+    def _fetch_version(self, stream_info: StreamInfo | None = None) -> str | None:
+        """Which Version THIS fetch is bringing: the stream's own word when it
+        has one, else the job's pin, else None (a legacy row the resolver
+        decides for). The occupant gates all ask this one question."""
+        if stream_info is not None:
+            delivered = self._delivered_version(stream_info)
+            if delivered is not None:
+                return delivered
+        return self._pinned_audio_type
 
     def _existing_same_item_at(
         self,
         path_media_dst: pathlib.Path,
         media: Track | Video,
-        fetch_is_atmos: bool | None = None,
+        version: str | None = None,
     ) -> pathlib.Path | None:
         """WHERE this item already lives at this destination, or None.
 
@@ -1907,9 +1887,9 @@ class Download:
           existing variant is tagged with some other id is this a NEW colliding
           track the caller downloads (the final move uniquifies it).
 
-        ``fetch_is_atmos`` is the Version gate on top of the id question (see
-        :meth:`_occupant_is_this_version`): an occupant in the OTHER Version is
-        never this item's copy HERE, so a dual download's second row fetches
+        ``version`` is the Version gate on top of the id question
+        (waves.metadata.occupant_is_version): an occupant in the OTHER Version
+        is never this item's copy HERE, so a dual download's second row fetches
         its own file even when the first row's file sits at the same name.
 
         The answer is the PATH holding the item, not a bare yes: when the item
@@ -1935,17 +1915,15 @@ class Download:
         # THIS Version's copy (the mode gate) AND this item's. A candidate
         # failing either is not this item HERE, and the scan goes on to the
         # numbered variants -- the item's own copy may sit at one of those.
-        if self._occupant_is_this_version(path_media_dst, fetch_is_atmos) and (
-            not occupant_id or occupant_id in owned_ids
-        ):
+        if occupant_is_version(path_media_dst, version) and (not occupant_id or occupant_id in owned_ids):
             return path_media_dst
-        return self._numbered_variant_holding(path_media_dst, owned_ids, fetch_is_atmos)
+        return self._numbered_variant_holding(path_media_dst, owned_ids, version)
 
     def _numbered_variant_holding(
         self,
         path_media_dst: pathlib.Path,
         owned_ids: set[str],
-        fetch_is_atmos: bool | None,
+        version: str | None,
     ) -> pathlib.Path | None:
         """The stem_NN variant of this destination that holds this item, or None.
 
@@ -1980,7 +1958,7 @@ class Download:
             if not sibling.is_file() or _is_truncated_leftover(sibling):
                 continue
 
-            if not self._occupant_is_this_version(sibling, fetch_is_atmos):
+            if not occupant_is_version(sibling, version):
                 continue
 
             sibling_id = read_item_id(sibling)
@@ -2059,7 +2037,12 @@ class Download:
 
         return not occupant or occupant == media_id or occupant in (owned_ids or set())
 
-    def _already_landed_here(self, path_media_dst: pathlib.Path, media: Track | Video) -> pathlib.Path | None:
+    def _already_landed_here(
+        self,
+        path_media_dst: pathlib.Path,
+        media: Track | Video,
+        version: str | None = None,
+    ) -> pathlib.Path | None:
         """The file this item was about to write, if a twin of it has already
         landed there during this same run.
 
@@ -2122,6 +2105,13 @@ class Download:
             return path_landed
 
         if not check_file_exists(path_media_dst, extension_ignore=False):
+            return None
+
+        # The occupant must be this fetch's own Version too: a dual download
+        # with a blank template finds the OTHER Version's file at this name,
+        # and those bytes are not this fetch's landing (issue #231). The
+        # ledger arm above needs no gate: one run is one Version.
+        if not occupant_is_version(path_media_dst, version):
             return None
 
         occupant_id: str = read_item_id(path_media_dst) or ""
@@ -2420,7 +2410,7 @@ class Download:
 
         if self.skip_existing:
             path_media_found: pathlib.Path | None = (
-                self._existing_same_item_at(path_media_dst, media, self._pinned_is_atmos())
+                self._existing_same_item_at(path_media_dst, media, self._pinned_audio_type)
                 if check_file_exists(path_media_dst, extension_ignore=False)
                 else None
             )
@@ -2455,7 +2445,7 @@ class Download:
                 # same question, and the two have to agree.
                 file_exists_track_dir: bool = (
                     check_file_exists(path_media_track_dir, extension_ignore=False)
-                    and self._existing_same_item_at(path_media_track_dir, media, self._pinned_is_atmos()) is not None
+                    and self._existing_same_item_at(path_media_track_dir, media, self._pinned_audio_type) is not None
                 )
                 file_exists_playlist_dir: bool = (
                     not file_exists_track_dir and skip_file and not path_media_dst.is_symlink()
@@ -2546,10 +2536,7 @@ class Download:
             # The stream's own word answers the Version question when it can
             # (the pre-stream check had only the job's pin); an occupant in
             # the other Version is not this one's copy here.
-            fetched_is_atmos = self._delivered_is_atmos(stream_info)
-            if fetched_is_atmos is None:
-                fetched_is_atmos = self._pinned_is_atmos()
-            path_media_found = self._existing_same_item_at(path_media_dst, media, fetched_is_atmos)
+            path_media_found = self._existing_same_item_at(path_media_dst, media, self._fetch_version(stream_info))
 
             if path_media_found is not None:
                 self.fn_logger.debug(f"Download skipped, since file exists: '{log_content(path_media_found)}'")
@@ -2974,7 +2961,11 @@ class Download:
             overwrite: bool = not self.skip_existing
             media_id: str = _waves_item_id(media)
             path_media_dst = pathlib.Path(path_file_sanitize(path_media_dst, adapt=True))
-            path_media_own: pathlib.Path | None = self._already_landed_here(path_media_dst, media)
+            # Which Version this fetch brings, resolved once: the stream's own
+            # word first, else the job's pin (an empty delivered word used to
+            # read stereo here while the skip gate fell back to the pin).
+            fetch_version = self._fetch_version(stream_info)
+            path_media_own: pathlib.Path | None = self._already_landed_here(path_media_dst, media, fetch_version)
 
             if path_media_own is not None:
                 # Nothing was written for this pass, so the caller must not
@@ -2983,11 +2974,11 @@ class Download:
                 self._note_skipped_after_stream(media)
 
                 return True, path_media_own
-            # What THIS fetch delivers, off the stream's own word. A missing
-            # or empty audio type reads stereo, which errs the safe way: a
-            # stereo verdict can only make the claim step aside from an Atmos
-            # file, never replace one.
-            fetch_is_atmos: bool = str(stream_info.delivered.get("audio_type") or "") == str(AudioType.ATMOS)
+            # What THIS fetch delivers, off the resolved Version. Nothing said
+            # anywhere reads stereo, which errs the safe way: a stereo verdict
+            # can only make the claim step aside from an Atmos file, never
+            # replace one.
+            fetch_is_atmos: bool = fetch_version == AudioType.ATMOS
             path_media_asked: pathlib.Path = path_media_dst
             path_media_dst, name_reserved = self._claim_destination(
                 path_media_dst, media_id, _waves_owned_ids(media), fetch_is_atmos
@@ -3003,7 +2994,7 @@ class Download:
                 # and the same positive-evidence question finds it. Asked before
                 # the error, so an expected step-aside is not reported as a lost
                 # download.
-                path_media_own = self._already_landed_here(path_media_dst, media)
+                path_media_own = self._already_landed_here(path_media_dst, media, fetch_version)
 
                 if path_media_own is not None:
                     self._note_skipped_after_stream(media)
@@ -3033,7 +3024,7 @@ class Download:
                     # the name is still a stranger and this still steps aside
                     # for it: only a state CHANGE inside the window can answer
                     # yes here, since the same question answered no moments ago.
-                    path_media_own = self._already_landed_here(path_media_asked, media)
+                    path_media_own = self._already_landed_here(path_media_asked, media, fetch_version)
 
                     if path_media_own is not None:
                         self._note_skipped_after_stream(media)
@@ -3069,7 +3060,7 @@ class Download:
 
                 def _occupant_is_this_items_own(path_occupied: pathlib.Path) -> bool:
                     nonlocal path_media_landed
-                    path_media_landed = self._already_landed_here(path_occupied, media)
+                    path_media_landed = self._already_landed_here(path_occupied, media, fetch_version)
 
                     return path_media_landed is not None
 
@@ -3330,11 +3321,11 @@ class Download:
             media_id: str = _waves_item_id(media)
 
             if self.skip_existing:
-                # The file being moved is this fetch's own copy, so its mode is
-                # the Version the occupant must match (the same answer
+                # The file being moved is this fetch's own copy, so its Version
+                # is the one the occupant must match (the same answer
                 # _claim_destination below asks the file for).
                 path_media_found: pathlib.Path | None = (
-                    self._existing_same_item_at(path_media_dst, media, _file_audio_mode_is_atmos(path_media_src))
+                    self._existing_same_item_at(path_media_dst, media, read_file_audio_type(path_media_src))
                     if check_file_exists(path_media_dst, extension_ignore=False)
                     else None
                 )

@@ -286,8 +286,13 @@ def _mp4_codec(path_file) -> str:
     return str(getattr(mp4.MP4(str(path_file)).info, "codec", "") or "")
 
 
-def read_audio_mode(path_file: str | pathlib.Path) -> str | None:
-    """Which Version the audio file at this path is: "stereo" / "atmos" / None.
+def read_file_audio_type(path_file: str | pathlib.Path) -> str | None:
+    """The audio type the audio file at this path IS: "stereo" / "atmos" / None.
+
+    read_audio_type's fallback sibling: that one answers only what the tag says
+    (the download gates' question -- a file Waves wrote must never be guessed
+    from its container), while this one answers what the FILE is, codec sniff
+    included, for the gates that judge a copy already on disk.
 
     Tag first, codec second (§5.3): a file Waves wrote carries
     WAVES_AUDIO_TYPE, which answers without opening the container and can
@@ -329,8 +334,8 @@ def occupant_is_version(path_file: str | pathlib.Path, version: str | None) -> b
     """
     if version is None:
         return True
-    mode = read_audio_mode(path_file)
-    return mode is None or mode == version
+    on_disk = read_file_audio_type(path_file)
+    return on_disk is None or on_disk == version
 
 
 class Metadata:

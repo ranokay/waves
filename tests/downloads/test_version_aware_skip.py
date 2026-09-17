@@ -8,16 +8,20 @@ machinery). The pre-stream skip was id-only, so the second row saw the first
 row's file, judged it "already downloaded", fetched nothing and recorded no
 ownership: the Atmos half silently vanished.
 
-The fix makes the occupant gate Version-aware before the fetch (the same
-on-disk mode question the replace gate already asked after it):
-``_existing_same_item_at(..., fetch_is_atmos=...)`` refuses an occupant in
-the other Version, and the Apple runner's own skip asks the same question.
-An untagged/unreadable occupant and an unpinned job keep the historical
-skip -- neither is evidence of a DIFFERENT Version.
+The fix makes every occupant gate Version-aware (the same on-disk question
+the replace gate already asked): the pre-stream and post-stream skips
+(``_existing_same_item_at(..., version=...)``), the "has this fetch already
+landed here" checks (``_already_landed_here``, whose id-only disk arm used
+to discard the fetched Atmos bytes), the symlink-target and playlist-move
+gates, and the Apple runner's own two skips. An untagged/unreadable
+occupant and an unpinned job keep the historical skip -- neither is
+evidence of a DIFFERENT Version.
 
-The real end-to-end shape (both rows fetching through the engine) is also
-driven in tests/downloads/test_apple_job_runner.py for the Apple runner and
-tests/downloads/test_dual_download.py for the per-Version ownership gates.
+Coverage: this module drives the gates and one full
+``_perform_actual_download`` run (the blank template's numbered copy);
+tests/downloads/test_apple_job_runner.py drives the Apple runner end to
+end; tests/downloads/test_dual_download.py covers the per-Version
+ownership gates that decide the two rows in the first place.
 """
 
 from __future__ import annotations
@@ -74,7 +78,7 @@ def _modes(monkeypatch, mapping: dict):
     def probe(path_file):
         return mapping.get(pathlib.Path(path_file))
 
-    monkeypatch.setattr("waves.metadata.read_audio_mode", probe)
+    monkeypatch.setattr("waves.metadata.read_file_audio_type", probe)
 
 
 def test_a_stereo_occupant_does_not_answer_for_the_atmos_row(tmp_path, monkeypatch):
@@ -84,7 +88,7 @@ def test_a_stereo_occupant_does_not_answer_for_the_atmos_row(tmp_path, monkeypat
     _modes(monkeypatch, {occupant: "stereo"})
     dl = _make_download()
     with patch("waves.download.read_item_id", return_value="101"):
-        assert dl._existing_same_item_at(occupant, _track(), True) is None
+        assert dl._existing_same_item_at(occupant, _track(), "atmos") is None
 
 
 def test_a_stereo_occupant_skips_the_stereo_row(tmp_path, monkeypatch):
@@ -92,7 +96,7 @@ def test_a_stereo_occupant_skips_the_stereo_row(tmp_path, monkeypatch):
     _modes(monkeypatch, {occupant: "stereo"})
     dl = _make_download()
     with patch("waves.download.read_item_id", return_value="101"):
-        assert dl._existing_same_item_at(occupant, _track(), False) == occupant
+        assert dl._existing_same_item_at(occupant, _track(), "stereo") == occupant
 
 
 def test_an_atmos_occupant_does_not_answer_for_the_stereo_row(tmp_path, monkeypatch):
@@ -102,7 +106,7 @@ def test_an_atmos_occupant_does_not_answer_for_the_stereo_row(tmp_path, monkeypa
     _modes(monkeypatch, {occupant: "atmos"})
     dl = _make_download()
     with patch("waves.download.read_item_id", return_value="101"):
-        assert dl._existing_same_item_at(occupant, _track(), False) is None
+        assert dl._existing_same_item_at(occupant, _track(), "stereo") is None
 
 
 def test_an_atmos_occupant_skips_the_atmos_row(tmp_path, monkeypatch):
@@ -110,7 +114,7 @@ def test_an_atmos_occupant_skips_the_atmos_row(tmp_path, monkeypatch):
     _modes(monkeypatch, {occupant: "atmos"})
     dl = _make_download()
     with patch("waves.download.read_item_id", return_value="101"):
-        assert dl._existing_same_item_at(occupant, _track(), True) == occupant
+        assert dl._existing_same_item_at(occupant, _track(), "atmos") == occupant
 
 
 def test_the_two_rows_of_a_dual_download_decide_against_one_blank_template(tmp_path, monkeypatch):
@@ -120,8 +124,8 @@ def test_the_two_rows_of_a_dual_download_decide_against_one_blank_template(tmp_p
     occupant = _occupant(tmp_path, "Xtal.m4a")
     _modes(monkeypatch, {occupant: "stereo"})
     with patch("waves.download.read_item_id", return_value="101"):
-        stereo = _make_download()._existing_same_item_at(occupant, _track(), False)
-        atmos = _make_download()._existing_same_item_at(occupant, _track(), True)
+        stereo = _make_download()._existing_same_item_at(occupant, _track(), "stereo")
+        atmos = _make_download()._existing_same_item_at(occupant, _track(), "atmos")
     assert stereo == occupant  # the stereo half is already here
     assert atmos is None  # the Atmos half still has to fetch
 
@@ -133,7 +137,7 @@ def test_an_unreadable_occupant_keeps_the_historical_skip(tmp_path, monkeypatch)
     _modes(monkeypatch, {occupant: None})
     dl = _make_download()
     with patch("waves.download.read_item_id", return_value="101"):
-        assert dl._existing_same_item_at(occupant, _track(), True) == occupant
+        assert dl._existing_same_item_at(occupant, _track(), "atmos") == occupant
 
 
 def test_an_unpinned_job_keeps_the_historical_skip(tmp_path, monkeypatch):
@@ -161,9 +165,58 @@ def test_a_numbered_variant_in_the_other_version_does_not_answer_either(tmp_path
     dl = _make_download()
     with patch("waves.download.read_item_id", side_effect=ids):
         # The stereo row: the variant is this Version's copy, so it skips there.
-        assert dl._existing_same_item_at(base, _track(), False) == variant
+        assert dl._existing_same_item_at(base, _track(), "stereo") == variant
         # The Atmos row: a stereo copy is not this Version's, wherever it sits.
-        assert dl._existing_same_item_at(base, _track(), True) is None
+        assert dl._existing_same_item_at(base, _track(), "atmos") is None
+
+
+def test_the_atmos_row_lands_beside_the_stereo_file_end_to_end(tmp_path, monkeypatch):
+    """The acceptance, through the real pipeline: the Atmos row of a dual
+    download must not stop at the stereo file the pre-stream gates let it
+    through. With the blank template's one destination, the real
+    _perform_actual_download must skip nothing, claim the numbered copy and
+    leave the stereo file alone. Fails on _already_landed_here's id-only disk
+    arm, which is where the fetched Atmos bytes used to be discarded."""
+    from types import SimpleNamespace
+
+    from waves.download import StreamInfo
+
+    occupant = tmp_path / "Song.m4a"
+    occupant.write_bytes(b"stereo bytes")
+    monkeypatch.setattr(
+        "waves.metadata.read_file_audio_type",
+        lambda path_file: "stereo" if pathlib.Path(path_file) == occupant else None,
+    )
+    monkeypatch.setattr(
+        "waves.download.read_item_id", lambda path_file: "101" if pathlib.Path(path_file) == occupant else ""
+    )
+    dl = _make_download(pinned_audio_type="atmos")
+    dl.settings = SimpleNamespace(
+        data=SimpleNamespace(
+            path_binary_ffmpeg="",
+            extract_flac=False,
+            downsample_enabled=False,
+            video_convert_mp4=False,
+        )
+    )
+    stream_info = StreamInfo(file_extension=".m4a", single_file=True, delivered={"audio_type": "atmos"})
+    cls = Download
+    with (
+        patch.object(cls, "_download", return_value=(True, tmp_path / "raw")),
+        patch.object(cls, "_extract_flac", side_effect=lambda p, transcode=False: p),
+        patch.object(cls, "_downsample_audio", side_effect=lambda p: p),
+        patch.object(cls, "_faststart_remux", side_effect=lambda p, s: p),
+        patch.object(cls, "_handle_metadata_and_extras", return_value=None),
+        patch.object(cls, "_move_file", return_value=True),
+        patch.object(cls, "_record_name_written"),
+        patch("waves.download.name_builder_item", return_value="Song"),
+    ):
+        ok, landed = dl._perform_actual_download(_track(), occupant, stream_info, False, None)
+
+    assert ok is True
+    assert landed != occupant  # the stereo file is not this fetch's landing
+    assert landed == tmp_path / "Song_01.m4a"  # the blank template's numbered copy
+    assert landed is not None
 
 
 def test_the_engine_call_site_passes_the_jobs_pin(tmp_path, monkeypatch):
@@ -194,13 +247,25 @@ def test_the_crossing_pin_reaches_the_engine_from_the_bridge():
     pre-stream gate Version-aware at all)."""
     from waves.waves_ui.backend import _TrackedDownload
 
-    dl = _TrackedDownload.__new__(_TrackedDownload)
-    dl._pinned_audio_type = "atmos"
-    assert dl._pinned_is_atmos() is True
-    dl._pinned_audio_type = "stereo"
-    assert dl._pinned_is_atmos() is False
-    dl._pinned_audio_type = None
-    assert dl._pinned_is_atmos() is None
+    dl = _TrackedDownload(
+        tidal_obj=MagicMock(),
+        path_base="./tmp",
+        fn_logger=MagicMock(),
+        skip_existing=True,
+        progress=MagicMock(),
+        audio_type="atmos",
+    )
+    assert dl._pinned_audio_type == "atmos"
+    assert dl._audio_type == "atmos"
+    dl = _TrackedDownload(
+        tidal_obj=MagicMock(),
+        path_base="./tmp",
+        fn_logger=MagicMock(),
+        skip_existing=True,
+        progress=MagicMock(),
+        audio_type="nonsense",
+    )
+    assert dl._pinned_audio_type is None and dl._audio_type is None
 
 
 def test_the_delivered_word_outranks_the_pin_after_the_stream():
@@ -210,7 +275,14 @@ def test_the_delivered_word_outranks_the_pin_after_the_stream():
 
     from waves.download import Download
 
-    assert Download._delivered_is_atmos(SimpleNamespace(delivered={"audio_type": "atmos"})) is True
-    assert Download._delivered_is_atmos(SimpleNamespace(delivered={"audio_type": "stereo"})) is False
-    assert Download._delivered_is_atmos(SimpleNamespace(delivered={})) is None
-    assert Download._delivered_is_atmos(SimpleNamespace()) is None
+    assert Download._delivered_version(SimpleNamespace(delivered={"audio_type": "atmos"})) == "atmos"
+    assert Download._delivered_version(SimpleNamespace(delivered={"audio_type": "STEREO"})) == "stereo"
+    assert Download._delivered_version(SimpleNamespace(delivered={})) is None
+    assert Download._delivered_version(SimpleNamespace()) is None
+
+    # _fetch_version prefers the delivered word and falls back to the pin.
+    dl = _make_download(pinned_audio_type="atmos")
+    assert dl._fetch_version(SimpleNamespace(delivered={"audio_type": "stereo"})) == "stereo"
+    assert dl._fetch_version(SimpleNamespace(delivered={})) == "atmos"
+    assert dl._fetch_version() == "atmos"
+    assert _make_download()._fetch_version() is None

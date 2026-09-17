@@ -39,7 +39,7 @@ from waves.constants import (
 )
 from waves.helper.exceptions import DownloadIncomplete
 from waves.lyrics import fetch_lrclib_lyrics, lyrics_sidecar_choices
-from waves.metadata import occupant_is_version, sniff_image_format
+from waves.metadata import normalize_audio_type_tag, occupant_is_version, sniff_image_format
 from waves.model.cfg import cover_sidecar_format, wants_both_default
 from waves.ownership import copy_is_current, record_names_a_broken_copy
 from waves.providers.apple import engine as apple_engine
@@ -1587,9 +1587,7 @@ def deliver_track(
     # confirms it per attempt below). Read BEFORE the skip gate: an occupant
     # in the other Version is not this one's copy (spec §5.3/§5.4, a blank
     # format_atmos puts both Versions on one name).
-    version_hint = str(getattr(audio_type, "value", audio_type) or "").strip().lower() or None
-    if version_hint not in ("stereo", "atmos"):
-        version_hint = None
+    version_hint = normalize_audio_type_tag(getattr(audio_type, "value", audio_type))
     if force:
         # Overwrite the copy THIS track owns, not the template path: two
         # distinct tracks can render to one relative name (the second owns
@@ -1668,12 +1666,12 @@ def deliver_track(
                     # Same Version gate as the pre-stream skip, with the
                     # stream's own answer (known by now): a file of the OTHER
                     # Version at this name is not this fetch's copy.
-                    true_hint = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
+                    delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
                     if (
                         not force
                         and data.skip_existing
                         and exact_true.exists()
-                        and occupant_is_version(exact_true, true_hint)
+                        and occupant_is_version(exact_true, delivered_version)
                     ):
                         raise _AppleSkipped()  # noqa: TRY301
                     dest = pick_destination(base, relative, want_ext)
