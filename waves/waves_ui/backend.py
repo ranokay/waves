@@ -17725,14 +17725,16 @@ class WavesBridge(LibraryMixin, QObject):
                 try:
                     # One pair from the runner's size rule (issue #236): the
                     # sidecar bytes at the separate file's size, the embedded
-                    # bytes at the embedded size.
+                    # bytes at the embedded size. The two fail independently,
+                    # so neither one's absence discards the other.
                     embed_cover, cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row)
                 except Exception:
                     cover = None
                     embed_cover = None
-                if not cover:
+                if not cover and not embed_cover:
                     continue
-                if (
+                served_here = False
+                if cover is not None and (
                     write_cover_sidecar(
                         folder,
                         cover,
@@ -17741,9 +17743,13 @@ class WavesBridge(LibraryMixin, QObject):
                     )
                     is not None
                 ):
+                    served_here = True
+                if bool(self._psetting(CTX_APPLE, "metadata_cover_embed", True)) and embed_cover is not None:
+                    served_here = (
+                        self._apple_standalone_embed_cover(folder, stem, embed_cover, track_row, facts) or served_here
+                    )
+                if served_here:
                     served += 1
-                if bool(self._psetting(CTX_APPLE, "metadata_cover_embed", True)):
-                    self._apple_standalone_embed_cover(folder, stem, embed_cover or cover, track_row, facts)
         return served
 
     def _apple_standalone_embed(
