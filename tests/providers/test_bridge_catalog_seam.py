@@ -363,6 +363,24 @@ def test_an_apple_only_failure_delivers_its_words_to_the_group():
     assert stub._search_cache == {}
 
 
+def test_a_two_provider_failure_stays_a_plain_search_failure():
+    """The in-group error belongs to the one failure no second provider can
+    carry (issue #241 / UI-05): with TIDAL in the fan-out, both fetches failing
+    is a plain failure -- nothing is emitted, so a page that holds rows stays,
+    and no single provider's words are put in the other's mouth."""
+    tidal = _provider(search=RuntimeError("network died"))
+    apple = _provider(search=AppleCatalogUnavailable())
+    stub = _SearchStub(tidal)
+    stub.providers["apple"] = apple
+    stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
+
+    stub.search("aphex twin")
+
+    assert stub.statuses[-1] == "Search failed"
+    assert stub.searchResults.emits == []
+    assert stub._search_cache == {}
+
+
 def test_search_with_no_provider_available_refuses_unchanged():
     tidal = _provider(search=AssertionError("TIDAL search ran without a session"))
     apple = _provider(search=AssertionError("Apple search ran while disabled"))

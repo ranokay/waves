@@ -153,9 +153,11 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
         error_shown
         and bool(_find_visible(q, "appleSearchError"))
         and bool(_find_visible(q, "appleSearchRetry"))
-        # A failed fetch is not an empty catalog: the page never also reports
-        # the query as having found nothing (issue #241 / UI-05).
+        # A failed fetch is not an empty catalog: the page never reports the
+        # query as having found nothing, and its own line names the failure
+        # instead of inviting a first search it already ran.
         and q("root.searchNoResultsFor") == ""
+        and q("emptyHint.text") == "Search failed"
     )
     # The head answers to the same type filter as the group's rows: Apple
     # serves no videos or mixes, so that filter never shows its head -- error

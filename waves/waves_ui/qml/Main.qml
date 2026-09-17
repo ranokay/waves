@@ -441,6 +441,10 @@ ApplicationWindow {
                                         || appleArtistsModel.count > 0 || appleAlbumsModel.count > 0
                                         || appleTracksModel.count > 0 || applePlaylistsModel.count > 0
                                         || searchTop !== null
+    // The one rule for "a provider that can issue a search is live": the
+    // search row and the build hint both follow it (J2: the row is live for a
+    // signed-out Apple-only user too).
+    readonly property bool searchAvailable: root.signedIn || root.appleEnabled
     // The query as it is sent: every run of whitespace (a pasted line break
     // or tab the single-line field never shows) becomes one space (issue #39).
     function searchQueryText(t) { return ("" + (t || "")).replace(/\s+/g, " ").trim() }
@@ -14826,8 +14830,8 @@ ApplicationWindow {
                     // Search + sort
                     RowLayout {
                         Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 10; spacing: 10
-                        enabled: root.signedIn || root.appleEnabled
-                        opacity: (root.signedIn || root.appleEnabled) ? 1 : 0.5
+                        enabled: root.searchAvailable
+                        opacity: root.searchAvailable ? 1 : 0.5
                         Rectangle {
                             id: searchBox
                             Layout.fillWidth: true; implicitHeight: 44; radius: 8; color: root.surface2
@@ -15785,10 +15789,14 @@ ApplicationWindow {
                     width: parent.width; horizontalAlignment: Text.AlignHCenter
                     textFormat: Text.PlainText; elide: Text.ElideMiddle
                     // A search that found nothing says so: the invitation left
-                    // up read as a search that never started (issue #39).
+                    // up read as a search that never started (issue #39). A
+                    // search that FAILED says that instead: the group's own
+                    // message carries the words (issue #241 / UI-05), so the
+                    // page never invites a first search it already ran.
                     text: root.searchNoResultsFor !== ""
                           ? "No results for “" + root.searchNoResultsFor + "”"
-                          : "Search for an artist, album, or track to begin"
+                          : (root.appleSearchError !== "" ? "Search failed"
+                                                          : "Search for an artist, album, or track to begin")
                     color: root.textLo; font.pixelSize: 22; topPadding: 96
                     // gentle breathing so the empty state feels alive
                     SequentialAnimation on opacity {
@@ -15834,7 +15842,7 @@ ApplicationWindow {
                 // The shared loading hint (WireHint.qml owns the look).
                 WireHint {
                     id: searchBuildHint
-                    active: (root.signedIn || root.appleEnabled) && root.searchBuilding
+                    active: root.searchAvailable && root.searchBuilding
                     width: parent.width; tint: root.textLo
                     onScreen: root.onScreen
                 }

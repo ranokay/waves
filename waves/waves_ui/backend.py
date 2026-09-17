@@ -3582,6 +3582,23 @@ _STALE_STAMP = float("-inf")
 _SEARCH_DISK_MAX = 12
 
 
+def _empty_tidal_lists() -> dict:
+    """The ungrouped buckets of a payload no TIDAL search filled.
+
+    TIDAL's rows ride these keys. A search only Apple answered and a resolved
+    link both leave them empty, so the page shows exactly the group that
+    answered (issue #241 / UI-05)."""
+    return {
+        "artists": [],
+        "albums": [],
+        "tracks": [],
+        "videos": [],
+        "playlists": [],
+        "mixes": [],
+        "top": None,
+    }
+
+
 def _apple_block(apple: dict | None = None, *, error_text: str = "") -> dict:
     """An Apple group in a search payload (issue #241 / UI-05).
 
@@ -3608,16 +3625,7 @@ def _failed_search_payload(error_text: str) -> dict:
     own: every list empty, the provider's honest message in its group (issue
     #241 / UI-05). The group head renders it with a RETRY; the status line
     repeats it. Nothing here is ever cached."""
-    return {
-        "artists": [],
-        "albums": [],
-        "tracks": [],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-        CTX_APPLE: _apple_block(error_text=error_text),
-    }
+    return {**_empty_tidal_lists(), CTX_APPLE: _apple_block(error_text=error_text)}
 
 
 def _search_same(a: dict, b: dict) -> bool:
@@ -6321,16 +6329,7 @@ class WavesBridge(LibraryMixin, QObject):
             apple["playlists"] = [provider.row_for("playlist", item)]
         else:
             return None
-        return {
-            "artists": [],
-            "albums": [],
-            "tracks": [],
-            "videos": [],
-            "playlists": [],
-            "mixes": [],
-            "top": None,
-            CTX_APPLE: apple,
-        }
+        return {**_empty_tidal_lists(), CTX_APPLE: apple}
 
     def _open_url(self, url: str) -> None:
         """Resolve a pasted TIDAL or Apple Music share URL into a single result."""
@@ -6531,15 +6530,16 @@ class WavesBridge(LibraryMixin, QObject):
             apple_error = provider_errors.get(CTX_APPLE)
             if provider_errors and len(provider_errors) == len(provider_ids):
                 # Every enabled fetch raised: a failure, never "0 results",
-                # which reads as a search that found nothing. A provider whose
-                # refusal carries honest words still delivers them to its OWN
-                # group (issue #241 / UI-05): an Apple-only failure would
-                # otherwise be a silent blank page, the one case where no
-                # second provider can carry the error. A page that already
-                # holds rows is never blanked by a failure, and nothing here is
-                # cached.
+                # which reads as a search that found nothing. The one failure
+                # whose words reach a group is the Apple-only one (issue #241 /
+                # UI-05): no second provider can carry them, so a blank page
+                # would be the only answer. With a TIDAL leg in the fan-out a
+                # single provider's words would blame it for both failures, so
+                # the plain failure stays. A page that already holds rows is
+                # never blanked by a failure, and nothing here is cached.
                 stale_rows = bool(stale is not None and self._search_total(stale))
-                if gen == self._search_gen and apple_error is not None and not stale_rows:
+                apple_only = provider_ids == [CTX_APPLE]
+                if gen == self._search_gen and apple_only and apple_error is not None and not stale_rows:
                     self.searchResults.emit(_failed_search_payload(str(apple_error)))
                     self._set_status(str(apple_error))
                 elif gen == self._search_gen:
