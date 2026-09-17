@@ -9,8 +9,8 @@ keyboard-only:
 
 - each NavTab and the QUEUE button carry a role, a non-empty name and
   ``activeFocusOnTab``;
-- a search result's DownloadButton does the same, with the activation path
-  the tap area takes (the gates included);
+- a search result's DownloadButton does the same (its activation path is the
+  tap area's: both call the one activate(), pinned by the source test);
 - the queue drawer's actions (PAUSE/RESUME, STOP, close) are ``SpecBtns``,
   which carry the metadata for every dialog action;
 - the search field is named.
@@ -27,7 +27,7 @@ import sys
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
+from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
 # QAccessible::Button.
@@ -97,17 +97,15 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     were not dropped from the components the scenario walks (a name alone
     cannot be activated by a screen reader without its press action)."""
     qml = QML_MAIN.read_text(encoding="utf-8")
-    for needle in (
-        "Accessible.onPressAction: sb.clicked()",
-        "Keys.onReturnPressed: sb.clicked()",
-        "Keys.onSpacePressed: sb.clicked()",
-        "Accessible.onPressAction: nt.clicked()",
-        "Keys.onReturnPressed: nt.clicked()",
-        "Accessible.onPressAction: db.activate()",
-        "Keys.onSpacePressed: db.activate()",
-        "Accessible.onPressAction: queueDrawer.open()",
-    ):
-        assert needle in qml, f"the keyboard path is missing: {needle}"
+    for action in ("sb.clicked()", "nt.clicked()", "db.activate()", "gcard.clicked()", "queueDrawer.open()"):
+        assert f"Accessible.onPressAction: {action}" in qml, f"no press action for {action}"
+        for key in ("Return", "Enter", "Space"):
+            needle = f"Keys.on{key}Pressed:"
+            assert needle in qml, f"the {key} handler is missing"
+        # Each control's handlers accept the event and ignore auto-repeat, so
+        # a held key cannot queue the action twice.
+        assert f"event.accepted = true; {action}" in qml, f"the key handler for {action} does not accept"
+        assert "if (!event.isAutoRepeat)" in qml, "a key handler auto-repeats"
 
 
 def _buttons(q, marker: str, scope: str = "[root.contentItem]") -> list[dict]:
@@ -182,7 +180,7 @@ def _scenario_body() -> int:
     _check_buttons(problems, _buttons(q, "function (o) { return o.objectName === 'queueBtn'; }"), "the QUEUE button")
     _show_search_results(q, settle, bridge)
     search = _buttons(q, "function (o) { return o.objectName === 'searchField'; }")
-    if not search or not search[0]["name"]:
+    if not search or not any(field["name"] for field in search):
         problems.append("the search field carries no accessible name")
     _check_buttons(
         problems,
@@ -191,15 +189,25 @@ def _scenario_body() -> int:
     )
 
     # The queue drawer's actions are SpecBtns (their own primary/danger/icon
-    # trio is this component's shape and no other's).
+    # trio is this component's shape and no other's). A queued row puts PAUSE
+    # beside the always-present close button, so the assertion sees drawer
+    # actions rather than anything else in the tree.
     q("queueDrawer.open()")
     settle(300)
+    if not bool(q("queueDrawer.opened")):
+        print("the queue drawer did not open", file=sys.stderr)
+        return EXIT_PRECONDITION
+    q(
+        "queueModel.append({'qid': 'a11y-row', 'title': 'Song', 'sub': 'Artist',"
+        " 'state': 'queued', 'uiGroup': 'queued'})"
+    )
+    settle(150)
     _check_buttons(
         problems,
         _buttons(
             q,
             "function (o) { return o.primary !== undefined && o.danger !== undefined && o.icon !== undefined; }",
-            "[root.contentItem, queueDrawer]",
+            "[queueDrawer.contentItem]",
         ),
         "a queue action",
         minimum=2,

@@ -6509,17 +6509,27 @@ ApplicationWindow {
             db.onTap()
         }
         function accessibleName() {
-            var word = db.st === "done" ? "Downloaded" : (db.st === "failed" ? "Retry download" : "Download")
-            var noun = db.noun !== "" ? " " + db.noun : ""
-            return word + noun + (db.showChooser ? ", chooser available" : "")
+            // The visible label already names the scope ("Download album"); the
+            // state rides along, so a screen reader hears what the face says.
+            var base = db.label !== "" ? db.label : "Download"
+            if (db.st === "done") return db.canRedownload ? base + ", downloaded, menu for redownload" : base + ", downloaded"
+            if (db.st === "failed") return base + ", failed"
+            if (db.st === "running" || db.waiting) return base + ", queued"
+            return base + (db.showChooser ? ", press Down for download options" : "")
         }
-        activeFocusOnTab: db.visible
+        // Inert faces leave the tab order (a focused control that does nothing
+        // reads as broken to a keyboard user); the done face with REDOWNLOAD
+        // stays, since it is actionable.
+        activeFocusOnTab: db.visible && !(db.st === "running" || db.waiting || (db.st === "done" && !db.canRedownload))
         Accessible.role: Accessible.Button
         Accessible.name: db.accessibleName()
         Accessible.onPressAction: db.activate()
-        Keys.onReturnPressed: db.activate()
-        Keys.onEnterPressed: db.activate()
-        Keys.onSpacePressed: db.activate()
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.activate() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.activate() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.activate() } }
+        // The chooser is the second face; Down opens it for a keyboard user
+        // exactly where the right-click/chevron path does.
+        Keys.onDownPressed: function(event) { if (db.showChooser) { event.accepted = true; db.openChooser() } }
         function openChooser() {
             if (!db.showChooser) return
             if (db.st === "running" || db.waiting) return
@@ -7969,11 +7979,13 @@ ApplicationWindow {
         // focus ring is the accent border, since a custom Rectangle draws none.
         activeFocusOnTab: visible
         Accessible.role: Accessible.Button
-        Accessible.name: sb.accessibleLabel !== "" ? sb.accessibleLabel : (sb.label !== "" ? sb.label : "Button")
+        Accessible.name: sb.accessibleLabel !== "" ? sb.accessibleLabel
+                       : (sb.label !== "" ? sb.label
+                       : (sb.icon !== "" ? sb.icon.charAt(0).toUpperCase() + sb.icon.slice(1) : "Button"))
         Accessible.onPressAction: sb.clicked()
-        Keys.onReturnPressed: sb.clicked()
-        Keys.onEnterPressed: sb.clicked()
-        Keys.onSpacePressed: sb.clicked()
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; sb.clicked() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; sb.clicked() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; sb.clicked() } }
         readonly property color bg: danger ? root.redCont
                                   : warn ? root.goldCont
                                   : (primary ? root.accentCont : "transparent")
@@ -7981,9 +7993,8 @@ ApplicationWindow {
         implicitHeight: sbTxt.implicitHeight + (compact ? 3 : root.btnPadV) * 2
         radius: compact ? 5 : root.btnRad
         color: (sbMa.containsMouse && (sb.primary || sb.danger || sb.warn)) ? Qt.lighter(sb.bg, 1.35) : sb.bg
-        border.width: sb.activeFocus ? 2 : 1
-        border.color: sb.activeFocus ? root.accent
-                    : danger ? Qt.alpha(root.red, 0.55)
+        border.width: 1
+        border.color: danger ? Qt.alpha(root.red, 0.55)
                     : warn ? Qt.alpha(root.gold, 0.55)
                     : (primary ? root.accentDim : root.border1)
         Behavior on color { ColorAnimation { duration: 110 } }
@@ -8009,6 +8020,13 @@ ApplicationWindow {
         MouseArea {
             id: sbMa; anchors.fill: parent; hoverEnabled: true
             cursorShape: Qt.PointingHandCursor; onClicked: sb.clicked()
+        }
+        // The keyboard focus ring (a custom Rectangle draws none): an overlay
+        // so it never repaints the danger/warn/primary border recipe.
+        Rectangle {
+            anchors.fill: parent; radius: sb.radius
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: sb.activeFocus
         }
     }
 
@@ -8045,6 +8063,18 @@ ApplicationWindow {
             Ico { name: "arrow-right"; color: gcard.highlight ? root.accent : root.textDim; size: 15; Layout.alignment: Qt.AlignVCenter }
         }
         MouseArea { id: gcMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: gcard.clicked() }
+        activeFocusOnTab: gcard.visible
+        Accessible.role: Accessible.Button
+        Accessible.name: gcard.title + (gcard.desc !== "" ? ", " + gcard.desc : "")
+        Accessible.onPressAction: gcard.clicked()
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; gcard.clicked() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; gcard.clicked() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; gcard.clicked() } }
+        Rectangle {
+            anchors.fill: parent; radius: gcard.radius
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: gcard.activeFocus
+        }
     }
 
     // Drives the "matrix decrypt" paste-in for a TextField: scrambled glyphs settle
@@ -8231,13 +8261,14 @@ ApplicationWindow {
         implicitWidth: navMetric.implicitWidth + root.btnPadH * 2
         // A tab is a button: named by its label, reachable with Tab, and
         // Enter/Space fire the same clicked() the pointer does.
-        activeFocusOnTab: true
+        activeFocusOnTab: nt.visible
         Accessible.role: Accessible.Button
         Accessible.name: nt.label
+        Accessible.checked: nt.active
         Accessible.onPressAction: nt.clicked()
-        Keys.onReturnPressed: nt.clicked()
-        Keys.onEnterPressed: nt.clicked()
-        Keys.onSpacePressed: nt.clicked()
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; nt.clicked() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; nt.clicked() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; nt.clicked() } }
 
         // Colours for the CRT look. accent/accentCont/accentDim/accentSoft are
         // shared app tokens; the dim phosphor-panel tones are local to this look.
@@ -8254,8 +8285,7 @@ ApplicationWindow {
         // idle body: dim phosphor panel; grey label that greys → green
         Rectangle {
             id: navDim; anchors.fill: parent; radius: root.btnRad; color: nt.navDimBg
-            border.width: nt.activeFocus ? 2 : 1
-            border.color: nt.activeFocus ? root.accent : (navMa.containsMouse ? nt.navDimHover : nt.navDimBorder)
+            border.width: 1; border.color: navMa.containsMouse ? nt.navDimHover : nt.navDimBorder
             Behavior on border.color { ColorAnimation { duration: 180 } }
             Text {
                 anchors.centerIn: parent; text: nt.label; textFormat: Text.PlainText
@@ -8295,6 +8325,11 @@ ApplicationWindow {
         Rectangle { id: navAfter; anchors.centerIn: parent; width: 7; height: 3; radius: 2; color: root.accent; opacity: 0 }
 
         MouseArea { id: navMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: nt.clicked() }
+        Rectangle {
+            anchors.fill: parent; radius: root.btnRad
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: nt.activeFocus
+        }
 
         states: State { name: "on"; when: nt.active
             PropertyChanges { navLit.opacity: 1 }
@@ -14639,9 +14674,9 @@ ApplicationWindow {
                     Accessible.role: Accessible.Button
                     Accessible.name: "Queue, " + root.activeQueueCount + (root.activeQueueCount === 1 ? " active item" : " active items")
                     Accessible.onPressAction: queueDrawer.open()
-                    Keys.onReturnPressed: queueDrawer.open()
-                    Keys.onEnterPressed: queueDrawer.open()
-                    Keys.onSpacePressed: queueDrawer.open()
+                    Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
+                    Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
+                    Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
                     color: "transparent"
                     border.width: activeFocus ? 2 : 1
                     border.color: activeFocus ? root.accent : root.border1
@@ -14801,7 +14836,16 @@ ApplicationWindow {
                                     // leaves it), so a keyboard user can reset the
                                     // term without selecting it by hand.
                                     Keys.onEscapePressed: function(event) {
-                                        if (searchField.text !== "") { searchField.text = ""; event.accepted = true }
+                                        if (searchField.text === "" && !searchDecoder.decoding) return
+                                        // A decode in flight would rewrite the text on its
+                                        // next tick: stop it and disarm the paste arm too,
+                                        // or the cleared term resurrects and still searches.
+                                        searchDecoder._timer.stop()
+                                        searchDecoder.decoding = false
+                                        searchDecoder.submitArmed = false
+                                        searchDecoder.submitPending = false
+                                        searchField.text = ""
+                                        event.accepted = true
                                     }
                                     placeholderText: "Search, or paste a TIDAL or Apple Music link…"
                                     color: searchDecoder.decoding ? root.accent : root.textHi
@@ -18212,6 +18256,7 @@ ApplicationWindow {
                 SpecBtn {
                     id: logsCloseBtn
                     icon: "close"
+                    accessibleLabel: "Close logs"
                     onClicked: logsDrawer.close()
                 }
             }
