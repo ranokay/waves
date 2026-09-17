@@ -1418,18 +1418,19 @@ class Download:
                 return None
         except MediaMissing:
             return None
-        except (ObjectNotFound, StreamNotAvailable, AssetNotAvailable):
-            # TIDAL no longer carries this item, so the re-fetch above 404s.
-            # That is a refusal, not a failure of ours, and it has to be
+        except (ObjectNotFound, StreamNotAvailable, AssetNotAvailable) as exc:
+            # The service no longer carries this item, so the re-fetch above
+            # 404s. That is a refusal, not a failure of ours, and it has to be
             # recorded as one HERE: this gate runs before any stream is
             # fetched, so _get_stream_info's identical rule (issue #25) never
             # gets the chance. Counting it as a plain failure is what made one
             # delisted entry fail a whole 500-track playlist, permanently: the
             # shortfall reappeared on every retry and the row could never
-            # settle green (issue #35).
+            # settle green (issue #35). The words are the provider's own
+            # (audit TS-09): the engine never names a service for another.
             self._note_unavailable_item(media)
             self.fn_logger.info(
-                f"This item is not available for listening anymore on TIDAL. Skipping: "
+                f"{self._refusal_words(exc, 'this item is not available')}. Skipping: "
                 f"{log_content(self._media_label(media, media_id))}"
             )
             return None
@@ -2693,27 +2694,42 @@ class Download:
 
         if verdict.kind is RefusalKind.THROTTLED:
             self.fn_logger.exception(
-                f"Too many requests against TIDAL backend. Skipping '{log_content(name_builder_item(media))}'. "
+                f"{self._refusal_words(error, 'the service is rate-limiting')}. "
+                f"Skipping '{log_content(name_builder_item(media))}'. "
                 f"Consider to activate delay between downloads."
             )
             return
 
         if verdict.kind is RefusalKind.UNAVAILABLE:
-            # TIDAL knows the track but will not serve a stream for it: the
-            # 404 / "no stream" answer for an asset that is genuinely gone, or
-            # a 401/403 whose body says the asset itself is withheld (e.g.
-            # subStatus 4005 "Asset is not ready for playback"). A refusal,
-            # not a failure, so mark it UNAVAILABLE (issue #25). Anything else
-            # (a dead session, a 5xx, a network error) keeps the "something
-            # went wrong" path.
+            # The service knows the track but will not serve a stream for it:
+            # the 404 / "no stream" answer for an asset that is genuinely gone,
+            # or a 401/403 whose body says the asset itself is withheld (e.g.
+            # subStatus 4005 "Asset is not ready for playback"). A refusal, not
+            # a failure, so mark it UNAVAILABLE (issue #25). Anything else (a
+            # dead session, a 5xx, a network error) keeps the "something went
+            # wrong" path.
             self._note_unavailable(media)
             self.fn_logger.info(
-                f"This item is not available for listening anymore on TIDAL. Skipping: "
+                f"{self._refusal_words(error, 'this item is not available')}. Skipping: "
                 f"{log_content(name_builder_item(media))}"
             )
             return
 
         self.fn_logger.exception(f"Something went wrong. Skipping '{log_content(name_builder_item(media))}'.")
+
+    def _refusal_words(self, error: Exception, fallback: str) -> str:
+        """The provider's own words for a refusal, or the engine's fallback.
+
+        User-facing refusal text is provider-owned (``classify_refusal``
+        restates the engine's error in the provider's vocabulary); the engine
+        supplies only a neutral fallback for a provider that says nothing, so a
+        third provider never reads TIDAL's words (audit TS-09).
+        """
+        try:
+            message = str(getattr(self.provider.classify_refusal(error), "message", "") or "").strip()
+        except Exception:
+            message = ""
+        return message or fallback
 
     def _get_track_stream_info(
         self,
@@ -3215,14 +3231,17 @@ class Download:
         """This download's provider id for per-provider options (issue #61).
 
         The pipeline is composed with a Provider (TIDAL by default); its
-        lyrics/artwork options live under that provider's mirrors. Unknown
-        or missing providers read as TIDAL, the historical behavior.
+        lyrics/artwork options live under that provider's mirrors, keyed by the
+        provider's own id, so a third provider reaches its own mirrors with no
+        allow-list edit (audit TS-09). No provider at all reads TIDAL, the
+        historical default; an unrecognized word falls back to the shared keys
+        inside ``provider_setting``, never to another provider's mirror.
         """
         try:
             pid = str(getattr(getattr(self, "provider", None), "id", "") or "").strip().lower()
         except Exception:
             pid = ""
-        return pid if pid in ("tidal", "apple") else "tidal"
+        return pid or "tidal"
 
     def _psetting(self, key: str, default=None):
         """One lyrics/artwork option for this download's provider.

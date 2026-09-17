@@ -6455,11 +6455,16 @@ ApplicationWindow {
         // need ISRC dedupe, which is post v1, so the segment names the row's
         // provider everywhere for now.
         property bool providerFixed: chooserKind !== "track" && chooserKind !== "video"
-        // Per-click pins exist for track rows and collection pages only
-        // (acceptance). Bulk sweeps keep Settings, so they keep one face.
-        readonly property bool chooserSupported: chooserKind === "track" || chooserKind === "album"
-            || chooserKind === "playlist" || chooserKind === "mix" || chooserKind === "video"
-        readonly property bool showChooser: root.appleEnabled && chooserSupported
+        // The split-button Chooser is a control, not an Apple feature (issue
+        // #235): the bridge answers whether THIS row's provider metadata and
+        // kind carry it, so a TIDAL-only install gets one and a provider that
+        // offers no per-click options draws no chevron. QML names no provider.
+        function computeChooserSupported() {
+            if (db.chooserKind === "" || ("" + db.mediaId) === "") return false
+            try { return waves.chooserSupported(db.mediaId, db.chooserKind) === true } catch (e) { return false }
+        }
+        readonly property bool chooserSupported: db.computeChooserSupported()
+        readonly property bool showChooser: chooserSupported
         property bool chooserBuilt: false
         readonly property bool chooserOpen: chooserLoader.item !== null && chooserLoader.item.visible
         property string chooserProvider: ""
@@ -6467,37 +6472,36 @@ ApplicationWindow {
         property string chooserAudio: "stereo"
         property bool chooserAtmosOnly: false
         property var chooserTiers: []
+        property var chooserProviders: []
+        property var chooserAudioOptions: ["stereo"]
+        property bool chooserShowLyrics: false
+        property bool chooserShowTtml: false
+        property bool chooserShowArt: false
         property bool chooserLyricsEmbed: false
         property bool chooserLyricsFile: false
         property bool chooserLyricsTtml: false
         property bool chooserCoverEmbed: true
         property bool chooserCoverFile: true
-        function chooserRowProvider() {
-            var mid = "" + (db.mediaId || "")
-            return mid.indexOf("apple:") === 0 ? "apple" : "tidal"
-        }
         function refreshChooser() {
             var d = ({})
             try { d = waves.chooserDefaults(db.mediaId, db.chooserKind) || ({}) } catch (e) { d = ({}) }
-            db.chooserProvider = "" + (d.provider || db.chooserRowProvider())
+            db.chooserProvider = "" + (d.provider || "")
             db.chooserTier = "" + (d.tier || "")
             db.chooserAudio = "" + (d.audioType || "stereo")
             db.chooserAtmosOnly = d.atmosOnly === true
             if (db.chooserAtmosOnly) db.chooserAudio = "atmos"
             db.chooserTiers = d.tiers || []
+            db.chooserProviders = d.providers || []
+            var audios = d.audioOptions || []
+            db.chooserAudioOptions = audios.length > 0 ? audios : ["stereo"]
+            db.chooserShowLyrics = d.showLyrics === true
+            db.chooserShowTtml = d.showLyricsTtml === true
+            db.chooserShowArt = d.showArt === true
             db.chooserLyricsEmbed = d.lyricsEmbed === true
             db.chooserLyricsFile = d.lyricsFile === true
-            db.chooserLyricsTtml = d.lyricsTtml === true
+            db.chooserLyricsTtml = d.lyricsTtml === true && db.chooserShowTtml
             db.chooserCoverEmbed = d.coverEmbed !== false
             db.chooserCoverFile = d.coverFile !== false
-        }
-        function refreshChooserForProvider() {
-            var tiers = []
-            try { tiers = waves.chooserTiers(db.chooserProvider) || [] } catch (e) { tiers = [] }
-            db.chooserTiers = tiers
-            var tierWord = ""
-            try { tierWord = "" + (waves.chooserDefaultTier(db.chooserProvider) || "") } catch (e) { tierWord = "" }
-            if (tierWord !== "") db.chooserTier = tierWord
         }
         function openChooser() {
             if (!db.showChooser) return
@@ -6541,7 +6545,7 @@ ApplicationWindow {
         }
         function saveChooserAsDefaults() {
             var vals = {
-                provider: "" + (db.chooserProvider || db.chooserRowProvider()),
+                provider: "" + (db.chooserProvider || ""),
                 tier: "" + (db.chooserTier || ""),
                 audioType: db.chooserAtmosOnly ? "atmos" : ("" + (db.chooserAudio || "")),
                 lyrics_embed: db.chooserLyricsEmbed,
@@ -7268,34 +7272,36 @@ ApplicationWindow {
                         Text { textFormat: Text.PlainText; text: "PROVIDER"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
                         Row {
                             spacing: 6
-                            // Fixed to the row's provider in v1. Cross provider
-                            // counterparts need ISRC dedupe, which is post v1,
-                            // so the segment names the provider without switching.
-                            Rectangle {
-                                width: 140; height: 26; radius: 6
-                                color: db.chooserProvider === "tidal" ? root.accentCont : root.surface3
-                                border.color: db.chooserProvider === "tidal" ? root.accentDim : root.outline; border.width: 1
-                                Row {
-                                    anchors.centerIn: parent; spacing: 6
-                                    Image { anchors.verticalCenter: parent.verticalCenter; source: "assets/providers/tidal.png"; width: 20; height: 13; fillMode: Image.PreserveAspectFit; smooth: true; cache: true }
-                                    Text { textFormat: Text.PlainText; text: "TIDAL"; color: db.chooserProvider === "tidal" ? root.accentContTx : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                            // One tile per enabled provider, straight from the
+                            // bridge (issue #235): fixed to the row's provider
+                            // in v1, and the row's own tile always present. No
+                            // provider id, name or asset path lives in QML, so
+                            // a third provider renders with no edit here.
+                            Repeater {
+                                model: db.chooserProviders
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    width: 140; height: 26; radius: 6
+                                    color: modelData.selected ? root.accentCont : root.surface3
+                                    border.color: modelData.selected ? root.accentDim : root.outline; border.width: 1
+                                    Row {
+                                        anchors.centerIn: parent; spacing: 6
+                                        Image {
+                                            visible: ("" + (modelData.logo || "")) !== ""
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            source: "" + (modelData.logo || "")
+                                            width: modelData.logo_width > 0 ? modelData.logo_width : 16
+                                            height: 14; fillMode: Image.PreserveAspectFit; smooth: true; cache: true
+                                        }
+                                        Text { textFormat: Text.PlainText; text: ("" + (modelData.name || modelData.id)).toUpperCase(); color: modelData.selected ? root.accentContTx : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                                    }
+                                    MouseArea { anchors.fill: parent; enabled: false; cursorShape: Qt.PointingHandCursor }
                                 }
-                                MouseArea { anchors.fill: parent; enabled: false; cursorShape: Qt.PointingHandCursor }
-                            }
-                            Rectangle {
-                                width: 140; height: 26; radius: 6
-                                color: db.chooserProvider === "apple" ? root.surfaceHi : root.surface3
-                                border.color: db.chooserProvider === "apple" ? root.textHi : root.outline; border.width: 1
-                                Row {
-                                    anchors.centerIn: parent; spacing: 6
-                                    Image { anchors.verticalCenter: parent.verticalCenter; source: "assets/providers/apple-music.png"; width: 14; height: 14; fillMode: Image.PreserveAspectFit; smooth: true; cache: true }
-                                    Text { textFormat: Text.PlainText; text: "APPLE MUSIC"; color: db.chooserProvider === "apple" ? root.textHi : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                                }
-                                MouseArea { anchors.fill: parent; enabled: false; cursorShape: Qt.PointingHandCursor }
                             }
                         }
                     }
                     Column {
+                        visible: db.chooserTiers.length > 0
                         spacing: 4
                         Text { textFormat: Text.PlainText; text: "AUDIO QUALITY"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
                         Repeater {
@@ -7327,8 +7333,11 @@ ApplicationWindow {
                         Row {
                             visible: !db.chooserAtmosOnly
                             spacing: 6
+                            // The provider's own words (issue #235): a
+                            // stereo-only provider offers one option, however
+                            // many the Chooser would carry elsewhere.
                             Repeater {
-                                model: ["stereo", "atmos", "both"]
+                                model: db.chooserAudioOptions
                                 delegate: Rectangle {
                                     required property string modelData
                                     width: 94; height: 26; radius: 6
@@ -7341,6 +7350,7 @@ ApplicationWindow {
                         }
                     }
                     Column {
+                        visible: db.chooserShowLyrics
                         spacing: 4
                         Text { textFormat: Text.PlainText; text: "LYRICS"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
                         Row {
@@ -7363,13 +7373,14 @@ ApplicationWindow {
                                 width: 80; height: 24; radius: 5
                                 color: db.chooserLyricsTtml ? root.accentCont : root.surface3
                                 border.color: db.chooserLyricsTtml ? root.accentDim : root.outline; border.width: 1
-                                opacity: db.chooserProvider === "apple" ? 1 : 0.4
+                                opacity: db.chooserShowTtml ? 1 : 0.4
                                 Text { textFormat: Text.PlainText; text: db.chooserLyricsTtml ? ".TTML ON" : ".TTML OFF"; color: db.chooserLyricsTtml ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; enabled: db.chooserProvider === "apple"; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsTtml = !db.chooserLyricsTtml } }
+                                MouseArea { anchors.fill: parent; enabled: db.chooserShowTtml; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsTtml = !db.chooserLyricsTtml } }
                             }
                         }
                     }
                     Column {
+                        visible: db.chooserShowArt
                         spacing: 4
                         Text { textFormat: Text.PlainText; text: "ALBUM ART"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
                         Row {

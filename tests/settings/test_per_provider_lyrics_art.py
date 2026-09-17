@@ -249,6 +249,7 @@ def test_chooser_defaults_read_the_row_provider_mirrors():
     stub._chooser_default_audio = lambda: "stereo"
     stub._chooser_atmos_only = lambda mid, kind: False
     stub._chooser_tier_entries = lambda pid: []
+    stub._chooser_supports = lambda mid, kind: True
     stub._get_apple_enabled = lambda: False
     stub._psetting = WavesBridge._psetting.__get__(stub, type(stub))
     stub.chooserDefaults = WavesBridge.chooserDefaults.__get__(stub, type(stub))

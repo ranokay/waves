@@ -132,6 +132,8 @@ def _bridge(**over):
         "_chooser_default_tier_word",
         "_chooser_default_audio",
         "_chooser_atmos_only",
+        "_chooser_supports",
+        "chooserSupported",
         "chooserDefaults",
         "saveChooserDefaults",
         "_chooser_normalize_audio",
@@ -196,7 +198,7 @@ def test_chooser_defaults_come_from_settings_per_provider():
     d = b.chooserDefaults("t1", "track")
     assert d["provider"] == "tidal" and d["providerFixed"] is False
     assert d["tier"] == "HI-RES" and d["audioType"] == "stereo"
-    assert d["atmosOnly"] is False and d["appleEnabled"] is False
+    assert d["atmosOnly"] is False and d["supported"] is True
     d_album = b.chooserDefaults("a1", "album")
     assert d_album["providerFixed"] is True
     d_apple = b.chooserDefaults("apple:456", "track")
