@@ -120,15 +120,16 @@ def test_windows_builds_ask_nuitka_for_low_memory():
 
 
 def test_the_build_excludes_yt_dlps_lazy_extractor_table():
-    """The lazy extractor table's generated C (58.8 MiB) cost 2,040 s of clang
-    plus 2,142 s of Python optimization in the 4,593 s cold build, and a warm
-    rebuild paid it again (issue #245). Waves only ever hands yt-dlp direct
-    stream URLs (gamdl's HlsFD/HttpFD path) and yt-dlp's own import contract
-    falls back to the real extractor modules when the table is absent, so every
-    host must exclude it; a compiled probe with the flag still lists all 1,751
-    extractor classes. The CI Windows legs export WAVES_NUITKA_FLAGS=--low-memory
-    themselves, so the exclusion has to survive an environment-provided value,
-    not just resolve from the Makefile's own default."""
+    """Every host must exclude yt-dlp's lazy extractor table (issue #245): its
+    generated C dominated the cold build (the measured numbers live in
+    docs/platform-enablement-review.md) and it is the one module the Windows
+    runners cannot compile at all. Waves only ever hands yt-dlp direct stream
+    URLs (gamdl's HlsFD/HttpFD path) and yt-dlp's own import contract falls back
+    to the real extractor modules when the table is absent, so the artifact
+    keeps every extractor. The CI Windows legs export
+    WAVES_NUITKA_FLAGS=--low-memory themselves, so the exclusion has to survive
+    an environment-provided value, not just resolve from the Makefile's own
+    default."""
     for env in ({"OS": "Windows_NT"}, {"OS": ""}, {"OS": "Windows_NT", "WAVES_NUITKA_FLAGS": "--low-memory"}):
         command = _dry_run_nuitka_command(env)
         assert "--nofollow-import-to=yt_dlp.extractor.lazy_extractors" in command, env

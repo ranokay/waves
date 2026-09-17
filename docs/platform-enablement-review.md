@@ -1,7 +1,8 @@
 # Windows and Linux enablement review
 
 - Status: review complete; Linux verified, Windows parked with the blocker
-  recorded (issue #205)
+  recorded (issue #205) and the recipe fix landed (issue #245), revalidation
+  owed
 - Scope: what the Windows and Linux builds ship, how the platform-dependent
   code branches behave, and which claims are verified versus still open
 - Method: code audit of the platform branches in production code (paths,
@@ -98,10 +99,21 @@ either leg cannot compile.
 
 Options assessed for the parked fix:
 
-- Exclude `yt_dlp.extractor.lazy_extractors` with `--nofollow-import-to=…`;
-  yt-dlp catches the resulting `ImportError` and falls back to the eager
-  extractor list. All 1,751 extractors stay available (verified locally by
-  blocking the import in the source tree); yt-dlp's first use gets slower.
+- **Exclude `yt_dlp.extractor.lazy_extractors` with `--nofollow-import-to=…`
+  — adopted 2026-09-17 (issue #245).** yt-dlp catches the resulting
+  `ImportError` and falls back to the eager extractor list. All 1,751
+  extractors stay available (verified locally by blocking the import in the
+  source tree, and again in a compiled Nuitka probe: all 1,751 classes);
+  yt-dlp's first use gets slower, and Waves never makes one — gamdl only ever
+  hands yt-dlp a direct stream URL (`HlsFD`/`HttpFD`), so the extractor
+  machinery is never touched. The table was also the single biggest cost of
+  every _working_ build: on macOS arm64 its 58.8 MiB of generated C took
+  2,040 s of clang and 2,142 s of Python optimization — 4,182 s of a 4,593 s
+  cold build — and a warm rebuild paid it again. With the exclusion the cold
+  build is 385 s (6 m 26 s) and a warm rebuild 379 s (no object reuse either
+  way), the peak process RSS 1.31 GB warm / 1.14 GB cold (was 2.22 GB), and
+  `waves.app` 236 MB (was 301 MB), with `tools/inspect_bundle.py` passing and
+  the packaged app booting clean offscreen.
 - Drop the Apple engine from the Windows bundle (an ADR 0004 amendment).
 - A larger runner — the x64 failure is `cl`'s own stack, so memory alone may
   not remove it.
@@ -109,7 +121,9 @@ Options assessed for the parked fix:
 Decision (2026-09-16): park Windows and record the blocker; Windows artifacts
 stay unpublished for now. The low-memory mode stays in place, because it is
 the prerequisite for any of the options and costs only build time, which the
-cache makes one-time.
+cache makes one-time. (2026-09-17: the exclusion above now ships in
+`WAVES_NUITKA_FLAGS`, so no build compiles the module; the Windows legs still
+owe their own revalidation, see the VS 2026 note below.)
 
 ## Gaps and risks
 
@@ -125,17 +139,19 @@ cache makes one-time.
 5. **Windows bundle builds are blocked by the bundled engine's compile
    size.** yt-dlp's generated `lazy_extractors` module cannot be compiled by
    MSVC on hosted runners (stack overflow on x64, heap exhaustion on arm64),
-   even serially; both Windows legs fail and Windows artifacts cannot ship
-   until one of the recorded options lands. Windows arm64 runners migrate to
-   Visual Studio 2026 on 2026-09-21, which may change the compiler's
-   behavior; revalidate then.
+   even serially. The recipe now excludes that module (issue #245), so no
+   build compiles it; the Windows legs have not been re-run since, and Windows
+   artifacts stay unpublished until they are. Windows arm64 runners migrate to
+   Visual Studio 2026 on 2026-09-21, which may change the compiler's behavior;
+   revalidate then.
 
 ## Recommendations
 
-- Windows needs one of the recorded options before it can ship: exclude
-  `lazy_extractors` (smallest change, eager fallback proven), amend ADR 0004
-  to drop the engine there, or move to a compiler/runner that handles the
-  module. The low-memory flag stays either way.
+- Windows needs a successful build with the exclusion in place (the smallest
+  of the recorded options, now shipped; the eager fallback is proven), or one
+  of the alternatives: amend ADR 0004 to drop the engine there, or move to a
+  compiler/runner that handles the module. The low-memory flag stays either
+  way.
 - Add a fast-domain test job for Windows (no QML/ffmpeg markers) to the manual
   workflow; it is the cheapest way to catch pure-Python platform breaks.
 - Either smoke-launch arm64 artifacts or state in the workflow why not, so
