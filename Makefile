@@ -19,13 +19,25 @@ WAVES_MACOS_MIN ?= 15.0
 # a time and cheaper options. The release build cache makes the slower first
 # pass a one-time cost; an empty value opts back into parallelism.
 #
+# yt-dlp's lazy extractor table is excluded on every host (issue #245). Its
+# generated C alone is 58.8 MiB, worth 2,040 s of clang on Apple silicon plus
+# 2,142 s of Python optimization -- 4,182 s of a 4,593 s cold build -- and the
+# warm rebuild pays it again. Waves never extracts a page URL (gamdl hands
+# yt-dlp only direct stream URLs, so only yt_dlp.downloader runs), and yt-dlp's
+# own import contract falls back to the real extractor modules when the table
+# is absent (`except ImportError` in extractor/extractors.py). Every real
+# extractor module stays in the artifact: a compiled probe with this flag
+# imports yt_dlp and lists all 1,751 classes in 0.13 s. With the exclusion the
+# cold build is ~6.5 minutes and waves.app is 236 MB (was ~77 minutes, 301 MB).
+#
 # On Apple silicon, Nuitka's auto-downloaded ccache is an x86-64 binary (its
 # cache holds one build per version), so Scons runs it under Rosetta and clang
 # then fails with "unable to load libxcrun ... need 'x86_64'" (issue #243).
 # Keep ccache out on Darwin/arm64 until an arm64 binary is provisioned; the
 # other hosts keep it.
 WAVES_HOST := $(shell uname -s 2>/dev/null)-$(shell uname -m 2>/dev/null)
-WAVES_NUITKA_FLAGS ?= $(if $(filter Windows_NT,$(OS)),--low-memory,$(if $(filter Darwin-arm64,$(WAVES_HOST)),--disable-ccache,))
+WAVES_NUITKA_FLAGS ?= $(if $(filter Windows_NT,$(OS)),--low-memory,$(if $(filter Darwin-arm64,$(WAVES_HOST)),--disable-ccache,)) \
+	--nofollow-import-to=yt_dlp.extractor.lazy_extractors
 
 .PHONY: install
 install: ## Install the poetry environment and install the pre-commit hooks
