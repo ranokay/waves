@@ -13,7 +13,7 @@ The audit's marker rules: a test that spawns an interpreter or constructs Qt
 itself is `qml` (Qt) or `integration` (non-Qt), never unmarked, and the
 unmarked Qt nodes route their skips through the require-qml-aware helper.
 This guard checks the marker half by parsing the test sources; the runtime
-half is `require_qml` in the shared helper plus conftest's session-end check,
+half is `require_qt()` in the shared helper plus conftest's session-end check,
 which fails a strict run when an UNMARKED test skipped for missing Qt. The
 two are the static and behavioural sides of one rule.
 """
@@ -116,16 +116,16 @@ def _reaches(
     return False
 
 
-def _module_pytestmark_has_qml(tree: ast.Module) -> bool:
-    """A module-level `pytestmark` that names the qml marker."""
+def _module_pytestmark_marks(tree: ast.Module) -> set[str]:
+    """The markers a module-level `pytestmark` names (qml, integration)."""
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         if not any(isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets):
             continue
-        if "qml" in ast.unparse(node.value):
-            return True
-    return False
+        text = ast.unparse(node.value)
+        return {marker for marker in ("qml", "integration") if marker in text}
+    return set()
 
 
 def _node_marks(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
@@ -138,21 +138,21 @@ def test_every_qt_or_process_test_declares_its_marker():
     for path in sorted(TESTS_ROOT.rglob("test_*.py")):
         src = path.read_text()
         tree = ast.parse(src)
-        module_marked = _module_pytestmark_has_qml(tree)
+        module_marks = _module_pytestmark_marks(tree)
         # Module-scope construction cannot be covered by a node decorator.
         module_constructs = any(
             _constructs_qt(stmt)
             for stmt in tree.body
             if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         )
-        if module_constructs and not module_marked:
+        if module_constructs and "qml" not in module_marks:
             offenders.append(f"{path.relative_to(TESTS_ROOT)} (module scope)")
             continue
         helpers = _module_helpers(tree)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("test_"):
                 continue
-            marks = _node_marks(node) if not module_marked else {"qml"}
+            marks = module_marks | _node_marks(node)
             drives_qt = _reaches(node, helpers, lambda current: _constructs_qt(current) or _boots_qml(current))
             if drives_qt:
                 if "qml" not in marks:
@@ -186,8 +186,8 @@ def test_an_unmarked_qt_skip_fails_the_strict_session(monkeypatch):
     assert conftest._UNMARKED_QT_SKIPS == ["tests/x/test_y.py::test_z"]
 
     session = SimpleNamespace(exitstatus=0)
-    returned = conftest.pytest_sessionfinish(session, 0)
-    assert returned != 0 and session.exitstatus != 0
+    conftest.pytest_sessionfinish(session, 0)
+    assert session.exitstatus != 0
 
     # A marked test's Qt skip is its own business (it converts it when
     # required); the net only catches the unmarked one.

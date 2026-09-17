@@ -119,8 +119,8 @@ within on this host.
 | Group                                                  | Command                                                                                                              |  Cases |                   Budget (measured) |
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | -----: | ----------------------------------: |
 | fast (no Qt, ffmpeg, slow, integration or account)     | `pytest --doctest-modules -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests` | ~4,194 |                      < 1 min (37 s) |
-| quick QML (the heaviest boots skipped)                 | `pytest --doctest-modules -rs -q -m "qml and not slow and not account" --require-qml tests`                          |    ~91 |                < 5 min (4 min 12 s) |
-| default (all but the live account tests; `make test`)  | `pytest --doctest-modules -rs -m "not account" tests`                                                                | ~4,354 |               < 10 min (6 min 48 s) |
+| quick QML (the heaviest boots skipped)                 | `pytest --doctest-modules -rs -q -m "qml and not slow and not integration and not account" --require-qml tests`      |    ~91 |                < 5 min (4 min 12 s) |
+| default (all but the live account tests)               | `pytest --doctest-modules -rs -m "not account" tests`                                                                | ~4,354 |               < 10 min (6 min 48 s) |
 | strict (the merge gate; default plus `--require-qml`)  | `pytest --doctest-modules -rs --require-qml -m "not account" tests`                                                  | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
 | ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips) | `pytest --doctest-modules -rs -q -m "ffmpeg and not account" tests`                                                  |    ~56 |                      < 1 min (11 s) |
 | live account (never in CI; needs credentials)          | `WAVES_ACCOUNT_TESTS=1 pytest -q -m account tests`                                                                   |      4 |                                 n/a |
@@ -130,8 +130,9 @@ the whole QML half. The `slow` marker names the heaviest QML boots (each case
 at least 8 s) and always sits beside `qml`, so `qml and not slow` covers the
 GUI surface without them. `integration` tests (nested runners, process
 boundaries) have no quick group of their own; run them through strict.
-`make test-fast`, `make test-qml`, `make test-strict` and `make test-ffmpeg`
-wrap the first four commands.
+`make test-fast`, `make test-qml`, `make test-default`, `make test-strict`
+and `make test-ffmpeg` wrap the first five groups; the live account group has
+no wrapper and never runs in CI.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
 `pip uninstall tidaler` in the old venv, then re-run `poetry install` (or

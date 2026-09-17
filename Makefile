@@ -56,7 +56,12 @@ test-fast: ## Run the fast group (no Qt, ffmpeg, slow, integration or account; <
 .PHONY: test-qml
 test-qml: ## Run the quick QML group (Qt required; < 5 min)
 	@echo "🚀 Testing code: quick QML group"
-	@poetry run pytest --doctest-modules -rs -q -m "qml and not slow and not account" --require-qml tests
+	@poetry run pytest --doctest-modules -rs -q -m "qml and not slow and not integration and not account" --require-qml tests
+
+.PHONY: test-default
+test-default: ## Run the default group (all but the live account tests; < 10 min)
+	@echo "🚀 Testing code: default group"
+	@poetry run pytest --doctest-modules -rs -m "not account" tests
 
 .PHONY: test-strict
 test-strict: ## Run the merge gate (everything but the live account tests; < 10 min)
