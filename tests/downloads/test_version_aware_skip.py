@@ -243,8 +243,10 @@ def test_the_engine_call_site_passes_the_jobs_pin(tmp_path, monkeypatch):
 
 
 def test_the_crossing_pin_reaches_the_engine_from_the_bridge():
-    """The bridge hands the engine the row's pin (that is what makes the
-    pre-stream gate Version-aware at all)."""
+    """The bridge hands the engine the row's Version and rung (the Version is
+    what makes the pre-stream gate Version-aware; the rung is the fetch's
+    request, carried through the seam)."""
+    from waves.constants import QualityTier
     from waves.waves_ui.backend import _TrackedDownload
 
     dl = _TrackedDownload(
@@ -254,9 +256,11 @@ def test_the_crossing_pin_reaches_the_engine_from_the_bridge():
         skip_existing=True,
         progress=MagicMock(),
         audio_type="atmos",
+        pinned_quality=QualityTier.HI_RES_LOSSLESS,
     )
     assert dl._pinned_audio_type == "atmos"
     assert dl._audio_type == "atmos"
+    assert dl._pinned_tier == QualityTier.HI_RES_LOSSLESS
     dl = _TrackedDownload(
         tidal_obj=MagicMock(),
         path_base="./tmp",
@@ -266,6 +270,7 @@ def test_the_crossing_pin_reaches_the_engine_from_the_bridge():
         audio_type="nonsense",
     )
     assert dl._pinned_audio_type is None and dl._audio_type is None
+    assert dl._pinned_tier is None
 
 
 def test_the_delivered_word_outranks_the_pin_after_the_stream():

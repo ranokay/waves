@@ -103,7 +103,7 @@ class _StubProvider:
         return self.facts
 
 
-def _make_download(provider, tmp_path=None) -> Download:
+def _make_download(provider, tmp_path=None, **kwargs) -> Download:
     dl = Download(
         tidal_obj=MagicMock(),
         skip_existing=False,
@@ -111,6 +111,7 @@ def _make_download(provider, tmp_path=None) -> Download:
         fn_logger=MagicMock(),
         progress=MagicMock(),
         provider=provider,
+        **kwargs,
     )
     dl.settings = MagicMock()
     dl.event_abort = threading.Event()
@@ -243,6 +244,19 @@ class TestEngineStreamRouting:
 
         assert provider.resolved and provider.resolved[0][0] is track
         assert info is not None and info.urls == ["https://seg/1"]
+
+    def test_the_jobs_request_crosses_the_seam(self, tmp_path):
+        # R-13: the job's pinned rung and Version are the resolve's arguments
+        # (one immutable ask), never state the provider has to guess. A legacy
+        # job that pinned neither keeps the None/None shape.
+        provider = _StubProvider(StreamInfo(urls=["https://seg/1"], file_extension=".flac", codecs="flac"))
+        pinned = _make_download(provider, tmp_path, pinned_tier=QualityTier.LOSSLESS, pinned_audio_type="atmos")
+        pinned._get_stream_info(_track("1"))
+        assert provider.resolved[0][1:] == (QualityTier.LOSSLESS, AudioType.ATMOS)
+
+        legacy = _make_download(provider, tmp_path)
+        legacy._get_stream_info(_track("2"))
+        assert provider.resolved[1][1:] == (None, None)
 
     def test_an_empty_stream_answer_is_a_failed_fetch(self, tmp_path):
         provider = _StubProvider(StreamInfo())

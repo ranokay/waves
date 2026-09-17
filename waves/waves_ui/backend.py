@@ -45,7 +45,7 @@ from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
 
 import waves.download as _waves_download
-from waves.config import Settings, Tidal, tidal_quality_for_tier
+from waves.config import Settings, Tidal
 from waves.constants import (
     CTX_APPLE,
     CTX_TIDAL,
@@ -103,7 +103,6 @@ from waves.model.cfg import (
 )
 from waves.model.cfg import Settings as CfgSettings
 from waves.model.cfg import Settings as ModelSettings
-from waves.model.downloader import TrackStreamInfo
 from waves.model.gui_data import ProgressBars
 from waves.ownership import (
     DEGRADED_RETRY_MAX as _DEGRADED_RETRY_MAX,
@@ -1493,11 +1492,12 @@ class _TrackedDownload(Download):
         # siblings; a thread-local carries that per-track decision safely.
         self._tls = local()
         self._skip_existing_base = False
-        # The job's pinned Version crosses to the engine BEFORE super(): the
-        # engine's pre-stream skip gate needs it, and it must be set before any
+        # The job's pinned Version and rung cross to the engine BEFORE super():
+        # the engine's pre-stream skip gate needs the Version, and the engine's
+        # fetch applies the rung per resolve, so both must be set before any
         # engine method can run. The shared normalizer is the one clamp.
         at = normalize_audio_type_tag(audio_type)
-        super().__init__(*args, pinned_audio_type=at, **kwargs)
+        super().__init__(*args, pinned_tier=pinned_quality, pinned_audio_type=at, **kwargs)
         self._track_signals = track_signals
         # Live "do I already have this" lookup (waves/ownership.py's
         # ownership_of, which re-checks the disk) plus the rank of the quality
@@ -1511,12 +1511,6 @@ class _TrackedDownload(Download):
         # of offering an upgrade the gate will skip (issue #40).
         self._ownership_stamp = ownership_stamp
         self._target_rank = int(target_rank)
-        # The Waves rung this job was queued at. A download asks the SHARED
-        # session for its stream, so without this a quality change in Settings
-        # would silently retarget work already queued or in flight; a job
-        # finishes at the quality the user started it with, and the new choice
-        # applies to what they queue next.
-        self._pinned_quality = pinned_quality
         # The library scan's bulk claim gate (library_bulk_skip): a callable
         # answering "does the user's library already claim this track?" from
         # the tag-matched presence index, or None when the gate is off or this
@@ -1702,78 +1696,16 @@ class _TrackedDownload(Download):
         what was requested. A private-method override, so it degrades to "no
         quality captured" (never a crash) if upstream ever renames it.
 
-        Also the seam where this job's pinned audio quality is applied. The
-        engine calls this holding tidal.stream_lock, which serialises every
-        stream fetch in the process, so writing the shared session's quality
-        here cannot cross another job's fetch.
-
-        An Atmos fetch is left ENTIRELY alone: nothing captured, nothing
-        written, nothing restored. It carries its own session and its own
-        request quality, and the switch that sets them runs inside the super()
-        call below, i.e. after this point. Capturing here and restoring in the
-        finally would therefore write the stereo tier back over that switch,
-        and switch_to_atmos_session only sets the Atmos quality when it has to
-        build the session, so every later Atmos track in the run would be
-        fetched at the stereo tier instead.
-
-        For a normal track the capture happens AFTER restore_normal_session,
-        which re-reads the setting when it rebuilds a normal session, so what
-        the finally puts back is that session's own quality rather than
-        whatever an earlier Atmos track left behind.
-
-        That restore is a re-authentication when the session is in Atmos mode,
-        and it can fail (a network flap). A failed restore leaves the session
-        marked Atmos, so the engine's OWN restore inside super() does not
-        early-return: it rewrites the session quality from the live setting,
-        over any pin written here, and if its re-login then succeeds the track
-        is fetched at today's setting instead of the job's. That is the exact
-        harm the pin exists to prevent, and it is silent (the ledger records
-        the real tier and agrees with itself). So a failed restore is not
-        pinned over: the item is answered the way the engine answers the same
-        failure, no stream, which item() counts as a failed track that a retry
-        picks up. One track retried beats one track written at the wrong
-        quality with nothing to say so."""
-        prev = None
-        pinned = getattr(self, "_pinned_quality", None)
-        # Dual-download stereo rows fetch stereo even though the default is
-        # both: the engine decides the session from the live setting, so hold
-        # it at stereo for this fetch (serialised by the stream lock, restored
-        # after). Atmos rows need no override: a "both" default already takes
-        # the Atmos session for dual-mode tracks, and Atmos-only tracks take
-        # it via the engine's own "nothing else to fetch" clause.
-        atmos_flag_held = False
-        prev_atmos_flag = None
-        if getattr(self, "_audio_type", None) == "stereo":
-            try:
-                prev_atmos_flag = str(getattr(self.settings.data, "default_audio_type", "stereo") or "stereo")
-                if default_audio_is_both(prev_atmos_flag):
-                    self.settings.data.default_audio_type = "stereo"
-                    atmos_flag_held = True
-            except Exception:
-                logger.debug("Could not hold the Atmos default off for a stereo fetch", exc_info=True)
-                atmos_flag_held = False
-        if pinned is not None:
-            try:
-                if not self._wants_atmos(media):
-                    if not self.tidal.restore_normal_session():  # no-op unless in an Atmos session
-                        logger.info("Could not leave the Atmos session; not fetching this track at an unpinned quality")
-                        return TrackStreamInfo(None, "", False, None)
-                    prev = self.session.audio_quality
-                    # The job pins a Waves rung; the engine maps the rung
-                    # onto the codec vocabulary its session asks at.
-                    self.session.audio_quality = tidal_quality_for_tier(pinned)
-            except Exception:
-                logger.debug("Could not pin this job's audio quality", exc_info=True)
-                prev = None
-        try:
-            info = super()._get_track_stream_info(media)
-        finally:
-            if prev is not None:
-                with contextlib.suppress(Exception):
-                    self.session.audio_quality = prev
-            if atmos_flag_held:
-                with contextlib.suppress(Exception):
-                    self.settings.data.default_audio_type = prev_atmos_flag
+        The job's request -- the Waves rung it was queued at and the Version it
+        pins -- arrives here as the resolver's own arguments and is forwarded
+        to the engine unchanged: the engine's fetch applies both (its
+        ``_get_track_stream_info``) inside the stream lock the caller already
+        holds. Nothing on this path writes shared session or Settings state, so
+        a per-click ask cannot leak into the saved defaults and a settings save
+        cannot persist a job's transient choice (R-13: the request crosses the
+        seam, the saved default stays the user's).
+        """
+        info = super()._get_track_stream_info(media, tier, audio_type)
         mid = getattr(media, "id", None)
         if mid is not None and getattr(info, "media_stream", None) is not None:
             quality = _stream_quality(info)
@@ -1781,7 +1713,7 @@ class _TrackedDownload(Download):
             # time ride along to the ownership record, so the gate can later tell
             # "a better master does not exist" (skip) from "we never tried at
             # this quality" (force). An Atmos fetch asks at its own fixed tier
-            # the pin does not govern, so it stamps no requested rank.
+            # the job's rung does not govern, so it stamps no requested rank.
             quality["requested_rank"] = -1 if self._wants_atmos(media) else self._target_rank
             ceiling = _advertised_ceiling(media)
             quality["ceiling_rank"] = -1 if ceiling is None else ceiling
@@ -1795,9 +1727,9 @@ class _TrackedDownload(Download):
         return (current_thread().ident or 0, str(getattr(media, "id", "") or ""))
 
     def _wants_atmos(self, media) -> bool:
-        """The engine's own Atmos condition, mirrored so the pin can leave an
-        Atmos fetch alone (it carries its own session and quality), and so the
-        ownership gate ranks a copy on the scale it was delivered on.
+        """The engine's own Atmos condition, mirrored so the ownership gate
+        ranks a copy on the scale it was delivered on, and so the delivered
+        snapshot leaves an Atmos fetch's rank unstated.
 
         Dual-download rows pin their Version: stereo rows never want Atmos
         (Atmos-only tracks skip instead, the Atmos row covers them); Atmos
