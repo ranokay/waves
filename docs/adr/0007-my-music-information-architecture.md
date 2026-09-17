@@ -1,7 +1,7 @@
 # 0007: My Music puts the Library first, then source-labelled saved shelves
 
 - Status: accepted
-- Decided: 2026-09-16 (issue #213, the onboarding spec; rename and labels in #221/#258, generic sections staged in #259)
+- Decided: 2026-09-16 (issue #213, the onboarding spec; rename and labels in #221/#258, generic sections in #259, the Library section in #222)
 - Scope: the information architecture of the My Music pane
 
 ## Decision
@@ -58,19 +58,22 @@ to move onto the rule is recorded under Consequences.
 
 ## Consequences
 
-- The Saved view needs the scan to expose each file's item id and
-  provenance; that track-row addition is the implementation dependency of
-  the Library section (staged after the rename and labels).
+- The Saved view reads the scan's per-file item id and exposes it on the
+  track row (#222): `waves/library_index.py` stores the value the download
+  gate wrote (generic tag first, the legacy TIDAL id as fallback), and the
+  provider badge is that id's namespace, so the ownership store keeps its
+  existing role.
 - The pane's first provider-shaped views are the starting point, and the
-  staged work is now partly done: the **saved shelves are per source**
+  staged work is now done: the **saved shelves are per source**
   (#259). The bridge answers a list of source groups (descriptor + the
   categories its capabilities can fill), each source renders its own label,
   strip and keep-alive panes, and every page loads through that source's
   provider, so a second FAVORITES provider appears with no QML edit. The
-  pane's **Library section** (Saved and All files) is the remaining stage
-  (#222); until it lands the pane opens on each source's Home landing, as it
-  did before. A source's group is what a second provider fills; the Library
-  section is provider-independent and sits above them.
+  pane's **Library section** (Saved and All files) landed in #222: it sits
+  above the source groups, pages the scan's own file rows
+  (`myMusicLibrary()` / `loadLibraryFiles(view)`) and is
+  provider-independent by construction — no row comes from a provider
+  fetch.
 - A hand-edited provenance tag can misreport a file's source; the All-files
   view remains the honest fallback, and the limitation is documented.
 - Tab, expanded-section and scroll positions survive the rename, so the

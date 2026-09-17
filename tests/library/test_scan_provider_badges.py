@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 
+import pytest
 from support.library_fakes import make_album_dir as _mk
 
 from waves import matching
@@ -29,6 +30,19 @@ def _tags(**over):
     base = {"album": "Album", "artist": "Artist", "date": "2024", "length": 200}
     base.update(over)
     return base
+
+
+@pytest.fixture(autouse=True)
+def _unreadable_fixture_files_have_no_ids(monkeypatch):
+    """Empty fixture files answer "" to the item-id probe.
+
+    The files in this module are empty and their tags are fiction, so their
+    ids are fiction too: the REAL probe would call every one of them
+    unreadable (an empty container has no header to parse) and every folder
+    would retry forever. The real reader's own rules live in
+    tests/library/test_library_item_id_scan.py and tests/metadata.
+    """
+    monkeypatch.setattr("waves.library_index._default_item_id", lambda path: "")
 
 
 def _index(tmp_path, tagmap, audiomap=None):
