@@ -534,3 +534,14 @@ def test_download_artist_refuses_a_partial_scan():
     assert stub.downloadState.emits == [("art1", "running"), ("art1", "")]
     assert stub._artist_groups == {}
     assert "Could not load the full discography, try again" in stub.statuses
+
+
+def test_download_artist_refuses_an_apple_artist():
+    """R-28 / UI-03: the Apple discography sweep is the one verb the Apple
+    catalog does not answer, and its refusal says so today -- no future-tense
+    "rollout" promised -- while the click queues nothing at all."""
+    stub = _DownloadArtistStub()
+    stub.downloadArtist("apple:artist-123")
+    assert stub.statuses == ["Not available for Apple Music yet"]
+    assert stub.downloadState.emits == []
+    assert stub._pending_downloads == []

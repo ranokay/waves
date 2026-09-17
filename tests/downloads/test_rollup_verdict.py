@@ -1,6 +1,6 @@
 """The one verdict behind the DOWNLOADED / IN LIBRARY state on every album,
 playlist and mix card: ``WavesBridge._rollup_verdict`` (backend.py), reached
-through ``collectionOwnership`` and ``collectionOwnershipFor``.
+through ``collectionOwnership`` and ``collectionOwnershipDetail``.
 
 The stake is the quality conjunct. A member is only counted as "owned" for the
 roll-up when its copy is ALSO up_to_date against the current audio quality
@@ -103,17 +103,19 @@ def test_no_members_reads_no():
     assert _verdict({}, ids=None) == "no"
 
 
-def test_collection_ownership_for_stringifies_ids_and_rolls_up():
+def test_collection_ownership_detail_stringifies_ids_and_rolls_up():
     """QML hands the member list over as a QVariantList that may carry ints;
     the store keys ids as strings, so the slot must stringify before asking."""
     stub = _LookupStub({"10": OWNED_CURRENT, "20": OWNED_CURRENT})
     stub._rollup_verdict = WavesBridge._rollup_verdict.__get__(stub, _LookupStub)
-    assert WavesBridge.collectionOwnershipFor(stub, [10, 20]) == "owned"
-    assert stub.asked == ["10", "20"], "ids must reach ownershipOf as strings"
+    stub._rollup_detail = WavesBridge._rollup_detail.__get__(stub, _LookupStub)
+    assert WavesBridge.collectionOwnershipDetail(stub, [10, 20])["verdict"] == "owned"
+    assert stub.asked[:2] == ["10", "20"], "ids must reach ownershipOf as strings"
     stub = _LookupStub({"10": OWNED_CURRENT, "20": OWNED_STALE})
     stub._rollup_verdict = WavesBridge._rollup_verdict.__get__(stub, _LookupStub)
-    assert WavesBridge.collectionOwnershipFor(stub, [10, 20]) == "no"
-    assert WavesBridge.collectionOwnershipFor(stub, []) == "no"
+    stub._rollup_detail = WavesBridge._rollup_detail.__get__(stub, _LookupStub)
+    assert WavesBridge.collectionOwnershipDetail(stub, [10, 20])["verdict"] == "no"
+    assert WavesBridge.collectionOwnershipDetail(stub, [])["verdict"] == "no"
 
 
 # --------------------------------------------------------------------------- #
@@ -146,7 +148,8 @@ def _bridge(store, *, quality):
         "_own_refresh",
         "_evict_own_cache_locked",
         "_rollup_verdict",
-        "collectionOwnershipFor",
+        "_rollup_detail",
+        "collectionOwnershipDetail",
     ):
         setattr(b, name, getattr(WavesBridge, name).__get__(b, WavesBridge))
     return b
@@ -185,7 +188,7 @@ def test_a_member_stored_below_the_target_rank_un_says_the_album(tmp_path):
     assert b.ownershipOf("103")["owned"] is True, "the HIGH copy IS owned; only its quality is behind"
     assert b.ownershipOf("103")["up_to_date"] is False
     assert b._rollup_verdict(ids) == "no"
-    assert b.collectionOwnershipFor([101, 102, 103]) == "no"
+    assert b.collectionOwnershipDetail([101, 102, 103])["verdict"] == "no"
 
     # The upgrade lands: a rank-3 copy of the third track is recorded, and the
     # cache entries are aged out so the next query re-reads the store.
@@ -194,7 +197,7 @@ def test_a_member_stored_below_the_target_rank_un_says_the_album(tmp_path):
         b._own_cache[tid] = (-1e9, b._own_cache[tid][1])
     _warm(b, ids)
     assert b._rollup_verdict(ids) == "owned"
-    assert b.collectionOwnershipFor([101, 102, 103]) == "owned"
+    assert b.collectionOwnershipDetail([101, 102, 103])["verdict"] == "owned"
 
 
 # --------------------------------------------------------------------------- #

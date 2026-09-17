@@ -16,7 +16,6 @@ __pycache__/
 build/
 develop-eggs/
 dist/
-downloads/
 eggs/
 .eggs/
 lib/
@@ -169,7 +168,11 @@ cython_debug/
 
 # Custom
 
-download/
+# Local media output and scratch download folders. Anchored to the repo root on
+# purpose: an unanchored `downloads/` also matches `tests/downloads/`, hiding
+# its tracked test modules from rg, editors and review tooling (TT-04).
+/download/
+/downloads/
 
 # Local design mockups (not part of the shipped app)
 mockups/

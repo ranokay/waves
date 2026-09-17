@@ -381,6 +381,20 @@ def test_download_with_chooser_apple_parks_pins_across_a_refetch():
     assert b._chooser_refetch_pins[("track", "apple:456")] == ("track", "HI-RES", "both", {"lyrics_embed": True})
 
 
+def test_download_with_chooser_refuses_an_apple_mix():
+    """R-28 / UI-03: the Apple mix/video branches answer with the same neutral
+    refusal as the artist sweep -- the click queues nothing and promises
+    nothing. (Apple search carries no mix or video rows today, so the branch
+    is a guard, not a route.)"""
+    b = _bridge(apple_enabled=True)
+    provider = _metadata(AppleProvider, cached=lambda kind, mid: None)
+    b.providers[CTX_APPLE] = provider
+    _bind(b, "_download_apple_with_chooser")
+    b._download_apple_with_chooser("apple:mix-1", "mix", None, "stereo", None)
+    assert b._last_status == "Not available for Apple Music yet"
+    assert b._queue == []
+
+
 def test_download_with_chooser_keeps_the_gate_message_when_nothing_queued(monkeypatch):
     """A held or blocked click keeps the gate's own status, never Queued."""
     monkeypatch.setattr(backend, "_image", lambda obj, size: "")
