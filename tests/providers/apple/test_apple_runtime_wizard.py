@@ -903,6 +903,27 @@ def test_install_rejects_checksum_mismatch(tmp_path):
     assert not mgr.is_installed()
 
 
+def test_install_honours_a_preset_abort(tmp_path):
+    """The installer's abort contract: a caller that already set the Event (the
+    app quitting, or a cancel affordance) stops the install before the download
+    starts -- no request is made and nothing is staged. The bridge does not pass
+    an Event today; this is the manager-level contract it would ride on."""
+    from threading import Event
+
+    from waves.providers.apple.runtime import AppleRuntimeCancelled, Nm3u8dlreRelease
+
+    mgr = AppleRuntimeManager(tmp_path)
+    abort = Event()
+    abort.set()
+    with pytest.raises(AppleRuntimeCancelled):
+        mgr.install(
+            release=Nm3u8dlreRelease(version="v0", url="https://example.invalid/N.tar.gz"),
+            abort=abort,
+            session=object(),
+        )
+    assert not mgr.binary_path.exists(), "an aborted install stages nothing"
+
+
 def test_a_stale_managed_binary_reports_runtime_stale(tmp_path, monkeypatch):
     """AP-06: an installed copy whose recorded provenance predates the shipped
     pin must not read as current forever, and installing the new pin is the

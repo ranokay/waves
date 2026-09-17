@@ -4252,11 +4252,11 @@ def _browse_nav(bridge) -> dict:
     }
 
 
-# The words an Apple verb with no implementation yet answers with. Present
-# tense on purpose: a future-tense promise would claim a ship date the build
-# cannot back, and one constant keeps the artist, mix and video refusals from
-# drifting apart (R-28 / UI-03).
-_APPLE_VERB_UNAVAILABLE = "Not available for Apple Music yet"
+# The status line for an Apple verb with no implementation yet. Present tense on
+# purpose: a future-tense promise would claim a ship date the build cannot back,
+# and one constant keeps the artist, mix and video refusals from drifting apart
+# (R-28 / UI-03).
+_APPLE_UNAVAILABLE_STATUS = "Not available for Apple Music yet"
 
 
 class WavesBridge(LibraryMixin, QObject):
@@ -11351,9 +11351,10 @@ class WavesBridge(LibraryMixin, QObject):
         OwnershipStore.members_of), safe to call directly from the GUI thread:
         unlike ownershipOf it never stats the user's music folder.
 
-        A test seam, not a UI call: the cards never read the member list per
-        id (that was ~15 slot crossings per card); they re-ask the rollup in
-        place (refreshOwned -> collectionOwnership/collectionOwnershipDetail).
+        A test seam, not a UI call: a card never reads the member list (one
+        crossing per member, each taking the GIL on the GUI thread as the
+        landing builds); it re-asks the rollup in place (refreshOwned ->
+        collectionOwnership/collectionOwnershipDetail).
         tests/library/test_ownership_bridge.py pins the learning path here."""
         return self._ownership.members_of(str(collection_id))
 
@@ -14342,7 +14343,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self._chooser_confirm_status(CTX_APPLE, ask, audio, files)
             return
         elif raw_kind in ("mix", "video"):
-            self._set_status(_APPLE_VERB_UNAVAILABLE)
+            self._set_status(_APPLE_UNAVAILABLE_STATUS)
             return
         else:
             return
@@ -17197,7 +17198,7 @@ class WavesBridge(LibraryMixin, QObject):
     def downloadArtist(self, artist_id: str) -> None:
         """Queue every album of an artist for download."""
         if str(artist_id).startswith(f"{CTX_APPLE}:"):
-            self._set_status(_APPLE_VERB_UNAVAILABLE)
+            self._set_status(_APPLE_UNAVAILABLE_STATUS)
             return
         if self._dl is None:
             return

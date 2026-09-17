@@ -6641,8 +6641,8 @@ ApplicationWindow {
         // a fetch itself.
         property var collectionIds: null
         // Collection rollup, discovered locally: mediaId is a collection id
-        // (album/playlist/mix) and its member ids are looked up from what
-        // Waves has already LEARNED locally (see collectionMemberIds): no
+        // (album/playlist/mix) and its rollup is read from what Waves has
+        // already LEARNED locally (see collectionOwnership): no
         // caller-supplied list needed, so this also covers collapsed rows and
         // shelf cards that have never had their track list fetched. A
         // collection Waves has genuinely never opened or downloaded reads as

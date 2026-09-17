@@ -168,10 +168,9 @@ cython_debug/
 
 # Custom
 
-# Local media output and scratch download folders. Anchored on purpose: the
-# unanchored template rule `downloads/` also matched `tests/downloads/` and hid
-# its tracked test modules from rg, editors and review tooling (TT-04), and a
-# new test file written there was silently ignored.
+# Local media output and scratch download folders. Anchored to the repo root on
+# purpose: an unanchored `downloads/` also matches `tests/downloads/`, hiding
+# its tracked test modules from rg, editors and review tooling (TT-04).
 /download/
 /downloads/
 

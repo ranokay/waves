@@ -536,7 +536,7 @@ def test_download_artist_refuses_a_partial_scan():
     assert "Could not load the full discography, try again" in stub.statuses
 
 
-def test_download_artist_refuses_an_apple_artist_with_present_tense_words():
+def test_download_artist_refuses_an_apple_artist():
     """R-28 / UI-03: the Apple discography sweep is the one verb the Apple
     catalog does not answer, and its refusal says so today -- no future-tense
     "rollout" promised -- while the click queues nothing at all."""
