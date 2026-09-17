@@ -49,24 +49,24 @@ test: ## Test the code with pytest
 	@poetry run pytest --doctest-modules
 
 .PHONY: test-fast
-test-fast: ## Run the fast group (no Qt, no ffmpeg; ~37 s)
+test-fast: ## Run the fast group (no Qt, ffmpeg, slow, integration or account; < 1 min)
 	@echo "🚀 Testing code: fast group"
-	@poetry run pytest -q -m "not qml and not ffmpeg and not slow and not account and not integration"
+	@poetry run pytest --doctest-modules -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests
 
 .PHONY: test-qml
-test-qml: ## Run the quick QML group (Qt required; ~4 min)
+test-qml: ## Run the quick QML group (Qt required; < 5 min)
 	@echo "🚀 Testing code: quick QML group"
-	@poetry run pytest -q -m "qml and not slow and not account" --require-qml
+	@poetry run pytest --doctest-modules -rs -q -m "qml and not slow and not account" --require-qml tests
 
 .PHONY: test-strict
-test-strict: ## Run the merge gate (everything but the live account tests; ~7-10 min)
+test-strict: ## Run the merge gate (everything but the live account tests; < 10 min)
 	@echo "🚀 Testing code: strict group"
 	@poetry run pytest --doctest-modules -rs --require-qml -m "not account" tests
 
 .PHONY: test-ffmpeg
-test-ffmpeg: ## Run the ffmpeg group (~11 s)
+test-ffmpeg: ## Run the ffmpeg group (assumes ffmpeg on PATH; < 1 min)
 	@echo "🚀 Testing code: ffmpeg group"
-	@poetry run pytest -q -m "ffmpeg and not account"
+	@poetry run pytest --doctest-modules -rs -q -m "ffmpeg and not account" tests
 
 .PHONY: star-history
 star-history: ## Copy the star-history chart from the public repo into this tree
