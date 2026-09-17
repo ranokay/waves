@@ -92,5 +92,17 @@ def test_fields_with_no_useful_default_do_not_offer_one():
         assert _shipped_default(key) is None
 
 
+def test_help_entries_name_a_settings_field():
+    """No dead help strings (issue #236 / audit LM-08): every HelpSettings
+    entry names a field the schema actually carries, so the page can never
+    offer help for a key no setting can ask about."""
+    from dataclasses import fields
+
+    settings_names = {f.name for f in fields(CfgSettings)}
+    help_names = {f.name for f in fields(HelpSettings)}
+    missing = sorted(help_names - settings_names)
+    assert not missing, f"help entries for keys no Settings field carries: {missing}"
+
+
 def test_unknown_key_has_no_default():
     assert _shipped_default("not_a_setting") is None

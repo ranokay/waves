@@ -355,7 +355,8 @@ _FLAG_FIELDS = [
     "lyrics_file_synced_only",
     "lyrics_prefer_lrclib",
     # Lyrics & art matrix (spec section 9.1): word-timed source
-    # toggle (default on) and the verbatim Apple TTML sidecar (default off).
+    # toggle (default on) and the verbatim Apple TTML sidecar (default on,
+    # the ratified best-quality fresh-install set).
     "lyrics_word_timed",
     "lyrics_ttml_file",
     # Per-provider mirrors: each provider's own lyrics/artwork
@@ -401,12 +402,6 @@ _FLAG_FIELDS = [
     "metadata_tag_bpm",
     "metadata_tag_initial_key",
     "metadata_tag_upc",
-    "skip_existing",
-    "confirm_category_download",
-    "symlink_to_track",
-    "playlist_create",
-    "mark_explicit",
-    "use_primary_album_artist",
     # Providers area: the Apple component's enable switch. It is
     # never rendered as a flag tile: the Apple status row carries it as the
     # section's master switch, so it only needs the persistence coercion.
@@ -14942,9 +14937,13 @@ class WavesBridge(LibraryMixin, QObject):
         """Whether this job fetches cover art at all (runner policy)."""
         return runner.wants_cover(self._apple_job_hooks(), collection, options=options)
 
-    def _apple_cover_bytes(self, provider, raw: dict) -> bytes | None:
-        """The collection cover at the embedded size, or None."""
-        return runner.cover_bytes(self._apple_job_hooks(), provider, raw)
+    def _apple_cover_bytes(self, provider, raw: dict) -> tuple[bytes | None, bytes | None]:
+        """(embedded, separate-file) cover bytes for one standalone action.
+
+        The pair comes from the runner's one size rule, so the COVER action
+        writes the sidecar at the chosen size and embeds the embedded one
+        (issue #236)."""
+        return runner.cover_bytes_pair(self._apple_job_hooks(), provider, raw, want_file=True)
 
     def _apple_write_sidecars(
         self,
@@ -17722,13 +17721,20 @@ class WavesBridge(LibraryMixin, QObject):
                 if not want and not bool(self._psetting(CTX_APPLE, "cover_album_file", True)):
                     continue
                 cover = None
+                embed_cover = None
                 try:
-                    cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row)
+                    # One pair from the runner's size rule (issue #236): the
+                    # sidecar bytes at the separate file's size, the embedded
+                    # bytes at the embedded size. The two fail independently,
+                    # so neither one's absence discards the other.
+                    embed_cover, cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row)
                 except Exception:
                     cover = None
-                if not cover:
+                    embed_cover = None
+                if not cover and not embed_cover:
                     continue
-                if (
+                served_here = False
+                if cover is not None and (
                     write_cover_sidecar(
                         folder,
                         cover,
@@ -17737,9 +17743,13 @@ class WavesBridge(LibraryMixin, QObject):
                     )
                     is not None
                 ):
+                    served_here = True
+                if bool(self._psetting(CTX_APPLE, "metadata_cover_embed", True)) and embed_cover is not None:
+                    served_here = (
+                        self._apple_standalone_embed_cover(folder, stem, embed_cover, track_row, facts) or served_here
+                    )
+                if served_here:
                     served += 1
-                if bool(self._psetting(CTX_APPLE, "metadata_cover_embed", True)):
-                    self._apple_standalone_embed_cover(folder, stem, cover, track_row, facts)
         return served
 
     def _apple_standalone_embed(

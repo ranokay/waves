@@ -256,6 +256,22 @@ class CoverDimensions(StrEnum):
     PxORIGIN = "origin"
 
 
+def cover_file_dimension(embedded: CoverDimensions, pref: str) -> CoverDimensions:
+    """Resolve the SEPARATE cover file's size from its preference.
+
+    "follow" (or any unknown word) uses the embedded size; otherwise a
+    ``CoverDimensions`` member name. One rule for every provider: TIDAL's
+    engine and the Apple runner both ask here, so a saved cover size cannot
+    apply to one provider's card and be ignored by the other (issue #236).
+    """
+    if pref == "follow":
+        return embedded
+    try:
+        return CoverDimensions[pref]
+    except KeyError:
+        return embedded
+
+
 class TidalLists(StrEnum):
     Playlists = "Playlists"
     Favorites = "Favorites"

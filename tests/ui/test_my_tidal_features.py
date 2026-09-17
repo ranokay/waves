@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from waves.constants import CoverDimensions
+from waves.constants import CoverDimensions, cover_file_dimension
 from waves.download import Download
 from waves.waves_ui import backend
 from waves.waves_ui.backend import WavesBridge
@@ -193,13 +193,13 @@ def test_want_cover_file_scope_matrix():
 
 
 def test_cover_file_dimension_follow_matches_embedded():
-    assert Download._cover_file_dimension(CoverDimensions.Px320, "follow") is CoverDimensions.Px320
+    assert cover_file_dimension(CoverDimensions.Px320, "follow") is CoverDimensions.Px320
 
 
 def test_cover_file_dimension_explicit_and_invalid():
-    assert Download._cover_file_dimension(CoverDimensions.Px320, "Px640") is CoverDimensions.Px640
+    assert cover_file_dimension(CoverDimensions.Px320, "Px640") is CoverDimensions.Px640
     # An unknown value never crashes; it falls back to the embedded size.
-    assert Download._cover_file_dimension(CoverDimensions.Px320, "not-a-size") is CoverDimensions.Px320
+    assert cover_file_dimension(CoverDimensions.Px320, "not-a-size") is CoverDimensions.Px320
 
 
 def _cover_fixture():

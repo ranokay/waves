@@ -256,3 +256,20 @@ def test_chooser_defaults_read_the_row_provider_mirrors():
     apple = stub.chooserDefaults("apple:1", "track")
     assert apple["lyricsEmbed"] is False and apple["coverFile"] is True
     assert backend is not None
+
+
+def test_the_shared_lyrics_art_keys_are_migration_carriers_only():
+    """A hand edit at a shared key must not reach a real install (issue #236 /
+    audit LM-04): every provider reads its own mirror, and the shared key only
+    answers a stub/legacy shape that has no mirror attribute."""
+    data = Settings()
+    data.lyrics_embed = True  # the pre-split spelling
+    data.tidal_lyrics_embed = False
+    data.apple_lyrics_embed = False
+    assert provider_setting(data, "tidal", "lyrics_embed", False) is False
+    assert provider_setting(data, "apple", "lyrics_embed", False) is False, "the shared key must not leak into a mirror"
+
+    # A legacy carrier (a stub without the mirror attribute) still answers.
+    legacy = SimpleNamespace(lyrics_embed=True)
+    assert provider_setting(legacy, "tidal", "lyrics_embed", False) is True
+    assert provider_setting(legacy, "apple", "lyrics_embed", False) is True

@@ -120,6 +120,73 @@ def test_apple_cover_url_clamps_to_5000():
     assert "5000x5000" in url
 
 
+def test_apple_cover_file_size_is_read(monkeypatch):
+    """The Apple card's 'Separate cover file size' governs the sidecar fetch
+    (issue #236 / audit LM-01): the pair carries the embedded bytes for the
+    embed and, for the sidecar, the same bytes on 'follow' (no second
+    request) or a fetch at the chosen size, and a sidecar the toggles do not
+    want never pays for one."""
+    from waves.constants import CoverDimensions
+    from waves.providers.apple import runner
+
+    asked: list = []
+    fetched: list = []
+
+    class _Provider:
+        @staticmethod
+        def cover_url(obj, dimension):
+            asked.append(dimension)
+            return f"https://cover/{dimension}.jpg"
+
+    class _Response:
+        def __init__(self, url):
+            self.content = f"bytes:{url}".encode()
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    class _Session:
+        @staticmethod
+        def get(url, timeout=30):
+            fetched.append(url)
+            return _Response(url)
+
+    monkeypatch.setattr(runner, "_pooled_session", lambda: _Session())
+
+    def _hooks(embedded, pref):
+        return runner.AppleJobHooks(
+            psetting=lambda provider_id, key, default=None: {
+                "metadata_cover_dimension": embedded,
+                "metadata_cover_file_dimension": pref,
+            }.get(key, default)
+        )
+
+    # Follow: both slots answer the one embedded fetch.
+    hooks = _hooks(CoverDimensions.Px640, "follow")
+    embedded, sidecar = runner.cover_bytes_pair(hooks, _Provider(), {"id": "album-1"}, want_file=True)
+    assert asked == [640] and fetched == ["https://cover/640.jpg"]
+    assert sidecar is embedded, "follow must not fetch again"
+
+    # An explicit choice is a fetch of its own at that size; the embed keeps
+    # the embedded-size bytes.
+    asked.clear()
+    fetched.clear()
+    hooks = _hooks(CoverDimensions.Px640, "Px1280")
+    embedded, sidecar = runner.cover_bytes_pair(hooks, _Provider(), {"id": "album-1"}, want_file=True)
+    assert asked == [640, 1280], "the sidecar fetch must use the chosen size"
+    assert sidecar == b"bytes:https://cover/1280.jpg"
+    assert embedded == b"bytes:https://cover/640.jpg"
+
+    # A sidecar the toggles do not want is never fetched.
+    asked.clear()
+    fetched.clear()
+    hooks = _hooks(CoverDimensions.Px640, "Px1280")
+    embedded, sidecar = runner.cover_bytes_pair(hooks, _Provider(), {"id": "album-1"}, want_file=False)
+    assert asked == [640]
+    assert sidecar is embedded
+
+
 @pytest.mark.ffmpeg
 def test_tidal_standalone_art_converts_to_the_selected_format(tmp_path):
     """The standalone action never writes JPEG bytes into a .png (S08)."""
