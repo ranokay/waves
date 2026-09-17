@@ -57,6 +57,12 @@ tab), and `signed_in` is the live session of the browse-capable provider
 whose pages fill the pane (the first in registry order), which the landing
 pane offers its sign-in call to action for.
 
+A provider's sign-in steps component (TIDAL's browser/paste pair) is a QML
+component, so `providerSignInSteps()` answers the ids this build ships steps
+for, registered where the providers are wired. The surface opens a
+provider's steps when it has them and its cards otherwise; `signInRequested`
+carries the provider whose sign-in the surface is showing.
+
 The welcome surface's cards come from `providerCards()`: one entry per
 registered provider with its descriptor identity (id/name/logo), its
 `summary` (the one-line capability truth) and `action` (the provider's own
@@ -302,7 +308,16 @@ thread: `_albumsQueued` (batch-enqueue a resolved discography),
 `_tracksQueued` (same batch marshalling for individual tracks),
 `_mediaRefetched` (re-dispatch a download whose object was evicted from the
 cache), `_queueTracksFetched` (merge a track snapshot without racing live
-events).
+events), `_folderTreeWarmed(source)` (one source's folder sweep finished;
+the parked drill-ins for that source replay).
+
+The My Music slots name their source, so the doc's payload rule applies to
+them too: `loadLibrary(source, category[, quiet])`,
+`loadMoreLibrary(source, category)`, `setLibrarySort(source, category, order,
+direction)`, `loadHome(source[, haveCached])` and
+`openPlaylistFolder(source, folderId)`; `myMusicSources()` /
+`myMusicEmpty()` are the pane's answer-only data (see Search, artist pages,
+library above).
 
 ## Adding a new signal
 

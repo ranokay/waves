@@ -180,8 +180,8 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     # the seven shelves, and its panes hold no fake rows.
     if q(tidal + ".categories.length") != 7:
         failures.append("the TIDAL group lost its category strip")
-    if q(fake + '.modelFor("albums").count') != 2 and q(tidal + '.modelFor("albums").count') > 0:
-        failures.append("rows landed in the wrong source's pane")
+    if q(tidal + '.modelFor("albums").count') != 0:
+        failures.append("the fake source's rows landed in TIDAL's pane")
 
     # One vocabulary per source: TIDAL's pane rows ARE the bridge's own row
     # dicts (the same keys search, Browse and the artist pages carry, so the

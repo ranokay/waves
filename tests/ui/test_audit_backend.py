@@ -41,6 +41,9 @@ class _Stub:
     """Bare stand-in for a WavesBridge, with the attributes the bound methods
     read/write. Real behaviour comes from binding WavesBridge methods below."""
 
+    _lib_generation = WavesBridge._lib_generation
+    _lib_start = WavesBridge._lib_start
+
     def __init__(self):
         self._queue: list[dict] = []
         self._queue_index: dict[int, dict] = {}
@@ -59,7 +62,8 @@ class _Stub:
         self._event_run.set()
         self._lib_cache: dict = {}
         self._lib_loading: set = set()
-        self._lib_gen = 0
+        self._lib_epoch = 0
+        self._lib_gen: dict = {}
         self._lib_sort: dict = {}
         self._fav_ids: dict = {}
         self._album_tracks_cache: dict = {}
@@ -210,7 +214,8 @@ def test_logout_bumps_lib_gen_and_clears_cache():
     stub = _Stub()
     stub._lib_cache = {("tidal", "albums"): {"items": [1, 2], "offset": 100, "more": True}}
     stub._lib_loading = {("tidal", "albums")}
-    stub._lib_gen = 5
+    stub._lib_gen = {("tidal", "albums"): 5}
+    captured = (stub._lib_epoch, stub._lib_gen[("tidal", "albums")])
     # logout() also resets the browse caches on the current build; provide them
     # so the SUT (the _lib_gen bump) runs regardless of that co-located cleanup.
     stub._browse_root_cache = object()
@@ -248,7 +253,8 @@ def test_logout_bumps_lib_gen_and_clears_cache():
 
     assert stub._lib_cache == {}, "cache cleared on logout"
     assert stub._lib_loading == set()
-    assert stub._lib_gen == 6, "generation bumped so a stale in-flight load is dropped"
+    assert stub._lib_gen == {}, "per-page counters dropped with the account"
+    assert (stub._lib_epoch, 0) != captured, "the epoch moved, so a stale in-flight load is dropped"
     assert stub._prefetch_key is None and stub._prefetch_claimed is False, "no prefetch survives the account"
     assert stub._prefetch_unrecorded == set(), "a hover-built page of the old account is never recorded for the new one"
     assert (
@@ -258,14 +264,30 @@ def test_logout_bumps_lib_gen_and_clears_cache():
 
 
 def test_stale_lib_gen_guards_cache_write_semantics():
-    # Mirrors the loadLibrary worker's guard: a page whose captured gen no longer
-    # matches must NOT write the cache. We assert the predicate the fix relies on.
+    # Mirrors the loadLibrary worker's guard: a page whose captured generation
+    # no longer matches must NOT write the cache. The generation has two halves
+    # and either moving under a worker drops its answer.
     stub = _Stub()
-    stub._lib_gen = 4
-    captured_gen = 4
-    # Simulate a logout bumping the generation mid-flight.
-    stub._lib_gen = 5
-    assert captured_gen != stub._lib_gen  # -> worker skips the cache write
+    key = ("tidal", "albums")
+    other_key = ("fake", "albums")
+
+    same = stub._lib_start(key)
+    assert same == stub._lib_generation(key), "a fresh load matches its own generation"
+
+    # 1. Another page's load leaves it alone: two sources loading their shelves
+    # in one turn must not cancel each other (issue #259).
+    other = stub._lib_start(other_key)
+    assert same == stub._lib_generation(key)
+    assert other == stub._lib_generation(other_key)
+
+    # 2. A reload or re-sort of the SAME page bumps its counter, dropping the
+    # older worker's answer.
+    stub._lib_start(key)
+    assert same != stub._lib_generation(key)
+
+    # 3. An account flip moves the epoch, so every in-flight page is dropped.
+    stub._lib_epoch += 1
+    assert other != stub._lib_generation(other_key), "the epoch drops every page, not just one"
 
 
 # --------------------------------------------------------------------------- #

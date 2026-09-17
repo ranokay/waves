@@ -4016,15 +4016,11 @@ def _my_music_empty(bridge) -> dict:
             continue
         descriptor = provider.descriptor()
         if descriptor.status_kind != StatusKind.SESSION:
-            # Nothing here signs in (Apple's path is its setup wizard): the
-            # provider's own card action is the honest click to offer.
-            return {
-                "provider": descriptor.id,
-                "action": "setup",
-                "message": f"My Music is your {descriptor.name} library",
-                "detail": f"Set up {descriptor.name} to see what Waves can fetch from it.",
-                "action_label": descriptor.welcome_action or f"Set up {descriptor.name}",
-            }
+            # A provider that never holds a session can never fill a shelf
+            # (see _provider_can_fill_shelves), so nothing here is missing its
+            # action: the pane stays quiet rather than offering a setup that
+            # would not produce shelves.
+            continue
         shelves = [c["label"].lower() for c in _source_categories(provider) if c["id"] != "home"]
         return {
             "provider": descriptor.id,
@@ -4495,6 +4491,13 @@ class WavesBridge(LibraryMixin, QObject):
         self._provider_status_probes = {
             CTX_APPLE: self._apple_live_flags,
         }
+        # The providers whose sign-in the welcome surface completes on its
+        # inline steps. Those steps are UI components this build ships per
+        # provider (a field, a button, a paste box), so the ids live here with
+        # the wiring rather than as a QML branch: the surface routes a
+        # provider's sign-in to its component when it has one, and to the
+        # provider cards otherwise -- never a blank page.
+        self._sign_in_step_providers = (CTX_TIDAL,)
         # TIDAL's row vocabulary: the app's row dicts for TIDAL objects are
         # built by this bridge's own ``_*_dict`` bodies (search, Browse, the
         # artist pages and the download slots have always read them there).
@@ -4735,7 +4738,15 @@ class WavesBridge(LibraryMixin, QObject):
         # one (source, category) while one is already in flight.
         self._lib_cache: dict[tuple[str, str], dict] = {}
         self._lib_loading: set[tuple[str, str]] = set()
-        self._lib_gen = 0  # bumped per first-page load to drop stale shelf loads
+        # Load generations, in two halves: ``_lib_epoch`` is bumped by a logout
+        # (which drops every cached page), and ``_lib_gen`` counts the loads
+        # started for one (source, category) page. A worker captures the pair
+        # before its fetch and drops its answer when either half moved: its own
+        # shelf was reloaded or re-sorted, or the account flipped. One global
+        # counter did this before, which meant a load for one source's shelf
+        # silently cancelled another source's in-flight load.
+        self._lib_epoch = 0
+        self._lib_gen: dict[tuple[str, str], int] = {}
         # Per-(source, category) sort, {(source, category): (order_key,
         # "asc"|"desc")}. Absent = the default (date-added, descending) order.
         # Session-only: a non-default sort is never persisted to the disk page
@@ -5916,10 +5927,11 @@ class WavesBridge(LibraryMixin, QObject):
         self._lib_cache.clear()
         self._lib_loading.clear()
         self._lib_sort.clear()
+        self._lib_gen.clear()
+        self._lib_epoch += 1
         self._fav_ids.clear()
         with self._pending_lock:
             self._pending_downloads = []
-        self._lib_gen += 1
         self._browse_root_cache = None
         self._browse_pages.clear()
         self._browse_loading.clear()
@@ -7521,6 +7533,18 @@ class WavesBridge(LibraryMixin, QObject):
             except Exception:
                 logger.exception("Folder-tree warm follow-up failed")
 
+    def _lib_generation(self, key: tuple[str, str]) -> tuple[int, int]:
+        """One shelf page's generation: (the account epoch, that page's load
+        counter). A worker captures it before its fetch and drops its answer
+        when the pair moved under it."""
+        return (self._lib_epoch, self._lib_gen.get(key, 0))
+
+    def _lib_start(self, key: tuple[str, str]) -> tuple[int, int]:
+        """Start a first-page load: bump this page's counter and return the
+        new generation. Another page's in-flight load is untouched."""
+        self._lib_gen[key] = self._lib_gen.get(key, 0) + 1
+        return (self._lib_epoch, self._lib_gen[key])
+
     def _library_page(
         self, source: str, category: str, offset: int, limit: int, order_override=None
     ) -> tuple[list, bool]:
@@ -7654,11 +7678,11 @@ class WavesBridge(LibraryMixin, QObject):
         if _source_provider(self, key[0]) is None:
             return
 
-        # Bump the load generation so a slower in-flight first-page load for a
-        # shelf the user has since switched away from can't publish stale rows
-        # or clear the busy state out from under the newly-chosen one.
-        self._lib_gen += 1
-        gen = self._lib_gen
+        # Bump THIS page's load generation so a slower in-flight first-page
+        # load for a shelf the user has since switched away from can't publish
+        # stale rows or clear the busy state out from under the newly-chosen
+        # one -- and cannot cancel another source's in-flight load either.
+        gen = self._lib_start(key)
 
         cached = self._lib_cache.get(key)
         if cached is not None:
@@ -7692,8 +7716,8 @@ class WavesBridge(LibraryMixin, QObject):
                     return  # keep showing the cached page, never repaint with an error
                 items, more, failed = [], False, True
             # Guard the cache write with the generation too: a load that started
-            # before a logout (which clears the cache and bumps _lib_gen) must not
-            # re-populate the cache for the next account. offset stores the *next*
+            # before a logout (which clears the cache and bumps the epoch) must
+            # not re-populate the cache for the next account. offset stores the *next*
             # API window to fetch (advances by the page size, since the window is
             # unfiltered-indexed, see _library_page).
             if revalidate:
@@ -7701,7 +7725,7 @@ class WavesBridge(LibraryMixin, QObject):
                 self._lib_reval_ts[key] = time.monotonic()
                 entry = self._lib_cache.get(key)
                 if (
-                    gen == self._lib_gen
+                    gen == self._lib_generation(key)
                     and entry is not None
                     and entry["offset"] == _LIBRARY_PAGE
                     and (items != entry["items"] or more != entry["more"])
@@ -7712,7 +7736,7 @@ class WavesBridge(LibraryMixin, QObject):
                     self._set_status(self._lib_status(category, self._lib_count(category, items), more))
                 devlog.done("library", f"{category} revalidate", devlog.clock() - t0, n=len(items))
                 return
-            if gen == self._lib_gen:
+            if gen == self._lib_generation(key):
                 if failed:
                     # A failed FIRST load must not become the shelf's cached
                     # (and disk-persisted) truth: an empty page with more=False
@@ -7754,7 +7778,7 @@ class WavesBridge(LibraryMixin, QObject):
             return
         self._lib_loading.add(key)
         offset = cached["offset"]
-        gen = self._lib_gen
+        gen = self._lib_generation(key)
         sort = self._lib_sort.get(key)
 
         def work() -> None:
@@ -7769,7 +7793,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # next scroll retries the same window.
                 logger.exception("Could not load more of library category %s", category)
                 items, more, failed = [], True, True
-            if gen != self._lib_gen or sort != self._lib_sort.get(key):
+            if gen != self._lib_generation(key) or sort != self._lib_sort.get(key):
                 # The shelf was re-sorted (or the account changed) while this
                 # page was in flight: appending it would splice the OLD order
                 # into the new list and skip a window of the new one.
@@ -7807,7 +7831,8 @@ class WavesBridge(LibraryMixin, QObject):
         else:
             self._lib_sort[key] = (order, direction)
         # Drop the differently-ordered page (and any in-flight load) so loadLibrary
-        # fetches page 1 fresh; it bumps _lib_gen, so a stale worker can't repaint.
+        # fetches page 1 fresh; it bumps this page's generation, so a stale
+        # worker can't repaint.
         self._lib_cache.pop(key, None)
         self._lib_loading.discard(key)
         self.loadLibrary(key[0], key[1])
@@ -9770,6 +9795,19 @@ class WavesBridge(LibraryMixin, QObject):
         light (see refreshProviderSurfaces in Main.qml).
         """
         return _my_music_sources(self)
+
+    @Slot(result="QVariant")
+    def providerSignInSteps(self) -> list:
+        """The providers whose sign-in the welcome surface's inline steps
+        complete, in registry order (see ``_sign_in_step_providers``).
+
+        The steps themselves are QML components (a field, a button, a paste
+        box), so this is the wiring's answer rather than a capability: the
+        surface opens a provider's steps when it ships them and its cards
+        otherwise. Re-read with the other provider surfaces.
+        """
+        registered = getattr(self, "_sign_in_step_providers", ())
+        return [pid for pid in registered if pid in getattr(self, "providers", {})]
 
     @Slot(result="QVariant")
     def myMusicEmpty(self) -> dict:

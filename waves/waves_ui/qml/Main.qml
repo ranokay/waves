@@ -275,6 +275,7 @@ ApplicationWindow {
         root.refreshProviderLights()
         root.refreshProviderCards()
         root.refreshMyMusicSources()
+        try { root.signInStepProviders = waves.providerSignInSteps() } catch (e) { root.signInStepProviders = [] }
     }
     function refreshBrowseNav() {
         try { root.browseNav = waves.browseNav() }
@@ -12219,9 +12220,13 @@ ApplicationWindow {
 
         Component.onCompleted: {
             // Start where the root expects the primary group, or at the first
-            // shelf this source can fill.
-            group.category = group.primary ? String(root.libraryCategory || "home")
-                                           : (group.categories.length ? String(group.categories[0].id) : "")
+            // shelf this source can fill -- and if the category the root
+            // remembers is not one THIS source declares (a different source
+            // became primary), its first shelf, so the strip is never blank.
+            var wanted = group.primary ? String(root.libraryCategory || "") : ""
+            group.category = group.hasCategory(wanted)
+                ? wanted
+                : (group.categories.length ? String(group.categories[0].id) : "")
             // A group that appears while the pane is open (a second source
             // signs in) loads its shelf too, so it is not a blank pane.
             if (root.libraryOpen) group.select(group.category)
@@ -13460,15 +13465,16 @@ ApplicationWindow {
         var empty = root.myMusicEmpty || ({})
         var provider = String(empty.provider || "")
         if (!provider) return
-        if (String(empty.action) === "signin") { root.openProviderSignIn(provider); return }
+        // The provider's own verb, dispatched through the bridge: a session
+        // provider's sign-in comes back as signInRequested and opens the
+        // surface on the steps this build ships for it. No verb branch here.
         waves.providerAction(provider, String(empty.action || ""))
     }
-    // The providers whose inline sign-in steps this build ships. The steps are
-    // a UI component (a field, a button, a paste box), so a provider that
-    // brings one adds itself here and its surface; a provider without one
-    // lands on the cards, where its own card action lives, rather than a blank
-    // page.
-    readonly property var signInStepProviders: ["tidal"]
+    // The providers whose sign-in the welcome surface's inline steps complete
+    // (the bridge's wiring; the steps are QML components, see
+    // waves.providerSignInSteps). A provider without one lands on the cards,
+    // where its own card action lives, rather than a blank page.
+    property var signInStepProviders: []
     function openProviderSignIn(providerId) {
         openSetupPage()
         var id = String(providerId || "")
@@ -14042,7 +14048,7 @@ ApplicationWindow {
             Qt.openUrlExternally(url)
             root.setupUrlOpened = true
         }
-        function onSignInRequested(providerId) { root.openSetupSignIn() }
+        function onSignInRequested(providerId) { root.openProviderSignIn(providerId) }
         function onBackRequested() { root.navBack() }
         function onForwardRequested() { root.navForward() }
         function onAppUpdateChecked(available, current, latest, manual) {

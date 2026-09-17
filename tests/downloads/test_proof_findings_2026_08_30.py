@@ -138,7 +138,8 @@ def _logout_stub(tmp_path):
     stub._prefetch_lock = Lock()
     stub._objs_lock = Lock()
     stub._pending_downloads = []
-    stub._lib_gen = 0
+    stub._lib_epoch = 0
+    stub._lib_gen = {}
     stub._browse_root_cache = None
     stub._browse_gen = 0
     stub._browse_reval_ts = 0.0

@@ -69,7 +69,8 @@ class _LogoutStub:
         self._fav_ids: dict = {}
         self._pending_lock = Lock()
         self._pending_downloads: list = []
-        self._lib_gen = 0
+        self._lib_epoch = 0
+        self._lib_gen: dict = {}
         self._browse_root_cache = {}
         self._browse_pages: dict = {}
         self._browse_loading: set = set()
@@ -226,13 +227,15 @@ def test_own_cache_is_bounded():
 
 class _MoreStub:
     loadMoreLibrary = WavesBridge.loadMoreLibrary
+    _lib_generation = WavesBridge._lib_generation
 
     def __init__(self):
         self._logged_in = True
         self.providers = {"tidal": object()}
         self._lib_cache = {("tidal", "albums"): {"items": [{"id": "old"}], "offset": 40, "more": True}}
         self._lib_loading: set = set()
-        self._lib_gen = 1
+        self._lib_epoch = 0
+        self._lib_gen: dict = {}
         self._lib_sort: dict = {}
         self.threadpool = _HeldPool()
         self.libraryMore = _Signal()

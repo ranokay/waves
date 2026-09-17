@@ -23,6 +23,7 @@ from support.provider_fakes import StubProvider, stub_bridge
 
 from waves.providers import Capability
 from waves.waves_ui import backend
+from waves.waves_ui.backend import WavesBridge
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MAIN_QML = REPO_ROOT / "waves" / "waves_ui" / "qml" / "Main.qml"
@@ -171,41 +172,37 @@ def test_a_signed_in_source_leaves_no_empty_state():
     assert backend._my_music_empty(stub_bridge({"tidal": tidal})) == {}
 
 
-def test_a_setup_provider_that_could_fill_shelves_offers_its_setup_action():
-    # Nothing here signs in (a setup-kind provider's path is its own wizard),
-    # so the click the state offers is that provider's own setup verb.
+def test_no_favourites_provider_means_no_empty_state():
+    # A registry that could never fill the pane has nothing to say: no dead
+    # call to action stands over shelves no provider would ever load. A
+    # FAVORITES provider whose status kind is not a session cannot fill
+    # shelves either (see _provider_can_fill_shelves), so it gets no state.
     from waves.providers import StatusKind
 
-    fake = StubProvider(
+    apple = StubProvider("apple", "Apple Music", capabilities=frozenset({Capability.SEARCH}))
+    assert backend._my_music_empty(stub_bridge({"apple": apple})) == {}
+    assert backend._my_music_empty(stub_bridge({})) == {}
+    setup_only = StubProvider(
         "fake",
         "Fake Music",
         capabilities=frozenset({Capability.FAVORITES}),
         status_kind=StatusKind.SETUP,
         logged_in=False,
     )
-
-    empty = backend._my_music_empty(stub_bridge({"fake": fake}))
-
-    assert empty["provider"] == "fake" and empty["action"] == "setup"
-    assert empty["action_label"] == "Set up Fake Music"
-
-
-def test_no_favourites_provider_means_no_empty_state():
-    # A registry that could never fill the pane has nothing to say: no dead
-    # call to action stands over shelves no provider would ever load.
-    apple = StubProvider("apple", "Apple Music", capabilities=frozenset({Capability.SEARCH}))
-    assert backend._my_music_empty(stub_bridge({"apple": apple})) == {}
-    assert backend._my_music_empty(stub_bridge({})) == {}
+    assert backend._my_music_empty(stub_bridge({"fake": setup_only})) == {}
 
 
 def test_the_pane_count_agrees_with_the_favourites_the_badges_read():
-    """The pane's rows ARE the favourites set the badge path reads.
+    """The pane's count is the count the badge path reads (issue #259, AC4).
 
-    Search's library-scoped views and badges ask for the user's favourites
-    through ``Provider.favorite_ids``; the pane pages the same set through
-    ``favorites_page``. Paging the pane to exhaustion must accumulate exactly
-    that set -- no window skipped, none counted twice -- so a row the badge
-    marks is a row the pane shows and the status count is its size.
+    Search's library-scoped views and the badges ask for the user's favourites
+    through the bridge's own ``_favorite_ids`` (the provider's id sweep); the
+    pane pages the same set through ``_library_page``/``favorites_page``. Both
+    halves are driven through the bridge over ONE provider fixture, so this
+    pins the real invariant the criterion is about: two different readers of
+    one favourites set agree -- the paged windows advance by the page size and
+    the short-window verdict adds up to exactly the id sweep, no window
+    skipped or counted twice, and both read the same provider.
     """
     albums = [f"al{i}" for i in range(7)]
 
@@ -213,32 +210,143 @@ def test_the_pane_count_agrees_with_the_favourites_the_badges_read():
         capabilities = frozenset({Capability.FAVORITES})
         is_logged_in = True
 
+        def __init__(self):
+            self.calls: list = []
+
         def descriptor(self):
             from waves.providers import ProviderDescriptor, StatusKind
 
-            return ProviderDescriptor(id="fake", name="Fake Music", status_kind=StatusKind.SESSION)
+            return ProviderDescriptor(id="tidal", name="TIDAL", status_kind=StatusKind.SESSION)
 
         def favorites_page(self, kind, offset, limit, order=None):
+            self.calls.append(("favorites_page", offset, limit))
+            # tidalapi's shape: a window can come back short (unavailable
+            # items dropped inside it) while "more" comes from the total.
             window = albums[offset : offset + limit]
             return list(window), offset + limit < len(albums)
 
         def favorite_ids(self, kind):
+            self.calls.append(("favorite_ids", kind))
             return set(albums)
 
         def row_for(self, kind, item):
             return {"id": item}
 
     provider = _Provider()
-    bridge = SimpleNamespace(providers={"fake": provider}, _lib_sort={})
+    bridge = SimpleNamespace(providers={"tidal": provider}, _lib_sort={}, _fav_ids={})
+
+    # The badge path: what the library-scoped artist views and the badges read.
+    badge_ids = WavesBridge._favorite_ids(bridge, "albums")
+
+    # The pane's path: the same source's favourites, paged to exhaustion.
     rows: list = []
     offset, more = 0, True
     while more:
-        page, more = backend.WavesBridge._library_page(bridge, "fake", "albums", offset, 3)
+        page, more = backend.WavesBridge._library_page(bridge, "tidal", "albums", offset, 3)
         rows.extend(page)
         offset += 3
 
     assert [r["id"] for r in rows] == albums, "the pane's windows must cover the favourites set exactly"
-    assert len(rows) == len(_Provider().favorite_ids("albums")), "the pane's count is the badge's count"
+    assert len(rows) == len(badge_ids), "the pane's count is the badge path's count"
+    assert next(c[0] for c in provider.calls) == "favorite_ids"
+    assert all(c[0] == "favorites_page" for c in provider.calls[1:]), "both readers go to the source's provider"
+
+
+class _Signal:
+    """Records ``emit`` calls so a test can assert what QML would have seen."""
+
+    def __init__(self):
+        self.emits: list = []
+
+    def emit(self, *args):
+        self.emits.append(args)
+
+
+def test_two_sources_loading_their_shelves_in_one_turn_both_land():  # noqa: C901 (one straight harness)
+    """One source's load must not cancel another's (issue #259).
+
+    Opening My Music loads the primary source's shelf and every other source's
+    in the same turn. A single global load generation meant the first load's
+    worker found the counter moved and silently dropped its page: that group's
+    pane stayed blank with no emit and no retry. The generations are per shelf
+    page now, so both land.
+    """
+    rows = {"tidal": [{"id": "t1"}], "fake": [{"id": "f1"}]}
+
+    class _Provider:
+        capabilities = frozenset({Capability.FAVORITES})
+        is_logged_in = True
+
+        def __init__(self, provider_id):
+            self.id = provider_id
+
+        def descriptor(self):
+            from waves.providers import ProviderDescriptor, StatusKind
+
+            return ProviderDescriptor(id=self.id, name=self.id, status_kind=StatusKind.SESSION)
+
+        def favorites_page(self, kind, offset, limit, order=None):
+            return list(rows[self.id]), False
+
+        def row_for(self, kind, item):
+            return dict(item)
+
+    class _HeldPool:
+        def __init__(self):
+            self.workers: list = []
+
+        def start(self, worker):
+            self.workers.append(worker)
+
+    class _Bridge:
+        _lib_generation = WavesBridge._lib_generation
+        _lib_start = WavesBridge._lib_start
+        loadLibrary = WavesBridge.loadLibrary
+        _lib_status = WavesBridge._lib_status
+        _lib_count = staticmethod(WavesBridge._lib_count)
+
+        def __init__(self):
+            self._logged_in = True
+            self.providers = {sid: _Provider(sid) for sid in ("tidal", "fake")}
+            self._lib_cache: dict = {}
+            self._lib_loading: set = set()
+            self._lib_sort: dict = {}
+            self._lib_reval_ts: dict = {}
+            self._lib_epoch = 0
+            self._lib_gen: dict = {}
+            self.threadpool = _HeldPool()
+            self.libraryLoaded = _Signal()
+            self.statuses: list = []
+
+        def _set_busy(self, on):
+            pass
+
+        def _set_status(self, text):
+            self.statuses.append(text)
+
+        def _save_page_cache(self):
+            pass
+
+        def _library_page(self, source, category, offset, limit, order_override=None):
+            # The page build itself is exercised by the seam tests; here the
+            # point is the two workers both landing.
+            return list(rows[source]), False
+
+    stub = _Bridge()
+    stub.loadLibrary("tidal", "albums")
+    stub.loadLibrary("fake", "albums")  # the second load used to cancel the first
+
+    # The second load's worker lands first, then the first's (the order that
+    # exposed the drop).
+    stub.threadpool.workers[1].run()
+    stub.threadpool.workers[0].run()
+
+    assert stub.libraryLoaded.emits == [
+        ("fake", "albums", [{"id": "f1"}], False),
+        ("tidal", "albums", [{"id": "t1"}], False),
+    ]
+    assert stub._lib_cache[("tidal", "albums")]["items"] == [{"id": "t1"}]
+    assert stub._lib_cache[("fake", "albums")]["items"] == [{"id": "f1"}]
 
 
 def test_the_sources_are_bridge_data_not_qml_copy():

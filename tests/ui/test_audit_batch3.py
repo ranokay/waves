@@ -357,12 +357,15 @@ def test_a_failed_first_favourites_load_is_not_cached():
 
 class _LoadLibStub:
     loadLibrary = WavesBridge.loadLibrary
+    _lib_generation = WavesBridge._lib_generation
+    _lib_start = WavesBridge._lib_start
     _lib_status = WavesBridge._lib_status
     _lib_count = staticmethod(WavesBridge._lib_count)
 
     def __init__(self, page=None, fail=False):
         self._logged_in = True
-        self._lib_gen = 0
+        self._lib_epoch = 0
+        self._lib_gen: dict = {}
         self._lib_cache: dict = {}
         self._lib_loading: set = set()
         self._lib_reval_ts: dict = {}
