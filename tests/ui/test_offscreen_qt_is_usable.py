@@ -14,7 +14,6 @@ surprise.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import subprocess
 import sys
@@ -23,13 +22,22 @@ from pathlib import Path
 
 import pytest
 
+# The canary for every offscreen QML gate: it is only meaningful where Qt
+# was meant to run, which is exactly what the qml marker and --require-qml
+# express.
+pytestmark = pytest.mark.qml
+
 _EXIT_OK = 0
 _EXIT_NO_PLATFORM = 3
 
 
 def test_the_offscreen_qt_platform_can_start():
-    if importlib.util.find_spec("PySide6") is None:
-        pytest.skip("PySide6 not installed (the gui extra): the QML gates are not expected to run here")
+    # Imported here, not at module level: this file runs itself as a child
+    # process, whose sys.path does not carry the tests root.
+    from support.qml import _skip_or_fail_missing_qt, missing_qt
+
+    if missing_qt():
+        _skip_or_fail_missing_qt()
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-qt-canary-")

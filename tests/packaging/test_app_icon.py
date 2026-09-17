@@ -42,11 +42,16 @@ def test_icon_ico_has_full_size_ladder():
     assert max(sizes) >= 256, "icon.ico needs a 256px frame for high-DPI surfaces"
 
 
+@pytest.mark.qml
 def test_icon_usable_guard_rejects_degenerate_icons():
     """The runtime guard must reject a 16-only / empty icon and accept a good one."""
-    QGuiApplication = pytest.importorskip("PySide6.QtGui").QGuiApplication
-    QIcon = pytest.importorskip("PySide6.QtGui").QIcon
+    from support.qml import _skip_or_fail_missing_qt, missing_qt
+
+    if missing_qt():
+        _skip_or_fail_missing_qt()
     import os
+
+    from PySide6.QtGui import QGuiApplication, QIcon
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     _ = QGuiApplication.instance() or QGuiApplication([])

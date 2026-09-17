@@ -47,6 +47,9 @@ from support.qml import (
     sandbox_qml_settings,
 )
 
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
+
 # Every surface that shows a release date, and so wears the mark. The two card
 # styles share CardCaption, which is why it is one wearer and not two.
 WEARERS = ["AlbumBlock", "CardCaption", "TrackRow", "album page header"]

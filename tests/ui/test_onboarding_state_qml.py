@@ -36,12 +36,15 @@ from support.qml import (
     EXIT_NO_QT,
     EXIT_OK,
     EXIT_REGRESSED,
+    _skip_or_fail_missing_qt,
     boot_main_qml,
-    missing_qt,
     run_scenario,
     scenario_env,
 )
 from support.qml_probe import scene_js
+
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
 
 _FINDERS = """
     function pointOfText(scope, needle) {
@@ -117,11 +120,10 @@ def _has_label(scope: str, needle: str) -> str:
     )
 
 
+@pytest.mark.qml
 def test_the_answer_survives_a_restart():
     """The acceptance's restart: one child answers Skip, a second boots from
     the same store and shows no welcome."""
-    if missing_qt():
-        pytest.skip("PySide6 / offscreen Qt unavailable")
     sandbox = tempfile.mkdtemp(prefix="waves-onboarding-restart-")
     try:
         for flag in ("--answer-skip", "--expect-answered"):
@@ -133,7 +135,7 @@ def test_the_answer_survives_a_restart():
                 timeout=180,
             )
             if proc.returncode == EXIT_NO_QT:
-                pytest.skip("PySide6 / offscreen Qt unavailable")
+                _skip_or_fail_missing_qt()
             if proc.returncode != EXIT_OK:
                 pytest.fail(f"{flag} failed\n" + (proc.stdout + proc.stderr).strip()[-1200:])
     finally:

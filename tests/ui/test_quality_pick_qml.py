@@ -36,6 +36,9 @@ from support.qml import (
     sandbox_qml_settings,
 )
 
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
+
 
 @pytest.mark.qml
 def test_the_quality_badge_menu_follows_the_choice_on_every_row():

@@ -27,6 +27,9 @@ from support.paths import QML_MAIN
 from support.qml import run_scenario
 from support.qml_probe import scene_js
 
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
+
 _EXIT_OK = 0
 _EXIT_REGRESSED = 1
 _EXIT_NO_QT = 77

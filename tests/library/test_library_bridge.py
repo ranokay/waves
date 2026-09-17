@@ -14,6 +14,7 @@ import sys
 import threading
 from types import SimpleNamespace
 
+import pytest
 from support.library_fakes import (
     make_album_dir as _album,
 )
@@ -1253,6 +1254,7 @@ def test_downloads_inside_library_false_for_a_sibling_prefix_name(tmp_path):
     assert s.downloadsInsideLibrary() is False
 
 
+@pytest.mark.platform
 def test_downloads_inside_library_folds_case_where_the_platform_does(tmp_path):
     # One folder spelled two ways. On macOS (APFS/HFS+ case-insensitive by
     # default) and on Windows (folded by normcase) those name the SAME folder,

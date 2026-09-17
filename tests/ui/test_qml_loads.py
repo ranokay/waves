@@ -32,6 +32,9 @@ from pathlib import Path
 import pytest
 from support.paths import QML_DIR, REPO_ROOT, TESTS_ROOT
 
+# One case, and it spawns a child interpreter to boot the real tree.
+pytestmark = pytest.mark.qml
+
 _EXIT_OK = 0
 _EXIT_BROKEN = 1
 _EXIT_NO_QT = 77
@@ -53,7 +56,9 @@ def test_main_qml_loads_without_errors_or_warnings():
     )
     report = (proc.stdout + proc.stderr).strip()
     if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
+        from support.qml import _skip_or_fail_missing_qt
+
+        _skip_or_fail_missing_qt()
     assert proc.returncode == _EXIT_OK, (
         "the QML did not load cleanly. Every scenario test SKIPS on this, so "
         "nothing else in the suite will tell you:\n" + report

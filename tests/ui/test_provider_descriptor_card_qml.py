@@ -21,10 +21,14 @@ from __future__ import annotations
 import json
 import sys
 
+import pytest
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
 from waves.providers.base import ProviderDescriptor, StatusKind
+
+# Every case here boots the real Main.qml in a child interpreter.
+pytestmark = pytest.mark.qml
 
 _TEXT_POINT_JS = """
     function pointOfText(needle) {

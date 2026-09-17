@@ -80,6 +80,7 @@ def test_strip_apple_double_noop_off_macos(tmp_path: pathlib.Path, monkeypatch: 
     assert ghost_path.exists()
 
 
+@pytest.mark.platform
 @pytest.mark.skipif(sys.platform != "darwin", reason="xattr APIs exercised for real on macOS only")
 def test_strip_apple_double_removes_xattrs(tmp_path: pathlib.Path) -> None:
     """Verify extended attributes are dropped from the destination file.

@@ -108,6 +108,26 @@ poetry run python -m waves.waves_ui   # run the app from source
 make gui-waves                        # Nuitka build -> dist/waves.app
 ```
 
+### Test groups
+
+The suite splits into groups with their own commands. Run them alone: the QML
+scenarios are timing-sensitive under load. The budgets are the runtimes
+measured on 2026-09-17 (macOS arm64, offscreen Qt).
+
+| Group                                  | Command                                                                                  | Cases |                 Measured |
+| -------------------------------------- | ---------------------------------------------------------------------------------------- | ----: | -----------------------: |
+| fast (no Qt, no ffmpeg)                | `pytest -q -m "not qml and not ffmpeg and not slow and not account and not integration"` | 4,191 |                     37 s |
+| quick QML (the heaviest boots skipped) | `pytest -q -m "qml and not slow and not account" --require-qml`                          |    86 |               4 min 12 s |
+| strict (the merge gate)                | `pytest --doctest-modules -rs --require-qml -m "not account" tests`                      | 4,354 | 6 min 51 s to 9 min 21 s |
+| ffmpeg                                 | `pytest -q -m "ffmpeg and not account"`                                                  |    56 |                     11 s |
+| live account (never in CI)             | `WAVES_ACCOUNT_TESTS=1 pytest -q -m account`                                             |     4 |        needs credentials |
+
+`--require-qml` turns a missing Qt into a failure instead of a silent skip of
+the whole QML half, and the strict command is what the merge gate runs. The
+`slow` marker names the heaviest QML boots (each ≥ 8 s), so `qml and not slow`
+covers the GUI surface without them. `make test-fast`, `make test-qml`,
+`make test-strict` and `make test-ffmpeg` wrap the first four commands.
+
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
 `pip uninstall tidaler` in the old venv, then re-run `poetry install` (or
 `pip install -e ".[gui]"`). A stale editable install keeps `import tidaler`

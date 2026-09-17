@@ -33,6 +33,9 @@ import pytest
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
+
 
 def _point(scope: str, name: str) -> str:
     """Scene coordinates of the first visible item with this objectName."""

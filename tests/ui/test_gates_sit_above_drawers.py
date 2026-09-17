@@ -25,7 +25,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 from support.paths import QML_MAIN, REPO_ROOT, TESTS_ROOT
+
+# One case, and it spawns a child interpreter to boot the real tree.
+pytestmark = pytest.mark.qml
 
 _EXIT_OK = 0
 _EXIT_REGRESSED = 1
@@ -48,12 +52,11 @@ def test_gates_are_in_the_overlay_layer_not_the_page():
         timeout=180,
     )
     tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-10:])
-    import pytest
+    from support.qml import _skip_or_fail_missing_qt
 
     if proc.returncode == _EXIT_NO_QT:
-        pytest.skip("PySide6 / offscreen Qt unavailable")
-    if proc.returncode == _EXIT_PRECONDITION:
-        pytest.skip(f"could not set up the scenario in this environment:\n{tail}")
+        _skip_or_fail_missing_qt()
+    assert proc.returncode != _EXIT_PRECONDITION, f"the scenario could not set itself up in this environment:\n{tail}"
     assert proc.returncode == _EXIT_OK, (
         "a full-screen gate left the overlay layer, so an open queue drawer will mask it again. "
         f"Scenario exit={proc.returncode}:\n{tail}"

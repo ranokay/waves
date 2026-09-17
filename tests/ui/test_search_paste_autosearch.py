@@ -44,6 +44,9 @@ from support.qml import (
     sandbox_qml_settings,
 )
 
+# The heaviest QML boot: excluded from the quick QML pass.
+pytestmark = pytest.mark.slow
+
 
 @pytest.mark.qml
 def test_paste_glyph_auto_searches_and_plain_paste_does_not():

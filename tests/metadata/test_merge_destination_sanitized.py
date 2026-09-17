@@ -255,6 +255,7 @@ def test_a_record_in_a_sibling_folder_is_not_owned_at_the_destination(tmp_path):
 # the folder name. The case is kept for a platform (or a future sanitizer)
 # where the two halves diverge, and skips honestly where they do not.
 # --------------------------------------------------------------------------- #
+@pytest.mark.platform
 def test_a_member_owned_in_a_control_character_folder_is_owned_at_the_destination(tmp_path):
     member = _member("Album\x00Name")
     plain = _unsanitized(tmp_path, member)

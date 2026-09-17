@@ -15,6 +15,7 @@ import sys
 import types
 from threading import Lock
 
+import pytest
 from support.dispatch_stub import arm_queue
 
 import waves.waves_ui.backend as backend_mod
@@ -55,6 +56,7 @@ def test_origin_url_rejects_local_disks_and_junk():
     assert netmount.origin_url("smbfs", "//") == ""
 
 
+@pytest.mark.platform
 def test_mount_origin_answers_for_the_root_volume():
     if sys.platform != "darwin":
         return  # statfs layout is macOS-specific; elsewhere the helper no-ops
