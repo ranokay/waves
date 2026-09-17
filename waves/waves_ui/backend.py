@@ -10219,11 +10219,16 @@ class WavesBridge(LibraryMixin, QObject):
     def chooserDefaults(self, media_id: str, kind: str = "") -> dict:
         """Everything the Chooser popover needs to open on this control.
 
-        provider: the row's provider (tidal/apple); providerFixed: True on
-        collection rows (a collection belongs to its provider); tier: the
-        Settings tier word for that provider; audioType: stereo/both from
-        Settings; atmosOnly: collapse the audio control; tiers: the
-        provider's tier entries; lyrics/art: the shared quick-toggles."""
+        provider: the row's provider id; providerFixed: True on collection rows
+        (a collection belongs to its provider); providers: the segment tiles
+        (enabled providers, the row's own always present, each descriptor's
+        name/mark/logo_width and which one is selected); tier: the Settings
+        tier word for that provider; audioType: stereo/both from Settings,
+        clamped to the words ``audioOptions`` offers; atmosOnly: collapse the
+        audio control; tiers: the provider's tier entries; audioOptions: the
+        provider's own audio words; showLyrics/showLyricsTtml/showArt: whether
+        each popover section applies to this provider (capability and engine
+        facts, never provider identity); lyrics/art: the shared quick-toggles."""
         provider_id = self._chooser_provider_of(media_id)
         provider = self._provider_meta(provider_id)
         capabilities = provider.capabilities if provider is not None else frozenset()
@@ -10251,13 +10256,18 @@ class WavesBridge(LibraryMixin, QObject):
         audio_options = ["stereo"]
         if provider is None or AudioType.ATMOS in provider.audio_types:
             audio_options += ["atmos", "both"]
+        audio_default = self._chooser_default_audio()
+        if audio_default not in audio_options:
+            # A stereo-only provider cannot honor a "both" default: the value
+            # and the offered words must agree, or the popover opens with no
+            # tile selected and sends a word the provider cannot fetch.
+            audio_default = "stereo"
         return {
             "provider": provider_id,
             "providerFixed": bool(self._chooser_is_collection_kind(kind)),
-            "supported": self._chooser_supports(media_id, kind),
             "providers": _chooser_provider_tiles(self, provider_id),
             "tier": self._chooser_default_tier_word(provider_id),
-            "audioType": self._chooser_default_audio(),
+            "audioType": audio_default,
             "atmosOnly": bool(self._chooser_atmos_only(media_id, kind)),
             "tiers": self._chooser_tier_entries(provider_id),
             "audioOptions": audio_options,

@@ -6450,11 +6450,6 @@ ApplicationWindow {
         // playlist, mix, video, artist, folder, category). Track rows and
         // collection pages carry per-click support. Bulk sweeps keep Settings.
         property string chooserKind: "track"
-        // A collection belongs to its provider, so the provider segment stays
-        // fixed there. Track rows fix it too in v1. Cross provider counterparts
-        // need ISRC dedupe, which is post v1, so the segment names the row's
-        // provider everywhere for now.
-        property bool providerFixed: chooserKind !== "track" && chooserKind !== "video"
         // The split-button Chooser is a control, not an Apple feature (issue
         // #235): the bridge answers whether THIS row's provider metadata and
         // kind carry it, so a TIDAL-only install gets one and a provider that
@@ -6519,13 +6514,16 @@ ApplicationWindow {
         function confirmChooser() {
             if (db.libClaim) { db.closeChooser(); db.openLibraryClaim(); return }
             if (db.st === "done" || db.st === "running" || db.waiting) { db.closeChooser(); return }
-            var k = "" + (db.chooserKind || "")
-            var supported = k === "track" || k === "album" || k === "playlist" || k === "mix" || k === "video"
-            if (!supported) {
+            // The control's own verdict (the bridge's kind + capability rule),
+            // not a second list spelled here: a kind or provider the bridge
+            // turns off falls back to the plain click, exactly as the absent
+            // chevron does.
+            if (!db.showChooser) {
                 try { db.onTap() } catch (e) { try { waves.uiLog("chooser", "chooser fallback failed: " + e, -1) } catch (e2) {} }
                 db.closeChooser()
                 return
             }
+            var k = "" + (db.chooserKind || "")
             var tier = db.chooserAtmosOnly ? "" : ("" + (db.chooserTier || ""))
             var audio = db.chooserAtmosOnly ? "atmos" : ("" + (db.chooserAudio || ""))
             var toggles = {
@@ -7268,15 +7266,18 @@ ApplicationWindow {
                     spacing: 10
                     Text { textFormat: Text.PlainText; text: "DOWNLOAD WITH"; color: root.textDim; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; font.letterSpacing: 1 }
                     Column {
+                        visible: db.chooserProviders.length > 0
                         spacing: 4
                         Text { textFormat: Text.PlainText; text: "PROVIDER"; color: root.textDim; font.family: root.mono; font.pixelSize: 9 }
-                        Row {
+                        Flow {
                             spacing: 6
+                            width: 296
                             // One tile per enabled provider, straight from the
                             // bridge (issue #235): fixed to the row's provider
                             // in v1, and the row's own tile always present. No
                             // provider id, name or asset path lives in QML, so
-                            // a third provider renders with no edit here.
+                            // a third provider renders with no edit here (the
+                            // Flow wraps however many arrive).
                             Repeater {
                                 model: db.chooserProviders
                                 delegate: Rectangle {

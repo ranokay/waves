@@ -279,7 +279,6 @@ def test_chooser_supported_is_capability_driven_not_provider_identity():
     )
     b = _bridge(providers={"mute": bare})
     assert b.chooserSupported("mute:1", "track") is False
-    assert b.chooserDefaults("mute:1", "track")["supported"] is False
 
 
 def test_chooser_segment_tiles_come_from_the_enabled_providers_descriptors():
@@ -337,6 +336,26 @@ def test_the_chooser_carries_which_sections_apply_per_provider():
     )
     d = _bridge(providers={"mute": bare}).chooserDefaults("mute:1", "track")
     assert d["showLyrics"] is False and d["showArt"] is False and d["showLyricsTtml"] is False
+
+
+def test_a_stereo_only_provider_clamps_the_stored_both_default():
+    """A 'both' Settings default cannot survive for a provider with no Atmos
+    words: the popover would open with no tile selected and send a word the
+    provider cannot fetch (issue #235)."""
+    stereo_only = SimpleNamespace(
+        name="Qobuz",
+        capabilities=frozenset({Capability.LYRICS}),
+        quality_options=(QualityOption(QualityTier.LOSSLESS, "FLAC 16-bit"),),
+        quality_setting="qobuz_quality_audio",
+        audio_types=frozenset({AudioType.STEREO}),
+        settings_card="qobuz",
+    )
+    d = _bridge(providers={"qobuz": stereo_only}, default_audio_type="both").chooserDefaults("qobuz:1", "track")
+    assert d["audioOptions"] == ["stereo"]
+    assert d["audioType"] == "stereo"
+    assert d["audioType"] in d["audioOptions"]
+    # A provider that serves Atmos keeps the stored default as it was.
+    assert _bridge(default_audio_type="both").chooserDefaults("t1", "track")["audioType"] == "both"
 
 
 def test_the_chooser_qml_names_no_provider():

@@ -8,8 +8,9 @@ Chooser popover. The popover carries the provider segment (fixed on
 collections), the provider's tiers with detail text, audio type
 stereo/Atmos/both (collapsing to ATMOS ONLY on atmos-only tracks), lyrics/art
 quick toggles, SET AS DEFAULTS (writes back to Settings) + DOWNLOAD. The
-choice applies to that click only. With Apple disabled rows keep today's
-single-face behavior.
+choice applies to that click only. The control is capability-driven, not an
+Apple feature: a TIDAL-only install gets it too, and a provider whose
+metadata offers nothing per-click gets no chevron.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -198,7 +199,8 @@ def test_chooser_defaults_come_from_settings_per_provider():
     d = b.chooserDefaults("t1", "track")
     assert d["provider"] == "tidal" and d["providerFixed"] is False
     assert d["tier"] == "HI-RES" and d["audioType"] == "stereo"
-    assert d["atmosOnly"] is False and d["supported"] is True
+    assert d["atmosOnly"] is False
+    assert b.chooserSupported("t1", "track") is True, "the one owner of the chevron verdict"
     d_album = b.chooserDefaults("a1", "album")
     assert d_album["providerFixed"] is True
     d_apple = b.chooserDefaults("apple:456", "track")
@@ -221,8 +223,10 @@ def test_chooser_defaults_audio_follows_the_default_and_atmos_only_collapses():
     assert d["atmosOnly"] is True
 
 
-def test_is_apple_enabled_gates_the_split_face():
-    assert _bridge(apple_enabled=False).isAppleEnabled() is False
+def test_the_split_face_is_not_gated_on_apple():
+    b = _bridge(apple_enabled=False)
+    assert b.isAppleEnabled() is False
+    assert b.chooserSupported("t1", "track") is True, "a TIDAL-only install gets the Chooser"
     assert _bridge(apple_enabled=True).isAppleEnabled() is True
 
 
