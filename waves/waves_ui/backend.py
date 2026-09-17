@@ -7926,15 +7926,6 @@ class WavesBridge(LibraryMixin, QObject):
     # counter) or a reload of the same view drops an in-flight answer that no
     # longer describes what is on screen.
 
-    def _library_files_state(self, view: str) -> tuple:
-        """The load state one Library-section view runs under: its generation
-        (the scan's counter plus this view's own) and the scan index the pair
-        belongs to. Captured under the index lock so the pair is always one
-        moment's: the same lock the root-change swap takes, so a load can
-        never hold the new index under the old generation."""
-        with self._library_index_lock:
-            return (self._library_gen, self._library_files_gen.get(view, 0)), self._library
-
     def _library_files_start(self, view: str) -> tuple:
         """Start a first-page load: bump this view's counter (dropping any
         in-flight page for it) and return the new state. Taking the lock drops
@@ -7982,6 +7973,11 @@ class WavesBridge(LibraryMixin, QObject):
         if lib is None:
             self.libraryFilesLoaded.emit(view, [], False, 0)
             return
+        # The badge marks are read HERE, on the slot's own thread: provider
+        # registry and descriptors are bridge state, and a worker must not
+        # touch it (the page itself is the scan's, read from the captured
+        # index).
+        logos = _provider_logos(self)
 
         def work() -> None:
             try:
@@ -7990,7 +7986,6 @@ class WavesBridge(LibraryMixin, QObject):
                 # The row build rides inside the guarded block: a bad row must
                 # answer the section with a failure, never die in the worker
                 # with the load state still busy.
-                logos = _provider_logos(self)
                 items = [_library_file_row(row, logos) for row in rows]
             except Exception:
                 logger.exception("Could not load the library files view %s", view)
@@ -8021,11 +8016,13 @@ class WavesBridge(LibraryMixin, QObject):
             self.libraryFilesMore.emit(view, [], False, -1)
             return
         start = max(0, int(offset))
+        # Marks read on the slot's own thread (see loadLibraryFiles): the
+        # worker only touches the captured scan index.
+        logos = _provider_logos(self)
 
         def work() -> None:
             try:
                 rows, more = lib.files_page(view, start, _LIBRARY_PAGE)
-                logos = _provider_logos(self)
                 items = [_library_file_row(row, logos) for row in rows]
             except Exception:
                 logger.exception("Could not load more of the library files view %s", view)

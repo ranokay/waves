@@ -54,7 +54,6 @@ _METHODS = (
     # them from the scan's own index, so the glue tests drive the real slots.
     "loadLibraryFiles",
     "loadMoreLibraryFiles",
-    "_library_files_state",
     "_library_files_start",
     "_library_files_claim",
     "_library_files_release",

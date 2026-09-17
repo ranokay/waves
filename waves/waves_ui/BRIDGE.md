@@ -114,11 +114,13 @@ provider-independent, it lists the files the scan found on disk.
 `myMusicLibrary()` answers its shape (`configured` plus the two view ids, Saved
 first), and `loadLibraryFiles(view)` / `loadMoreLibraryFiles(view, offset)`
 page the scan's own file rows — Saved is the files carrying an on-disk Waves
-item id, All files every audio file the walk sees. Each row's provider comes
-from that id's namespace (a bare id reads as TIDAL's, `waves.ids`), so an
-untagged row carries no provider and no row ever guesses one; nothing in the
-section crosses to a provider, and its rows are the same file facts the scan
-publishes, so its counts and the search badges cannot disagree.
+item id, All files every audio file the walk sees. The rows and counts never
+cross to a provider; the only descriptor-made field is each tagged row's
+`provider`/`provider_logo` badge, derived from the item id's namespace (a bare
+id reads as TIDAL's, `waves.ids`) and the registered provider's own mark, so
+an untagged row carries neither and no row ever guesses one. Because the rows
+are the same file facts the scan publishes, the section's counts and the
+search badges cannot disagree.
 
 ## Browse (editorial pages)
 

@@ -104,50 +104,42 @@ def test_the_row_builder_derives_the_provider_from_the_id_namespace():
     assert _library_file_row({"length": 61})["duration"] == "1:01"
 
 
-def test_a_third_providers_namespace_badges_with_its_own_descriptor_mark():
+def _provider(pid, logo):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(descriptor=lambda: SimpleNamespace(id=pid, logo=logo))
+
+
+def test_the_saved_page_carries_each_namespaces_own_descriptor_mark(tmp_path):
     """The badge must not fall back to TIDAL's logo for a namespace the two
-    known providers do not own: the mark comes from the registered provider's
-    own descriptor, and a namespace NO provider claims gets no mark at all."""
-    from types import SimpleNamespace
-
-    from waves.waves_ui.backend import _provider_logos
-
-    def provider(pid, logo):
-        return SimpleNamespace(descriptor=lambda: SimpleNamespace(id=pid, logo=logo))
-
-    registry = {
-        "tidal": provider("tidal", "assets/providers/tidal.png"),
-        "apple": provider("apple", "assets/providers/apple-music.png"),
-        "fake": provider("fake", "assets/providers/fake.png"),
+    known providers do not own: each row's mark comes from the registered
+    provider's own descriptor, and a namespace NO provider claims gets no
+    mark at all (its provider is still named)."""
+    lib = os.path.join(tmp_path, "lib")
+    saved = make_album_dir(lib, "A/Saved", ["01.flac", "02.flac", "03.flac"])
+    pathmap = {
+        os.path.join(saved, "01.flac"): _tags("Saved", title="First"),
+        os.path.join(saved, "02.flac"): _tags("Saved", title="Second"),
+        os.path.join(saved, "03.flac"): _tags("Saved", title="Third"),
     }
-    logos = _provider_logos(SimpleNamespace(providers=registry))
-    assert logos == {
-        "tidal": "assets/providers/tidal.png",
-        "apple": "assets/providers/apple-music.png",
-        "fake": "assets/providers/fake.png",
+    item_ids = {
+        os.path.join(saved, "01.flac"): "apple:91",
+        os.path.join(saved, "02.flac"): "fake:7",  # a third, registered provider
+        os.path.join(saved, "03.flac"): "ghost:9",  # no provider claims this
     }
-    assert _library_file_row({"item_id": "fake:7"}, logos)["provider_logo"] == "assets/providers/fake.png"
-    assert _library_file_row({"item_id": "ghost:7"}, logos)["provider_logo"] == ""
-    # A stub bridge with no registry still answers rows (the mark is simply
-    # unknown), so the section never depends on a provider being present.
-    assert _library_file_row({"item_id": "fake:7"}, {})["provider_logo"] == ""
-
-
-def test_the_saved_page_carries_the_provider_marks(tmp_path):
-    bridge, _pathmap, _ids = _seed(tmp_path)
-    from types import SimpleNamespace
-
+    bridge = make_library_bridge(tmp_path, library_folder=lib, path_tags=pathmap, item_ids=item_ids)
     bridge.providers = {
-        "apple": SimpleNamespace(
-            descriptor=lambda: SimpleNamespace(id="apple", logo="assets/providers/apple-music.png")
-        ),
-        "tidal": SimpleNamespace(descriptor=lambda: SimpleNamespace(id="tidal", logo="assets/providers/tidal.png")),
+        "apple": _provider("apple", "assets/providers/apple-music.png"),
+        "fake": _provider("fake", "assets/providers/fake-music.png"),
     }
+    bridge._library.refresh(lib, force_full=True)
+
     bridge.loadLibraryFiles("saved")
     items = bridge.libraryFilesLoaded.emits[0][1]
-    assert [r["provider_logo"] for r in items] == [
-        "assets/providers/apple-music.png",
-        "assets/providers/tidal.png",
+    assert [(r["provider"], r["provider_logo"]) for r in items] == [
+        ("apple", "assets/providers/apple-music.png"),
+        ("fake", "assets/providers/fake-music.png"),
+        ("ghost", ""),  # named, but no mark to wear
     ]
 
 
