@@ -6497,6 +6497,29 @@ ApplicationWindow {
             db.chooserCoverEmbed = d.coverEmbed !== false
             db.chooserCoverFile = d.coverFile !== false
         }
+        // What a click does, without the pointer: the same decision the tap
+        // area and the keyboard/accessibility press action take (the gates
+        // included), so a keyboard user cannot bypass a claim or a done face.
+        function activate() {
+            // A library claim is a guess, so it answers instead of ignoring.
+            if (db.libClaim) { db.openLibraryClaim(); return }
+            // A recorded copy answers too: where it is, and REDOWNLOAD.
+            if (db.st === "done" && db.canRedownload) { db.openRedownload(); return }
+            if (db.st === "running" || db.st === "done" || db.waiting) return
+            db.onTap()
+        }
+        function accessibleName() {
+            var word = db.st === "done" ? "Downloaded" : (db.st === "failed" ? "Retry download" : "Download")
+            var noun = db.noun !== "" ? " " + db.noun : ""
+            return word + noun + (db.showChooser ? ", chooser available" : "")
+        }
+        activeFocusOnTab: db.visible
+        Accessible.role: Accessible.Button
+        Accessible.name: db.accessibleName()
+        Accessible.onPressAction: db.activate()
+        Keys.onReturnPressed: db.activate()
+        Keys.onEnterPressed: db.activate()
+        Keys.onSpacePressed: db.activate()
         function openChooser() {
             if (!db.showChooser) return
             if (db.st === "running" || db.waiting) return
@@ -7213,12 +7236,7 @@ ApplicationWindow {
                 // (the scenario tests drive this tap area directly); treat
                 // that as a plain left click, the pre-Chooser behavior.
                 if (m && m.button === Qt.RightButton) { db.openChooser(); return }
-                // A library claim is a guess, so it answers instead of ignoring.
-                if (db.libClaim) { db.openLibraryClaim(); return }
-                // A recorded copy answers too: where it is, and REDOWNLOAD.
-                if (db.st === "done" && db.canRedownload) { db.openRedownload(); return }
-                if (db.st === "running" || db.st === "done" || db.waiting) return
-                db.onTap()
+                db.activate()
             }
         }
         // The chevron face: drawn exactly when the row's control carries the
@@ -7246,6 +7264,13 @@ ApplicationWindow {
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 onClicked: db.openChooser()
             }
+        }
+        // The keyboard focus ring (a custom Rectangle draws none): the accent
+        // outline over whatever the state frame currently paints.
+        Rectangle {
+            anchors.fill: parent; radius: root.btnRad
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: db.activeFocus
         }
         Loader { id: chooserLoader; active: db.chooserBuilt; sourceComponent: chooserComp }
         Component {
@@ -7933,8 +7958,22 @@ ApplicationWindow {
         // an action whose glyph says it faster than any label could (closing a
         // panel), where a word would only cost room in a crowded header.
         property string icon: ""
+        // An explicit screen-reader name for a control whose visible word is
+        // empty or does not say enough (an icon-only close, a count badge).
+        property string accessibleLabel: ""
         readonly property bool iconOnly: icon !== "" && label === ""
         signal clicked()
+        // Accessible as a button and reachable with Tab; Enter/Space fire the
+        // same clicked() the pointer does, so every dialog action (queue
+        // PAUSE/STOP/RETRY ALL/CLEAR, gate cards) works keyboard-only. The
+        // focus ring is the accent border, since a custom Rectangle draws none.
+        activeFocusOnTab: visible
+        Accessible.role: Accessible.Button
+        Accessible.name: sb.accessibleLabel !== "" ? sb.accessibleLabel : (sb.label !== "" ? sb.label : "Button")
+        Accessible.onPressAction: sb.clicked()
+        Keys.onReturnPressed: sb.clicked()
+        Keys.onEnterPressed: sb.clicked()
+        Keys.onSpacePressed: sb.clicked()
         readonly property color bg: danger ? root.redCont
                                   : warn ? root.goldCont
                                   : (primary ? root.accentCont : "transparent")
@@ -7942,8 +7981,9 @@ ApplicationWindow {
         implicitHeight: sbTxt.implicitHeight + (compact ? 3 : root.btnPadV) * 2
         radius: compact ? 5 : root.btnRad
         color: (sbMa.containsMouse && (sb.primary || sb.danger || sb.warn)) ? Qt.lighter(sb.bg, 1.35) : sb.bg
-        border.width: 1
-        border.color: danger ? Qt.alpha(root.red, 0.55)
+        border.width: sb.activeFocus ? 2 : 1
+        border.color: sb.activeFocus ? root.accent
+                    : danger ? Qt.alpha(root.red, 0.55)
                     : warn ? Qt.alpha(root.gold, 0.55)
                     : (primary ? root.accentDim : root.border1)
         Behavior on color { ColorAnimation { duration: 110 } }
@@ -8189,6 +8229,15 @@ ApplicationWindow {
         signal clicked()
         implicitHeight: navMetric.implicitHeight + root.btnPadV * 2
         implicitWidth: navMetric.implicitWidth + root.btnPadH * 2
+        // A tab is a button: named by its label, reachable with Tab, and
+        // Enter/Space fire the same clicked() the pointer does.
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Button
+        Accessible.name: nt.label
+        Accessible.onPressAction: nt.clicked()
+        Keys.onReturnPressed: nt.clicked()
+        Keys.onEnterPressed: nt.clicked()
+        Keys.onSpacePressed: nt.clicked()
 
         // Colours for the CRT look. accent/accentCont/accentDim/accentSoft are
         // shared app tokens; the dim phosphor-panel tones are local to this look.
@@ -8205,7 +8254,8 @@ ApplicationWindow {
         // idle body: dim phosphor panel; grey label that greys → green
         Rectangle {
             id: navDim; anchors.fill: parent; radius: root.btnRad; color: nt.navDimBg
-            border.width: 1; border.color: navMa.containsMouse ? nt.navDimHover : nt.navDimBorder
+            border.width: nt.activeFocus ? 2 : 1
+            border.color: nt.activeFocus ? root.accent : (navMa.containsMouse ? nt.navDimHover : nt.navDimBorder)
             Behavior on border.color { ColorAnimation { duration: 180 } }
             Text {
                 anchors.centerIn: parent; text: nt.label; textFormat: Text.PlainText
@@ -14583,8 +14633,18 @@ ApplicationWindow {
                 }
                 // queue (outlined) with count badge
                 Rectangle {
+                    objectName: "queueBtn"
                     implicitHeight: qrow.implicitHeight + root.btnPadV * 2; implicitWidth: qrow.implicitWidth + root.btnPadH * 2; radius: root.btnRad
-                    color: "transparent"; border.color: root.border1
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Queue, " + root.activeQueueCount + (root.activeQueueCount === 1 ? " active item" : " active items")
+                    Accessible.onPressAction: queueDrawer.open()
+                    Keys.onReturnPressed: queueDrawer.open()
+                    Keys.onEnterPressed: queueDrawer.open()
+                    Keys.onSpacePressed: queueDrawer.open()
+                    color: "transparent"
+                    border.width: activeFocus ? 2 : 1
+                    border.color: activeFocus ? root.accent : root.border1
                     RowLayout {
                         id: qrow; anchors.centerIn: parent; spacing: 7
                         Ico { name: "arrow-down"; color: root.accent; size: 15; bold: 10 }
@@ -14734,7 +14794,15 @@ ApplicationWindow {
                                 Ico { name: "search"; color: root.accent; size: 18 }
                                 TextField {
                                     id: searchField
+                                    objectName: "searchField"
                                     Layout.fillWidth: true
+                                    Accessible.name: "Search, or paste a TIDAL or Apple Music link"
+                                    // Escape empties the box first (the next Escape
+                                    // leaves it), so a keyboard user can reset the
+                                    // term without selecting it by hand.
+                                    Keys.onEscapePressed: function(event) {
+                                        if (searchField.text !== "") { searchField.text = ""; event.accepted = true }
+                                    }
                                     placeholderText: "Search, or paste a TIDAL or Apple Music link…"
                                     color: searchDecoder.decoding ? root.accent : root.textHi
                                     placeholderTextColor: root.textLo; font.pixelSize: 15
@@ -17187,6 +17255,7 @@ ApplicationWindow {
                 SpecBtn {
                     id: queueCloseBtn
                     icon: "close"
+                    accessibleLabel: "Close queue"
                     onClicked: queueDrawer.close()
                 }
             }
