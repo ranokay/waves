@@ -6497,6 +6497,53 @@ ApplicationWindow {
             db.chooserCoverEmbed = d.coverEmbed !== false
             db.chooserCoverFile = d.coverFile !== false
         }
+        // What a click does, without the pointer: the same decision the tap
+        // area and the keyboard/accessibility press action take (the gates
+        // included), so a keyboard user cannot bypass a claim or a done face.
+        function activate() {
+            // A library claim is a guess, so it answers instead of ignoring.
+            if (db.libClaim) { db.openLibraryClaim(); return }
+            // A recorded copy answers too: where it is, and REDOWNLOAD.
+            if (db.st === "done" && db.canRedownload) { db.openRedownload(); return }
+            if (db.st === "running" || db.st === "done" || db.waiting) return
+            db.onTap()
+        }
+        function accessibleName() {
+            // The visible face names itself: the label carries the scope
+            // ("Download album") and the library faces their own words, so the
+            // reader hears what the button draws.
+            var base = db.label !== "" ? db.label : "Download"
+            if (db.libClaim) return (db.libGuess ? "Maybe in library: " : "In library: ") + base
+            if (db.libPartialClaim) return "Partially in library: " + base
+            if (db.st === "done") return db.canRedownload ? base + ", downloaded, menu for redownload" : base + ", downloaded"
+            if (db.st === "failed") return base + ", failed"
+            if (db.waiting) return base + ", queued, press Delete to cancel"
+            if (db.st === "running") return base + ", downloading"
+            return base + (db.showChooser ? ", press Down for download options" : "")
+        }
+        function chooserReachable() {
+            return db.showChooser && !db.libClaim && !(db.st === "running" || db.waiting || db.st === "done")
+        }
+        // Inert faces leave the tab order, but the actionable ones stay: the
+        // claim faces (MAYBE/IN LIBRARY) open their gate, and the done face
+        // with REDOWNLOAD stays because it is actionable.
+        activeFocusOnTab: db.visible
+            && (db.libClaim || !(db.st === "running" || db.waiting || (db.st === "done" && !db.canRedownload)))
+        Accessible.role: Accessible.Button
+        Accessible.name: db.accessibleName()
+        Accessible.onPressAction: db.activate()
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.activate() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.activate() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.activate() } }
+        // The chooser is the second face; Down opens it for a keyboard user
+        // exactly where the right-click/chevron path does. The key is only
+        // swallowed when the chooser would really open, so list navigation is
+        // never eaten by an inert face.
+        Keys.onDownPressed: function(event) { if (db.chooserReachable()) { event.accepted = true; db.openChooser() } }
+        // A queued row's inline cancel has no pointer-only equivalent.
+        Keys.onDeletePressed: function(event) {
+            if (db.st === "queued" || db.waiting) { event.accepted = true; root.cancelQueuedMedia(db.mediaId) }
+        }
         function openChooser() {
             if (!db.showChooser) return
             if (db.st === "running" || db.waiting) return
@@ -7213,12 +7260,7 @@ ApplicationWindow {
                 // (the scenario tests drive this tap area directly); treat
                 // that as a plain left click, the pre-Chooser behavior.
                 if (m && m.button === Qt.RightButton) { db.openChooser(); return }
-                // A library claim is a guess, so it answers instead of ignoring.
-                if (db.libClaim) { db.openLibraryClaim(); return }
-                // A recorded copy answers too: where it is, and REDOWNLOAD.
-                if (db.st === "done" && db.canRedownload) { db.openRedownload(); return }
-                if (db.st === "running" || db.st === "done" || db.waiting) return
-                db.onTap()
+                db.activate()
             }
         }
         // The chevron face: drawn exactly when the row's control carries the
@@ -7246,6 +7288,13 @@ ApplicationWindow {
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 onClicked: db.openChooser()
             }
+        }
+        // The keyboard focus ring (a custom Rectangle draws none): the accent
+        // outline over whatever the state frame currently paints.
+        Rectangle {
+            anchors.fill: parent; radius: root.btnRad
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: db.activeFocus
         }
         Loader { id: chooserLoader; active: db.chooserBuilt; sourceComponent: chooserComp }
         Component {
@@ -7903,6 +7952,18 @@ ApplicationWindow {
             Ico { visible: ga.showArrow; name: "arrow-right"; color: ga.fg; size: 15 }
         }
         MouseArea { id: gaMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: ga.clicked() }
+        activeFocusOnTab: ga.visible && ga.enabled
+        Accessible.role: Accessible.Button
+        Accessible.name: ga.label
+        Accessible.onPressAction: function() { if (ga.enabled) ga.clicked() }
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat && ga.enabled) { event.accepted = true; ga.clicked() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat && ga.enabled) { event.accepted = true; ga.clicked() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat && ga.enabled) { event.accepted = true; ga.clicked() } }
+        Rectangle {
+            anchors.fill: parent; radius: ga.radius
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: ga.activeFocus
+        }
     }
 
     // Console-spec button: the app's ordinary hugging button (label + btnPadH*2
@@ -7933,8 +7994,24 @@ ApplicationWindow {
         // an action whose glyph says it faster than any label could (closing a
         // panel), where a word would only cost room in a crowded header.
         property string icon: ""
+        // An explicit screen-reader name for a control whose visible word is
+        // empty or does not say enough (an icon-only close, a count badge).
+        property string accessibleLabel: ""
         readonly property bool iconOnly: icon !== "" && label === ""
         signal clicked()
+        // Accessible as a button and reachable with Tab; Enter/Space fire the
+        // same clicked() the pointer does, so every dialog action (queue
+        // PAUSE/STOP/RETRY ALL/CLEAR, gate cards) works keyboard-only. The
+        // focus ring is the accent border, since a custom Rectangle draws none.
+        activeFocusOnTab: visible
+        Accessible.role: Accessible.Button
+        Accessible.name: sb.accessibleLabel !== "" ? sb.accessibleLabel
+                       : (sb.label !== "" ? sb.label
+                       : (sb.icon !== "" ? sb.icon.charAt(0).toUpperCase() + sb.icon.slice(1) : "Button"))
+        Accessible.onPressAction: function() { if (sb.enabled) sb.clicked() }
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat && sb.enabled) { event.accepted = true; sb.clicked() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat && sb.enabled) { event.accepted = true; sb.clicked() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat && sb.enabled) { event.accepted = true; sb.clicked() } }
         readonly property color bg: danger ? root.redCont
                                   : warn ? root.goldCont
                                   : (primary ? root.accentCont : "transparent")
@@ -7969,6 +8046,13 @@ ApplicationWindow {
         MouseArea {
             id: sbMa; anchors.fill: parent; hoverEnabled: true
             cursorShape: Qt.PointingHandCursor; onClicked: sb.clicked()
+        }
+        // The keyboard focus ring (a custom Rectangle draws none): an overlay
+        // so it never repaints the danger/warn/primary border recipe.
+        Rectangle {
+            anchors.fill: parent; radius: sb.radius
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: sb.activeFocus
         }
     }
 
@@ -8005,6 +8089,18 @@ ApplicationWindow {
             Ico { name: "arrow-right"; color: gcard.highlight ? root.accent : root.textDim; size: 15; Layout.alignment: Qt.AlignVCenter }
         }
         MouseArea { id: gcMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: gcard.clicked() }
+        activeFocusOnTab: gcard.visible
+        Accessible.role: Accessible.Button
+        Accessible.name: gcard.title + (gcard.desc !== "" ? ", " + gcard.desc : "")
+        Accessible.onPressAction: gcard.clicked()
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; gcard.clicked() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; gcard.clicked() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; gcard.clicked() } }
+        Rectangle {
+            anchors.fill: parent; radius: gcard.radius
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: gcard.activeFocus
+        }
     }
 
     // Drives the "matrix decrypt" paste-in for a TextField: scrambled glyphs settle
@@ -8030,6 +8126,15 @@ ApplicationWindow {
         }
         // Call from the field's onTextChanged: a multi-char jump that typing can't
         // produce is treated as a paste and animated in.
+        // Stop a decode in flight and forget its term: a caller clearing the
+        // field must not have the animation rewrite it a tick later.
+        function cancel() {
+            _timer.stop()
+            decoding = false
+            _final = ""
+            _locked = 0
+            _prevLen = 0
+        }
         function noteTextChanged() {
             if (!decoding && field.text.length - _prevLen >= 4) run(field.text)
             _prevLen = field.text.length
@@ -8189,6 +8294,17 @@ ApplicationWindow {
         signal clicked()
         implicitHeight: navMetric.implicitHeight + root.btnPadV * 2
         implicitWidth: navMetric.implicitWidth + root.btnPadH * 2
+        // A tab is a button: named by its label, reachable with Tab, and
+        // Enter/Space fire the same clicked() the pointer does.
+        activeFocusOnTab: nt.visible
+        Accessible.role: Accessible.Button
+        Accessible.name: nt.label
+        Accessible.checkable: true
+        Accessible.checked: nt.active
+        Accessible.onPressAction: nt.clicked()
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; nt.clicked() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; nt.clicked() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; nt.clicked() } }
 
         // Colours for the CRT look. accent/accentCont/accentDim/accentSoft are
         // shared app tokens; the dim phosphor-panel tones are local to this look.
@@ -8245,6 +8361,11 @@ ApplicationWindow {
         Rectangle { id: navAfter; anchors.centerIn: parent; width: 7; height: 3; radius: 2; color: root.accent; opacity: 0 }
 
         MouseArea { id: navMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: nt.clicked() }
+        Rectangle {
+            anchors.fill: parent; radius: root.btnRad
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: nt.activeFocus
+        }
 
         states: State { name: "on"; when: nt.active
             PropertyChanges { navLit.opacity: 1 }
@@ -14583,7 +14704,15 @@ ApplicationWindow {
                 }
                 // queue (outlined) with count badge
                 Rectangle {
+                    objectName: "queueBtn"
                     implicitHeight: qrow.implicitHeight + root.btnPadV * 2; implicitWidth: qrow.implicitWidth + root.btnPadH * 2; radius: root.btnRad
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Queue, " + root.activeQueueCount + (root.activeQueueCount === 1 ? " active item" : " active items")
+                    Accessible.onPressAction: queueDrawer.open()
+                    Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
+                    Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
+                    Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
                     color: "transparent"; border.color: root.border1
                     RowLayout {
                         id: qrow; anchors.centerIn: parent; spacing: 7
@@ -14596,6 +14725,11 @@ ApplicationWindow {
                         }
                     }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: queueDrawer.open() }
+                    Rectangle {
+                        anchors.fill: parent; radius: root.btnRad
+                        color: "transparent"; border.width: 2; border.color: root.accent
+                        visible: parent.activeFocus
+                    }
                 }
                 // Per-provider status lights (issue #223): one compact dot
                 // per provider the bridge reports, replacing the old
@@ -14734,7 +14868,23 @@ ApplicationWindow {
                                 Ico { name: "search"; color: root.accent; size: 18 }
                                 TextField {
                                     id: searchField
+                                    objectName: "searchField"
                                     Layout.fillWidth: true
+                                    Accessible.name: "Search, or paste a TIDAL or Apple Music link"
+                                    // Escape empties the box first (the next Escape
+                                    // leaves it), so a keyboard user can reset the
+                                    // term without selecting it by hand.
+                                    Keys.onEscapePressed: function(event) {
+                                        if (searchField.text === "" && !searchDecoder.decoding) return
+                                        // A decode in flight would rewrite the text on its
+                                        // next tick: cancel it and disarm the paste arm too,
+                                        // or the cleared term resurrects and still searches.
+                                        searchDecoder.cancel()
+                                        searchDecoder.submitArmed = false
+                                        searchDecoder.submitPending = false
+                                        searchField.text = ""
+                                        event.accepted = true
+                                    }
                                     placeholderText: "Search, or paste a TIDAL or Apple Music link…"
                                     color: searchDecoder.decoding ? root.accent : root.textHi
                                     placeholderTextColor: root.textLo; font.pixelSize: 15
@@ -17187,6 +17337,7 @@ ApplicationWindow {
                 SpecBtn {
                     id: queueCloseBtn
                     icon: "close"
+                    accessibleLabel: "Close queue"
                     onClicked: queueDrawer.close()
                 }
             }
@@ -18143,6 +18294,7 @@ ApplicationWindow {
                 SpecBtn {
                     id: logsCloseBtn
                     icon: "close"
+                    accessibleLabel: "Close logs"
                     onClicked: logsDrawer.close()
                 }
             }
