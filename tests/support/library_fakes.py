@@ -56,6 +56,8 @@ _METHODS = (
     "loadMoreLibraryFiles",
     "_library_files_state",
     "_library_files_start",
+    "_library_files_claim",
+    "_library_files_release",
     "_library_files_stale",
     "myMusicLibrary",
     "_waves_pref_bool",

@@ -4078,18 +4078,24 @@ def _provider_logos(bridge) -> dict[str, str]:
 
     Built once per page so a badge shows the namespace's provider mark, and a
     namespace no provider claims maps to nothing (never another provider's
-    logo: an unknown file must not wear TIDAL's mark).
+    logo: an unknown file must not wear TIDAL's mark). A provider whose
+    descriptor cannot be read contributes no mark instead of failing the
+    page: the rows are the scan's answer, the marks are decoration.
     """
     logos: dict[str, str] = {}
     for provider in _provider_registry(bridge):
-        descriptor = provider.descriptor()
-        logos[str(descriptor.id)] = str(descriptor.logo or "")
+        try:
+            descriptor = provider.descriptor()
+            logos[str(descriptor.id)] = str(descriptor.logo or "")
+        except Exception:
+            logger.debug("Could not read a provider's mark for a library row", exc_info=True)
     return logos
 
 
 #: The Library section's view labels, keyed by the scan's own view ids
 #: (library_index.FILES_VIEWS, Saved first). Words, not behaviour: QML renders
-#: these, so a copy change needs no QML edit.
+#: these, so a copy change needs no QML edit. A view with no entry renders its
+#: own id rather than failing the section (see myMusicLibrary).
 _LIBRARY_VIEW_LABELS = {"saved": "Saved", "all": "All files"}
 
 
@@ -7931,10 +7937,34 @@ class WavesBridge(LibraryMixin, QObject):
 
     def _library_files_start(self, view: str) -> tuple:
         """Start a first-page load: bump this view's counter (dropping any
-        in-flight page for it) and return the new state."""
+        in-flight page for it) and return the new state. Taking the lock drops
+        the in-flight append guard with the counter, so the replace and the
+        guard are one step on every thread."""
         with self._library_index_lock:
             self._library_files_gen[view] = self._library_files_gen.get(view, 0) + 1
+            self._library_files_loading.pop(view, None)
             return (self._library_gen, self._library_files_gen[view]), self._library
+
+    def _library_files_claim(self, view: str) -> tuple | None:
+        """Claim one view's append slot, at most one append at a time: the
+        state to load under, or None while an append is already in flight. The
+        check and the claim are one locked step, so two scroll events can
+        never both start the same window."""
+        with self._library_index_lock:
+            if view in self._library_files_loading:
+                return None
+            state = ((self._library_gen, self._library_files_gen.get(view, 0)), self._library)
+            self._library_files_loading[view] = state[0]
+            return state
+
+    def _library_files_release(self, view: str, gen: tuple) -> None:
+        """Free one view's append slot, but only when it is still THIS load's:
+        the compare and the delete are one locked step, so a reload that took
+        the guard between them neither raises nor lets a stale worker remove a
+        newer append's guard."""
+        with self._library_index_lock:
+            if self._library_files_loading.get(view) == gen:
+                del self._library_files_loading[view]
 
     def _library_files_stale(self, view: str, gen: tuple) -> bool:
         with self._library_index_lock:
@@ -7949,7 +7979,6 @@ class WavesBridge(LibraryMixin, QObject):
         without a second call."""
         view = _library_files_view(view)
         gen, lib = self._library_files_start(view)
-        self._library_files_loading.pop(view, None)
         if lib is None:
             self.libraryFilesLoaded.emit(view, [], False, 0)
             return
@@ -7980,13 +8009,13 @@ class WavesBridge(LibraryMixin, QObject):
         scroll (the pane retries on the next scroll), and ``total`` is -1:
         an append changes no count."""
         view = _library_files_view(view)
-        if view in self._library_files_loading:
+        claimed = self._library_files_claim(view)
+        if claimed is None:
             return
-        gen, lib = self._library_files_state(view)
+        gen, lib = claimed
         if lib is None:
             self.libraryFilesMore.emit(view, [], False, -1)
             return
-        self._library_files_loading[view] = gen
         start = max(0, int(offset))
 
         def work() -> None:
@@ -7997,11 +8026,10 @@ class WavesBridge(LibraryMixin, QObject):
             except Exception:
                 logger.exception("Could not load more of the library files view %s", view)
                 items, more = [], True
-            # The guard clears only when it is still OURS: a superseded worker
-            # must neither leak it (a newer load already replaced it) nor drop
-            # a newer append's guard.
-            if self._library_files_loading.get(view) == gen:
-                del self._library_files_loading[view]
+            # Only this load's own guard is freed (a reload or a newer append
+            # may own it by now); a stale page is dropped after that, so the
+            # guard never leaks and infinite scroll never stalls.
+            self._library_files_release(view, gen)
             if self._library_files_stale(view, gen):
                 return
             self.libraryFilesMore.emit(view, items, more, -1)
@@ -10028,7 +10056,7 @@ class WavesBridge(LibraryMixin, QObject):
             "configured": bool(self._library_root()),
             # The ids are the scan's own (library_index.FILES_VIEWS), so QML
             # switches on the bridge's vocabulary, never a re-spelled literal.
-            "views": [{"id": view_id, "label": _LIBRARY_VIEW_LABELS[view_id]} for view_id in FILES_VIEWS],
+            "views": [{"id": view_id, "label": _LIBRARY_VIEW_LABELS.get(view_id, view_id)} for view_id in FILES_VIEWS],
         }
 
     @Slot(result=bool)

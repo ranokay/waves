@@ -192,14 +192,15 @@ def test_a_reload_drops_the_first_pages_answer_in_flight(tmp_path):
     assert [e[0] for e in bridge.libraryFilesLoaded.emits] == ["saved"]
 
 
-def test_a_superseded_append_neither_leaks_nor_steals_the_scroll_guard(tmp_path):
-    """The in-flight append guard is keyed by the load it belongs to.
+def test_a_superseded_append_neither_leaks_nor_steals_the_scroll_slot(tmp_path):
+    """A raced append's slot is freed for its own view, and only its own.
 
-    Both simpler shapes are wrong: clearing it before the stale check let a
-    superseded worker drop a NEWER append's guard, and clearing it only after
-    the check leaked the guard when a reload raced the append -- and either
-    way every later append for that view returned early, stopping infinite
-    scroll for the rest of the session.
+    Both simpler shapes are wrong and both are observable here through what
+    the pane can still do: clearing the slot before the stale check let a
+    superseded worker drop a NEWER append's slot (a duplicate window could
+    then start), and clearing it only after the check leaked the slot when a
+    reload raced the append (every later append returned early and infinite
+    scroll stopped for the rest of the session).
     """
     from conftest import _InlinePool
 
@@ -212,25 +213,29 @@ def test_a_superseded_append_neither_leaks_nor_steals_the_scroll_guard(tmp_path)
             held.append(worker)
 
     bridge.threadpool = _HeldPool()
-    bridge.loadMoreLibraryFiles("all", 0)
-    stale_gen = bridge._library_files_loading["all"]
+    bridge.loadMoreLibraryFiles("all", 0)  # one append in flight
 
-    # A reload ships while the append is in flight (a scan publish).
+    # A reload ships while the append is in flight (a scan publish). The
+    # reload owns the view now: it must be able to take the slot back.
     bridge.threadpool = _InlinePool()
     bridge.loadLibraryFiles("all")
-    assert "all" not in bridge._library_files_loading  # no leaked guard
 
-    # A newer append starts; the stale worker landing must keep its guard.
+    # A newer append starts; the stale worker landing must neither free its
+    # slot (another window must not start beside it) nor emit its old page.
     bridge.threadpool = _HeldPool()
     bridge.loadMoreLibraryFiles("all", 0)
-    fresh_gen = bridge._library_files_loading["all"]
-    assert fresh_gen != stale_gen
-    held[0].run()
-    assert bridge._library_files_loading["all"] == fresh_gen
-    assert bridge.libraryFilesMore.emits == []  # the stale page was dropped
+    held[0].run()  # the stale append lands
+    assert bridge.libraryFilesMore.emits == []
+    assert len(held) == 2  # a start would have queued a third worker
+    bridge.loadMoreLibraryFiles("all", 0)
+    assert len(held) == 2  # the newer append's slot held
     held[1].run()
-    assert bridge.libraryFilesMore.emits  # the newer append answered
-    assert "all" not in bridge._library_files_loading
+    assert [e[0] for e in bridge.libraryFilesMore.emits] == ["all"]
+
+    # And the slot is free again: the pane can page further.
+    bridge.threadpool = _InlinePool()
+    bridge.loadMoreLibraryFiles("all", 3)
+    assert [e[0] for e in bridge.libraryFilesMore.emits] == ["all", "all"]
 
 
 def test_a_scan_that_loses_a_file_empties_its_saved_row(tmp_path):
