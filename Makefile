@@ -19,6 +19,17 @@ WAVES_MACOS_MIN ?= 15.0
 # a time and cheaper options. The release build cache makes the slower first
 # pass a one-time cost; an empty value opts back into parallelism.
 #
+# yt-dlp's lazy extractor table is excluded on every host (issue #245): its
+# generated C dominated the build (4,182 s of a 4,593 s cold build on Apple
+# silicon) and it is the one module MSVC cannot compile at all -- the full
+# record and numbers live in docs/platform-enablement-review.md. Waves never
+# extracts a page URL (gamdl hands yt-dlp only direct stream URLs, so only
+# yt_dlp.downloader runs), and yt-dlp's own import contract falls back to the
+# real extractor modules when the table is absent (`except ImportError` in
+# extractor/extractors.py), so every extractor stays in the artifact. With the
+# exclusion the cold build is ~6.5 minutes and waves.app 236 MB (was ~77
+# minutes, 301 MB).
+#
 # On Apple silicon, Nuitka's auto-downloaded ccache is an x86-64 binary (its
 # cache holds one build per version), so Scons runs it under Rosetta and clang
 # then fails with "unable to load libxcrun ... need 'x86_64'" (issue #243).
@@ -26,6 +37,12 @@ WAVES_MACOS_MIN ?= 15.0
 # other hosts keep it.
 WAVES_HOST := $(shell uname -s 2>/dev/null)-$(shell uname -m 2>/dev/null)
 WAVES_NUITKA_FLAGS ?= $(if $(filter Windows_NT,$(OS)),--low-memory,$(if $(filter Darwin-arm64,$(WAVES_HOST)),--disable-ccache,))
+# Appended, not part of the ?= default: the exclusion is a packaging fact about
+# yt-dlp, not a host choice, and the CI Windows legs prefix the command with
+# WAVES_NUITKA_FLAGS=--low-memory (an environment value a ?= default would
+# never apply to). A command-line WAVES_NUITKA_FLAGS=... override still wins --
+# the usual escape hatch for a one-off build.
+WAVES_NUITKA_FLAGS += --nofollow-import-to=yt_dlp.extractor.lazy_extractors
 
 .PHONY: install
 install: ## Install the poetry environment and install the pre-commit hooks

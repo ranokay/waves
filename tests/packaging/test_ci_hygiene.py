@@ -117,3 +117,19 @@ def test_windows_builds_ask_nuitka_for_low_memory():
     # from OS=Windows_NT alone and stay out of the other platforms' commands.
     assert "--low-memory" in _dry_run_nuitka_command({"OS": "Windows_NT"})
     assert "--low-memory" not in _dry_run_nuitka_command({"OS": ""})
+
+
+def test_the_build_excludes_yt_dlps_lazy_extractor_table():
+    """Every host must exclude yt-dlp's lazy extractor table (issue #245): its
+    generated C dominated the cold build (the measured numbers live in
+    docs/platform-enablement-review.md) and it is the one module the Windows
+    runners cannot compile at all. Waves only ever hands yt-dlp direct stream
+    URLs (gamdl's HlsFD/HttpFD path) and yt-dlp's own import contract falls back
+    to the real extractor modules when the table is absent, so the artifact
+    keeps every extractor. The CI Windows legs export
+    WAVES_NUITKA_FLAGS=--low-memory themselves, so the exclusion has to survive
+    an environment-provided value, not just resolve from the Makefile's own
+    default."""
+    for env in ({"OS": "Windows_NT"}, {"OS": ""}, {"OS": "Windows_NT", "WAVES_NUITKA_FLAGS": "--low-memory"}):
+        command = _dry_run_nuitka_command(env)
+        assert "--nofollow-import-to=yt_dlp.extractor.lazy_extractors" in command, env
