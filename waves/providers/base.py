@@ -306,6 +306,12 @@ class Provider(ABC):
     under (``apple_lyrics_embed``). The neutral default is "": the provider's
     mirrors stay under its id namespace, with the shared keys as fallback."""
 
+    ttml_lyrics: bool = False
+    """Whether this provider's engine can write verbatim TTML lyric sidecars.
+    The neutral default is False, so the Chooser disables its TTML toggle for a
+    provider that cannot produce one, capability instead of provider identity
+    (issue #235)."""
+
     @classmethod
     def descriptor(cls) -> ProviderDescriptor:
         """Static identity for the surfaces that list providers.

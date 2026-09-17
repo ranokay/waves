@@ -8,14 +8,16 @@ Chooser popover. The popover carries the provider segment (fixed on
 collections), the provider's tiers with detail text, audio type
 stereo/Atmos/both (collapsing to ATMOS ONLY on atmos-only tracks), lyrics/art
 quick toggles, SET AS DEFAULTS (writes back to Settings) + DOWNLOAD. The
-choice applies to that click only. With Apple disabled rows keep today's
-single-face behavior.
+choice applies to that click only. The control is capability-driven, not an
+Apple feature: a TIDAL-only install gets it too, and a provider whose
+metadata offers nothing per-click gets no chevron.
 
 HOW THIS STAYS FIXED
 --------------------
 Method-bound stubs, no display and no session: chooserTiers names the tiers
 with spec detail text (Apple has no LOW); chooserDefaults answers provider /
-providerFixed / tier / audioType / atmosOnly / toggles from Settings;
+the segment tiles / tier / audioType / atmosOnly / toggles from
+provider metadata and Settings;
 saveChooserDefaults stages tier + audio + toggles through applySettings and
 refuses Apple LOW; downloadWithChooser pins tier + audio for that click only
 without touching _quality_overrides, both queues two rows, atmos/stereo queue
@@ -125,13 +127,14 @@ def _bridge(**over):
         "isAppleEnabled",
         "_provider_meta",
         "_chooser_provider_of",
-        "_chooser_is_collection_kind",
         "_chooser_tier_entries",
         "chooserTiers",
         "chooserDefaultTier",
         "_chooser_default_tier_word",
         "_chooser_default_audio",
         "_chooser_atmos_only",
+        "_chooser_supports",
+        "chooserSupported",
         "chooserDefaults",
         "saveChooserDefaults",
         "_chooser_normalize_audio",
@@ -194,11 +197,11 @@ def test_chooser_defaults_come_from_settings_per_provider():
     assert b.chooserDefaultTier("tidal") == "HI-RES"
     assert b.chooserDefaultTier("apple") == "HIGH"
     d = b.chooserDefaults("t1", "track")
-    assert d["provider"] == "tidal" and d["providerFixed"] is False
+    assert d["provider"] == "tidal"
     assert d["tier"] == "HI-RES" and d["audioType"] == "stereo"
-    assert d["atmosOnly"] is False and d["appleEnabled"] is False
-    d_album = b.chooserDefaults("a1", "album")
-    assert d_album["providerFixed"] is True
+    assert d["atmosOnly"] is False
+    assert b.chooserSupported("t1", "track") is True, "the one owner of the chevron verdict"
+    assert b.chooserSupported("a1", "album") is True
     d_apple = b.chooserDefaults("apple:456", "track")
     assert d_apple["provider"] == "apple" and d_apple["tier"] == "HIGH"
     assert [e["word"] for e in d_apple["tiers"]] == ["HI-RES", "LOSSLESS", "HIGH"]
@@ -219,8 +222,10 @@ def test_chooser_defaults_audio_follows_the_default_and_atmos_only_collapses():
     assert d["atmosOnly"] is True
 
 
-def test_is_apple_enabled_gates_the_split_face():
-    assert _bridge(apple_enabled=False).isAppleEnabled() is False
+def test_the_split_face_is_not_gated_on_apple():
+    b = _bridge(apple_enabled=False)
+    assert b.isAppleEnabled() is False
+    assert b.chooserSupported("t1", "track") is True, "a TIDAL-only install gets the Chooser"
     assert _bridge(apple_enabled=True).isAppleEnabled() is True
 
 

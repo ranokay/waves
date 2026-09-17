@@ -208,6 +208,18 @@ REDOWNLOAD stays the way back. Disabling Apple in Settings stops its queued
 and running rows through the same Stopped shape STOP uses, each carrying the
 reason that says why.
 
+The per-click Chooser's two answer-only slots are capability-driven (issue
+#235), so a provider is never named by QML: `chooserSupported(mediaId, kind)`
+says whether a control carries the split button at all (the covered kinds plus
+the row's provider metadata: a quality rung, an audio type, or a lyrics/art
+capability), and `chooserDefaults(mediaId, kind)` returns the popover's data --
+`provider`, `providers` (segment tiles: id, name, logo,
+logo_width, selected, one per enabled provider with the row's own always
+present), `tier`, `audioType` (clamped to `audioOptions`), `audioOptions`,
+`atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt` and the
+lyrics/art quick-toggles. A provider whose metadata offers nothing per-click
+answers `chooserSupported` False, so no chevron renders.
+
 ## Local library presence (the "in your library" badge)
 
 The scan family lives in `bridge_library.py` (`LibraryMixin`, mixed into

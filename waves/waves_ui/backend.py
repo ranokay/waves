@@ -4121,6 +4121,71 @@ def _provider_lights(bridge) -> list[dict]:
     return [light for light in lights if light is not None]
 
 
+# ----- the Chooser's control and provider segment (issue #235) -----
+#
+# The per-click Chooser belongs to the control and the provider metadata, not
+# to Apple: a TIDAL-only install gets it, a provider that declares no per-click
+# options gets no chevron, and a third provider's segment tile renders from its
+# descriptor with no QML branch.
+
+# The download kinds that carry the per-click control (spec §7.2): track rows
+# and collection pages. Bulk sweeps keep Settings and a single face. QML no
+# longer spells it; ``downloadWithChooser``'s dispatch templates must cover
+# every kind that appears here (a kind it does not know falls back to the
+# plain download slot there).
+_CHOOSER_KINDS: tuple[str, ...] = ("track", "album", "playlist", "mix", "video")
+
+
+def _provider_is_enabled(bridge, provider) -> bool:
+    """Whether a provider is enabled, from the same flags its light reads.
+
+    A SESSION provider (TIDAL) has no switch and is always on; a SETUP
+    provider answers from its live setup flags, a missing probe reading off --
+    the same rule its status light follows. No provider id enters the rule.
+    """
+    try:
+        descriptor = provider.descriptor()
+    except Exception:
+        logger.debug("A provider's descriptor failed; treating it as disabled", exc_info=True)
+        return False
+    if descriptor.status_kind is not StatusKind.SETUP:
+        return True
+    return bool(_provider_setup_flags(bridge, provider).get("enabled", False))
+
+
+def _chooser_provider_tiles(bridge, selected_id: str) -> list[dict]:
+    """The Chooser's provider segment tiles, descriptor-driven.
+
+    One tile per ENABLED provider; the selected provider always gets its tile
+    even while its switch is off (the row is on screen already, and hiding the
+    selected tile would leave a bare segment). Each carries the descriptor's
+    own name and mark, so QML renders a third provider's tile with no branch
+    and no provider id or asset path in QML.
+    """
+    tiles: list[dict] = []
+    for provider in _provider_registry(bridge):
+        try:
+            descriptor = provider.descriptor()
+        except Exception:
+            logger.debug("A provider's descriptor failed; no Chooser tile for it", exc_info=True)
+            continue
+        pid = str(getattr(descriptor, "id", "") or "")
+        if not pid:
+            continue
+        if pid != selected_id and not _provider_is_enabled(bridge, provider):
+            continue
+        tiles.append(
+            {
+                "id": pid,
+                "name": str(getattr(descriptor, "name", "") or pid),
+                "logo": str(getattr(descriptor, "logo", "") or ""),
+                "logo_width": int(getattr(descriptor, "logo_width", 0) or 0),
+                "selected": pid == selected_id,
+            }
+        )
+    return tiles
+
+
 def _browse_nav(bridge) -> dict:
     """Browse's availability for the header and its landing pane.
 
@@ -9997,8 +10062,9 @@ class WavesBridge(LibraryMixin, QObject):
     def isAppleEnabled(self) -> bool:
         """Whether the Apple provider section is enabled (spec §7.1).
 
-        QML gates the split-button chevron on this: with Apple disabled rows
-        keep today's single-face behavior unchanged."""
+        The split-button chooser is no longer gated on this (issue #235: the
+        control belongs to every provider); the Apple surfaces that still read
+        it are the provider's own cards, panes and download gates."""
         return self._get_apple_enabled()
 
     def _provider_meta(self, provider_id: str):
@@ -10022,10 +10088,6 @@ class WavesBridge(LibraryMixin, QObject):
             if mid.startswith(f"{provider_id}:"):
                 return provider_id
         return CTX_TIDAL
-
-    def _chooser_is_collection_kind(self, kind: str) -> bool:
-        """Whether a download kind belongs to a provider (fixed segment)."""
-        return str(kind or "").strip().lower() in ("album", "playlist", "mix", "artist", "folder", "category")
 
     def _chooser_tier_entries(self, provider_id: str) -> list:
         """The provider's tiers with detail text for the Chooser popover.
@@ -10110,15 +10172,60 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             return False
 
+    def _chooser_supports(self, media_id: str, kind: str) -> bool:
+        """Whether this control carries the per-click Chooser at all.
+
+        Provider metadata decides, never provider identity: the kind must be
+        one the control covers, and the row's provider must offer something to
+        choose -- a quality rung, an audio type, or a lyrics/art capability.
+        A provider that declares none of those gets no chevron, never a
+        control that opens empty.
+        """
+        if str(kind or "").strip().lower() not in _CHOOSER_KINDS:
+            return False
+        if not str(media_id or "").strip():
+            # No row, no control: an empty id is a placeholder host (an
+            # invisible folder tile), never a chooser.
+            return False
+        provider = self._provider_meta(self._chooser_provider_of(media_id))
+        if provider is None:
+            return False
+        capabilities = provider.capabilities
+        return bool(
+            provider.quality_options
+            or provider.audio_types
+            or Capability.LYRICS in capabilities
+            or Capability.ART in capabilities
+        )
+
+    @Slot(str, str, result=bool)
+    def chooserSupported(self, media_id: str, kind: str = "") -> bool:
+        """Whether the row's download control carries the split-button Chooser.
+
+        The Chooser is a control, not an Apple feature (issue #235 / audit
+        TS-05), so a TIDAL-only install gets it too; a provider whose metadata
+        offers no per-click options answers False and the QML renders no
+        chevron. One slot for every provider, so no QML branch names one.
+        """
+        try:
+            return self._chooser_supports(media_id, kind)
+        except Exception:
+            logger.debug("Chooser capability probe failed; hiding the control", exc_info=True)
+            return False
+
     @Slot(str, str, result="QVariant")
     def chooserDefaults(self, media_id: str, kind: str = "") -> dict:
         """Everything the Chooser popover needs to open on this control.
 
-        provider: the row's provider (tidal/apple); providerFixed: True on
-        collection rows (a collection belongs to its provider); tier: the
-        Settings tier word for that provider; audioType: stereo/both from
-        Settings; atmosOnly: collapse the audio control; tiers: the
-        provider's tier entries; lyrics/art: the shared quick-toggles."""
+        provider: the row's provider id; providers: the segment tiles
+        (enabled providers, the row's own always present, each descriptor's
+        name/mark/logo_width and which one is selected); tier: the Settings
+        tier word for that provider; audioType: stereo/both from Settings,
+        clamped to the words ``audioOptions`` offers; atmosOnly: collapse the
+        audio control; tiers: the provider's tier entries; audioOptions: the
+        provider's own audio words; showLyrics/showLyricsTtml/showArt: whether
+        each popover section applies to this provider (capability and engine
+        facts, never provider identity); lyrics/art: the shared quick-toggles."""
         provider_id = self._chooser_provider_of(media_id)
         provider = self._provider_meta(provider_id)
         capabilities = provider.capabilities if provider is not None else frozenset()
@@ -10146,20 +10253,28 @@ class WavesBridge(LibraryMixin, QObject):
         audio_options = ["stereo"]
         if provider is None or AudioType.ATMOS in provider.audio_types:
             audio_options += ["atmos", "both"]
+        audio_default = self._chooser_default_audio()
+        if audio_default not in audio_options:
+            # A stereo-only provider cannot honor a "both" default: the value
+            # and the offered words must agree, or the popover opens with no
+            # tile selected and sends a word the provider cannot fetch.
+            audio_default = "stereo"
         return {
             "provider": provider_id,
-            "providerFixed": bool(self._chooser_is_collection_kind(kind)),
+            "providers": _chooser_provider_tiles(self, provider_id),
             "tier": self._chooser_default_tier_word(provider_id),
-            "audioType": self._chooser_default_audio(),
+            "audioType": audio_default,
             "atmosOnly": bool(self._chooser_atmos_only(media_id, kind)),
             "tiers": self._chooser_tier_entries(provider_id),
             "audioOptions": audio_options,
+            "showLyrics": Capability.LYRICS in capabilities,
+            "showLyricsTtml": Capability.LYRICS in capabilities and bool(getattr(provider, "ttml_lyrics", False)),
+            "showArt": Capability.ART in capabilities,
             "lyricsEmbed": lyrics_embed,
             "lyricsFile": lyrics_file,
             "lyricsTtml": lyrics_ttml,
             "coverEmbed": cover_embed,
             "coverFile": cover_file,
-            "appleEnabled": self._get_apple_enabled(),
         }
 
     @Slot("QVariant")
@@ -17590,7 +17705,7 @@ class WavesBridge(LibraryMixin, QObject):
                     lyrics_file=bool(self._psetting(CTX_APPLE, "lyrics_file", False)),
                     synced_only=bool(self._psetting(CTX_APPLE, "lyrics_file_synced_only", False)),
                     ttml_file=bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False)),
-                    is_apple=True,
+                    ttml_supported=True,
                 ):
                     if write_text_sidecar(folder, stem, suffix, text) is not None:
                         wrote = True
@@ -17739,7 +17854,7 @@ class WavesBridge(LibraryMixin, QObject):
                     lyrics_file=bool(self._psetting(CTX_TIDAL, "lyrics_file", False)),
                     synced_only=bool(self._psetting(CTX_TIDAL, "lyrics_file_synced_only", False)),
                     ttml_file=False,
-                    is_apple=False,
+                    ttml_supported=False,
                 )
                 has_lyrics = bool(synced or unsynced)
                 embed_on = bool(self._psetting(CTX_TIDAL, "lyrics_embed", False))

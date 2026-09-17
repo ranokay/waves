@@ -113,6 +113,9 @@ class AppleProvider(Provider):
     # per-click Atmos fetch is a real delivery, so Apple serves both types.
     audio_types = frozenset({AudioType.STEREO, AudioType.ATMOS})
     settings_card = "apple"
+    # Apple's syllable-timed lyrics arrive as TTML, so its Chooser offers the
+    # verbatim sidecar toggle (the writer honors it for Apple only).
+    ttml_lyrics = True
 
     @classmethod
     def descriptor(cls) -> ProviderDescriptor:

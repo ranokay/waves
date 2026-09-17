@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from support.provider_fakes import BareProvider
 
 from waves.constants import CTX_APPLE, CTX_TIDAL, QualityTier
-from waves.providers import AudioType, Capability, QualityOption
+from waves.providers import AudioType, Capability, QualityOption, StatusKind
 from waves.providers.apple import AppleProvider
 from waves.providers.tidal import TidalProvider
 from waves.waves_ui.backend import WavesBridge
@@ -72,13 +72,14 @@ def _bridge(providers=None, **settings_over):
     for name in (
         "_provider_meta",
         "_chooser_provider_of",
-        "_chooser_is_collection_kind",
         "_chooser_tier_entries",
         "chooserTiers",
         "chooserDefaultTier",
         "_chooser_default_tier_word",
         "_chooser_default_audio",
         "_chooser_atmos_only",
+        "_chooser_supports",
+        "chooserSupported",
         "chooserDefaults",
         "saveChooserDefaults",
         "_chooser_ask_for",
@@ -102,6 +103,20 @@ _QOBUZ = SimpleNamespace(
     audio_types=frozenset({AudioType.STEREO}),
     settings_card="qobuz",
 )
+
+
+def _qobuz_descriptor():
+    """A third provider's descriptor, the identity its segment tile reads."""
+    return SimpleNamespace(
+        id="qobuz",
+        name="Qobuz",
+        logo="assets/providers/qobuz.png",
+        logo_width=22,
+        status_kind=StatusKind.NONE,
+    )
+
+
+_QOBUZ.descriptor = _qobuz_descriptor
 
 
 # --------------------------------------------------------------------------- #
@@ -167,11 +182,10 @@ def test_chooser_default_tier_reads_each_providers_own_setting():
 def test_chooser_defaults_carry_provider_audio_options_and_toggles():
     b = _bridge()
     d = b.chooserDefaults("apple:1", "track")
-    assert d["provider"] == "apple" and d["providerFixed"] is False
+    assert d["provider"] == "apple"
     assert d["audioOptions"] == ["stereo", "atmos", "both"]
     assert d["tier"] == "LOSSLESS"
     assert d["lyricsEmbed"] is False and d["coverEmbed"] is True
-    assert b.chooserDefaults("t1", "album")["providerFixed"] is True
 
 
 def test_chooser_pins_only_listed_tiers_for_each_provider():
@@ -238,6 +252,127 @@ def test_a_third_provider_without_the_capability_gets_no_toggle_gate():
     d = b.chooserDefaults("mute:1", "track")
     assert d["lyricsEmbed"] is False and d["lyricsFile"] is False and d["lyricsTtml"] is False
     assert d["coverEmbed"] is False and d["coverFile"] is False
+
+
+def test_chooser_supported_is_capability_driven_not_provider_identity():
+    """The split button belongs to the control, not to Apple (issue #235 /
+    TS-05): a TIDAL-only install gets it, an unsupported kind does not, and a
+    provider whose metadata offers nothing per-click answers False instead of
+    drawing a control that opens empty."""
+    b = _bridge(apple_enabled=False)
+    assert b.chooserSupported("t1", "track") is True
+    assert b.chooserSupported("t1", "album") is True
+    assert b.chooserSupported("apple:1", "track") is True, "the Apple switch is not the gate"
+    assert b.chooserSupported("t1", "artist") is False
+    assert b.chooserSupported("t1", "folder") is False
+    assert b.chooserSupported("", "track") is False
+
+    bare = SimpleNamespace(
+        name="Mute",
+        capabilities=frozenset(),
+        quality_options=(),
+        quality_setting="",
+        audio_types=frozenset(),
+        settings_card="mute",
+    )
+    b = _bridge(providers={"mute": bare})
+    assert b.chooserSupported("mute:1", "track") is False
+
+
+def test_chooser_segment_tiles_come_from_the_enabled_providers_descriptors():
+    """The provider segment is bridge data (issue #235): a disabled provider
+    draws no tile, the row's own provider always does, and each tile carries
+    the descriptor's own name and mark -- no provider name or asset path in
+    QML, so a third provider renders with no QML edit."""
+    b = _bridge(apple_enabled=False)
+    d = b.chooserDefaults("t1", "track")
+    assert [t["id"] for t in d["providers"]] == ["tidal"]
+    assert d["providers"][0]["selected"] is True
+
+    # A third provider with no setup switch is always on; it renders from its
+    # descriptor and metadata alone.
+    b = _bridge(
+        providers={CTX_TIDAL: TidalProvider(SimpleNamespace()), "qobuz": _QOBUZ}, qobuz_quality_audio="LOSSLESS"
+    )
+    tiles = b.chooserDefaults("qobuz:1", "track")["providers"]
+    assert [t["id"] for t in tiles] == ["tidal", "qobuz"]
+    assert [t["selected"] for t in tiles] == [False, True]
+    qobuz = tiles[1]
+    assert qobuz["name"] == "Qobuz" and qobuz["logo"] == "assets/providers/qobuz.png"
+
+    b = _bridge(apple_enabled=True)
+    b._provider_status_probes = {CTX_APPLE: lambda: {"enabled": True}}
+    tiles = b.chooserDefaults("apple:1", "track")["providers"]
+    assert [t["id"] for t in tiles] == ["tidal", "apple"]
+    assert [t["selected"] for t in tiles] == [False, True]
+    apple = tiles[1]
+    descriptor = AppleProvider.descriptor()
+    assert apple["name"] == descriptor.name
+    assert apple["logo"] == descriptor.logo
+    assert apple["logo_width"] == descriptor.logo_width
+
+
+def test_the_chooser_carries_which_sections_apply_per_provider():
+    """Each popover section is gated on provider metadata, not identity: the
+    lyrics/art sections follow the capabilities and the TTML toggle follows
+    the provider's own engine fact (issue #235)."""
+    b = _bridge()
+    tidal = b.chooserDefaults("t1", "track")
+    apple = b.chooserDefaults("apple:1", "track")
+    assert tidal["showLyrics"] is True and tidal["showArt"] is True
+    assert tidal["showLyricsTtml"] is False, "TIDAL writes no verbatim TTML sidecar"
+    assert apple["showLyrics"] is True and apple["showArt"] is True
+    assert apple["showLyricsTtml"] is True
+
+    bare = SimpleNamespace(
+        name="Mute",
+        capabilities=frozenset(),
+        quality_options=(),
+        quality_setting="",
+        audio_types=frozenset(),
+        settings_card="mute",
+    )
+    d = _bridge(providers={"mute": bare}).chooserDefaults("mute:1", "track")
+    assert d["showLyrics"] is False and d["showArt"] is False and d["showLyricsTtml"] is False
+
+
+def test_a_stereo_only_provider_clamps_the_stored_both_default():
+    """A 'both' Settings default cannot survive for a provider with no Atmos
+    words: the popover would open with no tile selected and send a word the
+    provider cannot fetch (issue #235)."""
+    stereo_only = SimpleNamespace(
+        name="Qobuz",
+        capabilities=frozenset({Capability.LYRICS}),
+        quality_options=(QualityOption(QualityTier.LOSSLESS, "FLAC 16-bit"),),
+        quality_setting="qobuz_quality_audio",
+        audio_types=frozenset({AudioType.STEREO}),
+        settings_card="qobuz",
+    )
+    d = _bridge(providers={"qobuz": stereo_only}, default_audio_type="both").chooserDefaults("qobuz:1", "track")
+    assert d["audioOptions"] == ["stereo"]
+    assert d["audioType"] == "stereo"
+    assert d["audioType"] in d["audioOptions"]
+    # A provider that serves Atmos keeps the stored default as it was.
+    assert _bridge(default_audio_type="both").chooserDefaults("t1", "track")["audioType"] == "both"
+
+
+def test_the_chooser_qml_names_no_provider():
+    """Acceptance for a third provider: the popover region carries no provider
+    id, name or asset, so a provider registered with a descriptor and the
+    right metadata renders its segment, audio words and section gates without
+    a QML edit (issue #235)."""
+    import pathlib
+
+    from waves.waves_ui import backend as backend_module
+
+    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "Main.qml").read_text(encoding="utf-8")
+    start = qml.find("id: chooserComp")
+    end = qml.find("// Playlist-folder tile", start + 1)
+    assert start != -1 and end != -1, "the guard found no chooser region to check"
+    region = qml[start:end]
+    assert "PROVIDER" in region, "the guard is looking at the wrong region"
+    for needle in ("tidal", "apple", "assets/providers", "chooserRowProvider"):
+        assert needle.lower() not in region.lower(), f"the Chooser region still names a provider: {needle}"
 
 
 # --------------------------------------------------------------------------- #

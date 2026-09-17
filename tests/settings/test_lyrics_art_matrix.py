@@ -88,11 +88,13 @@ def test_sidecar_matrix_extensions_never_faked():
     assert lyrics_sidecar_choices(plain="hi", lyrics_file=True) == [("hi", ".txt")]
     assert lyrics_sidecar_choices(plain="hi", lyrics_file=True, synced_only=True) == []
     # TTML is independent: Apple verbatim zero-conversion, sidecar-only.
-    assert lyrics_sidecar_choices(ttml="<tt/>", ttml_file=True, is_apple=True) == [("<tt/>", ".ttml")]
+    assert lyrics_sidecar_choices(ttml="<tt/>", ttml_file=True, ttml_supported=True) == [("<tt/>", ".ttml")]
     # TIDAL has no TTML source: the toggle is inert there.
-    assert lyrics_sidecar_choices(ttml="<tt/>", ttml_file=True, is_apple=False) == []
+    assert lyrics_sidecar_choices(ttml="<tt/>", ttml_file=True, ttml_supported=False) == []
     # All embed x sidecar combinations valid: both sidecars at once.
-    both = lyrics_sidecar_choices(synced="[00:01]hi", ttml="<tt/>", lyrics_file=True, ttml_file=True, is_apple=True)
+    both = lyrics_sidecar_choices(
+        synced="[00:01]hi", ttml="<tt/>", lyrics_file=True, ttml_file=True, ttml_supported=True
+    )
     assert both == [("[00:01]hi", ".lrc"), ("<tt/>", ".ttml")]
     # Nothing enabled means nothing written.
     assert lyrics_sidecar_choices(synced="x", plain="y", ttml="z") == []
