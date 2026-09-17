@@ -10042,7 +10042,11 @@ ApplicationWindow {
                     ProviderBadge {
                         objectName: "trackProviderBadge"
                         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                        visible: trow.local && trow.provider !== ""
+                        // The mark gates the badge: a namespace no registered
+                        // provider claims has no logo (the bridge says so),
+                        // and the badge must not fall back to another
+                        // provider's mark for it.
+                        visible: trow.local && trow.providerLogo !== ""
                         provider: trow.provider
                         logo: trow.providerLogo
                     }
@@ -12340,7 +12344,10 @@ ApplicationWindow {
             model.clear()
             for (var i = 0; i < items.length; ++i) model.append(items[i])
             var m = Object.assign({}, more); m[v] = hasMore === true; more = m
-            if (total >= 0) { var c = Object.assign({}, counts); c[v] = total; counts = c }
+            // The total is stored even when it is -1 (a failed page): that is
+            // the state the section's status text reports, and dropping it
+            // made a read error read as "no saved files yet".
+            if (total !== undefined) { var c = Object.assign({}, counts); c[v] = total; counts = c }
             if (v === category) {
                 loading = false
                 listFor(v).applyRestore()

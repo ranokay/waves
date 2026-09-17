@@ -277,6 +277,19 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
     if not _click(root, q, settle, _point("libSection", "libViewChip-saved"), _list_visible("libSavedList")):
         failures.append("clicking Saved did not switch back")
 
+    # A read failure is a state, not an empty library: the bridge answers
+    # total -1 and the section says so instead of "No saved files yet".
+    def boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    bridge._library.files_page = boom
+    q("libSection.reload()")
+    settle(500)
+    if not bool(q(_text_visible("libSection", "Could not read your music folder"))):
+        failures.append("a failed page read as an empty library")
+    if bool(q(_text_visible("libSection", "No saved files yet"))):
+        failures.append("a failed page showed the empty sentence")
+
     for line in failures:
         print(f"REGRESSED: {line}", file=sys.stderr)
     return EXIT_REGRESSED if failures else EXIT_OK

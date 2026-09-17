@@ -648,9 +648,10 @@ def _default_item_id(path: str) -> str | None:
     "" is the settled answer for a file no provider saved (every plain
     library file); None means the read failed, and the row is then persisted
     unknown so the folder retries rather than hardening "untagged" into a
-    fact. The reader's own contract already answers "" for both cases, so
-    None is only reachable through the injectable seam; the distinction is
-    kept because a failed probe must never read as "not Waves' file".
+    fact. The reader cannot tell "no tag" from "could not read" -- both
+    answer "" -- so None comes from this probe's own failures (the reader
+    unreachable, or raising) and from an injectable seam that answers it;
+    either way a failed probe must never read as "not Waves' file".
     """
     try:
         from waves.metadata import read_item_id
