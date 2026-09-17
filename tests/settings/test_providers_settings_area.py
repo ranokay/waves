@@ -304,6 +304,59 @@ def _apply(stub, values):
     WavesBridge.applySettings.__get__(stub, type(stub))(values)
 
 
+def test_saving_an_overlapping_quarantine_folder_warns_with_the_used_path(tmp_path):
+    """Issue #238 / LM-07: the resolver refuses a quarantine folder that
+    overlaps the download root, so the save says so instead of leaving the
+    stored value and the folder really used silently different."""
+    stub = _apply_stub()
+    stub.settings.data.download_base_path = str(tmp_path / "lib")
+    stub.settings.data.apple_quarantine_dir = ""
+    notes: list = []
+    stub._set_status = notes.append
+    stub._configure_apple_provider = lambda: None
+    stub._apple_quarantine_note = WavesBridge._apple_quarantine_note.__get__(stub, type(stub))
+
+    _apply(stub, {"apple_quarantine_dir": str(tmp_path / "lib")})
+
+    assert stub.settings.data.apple_quarantine_dir == str(tmp_path / "lib"), "the typed value is stored as given"
+    assert notes and "Settings saved" in notes[-1], "the saved word survives the warning"
+    assert "overlaps the download folder" in notes[-1]
+    assert "Waves Quarantine" in notes[-1]
+
+    # A folder outside the download root saves with no warning.
+    notes.clear()
+    _apply(stub, {"apple_quarantine_dir": str(tmp_path / "quarantine")})
+    assert notes == ["Settings saved"], "only the plain saved word"
+
+    # Moving the download folder onto an existing custom quarantine folder
+    # is the same divergence and warns too.
+    notes.clear()
+    _apply(stub, {"download_base_path": str(tmp_path / "quarantine")})
+    assert notes and "overlaps the download folder" in notes[-1]
+
+
+def test_the_quarantine_card_names_the_folder_really_in_use(tmp_path):
+    """The stored value stays visible, and the card's help says which folder
+    is used instead when the resolver overrides it (issue #238 / LM-07)."""
+    stub = _schema_stub(apple_enabled=True)
+    stub.settings = SimpleNamespace(data=ModelSettings())
+    stub.settings.data.download_base_path = str(tmp_path / "lib")
+    stub._apple_quarantine_note = WavesBridge._apple_quarantine_note.__get__(stub, type(stub))
+
+    def _quarantine_field():
+        for section in WavesBridge.settingsSchema(stub):
+            for card in section.get("providers") or []:
+                for field in card.get("fields") or []:
+                    if field["key"] == "apple_quarantine_dir":
+                        return field
+        raise AssertionError("the Apple card carries no quarantine field")
+
+    assert "overlaps the download folder" not in _quarantine_field()["help"]
+    stub.settings.data.apple_quarantine_dir = str(tmp_path / "lib")  # the download root itself
+    assert "overlaps the download folder" in _quarantine_field()["help"]
+    assert "Waves Quarantine" in _quarantine_field()["help"]
+
+
 def test_saving_the_switch_persists_it():
     stub = _apply_stub()
     _apply(stub, {"apple_enabled": True})

@@ -59,6 +59,9 @@ def schema_stub(apple_enabled: bool = False, logged_in: bool = False):
     stub.settings.data.apple_enabled = apple_enabled
     stub._help = HelpSettings()
     stub._help_for = _bind(stub, "_help_for")
+    # The quarantine field's help is composed with the resolver's answer, so
+    # the schema needs the note helper bound like _help_for.
+    stub._apple_quarantine_note = _bind(stub, "_apple_quarantine_note")
     stub._ffmpeg_flag_prefs = {}
     stub.ffmpegState = lambda: {"status": "none", "source": "none", "path": ""}
     stub._user_ffmpeg_path = lambda: ""

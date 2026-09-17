@@ -36,6 +36,14 @@ def test_em_dash_becomes_plain_punctuation():
     assert _help_for("Downsample — never upsample") == "Downsample; never upsample"
 
 
+def test_integrity_help_names_the_decodability_limit():
+    """Spec §6.5 / issue #238: verification proves a delivery decodes, not
+    that it is bit-perfect, and the integrity help must say so rather than
+    imply a fidelity guarantee."""
+    text = HelpSettings().apple_integrity_retries
+    assert "decodab" in text and "not bit-perfect fidelity" in text
+
+
 def test_delimiter_help_advertises_the_real_default():
     real_default = ", "
     help_text = _help_for(HelpSettings().filename_delimiter_artist)
