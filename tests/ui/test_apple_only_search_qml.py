@@ -73,14 +73,16 @@ def _settle_until(q, settle, predicate, *, timeout_ms: int = 5000, step_ms: int 
     """Spin the event loop until the predicate holds, or its budget runs out.
 
     The bridge answers a search from a worker thread, so a state a payload
-    produces cannot be read the moment the search is issued.
+    produces cannot be read the moment the search is issued. ``step_ms`` 0
+    samples one event-loop pass at a time: a build veil over a handful of
+    cards can rise and fall inside a few milliseconds.
     """
     waited = 0
     while not predicate():
         if waited >= timeout_ms:
             return False
         settle(step_ms)
-        waited += step_ms
+        waited += max(step_ms, 1)
     return True
 
 
@@ -111,7 +113,7 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
 
     bridge.settings.data.apple_enabled = True
     bridge.appleStatusChanged.emit()
-    settle(300)
+    _settle_until(q, settle, lambda: q("appleEnabled"), timeout_ms=2000, step_ms=10)
 
     searches: list[str] = []
 
@@ -135,7 +137,9 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
         hint_seen = hint_seen or bool(q("searchBuildHint.active"))
         return bool(q("root.appleSearchGrouped")) and q("root.appleSearchCount") == len(_ARTISTS)
 
-    rows_landed = _settle_until(q, settle, _rows_landed, step_ms=5)
+    rows_landed = _settle_until(q, settle, _rows_landed, step_ms=0)
+    # The veil's total is what holds it up until every Apple card has loaded:
+    # the rendered hint proves it rose, this proves it counted the rows.
     build_total_ok = q("root._searchBuildTotal") == len(_ARTISTS)
     veil_down = _settle_until(q, settle, lambda: not bool(q("searchBuildHint.active")))
     loading_ok = rows_landed and build_total_ok and hint_seen and veil_down
@@ -145,12 +149,29 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
     # rows when the fetch answers.
     q("root.submitSearch('flaky')")
     error_shown = _settle_until(q, settle, lambda: q("root.appleSearchError") == APPLE_WORDS)
-    error_ok = error_shown and bool(_find_visible(q, "appleSearchError")) and bool(_find_visible(q, "appleSearchRetry"))
+    error_ok = (
+        error_shown
+        and bool(_find_visible(q, "appleSearchError"))
+        and bool(_find_visible(q, "appleSearchRetry"))
+        # A failed fetch is not an empty catalog: the page never also reports
+        # the query as having found nothing (issue #241 / UI-05).
+        and q("root.searchNoResultsFor") == ""
+    )
+    # The head answers to the same type filter as the group's rows: Apple
+    # serves no videos or mixes, so that filter never shows its head -- error
+    # or not -- while the filters it does answer under keep it.
+    q("root.filterType = 'videos'")
+    filter_ok = _settle_until(q, settle, lambda: not bool(q("appleGroupHead.visible")), timeout_ms=1000, step_ms=5)
+    q("root.filterType = 'tracks'")
+    filter_ok = filter_ok and _settle_until(
+        q, settle, lambda: bool(q("appleGroupHead.visible")), timeout_ms=1000, step_ms=5
+    )
+    q("root.filterType = 'all'")
     q("appleSearchRetry.clicked()")
     retried = _settle_until(
         q, settle, lambda: q("root.appleSearchError") == "" and q("root.appleSearchCount") == len(_ARTISTS)
     )
-    error_ok = error_ok and retried and searches.count("flaky") == 2
+    error_ok = error_ok and filter_ok and retried and searches.count("flaky") == 2
 
     # An Apple-only signed-out search that finds nothing shows its own empty
     # state: the payload was accepted (the group is mounted, no stale error
@@ -170,11 +191,16 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
     # error field, and must not resurrect the group head on stale words.
     bridge.settings.data.apple_enabled = False
     bridge.appleStatusChanged.emit()
-    settle(400)
+    cleared = _settle_until(q, settle, lambda: not bool(q("root.appleSearchGrouped")), timeout_ms=2000, step_ms=10)
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit({**_payload(error=APPLE_WORDS), "refresh": True})
-    settle(400)
-    ghost_ok = not bool(q("root.appleSearchGrouped")) and not bool(_find_visible(q, "appleSearchError"))
+    # The words did land (the premise), under no group and no head.
+    ghost_ok = (
+        cleared
+        and q("root.appleSearchError") == APPLE_WORDS
+        and not bool(q("appleGroupHead.visible"))
+        and not bool(_find_visible(q, "appleSearchError"))
+    )
     return loading_ok, error_ok, empty_ok, ghost_ok
 
 
@@ -215,7 +241,13 @@ def _check_row_gate(bridge, q, settle) -> tuple[bool, bool, bool]:
     # Apple on: the same signed-out session gets a live field and sort control.
     bridge.settings.data.apple_enabled = True
     bridge.appleStatusChanged.emit()
-    settle(500)
+    _settle_until(
+        q,
+        settle,
+        lambda: q("appleEnabled") and q("searchField.enabled") and q("sortBox.enabled"),
+        timeout_ms=2000,
+        step_ms=10,
+    )
     on_ok = (
         q("appleEnabled")
         and q("searchField.enabled")
@@ -227,13 +259,15 @@ def _check_row_gate(bridge, q, settle) -> tuple[bool, bool, bool]:
     # Apple off again: the gate follows the setting, not a one-way latch.
     bridge.settings.data.apple_enabled = False
     bridge.appleStatusChanged.emit()
-    settle(500)
+    _settle_until(
+        q, settle, lambda: not q("searchField.enabled") and not q("sortBox.enabled"), timeout_ms=2000, step_ms=10
+    )
     back_off_ok = not q("searchField.enabled") and not q("sortBox.enabled")
 
     # Leave Apple on for the state checks that follow.
     bridge.settings.data.apple_enabled = True
     bridge.appleStatusChanged.emit()
-    settle(300)
+    _settle_until(q, settle, lambda: q("appleEnabled"), timeout_ms=2000, step_ms=10)
     return off_ok, on_ok, back_off_ok
 
 
