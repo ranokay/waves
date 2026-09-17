@@ -452,11 +452,16 @@ def test_supervisor_recreates_a_container_from_an_older_image(tmp_path):
     def _healthy(url, timeout=5):
         return SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
 
+    session_dir = tmp_path / "wd"
     sup = SidecarSupervisor(runner=_runner, http_get=_healthy, monotonic=lambda: 0.0)
-    assert sup.ensure_started(http_port=51234, image="img:new", data_dir=str(tmp_path / "wd")) is True
+    assert sup.ensure_started(http_port=51234, image="img:new", data_dir=str(session_dir)) is True
     kinds = [cmd[:2] for cmd in seen]
     assert ["docker", "rm"] in kinds, "the container built from the old image must give way"
-    assert ["docker", "run"] in kinds, "the pinned image must take its place"
+    run = next(cmd for cmd in seen if cmd[:2] == ["docker", "run"])
+    # The replacement really runs the pinned image and keeps the session
+    # volume mounted, not merely "a run happened".
+    assert run[-1] == "img:new"
+    assert f"{session_dir}:/app/rootfs/data/data/com.apple.android.music/files" in run
 
 
 def test_supervisor_leaves_a_container_on_the_pinned_image_alone(tmp_path):

@@ -19280,7 +19280,7 @@ class WavesBridge(LibraryMixin, QObject):
             image_pulled=image_pulled,
             port=port,
             port_dirty=port_dirty,
-            runtime_stale=bool(runtime.get("update_available", False)),
+            runtime_stale=bool(runtime.get("runtime_stale", False)),
         )
         return {
             "light": described,

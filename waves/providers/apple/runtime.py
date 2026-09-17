@@ -670,14 +670,7 @@ class AppleRuntimeManager:
 
     def _base_status(self) -> dict:
         """The wrapper pins every status answer carries, managed or not."""
-        pinned = pinned_release(self.os_key, self.arch)
-        return {
-            "wrapper_image": WRAPPER_V2_IMAGE,
-            "wrapper_libs": WRAPPER_LIBS_VERSION,
-            # The release this build ships, so a caller can word "installed X,
-            # pinned Y" without importing the pin table (AP-06).
-            "pinned_version": str(getattr(pinned, "version", "") or NM3U8DLRE_VERSION),
-        }
+        return {"wrapper_image": WRAPPER_V2_IMAGE, "wrapper_libs": WRAPPER_LIBS_VERSION}
 
     def _install_is_stale(self) -> bool:
         """Whether the managed binary predates the shipped pin (AP-06).
@@ -705,7 +698,7 @@ class AppleRuntimeManager:
         ``path`` (the FFmpeg manager's precedence); only the copy this
         manager provisioned reports ``managed``. A managed copy whose
         recorded provenance differs from the shipped pin reports
-        ``update_available`` (AP-06: a pin bump must not let an old binary
+        ``runtime_stale`` (AP-06: a pin bump must not let an old binary
         look current forever); the state stays ``managed`` because the binary
         still works, and Install is the one-click way to replace it.
         """
@@ -720,7 +713,7 @@ class AppleRuntimeManager:
                 "version": str(mani.get("version") or NM3U8DLRE_VERSION),
                 "source_url": str(mani.get("url") or ""),
                 "sha256": str(mani.get("sha256") or ""),
-                "update_available": self._install_is_stale(),
+                "runtime_stale": self._install_is_stale(),
             }
         cp = (custom_path or "").strip()
         if cp and Path(cp).is_file():
@@ -733,7 +726,7 @@ class AppleRuntimeManager:
                 "version": "",
                 "source_url": "",
                 "sha256": "",
-                "update_available": False,
+                "runtime_stale": False,
             }
         found = shutil.which("N_m3u8DL-RE")
         if found:
@@ -746,7 +739,7 @@ class AppleRuntimeManager:
                 "version": "",
                 "source_url": "",
                 "sha256": "",
-                "update_available": False,
+                "runtime_stale": False,
             }
         return {
             **self._base_status(),
@@ -757,7 +750,7 @@ class AppleRuntimeManager:
             "version": "",
             "source_url": "",
             "sha256": "",
-            "update_available": False,
+            "runtime_stale": False,
         }
 
     def install(

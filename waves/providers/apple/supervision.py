@@ -685,33 +685,35 @@ class SidecarSupervisor:
             return False
         return port_bindings_are_private(getattr(proc, "stdout", "") or "", http_port, decrypt_port)
 
-    def _container_image_id(self) -> str:
-        """The image ID our sidecar was created from, "" when unreadable."""
+    def _inspect_image_id(self, args: list, label: str) -> str:
+        """One image-ID inspect: trimmed stdout, "" when unreadable.
+
+        The two ID readers below differ only in argv and the log label;
+        sharing the run/returncode/strip keeps their error handling from
+        drifting apart.
+        """
         try:
-            proc = self._run(
-                [self._binary, "inspect", "--format", "{{.Image}}", self._container],
-                timeout=15,
-            )
+            proc = self._run(args, timeout=15)
         except Exception:
-            logger.debug("Wrapper container image could not be read", exc_info=True)
+            logger.debug("%s could not be read", label, exc_info=True)
             return ""
         if getattr(proc, "returncode", 1) != 0:
             return ""
         return str(getattr(proc, "stdout", "") or "").strip()
 
+    def _container_image_id(self) -> str:
+        """The image ID our sidecar was created from, "" when unreadable."""
+        return self._inspect_image_id(
+            [self._binary, "inspect", "--format", "{{.Image}}", self._container],
+            "Wrapper container image",
+        )
+
     def _local_image_id(self, image: str) -> str:
         """The local image ID the given reference resolves to, "" when unknown."""
-        try:
-            proc = self._run(
-                [self._binary, "image", "inspect", "--format", "{{.Id}}", image],
-                timeout=15,
-            )
-        except Exception:
-            logger.debug("Wrapper image could not be read", exc_info=True)
-            return ""
-        if getattr(proc, "returncode", 1) != 0:
-            return ""
-        return str(getattr(proc, "stdout", "") or "").strip()
+        return self._inspect_image_id(
+            [self._binary, "image", "inspect", "--format", "{{.Id}}", image],
+            "Wrapper image",
+        )
 
     def _container_image_is_current(self, image: str) -> bool:
         """Whether the sidecar was created from the image the pin now names.

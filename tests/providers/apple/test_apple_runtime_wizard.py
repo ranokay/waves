@@ -903,7 +903,7 @@ def test_install_rejects_checksum_mismatch(tmp_path):
     assert not mgr.is_installed()
 
 
-def test_a_stale_managed_binary_reports_update_available(tmp_path, monkeypatch):
+def test_a_stale_managed_binary_reports_runtime_stale(tmp_path, monkeypatch):
     """AP-06: an installed copy whose recorded provenance predates the shipped
     pin must not read as current forever, and installing the new pin is the
     update. An unchanged pin reports current and re-downloads nothing."""
@@ -918,20 +918,19 @@ def test_a_stale_managed_binary_reports_update_available(tmp_path, monkeypatch):
     mgr.install(release=pinned, session=_Sess(blob, sha))
 
     current = mgr.status()
-    assert current["state"] == "managed" and current["update_available"] is False
-    assert current["pinned_version"] == "v9.9.9"
+    assert current["state"] == "managed" and current["runtime_stale"] is False
 
     # A pin bump: new version, new asset, new checksum. The installed copy is
     # still executable and does not read as current any more.
     bumped = Nm3u8dlreRelease(version="v9.9.10", url="https://example.invalid/N-9910.tar.gz", sha256=sha)
     monkeypatch.setattr("waves.providers.apple.runtime.pinned_release", lambda *a, **k: bumped)
     stale = mgr.status()
-    assert stale["state"] == "managed" and stale["update_available"] is True
+    assert stale["state"] == "managed" and stale["runtime_stale"] is True
 
     # The offered Install (the wizard's apple_update_runtime action) replaces
     # it, and the copy reads current again.
     mgr.install(release=bumped, session=_Sess(blob, sha))
-    assert mgr.status()["update_available"] is False
+    assert mgr.status()["runtime_stale"] is False
 
 
 def test_remove_clears_binary_and_manifest(tmp_path, monkeypatch):
