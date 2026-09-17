@@ -4252,6 +4252,13 @@ def _browse_nav(bridge) -> dict:
     }
 
 
+# The words an Apple verb with no implementation yet answers with. Present
+# tense on purpose: a future-tense promise would claim a ship date the build
+# cannot back, and one constant keeps the artist, mix and video refusals from
+# drifting apart (R-28 / UI-03).
+_APPLE_VERB_UNAVAILABLE = "Not available for Apple Music yet"
+
+
 class WavesBridge(LibraryMixin, QObject):
     """The single object exposed to QML as the ``waves`` context property.
 
@@ -4412,8 +4419,9 @@ class WavesBridge(LibraryMixin, QObject):
     # Pool thread -> GUI thread: arm the batch flush timer.
     _ownAnnounceArm = Signal()
     # A collection (album/playlist/mix) learned new member track ids (a
-    # download or browse-open just observed its contents); QML re-queries
-    # collectionMemberIds for that id to refresh a collapsed row's badge.
+    # download or browse-open just observed its contents); the cards watching
+    # it re-ask ownership in place (refreshOwned -> collectionOwnership /
+    # collectionOwnershipDetail), never the member list per card (R-28 / UI-09).
     collectionMembershipChanged = Signal(str)
     # Download-folder gating. downloadFolderMissing → no folder is set at all
     # (blocking: the download did not start); downloadFolderDefault → the user is
@@ -4752,7 +4760,6 @@ class WavesBridge(LibraryMixin, QObject):
         except Exception:
             logger.debug("Apple runtime manager unavailable", exc_info=True)
             self._apple_runtime = None
-        self._apple_runtime_abort = Event()
         self._apple_runtime_inflight = False
         # Cached container-runtime probe: appleSetupState() runs
         # on the GUI thread, where a `docker info` against a hung daemon
@@ -11342,7 +11349,12 @@ class WavesBridge(LibraryMixin, QObject):
         None if Waves has never observed this collection's contents (never
         opened, never downloaded). A plain local table lookup (see
         OwnershipStore.members_of), safe to call directly from the GUI thread:
-        unlike ownershipOf it never stats the user's music folder."""
+        unlike ownershipOf it never stats the user's music folder.
+
+        A test seam, not a UI call: the cards never read the member list per
+        id (that was ~15 slot crossings per card); they re-ask the rollup in
+        place (refreshOwned -> collectionOwnership/collectionOwnershipDetail).
+        tests/library/test_ownership_bridge.py pins the learning path here."""
         return self._ownership.members_of(str(collection_id))
 
     @Slot(str, result="QVariant")
@@ -11374,17 +11386,12 @@ class WavesBridge(LibraryMixin, QObject):
             out[cid] = {"ids": ids, **self._rollup_detail(ids or [])}
         return out
 
-    @Slot("QVariantList", result=str)
-    def collectionOwnershipFor(self, ids) -> str:
-        """collectionOwnership's verdict for a member list the caller already
-        holds (a page that knows its own tracks)."""
-        return self._rollup_verdict([str(t) for t in ids or []])
-
     @Slot("QVariantList", result="QVariant")
     def collectionOwnershipDetail(self, ids):
-        """collectionOwnershipFor plus where the owned copies live:
-        {verdict, in_library, folder}. One crossing, so a page's header button
-        can word its done face and name the folder in its redownload gate."""
+        """collectionOwnership's verdict for a member list the caller already
+        holds, plus where the owned copies live: {verdict, in_library,
+        folder}. One crossing, so a page's header button can word its done
+        face and name the folder in its redownload gate."""
         return self._rollup_detail([str(t) for t in ids or []])
 
     def _rollup_detail(self, ids) -> dict:
@@ -14334,11 +14341,8 @@ class WavesBridge(LibraryMixin, QObject):
                 files = 1 if audio != "both" else 2
                 self._chooser_confirm_status(CTX_APPLE, ask, audio, files)
             return
-        elif raw_kind == "mix":
-            self._set_status("Apple mixes arrive with the full Apple rollout")
-            return
-        elif raw_kind == "video":
-            self._set_status("Apple videos arrive with the full Apple rollout")
+        elif raw_kind in ("mix", "video"):
+            self._set_status(_APPLE_VERB_UNAVAILABLE)
             return
         else:
             return
@@ -17193,7 +17197,7 @@ class WavesBridge(LibraryMixin, QObject):
     def downloadArtist(self, artist_id: str) -> None:
         """Queue every album of an artist for download."""
         if str(artist_id).startswith(f"{CTX_APPLE}:"):
-            self._set_status("Apple artist downloads arrive with the full Apple rollout")
+            self._set_status(_APPLE_VERB_UNAVAILABLE)
             return
         if self._dl is None:
             return
@@ -19707,30 +19711,6 @@ class WavesBridge(LibraryMixin, QObject):
             return {"state": "missing", "available": False, "managed": False, "path": ""}
 
     @Slot(result="QVariant")
-    def appleContainerStatus(self) -> dict:
-        """The container runtime, from the GUI-safe cached probe."""
-        probe = getattr(self, "_apple_container_state", None)
-        try:
-            if callable(probe):
-                return probe()
-            from waves.providers.apple.runtime import detect_container_runtime
-
-            return detect_container_runtime()
-        except Exception:
-            logger.debug("Apple container probe failed", exc_info=True)
-            return {"name": "", "available": False, "running": False, "hint": ""}
-
-    @Slot(str, result="QVariant")
-    def appleVerifyCookies(self, path: str) -> dict:
-        """Verify a cookies export unlocks the cookies tier."""
-        from waves.providers.apple.runtime import verify_cookies_file
-
-        try:
-            return {"ok": True, **verify_cookies_file(path)}
-        except Exception as exc:
-            return {"ok": False, "path": str(path or ""), "error": str(exc)}
-
-    @Slot(result="QVariant")
     def appleEnsurePort(self) -> dict:
         """Persist and return the wrapper port: override when free, else picked."""
         manager = getattr(self, "_apple_runtime", None)
@@ -19758,23 +19738,14 @@ class WavesBridge(LibraryMixin, QObject):
         self._apple_runtime_inflight = True
 
         def work() -> None:
-            with contextlib.suppress(Exception):
-                self._apple_runtime_abort.clear()
             self.appleRuntimeStateChanged.emit("downloading", "Downloading N_m3u8DL-RE…")
             try:
                 try:
                     status = manager.install(
                         progress_cb=lambda p: self.appleRuntimeProgress.emit(float(p)),
                         log_cb=lambda m: self.appleRuntimeStateChanged.emit("downloading", m),
-                        abort=self._apple_runtime_abort,
                     )
                 except Exception as exc:
-                    from waves.providers.apple.runtime import AppleRuntimeCancelled
-
-                    if isinstance(exc, AppleRuntimeCancelled):
-                        self.appleRuntimeStateChanged.emit("cancelled", "Cancelled")
-                        self.appleRuntimeStatusChanged.emit()
-                        return
                     logger.exception("Apple runtime install failed")
                     self.appleRuntimeStateChanged.emit("failed", str(exc) or "Install failed")
                     # Refresh the wizard card too, so the failed step is
@@ -19792,11 +19763,6 @@ class WavesBridge(LibraryMixin, QObject):
                 self._apple_runtime_inflight = False
 
         self.threadpool.start(Worker(work))
-
-    @Slot()
-    def cancelAppleRuntime(self) -> None:
-        with contextlib.suppress(Exception):
-            self._apple_runtime_abort.set()
 
     @Slot()
     def removeAppleRuntime(self) -> None:
@@ -19991,8 +19957,6 @@ class WavesBridge(LibraryMixin, QObject):
         self._apple_runtime_inflight = True
 
         def work() -> None:
-            with contextlib.suppress(Exception):
-                self._apple_runtime_abort.clear()
             self.appleRuntimeStateChanged.emit("downloading", "Pulling the wrapper image…")
             try:
                 try:
@@ -20001,11 +19965,6 @@ class WavesBridge(LibraryMixin, QObject):
                         log_cb=lambda m: self.appleRuntimeStateChanged.emit("downloading", m),
                     )
                 except Exception as exc:
-                    from waves.providers.apple.runtime import AppleRuntimeCancelled
-
-                    if isinstance(exc, AppleRuntimeCancelled):
-                        self.appleRuntimeStateChanged.emit("cancelled", "Cancelled")
-                        return
                     logger.exception("Apple wrapper image pull failed")
                     self.appleRuntimeStateChanged.emit("failed", str(exc) or "Pull failed")
                     try:

@@ -16,7 +16,6 @@ __pycache__/
 build/
 develop-eggs/
 dist/
-downloads/
 eggs/
 .eggs/
 lib/
@@ -169,7 +168,12 @@ cython_debug/
 
 # Custom
 
-download/
+# Local media output and scratch download folders. Anchored on purpose: the
+# unanchored template rule `downloads/` also matched `tests/downloads/` and hid
+# its tracked test modules from rg, editors and review tooling (TT-04), and a
+# new test file written there was silently ignored.
+/download/
+/downloads/
 
 # Local design mockups (not part of the shipped app)
 mockups/
