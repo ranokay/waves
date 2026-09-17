@@ -1274,7 +1274,7 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: emitted.append(True))
     stub._set_status = lambda *args: None
     waited = []
-    monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort: waited.append(True) or True)
+    monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort, **k: waited.append(True) or True)
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
 
@@ -1291,7 +1291,7 @@ def test_expired_session_holds_and_retries_once_the_session_returns(tmp_path, mo
     assert summary == ""
     assert len(calls) == 2, "the same track retries in place once the session returns"
     assert waited == [True]
-    assert held and held[0][0] == 1 and "Sign in again" in held[0][1]
+    assert held and held[0][0] == 1 and "cookies export" in held[0][1]
     assert stub._apple_session_expired is False, "a landed track lifts the marker"
     assert emitted, "the light re-reads on the failure and the recovery"
     assert next(ev for ev in relay.events if ev.get("status") == "done")
@@ -1319,12 +1319,12 @@ def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkey
     monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
     stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
     stub._set_status = lambda *args: None
-    monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort: False)
+    monkeypatch.setattr(runner, "wait_for_session", lambda hooks, provider, job_abort, **k: False)
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
     abort = Event()
 
-    def _wait_then_stop(hooks, provider, job_abort):
+    def _wait_then_stop(hooks, provider, job_abort, **k):
         job_abort.set()
         return False
 
@@ -1345,6 +1345,166 @@ def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkey
 
     assert held, "the boundary held the row before the stop landed"
     assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+@pytest.mark.ffmpeg
+def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_signed_in(tmp_path, monkeypatch):
+    """AP-01: the fetch needs cookies, the wrapper guest is signed in, and the
+    export never changes. The old hold read the wrapper probe as recovery, so
+    the identical failing fetch re-ran forever; now the hold watches the
+    cookies export alone and past its bound the run ends with the cookies
+    setup words (the row is retryable once the export is replaced)."""
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
+
+    provider = _FakeProvider()
+    provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(
+        AppleCredentialsError("Apple downloads need a signed-in cookies export", credential=AppleCredential.COOKIES)
+    )
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._set_status = lambda *args: None
+    hooks = stub._apple_job_hooks()
+    probes = []
+    hooks.refresh_wrapper_auth = lambda **kw: probes.append(kw) or {"logged_in": True}
+    held = []
+    monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 1)
+    monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    surfaced = str(excinfo.value)
+    assert "cookies export" in surfaced and "Settings" in surfaced
+    assert probes == [], "the wrapper probe cannot answer for a cookies fetch"
+    assert held and "cookies export" in held[0][1]
+    assert stub._apple_session_expired is True, "the light reads needs attention"
+    assert not any(ev.get("status") == "done" for ev in relay.events)
+
+
+@pytest.mark.ffmpeg
+def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, monkeypatch):
+    """The other half of the acceptance: a healthy credential path still
+    recovers automatically. The fetch needs the wrapper, the first call finds
+    the guest signed out, and the recovery probe finds it signed back in; the
+    same track retries in place and lands."""
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
+
+    monkeypatch.setattr(
+        apple_engine,
+        "probe_audio_file",
+        # The wrapper tier's delivery is stereo ALAC: the landing must read as
+        # the wrapper's proof, not the cookies tier's AAC.
+        lambda path, ffprobe_path="": {"codec": "alac", "sample_rate": "44100", "bit_depth": 16},
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    calls = []
+
+    def _flaky(raw, tier, audio_type):
+        calls.append(audio_type)
+        if len(calls) == 1:
+            raise AppleCredentialsError("The Apple wrapper is not signed in", credential=AppleCredential.WRAPPER)
+        info = _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+        # The wrapper tier's delivery is stereo ALAC, and its own words must
+        # say so: the landing's credential proof reads the delivered codecs.
+        info.codecs = "alac"
+        info.delivered = {**info.delivered, "tier": QualityTier.LOSSLESS.value, "codecs": "alac"}
+        return info
+
+    provider.resolve_stream = _flaky
+    provider.wrapper_url = "http://127.0.0.1:1234"  # the guest tier is set up, its session expired
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._set_status = lambda *args: None
+    hooks = stub._apple_job_hooks()
+    hooks.refresh_wrapper_auth = lambda **kw: {"logged_in": True}
+    held = []
+    monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 2)
+    monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        hooks,
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert len(calls) == 2, "the same track retries in place once the guest returns"
+    assert held and "wrapper session" in held[0][1]
+    assert stub._apple_session_expired is False, "a landed track lifts the marker"
+    assert next(ev for ev in relay.events if ev.get("status") == "done")
+    assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+@pytest.mark.ffmpeg
+def test_a_credential_that_keeps_reading_recovered_ends_at_setup(tmp_path, monkeypatch):
+    """The wait's poll bound covers a credential that never changes; this caps
+    the other shape (R-15's "N immediate re-failures"): the probe keeps saying
+    the guest is back and the fetch keeps failing, so every hold reads as
+    recovery and the track would retry forever. After the hold cap the run
+    ends with the credential's setup words."""
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
+
+    provider = _FakeProvider()
+    provider.wrapper_url = "http://127.0.0.1:1234"
+    calls = []
+
+    def _always_broken(raw, tier, audio_type):
+        calls.append(audio_type)
+        raise AppleCredentialsError("The Apple wrapper is not signed in", credential=AppleCredential.WRAPPER)
+
+    provider.resolve_stream = _always_broken
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._set_status = lambda *args: None
+    hooks = stub._apple_job_hooks()
+    hooks.refresh_wrapper_auth = lambda **kw: {"logged_in": True}  # the probe keeps reading recovered
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_RETRIES", 2)
+    monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert "wrapper session" in str(excinfo.value)
+    assert len(calls) == 3, "held at most the cap; then setup, not another retry"
+    assert not any(ev.get("status") == "done" for ev in relay.events)
 
 
 def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path, monkeypatch):

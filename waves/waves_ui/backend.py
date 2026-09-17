@@ -133,6 +133,7 @@ from waves.providers import (
     TidalProvider,
 )
 from waves.providers.apple import runner
+from waves.providers.apple.engine import AppleCredential
 from waves.providers.apple.files import (
     tag_apple_file,
     write_cover_sidecar,
@@ -14239,8 +14240,8 @@ class WavesBridge(LibraryMixin, QObject):
             note_activity=lambda: self._apple_note_activity(),
             refresh_wrapper_auth=lambda timeout=5: self._refresh_apple_wrapper_auth(timeout=timeout),
             schedule_idle_stop=lambda: self._schedule_apple_idle_stop(),
-            mark_session_expired=lambda: self._apple_mark_session_expired(),
-            clear_session_expired=lambda: self._apple_clear_session_expired(),
+            mark_session_expired=lambda credential: self._apple_mark_session_expired(credential),
+            clear_session_expired=lambda credential: self._apple_clear_session_expired(credential),
             redact=lambda text: diagnostics.content(text),
             devlog_event=lambda *args, **kwargs: devlog.event(*args, **kwargs),
             devlog_done=lambda *args, **kwargs: devlog.done(*args, **kwargs),
@@ -14358,30 +14359,44 @@ class WavesBridge(LibraryMixin, QObject):
         """Hold an Apple row with one clear message (runner presentation)."""
         runner.set_held(self._apple_job_hooks(), qid, detail)
 
-    def _apple_mark_session_expired(self) -> None:
+    def _apple_mark_session_expired(self, credential=AppleCredential.COOKIES) -> None:
         """Remember a boundary-rejected Apple session and move the light.
 
-        The marker clears when the wrapper probe authenticates again, when
-        the cookies setting is saved, or on sign-out; until then the light
-        reports needs attention even if a cached probe still reads signed in.
+        The failing ``credential`` rides along, and only proof about THAT
+        credential lifts the marker (a wrapper sign-in cannot heal a cookies
+        failure and vice versa, AP-01); signing out clears it whatever it
+        names. Until then the light reports needs attention even if a cached
+        probe still reads signed in.
         """
-        already = bool(getattr(self, "_apple_session_expired", False))
+        wanted = AppleCredential.of(credential)
+        was_expired = bool(getattr(self, "_apple_session_expired", False))
+        changed = wanted != getattr(self, "_apple_session_credential", "")
         self._apple_session_expired = True
-        if not already:
+        self._apple_session_credential = wanted
+        if not was_expired or changed:
             with contextlib.suppress(Exception):
                 self.appleStatusChanged.emit()
 
-    def _apple_clear_session_expired(self) -> None:
-        """The Apple session works again: drop the marker and move the light."""
+    def _apple_clear_session_expired(self, credential=None) -> None:
+        """The named credential works again: drop the marker and move the light.
+
+        No argument means a proof that the whole session works (a landed
+        track, a sign-out) and clears whatever was pending. A named credential
+        clears only its own marker, so a healthy wrapper cannot report a
+        cookies failure healed (AP-01). A marker from before credentials were
+        recorded (unknown pending) clears on either proof.
+        """
         if not getattr(self, "_apple_session_expired", False):
             return
+        pending = str(getattr(self, "_apple_session_credential", "") or "")
+        if credential is not None and pending:
+            wanted = AppleCredential.of(credential)
+            if wanted != pending:
+                return
         self._apple_session_expired = False
+        self._apple_session_credential = ""
         with contextlib.suppress(Exception):
             self.appleStatusChanged.emit()
-
-    def _apple_wait_for_session(self, provider, job_abort) -> bool:
-        """Wait (abortably) until the Apple session can serve again (runner policy)."""
-        return runner.wait_for_session(self._apple_job_hooks(), provider, job_abort)
 
     def _apple_needs_wrapper(self, requested_rank: int = -1) -> bool:
         """Whether this job's ask can need the wrapper sidecar at all."""
@@ -20998,9 +21013,11 @@ class WavesBridge(LibraryMixin, QObject):
                 provider.wrapper_logged_in = bool(result.get("logged_in"))
         if bool(result.get("logged_in")):
             # The guest refreshed its own tokens: the paused session is back.
+            # Only a wrapper-pending marker lifts here; a cookies-broken job's
+            # marker stays until the export itself is proven (AP-01).
             clear = getattr(self, "_apple_clear_session_expired", None)
             if callable(clear):
-                clear()
+                clear(AppleCredential.WRAPPER)
         if snapshot(result) != previous_snapshot:
             with contextlib.suppress(Exception):
                 self.appleWrapperAuthChanged.emit()
@@ -21441,7 +21458,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # A different export is the user's answer to the expiry pause.
                 clear = getattr(self, "_apple_clear_session_expired", None)
                 if callable(clear):
-                    clear()
+                    clear(AppleCredential.COOKIES)
             # The light tracks cookies and runtime paths, not just the switch:
             # saving a cookies export moves not_set_up to signed_in at once.
             self.appleStatusChanged.emit()

@@ -44,6 +44,7 @@ from waves.model.cfg import cover_sidecar_format, wants_both_default
 from waves.ownership import copy_is_current, record_names_a_broken_copy
 from waves.providers.apple import engine as apple_engine
 from waves.providers.apple.engine import (
+    AppleCredential,
     AppleCredentialsError,
     AppleDownloadError,
     AppleIntegrityError,
@@ -71,6 +72,8 @@ from waves.providers.apple.integrity import (
     resolve_quarantine_dir,
 )
 from waves.providers.apple.supervision import (
+    HELD_CREDENTIAL_POLLS,
+    HELD_CREDENTIAL_RETRIES,
     HELD_POLL_SEC,
     HELD_START_FAILURES,
     SETUP_PATH,
@@ -217,8 +220,8 @@ class AppleJobHooks:
     note_activity: Callable[[], None] = _noop
     refresh_wrapper_auth: Callable[..., Any] = _none
     schedule_idle_stop: Callable[[], None] = _noop
-    mark_session_expired: Callable[[], None] = _noop
-    clear_session_expired: Callable[[], None] = _noop
+    mark_session_expired: Callable[..., None] = _noop
+    clear_session_expired: Callable[..., None] = _noop
 
     redact: Callable[[Any], str] = str
     devlog_event: Callable[..., None] = _noop
@@ -1405,28 +1408,113 @@ def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
         hooks.status(message)
 
 
-def wait_for_session(hooks: AppleJobHooks, provider, job_abort) -> bool:
-    """Wait (abortably) until the Apple session can serve again.
+def _setup_required(hooks: AppleJobHooks, message: str) -> _AppleSetupRequired:
+    """The terminal verdict for a state only the user can fix.
 
-    The wrapper guest refreshes its own tokens, so a cheap /me probe
-    finds it; a cookies export cannot be probed server-side, so the wait
-    watches the file the provider names and retries once it changes.
-    False when STOP lands.
+    Ask the wizard to open, say the words the row will carry, and answer the
+    exception the run ends with (retryable once setup works). One body for the
+    runtime that will not start and the credential that will not return, so
+    every "hand it to setup" path reads the same.
+    """
+    with contextlib.suppress(Exception):
+        hooks.setup_requested("setup")
+    with contextlib.suppress(Exception):
+        hooks.status(message)
+    return _AppleSetupRequired(message)
+
+
+def _landed_credential(delivered: dict) -> AppleCredential:
+    """Which credential a landed delivery exercised.
+
+    The wrapper serves stereo ALAC only; Atmos and lossy stereo come through
+    the cookies export. So a lossless/hi-res stereo landing is wrapper proof
+    and every other landing is cookies proof, letting a landed track lift only
+    the marker its own fetch answers for (spec §3: the light reads needs
+    attention while the export a tier needs is broken).
+    """
+    quality = dict((delivered or {}).get("quality") or {})
+    if str(quality.get("audio_mode") or "").upper() == "DOLBY_ATMOS":
+        return AppleCredential.COOKIES
+    if str(quality.get("tier") or "").upper() in (
+        QualityTier.LOSSLESS.value,
+        QualityTier.HI_RES_LOSSLESS.value,
+    ):
+        return AppleCredential.WRAPPER
+    return AppleCredential.COOKIES
+
+
+def _credential_words(credential: AppleCredential) -> tuple[str, str]:
+    """The (hold, terminal) wording for the credential a fetch needed.
+
+    Both name the repair path the wizard owns, so a held or failed row is
+    actionable (AP-01: the hold used to name the wrong credential and the
+    retry re-ran the identical failing fetch).
+    """
+    if credential == AppleCredential.WRAPPER:
+        return (
+            f"Apple's wrapper session is signed out. Waiting for sign-in; finish setup in {SETUP_PATH}.",
+            f"Apple's wrapper session is signed out. Finish setup in {SETUP_PATH}, then retry.",
+        )
+    return (
+        f"Apple's cookies export is not usable. Waiting for a new export; finish setup in {SETUP_PATH}.",
+        f"Apple's cookies export is not usable. Finish setup in {SETUP_PATH}, then retry.",
+    )
+
+
+def wait_for_session(
+    hooks: AppleJobHooks,
+    provider,
+    job_abort,
+    *,
+    credential: AppleCredential = AppleCredential.COOKIES,
+) -> bool:
+    """Wait (abortably) until the credential the fetch NEEDED can serve again.
+
+    Only that credential's own proof counts: a cookies-shaped failure is not
+    healed by the wrapper guest's tokens (the fetch never uses them), and a
+    wrapper-shaped failure is not healed by a new cookies export. The
+    wrapper guest refreshes its own tokens, so its health is the /me probe;
+    a cookies export cannot be probed server-side, so the wait watches the
+    file the provider names and retries once it changes.
+
+    The wait is bounded (HELD_CREDENTIAL_POLLS polls without a change): a
+    credential that never changes cannot come back on its own, so the row is
+    handed to setup with the credential's own words (retryable once it is
+    fixed) instead of holding the queue for good. Returns True on a real
+    change, False when STOP landed.
     """
     cookies_before = _apple_cookies_fingerprint(str(getattr(provider, "cookies_path", "") or ""))
+    wants_wrapper = credential == AppleCredential.WRAPPER
+    failures = 0
     while not job_abort.is_set():
-        if str(getattr(provider, "wrapper_url", "") or "").strip():
-            try:
-                state = hooks.refresh_wrapper_auth(timeout=5) or {}
-                if bool(state.get("logged_in")):
-                    return True
-            except Exception:
-                logger.debug("Apple wrapper recovery probe failed", exc_info=True)
-        cookies_now = _apple_cookies_fingerprint(str(getattr(provider, "cookies_path", "") or ""))
-        if cookies_now != cookies_before:
-            # A fresh export landed (in place or at a new path): the
-            # retried fetch is the proof.
+        recovered = False
+        if wants_wrapper:
+            if str(getattr(provider, "wrapper_url", "") or "").strip():
+                try:
+                    state = hooks.refresh_wrapper_auth(timeout=5) or {}
+                    if bool(state.get("logged_in")):
+                        # The guest signed back in: the retried fetch is the
+                        # proof.
+                        return True
+                    if state.get("reachable") is False:
+                        # The runtime itself is not answering, which is not a
+                        # credential question: let the retried fetch run the
+                        # down path (held for the runtime, the setup words if
+                        # it will not start) instead of blaming the session.
+                        return True
+                except Exception:
+                    logger.debug("Apple wrapper recovery probe failed", exc_info=True)
+        else:
+            cookies_now = _apple_cookies_fingerprint(str(getattr(provider, "cookies_path", "") or ""))
+            recovered = cookies_now != cookies_before
+        if recovered:
+            # A fresh credential is in place (or the guest signed in again):
+            # the retried fetch is the proof.
             return True
+        failures += 1
+        if failures >= max(1, int(HELD_CREDENTIAL_POLLS)):
+            _hold, terminal = _credential_words(credential)
+            raise _setup_required(hooks, terminal)
         if not sleep_abortable(HELD_POLL_SEC, job_abort):
             return False
     return False
@@ -1503,11 +1591,7 @@ def ensure_sidecar(hooks: AppleJobHooks, qid: int, job_abort, *, need_wrapper: b
             terminal_message = f"Apple's wrapper tier is not set up. Finish setup in {SETUP_PATH}, then retry."
             failures += 1
         if failures >= max(1, int(HELD_START_FAILURES)):
-            with contextlib.suppress(Exception):
-                hooks.setup_requested("setup")
-            with contextlib.suppress(Exception):
-                hooks.status(terminal_message)
-            raise _AppleSetupRequired(terminal_message)
+            raise _setup_required(hooks, terminal_message)
         if not sleep_abortable(HELD_POLL_SEC, job_abort):
             return False
     return False
@@ -2167,6 +2251,7 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
         track_force = force or verdict == "force"
         owned_path = str((gate_rec or {}).get("path") or "") or None
         attempts = 0
+        credential_holds = 0
         try:
             while True:
                 try:
@@ -2195,18 +2280,27 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
                     break
                 except Exception as exc:
                     if isinstance(exc, AppleCredentialsError):
-                        # The saved session no longer works: tell the
-                        # light, hold the row with the sign-in message,
-                        # and wait in place for recovery instead of
-                        # failing the run (spec §3). The wrapper guest
-                        # refreshes its tokens on its own; a cookies
-                        # export recovers when its file or path changes.
-                        # STOP lands promptly and settles the row
-                        # cancelled. The retry re-runs THIS track.
-                        hooks.mark_session_expired()
+                        # The saved session no longer works: tell the light,
+                        # hold the row with the failing credential's own
+                        # words, and wait for THAT credential to change
+                        # instead of failing the run (spec §3). Waiting on
+                        # the other credential is how a wrapper-signed-in,
+                        # cookies-broken job looped the identical failing
+                        # fetch forever (AP-01); the wait is bounded, and a
+                        # track held once too often for a credential that
+                        # keeps reading recovered hands the row to setup
+                        # instead of retrying forever. STOP lands promptly
+                        # and settles the row cancelled. The retry re-runs
+                        # THIS track.
+                        credential = getattr(exc, "credential", AppleCredential.COOKIES)
+                        hold_words, terminal = _credential_words(credential)
+                        credential_holds += 1
+                        if credential_holds > max(1, int(HELD_CREDENTIAL_RETRIES)):
+                            raise _setup_required(hooks, terminal) from exc
+                        hooks.mark_session_expired(credential)
                         with contextlib.suppress(Exception):
-                            set_held(hooks, qid, "Sign in again in Settings under Providers, Apple Music.")
-                        if not wait_for_session(hooks, provider, job_abort):
+                            set_held(hooks, qid, hold_words)
+                        if not wait_for_session(hooks, provider, job_abort, credential=credential):
                             raise _AppleAborted() from exc
                         continue
                     # A dead sidecar holds the row while a return is
@@ -2301,10 +2395,11 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             continue
         ok += 1
         landed.append(pathlib.Path(delivered["path"]))
-        # A landed track proves the session works: lift the expiry marker
-        # even when recovery was never observed by a probe (spec §3).
+        # A landed track proves the credential its own fetch needed, and only
+        # that one: an ALAC landing cannot report a cookies-broken export
+        # healed (spec §3). A probe never has to have observed the recovery.
         with contextlib.suppress(Exception):
-            hooks.clear_session_expired()
+            hooks.clear_session_expired(_landed_credential(delivered))
         # Wrapper work stamps the idle clock so an in-flight run never
         # looks idle to the sidecar stop.
         with contextlib.suppress(Exception):
