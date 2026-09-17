@@ -34,7 +34,6 @@ from tidalapi import Album, Mix, Playlist, Session, Track, UserPlaylist, Video
 from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvailable
 from tidalapi.media import (
     AudioExtensions,
-    AudioMode,
     Codec,
     Quality,
     VideoExtensions,
@@ -55,9 +54,9 @@ from waves.constants import (
     MetadataTargetUPC,
     QualityTier,
     QualityVideo,
-    default_audio_is_both,
     provider_folder_name,
     tier_from_word,
+    wants_atmos_delivery,
 )
 from waves.helper.camelot import format_initial_key
 from waves.helper.exceptions import MediaMissing
@@ -2748,29 +2747,16 @@ class Download:
         # The Atmos session serves two cases: the request asked for Atmos (a
         # pinned Atmos Version) and the track has it, or the track has NOTHING
         # ELSE (TIDAL lists the Atmos version as its own id with no stereo
-        # stream, so the normal session has no stream to offer). The second
-        # clause is what downloads an Atmos-only track when the setting is
-        # off, instead of skipping it and leaving a hole in the album.
-        modes = getattr(media, "audio_modes", None) or []
-        has_atmos = AudioMode.dolby_atmos.value in modes
-        atmos_only = bool(modes) and all(mode == AudioMode.dolby_atmos.value for mode in modes)
-        pinned_version = normalize_audio_type_tag(audio_type)
-        if pinned_version == "atmos":
-            # An Atmos-pinned row fetches Atmos whatever the saved default
-            # says (the defect the seam carry fixes): a dual download's two
-            # rows are the user's answer to the choice. The track facts still
-            # gate the session: a catalog object that advertises no Atmos has
-            # no Atmos stream to ask for, and the bridge skips such a row
-            # before this fetch (a sparse payload must not fake one).
-            want_atmos = has_atmos
-        elif pinned_version == "stereo":
-            # A stereo-pinned row never takes the Atmos session where a
-            # stereo stream exists; the "nothing else" clause still applies.
-            want_atmos = has_atmos and atmos_only
-        else:
-            want_atmos = has_atmos and (
-                default_audio_is_both(getattr(self.settings.data, "default_audio_type", "stereo")) or atmos_only
-            )
+        # stream, so the normal session has no stream to offer). The decision
+        # is shared with the bridge's ownership gate (wants_atmos_delivery),
+        # so what a row fetches is what it ranks. The track facts still gate
+        # it: a catalog object that advertises no Atmos has no Atmos stream to
+        # ask for, and the bridge skips such a row before this fetch.
+        want_atmos = wants_atmos_delivery(
+            getattr(media, "audio_modes", None),
+            audio_type,
+            getattr(self.settings.data, "default_audio_type", "stereo"),
+        )
 
         if want_atmos:
             if not self.tidal.switch_to_atmos_session():

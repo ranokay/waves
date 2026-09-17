@@ -203,6 +203,41 @@ def default_audio_is_both(value: object) -> bool:
         return False
 
 
+# TIDAL's audioModes spelling for a Dolby Atmos delivery, as a literal so this
+# shared decision needs no engine import (waves.ownership spells the same word).
+ATMOS_MODE: str = "DOLBY_ATMOS"
+
+
+def wants_atmos_delivery(modes, pinned_version: object, default_audio_type: object) -> bool:
+    """Whether a fetch asks for the Dolby Atmos Version: the ONE Atmos
+    decision, shared by the engine's stream resolver and the bridge's
+    ownership/delivered sinks, so fetching and ranking cannot drift.
+
+    Args:
+        modes: The track's advertised audio modes as the provider reports them.
+        pinned_version: The job's per-click Version ("stereo" / "atmos"), or
+            None when it pinned none (a legacy row).
+        default_audio_type: The stored audio-type default, consulted only for
+            an unpinned row (through ``default_audio_is_both``).
+
+    The rules: an Atmos-pinned job wants Atmos whenever the track offers it; a
+    stereo-pinned job takes it only when the track has NOTHING ELSE (TIDAL
+    lists the Atmos version as its own id with no stereo stream, so the
+    alternative is a hole in the album); an unpinned job follows the stored
+    default, with that same nothing-else clause.
+    """
+    modes = [str(mode) for mode in modes or []]
+    if ATMOS_MODE not in modes:
+        return False
+    pin = str(pinned_version or "").strip().lower()
+    if pin == "atmos":
+        return True
+    nothing_else = all(mode == ATMOS_MODE for mode in modes)
+    if pin == "stereo":
+        return nothing_else
+    return nothing_else or default_audio_is_both(default_audio_type)
+
+
 class MediaType(StrEnum):
     TRACK = "track"
     VIDEO = "video"

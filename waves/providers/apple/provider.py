@@ -1118,8 +1118,25 @@ class AppleProvider(Provider):
             return False
         return audio_type == AudioType.ATMOS and self._has_atmos(item)
 
-    def resolve_stream(self, track, tier: QualityTier, audio_type: AudioType) -> StreamInfo:
+    @staticmethod
+    def _required_request(tier, audio_type) -> tuple[QualityTier, AudioType]:
+        """The caller's request, with the seam's None refused.
+
+        Apple's runner resolves both before asking (the row's pin, else the
+        stored default), so an unresolved request is a caller error, never a
+        tier to guess at.
+        """
+        if tier is None or audio_type is None:
+            raise ValueError("Apple's resolve_stream needs the row's explicit tier and audio type")  # noqa: TRY003
+        return tier, audio_type
+
+    def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
         """Fetch and locally decrypt one song through the gamdl engine.
+
+        The request parameters may be None per the seam contract (a caller that
+        pinned nothing); Apple's runner always resolves both first (the row's
+        pin, else the stored default), so None arriving here is refused rather
+        than silently downgraded to a guessed tier.
 
         Unlike TIDAL's stream manifests this is a whole-file delivery: the
         engine downloads and decrypts into a staged .m4a and ``local_file``
@@ -1139,6 +1156,7 @@ class AppleProvider(Provider):
         item = self._unwrap(track)
         if not isinstance(item, dict) or not item.get("id"):
             raise KeyError(str(getattr(track, "id", track)))
+        tier, audio_type = self._required_request(tier, audio_type)
         atmos = self._delivery_atmos(item, audio_type)
         try:
             want = QualityTier(tier) if isinstance(tier, QualityTier) else QualityTier(str(tier))

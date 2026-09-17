@@ -63,6 +63,7 @@ from waves.constants import (
     provider_folder_name,
     quality_rank,
     tier_from_word,
+    wants_atmos_delivery,
 )
 from waves.download import COLLECTION_GAUGE, SEGMENT_GAUGE, Download
 from waves.helper.exceptions import DownloadIncomplete
@@ -1319,17 +1320,12 @@ _ATMOS_MODE = str(AudioMode.dolby_atmos.value)
 
 
 def _delivers_atmos(media, atmos_on: bool) -> bool:
-    """The engine's own Atmos condition (download.py), mirrored: a track is
-    fetched through the Atmos session when the setting asks for Atmos and the
-    track has it, and also when the track has NOTHING ELSE (TIDAL lists the
-    Atmos version as its own id with no stereo stream behind it, so there is no
-    other stream to fetch; the setting means "prefer stereo where there is a
-    choice", not "leave a hole in the album"). The gate and the drawer's
-    prediction both rank an owned copy on the scale this answer names, so it
-    must not drift from the engine or an Atmos copy ranks stale against a
-    stereo target and every save re-fetches the identical file."""
-    modes = getattr(media, "audio_modes", None) or []
-    return bool(_ATMOS_MODE in modes and (atmos_on or all(str(m) == _ATMOS_MODE for m in modes)))
+    """The legacy (unpinned) row's Atmos condition, through the shared decision
+    (``wants_atmos_delivery``), so the ownership gate ranks an owned copy on
+    exactly the scale the engine would fetch on. The setting means "prefer
+    stereo where there is a choice", not "leave a hole in the album": a track
+    with NOTHING ELSE is fetched through the Atmos session either way."""
+    return wants_atmos_delivery(getattr(media, "audio_modes", None), None, "both" if atmos_on else "stereo")
 
 
 def _atmos_only(obj) -> bool:
@@ -1492,10 +1488,11 @@ class _TrackedDownload(Download):
         # siblings; a thread-local carries that per-track decision safely.
         self._tls = local()
         self._skip_existing_base = False
-        # The job's pinned Version and rung cross to the engine BEFORE super():
-        # the engine's pre-stream skip gate needs the Version, and the engine's
-        # fetch applies the rung per resolve, so both must be set before any
-        # engine method can run. The shared normalizer is the one clamp.
+        # The job's pinned Version and rung cross to the engine in the
+        # super() call: the engine's pre-stream skip gate needs the Version,
+        # and the engine's fetch applies the rung per resolve, so both are in
+        # place before any engine method can run. The shared normalizer is the
+        # one clamp.
         at = normalize_audio_type_tag(audio_type)
         super().__init__(*args, pinned_tier=pinned_quality, pinned_audio_type=at, **kwargs)
         self._track_signals = track_signals
@@ -1705,10 +1702,10 @@ class _TrackedDownload(Download):
         pins -- arrives here as the resolver's own arguments and is forwarded
         to the engine unchanged: the engine's fetch applies both (its
         ``_get_track_stream_info``) inside the stream lock the caller already
-        holds. Nothing on this path writes shared session or Settings state, so
-        a per-click ask cannot leak into the saved defaults and a settings save
-        cannot persist a job's transient choice (R-13: the request crosses the
-        seam, the saved default stays the user's).
+        holds. Nothing here writes Settings, so a per-click ask cannot leak
+        into the saved defaults and a settings save cannot persist a job's
+        transient choice (R-13); the session write the engine makes for the
+        fetch's rung is the fetch's own, put back in the same lock.
         """
         info = super()._get_track_stream_info(media, tier, audio_type)
         mid = getattr(media, "id", None)
@@ -1732,28 +1729,19 @@ class _TrackedDownload(Download):
         return (current_thread().ident or 0, str(getattr(media, "id", "") or ""))
 
     def _wants_atmos(self, media) -> bool:
-        """The engine's own Atmos condition, mirrored exactly so the ownership
-        gate ranks a copy on the scale it was delivered on, and so the
-        delivered snapshot leaves an Atmos fetch's rank unstated (the engine's
-        resolver reads the same pinned Version; the two must not drift).
-
-        Dual-download rows pin their Version: an Atmos row wants Atmos whenever
-        the track offers it; a stereo row takes it only through the engine's
-        "nothing else to fetch" clause (an Atmos-only track, which the row
-        itself skips first -- the Atmos row covers it). Legacy single rows
-        (audio_type None) keep the engine's own settings condition.
-        """
-        at = getattr(self, "_audio_type", None)
-        if at == "stereo":
-            return bool(_atmos_only(media))
-        if at == "atmos":
-            return bool(_has_atmos(media))
+        """Whether THIS row's fetch would ask for the Atmos session: the same
+        shared decision the engine's resolver makes
+        (``waves.constants.wants_atmos_delivery``), so the ownership gate ranks
+        a copy on the scale it was delivered on and the delivered snapshot
+        leaves an Atmos fetch's rank unstated."""
         try:
             data = getattr(getattr(self, "settings", None), "data", None)
-            atmos_default = default_audio_is_both(getattr(data, "default_audio_type", "stereo"))
+            default_type = getattr(data, "default_audio_type", "stereo")
         except Exception:
-            atmos_default = False
-        return _delivers_atmos(media, atmos_default)
+            default_type = "stereo"
+        return wants_atmos_delivery(
+            getattr(media, "audio_modes", None), getattr(self, "_audio_type", None), default_type
+        )
 
     def _get_media_urls(self, media, stream_info=None):
         """Capture that a video is really being fetched, as a side effect. Videos
@@ -12802,7 +12790,7 @@ class WavesBridge(LibraryMixin, QObject):
         event_abort: Event | None = None,
         library_claim=None,
         force_redownload: bool = False,
-        pinned_quality=None,
+        pinned_quality: QualityTier | None = None,
         audio_type: str | None = None,
         base_template: str | None = None,
         chooser_toggles: dict | None = None,
