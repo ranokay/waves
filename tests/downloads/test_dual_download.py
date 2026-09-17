@@ -235,7 +235,6 @@ def test_file_mode_reader_prefers_the_tag_over_the_codec(tmp_path, monkeypatch):
     import shutil
     import subprocess
 
-    import waves.download as download_mod
     from waves.constants import METADATA_LOOKUP_UPC, MetadataTargetUPC
     from waves.download import _file_audio_mode_is_atmos
     from waves.metadata import Metadata
@@ -263,26 +262,12 @@ def test_file_mode_reader_prefers_the_tag_over_the_codec(tmp_path, monkeypatch):
     )
     assert meta.save()
 
-    class _Info:
-        codec = "mp4a.40.2"  # stereo codec, contradicting the tag
-
-    class _MP4:
-        def __init__(self, _path):
-            self.info = _Info()
-
-    monkeypatch.setattr(download_mod, "MP4", _MP4)
+    # The container sniff is the shared reader's module-level seam.
+    monkeypatch.setattr("waves.metadata._mp4_codec", lambda _path: "mp4a.40.2")  # stereo codec, contradicting the tag
     assert _file_audio_mode_is_atmos(target) is True
 
     # And an untagged file still falls back to the codec.
     plain = tmp_path / "plain.m4a"
     plain.write_bytes(b"stand-in")
-
-    class _Info2:
-        codec = "ec-3"
-
-    class _MP42:
-        def __init__(self, _path):
-            self.info = _Info2()
-
-    monkeypatch.setattr(download_mod, "MP4", _MP42)
+    monkeypatch.setattr("waves.metadata._mp4_codec", lambda _path: "ec-3")
     assert _file_audio_mode_is_atmos(plain) is True

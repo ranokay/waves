@@ -1492,7 +1492,12 @@ class _TrackedDownload(Download):
         # siblings; a thread-local carries that per-track decision safely.
         self._tls = local()
         self._skip_existing_base = False
-        super().__init__(*args, **kwargs)
+        # The job's pinned Version crosses to the engine BEFORE super(): the
+        # engine's pre-stream skip gate needs it, and it must be set before any
+        # engine method can run.
+        at = str(audio_type or "").strip().lower() or None
+        at = at if at in ("stereo", "atmos") else None
+        super().__init__(*args, pinned_audio_type=at, **kwargs)
         self._track_signals = track_signals
         # Live "do I already have this" lookup (waves/ownership.py's
         # ownership_of, which re-checks the disk) plus the rank of the quality
@@ -1531,8 +1536,9 @@ class _TrackedDownload(Download):
         # the Atmos row covers them); Atmos rows fetch Atmos (skipping
         # stereo-only tracks), placing dual Versions through the Atmos
         # subfolder and Atmos-only tracks to the normal path (no hole).
-        at = str(audio_type or "").strip().lower() or None
-        self._audio_type = at if at in ("stereo", "atmos") else None
+        # (The same value crossed to the engine as pinned_audio_type above,
+        # which is what makes the pre-stream skip Version-aware.)
+        self._audio_type = at
         # The stereo template for Atmos-only fallback (Atmos rows place
         # Atmos-only tracks to the normal path, not the subfolder). None for
         # stereo/single rows, which never need it.

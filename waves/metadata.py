@@ -270,6 +270,48 @@ def read_audio_type(path_file: str | pathlib.Path) -> str | None:
     return normalize_audio_type_tag(ids[0])
 
 
+# Every extension Dolby Atmos can arrive in: E-AC-3 JOC and AC-4 are MP4
+# payloads, so any other container is stereo by construction and needs no open.
+_ATMOS_CONTAINER_SUFFIXES = (".m4a", ".mp4")
+_ATMOS_CODECS = ("ec-3", "ac-4")
+
+
+def _mp4_codec(path_file) -> str:
+    """The codec one MP4 container reports, "" when it says nothing.
+
+    Module-level so the container open is a seam a test can stand in front of
+    (the codec sniff's own rules), and so every caller shares one open.
+    """
+    return str(getattr(mp4.MP4(str(path_file)).info, "codec", "") or "")
+
+
+def read_audio_mode(path_file: str | pathlib.Path) -> str | None:
+    """Which Version the audio file at this path is: "stereo" / "atmos" / None.
+
+    Tag first, codec second (§5.3): a file Waves wrote carries
+    WAVES_AUDIO_TYPE, which answers without opening the container and can
+    never misread a shared extension (TIDAL's stereo AAC and its Atmos both
+    live in .m4a). Untagged files -- every library already on disk, a user's
+    own files -- fall back to the codec sniff, which stays the legacy answer,
+    never the source. Only an MP4 container can hold Atmos, so every other
+    extension is stereo by construction, answered without opening the file.
+
+    None means the file could not be read at all: callers keep their
+    historical answer (an unreadable copy is never evidence of a DIFFERENT
+    Version) instead of guessing.
+    """
+    tagged = read_audio_type(path_file)
+    if tagged in (AUDIO_TYPE_STEREO, AUDIO_TYPE_ATMOS):
+        return tagged
+    if pathlib.Path(str(path_file)).suffix.lower() not in _ATMOS_CONTAINER_SUFFIXES:
+        return AUDIO_TYPE_STEREO
+    try:
+        codec = _mp4_codec(path_file)
+    except Exception:
+        return None
+    return AUDIO_TYPE_ATMOS if codec.startswith(_ATMOS_CODECS) else AUDIO_TYPE_STEREO
+
+
 class Metadata:
     path_file: str | pathlib.Path
     title: str
