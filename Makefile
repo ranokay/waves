@@ -36,8 +36,12 @@ WAVES_MACOS_MIN ?= 15.0
 # Keep ccache out on Darwin/arm64 until an arm64 binary is provisioned; the
 # other hosts keep it.
 WAVES_HOST := $(shell uname -s 2>/dev/null)-$(shell uname -m 2>/dev/null)
-WAVES_NUITKA_FLAGS ?= $(if $(filter Windows_NT,$(OS)),--low-memory,$(if $(filter Darwin-arm64,$(WAVES_HOST)),--disable-ccache,)) \
-	--nofollow-import-to=yt_dlp.extractor.lazy_extractors
+WAVES_NUITKA_FLAGS ?= $(if $(filter Windows_NT,$(OS)),--low-memory,$(if $(filter Darwin-arm64,$(WAVES_HOST)),--disable-ccache,))
+# Appended, not part of the ?= default: the exclusion is a packaging fact about
+# yt-dlp, not a host choice, and the CI Windows legs prefix the command with
+# WAVES_NUITKA_FLAGS=--low-memory (an environment value a ?= default would
+# never apply to).
+WAVES_NUITKA_FLAGS += --nofollow-import-to=yt_dlp.extractor.lazy_extractors
 
 .PHONY: install
 install: ## Install the poetry environment and install the pre-commit hooks
