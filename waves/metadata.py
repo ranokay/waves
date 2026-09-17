@@ -279,8 +279,9 @@ _ATMOS_CODECS = ("ec-3", "ac-4")
 def _mp4_codec(path_file) -> str:
     """The codec one MP4 container reports, "" when it says nothing.
 
-    Module-level so the container open is a seam a test can stand in front of
-    (the codec sniff's own rules), and so every caller shares one open.
+    Module-level because the container open is a seam a test can stand in
+    front of (the codec sniff's own rules), and because every reader goes
+    through this one place rather than opening the container itself.
     """
     return str(getattr(mp4.MP4(str(path_file)).info, "codec", "") or "")
 
@@ -310,6 +311,26 @@ def read_audio_mode(path_file: str | pathlib.Path) -> str | None:
     except Exception:
         return None
     return AUDIO_TYPE_ATMOS if codec.startswith(_ATMOS_CODECS) else AUDIO_TYPE_STEREO
+
+
+def occupant_is_version(path_file: str | pathlib.Path, version: str | None) -> bool:
+    """Whether the audio file at this path may stand in for ``version``'s copy.
+
+    The one rule every Version-aware skip asks (the shared engine's
+    ``_existing_same_item_at`` and the Apple runner's own delivery skip): an
+    occupant whose on-disk Version differs is the OTHER Version's file, so it
+    is not this one's copy however its id reads -- a dual download keeps one
+    file per Version, and a blank Atmos template aims both at one name.
+
+    A Version the caller did not pin (None: a legacy single row, or a stream
+    that has not answered yet) and an occupant whose Version cannot be read
+    both keep the historical answer, "yes": neither is evidence of a
+    DIFFERENT Version.
+    """
+    if version is None:
+        return True
+    mode = read_audio_mode(path_file)
+    return mode is None or mode == version
 
 
 class Metadata:

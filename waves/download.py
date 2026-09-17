@@ -1868,19 +1868,17 @@ class Download:
         A dual download keeps one file per Version (§5.2), and with a blank
         Atmos template both aim at one name (§5.4): a stereo file must not
         answer for the Atmos job, nor the reverse, however its item id reads.
-        The on-disk mode decides (tag first, codec second), exactly as it does
-        for the replace gate (:meth:`_is_own_copy`).
+        The rule itself lives in waves.metadata.occupant_is_version, beside
+        the reader it asks, so this gate and the Apple runner's cannot drift.
 
         ``fetch_is_atmos`` is what THIS job is pinned to bring, or None when
-        it is unpinned (a legacy single row) or the occupant's mode cannot be
-        read. Both unknown cases keep the historical answer, "yes": a mode we
-        cannot prove is never evidence of a DIFFERENT Version, and an unpinned
-        job has no Version to compare against.
+        it is unpinned (a legacy single row): both unknown cases keep the
+        historical answer, "yes".
         """
-        if fetch_is_atmos is None:
-            return True
-        occupant_is_atmos = _file_audio_mode_is_atmos(path_file)
-        return occupant_is_atmos is None or occupant_is_atmos == fetch_is_atmos
+        version = None if fetch_is_atmos is None else ("atmos" if fetch_is_atmos else "stereo")
+        from waves.metadata import occupant_is_version
+
+        return occupant_is_version(path_file, version)
 
     def _existing_same_item_at(
         self,
