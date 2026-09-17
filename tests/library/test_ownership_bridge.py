@@ -198,7 +198,7 @@ def test_stream_quality_accepts_plain_strings():
 def test_get_track_stream_info_captures_quality(monkeypatch):
     stream = SimpleNamespace(audio_quality="HI_RES_LOSSLESS", audio_mode="STEREO", bit_depth=24, sample_rate=96000)
     info = SimpleNamespace(media_stream=stream, stream_manifest=SimpleNamespace(codecs="FLAC"))
-    monkeypatch.setattr(backend.Download, "_get_track_stream_info", lambda self, media: info)
+    monkeypatch.setattr(backend.Download, "_get_track_stream_info", lambda self, media, *request: info)
     td = _new_tracked()
     media = SimpleNamespace(id=99)
     out = td._get_track_stream_info(media)
@@ -210,10 +210,26 @@ def test_get_track_stream_info_captures_quality(monkeypatch):
 def test_get_track_stream_info_no_stream_captures_nothing(monkeypatch):
     # A skip_existing short-circuit hands back a TrackStreamInfo with no stream.
     info = SimpleNamespace(media_stream=None, stream_manifest=None)
-    monkeypatch.setattr(backend.Download, "_get_track_stream_info", lambda self, media: info)
+    monkeypatch.setattr(backend.Download, "_get_track_stream_info", lambda self, media, *request: info)
     td = _new_tracked()
     td._get_track_stream_info(SimpleNamespace(id=99))
     assert td._delivered == {}
+
+
+def test_get_track_stream_info_forwards_the_jobs_request(monkeypatch):
+    """The override is the resolver the seam calls back, so the job's request
+    (tier and Version) must reach the engine's fetch unchanged: that carry is
+    what makes a per-click ask independent of the saved defaults (R-13)."""
+    seen: list[tuple] = []
+
+    def _engine_fetch(self, media, tier=None, audio_type=None):
+        seen.append((tier, audio_type))
+        return SimpleNamespace(media_stream=None, stream_manifest=None)
+
+    monkeypatch.setattr(backend.Download, "_get_track_stream_info", _engine_fetch)
+    td = _new_tracked()
+    td._get_track_stream_info(SimpleNamespace(id=99), "HI_RES_LOSSLESS", "atmos")
+    assert seen == [("HI_RES_LOSSLESS", "atmos")]
 
 
 def _patch_item_helpers(monkeypatch, return_value):

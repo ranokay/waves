@@ -103,7 +103,7 @@ class _StubProvider:
         return self.facts
 
 
-def _make_download(provider, tmp_path=None) -> Download:
+def _make_download(provider, tmp_path=None, **kwargs) -> Download:
     dl = Download(
         tidal_obj=MagicMock(),
         skip_existing=False,
@@ -111,6 +111,7 @@ def _make_download(provider, tmp_path=None) -> Download:
         fn_logger=MagicMock(),
         progress=MagicMock(),
         provider=provider,
+        **kwargs,
     )
     dl.settings = MagicMock()
     dl.event_abort = threading.Event()
@@ -243,6 +244,19 @@ class TestEngineStreamRouting:
 
         assert provider.resolved and provider.resolved[0][0] is track
         assert info is not None and info.urls == ["https://seg/1"]
+
+    def test_the_jobs_request_crosses_the_seam(self, tmp_path):
+        # R-13: the job's pinned rung and Version are the resolve's arguments
+        # (one immutable ask), never state the provider has to guess. A legacy
+        # job that pinned neither keeps the None/None shape.
+        provider = _StubProvider(StreamInfo(urls=["https://seg/1"], file_extension=".flac", codecs="flac"))
+        pinned = _make_download(provider, tmp_path, pinned_tier=QualityTier.LOSSLESS, pinned_audio_type="atmos")
+        pinned._get_stream_info(_track("1"))
+        assert provider.resolved[0][1:] == (QualityTier.LOSSLESS, AudioType.ATMOS)
+
+        legacy = _make_download(provider, tmp_path)
+        legacy._get_stream_info(_track("2"))
+        assert provider.resolved[1][1:] == (None, None)
 
     def test_an_empty_stream_answer_is_a_failed_fetch(self, tmp_path):
         provider = _StubProvider(StreamInfo())
@@ -527,6 +541,7 @@ class TestJobSpecDispatch:
 
         def _build_download(signals, **kwargs):
             stub.dl.library_claim = kwargs.get("library_claim")
+            stub.dl.built_kwargs = kwargs
             return stub.dl
 
         class _Pool:
@@ -571,7 +586,7 @@ class TestJobSpecDispatch:
         arm_dispatch(stub)
         return stub
 
-    def _spec(self, *, collection=True, kind="album", object_id="tidal:m1", media_id="m1"):
+    def _spec(self, *, collection=True, kind="album", object_id="tidal:m1", media_id="m1", audio_type=None):
         from waves.waves_ui.backend import _JobSpec
 
         return _JobSpec(
@@ -583,6 +598,7 @@ class TestJobSpecDispatch:
             collection=collection,
             media_id=media_id,
             merge_plan=None,
+            audio_type=audio_type,
         )
 
     def _drive(self, stub, spec):
@@ -647,3 +663,18 @@ class TestJobSpecDispatch:
         self._drive(stub, self._spec())
 
         assert records == [album]
+
+    def test_the_built_download_carries_the_rows_request(self, tmp_path):
+        """The runner hands the download the row's own rung and Version (R-13),
+        never a live Settings read: that carry is what makes a per-click ask
+        independent of the saved defaults. The source guard in
+        tests/settings/test_quality_pinned_per_job.py pairs with this."""
+        provider = _StubProvider()
+        provider.get_object = lambda kind, raw_id: SimpleNamespace(id=raw_id)
+        stub = self._stub_bridge(provider, tmp_path)
+        stub._job_quality = lambda qid: QualityTier.HI_RES_LOSSLESS
+
+        self._drive(stub, self._spec(audio_type="atmos"))
+
+        assert stub.dl.built_kwargs["pinned_quality"] == QualityTier.HI_RES_LOSSLESS
+        assert stub.dl.built_kwargs["audio_type"] == "atmos"

@@ -309,7 +309,6 @@ def _capture_dl(monkeypatch, *, target_rank, stream_quality="LOSSLESS"):
     from waves import download as download_mod
 
     dl = _TrackedDownload.__new__(_TrackedDownload)
-    dl._pinned_quality = None
     dl._target_rank = target_rank
     dl._delivered = {}
     dl._delivered_lock = Lock()
@@ -320,7 +319,7 @@ def _capture_dl(monkeypatch, *, target_rank, stream_quality="LOSSLESS"):
         ),
         stream_manifest=SimpleNamespace(codecs="flac"),
     )
-    monkeypatch.setattr(download_mod.Download, "_get_track_stream_info", lambda self, media: info)
+    monkeypatch.setattr(download_mod.Download, "_get_track_stream_info", lambda self, media, *request: info)
     return dl
 
 

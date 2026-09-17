@@ -53,10 +53,11 @@ def _track(tid="101", modes=None):
     return t
 
 
-def _session_reached(media, atmos_on: bool) -> str:
+def _session_reached(media, atmos_on: bool, pin: str | None = None) -> str:
     """Drive the REAL Download._get_track_stream_info and report which session
     it reached for. Only the session and the stream are stand-ins; the branch
-    under observation is the engine's own."""
+    under observation is the engine's own. ``pin`` is the job's Version (the
+    resolver's own argument, R-13)."""
     reached: list[str] = []
     stream = SimpleNamespace(get_stream_manifest=lambda: SimpleNamespace(file_extension=".m4a", codecs="EAC3"))
     dl = Download.__new__(Download)
@@ -70,7 +71,7 @@ def _session_reached(media, atmos_on: bool) -> str:
     )
     dl.session = SimpleNamespace(track=lambda _id: SimpleNamespace(get_stream=lambda: stream))
     media.get_stream = lambda: stream
-    dl._get_track_stream_info(media)
+    dl._get_track_stream_info(media, None, pin)
     return reached[0] if reached else ""
 
 
@@ -105,6 +106,24 @@ def test_the_bridge_mirror_agrees_with_the_engine_on_every_shape():
             media = _track(modes=modes)
             engine = _session_reached(media, atmos_on) == "atmos"
             assert _delivers_atmos(media, atmos_on) is engine, (atmos_on, modes)
+
+
+def test_the_row_mirror_agrees_with_the_engine_on_every_pinned_shape():
+    """_wants_atmos mirrors the pinned-Version half of the engine's condition
+    (R-13): the ownership gate and the delivered snapshot rank a pinned row's
+    copy on the scale the fetch would really deliver on, so the two must agree
+    for every pin, default and mode list -- including the stereo pin on an
+    Atmos-only track (which item() skips, and where the engine's nothing-else
+    clause would still take the Atmos session)."""
+    for pin in (None, "stereo", "atmos"):
+        for atmos_on in (True, False):
+            for modes in ([ATMOS], [ATMOS, "STEREO"], ["STEREO"], []):
+                media = _track(modes=modes)
+                engine = _session_reached(media, atmos_on, pin=pin) == "atmos"
+                dl = _TrackedDownload.__new__(_TrackedDownload)
+                dl._audio_type = pin
+                dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both" if atmos_on else "stereo"))
+                assert dl._wants_atmos(media) is engine, (pin, atmos_on, modes)
 
 
 # --------------------------------------------------------------------------- #

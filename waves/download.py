@@ -34,14 +34,13 @@ from tidalapi import Album, Mix, Playlist, Session, Track, UserPlaylist, Video
 from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvailable
 from tidalapi.media import (
     AudioExtensions,
-    AudioMode,
     Codec,
     Quality,
     VideoExtensions,
 )
 from urllib3.util.ssl_ import create_urllib3_context
 
-from waves.config import ApiCallStopped, Settings, Tidal, api_waits_wake_for
+from waves.config import ApiCallStopped, Settings, Tidal, api_waits_wake_for, tidal_quality_for_tier
 from waves.constants import (
     CHUNK_SIZE,
     EXTENSION_LYRICS,
@@ -53,9 +52,11 @@ from waves.constants import (
     DownsampleTarget,
     MediaType,
     MetadataTargetUPC,
+    QualityTier,
     QualityVideo,
-    default_audio_is_both,
     provider_folder_name,
+    tier_from_word,
+    wants_atmos_delivery,
 )
 from waves.helper.camelot import format_initial_key
 from waves.helper.exceptions import MediaMissing
@@ -415,6 +416,11 @@ class Download:
     # so a Download reached without __init__ (a stand-in) reads "unpinned".
     _pinned_audio_type: str | None = None
 
+    # The Waves rung THIS job was queued at, or None when it pinned none (a
+    # legacy row; the session's own quality then stands). Defaulted on the
+    # class for the same stand-in reason as _pinned_audio_type above.
+    _pinned_tier: QualityTier | None = None
+
     # Process-wide keep-alive HTTP session (see the comment in __init__): all
     # Download instances share one warm connection pool so an album start does
     # not pay a burst of TLS handshakes on a cold per-instance pool.
@@ -467,6 +473,7 @@ class Download:
         provider: Provider | None = None,
         album_artist_tag_clean: Callable[[], bool] | None = None,
         chooser_toggles: dict | None = None,
+        pinned_tier: QualityTier | None = None,
         pinned_audio_type: str | None = None,
     ) -> None:
         """Initialize the Download object and its dependencies.
@@ -498,11 +505,17 @@ class Download:
                 lyrics/art pins (base keys, booleans). They win over the
                 provider's stored options for this job only. Defaults to None
                 (every option reads Settings).
+            pinned_tier (QualityTier | None, optional): The Waves rung this job
+                was queued at. It rides ``resolve_stream`` as the job's own
+                request, so a job fetches at the quality the user started it
+                with however Settings moves afterwards. None (the default)
+                means the session's own quality stands.
             pinned_audio_type (str | None, optional): Which Version this job
                 was pinned to fetch ("stereo" / "atmos"), for the gates that
                 must not let one Version's file answer for the other (§5.2:
-                a dual download's two rows). None (the default) means the job
-                did not pin one and the resolver decides.
+                a dual download's two rows) and for the fetch itself. None
+                (the default) means the job did not pin one and the resolver
+                decides.
         """
         self.settings = Settings()
         self.tidal = tidal_obj
@@ -538,6 +551,10 @@ class Download:
         # The Version this job pins (dual download rows). None is a legacy
         # single row; the shared normalizer is the one spelling of the clamp.
         self._pinned_audio_type = normalize_audio_type_tag(pinned_audio_type)
+        # The Waves rung this job pins, folded onto the ladder so both the
+        # seam's QualityTier and a raw word spell it the same way. None is a
+        # legacy row whose fetch follows the session's own quality.
+        self._pinned_tier = tier_from_word(pinned_tier) if pinned_tier is not None else None
 
         # Destination directories already ensured by this instance (one
         # instance = one queued item, so this resets naturally per album).
@@ -2610,17 +2627,19 @@ class Download:
         if isinstance(media, Track):
             with self.tidal.stream_lock:
                 try:
-                    # The tier and audio type are the seam's contract shape;
-                    # TIDAL's fetch decides from its own session state (the
-                    # job's pinned quality and the Atmos swap), which is
-                    # fenced behind this engine's resolver -- bound around the
-                    # resolve, so the answer is THIS engine's fetch even
-                    # though the provider instance is shared with idle
-                    # engines (a settings save rebuilds one mid-job).
+                    # The job's request -- the Waves rung it was queued at and
+                    # the Version it pins -- rides the seam as the resolve's
+                    # own arguments (spec §4.1/§5.5: one immutable ask, never
+                    # live Settings). TIDAL's fetch applies them inside this
+                    # engine, fenced behind this resolver -- bound around the
+                    # resolve, so the answer is THIS engine's fetch even though
+                    # the provider instance is shared with idle engines (a
+                    # settings save rebuilds one mid-job).
                     bind = getattr(self.provider, "stream_resolver_bound", None)
                     binding = bind(self._get_track_stream_info) if bind is not None else contextlib.nullcontext()
+                    requested_version = AudioType(self._pinned_audio_type) if self._pinned_audio_type else None
                     with binding:
-                        stream_info = self.provider.resolve_stream(media, None, None)
+                        stream_info = self.provider.resolve_stream(media, self._pinned_tier, requested_version)
                 except Exception as error:
                     # Every arm ends the same way (nothing fetched and the
                     # caller is told so identically); only what gets recorded
@@ -2696,38 +2715,47 @@ class Download:
 
         self.fn_logger.exception(f"Something went wrong. Skipping '{log_content(name_builder_item(media))}'.")
 
-    def _get_track_stream_info(self, media: Track, tier=None, audio_type=None) -> TrackStreamInfo:
+    def _get_track_stream_info(
+        self,
+        media: Track,
+        tier: QualityTier | None = None,
+        audio_type: AudioType | None = None,
+    ) -> TrackStreamInfo:
         """
         Gets stream info for a Track, handling Atmos/Normal session switching.
 
         This is the engine resolver the Provider seam calls back: registered
         with the provider at construction, invoked through
-        ``provider.resolve_stream`` under the stream lock. The seam's tier and
-        audio type ride in for the interface's shape; TIDAL's fetch decides
-        from its own session state (the job's pinned quality and the Atmos
-        swap below), which is this engine's fenced business.
+        ``provider.resolve_stream`` under the stream lock. The job's request --
+        the Waves rung it was queued at and the Version it pins -- arrives as
+        these arguments, so the fetch answers to the click that queued it and
+        never to live Settings; a legacy job that pinned neither (both None)
+        keeps the historical defaults.
 
         Args:
             media: The track to get stream information for.
-            tier: The Waves quality tier asked for (unused by TIDAL's fetch).
-            audio_type: The audio type asked for (unused by TIDAL's fetch).
+            tier: The Waves rung this job asks at, or None to follow the
+                session's own quality.
+            audio_type: The Version this job pins (stereo / Atmos), or None
+                for a legacy row the settings decide for.
 
         Returns:
             TrackStreamInfo: Container with stream manifest, file extension,
                             FLAC extraction flag, and media stream object.
                             Returns TrackStreamInfo with None/empty values if fails.
         """
-        # The Atmos session serves two cases: the user asked for Atmos and the
-        # track has it, or the track has NOTHING ELSE (TIDAL lists the Atmos
-        # version as its own id with no stereo stream, so the normal session
-        # has no stream to offer). The second clause is what downloads an
-        # Atmos-only track when the setting is off, instead of skipping it and
-        # leaving a hole in the album.
-        modes = getattr(media, "audio_modes", None) or []
-        has_atmos = AudioMode.dolby_atmos.value in modes
-        atmos_only = bool(modes) and all(mode == AudioMode.dolby_atmos.value for mode in modes)
-        want_atmos = has_atmos and (
-            default_audio_is_both(getattr(self.settings.data, "default_audio_type", "stereo")) or atmos_only
+        # The Atmos session serves two cases: the request asked for Atmos (a
+        # pinned Atmos Version) and the track has it, or the track has NOTHING
+        # ELSE (TIDAL lists the Atmos version as its own id with no stereo
+        # stream, so the normal session has no stream to offer). The decision
+        # is shared with the bridge's ownership gate (wants_atmos_delivery),
+        # so what a row fetches is what it ranks. The track facts still gate
+        # it: a catalog object that advertises no Atmos has no Atmos stream to
+        # ask for, and the bridge skips such a row before this fetch.
+        want_atmos = wants_atmos_delivery(
+            getattr(media, "audio_modes", None),
+            audio_type,
+            getattr(self.settings.data, "default_audio_type", "stereo"),
         )
 
         if want_atmos:
@@ -2739,7 +2767,25 @@ class Download:
                 self.fn_logger.error(f"Failed to restore normal session for track: {media.id}")
                 return TrackStreamInfo(None, "", False, None)
 
-        media_stream = self.session.track(media.id).get_stream() if want_atmos else media.get_stream()
+        # This job's rung, written onto the shared session for this fetch only.
+        # It goes on AFTER the restore above (which re-reads the setting when
+        # it rebuilds a normal session, so what is captured below is that
+        # session's own quality rather than whatever an earlier Atmos track
+        # left behind), and the fetch and the put-back both run inside the
+        # stream lock the caller holds, so no other fetch can see it. An Atmos
+        # fetch is left entirely alone: it carries its own fixed request
+        # quality, which the switch above sets.
+        prev_quality = None
+        if tier is not None and not want_atmos:
+            prev_quality = self.session.audio_quality
+            self.session.audio_quality = tidal_quality_for_tier(tier)
+        try:
+            media_stream = self.session.track(media.id).get_stream() if want_atmos else media.get_stream()
+        finally:
+            # The fetch's answer wins even if the put-back fails.
+            if prev_quality is not None:
+                with contextlib.suppress(Exception):
+                    self.session.audio_quality = prev_quality
 
         stream_manifest = media_stream.get_stream_manifest()
         file_extension = stream_manifest.file_extension

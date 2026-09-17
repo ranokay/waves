@@ -36,7 +36,6 @@ def _track(tid="101"):
 
 def _dl(monkeypatch, quality="LOSSLESS"):
     dl = _TrackedDownload.__new__(_TrackedDownload)
-    dl._pinned_quality = None
     dl._target_rank = 3
     dl._delivered = {}
     dl._delivered_lock = threading.Lock()
@@ -45,7 +44,7 @@ def _dl(monkeypatch, quality="LOSSLESS"):
         media_stream=SimpleNamespace(audio_quality=quality, audio_mode="STEREO", bit_depth=16, sample_rate=44100),
         stream_manifest=SimpleNamespace(codecs="flac"),
     )
-    monkeypatch.setattr(download_mod.Download, "_get_track_stream_info", lambda self, media: info)
+    monkeypatch.setattr(download_mod.Download, "_get_track_stream_info", lambda self, media, *request: info)
     return dl
 
 

@@ -586,7 +586,12 @@ class TidalProvider(Provider):
 
     # ----- per-track delivery
 
-    def resolve_stream(self, track, tier: QualityTier, audio_type: AudioType) -> StreamInfo:
+    def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
+        """One resolve through the engine fetch bound around this call.
+
+        The job's request (its tier and Version) is forwarded unchanged; None
+        means the job pinned nothing and the engine's own state decides.
+        """
         if self._stream_resolver is None:
             raise RuntimeError(  # noqa: TRY003
                 "TidalProvider has no stream resolver bound; "

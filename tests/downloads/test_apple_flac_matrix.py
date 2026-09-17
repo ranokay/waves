@@ -181,7 +181,6 @@ def _tidal_dl(*, extract=True, scope_all=False, atmos_on=False):
     dl.fn_logger = SimpleNamespace(error=lambda *a, **k: None, info=lambda *a, **k: None)
     # The _TrackedDownload override stamps the delivered snapshot; give it
     # the ledger it writes into (see test_quality_pinned_per_job).
-    dl._pinned_quality = None
     dl._target_rank = -1
     dl._delivered = {}
     dl._delivered_lock = Lock()

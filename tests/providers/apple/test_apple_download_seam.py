@@ -139,6 +139,19 @@ def test_resolve_stream_without_cookies_raises_before_touching_gamdl():
         provider.resolve_stream(_song_resource(), QualityTier.HIGH, AudioType.STEREO)
 
 
+def test_resolve_stream_refuses_an_unpinned_request():
+    """The seam types the request as optional (a caller that pinned nothing
+    passes None and a provider with stored defaults answers for it); Apple
+    resolves the row's ask in its runner before calling, so an unresolved one
+    is refused rather than fetched at a guessed tier or Version."""
+    provider = AppleProvider(catalog=None)
+
+    with pytest.raises(ValueError, match="explicit tier"):
+        provider.resolve_stream(_song_resource(), None, AudioType.STEREO)
+    with pytest.raises(ValueError, match="explicit tier"):
+        provider.resolve_stream(_song_resource(), QualityTier.HIGH, None)
+
+
 def test_missing_binaries_name_the_settings_field(tmp_path, monkeypatch):
     import waves.providers.apple.engine as engine
 

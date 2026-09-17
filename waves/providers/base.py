@@ -487,9 +487,16 @@ class Provider(ABC):
     # ----- per-track delivery
 
     @abstractmethod
-    def resolve_stream(self, track, tier: QualityTier, audio_type: AudioType) -> StreamInfo:
+    def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
         """Resolve a track to a streamable delivery at the requested tier and
-        audio type."""
+        audio type.
+
+        The two are the caller's per-job request (one immutable ask, spec §5.5);
+        a caller that pinned neither passes None for both, and the provider then
+        answers from its own state (the legacy single row, whose fetch follows
+        the stored defaults). The per-job request never travels as shared
+        mutable state.
+        """
 
     @abstractmethod
     def fetch_lyrics(self, track) -> tuple[str, str]:
