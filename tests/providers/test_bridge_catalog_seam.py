@@ -25,6 +25,7 @@ from types import SimpleNamespace
 from tidalapi.album import Album
 from tidalapi.artist import Artist
 
+from waves.constants import CTX_APPLE
 from waves.providers import Capability
 from waves.providers.apple import AppleCatalogUnavailable
 from waves.waves_ui import backend
@@ -338,6 +339,28 @@ def test_search_with_tidal_signed_out_and_apple_enabled_asks_only_apple():
     ]
     assert stub.statuses[-1] == "1 results"
     assert stub.busy == [True, False]
+
+
+def test_an_apple_only_failure_delivers_its_words_to_the_group():
+    """Issue #241 / UI-05: when Apple is the only provider and its fetch fails,
+    the honest words still reach the Apple group as a payload -- not a silent
+    "Search failed" with a blank page -- so the group head can show them with
+    a RETRY. Nothing is cached from a failure."""
+    tidal = _provider(search=AssertionError("TIDAL search ran without a session"))
+    apple = _provider(search=AppleCatalogUnavailable())
+    stub = _SearchStub(tidal)
+    stub.providers["apple"] = apple
+    stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
+    stub._logged_in = False
+
+    stub.search("aphex twin")
+
+    assert stub.searchResults.emits, "an Apple-only failure must still answer the group"
+    payload = stub.searchResults.emits[-1]
+    assert payload[CTX_APPLE]["error"] == "Apple changed its web app. A Waves update is needed."
+    assert payload[CTX_APPLE]["albums"] == [] and payload["albums"] == []
+    assert stub.statuses[-1] == payload[CTX_APPLE]["error"]
+    assert stub._search_cache == {}
 
 
 def test_search_with_no_provider_available_refuses_unchanged():

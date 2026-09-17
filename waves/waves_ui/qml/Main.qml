@@ -906,7 +906,9 @@ ApplicationWindow {
     }
     // A provider header only makes sense while the active type filter can
     // still show one of its rows. Apple offers no videos or mixes in this
-    // slice, so those filters never show its header.
+    // slice, so those filters never show its header -- unless an Apple error
+    // stands: a failed fetch has to be visible wherever its group would be,
+    // and that is the group head's own OR (issue #241).
     function providerGroupVisible(apple) {        if (!appleSearchGrouped) return false
         var models = apple ? ({ artists: appleArtistsModel, albums: appleAlbumsModel, tracks: appleTracksModel, playlists: applePlaylistsModel })
                            : ({ artists: artistsModel, albums: albumsModel, tracks: tracksModel, videos: videosModel, playlists: playlistsModel, mixes: mixesModel })
@@ -16210,7 +16212,9 @@ ApplicationWindow {
                         objectName: "appleSearchError"
                         visible: root.appleSearchError !== ""
                         anchors.left: parent.left; anchors.leftMargin: 28
-                        anchors.right: appleSearchRetry.left; anchors.rightMargin: 8
+                        // The retry's own spot, reserved: a sibling declared
+                        // below this text cannot be referenced by its anchor.
+                        anchors.right: parent.right; anchors.rightMargin: 96
                         anchors.bottom: parent.bottom; anchors.bottomMargin: 10
                         textFormat: Text.PlainText; elide: Text.ElideRight
                         text: root.appleSearchError

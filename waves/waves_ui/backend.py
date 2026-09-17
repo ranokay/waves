@@ -3582,6 +3582,33 @@ _STALE_STAMP = float("-inf")
 _SEARCH_DISK_MAX = 12
 
 
+def _failed_search_payload(error_text: str) -> dict:
+    """The payload for a search whose only provider failed with words of its
+    own: every list empty, the provider's honest message in its group (issue
+    #241 / UI-05). The group head renders it with a RETRY; the status line
+    repeats it. Nothing here is ever cached."""
+    apple = {
+        "artists": [],
+        "albums": [],
+        "tracks": [],
+        "videos": [],
+        "playlists": [],
+        "mixes": [],
+        "top": None,
+        "error": str(error_text or ""),
+    }
+    return {
+        "artists": [],
+        "albums": [],
+        "tracks": [],
+        "videos": [],
+        "playlists": [],
+        "mixes": [],
+        "top": None,
+        CTX_APPLE: apple,
+    }
+
+
 def _search_same(a: dict, b: dict) -> bool:
     """Whether two search payloads show the same page.
 
@@ -6277,6 +6304,10 @@ class WavesBridge(LibraryMixin, QObject):
             "playlists": [],
             "mixes": [],
             "top": None,
+            # The error key rides every Apple group (empty here): a resolved
+            # link cannot have failed, and one payload shape keeps readers
+            # from branching on its presence (issue #241).
+            "error": "",
         }
         if kind == "artist":
             empty_apple["artists"] = [provider.row_for("artist", item)]
@@ -6495,12 +6526,23 @@ class WavesBridge(LibraryMixin, QObject):
                     ]
                 provider_results = {provider_id: result for provider_id, result, _error in fetched}
                 provider_errors = {provider_id: error for provider_id, _result, error in fetched if error is not None}
+            apple_error = provider_errors.get(CTX_APPLE)
             if provider_errors and len(provider_errors) == len(provider_ids):
                 # Every enabled fetch raised: a failure, never "0 results",
-                # which reads as a search that found nothing. Nothing is
-                # emitted or cached, so a stale page already painted stays.
-                if gen == self._search_gen:
+                # which reads as a search that found nothing. A provider whose
+                # refusal carries honest words still delivers them to its OWN
+                # group (issue #241 / UI-05): an Apple-only failure would
+                # otherwise be a silent blank page, the one case where no
+                # second provider can carry the error. A page that already
+                # holds rows is never blanked by a failure, and nothing here is
+                # cached.
+                stale_rows = bool(stale is not None and self._search_total(stale))
+                if gen == self._search_gen and apple_error is not None and not stale_rows:
+                    self.searchResults.emit(_failed_search_payload(str(apple_error)))
+                    self._set_status(str(apple_error))
+                elif gen == self._search_gen:
                     self._set_status("Search failed")
+                if gen == self._search_gen:
                     self._set_busy(False)
                 return
             # Only TIDAL feeds the ungrouped buckets; an Apple-only search
@@ -6564,7 +6606,6 @@ class WavesBridge(LibraryMixin, QObject):
                 # section. Not a result of its own, so never counted.
                 "top": top,
             }
-            apple_error = provider_errors.get(CTX_APPLE)
             if apple_enabled:
                 apple = provider_results.get(CTX_APPLE, {})
                 payload[CTX_APPLE] = {
