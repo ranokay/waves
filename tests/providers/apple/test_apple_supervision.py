@@ -422,6 +422,84 @@ def test_supervisor_starts_a_private_stopped_container_without_recreating(tmp_pa
     assert ["docker", "run"] not in kinds
 
 
+def test_supervisor_recreates_a_container_from_an_older_image(tmp_path):
+    """AP-07: a healthy container built before a pin bump keeps serving the
+    old bytes; the next supervision pass removes it and recreates from the
+    pinned image, session volume preserved."""
+    seen: list = []
+
+    def _runner(args, **kwargs):
+        seen.append(list(args))
+        if args[:2] == ["docker", "ps"]:
+            return SimpleNamespace(returncode=0, stdout="waves-wrapper-v2 running\n", stderr="")
+        if args[1:3] == ["inspect", "--format"] and "{{.Image}}" in args:
+            return SimpleNamespace(returncode=0, stdout="sha256:oldimage", stderr="")
+        if args[1:4] == ["image", "inspect", "--format"]:
+            return SimpleNamespace(returncode=0, stdout="sha256:newimage", stderr="")
+        if args[1:3] == ["inspect", "--format"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "51234"}],
+                        "10020/tcp": [{"HostIp": "127.0.0.1", "HostPort": "10020"}],
+                    }
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def _healthy(url, timeout=5):
+        return SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
+
+    session_dir = tmp_path / "wd"
+    sup = SidecarSupervisor(runner=_runner, http_get=_healthy, monotonic=lambda: 0.0)
+    assert sup.ensure_started(http_port=51234, image="img:new", data_dir=str(session_dir)) is True
+    kinds = [cmd[:2] for cmd in seen]
+    assert ["docker", "rm"] in kinds, "the container built from the old image must give way"
+    run = next(cmd for cmd in seen if cmd[:2] == ["docker", "run"])
+    # The replacement really runs the pinned image and keeps the session
+    # volume mounted, not merely "a run happened".
+    assert run[-1] == "img:new"
+    assert f"{session_dir}:/app/rootfs/data/data/com.apple.android.music/files" in run
+
+
+def test_supervisor_leaves_a_container_on_the_pinned_image_alone(tmp_path):
+    """The unchanged-pin half: matching image IDs mean no recreate and no
+    churn (nothing is re-pulled and the container is not re-run)."""
+    seen: list = []
+
+    def _runner(args, **kwargs):
+        seen.append(list(args))
+        if args[:2] == ["docker", "ps"]:
+            return SimpleNamespace(returncode=0, stdout="waves-wrapper-v2 running\n", stderr="")
+        if args[1:3] == ["inspect", "--format"] and "{{.Image}}" in args:
+            return SimpleNamespace(returncode=0, stdout="sha256:sameimage", stderr="")
+        if args[1:4] == ["image", "inspect", "--format"]:
+            return SimpleNamespace(returncode=0, stdout="sha256:sameimage", stderr="")
+        if args[1:3] == ["inspect", "--format"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "51234"}],
+                        "10020/tcp": [{"HostIp": "127.0.0.1", "HostPort": "10020"}],
+                    }
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def _healthy(url, timeout=5):
+        return SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
+
+    sup = SidecarSupervisor(runner=_runner, http_get=_healthy, monotonic=lambda: 0.0)
+    assert sup.ensure_started(http_port=51234, image="img:pinned", data_dir=str(tmp_path / "wd")) is True
+    kinds = [cmd[:2] for cmd in seen]
+    assert ["docker", "rm"] not in kinds
+    assert ["docker", "run"] not in kinds
+
+
 def _bridge_stub(**settings_overrides):
     data = SimpleNamespace(apple_pacing_batch_size=0, apple_pacing_delay_sec=0.0, apple_wrapper_idle_sec=0.0)
     for key, value in settings_overrides.items():

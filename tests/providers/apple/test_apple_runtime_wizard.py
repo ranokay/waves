@@ -903,6 +903,36 @@ def test_install_rejects_checksum_mismatch(tmp_path):
     assert not mgr.is_installed()
 
 
+def test_a_stale_managed_binary_reports_runtime_stale(tmp_path, monkeypatch):
+    """AP-06: an installed copy whose recorded provenance predates the shipped
+    pin must not read as current forever, and installing the new pin is the
+    update. An unchanged pin reports current and re-downloads nothing."""
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
+
+    mgr = AppleRuntimeManager(tmp_path)
+    blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
+    sha = hashlib.sha256(blob).hexdigest()
+    pinned = Nm3u8dlreRelease(version="v9.9.9", url="https://example.invalid/N-999.tar.gz", sha256=sha)
+    monkeypatch.setattr("waves.providers.apple.runtime.pinned_release", lambda *a, **k: pinned)
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "9.9.9")
+    mgr.install(release=pinned, session=_Sess(blob, sha))
+
+    current = mgr.status()
+    assert current["state"] == "managed" and current["runtime_stale"] is False
+
+    # A pin bump: new version, new asset, new checksum. The installed copy is
+    # still executable and does not read as current any more.
+    bumped = Nm3u8dlreRelease(version="v9.9.10", url="https://example.invalid/N-9910.tar.gz", sha256=sha)
+    monkeypatch.setattr("waves.providers.apple.runtime.pinned_release", lambda *a, **k: bumped)
+    stale = mgr.status()
+    assert stale["state"] == "managed" and stale["runtime_stale"] is True
+
+    # The offered Install (the wizard's apple_update_runtime action) replaces
+    # it, and the copy reads current again.
+    mgr.install(release=bumped, session=_Sess(blob, sha))
+    assert mgr.status()["runtime_stale"] is False
+
+
 def test_remove_clears_binary_and_manifest(tmp_path, monkeypatch):
     from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
 
@@ -1264,6 +1294,33 @@ def test_setup_state_carries_wizard_pins_and_high_port(tmp_path):
     assert port == 0 or 1024 <= port <= 65535
 
 
+def test_setup_state_surfaces_a_stale_managed_runtime(tmp_path, monkeypatch):
+    """The wizard read wires the stale flag through from the manager status
+    (AP-06): a managed copy whose provenance predates the shipped pin turns
+    the runtime step to attention with the Install action, and a current one
+    keeps the done step."""
+    from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
+
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    mgr = stub._apple_runtime
+    blob = _make_tarball(_exe_name(mgr.os_key or "macos"))
+    sha = hashlib.sha256(blob).hexdigest()
+    old = Nm3u8dlreRelease(version="v0.5.0", url="https://example.invalid/old.tar.gz", sha256=sha)
+    monkeypatch.setattr("waves.providers.apple.runtime.pinned_release", lambda *a, **k: old)
+    monkeypatch.setattr("waves.providers.apple.runtime._probe_version", lambda path: "0.5.0")
+    mgr.install(release=old, session=_Sess(blob, sha))
+    stub.providers["apple"] = SimpleNamespace(cookies_path="", nm3u8dlre_path=str(mgr.binary_path))
+
+    current = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert current["runtime"]["state"] == "done"
+
+    bumped = Nm3u8dlreRelease(version="v0.6.0-beta", url="https://example.invalid/new.tar.gz", sha256=sha)
+    monkeypatch.setattr("waves.providers.apple.runtime.pinned_release", lambda *a, **k: bumped)
+    stale = {s["key"]: s for s in stub.appleSetupState()["steps"]}
+    assert stale["runtime"]["state"] == "attention"
+    assert stale["runtime"]["action"] == "apple_update_runtime"
+
+
 def test_resolve_prefers_override_then_managed(tmp_path, monkeypatch):
     from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
 
@@ -1412,6 +1469,20 @@ def _steps(**over):
     base.update(over)
     base.setdefault("port_dirty", False)
     return {s["key"]: s for s in WavesBridge._apple_wizard_steps(**base)}
+
+
+def test_a_stale_managed_runtime_step_asks_for_an_update():
+    """AP-06's surface: the setup pass reads the stale managed copy as an
+    attention step whose action is the Install that refreshes it; a current
+    copy keeps the done step and Remove."""
+    steps = _steps(runtime_state="managed", runtime_stale=True)
+    assert steps["runtime"]["state"] == "attention"
+    assert steps["runtime"]["action"] == "apple_update_runtime"
+    assert "newer pinned" in steps["runtime"]["detail"]
+
+    steps = _steps(runtime_state="managed")
+    assert steps["runtime"]["state"] == "done"
+    assert steps["runtime"]["action"] == "apple_remove_runtime"
 
 
 def test_fresh_machine_steps_walk_in_order():

@@ -685,6 +685,66 @@ class SidecarSupervisor:
             return False
         return port_bindings_are_private(getattr(proc, "stdout", "") or "", http_port, decrypt_port)
 
+    def _inspect_image_id(self, args: list, label: str) -> str:
+        """One image-ID inspect: trimmed stdout, "" when unreadable.
+
+        The two ID readers below differ only in argv and the log label;
+        sharing the run/returncode/strip keeps their error handling from
+        drifting apart.
+        """
+        try:
+            proc = self._run(args, timeout=15)
+        except Exception:
+            logger.debug("%s could not be read", label, exc_info=True)
+            return ""
+        if getattr(proc, "returncode", 1) != 0:
+            return ""
+        return str(getattr(proc, "stdout", "") or "").strip()
+
+    def _container_image_id(self) -> str:
+        """The image ID our sidecar was created from, "" when unreadable."""
+        return self._inspect_image_id(
+            [self._binary, "inspect", "--format", "{{.Image}}", self._container],
+            "Wrapper container image",
+        )
+
+    def _local_image_id(self, image: str) -> str:
+        """The local image ID the given reference resolves to, "" when unknown."""
+        return self._inspect_image_id(
+            [self._binary, "image", "inspect", "--format", "{{.Id}}", image],
+            "Wrapper image",
+        )
+
+    def _container_image_is_current(self, image: str) -> bool:
+        """Whether the sidecar was created from the image the pin now names.
+
+        A readable mismatch means the container predates the pin (or the tag
+        was re-pulled), and recreation is how the refresh lands; the session
+        volume is preserved, so it is safe (AP-07). Unknown on either side
+        answers True -- a runtime that cannot report IDs must not churn a
+        working sidecar on every pass.
+        """
+        container_id = self._container_image_id()
+        local_id = self._local_image_id(image) if image else ""
+        if not container_id or not local_id:
+            return True
+        return container_id == local_id
+
+    def _container_must_recreate(self, state: str, img: str, port: int, decrypt_port: int) -> bool:
+        """Whether the existing sidecar must be removed before the run below.
+
+        Two reasons: its published bindings are not loopback-private (an older
+        container or a stale mapping is rebound on the way back), or it was
+        created from an image other than the one the pin now names (AP-07: a
+        pulled tag bump must not keep serving the old bytes). Unknown image
+        IDs never recreate; a container that is not there never does.
+        """
+        if not state:
+            return False
+        if not self._container_bindings_private(port, decrypt_port):
+            return True
+        return bool(img) and not self._container_image_is_current(img)
+
     def _run_fresh(self, *, image: str, port: int, decrypt_port: int, host_data: str, start_timeout: int) -> None:
         """Run a fresh sidecar from the image with the current port mapping."""
         try:
@@ -774,8 +834,13 @@ class SidecarSupervisor:
         # data dir, so recreation preserves it. A removal that fails holds the
         # row instead of trusting the exposed container's health.
         state = self._container_state()
+        img = self._resolve_image(image)
+        # A container whose bindings are exposed, or which was built from an
+        # image other than the one the pin names, is removed so the run below
+        # recreates it correctly; the session lives in the host data dir, so
+        # recreation preserves it (AP-07).
         migrated = False
-        if state and not self._container_bindings_private(port, host_decrypt):
+        if self._container_must_recreate(state, img, port, host_decrypt):
             if not self._remove_container():
                 return False
             state = ""
@@ -783,7 +848,6 @@ class SidecarSupervisor:
         if not migrated and self.is_ready(port):
             self.note_activity()
             return True
-        img = self._resolve_image(image)
         if not img:
             return False
         host_data = self._resolve_data_dir(data_dir)

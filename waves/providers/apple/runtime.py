@@ -672,12 +672,35 @@ class AppleRuntimeManager:
         """The wrapper pins every status answer carries, managed or not."""
         return {"wrapper_image": WRAPPER_V2_IMAGE, "wrapper_libs": WRAPPER_LIBS_VERSION}
 
+    def _install_is_stale(self) -> bool:
+        """Whether the managed binary predates the shipped pin (AP-06).
+
+        Compares the provenance the install recorded -- version, asset URL and
+        verified checksum -- against the pinned release this build ships. A
+        manifest from before a field existed counts as stale, because the pass
+        that re-installs it is also what records the field. An unsupported
+        platform (no pinned asset) can never be stale.
+        """
+        pinned = pinned_release(self.os_key, self.arch)
+        if pinned is None:
+            return False
+        mani = self._read_manifest()
+        return (
+            str(mani.get("version") or "") != str(pinned.version or "")
+            or str(mani.get("url") or "") != str(pinned.url or "")
+            or str(mani.get("sha256") or "") != str(pinned.sha256 or "")
+        )
+
     def status(self, custom_path: str = "") -> dict:
         """Describe the managed N_m3u8DL-RE for the UI.
 
         An explicit override or a binary on PATH reports as an unmanaged
         ``path`` (the FFmpeg manager's precedence); only the copy this
-        manager provisioned reports ``managed``.
+        manager provisioned reports ``managed``. A managed copy whose
+        recorded provenance differs from the shipped pin reports
+        ``runtime_stale`` (AP-06: a pin bump must not let an old binary
+        look current forever); the state stays ``managed`` because the binary
+        still works, and Install is the one-click way to replace it.
         """
         if self.is_installed():
             mani = self._read_manifest()
@@ -690,6 +713,7 @@ class AppleRuntimeManager:
                 "version": str(mani.get("version") or NM3U8DLRE_VERSION),
                 "source_url": str(mani.get("url") or ""),
                 "sha256": str(mani.get("sha256") or ""),
+                "runtime_stale": self._install_is_stale(),
             }
         cp = (custom_path or "").strip()
         if cp and Path(cp).is_file():
@@ -702,6 +726,7 @@ class AppleRuntimeManager:
                 "version": "",
                 "source_url": "",
                 "sha256": "",
+                "runtime_stale": False,
             }
         found = shutil.which("N_m3u8DL-RE")
         if found:
@@ -714,6 +739,7 @@ class AppleRuntimeManager:
                 "version": "",
                 "source_url": "",
                 "sha256": "",
+                "runtime_stale": False,
             }
         return {
             **self._base_status(),
@@ -724,6 +750,7 @@ class AppleRuntimeManager:
             "version": "",
             "source_url": "",
             "sha256": "",
+            "runtime_stale": False,
         }
 
     def install(

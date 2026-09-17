@@ -19280,6 +19280,7 @@ class WavesBridge(LibraryMixin, QObject):
             image_pulled=image_pulled,
             port=port,
             port_dirty=port_dirty,
+            runtime_stale=bool(runtime.get("runtime_stale", False)),
         )
         return {
             "light": described,
@@ -19320,6 +19321,7 @@ class WavesBridge(LibraryMixin, QObject):
         image_pulled: bool,
         port: int,
         port_dirty: bool = False,
+        runtime_stale: bool = False,
     ) -> list:
         """The wizard's steps for the QML in-place flow, in walking order.
 
@@ -19365,7 +19367,13 @@ class WavesBridge(LibraryMixin, QObject):
                 "action_label": _APPLE_STEP_ACTION_LABELS.get("apple_import_cookies", ""),
             }
         )
-        if runtime_state == "managed":
+        if runtime_state == "managed" and runtime_stale:
+            runtime_step = (
+                "attention",
+                "A newer pinned N_m3u8DL-RE is available; Install replaces the managed copy (checksum-verified).",
+                "apple_update_runtime",
+            )
+        elif runtime_state == "managed":
             runtime_step = ("done", "Managed N_m3u8DL-RE is provisioned and verified.", "apple_remove_runtime")
         elif runtime_state == "path":
             runtime_step = (
