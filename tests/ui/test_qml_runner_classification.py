@@ -101,6 +101,7 @@ def test_a_broken_app_import_fails_the_startup_scenario(tmp_path, monkeypatch):
     assert "injected app import failure" in str(excinfo.value)
 
 
+@pytest.mark.integration
 def test_ffmpeg_marker_skips_when_no_binary_is_on_path():
     """The ffmpeg marker is the suite's skip gate for missing binaries."""
     import os

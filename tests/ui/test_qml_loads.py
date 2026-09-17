@@ -56,9 +56,9 @@ def test_main_qml_loads_without_errors_or_warnings():
     )
     report = (proc.stdout + proc.stderr).strip()
     if proc.returncode == _EXIT_NO_QT:
-        from support.qml import _skip_or_fail_missing_qt
+        from support.qml import require_qt
 
-        _skip_or_fail_missing_qt()
+        require_qt()
     assert proc.returncode == _EXIT_OK, (
         "the QML did not load cleanly. Every scenario test SKIPS on this, so "
         "nothing else in the suite will tell you:\n" + report

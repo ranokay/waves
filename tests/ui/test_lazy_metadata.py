@@ -69,6 +69,7 @@ def _run_probe() -> dict[str, str]:
     return out
 
 
+@pytest.mark.integration
 def test_import_is_free_and_all_three_cost_at_most_one_probe():
     report = _run_probe()
     assert report["PROBES_AT_IMPORT"] == "0", "importing waves ran a metadata probe"

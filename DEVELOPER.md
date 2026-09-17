@@ -116,13 +116,14 @@ timing-sensitive under load. Counts and runtimes below are as of 2026-09-17
 (macOS arm64, offscreen Qt); the budget is the limit the group must stay
 within on this host.
 
-| Group                                                           | Command                                                                                                              |  Cases |                   Budget (measured) |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -----: | ----------------------------------: |
-| fast (no Qt, ffmpeg, slow, integration or account)              | `pytest --doctest-modules -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests` | ~4,194 |                      < 1 min (37 s) |
-| quick QML (the heaviest boots skipped)                          | `pytest --doctest-modules -rs -q -m "qml and not slow and not account" --require-qml tests`                          |    ~91 |                < 5 min (4 min 12 s) |
-| strict (the merge gate; runs the groups above plus integration) | `pytest --doctest-modules -rs --require-qml -m "not account" tests`                                                  | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
-| ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips)          | `pytest --doctest-modules -rs -q -m "ffmpeg and not account" tests`                                                  |    ~56 |                      < 1 min (11 s) |
-| live account (never in CI; needs credentials)                   | `WAVES_ACCOUNT_TESTS=1 pytest -q -m account tests`                                                                   |      4 |                                 n/a |
+| Group                                                  | Command                                                                                                              |  Cases |                   Budget (measured) |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | -----: | ----------------------------------: |
+| fast (no Qt, ffmpeg, slow, integration or account)     | `pytest --doctest-modules -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests` | ~4,194 |                      < 1 min (37 s) |
+| quick QML (the heaviest boots skipped)                 | `pytest --doctest-modules -rs -q -m "qml and not slow and not account" --require-qml tests`                          |    ~91 |                < 5 min (4 min 12 s) |
+| default (all but the live account tests; `make test`)  | `pytest --doctest-modules -rs -m "not account" tests`                                                                | ~4,354 |               < 10 min (6 min 48 s) |
+| strict (the merge gate; default plus `--require-qml`)  | `pytest --doctest-modules -rs --require-qml -m "not account" tests`                                                  | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
+| ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips) | `pytest --doctest-modules -rs -q -m "ffmpeg and not account" tests`                                                  |    ~56 |                      < 1 min (11 s) |
+| live account (never in CI; needs credentials)          | `WAVES_ACCOUNT_TESTS=1 pytest -q -m account tests`                                                                   |      4 |                                 n/a |
 
 `--require-qml` turns a missing Qt into a failure instead of a silent skip of
 the whole QML half. The `slow` marker names the heaviest QML boots (each case

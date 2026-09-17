@@ -36,10 +36,9 @@ from waves.waves_ui import diagnostics
 
 
 def _qt_app():
-    from support.qml import _skip_or_fail_missing_qt, missing_qt
+    from support.qml import require_qt
 
-    if missing_qt():
-        _skip_or_fail_missing_qt()
+    require_qt()
     from PySide6.QtCore import QCoreApplication
 
     return QCoreApplication.instance() or QCoreApplication([])
@@ -170,10 +169,9 @@ def test_a_countdown_still_armed_at_exit_is_cancelled_before_teardown():
     bridge started the watchdog. shutdown() covers the normal quit; this pins
     the net for every other exit: the module cancels the dump at atexit, which
     runs before faulthandler's own teardown."""
-    from support.qml import _skip_or_fail_missing_qt, missing_qt
+    from support.qml import require_qt
 
-    if missing_qt():
-        _skip_or_fail_missing_qt()
+    require_qt()
     proc = subprocess.run(
         [sys.executable, "-c", _EXIT_PROBE],
         capture_output=True,

@@ -50,10 +50,9 @@ def test_playlist_and_mix_rows_expand_to_a_ledger():
 
 def _bridge_for_fetch(monkeypatch):
     """A bridge whose worker pool runs inline, so the fetch is synchronous."""
-    from support.qml import _skip_or_fail_missing_qt, missing_qt
+    from support.qml import require_qt
 
-    if missing_qt():
-        _skip_or_fail_missing_qt()
+    require_qt()
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtGui import QGuiApplication
 

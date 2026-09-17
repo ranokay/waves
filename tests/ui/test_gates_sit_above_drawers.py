@@ -52,10 +52,10 @@ def test_gates_are_in_the_overlay_layer_not_the_page():
         timeout=180,
     )
     tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-10:])
-    from support.qml import _skip_or_fail_missing_qt
+    from support.qml import require_qt
 
     if proc.returncode == _EXIT_NO_QT:
-        _skip_or_fail_missing_qt()
+        require_qt()
     assert proc.returncode != _EXIT_PRECONDITION, f"the scenario could not set itself up in this environment:\n{tail}"
     assert proc.returncode == _EXIT_OK, (
         "a full-screen gate left the overlay layer, so an open queue drawer will mask it again. "

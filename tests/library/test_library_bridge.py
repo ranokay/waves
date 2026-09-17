@@ -850,6 +850,7 @@ def test_offline_new_folder_does_not_resurrect_old_badges(tmp_path):
     assert s._library_scan_status == "missing"
 
 
+@pytest.mark.integration
 def test_presence_never_reaches_the_download_engine():
     """THE safety property of this whole feature: the tag-matched presence index
     can DECLINE a fetch, and it can do NOTHING else.

@@ -34,10 +34,9 @@ _EXIT_NO_PLATFORM = 3
 def test_the_offscreen_qt_platform_can_start():
     # Imported here, not at module level: this file runs itself as a child
     # process, whose sys.path does not carry the tests root.
-    from support.qml import _skip_or_fail_missing_qt, missing_qt
+    from support.qml import require_qt
 
-    if missing_qt():
-        _skip_or_fail_missing_qt()
+    require_qt()
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-qt-canary-")

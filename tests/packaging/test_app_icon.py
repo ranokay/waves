@@ -45,10 +45,9 @@ def test_icon_ico_has_full_size_ladder():
 @pytest.mark.qml
 def test_icon_usable_guard_rejects_degenerate_icons():
     """The runtime guard must reject a 16-only / empty icon and accept a good one."""
-    from support.qml import _skip_or_fail_missing_qt, missing_qt
+    from support.qml import require_qt
 
-    if missing_qt():
-        _skip_or_fail_missing_qt()
+    require_qt()
     import os
 
     from PySide6.QtGui import QGuiApplication, QIcon

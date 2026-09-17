@@ -36,8 +36,8 @@ from support.qml import (
     EXIT_NO_QT,
     EXIT_OK,
     EXIT_REGRESSED,
-    _skip_or_fail_missing_qt,
     boot_main_qml,
+    require_qt,
     run_scenario,
     scenario_env,
 )
@@ -135,7 +135,7 @@ def test_the_answer_survives_a_restart():
                 timeout=180,
             )
             if proc.returncode == EXIT_NO_QT:
-                _skip_or_fail_missing_qt()
+                require_qt()
             if proc.returncode != EXIT_OK:
                 pytest.fail(f"{flag} failed\n" + (proc.stdout + proc.stderr).strip()[-1200:])
     finally:
