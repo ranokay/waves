@@ -8014,6 +8014,10 @@ class WavesBridge(LibraryMixin, QObject):
             return
         gen, lib = claimed
         if lib is None:
+            # Free the slot before answering: with no index there is nothing
+            # to page, but a leaked slot would block every later append once
+            # an index exists.
+            self._library_files_release(view, gen)
             self.libraryFilesMore.emit(view, [], False, -1)
             return
         start = max(0, int(offset))

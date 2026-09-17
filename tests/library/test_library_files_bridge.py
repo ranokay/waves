@@ -289,6 +289,9 @@ def test_the_slots_survive_a_bridge_with_no_library_index(tmp_path):
     assert bridge.libraryFilesLoaded.emits == [("all", [], False, 0)]
     bridge.loadMoreLibraryFiles("all", 0)
     assert bridge.libraryFilesMore.emits == [("all", [], False, -1)]
+    # The no-index answer must not leave the append slot claimed for good.
+    bridge.loadMoreLibraryFiles("all", 0)
+    assert bridge.libraryFilesMore.emits == [("all", [], False, -1), ("all", [], False, -1)]
 
 
 def test_a_failed_first_page_answers_total_minus_one(tmp_path):
