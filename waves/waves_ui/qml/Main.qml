@@ -6509,18 +6509,26 @@ ApplicationWindow {
             db.onTap()
         }
         function accessibleName() {
-            // The visible label already names the scope ("Download album"); the
-            // state rides along, so a screen reader hears what the face says.
+            // The visible face names itself: the label carries the scope
+            // ("Download album") and the library faces their own words, so the
+            // reader hears what the button draws.
             var base = db.label !== "" ? db.label : "Download"
+            if (db.libClaim) return (db.libGuess ? "Maybe in library: " : "In library: ") + base
+            if (db.libPartialClaim) return "Partially in library: " + base
             if (db.st === "done") return db.canRedownload ? base + ", downloaded, menu for redownload" : base + ", downloaded"
             if (db.st === "failed") return base + ", failed"
-            if (db.st === "running" || db.waiting) return base + ", queued"
+            if (db.waiting) return base + ", queued, press Delete to cancel"
+            if (db.st === "running") return base + ", downloading"
             return base + (db.showChooser ? ", press Down for download options" : "")
         }
-        // Inert faces leave the tab order (a focused control that does nothing
-        // reads as broken to a keyboard user); the done face with REDOWNLOAD
-        // stays, since it is actionable.
-        activeFocusOnTab: db.visible && !(db.st === "running" || db.waiting || (db.st === "done" && !db.canRedownload))
+        function chooserReachable() {
+            return db.showChooser && !db.libClaim && !(db.st === "running" || db.waiting || db.st === "done")
+        }
+        // Inert faces leave the tab order, but the actionable ones stay: the
+        // claim faces (MAYBE/IN LIBRARY) open their gate, and the done face
+        // with REDOWNLOAD stays because it is actionable.
+        activeFocusOnTab: db.visible
+            && (db.libClaim || !(db.st === "running" || db.waiting || (db.st === "done" && !db.canRedownload)))
         Accessible.role: Accessible.Button
         Accessible.name: db.accessibleName()
         Accessible.onPressAction: db.activate()
@@ -6528,8 +6536,14 @@ ApplicationWindow {
         Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.activate() } }
         Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.activate() } }
         // The chooser is the second face; Down opens it for a keyboard user
-        // exactly where the right-click/chevron path does.
-        Keys.onDownPressed: function(event) { if (db.showChooser) { event.accepted = true; db.openChooser() } }
+        // exactly where the right-click/chevron path does. The key is only
+        // swallowed when the chooser would really open, so list navigation is
+        // never eaten by an inert face.
+        Keys.onDownPressed: function(event) { if (db.chooserReachable()) { event.accepted = true; db.openChooser() } }
+        // A queued row's inline cancel has no pointer-only equivalent.
+        Keys.onDeletePressed: function(event) {
+            if (db.st === "queued" || db.waiting) { event.accepted = true; root.cancelQueuedMedia(db.mediaId) }
+        }
         function openChooser() {
             if (!db.showChooser) return
             if (db.st === "running" || db.waiting) return
@@ -7938,6 +7952,18 @@ ApplicationWindow {
             Ico { visible: ga.showArrow; name: "arrow-right"; color: ga.fg; size: 15 }
         }
         MouseArea { id: gaMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: ga.clicked() }
+        activeFocusOnTab: ga.visible && ga.enabled
+        Accessible.role: Accessible.Button
+        Accessible.name: ga.label
+        Accessible.onPressAction: function() { if (ga.enabled) ga.clicked() }
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat && ga.enabled) { event.accepted = true; ga.clicked() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat && ga.enabled) { event.accepted = true; ga.clicked() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat && ga.enabled) { event.accepted = true; ga.clicked() } }
+        Rectangle {
+            anchors.fill: parent; radius: ga.radius
+            color: "transparent"; border.width: 2; border.color: root.accent
+            visible: ga.activeFocus
+        }
     }
 
     // Console-spec button: the app's ordinary hugging button (label + btnPadH*2
@@ -7982,10 +8008,10 @@ ApplicationWindow {
         Accessible.name: sb.accessibleLabel !== "" ? sb.accessibleLabel
                        : (sb.label !== "" ? sb.label
                        : (sb.icon !== "" ? sb.icon.charAt(0).toUpperCase() + sb.icon.slice(1) : "Button"))
-        Accessible.onPressAction: sb.clicked()
-        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; sb.clicked() } }
-        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; sb.clicked() } }
-        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; sb.clicked() } }
+        Accessible.onPressAction: function() { if (sb.enabled) sb.clicked() }
+        Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat && sb.enabled) { event.accepted = true; sb.clicked() } }
+        Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat && sb.enabled) { event.accepted = true; sb.clicked() } }
+        Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat && sb.enabled) { event.accepted = true; sb.clicked() } }
         readonly property color bg: danger ? root.redCont
                                   : warn ? root.goldCont
                                   : (primary ? root.accentCont : "transparent")
@@ -8100,6 +8126,15 @@ ApplicationWindow {
         }
         // Call from the field's onTextChanged: a multi-char jump that typing can't
         // produce is treated as a paste and animated in.
+        // Stop a decode in flight and forget its term: a caller clearing the
+        // field must not have the animation rewrite it a tick later.
+        function cancel() {
+            _timer.stop()
+            decoding = false
+            _final = ""
+            _locked = 0
+            _prevLen = 0
+        }
         function noteTextChanged() {
             if (!decoding && field.text.length - _prevLen >= 4) run(field.text)
             _prevLen = field.text.length
@@ -8264,6 +8299,7 @@ ApplicationWindow {
         activeFocusOnTab: nt.visible
         Accessible.role: Accessible.Button
         Accessible.name: nt.label
+        Accessible.checkable: true
         Accessible.checked: nt.active
         Accessible.onPressAction: nt.clicked()
         Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; nt.clicked() } }
@@ -14677,9 +14713,7 @@ ApplicationWindow {
                     Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
                     Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
                     Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
-                    color: "transparent"
-                    border.width: activeFocus ? 2 : 1
-                    border.color: activeFocus ? root.accent : root.border1
+                    color: "transparent"; border.color: root.border1
                     RowLayout {
                         id: qrow; anchors.centerIn: parent; spacing: 7
                         Ico { name: "arrow-down"; color: root.accent; size: 15; bold: 10 }
@@ -14691,6 +14725,11 @@ ApplicationWindow {
                         }
                     }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: queueDrawer.open() }
+                    Rectangle {
+                        anchors.fill: parent; radius: root.btnRad
+                        color: "transparent"; border.width: 2; border.color: root.accent
+                        visible: parent.activeFocus
+                    }
                 }
                 // Per-provider status lights (issue #223): one compact dot
                 // per provider the bridge reports, replacing the old
@@ -14838,10 +14877,9 @@ ApplicationWindow {
                                     Keys.onEscapePressed: function(event) {
                                         if (searchField.text === "" && !searchDecoder.decoding) return
                                         // A decode in flight would rewrite the text on its
-                                        // next tick: stop it and disarm the paste arm too,
+                                        // next tick: cancel it and disarm the paste arm too,
                                         // or the cleared term resurrects and still searches.
-                                        searchDecoder._timer.stop()
-                                        searchDecoder.decoding = false
+                                        searchDecoder.cancel()
                                         searchDecoder.submitArmed = false
                                         searchDecoder.submitPending = false
                                         searchField.text = ""

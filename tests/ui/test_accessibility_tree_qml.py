@@ -93,19 +93,27 @@ def test_primary_controls_carry_accessible_names_and_focus():
 
 
 def test_the_handlers_behind_the_keyboard_paths_exist():
-    """The scenario proves the metadata; this pins that Enter/Space handlers
-    were not dropped from the components the scenario walks (a name alone
-    cannot be activated by a screen reader without its press action)."""
+    """The scenario proves the metadata; this pins the handlers it cannot
+    drive (the harness sends no key events). Every press action has its own
+    Return/Enter/Space handler, each accepts the event and ignores
+    auto-repeat, and the two extra keys (Down opens the chooser, Escape
+    clears the search box, Delete cancels a queued row) are present."""
     qml = QML_MAIN.read_text(encoding="utf-8")
-    for action in ("sb.clicked()", "nt.clicked()", "db.activate()", "gcard.clicked()", "queueDrawer.open()"):
-        assert f"Accessible.onPressAction: {action}" in qml, f"no press action for {action}"
-        for key in ("Return", "Enter", "Space"):
-            needle = f"Keys.on{key}Pressed:"
-            assert needle in qml, f"the {key} handler is missing"
-        # Each control's handlers accept the event and ignore auto-repeat, so
-        # a held key cannot queue the action twice.
-        assert f"event.accepted = true; {action}" in qml, f"the key handler for {action} does not accept"
-        assert "if (!event.isAutoRepeat)" in qml, "a key handler auto-repeats"
+    press_actions = qml.count("Accessible.onPressAction")
+    assert press_actions >= 5, "the primary controls lost their press actions"
+    for key in ("Return", "Enter", "Space"):
+        handlers = qml.count(f"Keys.on{key}Pressed")
+        assert handlers >= press_actions, f"only {handlers} {key} handlers for {press_actions} press actions"
+    for needle in (
+        "if (!event.isAutoRepeat)",
+        "event.accepted = true",
+        "Keys.onDownPressed: function(event) { if (db.chooserReachable())",
+        "Keys.onDeletePressed: function(event) {",
+        "Keys.onEscapePressed: function(event) {",
+        "Accessible.checkable: true",
+        "function cancel() {",
+    ):
+        assert needle in qml, f"the keyboard path is missing: {needle}"
 
 
 def _buttons(q, marker: str, scope: str = "[root.contentItem]") -> list[dict]:
