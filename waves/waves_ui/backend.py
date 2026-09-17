@@ -1478,7 +1478,7 @@ class _TrackedDownload(Download):
         ownership_of=None,
         ownership_stamp=None,
         target_rank: int = -1,
-        pinned_quality=None,
+        pinned_quality: QualityTier | None = None,
         library_claim=None,
         force_redownload: bool = False,
         audio_type: str | None = None,
@@ -1688,7 +1688,12 @@ class _TrackedDownload(Download):
         with self._outcome_lock:
             self.unavailable_count += 1
 
-    def _get_track_stream_info(self, media, tier=None, audio_type=None):
+    def _get_track_stream_info(
+        self,
+        media,
+        tier: QualityTier | None = None,
+        audio_type: AudioType | None = None,
+    ):
         """Capture the delivered stream's quality as a side effect, without
         touching download.py. The engine calls this (tracks only, only when a
         stream is actually fetched) inside super().item(); stashing the real
@@ -1727,19 +1732,20 @@ class _TrackedDownload(Download):
         return (current_thread().ident or 0, str(getattr(media, "id", "") or ""))
 
     def _wants_atmos(self, media) -> bool:
-        """The engine's own Atmos condition, mirrored so the ownership gate
-        ranks a copy on the scale it was delivered on, and so the delivered
-        snapshot leaves an Atmos fetch's rank unstated.
+        """The engine's own Atmos condition, mirrored exactly so the ownership
+        gate ranks a copy on the scale it was delivered on, and so the
+        delivered snapshot leaves an Atmos fetch's rank unstated (the engine's
+        resolver reads the same pinned Version; the two must not drift).
 
-        Dual-download rows pin their Version: stereo rows never want Atmos
-        (Atmos-only tracks skip instead, the Atmos row covers them); Atmos
-        rows want Atmos whenever the track offers it. Legacy single rows
-        (audio_type None, stereo default) keep the engine's own condition,
-        including its "nothing else to fetch" clause.
+        Dual-download rows pin their Version: an Atmos row wants Atmos whenever
+        the track offers it; a stereo row takes it only through the engine's
+        "nothing else to fetch" clause (an Atmos-only track, which the row
+        itself skips first -- the Atmos row covers it). Legacy single rows
+        (audio_type None) keep the engine's own settings condition.
         """
         at = getattr(self, "_audio_type", None)
         if at == "stereo":
-            return False
+            return bool(_atmos_only(media))
         if at == "atmos":
             return bool(_has_atmos(media))
         try:

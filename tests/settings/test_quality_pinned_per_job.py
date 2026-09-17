@@ -177,7 +177,9 @@ def test_a_stereo_pinned_row_fetches_stereo_whatever_the_default_says():
     session (the row's Version is the user's answer to the choice)."""
     session = _Session(Quality.high_lossless)
     tidal = _RecordingTidal()
-    _dl, info = _fetch(session, tier=QualityTier.HI_RES_LOSSLESS, audio_type="stereo", modes=_DUAL, tidal=tidal)
+    _dl, info = _fetch(
+        session, tier=QualityTier.HI_RES_LOSSLESS, audio_type="stereo", modes=_DUAL, setting="both", tidal=tidal
+    )
     assert (tidal.switches, tidal.restores) == (0, 1)
     assert session.asked == [Quality.hi_res_lossless], "the job's rung, not the setting, must be asked for"
     assert info.media_stream is not None
@@ -346,15 +348,16 @@ def test_the_skip_rank_follows_the_jobs_quality_not_the_setting():
 # A failed restore is not pinned over.
 # --------------------------------------------------------------------------- #
 class _FlakyRestoreTidal:
-    """config.py's restore_normal_session, transcribed with the part the
+    """config.py's restore_normal_session, transcribed with the facts the
     switching stand-in above leaves out: it writes the LIVE setting onto the
-    session and only THEN re-authenticates, and when that fails it returns
-    False without ever clearing is_atmos_session. The script says which
-    re-logins succeed, in order."""
+    session, lowers the Atmos flag BEFORE re-authenticating, and when the
+    re-login fails it returns False with the flag already down. So the next
+    normalise early-returns without re-authenticating and the next fetch
+    proceeds. The script says which re-logins succeed, in order."""
 
-    def __init__(self, session, setting_quality, relogin_script, *, from_atmos=True):
+    def __init__(self, session, setting_quality, relogin_script):
         self.session = session
-        self.is_atmos_session = from_atmos  # an Atmos track just went through
+        self.is_atmos_session = True  # an Atmos track just went through
         self.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=setting_quality))
         self._script = list(relogin_script)
         self.restores = 0
@@ -367,10 +370,8 @@ class _FlakyRestoreTidal:
         if not self.is_atmos_session and not force:
             return True
         self.session.audio_quality = tidal_quality_for_tier(QualityTier(self.settings.data.tidal_quality_audio))
-        if not (self._script.pop(0) if self._script else True):
-            return False
         self.is_atmos_session = False
-        return True
+        return bool(self._script.pop(0) if self._script else True)
 
 
 def _stereo_after_atmos(setting, relogin_script):

@@ -2716,7 +2716,12 @@ class Download:
 
         self.fn_logger.exception(f"Something went wrong. Skipping '{log_content(name_builder_item(media))}'.")
 
-    def _get_track_stream_info(self, media: Track, tier=None, audio_type=None) -> TrackStreamInfo:
+    def _get_track_stream_info(
+        self,
+        media: Track,
+        tier: QualityTier | None = None,
+        audio_type: AudioType | None = None,
+    ) -> TrackStreamInfo:
         """
         Gets stream info for a Track, handling Atmos/Normal session switching.
 
@@ -2753,7 +2758,10 @@ class Download:
         if pinned_version == "atmos":
             # An Atmos-pinned row fetches Atmos whatever the saved default
             # says (the defect the seam carry fixes): a dual download's two
-            # rows are the user's answer to the choice.
+            # rows are the user's answer to the choice. The track facts still
+            # gate the session: a catalog object that advertises no Atmos has
+            # no Atmos stream to ask for, and the bridge skips such a row
+            # before this fetch (a sparse payload must not fake one).
             want_atmos = has_atmos
         elif pinned_version == "stereo":
             # A stereo-pinned row never takes the Atmos session where a
@@ -2781,11 +2789,10 @@ class Download:
         # stream lock the caller holds, so no other fetch can see it. An Atmos
         # fetch is left entirely alone: it carries its own fixed request
         # quality, which the switch above sets.
-        pinned_tier = tier_from_word(tier) if tier is not None else None
         prev_quality = None
-        if pinned_tier is not None and not want_atmos:
+        if tier is not None and not want_atmos:
             prev_quality = self.session.audio_quality
-            self.session.audio_quality = tidal_quality_for_tier(pinned_tier)
+            self.session.audio_quality = tidal_quality_for_tier(tier)
         try:
             media_stream = self.session.track(media.id).get_stream() if want_atmos else media.get_stream()
         finally:
