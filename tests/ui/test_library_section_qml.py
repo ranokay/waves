@@ -279,6 +279,32 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
     if not _click(root, q, settle, _point("libSection", "libViewChip-saved"), _list_visible("libSavedList")):
         failures.append("clicking Saved did not switch back")
 
+    # A scan that lands while My Music is hidden must not leave the section
+    # stale: the pane refreshes on return (found in review, 2026-09-17).
+    saved_dir = os.path.join(lib, "A", "Saved")
+    _write_book(os.path.join(saved_dir, "04.flac"))
+    tags[os.path.join(saved_dir, "04.flac")] = {
+        "album": "Saved",
+        "artist": "A",
+        "date": "2000",
+        "title": "Fourth",
+        "length": 300,
+    }
+    ids[os.path.join(saved_dir, "04.flac")] = "9001"
+    q("root.libraryOpen = false")
+    settle(150)
+    bridge._library.refresh(lib, force_full=True)
+    bridge.libraryPresenceChanged.emit()  # the scan's publish while hidden
+    settle(300)
+    q("root.openLibrary()")
+    settle(700)
+    q("scrollDressing.visible = false")
+    settle(120)
+    if q(_row_count("libSavedList")) != 4:
+        failures.append("a scan that landed while the pane was hidden left the saved list stale")
+    if not bool(q(_text_visible("libSection", "Saved · 4"))):
+        failures.append("a scan that landed while the pane was hidden left the count stale")
+
     # A read failure is a state, not an empty library: the bridge answers
     # total -1 and the section says so instead of "No saved files yet".
     def boom(*_a, **_k):
