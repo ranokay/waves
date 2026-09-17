@@ -84,6 +84,7 @@ from waves.helper.tidal import (
 )
 from waves.ids import namespaced_id
 from waves.library_index import (
+    FILES_VIEWS,
     POLL_GAUGE,
     READ_GAUGE,
     WALK_GAUGE,
@@ -4040,20 +4041,25 @@ def _my_music_empty(bridge) -> dict:
 # id's own namespace, and the readable duration the UI prints.
 
 
-def _library_file_row(row: dict) -> dict:
+def _library_file_row(row: dict, logos: dict[str, str] | None = None) -> dict:
     """One local library file as a My Music row (ADR 0007, issue #222).
 
     The provider is derived from the file's item id -- the namespace the
     download gate wrote, a bare id reading as TIDAL's (``namespaced_id``'s own
     rule), never guessed from the folder or the row -- so a legacy file
     badges like a new one and an untagged file carries no provider at all.
+    ``logos`` maps a provider id to its descriptor's mark; the row carries it
+    so the badge renders the provider that actually owns the namespace, even
+    a provider whose id QML has never seen.
     """
     item_id = str(row.get("item_id") or "")
     length = int(row.get("length", 0) or 0)
+    provider = namespaced_id(item_id).partition(":")[0] if item_id else ""
     return {
         "id": item_id,
         "item_id": item_id,
-        "provider": namespaced_id(item_id).partition(":")[0] if item_id else "",
+        "provider": provider,
+        "provider_logo": str((logos or {}).get(provider, "")),
         "title": str(row.get("title") or ""),
         "artist": str(row.get("artist") or row.get("album_artist") or ""),
         "album": str(row.get("album") or ""),
@@ -4067,15 +4073,37 @@ def _library_file_row(row: dict) -> dict:
     }
 
 
+def _provider_logos(bridge) -> dict[str, str]:
+    """Every registered provider's mark by id, from its own descriptor.
+
+    Built once per page so a badge shows the namespace's provider mark, and a
+    namespace no provider claims maps to nothing (never another provider's
+    logo: an unknown file must not wear TIDAL's mark).
+    """
+    logos: dict[str, str] = {}
+    for provider in _provider_registry(bridge):
+        descriptor = provider.descriptor()
+        logos[str(descriptor.id)] = str(descriptor.logo or "")
+    return logos
+
+
+#: The Library section's view labels, keyed by the scan's own view ids
+#: (library_index.FILES_VIEWS, Saved first). Words, not behaviour: QML renders
+#: these, so a copy change needs no QML edit.
+_LIBRARY_VIEW_LABELS = {"saved": "Saved", "all": "All files"}
+
+
 def _library_files_view(view) -> str:
-    """One of the Library section's two view ids, defaulting to Saved.
+    """One of the Library section's two view ids (``library_index.FILES_VIEWS``),
+    defaulting to the first (Saved, the section's own default).
 
     QML reads the ids from ``myMusicLibrary()``, so an unknown value is a
-    wiring bug rather than a third view: it is answered with the section's
-    default view instead of an empty list the user cannot explain.
+    wiring bug rather than a third view: it is answered with the default view
+    instead of an empty list the user cannot explain. The scan's own reader
+    stays strict -- this is the one boundary a typo can arrive through.
     """
     text = str(view or "")
-    return text if text in ("saved", "all") else "saved"
+    return text if text in FILES_VIEWS else FILES_VIEWS[0]
 
 
 # ----- the header's per-provider lights (issue #223) -----
@@ -7893,9 +7921,9 @@ class WavesBridge(LibraryMixin, QObject):
     def _library_files_state(self, view: str) -> tuple:
         """The load state one Library-section view runs under: its generation
         (the scan's counter plus this view's own) and the scan index the pair
-        belongs to. Captured under the index lock, so a load can never take
-        the NEW index with the OLD generation (the pairing that let a stale
-        queued scan write the wrong root's cache)."""
+        belongs to. Captured under the index lock so the pair is always one
+        moment's: the same lock the root-change swap takes, so a load can
+        never hold the new index under the old generation."""
         with self._library_index_lock:
             return (self._library_gen, self._library_files_gen.get(view, 0)), self._library
 
@@ -7933,7 +7961,8 @@ class WavesBridge(LibraryMixin, QObject):
                 rows, more, total = [], False, -1
             if self._library_files_stale(view, gen):
                 return
-            self.libraryFilesLoaded.emit(view, [_library_file_row(row) for row in rows], more, total)
+            logos = _provider_logos(self)
+            self.libraryFilesLoaded.emit(view, [_library_file_row(row, logos) for row in rows], more, total)
 
         self.threadpool.start(Worker(work))
 
@@ -7960,10 +7989,14 @@ class WavesBridge(LibraryMixin, QObject):
             except Exception:
                 logger.exception("Could not load more of the library files view %s", view)
                 rows, more = [], True
-            self._library_files_loading.discard(view)
             if self._library_files_stale(view, gen):
                 return
-            self.libraryFilesMore.emit(view, [_library_file_row(row) for row in rows], more, -1)
+            # The guard clears HERE, not before the stale check: a superseded
+            # worker must not open the window a newer append for this view is
+            # already using (the check and the clear stay one decision).
+            self._library_files_loading.discard(view)
+            logos = _provider_logos(self)
+            self.libraryFilesMore.emit(view, [_library_file_row(row, logos) for row in rows], more, -1)
 
         self.threadpool.start(Worker(work))
 
@@ -9985,10 +10018,9 @@ class WavesBridge(LibraryMixin, QObject):
         """
         return {
             "configured": bool(self._library_root()),
-            "views": [
-                {"id": "saved", "label": "Saved"},
-                {"id": "all", "label": "All files"},
-            ],
+            # The ids are the scan's own (library_index.FILES_VIEWS), so QML
+            # switches on the bridge's vocabulary, never a re-spelled literal.
+            "views": [{"id": view_id, "label": _LIBRARY_VIEW_LABELS[view_id]} for view_id in FILES_VIEWS],
         }
 
     @Slot(result=bool)

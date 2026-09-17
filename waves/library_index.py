@@ -733,6 +733,10 @@ def _track_keys(title, artist) -> tuple[str, str]:
 # issue #222). Anything else is a bug in the caller, not a third view.
 FILES_VIEWS = ("saved", "all")
 
+# The Saved view's predicate, in one place: a file Waves itself saved carries
+# an item id (NULL is a pre-#222 row, '' an untagged file the walk sees).
+_SAVED_FILES_WHERE = "item_id IS NOT NULL AND item_id <> ''"
+
 
 def _require_files_view(view) -> str:
     """One of FILES_VIEWS, or the caller made a mistake that must be loud."""
@@ -2925,7 +2929,7 @@ class LibraryIndex:
         view = _require_files_view(view)
         size = max(1, int(limit))
         start = max(0, int(offset))
-        where = "WHERE t.item_id IS NOT NULL AND t.item_id <> ''" if view == "saved" else ""
+        where = f"WHERE t.{_SAVED_FILES_WHERE}" if view == "saved" else ""
         rows = self._read(
             f"SELECT {self._FILE_FACT_COLUMNS} FROM tracks t"  # noqa: S608 (a column list, no caller text)
             " LEFT JOIN albums a ON a.folder_path = t.folder_path"
@@ -2941,7 +2945,7 @@ class LibraryIndex:
         count. A COUNT over the tracks index: no join, no sort, and it runs on
         a worker with the page it belongs to, never on the GUI thread."""
         view = _require_files_view(view)
-        where = " WHERE item_id IS NOT NULL AND item_id <> ''" if view == "saved" else ""
+        where = f" WHERE {_SAVED_FILES_WHERE}" if view == "saved" else ""
         rows = self._read(f"SELECT COUNT(*) FROM tracks{where}")  # noqa: S608 (one static branch)
         return int(rows[0][0] or 0) if rows else 0
 

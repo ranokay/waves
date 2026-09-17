@@ -306,3 +306,64 @@ def test_a_file_moved_out_of_the_root_leaves_both_views(tmp_path):
     assert idx.files_page("saved")[0] == []
     assert [r["title"] for r in idx.files_page("all")[0]] == ["K"]
     assert idx.files_count("saved") == 0
+
+
+# --- the real tag path: a scanned file, no injected reader -------------------
+
+
+def _tag_mp4(path: str, *, name: str | None = None, item_id: str | None = None, legacy: str | None = None) -> None:
+    """Write a real MP4's tags with mutagen, exactly the atoms the download
+    gate writes: the generic WAVES_ITEM_ID freeform, the legacy
+    WAVES_TIDAL_ID freeform (bare), and the easy title/album/artist keys."""
+    import mutagen.mp4
+
+    m = mutagen.mp4.MP4(path)
+    if m.tags is None:
+        m.add_tags()
+    m["\xa9nam"] = [name or os.path.basename(path)]
+    m["\xa9alb"] = ["Album"]
+    m["aART"] = ["A"]
+    if item_id is not None:
+        m["----:com.apple.iTunes:WAVES_ITEM_ID"] = [item_id.encode("utf-8")]
+    if legacy is not None:
+        m["----:com.apple.iTunes:WAVES_TIDAL_ID"] = [legacy.encode("utf-8")]
+    m.save()
+
+
+@pytest.mark.ffmpeg
+def test_real_tags_scan_into_saved_through_the_download_gates_own_reader(tmp_path, monkeypatch):
+    """The acceptance's id cases with nothing faked in the tag path: an m4a
+    carrying the generic WAVES_ITEM_ID scans into Saved under its namespace,
+    one carrying only the legacy WAVES_TIDAL_ID reads bare (tidal's), and an
+    untagged tone never enters Saved. The second scan opens no file at all
+    (the ids are stored rows now), which is the scan's time budget: the new
+    probe costs the cold read and nothing after it."""
+    import mutagen
+    from support.audio_fixtures import tone
+
+    lib = str(tmp_path / "lib" / "A" / "Album")
+    os.makedirs(lib)
+    generic = tone(os.path.join(lib, "01.m4a"))
+    legacy = tone(os.path.join(lib, "02.m4a"))
+    plain = tone(os.path.join(lib, "03.m4a"))
+    _tag_mp4(str(generic), name="First", item_id="apple:91")
+    _tag_mp4(str(legacy), name="Second", legacy="77")
+    _tag_mp4(str(plain), name="Third")
+
+    opens: list[str] = []
+    real_file = mutagen.File
+
+    def counting_file(path, *args, **kwargs):
+        opens.append(str(path))
+        return real_file(path, *args, **kwargs)
+
+    monkeypatch.setattr(mutagen, "File", counting_file)
+    idx = LibraryIndex(str(tmp_path / "library.sqlite3"))
+    idx.refresh(str(tmp_path / "lib"))
+    assert opens, "the real scan read no file at all"
+    assert [r["item_id"] for r in idx.files_page("saved")[0]] == ["apple:91", "77"]
+    assert [r["title"] for r in idx.files_page("all")[0]] == ["First", "Second", "Third"]
+
+    opens.clear()
+    idx.refresh(str(tmp_path / "lib"))
+    assert opens == []  # warm: the ids are stored, nothing is re-probed

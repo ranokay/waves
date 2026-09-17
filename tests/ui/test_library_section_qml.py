@@ -92,8 +92,9 @@ def _write_book(path: str) -> None:
 
 
 def _seed_library() -> tuple[str, dict, dict]:
-    """A two-folder library: Waves saved two files (an Apple id and a legacy
-    bare TIDAL id), the user ripped one (untagged). Returns (root, tags, ids).
+    """A two-folder library: Waves saved three files (an Apple id, a legacy
+    bare TIDAL id and a namespace no real provider owns), the user ripped one
+    (untagged). Returns (root, tags, ids).
     """
     base = tempfile.mkdtemp(prefix="waves-library-section-")
     lib = os.path.join(base, "music")
@@ -101,6 +102,7 @@ def _seed_library() -> tuple[str, dict, dict]:
     ripped = os.path.join(lib, "B", "Ripped")
     _write_book(os.path.join(saved, "01.flac"))
     _write_book(os.path.join(saved, "02.flac"))
+    _write_book(os.path.join(saved, "03.flac"))
     _write_book(os.path.join(ripped, "01.mp3"))
     tags = {
         os.path.join(saved, "01.flac"): {
@@ -117,13 +119,37 @@ def _seed_library() -> tuple[str, dict, dict]:
             "title": "Second",
             "length": 180,
         },
+        os.path.join(saved, "03.flac"): {
+            "album": "Saved",
+            "artist": "A",
+            "date": "2000",
+            "title": "Third",
+            "length": 240,
+        },
         os.path.join(ripped, "01.mp3"): {"album": "Ripped", "artist": "B", "date": "1999", "title": "Tripped"},
     }
     ids = {
         os.path.join(saved, "01.flac"): "apple:91",
         os.path.join(saved, "02.flac"): "77",  # legacy TIDAL, read bare
+        os.path.join(saved, "03.flac"): "fake:7",  # a third provider's namespace
     }
     return lib, tags, ids
+
+
+def _register_fake_provider(bridge, logo: str) -> None:
+    """A third provider with no capabilities: it contributes no shelf, so the
+    only thing it can move is the Library section's badge for its namespace."""
+    from waves.providers import ProviderDescriptor, StatusKind
+
+    class _FakeProvider:
+        id = "fake"
+        name = "Fake Music"
+        capabilities = frozenset()
+
+        def descriptor(self):
+            return ProviderDescriptor(id=self.id, name=self.name, logo=logo, status_kind=StatusKind.NONE)
+
+    bridge.providers["fake"] = _FakeProvider()
 
 
 def _install_library(bridge, lib: str, tags: dict, ids: dict) -> None:
@@ -166,6 +192,15 @@ def _row_badge_visible(list_name: str, index: int) -> str:
     )
 
 
+def _row_badge_logo(list_name: str, index: int) -> str:
+    return scene_js(
+        f"  var row = findObject(root, {json.dumps(list_name)}).itemAtIndex({index});\n"
+        "  if (!row) return '(no row)';\n"
+        "  var b = findFirst(row, function (o) { return o.objectName === 'trackProviderBadge'; });\n"
+        "  return b ? String(b.logo) : '(no badge)';\n"
+    )
+
+
 def _row_badge_provider(list_name: str, index: int) -> str:
     return scene_js(
         f"  var row = findObject(root, {json.dumps(list_name)}).itemAtIndex({index});\n"
@@ -182,6 +217,7 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
     root, q, settle, bridge = booted
 
     lib, tags, ids = _seed_library()
+    _register_fake_provider(bridge, "assets/providers/apple-music.png")
     _install_library(bridge, lib, tags, ids)
     q("root.refreshProviderSurfaces()")
     q("root.openLibrary()")
@@ -194,7 +230,7 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
     # views, with the counts its own pages answered.
     if not bool(q(_visible("libSection", "libViewsFlow"))):
         failures.append("the Library section rendered no view strip")
-    if not bool(q(_text_visible("libSection", "Saved · 2"))):
+    if not bool(q(_text_visible("libSection", "Saved · 3"))):
         failures.append("the Saved view did not name itself with its count")
     # The other view has not loaded yet, so it shows no count: a count is the
     # answer to a page, never a QML guess.
@@ -214,7 +250,13 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
         failures.append("a tagged row carried no provider badge")
     if q(_row_badge_provider("libSavedList", 1)) != "tidal":
         failures.append("a legacy TIDAL id did not read as TIDAL's")
-    if q(_row_count("libSavedList")) != 2:
+    # A namespace no two-provider fallback knows still badges with THAT
+    # provider's descriptor mark, from the bridge's own registry.
+    if q(_row_badge_provider("libSavedList", 2)) != "fake":
+        failures.append("a third provider's namespace lost its identity")
+    if q(_row_badge_logo("libSavedList", 2)) != "assets/providers/apple-music.png":
+        failures.append("a third provider's badge did not render its own descriptor mark")
+    if q(_row_count("libSavedList")) != 3:
         failures.append("Saved listed a file it should not (or lost one)")
 
     # Switching views shows everything, and the untagged row carries no badge.
@@ -222,14 +264,14 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
         failures.append("clicking All files did not switch the section")
     if bool(q(_visible("libSection", "libSavedList"))):
         failures.append("the Saved list stayed visible under All files")
-    if q(_row_count("libAllList")) != 3:
+    if q(_row_count("libAllList")) != 4:
         failures.append("All files did not list every audio file the scan sees")
     # The view's page answered its count, so the chip names it now.
-    if not bool(q(_text_visible("libSection", "All files · 3"))):
+    if not bool(q(_text_visible("libSection", "All files · 4"))):
         failures.append("the All-files view's count did not arrive with its page")
-    if q(_row_js("libAllList", 2, "provider")) != "":
+    if q(_row_js("libAllList", 3, "provider")) != "":
         failures.append("an untagged row claimed a provider")
-    if bool(q(_row_badge_visible("libAllList", 2))):
+    if bool(q(_row_badge_visible("libAllList", 3))):
         failures.append("an untagged row rendered a provider badge")
     # And back: the keep-alive list still holds its rows.
     if not _click(root, q, settle, _point("libSection", "libViewChip-saved"), _list_visible("libSavedList")):

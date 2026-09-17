@@ -17,6 +17,7 @@ an untagged file) is the same spread the on-disk tags produce.
 from __future__ import annotations
 
 import os
+import sqlite3
 
 from support.library_fakes import make_album_dir, make_library_bridge
 
@@ -101,6 +102,53 @@ def test_the_row_builder_derives_the_provider_from_the_id_namespace():
     assert _library_file_row({"item_id": "42"})["provider"] == "tidal"
     assert _library_file_row({"item_id": ""})["provider"] == ""
     assert _library_file_row({"length": 61})["duration"] == "1:01"
+
+
+def test_a_third_providers_namespace_badges_with_its_own_descriptor_mark():
+    """The badge must not fall back to TIDAL's logo for a namespace the two
+    known providers do not own: the mark comes from the registered provider's
+    own descriptor, and a namespace NO provider claims gets no mark at all."""
+    from types import SimpleNamespace
+
+    from waves.waves_ui.backend import _provider_logos
+
+    def provider(pid, logo):
+        return SimpleNamespace(descriptor=lambda: SimpleNamespace(id=pid, logo=logo))
+
+    registry = {
+        "tidal": provider("tidal", "assets/providers/tidal.png"),
+        "apple": provider("apple", "assets/providers/apple-music.png"),
+        "fake": provider("fake", "assets/providers/fake.png"),
+    }
+    logos = _provider_logos(SimpleNamespace(providers=registry))
+    assert logos == {
+        "tidal": "assets/providers/tidal.png",
+        "apple": "assets/providers/apple-music.png",
+        "fake": "assets/providers/fake.png",
+    }
+    assert _library_file_row({"item_id": "fake:7"}, logos)["provider_logo"] == "assets/providers/fake.png"
+    assert _library_file_row({"item_id": "ghost:7"}, logos)["provider_logo"] == ""
+    # A stub bridge with no registry still answers rows (the mark is simply
+    # unknown), so the section never depends on a provider being present.
+    assert _library_file_row({"item_id": "fake:7"}, {})["provider_logo"] == ""
+
+
+def test_the_saved_page_carries_the_provider_marks(tmp_path):
+    bridge, _pathmap, _ids = _seed(tmp_path)
+    from types import SimpleNamespace
+
+    bridge.providers = {
+        "apple": SimpleNamespace(
+            descriptor=lambda: SimpleNamespace(id="apple", logo="assets/providers/apple-music.png")
+        ),
+        "tidal": SimpleNamespace(descriptor=lambda: SimpleNamespace(id="tidal", logo="assets/providers/tidal.png")),
+    }
+    bridge.loadLibraryFiles("saved")
+    items = bridge.libraryFilesLoaded.emits[0][1]
+    assert [r["provider_logo"] for r in items] == [
+        "assets/providers/apple-music.png",
+        "assets/providers/tidal.png",
+    ]
 
 
 def test_the_second_page_appends_from_the_offset_the_section_holds(tmp_path, monkeypatch):
@@ -195,3 +243,29 @@ def test_the_slots_survive_a_bridge_with_no_library_index(tmp_path):
     assert bridge.libraryFilesLoaded.emits == [("all", [], False, 0)]
     bridge.loadMoreLibraryFiles("all", 0)
     assert bridge.libraryFilesMore.emits == [("all", [], False, -1)]
+
+
+def test_a_failed_first_page_answers_total_minus_one(tmp_path):
+    """A read error must reach the pane as a failure (total -1, which the
+    section renders as its own sentence), never as a complete, empty library
+    that reads "No saved files yet" forever."""
+    bridge, _pathmap, _ids = _seed(tmp_path)
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    bridge._library.files_page = boom
+    bridge.loadLibraryFiles("saved")
+    view, items, more, total = bridge.libraryFilesLoaded.emits[0]
+    assert (view, items, more, total) == ("saved", [], False, -1)
+
+
+def test_a_failed_append_never_exhausts_the_scroll(tmp_path):
+    bridge, _pathmap, _ids = _seed(tmp_path)
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    bridge._library.files_page = boom
+    bridge.loadMoreLibraryFiles("all", 0)
+    assert bridge.libraryFilesMore.emits == [("all", [], True, -1)]

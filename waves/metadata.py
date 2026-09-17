@@ -144,23 +144,18 @@ def _bare_legacy_id(value: str) -> str:
     return raw if provider_id == DEFAULT_PROVIDER else value
 
 
-def read_custom_ids(path_file: str | pathlib.Path, tag: str) -> list[str]:
-    """Every value one of Waves' own id tags carries, in written order.
+def _ids_in_tags(tags, tag: str) -> list[str]:
+    """Every value one of Waves' own id tags carries inside an OPEN file's tag
+    block, in written order.
 
-    One probe for all three containers: a Vorbis comment is stored under the
-    bare name, ID3 under a "TXXX:" description, MP4 under an iTunes freeform
-    atom. An unreadable file, a container with no tags at all, or a tag that
-    was never written all answer the same way, with an empty list.
+    Split out of :func:`read_custom_ids` so :func:`read_item_id` can ask two
+    tag names of ONE mutagen object: the library scan reads an item id for
+    every file of a cold library, and reopening the container for the legacy
+    fallback doubled that phase's file opens for no better answer.
     """
-    try:
-        m = mutagen.File(path_file)
-    except Exception:
-        return []
-    if m is None or not m.tags:
-        return []
     for key in (tag, f"TXXX:{tag}", f"----:com.apple.iTunes:{tag}"):
         try:
-            value = m.tags.get(key)
+            value = tags.get(key)
         except Exception:  # noqa: S112 - a container that can't .get() a key simply has no id
             continue
         if not value:
@@ -183,6 +178,23 @@ def read_custom_ids(path_file: str | pathlib.Path, tag: str) -> list[str]:
     return []
 
 
+def read_custom_ids(path_file: str | pathlib.Path, tag: str) -> list[str]:
+    """Every value one of Waves' own id tags carries, in written order.
+
+    One probe for all three containers: a Vorbis comment is stored under the
+    bare name, ID3 under a "TXXX:" description, MP4 under an iTunes freeform
+    atom. An unreadable file, a container with no tags at all, or a tag that
+    was never written all answer the same way, with an empty list.
+    """
+    try:
+        m = mutagen.File(path_file)
+    except Exception:
+        return []
+    if m is None or not m.tags:
+        return []
+    return _ids_in_tags(m.tags, tag)
+
+
 def read_item_id(path_file: str | pathlib.Path) -> str:
     """The item id a file was downloaded as, or "" when untagged.
 
@@ -194,13 +206,23 @@ def read_item_id(path_file: str | pathlib.Path) -> str:
     skip gates compare against -- while a file saved by another provider
     answers under its namespaced id, which can never equal a bare tidal id.
 
+    Both tag names are asked of ONE open: the library scan calls this for
+    every file of a cold scan (ADR 0007, issue #222), and the legacy fallback
+    is the common case there, so reopening the container for it would double
+    the phase's file opens.
+
     Files from releases before any id tag existed (or raw .ts videos, which
     have no tag atoms) return "": callers must treat that as "identity
     unknown", never as "different item".
     """
-    ids = read_custom_ids(path_file, GENERIC_ITEM_ID_TAG)
-    if not ids:
-        ids = read_custom_ids(path_file, ITEM_ID_TAG)
+    try:
+        m = mutagen.File(path_file)
+    except Exception:
+        m = None
+    tags = getattr(m, "tags", None) if m is not None else None
+    if not tags:
+        return ""
+    ids = _ids_in_tags(tags, GENERIC_ITEM_ID_TAG) or _ids_in_tags(tags, ITEM_ID_TAG)
     return _bare_legacy_id(ids[0]) if ids else ""
 
 

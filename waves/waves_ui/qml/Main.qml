@@ -8358,12 +8358,18 @@ ApplicationWindow {
     // square Apple mark).
     component ProviderBadge: Rectangle {
         property string provider: "tidal"   // "tidal" | "apple"
+        // The descriptor's own mark for this provider, when the caller has one
+        // (the Library section's rows do, issue #222): a namespace the id
+        // fallbacks below never heard of still badges with ITS provider's
+        // logo, never another provider's.
+        property string logo: ""
         readonly property bool isApple: provider === "apple"
         width: 34; height: 24; radius: 7
         color: "#cc101318"; border.color: root.outline
         Image {
             anchors.centerIn: parent
-            source: parent.isApple ? "assets/providers/apple-music.png" : "assets/providers/tidal.png"
+            source: parent.logo !== "" ? parent.logo
+                    : parent.isApple ? "assets/providers/apple-music.png" : "assets/providers/tidal.png"
             width: parent.isApple ? 14 : 20; height: parent.isApple ? 14 : 13
             fillMode: Image.PreserveAspectFit; smooth: true; cache: true
         }
@@ -9867,8 +9873,10 @@ ApplicationWindow {
         // down, and the row's own action is revealing its folder instead.
         property bool local: false
         // The provider the file was saved from, "" when untagged: the badge
-        // an untagged row must NOT grow (ADR 0007). Only local rows read it.
+        // an untagged row must NOT grow (ADR 0007), plus the descriptor mark
+        // that provider's badge shows. Only local rows read them.
         property string provider: ""
+        property string providerLogo: ""
         // The album folder on disk: where a local row's reveal lands.
         property string folderPath: ""
         readonly property bool revealable: local && folderPath !== ""
@@ -10036,6 +10044,7 @@ ApplicationWindow {
                         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                         visible: trow.local && trow.provider !== ""
                         provider: trow.provider
+                        logo: trow.providerLogo
                     }
                     QualPick {
                         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
@@ -12169,6 +12178,28 @@ ApplicationWindow {
     // instantiated, so a multi-thousand-item category renders instantly and
     // scrolls smoothly. Each instance sets its own `cat`, `model` and `delegate`.
     // It prefetches the next page as it scrolls and shows a footer while loading.
+    // One My Music strip chip: a dot, a label and the selected treatment --
+    // the shape both the Library section's views and a source group's
+    // categories render. The owner supplies the words and handles `picked`.
+    component LibChip: Rectangle {
+        id: chip
+        property string label: ""
+        property bool on: false
+        signal picked()
+        radius: 8; implicitHeight: 30; implicitWidth: chipRow.implicitWidth + 26
+        color: chip.on ? root.accentCont : "transparent"
+        border.color: chip.on ? root.accentDim : root.border1
+        Row {
+            id: chipRow; anchors.centerIn: parent; spacing: 7
+            Rectangle { width: 6; height: 6; radius: 3; anchors.verticalCenter: parent.verticalCenter; color: chip.on ? root.accent : root.textDim }
+            Text {
+                textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter
+                text: chip.label; color: chip.on ? root.accent : root.textLo; font.pixelSize: 13
+            }
+        }
+        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: chip.picked() }
+    }
+
     component LibList: ListView {
         id: lv
         property string cat: ""
@@ -12335,15 +12366,19 @@ ApplicationWindow {
             waves.loadMoreLibraryFiles(cat, model.count)
         }
         // The one status the section shows in place of rows: the configure
-        // ask, a scan still reading, or the view's own empty sentence.
+        // ask, a read that failed, a scan still reading, or the view's own
+        // empty sentence. A failed first page answers total -1 (see the
+        // bridge), which must never read as "no saved files yet".
         function statusText() {
             if (!configured) return ""
             if (loading || listFor(category).count > 0) return ""
+            if (counts[category] === -1) return "Could not read your music folder"
             if (scanning || !indexReady) return "Scanning your music folder…"
             return category === "all" ? "No audio files found" : "No saved files yet"
         }
         function statusHint() {
             if (!configured || loading || listFor(category).count > 0) return ""
+            if (counts[category] === -1) return "Reopen My Music to try again."
             if (scanning || !indexReady) return "Everything on disk appears here as the scan finds it."
             return category === "all"
                 ? "Waves found no audio files in your music folder."
@@ -12381,24 +12416,12 @@ ApplicationWindow {
                     width: parent.width; spacing: 8
                     Repeater {
                         model: libSection.views
-                        delegate: Rectangle {
-                            id: vchip
+                        delegate: LibChip {
                             required property var modelData
-                            readonly property bool on: libSection.category === modelData.id
                             objectName: "libViewChip-" + modelData.id
-                            radius: 8; implicitHeight: 30; implicitWidth: vcRow.implicitWidth + 26
-                            color: on ? root.accentCont : "transparent"
-                            border.color: on ? root.accentDim : root.border1
-                            Row {
-                                id: vcRow; anchors.centerIn: parent; spacing: 7
-                                Rectangle { width: 6; height: 6; radius: 3; anchors.verticalCenter: parent.verticalCenter; color: vchip.on ? root.accent : root.textDim }
-                                Text {
-                                    textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter
-                                    text: vchip.modelData.label + libSection.countLabel(vchip.modelData.id)
-                                    color: vchip.on ? root.accent : root.textLo; font.pixelSize: 13
-                                }
-                            }
-                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: libSection.select(vchip.modelData.id) }
+                            label: modelData.label + libSection.countLabel(modelData.id)
+                            on: libSection.category === modelData.id
+                            onPicked: libSection.select(modelData.id)
                         }
                     }
                 }
@@ -12495,6 +12518,7 @@ ApplicationWindow {
                 width: ListView.view.width
                 local: true
                 provider: String(model.provider || "")
+                providerLogo: String(model.provider_logo || "")
                 folderPath: String(model.folder || "")
                 tId: String(model.id || "")
                 title: String(model.title || "")
@@ -12796,19 +12820,11 @@ ApplicationWindow {
                     width: parent.width; spacing: 8
                     Repeater {
                         model: group.categories
-                        delegate: Rectangle {
-                            id: lchip
+                        delegate: LibChip {
                             required property var modelData
-                            readonly property bool on: group.category === modelData.id
-                            radius: 8; implicitHeight: 30; implicitWidth: lcRow.implicitWidth + 26
-                            color: on ? root.accentCont : "transparent"
-                            border.color: on ? root.accentDim : root.border1
-                            Row {
-                                id: lcRow; anchors.centerIn: parent; spacing: 7
-                                Rectangle { width: 6; height: 6; radius: 3; anchors.verticalCenter: parent.verticalCenter; color: lchip.on ? root.accent : root.textDim }
-                                Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: lchip.modelData.label; color: lchip.on ? root.accent : root.textLo; font.pixelSize: 13 }
-                            }
-                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: group.select(lchip.modelData.id) }
+                            label: modelData.label
+                            on: group.category === modelData.id
+                            onPicked: group.select(modelData.id)
                         }
                     }
                 }
