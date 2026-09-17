@@ -1,0 +1,50 @@
+"""OpenCodeReview's project rules keep QML and Markdown in scope (issue #263).
+
+WHAT THIS FENCES OFF
+--------------------
+OCR's default filters skip `.qml` and `.md` as unsupported extensions, so a
+Waves review would silently cover only the Python/JS part of a diff. The
+project rule file's `include` list is the documented bypass, and the per-path
+rules carry the house invariants into OCR's prompt. This guard pins both, so
+the coverage cannot silently regress when someone edits the file.
+
+The rule file is repo config, not product behaviour: the guard reads it as
+JSON and asserts the two things a review needs — the extension bypass and a
+house rule for each language the repo writes.
+"""
+
+from __future__ import annotations
+
+import json
+
+from support.paths import REPO_ROOT
+
+RULE_FILE = REPO_ROOT / ".opencodereview" / "rule.json"
+
+# The paths a review must resolve a house rule for.
+HOUSE_RULES = ("**/*.qml", "waves/**/*.py", "tests/**/*.py", "**/*.md")
+
+
+def _rules() -> dict:
+    assert RULE_FILE.is_file(), f"{RULE_FILE} is missing"
+    return json.loads(RULE_FILE.read_text(encoding="utf-8"))
+
+
+def test_qml_and_markdown_bypass_the_default_extension_filter():
+    data = _rules()
+    include = data.get("include") or []
+
+    assert "**/*.qml" in include, "QML would fall back to the unsupported-extension filter"
+    assert "**/*.md" in include, "Markdown would fall back to the unsupported-extension filter"
+
+
+def test_every_language_the_repo_writes_resolves_a_house_rule():
+    patterns = [entry.get("path", "") for entry in _rules().get("rules") or []]
+
+    for expected in HOUSE_RULES:
+        assert expected in patterns, f"no house rule for {expected!r}"
+
+    # A one-line rule is not a house rule: each entry must say something the
+    # reviewer can act on.
+    for entry in _rules()["rules"]:
+        assert len(str(entry.get("rule", "")).strip()) > 80, f"rule for {entry.get('path')!r} is too thin"
