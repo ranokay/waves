@@ -1086,7 +1086,7 @@ _ENUM_LABELS = {
     },
     "apple_quality_audio": {
         "HIGH": "High · Up to 256 Kbps (AAC)",
-        "LOSSLESS": "Lossless · Up to 16-bit / 44.1 kHz (ALAC)",
+        "LOSSLESS": "Lossless · Up to 24-bit / 48 kHz (ALAC)",
         "HI_RES_LOSSLESS": "Max · Hi-Res · Up to 24-bit / 192 kHz (ALAC)",
     },
     "quality_video": {"P360": "360p", "P480": "480p", "P720": "720p", "P1080": "1080p"},

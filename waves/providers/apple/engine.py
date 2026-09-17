@@ -707,7 +707,7 @@ def _choose_alac_playlist(playlists: list, max_tier: str | None) -> dict | None:
     AppleVariantUnavailable, classified unavailable upstream so the ceiling's
     fallback rules still apply.
     """
-    candidates: list[tuple[int, int, dict]] = []
+    candidates: list[tuple[int, int, int, dict]] = []
     for playlist in playlists:
         if not isinstance(playlist, dict):
             continue
@@ -718,10 +718,13 @@ def _choose_alac_playlist(playlists: list, max_tier: str | None) -> dict | None:
         rate, depth = int(match.group(1)), int(match.group(2))
         if max_tier is not None and quality_rank(apple_tier_for_delivery("alac", depth, rate)) > quality_rank(max_tier):
             continue
-        candidates.append((depth, rate, playlist))
+        candidates.append((quality_rank(apple_tier_for_delivery("alac", depth, rate)), depth, rate, playlist))
     if not candidates:
         return None
-    return max(candidates, key=lambda candidate: (candidate[0], candidate[1]))[2]
+    # Rung first, then depth and rate: the best on the rung the ask reaches
+    # (a 24/192 beats a 24/96 on the same rung; an oddity labelled above the
+    # ceiling's rung can never outrank a real one).
+    return max(candidates, key=lambda candidate: (candidate[0], candidate[1], candidate[2]))[3]
 
 
 def download_song_alac_file(
@@ -736,8 +739,9 @@ def download_song_alac_file(
 ) -> AppleDelivery:
     """Fetch one ALAC song through the managed wrapper into a fresh workdir.
 
-    ``max_tier`` caps the rendition (a Waves tier value): LOSSLESS picks an
-    ALAC at or below 16-bit, anything else the best the master holds. Session
+    ``max_tier`` caps the rendition (a Waves tier value): LOSSLESS picks the
+    best ALAC on that rung (16-bit at any rate, or 24-bit at 44.1/48 kHz),
+    anything else the best the master holds. Session
     persistence is the wrapper's own property (tokens survive a container
     restart): a second call with the same URL needs no re-login. Raises
     AppleCredentialsError when the guest is logged out or unreachable as a

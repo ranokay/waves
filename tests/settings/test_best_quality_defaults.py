@@ -44,7 +44,7 @@ def test_quality_dropdowns_state_up_to_ceilings():
     assert tidal["HI_RES_LOSSLESS"] == "Max · Hi-Res · Up to 24-bit / 192 kHz"
     apple = _ENUM_LABELS["apple_quality_audio"]
     assert apple["HIGH"] == "High · Up to 256 Kbps (AAC)"
-    assert apple["LOSSLESS"] == "Lossless · Up to 16-bit / 44.1 kHz (ALAC)"
+    assert apple["LOSSLESS"] == "Lossless · Up to 24-bit / 48 kHz (ALAC)"
     assert apple["HI_RES_LOSSLESS"] == "Max · Hi-Res · Up to 24-bit / 192 kHz (ALAC)"
     for labels in (tidal, apple):
         assert all("Up to" in label for label in labels.values())

@@ -43,7 +43,7 @@ Research for [wayfinder ticket #5](https://github.com/ranokay/waves/issues/5). I
 6. **No TYPE_END patching in v1**: the only known patcher lives in an unlicensed repo (no copying), and patching converts an undecodable file into a decodable-but-still-lossy one, defeating verification — it masks a bad source instead of refetching it ([PR #109](https://github.com/zhaarey/apple-music-downloader/pull/109), [alacfix](https://github.com/zhaarey/apple-music-downloader/blob/main/utils/alacfix/alacfix.go)). Revisit only as an explicitly-labeled salvage feature later.
 7. **Honest limits in the spec**: verification proves ffmpeg-decodability, not bit-perfect fidelity — the only full guarantee is cross-source comparison, which Waves cannot automate against other paid services ([blog caveat](https://blog.hanlin.press/2025/09/ALAC-Verification-Guide/)). Document this in the QA requirement.
 
-## Quality mapping for 24-bit ALAC (2026-09-18, issue #239 / audit AP-08)
+## Quality mapping for 24-bit ALAC (issue #239 / audit AP-08)
 
 The ladder decision above the 16-bit line follows **Apple's own Lossless-vs-Hi-Res class boundary**, not bit depth alone: Lossless reaches 24-bit/48 kHz, Hi-Res Lossless is the 24-bit class above 48 kHz (88.2–192 kHz). The mapping is therefore:
 
@@ -54,6 +54,6 @@ The ladder decision above the 16-bit line follows **Apple's own Lossless-vs-Hi-R
 | ALAC/FLAC, 24-bit, ≤ 48 kHz or an unreadable rate | LOSSLESS                |
 | ALAC/FLAC, 24-bit, > 48 kHz (88.2–192)            | HI_RES_LOSSLESS         |
 
-A 24/96 and a 24/192 master share the rung; their numbers ride the label detail ("ALAC 24/192"), never rank. The ask uses the same map as its ceiling, so a **LOSSLESS request accepts a 24-bit/48 kHz-only master** (previously it capped at 16-bit and fell through to AAC 256 even though a lossless rendition existed) while a 24-bit/88.2+ master still cannot satisfy it.
+A 24/96 and a 24/192 master share the rung; their numbers ride the label detail ("ALAC 24/192"), never rank. The ask uses the same map as its ceiling: a **LOSSLESS request accepts a 24-bit/48 kHz-only master**, while a master whose only rendition is 24-bit above 48 kHz answers the format refusal and the provider's ceiling fallback rules apply (a higher-rung rendition is never substituted for the requested rung).
 
 Sampling evidence: the bit-depth/rate classes are Apple's documented product classes, and the ALAC rendition labels (`audio-alac-stereo-<rate>-<depth>`) carry both numbers, so the map is decidable from the manifest alone. The live confirmation on one 24/48 and one 24/96 track — advertised vs delivered rung through a real account — remains **pending**: this checkout has no Apple account, so the audit's runtime check (AP-08) could not be repeated here; the model is pinned by unit tests on the map and the chooser, and the runner re-derives the landed rung through the same function.
