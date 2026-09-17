@@ -270,6 +270,74 @@ def read_audio_type(path_file: str | pathlib.Path) -> str | None:
     return normalize_audio_type_tag(ids[0])
 
 
+# Every extension Dolby Atmos can arrive in: E-AC-3 JOC and AC-4 are MP4
+# payloads, so any other container is stereo by construction and needs no open.
+_ATMOS_CONTAINER_SUFFIXES = (".m4a", ".mp4")
+_ATMOS_CODECS = ("ec-3", "ac-4")
+
+
+def _mp4_codec(path_file) -> str:
+    """The codec one MP4 container reports, "" when it says nothing.
+
+    Module-level because the container open is a seam a test can stand in
+    front of (the codec sniff's own rules), and because every reader goes
+    through this one place rather than opening the container itself.
+    """
+    return str(getattr(mp4.MP4(str(path_file)).info, "codec", "") or "")
+
+
+def read_file_audio_type(path_file: str | pathlib.Path) -> str | None:
+    """The audio type the audio file at this path IS: "stereo" / "atmos" / None.
+
+    read_audio_type's fallback sibling: that one answers only what the tag says
+    (the download gates' question -- a file Waves wrote must never be guessed
+    from its container), while this one answers what the FILE is, codec sniff
+    included, for the gates that judge a copy already on disk.
+
+    Tag first, codec second (§5.3): a file Waves wrote carries
+    WAVES_AUDIO_TYPE, which answers without opening the container and can
+    never misread a shared extension (TIDAL's stereo AAC and its Atmos both
+    live in .m4a). Untagged files -- every library already on disk, a user's
+    own files -- fall back to the codec sniff, which stays the legacy answer,
+    never the source. Only an MP4 container can hold Atmos, so every other
+    extension is stereo by construction, answered without opening the file.
+
+    None means the file could not be read at all: callers keep their
+    historical answer (an unreadable copy is never evidence of a DIFFERENT
+    Version) instead of guessing.
+    """
+    tagged = read_audio_type(path_file)
+    if tagged in (AUDIO_TYPE_STEREO, AUDIO_TYPE_ATMOS):
+        return tagged
+    if pathlib.Path(str(path_file)).suffix.lower() not in _ATMOS_CONTAINER_SUFFIXES:
+        return AUDIO_TYPE_STEREO
+    try:
+        codec = _mp4_codec(path_file)
+    except Exception:
+        return None
+    return AUDIO_TYPE_ATMOS if codec.startswith(_ATMOS_CODECS) else AUDIO_TYPE_STEREO
+
+
+def occupant_is_version(path_file: str | pathlib.Path, version: str | None) -> bool:
+    """Whether the audio file at this path may stand in for ``version``'s copy.
+
+    The one rule every Version-aware skip asks (the shared engine's
+    ``_existing_same_item_at`` and the Apple runner's own delivery skip): an
+    occupant whose on-disk Version differs is the OTHER Version's file, so it
+    is not this one's copy however its id reads -- a dual download keeps one
+    file per Version, and a blank Atmos template aims both at one name.
+
+    A Version the caller did not pin (None: a legacy single row, or a stream
+    that has not answered yet) and an occupant whose Version cannot be read
+    both keep the historical answer, "yes": neither is evidence of a
+    DIFFERENT Version.
+    """
+    if version is None:
+        return True
+    on_disk = read_file_audio_type(path_file)
+    return on_disk is None or on_disk == version
+
+
 class Metadata:
     path_file: str | pathlib.Path
     title: str

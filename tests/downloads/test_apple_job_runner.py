@@ -647,6 +647,52 @@ def test_both_default_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
     assert done["quality"]["audio_mode"] == "DOLBY_ATMOS"
 
 
+@pytest.mark.ffmpeg
+def test_the_atmos_row_is_not_skipped_by_the_stereo_file(tmp_path, monkeypatch):
+    """A blank format_atmos aims both Versions at one name, so the stereo row
+    runs first and its file sits at the Atmos row's destination. The Atmos
+    skip must ask the occupant's on-disk Version (AP-04): it fetches, lands as
+    the numbered copy beside the stereo file, and leaves that file alone."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "eac3", "sample_rate": "48000"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    # The stereo row's file, already there (a real AAC .m4a: stereo by codec).
+    stereo_file = base / "Aphex Twin" / "Xtal.m4a"
+    stereo_file.parent.mkdir(parents=True)
+    _tone(stereo_file)
+    stub = _bind(_stub(base, provider))
+    stub.settings = _settings(base, default_audio_type="both")
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        # The blank format_atmos the blank fragment produces: the stereo
+        # template unchanged (see atmos_file_template).
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert provider.fetched == [AudioType.ATMOS], "the Atmos Version was silently skipped"
+    assert stereo_file.is_file()  # the stereo copy is untouched
+    landed = base / "Aphex Twin" / "Xtal_01.m4a"
+    assert landed.is_file(), "the Atmos Version did not land as the numbered copy"
+    import mutagen.mp4
+
+    assert bytes(mutagen.mp4.MP4(str(landed)).tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:song-1"
+
+
 def test_album_job_reports_a_partial_shortfall(tmp_path):
     provider = _FakeProvider(fixture=None)
 

@@ -22,7 +22,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import waves.download as download_mod
 from waves.download import Download, _file_audio_mode_is_atmos
 from waves.waves_ui.backend import _TrackedDownload
 
@@ -227,14 +226,8 @@ class TestTheOnDiskModeReader:
         path = tmp_path / "Song.m4a"
         path.write_bytes(b"stand-in")
 
-        class _Info:
-            pass
-
-        class _MP4:
-            def __init__(self, _path):
-                self.info = _Info()
-                self.info.codec = codec
-
-        monkeypatch.setattr(download_mod, "MP4", _MP4)
+        # The sniff lives in the shared reader (waves.metadata.read_audio_mode);
+        # its container open is the module-level seam.
+        monkeypatch.setattr("waves.metadata._mp4_codec", lambda _path: codec)
 
         assert _file_audio_mode_is_atmos(path) is verdict
