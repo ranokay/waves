@@ -1,6 +1,5 @@
 {
     "include": ["**/*.qml", "**/*.md"],
-    "exclude": ["docs/audits/**"],
     "rules": [
         {
             "path": "waves/waves_ui/BRIDGE.md",
@@ -15,7 +14,7 @@
         {
             "path": "waves/**/*.py",
             "merge_system_rule": true,
-            "rule": "Waves Python house rules (the bridge is waves/waves_ui/backend.py; providers live under waves/providers/):\n1. Provider-agnostic by contract: consult Capability and ProviderDescriptor (cards, status kinds, lights, Browse availability, saved shelves, Chooser metadata) instead of branching on a provider's id; a new provider must need no QML edit.\n2. Only plain dicts/lists/strings/numbers cross to QML (never engine objects), and a slot's payload must match its comment and its BRIDGE.md row.\n3. A new or changed bridge signal/slot is documented in waves/waves_ui/BRIDGE.md in the same change.\n4. Worker threads must not touch bridge state or shared caches directly: marshal through signals queued to the GUI thread, and keep long blocking work on the thread pools.\n5. Comments state invariants, not history; a comment the code contradicts is a finding.\n6. Anything possibly configurable belongs in Settings, and every settings-schema field needs a reader and a writer.\n7. Flag duplicated logic that belongs in one helper, and any provider identity hardcoded into a shared path.\n8. A behaviour change without a test is a finding."
+            "rule": "Waves Python house rules (the bridge is waves/waves_ui/backend.py; providers live under waves/providers/):\n1. Provider-agnostic by contract: consult Capability and ProviderDescriptor (cards, status kinds, lights, Browse availability, saved shelves, Chooser metadata) instead of branching on a provider's id; a new provider must need no QML edit.\n2. Only plain dicts/lists/strings/numbers cross to QML (never engine objects), and a slot's payload must match its comment and its BRIDGE.md row.\n3. The bridge contract and its reference move together: every new, renamed or removed bridge signal/slot, and every payload-shape change, is documented in waves/waves_ui/BRIDGE.md in the same change. A backend.py change that alters what QML reads without the BRIDGE.md update is a finding.\n4. Worker threads must not touch bridge state or shared caches directly: marshal through signals queued to the GUI thread, and keep long blocking work on the thread pools.\n5. Comments state invariants, not history; a comment the code contradicts is a finding.\n6. Anything possibly configurable belongs in Settings, and every settings-schema field needs a reader and a writer.\n7. Flag duplicated logic that belongs in one helper, and any provider identity hardcoded into a shared path.\n8. A behaviour change without a test is a finding."
         },
         {
             "path": "tests/**/*.py",
@@ -25,7 +24,7 @@
         {
             "path": "**/*.md",
             "merge_system_rule": true,
-            "rule": "Waves documentation house rules:\n1. Decision records (docs/adr/NNNN-*.md) keep the house shape: Status, Decided, Scope, Decision, Why, Alternatives considered, Consequences. A record without alternatives or consequences is incomplete.\n2. CONTEXT.md is a glossary only: a term, a one-line meaning, an _Avoid_ line. Flag implementation detail, flags, file paths or code names in a glossary term.\n3. docs/agents/* describe the workflow the repo actually runs; if the diff changes the process, these change in the same PR.\n4. Flag claims the code in the same diff contradicts, and history narration in place of invariants or decisions."
+            "rule": "Waves documentation house rules:\n1. Decision records (docs/adr/NNNN-*.md): a NEW record states Status, Decided, Decision, Why and Consequences, plus Scope and Alternatives considered. Records that predate the convention (e.g. 0001, 0003) are not findings for the parts they never had.\n2. CONTEXT.md is a glossary only: a term with a concise meaning and, where a synonym is tempting, an _Avoid_ line. Flag implementation detail, flags, file paths or code names inside a glossary term.\n3. docs/agents/* describe the workflow the repo actually runs; if the diff changes the process, these change in the same PR.\n4. Flag claims the code in the same diff contradicts, and history narration in place of invariants or decisions."
         }
     ]
 }

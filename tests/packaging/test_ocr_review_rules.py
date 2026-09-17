@@ -22,7 +22,7 @@ from support.paths import REPO_ROOT
 RULE_FILE = REPO_ROOT / ".opencodereview" / "rule.json"
 
 # The paths a review must resolve a house rule for.
-HOUSE_RULES = ("**/*.qml", "waves/**/*.py", "tests/**/*.py", "**/*.md")
+HOUSE_RULES = ("**/*.qml", "waves/**/*.py", "tests/**/*.py", "**/*.md", "waves/waves_ui/BRIDGE.md")
 
 
 def _rules() -> dict:
@@ -38,13 +38,21 @@ def test_qml_and_markdown_bypass_the_default_extension_filter():
     assert "**/*.md" in include, "Markdown would fall back to the unsupported-extension filter"
 
 
-def test_every_language_the_repo_writes_resolves_a_house_rule():
-    patterns = [entry.get("path", "") for entry in _rules().get("rules") or []]
+def test_every_surface_the_review_covers_resolves_a_house_rule():
+    rules = _rules().get("rules") or []
+    patterns = [entry.get("path", "") for entry in rules]
 
     for expected in HOUSE_RULES:
         assert expected in patterns, f"no house rule for {expected!r}"
 
+    # merge_system_rule keeps the built-in language rules alongside ours (the
+    # field is undocumented upstream but present in the installed v1.12.3 and
+    # used by OpenCodeReview's own project file); losing it would silently
+    # shrink every review to our text alone.
+    for entry in rules:
+        assert entry.get("merge_system_rule") is True, f"{entry.get('path')!r} does not merge the system rule"
+
     # A one-line rule is not a house rule: each entry must say something the
     # reviewer can act on.
-    for entry in _rules()["rules"]:
+    for entry in rules:
         assert len(str(entry.get("rule", "")).strip()) > 80, f"rule for {entry.get('path')!r} is too thin"
