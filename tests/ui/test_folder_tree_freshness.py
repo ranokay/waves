@@ -45,9 +45,9 @@ def _bridge(monkeypatch, trees, sweeps=None):
     (tickets #20/#22): the fake answers the bridge's ``user_collections()``
     and ``folder_tree()`` calls."""
     b = WavesBridge.__new__(WavesBridge)
-    b._media_lists_cache = None
+    b._media_lists_cache = {}
     b._media_lists_lock = Lock()
-    b._folder_tree = None
+    b._folder_tree = {}
     b.tidal = MagicMock()
     calls = {"sweep": 0, "walk": 0}
 
@@ -59,7 +59,15 @@ def _bridge(monkeypatch, trees, sweeps=None):
         calls["walk"] += 1
         return trees.pop(0)
 
-    b.providers = {"tidal": SimpleNamespace(user_collections=fake_sweep, folder_tree=fake_walk)}
+    b.providers = {
+        "tidal": SimpleNamespace(
+            user_collections=fake_sweep,
+            folder_tree=fake_walk,
+            # The pane's rows come through the source's own row vocabulary
+            # (issue #259); the stub answers with the one key these tests read.
+            row_for=lambda kind, item: {"id": getattr(item, "id", "")},
+        )
+    }
     return b, calls
 
 
@@ -68,22 +76,22 @@ def test_a_partial_sweep_does_not_replace_a_complete_tree(monkeypatch):
     cut = _tree(["Country"], partial=True)
     b, _calls = _bridge(monkeypatch, [good, cut])
 
-    _lists, tree = b._media_lists(refresh=True)
+    _lists, tree = b._media_lists("tidal", refresh=True)
     assert tree is good
 
     # Age the cache so the next first-page load re-sweeps, and let that sweep
     # get rate limited half way through.
-    ts, data, t = b._media_lists_cache
-    b._media_lists_cache = (ts - WavesBridge._MEDIA_LISTS_TTL - 1, data, t)
-    _lists, tree = b._media_lists(refresh=True)
+    ts, data, t = b._media_lists_cache["tidal"]
+    b._media_lists_cache["tidal"] = (ts - WavesBridge._MEDIA_LISTS_TTL - 1, data, t)
+    _lists, tree = b._media_lists("tidal", refresh=True)
     assert tree is good, "a rate-limited walk must not drop folders from the cached tree"
-    assert b._folder_tree is good
+    assert b._folder_tree["tidal"] is good
 
 
 def test_a_partial_tree_is_kept_when_there_is_nothing_better(monkeypatch):
     cut = _tree(["Country"], partial=True)
     b, _calls = _bridge(monkeypatch, [cut])
-    _lists, tree = b._media_lists(refresh=True)
+    _lists, tree = b._media_lists("tidal", refresh=True)
     assert tree is cut  # something beats nothing on a cold session
 
 
@@ -91,10 +99,10 @@ def test_a_complete_sweep_replaces_a_partial_one(monkeypatch):
     cut = _tree(["Country"], partial=True)
     good = _tree(["Country", "Jazz"])
     b, _calls = _bridge(monkeypatch, [cut, good])
-    b._media_lists(refresh=True)
-    ts, data, t = b._media_lists_cache
-    b._media_lists_cache = (ts - WavesBridge._MEDIA_LISTS_TTL - 1, data, t)
-    _lists, tree = b._media_lists(refresh=True)
+    b._media_lists("tidal", refresh=True)
+    ts, data, t = b._media_lists_cache["tidal"]
+    b._media_lists_cache["tidal"] = (ts - WavesBridge._MEDIA_LISTS_TTL - 1, data, t)
+    _lists, tree = b._media_lists("tidal", refresh=True)
     assert tree is good
 
 
@@ -105,17 +113,16 @@ def test_the_mixes_tab_does_not_walk_the_folder_tree(monkeypatch):
     b, calls = _bridge(monkeypatch, [good], sweeps={"playlists": [], "mixes": ["m1", "m2"]})
     b._lib_sort = {}
     b._sort_local_library = lambda full, spec: full
-    b._mix_dict = lambda m: {"id": m}
 
-    b._media_lists(refresh=True)  # playlists tab: walks
+    b._media_lists("tidal", refresh=True)  # playlists tab: walks
     assert calls["walk"] == 1
 
-    ts, data, t = b._media_lists_cache
-    b._media_lists_cache = (ts - WavesBridge._MEDIA_LISTS_TTL - 1, data, t)
-    WavesBridge._library_page(b, "mixes", 0, 1)  # mixes tab past the TTL: re-sweeps
+    ts, data, t = b._media_lists_cache["tidal"]
+    b._media_lists_cache["tidal"] = (ts - WavesBridge._MEDIA_LISTS_TTL - 1, data, t)
+    WavesBridge._library_page(b, "tidal", "mixes", 0, 1)  # mixes tab past the TTL: re-sweeps
     assert calls["sweep"] == 2
     assert calls["walk"] == 1, "the mixes tab must not pay for (or clobber) the folder walk"
-    assert b._folder_tree is good
+    assert b._folder_tree["tidal"] is good
 
 
 def test_the_playlists_page_windows_against_its_own_sweeps_tree(monkeypatch):
@@ -127,13 +134,12 @@ def test_the_playlists_page_windows_against_its_own_sweeps_tree(monkeypatch):
     b._lib_sort = {}
     b._sort_local_library = lambda full, spec: full
     b._folder_dict = lambda n, t: {"kind": "folder", "id": n.id}
-    b._playlist_dict = lambda p: {"kind": "playlist", "id": p.id}
 
-    page0, more0 = WavesBridge._library_page(b, "playlists", 0, 3)
+    page0, more0 = WavesBridge._library_page(b, "tidal", "playlists", 0, 3)
     # A concurrent sweep from elsewhere swaps in a tree with a different root
     # count. The next scroll page must still window against the paired tree.
-    b._folder_tree = _tree(["Country", "Jazz", "Rock"])
-    page1, more1 = WavesBridge._library_page(b, "playlists", 3, 3)
+    b._folder_tree["tidal"] = _tree(["Country", "Jazz", "Rock"])
+    page1, more1 = WavesBridge._library_page(b, "tidal", "playlists", 3, 3)
 
     ids = [r["id"] for r in page0 + page1]
     assert ids == ["f0", "p0", "p1", "p2", "p3"], "the page window skipped or repeated a playlist"

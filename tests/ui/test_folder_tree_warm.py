@@ -57,12 +57,17 @@ class _WarmStub:
     _needs_folder_tree = WavesBridge._needs_folder_tree
 
     def __init__(self, tree=None, logged_in=True):
-        self._folder_tree = None
+        self._folder_tree = {}
         self._swept = tree
         self._media_lists_lock = Lock()
         self._logged_in = logged_in
         self._tree_warm_waiting: list = []
         self._tree_warm_inflight = False
+        # The pane's rows come through the source's own row vocabulary
+        # (issue #259); the stub answers the one key these tests read.
+        self.providers = {
+            "tidal": SimpleNamespace(id="tidal", row_for=lambda kind, item: {"kind": kind, "id": item.id})
+        }
         self.threadpool = _InlinePool()
         self.sweeps = 0
         self.busy: list = []
@@ -70,10 +75,10 @@ class _WarmStub:
         self._folderTreeWarmed = SimpleNamespace(emit=self._on_folder_tree_warmed)
         self.settings = SimpleNamespace(data=SimpleNamespace(format_playlist="Playlists/{folder_path}{playlist_name}"))
 
-    def _media_lists(self, refresh=True, walk=True):
+    def _media_lists(self, source, refresh=True, walk=True):
         self.sweeps += 1
         with self._media_lists_lock:
-            self._folder_tree = self._swept
+            self._folder_tree[source] = self._swept
         return {}, self._swept
 
     def _set_busy(self, on):
@@ -81,9 +86,6 @@ class _WarmStub:
 
     def _folder_dict(self, node, tree):
         return {"kind": "folder", "id": node.id}
-
-    def _playlist_dict(self, pl):
-        return {"kind": "playlist", "id": pl.id}
 
 
 def _tree():
@@ -101,11 +103,11 @@ def _tree():
 
 def test_a_folder_opened_before_the_sweep_warms_and_then_fills():
     stub = _WarmStub(_tree())
-    stub.openPlaylistFolder("f1")
+    stub.openPlaylistFolder("tidal", "f1")
 
     assert stub.sweeps == 1, "the click must trigger the sweep it needs"
-    ((fid, rows, path),) = stub.playlistFolderLoaded.calls
-    assert fid == "f1" and path == "Country"
+    ((source, fid, rows, path),) = stub.playlistFolderLoaded.calls
+    assert source == "tidal" and fid == "f1" and path == "Country"
     assert [r["id"] for r in rows] == ["f2", "p1"], "subfolder first, then the playlists"
     assert stub.busy == [True, False], "the wait is visible, and it ends"
 
@@ -117,31 +119,31 @@ def test_only_one_sweep_is_started_for_a_burst_of_clicks():
     started: list = []
     stub.threadpool = SimpleNamespace(start=started.append)
 
-    stub.openPlaylistFolder("f1")
-    stub.openPlaylistFolder("f2")
+    stub.openPlaylistFolder("tidal", "f1")
+    stub.openPlaylistFolder("tidal", "f2")
     assert len(started) == 1
     assert len(stub._tree_warm_waiting) == 2
 
     started[0].fn()  # the sweep lands, both parked opens replay
-    assert [c[0] for c in stub.playlistFolderLoaded.calls] == ["f1", "f2"]
+    assert [c[1] for c in stub.playlistFolderLoaded.calls] == ["f1", "f2"]
 
 
 def test_a_folder_that_is_really_gone_still_reports_empty_once():
     """Warming must not loop: the replayed open finds a tree (just not this
     node) and falls through to the old not-found emit."""
     stub = _WarmStub(_tree())
-    stub.openPlaylistFolder("nope")
+    stub.openPlaylistFolder("tidal", "nope")
 
     assert stub.sweeps == 1
-    assert stub.playlistFolderLoaded.calls == [("nope", [], "")]
+    assert stub.playlistFolderLoaded.calls == [("tidal", "nope", [], "")]
 
 
 def test_signed_out_keeps_the_old_behaviour():
     stub = _WarmStub(_tree(), logged_in=False)
-    stub.openPlaylistFolder("f1")
+    stub.openPlaylistFolder("tidal", "f1")
 
     assert stub.sweeps == 0, "no sweep is possible signed out"
-    assert stub.playlistFolderLoaded.calls == [("f1", [], "")]
+    assert stub.playlistFolderLoaded.calls == [("tidal", "f1", [], "")]
 
 
 def test_a_download_before_the_sweep_waits_for_the_folder_path():

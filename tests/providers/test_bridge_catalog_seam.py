@@ -613,17 +613,17 @@ def test_the_media_lists_sweep_reads_the_provider(monkeypatch):
         tidal=SimpleNamespace(session=_GuardSession()),
         providers={"tidal": provider},
         _media_lists_lock=Lock(),
-        _media_lists_cache=None,
+        _media_lists_cache={},
         _MEDIA_LISTS_TTL=60.0,
-        _folder_tree=None,
+        _folder_tree={},
     )
 
-    fresh, tree = WavesBridge._media_lists(stub, refresh=True, walk=False)
+    fresh, tree = WavesBridge._media_lists(stub, "tidal", refresh=True, walk=False)
 
     assert provider.calls == [("user_collections",)]
     assert fresh == {"playlists": [], "mixes": []}
     assert tree is None
-    assert stub._media_lists_cache[1] is fresh  # cached, as ever
+    assert stub._media_lists_cache["tidal"][1] is fresh  # cached, as ever
 
 
 def test_a_fresh_sweep_within_the_ttl_never_reaches_the_provider_twice(monkeypatch):
@@ -634,34 +634,64 @@ def test_a_fresh_sweep_within_the_ttl_never_reaches_the_provider_twice(monkeypat
         tidal=SimpleNamespace(session=_GuardSession()),
         providers={"tidal": provider},
         _media_lists_lock=Lock(),
-        _media_lists_cache=(time.monotonic(), {"playlists": ["kept"]}, None),
+        _media_lists_cache={"tidal": (time.monotonic(), {"playlists": ["kept"]}, None)},
         _MEDIA_LISTS_TTL=60.0,
-        _folder_tree=None,
+        _folder_tree={},
     )
 
-    fresh, _tree = WavesBridge._media_lists(stub, refresh=True, walk=False)
+    fresh, _tree = WavesBridge._media_lists(stub, "tidal", refresh=True, walk=False)
 
     assert fresh == {"playlists": ["kept"]}  # the TTL copy
     assert provider.calls == []
 
 
 def test_the_library_favorites_window_reads_the_provider():
+    # The pane's window: the source's favourites page, with the rows in the
+    # SOURCE's own row vocabulary (row_for), never a bridge branch on who it
+    # is. An item the provider cannot render (an empty row) is dropped.
     o1, o2 = object(), object()
-    provider = _provider(favorites_page=([o1, o2], True))
-    stub = SimpleNamespace(
-        providers={"tidal": provider},
-        _lib_sort={},
-        _track_dict=lambda o: {"id": f"row{int(o is o2)}"},
-        _album_dict=lambda o: {},
-        _fav_artist_dict=lambda o: {},
-        _video_dict=lambda o: {},
-    )
 
-    rows, more = WavesBridge._library_page(stub, "tracks", 0, 10, order_override=("date", "desc"))
+    class _RowProvider(_FakeProvider):
+        def row_for(self, kind, item):
+            self.calls.append(("row_for", kind))
+            return {"id": f"row{int(item is o2)}"}
 
-    assert provider.calls == [("favorites_page", "tracks", 0, 10, ("date", "desc"))]
+    provider = _RowProvider(favorites_page=([o1, o2], True))
+    stub = SimpleNamespace(providers={"tidal": provider}, _lib_sort={}, _source_provider=lambda source: provider)
+    stub._source_rows = lambda provider, row_kind, raw: WavesBridge._source_rows(stub, provider, row_kind, raw)
+
+    rows, more = WavesBridge._library_page(stub, "tidal", "tracks", 0, 10, order_override=("date", "desc"))
+
+    assert provider.calls == [
+        ("favorites_page", "tracks", 0, 10, ("date", "desc")),
+        ("row_for", "track"),
+        ("row_for", "track"),
+    ]
     assert rows == [{"id": "row0"}, {"id": "row1"}]
     assert more is True
+
+
+def test_the_library_window_drops_rows_a_provider_cannot_render():
+    o1, o2 = object(), object()
+
+    class _RowProvider(_FakeProvider):
+        def row_for(self, kind, item):
+            return {"id": "row1"} if item is o2 else {}
+
+    provider = _RowProvider(favorites_page=([o1, o2], False))
+    stub = SimpleNamespace(providers={"tidal": provider}, _lib_sort={}, _source_provider=lambda source: provider)
+    stub._source_rows = lambda provider, row_kind, raw: WavesBridge._source_rows(stub, provider, row_kind, raw)
+
+    rows, more = WavesBridge._library_page(stub, "tidal", "tracks", 0, 10)
+
+    assert rows == [{"id": "row1"}]
+    assert more is False
+
+
+def test_a_source_with_no_provider_loads_nothing():
+    stub = SimpleNamespace(providers={}, _lib_sort={}, _source_provider=lambda source: None)
+
+    assert WavesBridge._library_page(stub, "gone", "tracks", 0, 10) == ([], False)
 
 
 # --------------------------------------------------------------------------- #

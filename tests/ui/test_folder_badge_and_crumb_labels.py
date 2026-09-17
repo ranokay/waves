@@ -39,6 +39,7 @@ from support.qml import (
     EXIT_OK,
     EXIT_PRECONDITION,
     EXIT_REGRESSED,
+    make_tidal_my_music_source,
     run_scenario,
     sandbox_qml_settings,
 )
@@ -59,7 +60,7 @@ _FIND_BADGE = """
         }
         return null
     }
-    return walk(libPlaylistsList.itemAtIndex(0))
+    return walk(root.libGroupFor("tidal").viewFor("playlists").itemAtIndex(0))
 })()
 """
 
@@ -141,9 +142,12 @@ def _run_scenario() -> int:
         print(msg, file=sys.stderr)
         return EXIT_REGRESSED
 
+    # My Music renders one group per live source (issue #259): seed the
+    # session the real sign-in would flip, then drive TIDAL's own group.
+    make_tidal_my_music_source(root, q, settle, bridge)
     root.setProperty("libraryOpen", True)
-    root.setProperty("libraryCategory", "playlists")
-    bridge.libraryLoaded.emit("playlists", _folder_row(), False)
+    q('root.libGroupFor("tidal").category = "playlists"')
+    bridge.libraryLoaded.emit("tidal", "playlists", _folder_row(), False)
     settle()
 
     badge = q(_FIND_BADGE)

@@ -236,6 +236,12 @@ ApplicationWindow {
     // while a configured provider declares it. Re-read at boot and on the
     // same flips that move a session or the Apple light.
     property var providerLights: []
+    // My Music's source groups and the pane's one empty state, composed by
+    // the bridge from the provider descriptors and capabilities (issue
+    // #259): a provider that later declares FAVORITES appears in `sources`
+    // with its own categories and no QML edit.
+    property var myMusicSources: []
+    property var myMusicEmpty: ({})
     property var browseNav: ({ available: false, signed_in: false })
     readonly property bool browseAvailable: !!(root.browseNav && root.browseNav.available)
     // The browse source's session, not the header's TIDAL flag: the bridge
@@ -253,12 +259,22 @@ ApplicationWindow {
     function refreshProviderCards() {
         try { root.providerCards = waves.providerCards() } catch (e) { root.providerCards = [] }
     }
-    // The two provider surfaces always move together (a session or setup flip
-    // changes both the header's marks and the welcome cards), so one call
-    // keeps the BRIDGE.md rule in one place.
+    function refreshMyMusicSources() {
+        var next = []
+        try { next = waves.myMusicSources() } catch (e) { next = [] }
+        // Re-assign only on a real change: the pane's Repeater rebuilds its
+        // groups when the array changes, so a setup flip that leaves the
+        // sources as they were must not cost the pane its rows and scroll.
+        if (JSON.stringify(next) !== JSON.stringify(root.myMusicSources)) root.myMusicSources = next
+        try { root.myMusicEmpty = waves.myMusicEmpty() } catch (e) { root.myMusicEmpty = ({}) }
+    }
+    // The provider surfaces always move together (a session or setup flip
+    // changes the header's marks, the welcome cards and My Music's sources),
+    // so one call keeps the BRIDGE.md rule in one place.
     function refreshProviderSurfaces() {
         root.refreshProviderLights()
         root.refreshProviderCards()
+        root.refreshMyMusicSources()
     }
     function refreshBrowseNav() {
         try { root.browseNav = waves.browseNav() }
@@ -735,21 +751,37 @@ ApplicationWindow {
         }
         }
     }
-    // My Music infinite scroll: whether more pages exist PER CATEGORY (the
-    // category panes are keep-alive, so each keeps its own pagination
-    // truth while hidden), and whether a page is in flight for the active one
-    // (to avoid firing duplicate page requests while scrolling). The map is
-    // read only from functions, never bindings, so plain mutation is fine.
-    property var libCatHasMore: ({})
-    property bool libLoadingMore: false
-    // Armed when a quiet revalidate of the active category is issued: if it
-    // does land (rows actually changed), the refill pins the user's scroll
-    // spot instead of snapping to the top. Sort changes and fresh loads
-    // disarm it: those genuinely restart the list from the top.
-    property bool libPinRefill: false
-    // My Music per-category sort, {cat: {key, asc}}. Kept in step with the
-    // backend's own per-category sort (both mutate only via libApplySort).
-    property var libSort: ({})
+    // My Music is rendered as one group per bridge source (issue #259): each
+    // group owns its category strip, its sort, its pagination flags and its
+    // keep-alive models, so a second provider's shelves are its own and no
+    // state has to be keyed by (source, category) in here. These are the
+    // roots of that routing: the Repeater's delegates (in registration order)
+    // and the source -> group lookup every bridge emit goes through.
+    function libGroupList() {
+        var out = []
+        for (var i = 0; i < libSourceRep.count; ++i) {
+            var g = libSourceRep.itemAt(i)
+            if (g) out.push(g)
+        }
+        return out
+    }
+    function libGroupFor(source) {
+        var want = String(source || "")
+        var groups = root.libGroupList()
+        for (var i = 0; i < groups.length; ++i) {
+            if (String(groups[i].sourceId) === want) return groups[i]
+        }
+        return null
+    }
+    // The view the scroll dressing follows: whatever the primary source's
+    // visible shelf is (the top group is the pane's own). ``cat`` is passed in
+    // so the caller's binding reads root.libraryCategory and re-evaluates
+    // when the primary source switches shelves.
+    function libActiveView(cat) {
+        var groups = root.libGroupList()
+        if (groups.length === 0) return null
+        return groups[0].viewFor(String(cat || groups[0].category))
+    }
     // Download-folder gate dialogs: the blocking "no folder set" gate and the
     // one-time soft nudge for users still on the old default. Driven by the
     // downloadFolderMissing / downloadFolderDefault signals.
@@ -2568,36 +2600,16 @@ ApplicationWindow {
         clearAppleSearch()
         searchField.forceActiveFocus()
     }
+    // The pane's shelves are the source groups' (issue #259): opening My Music
+    // selects the category on the primary source and lets every other source
+    // load its own current shelf, so a second provider's group is not a blank
+    // pane the user has to click. Nothing to load with no source: the pane's
+    // empty state is on screen instead.
     function loadLib(cat) {
-        libraryCategory = cat
-        libLoadingMore = false
-        // "Home" is a self-contained, Browse-shaped landing kept on screen:
-        // re-opening My Music shows the shelves it already has, instantly. The
-        // backend serves the first load from its disk snapshot and every visit
-        // triggers a quiet, throttled revalidation (repainting only when the
-        // favourites changed), so an app left running still stays current. The
-        // placeholder glyph shows only on the very first run (nothing cached
-        // yet). Logout drops the cache (onLoggedInChanged), so a different
-        // account still refetches.
-        if (cat === "home") {
-            waves.loadHome(root.homeSections.length > 0)
-            return
-        }
-        // Every category pane is keep-alive: switching only changes which one
-        // is visible, and each keeps its rows, expansion and scroll for its
-        // whole life. A category that already has rows shows them as-is and
-        // revalidates quietly (the backend repaints only on change, and the
-        // refill pins the scroll spot); only a still-empty category does a
-        // visible first load.
-        var m = libModelFor(cat)
-        if (m && m.count > 0) {
-            libPinRefill = true
-            waves.loadLibrary(cat, true)
-            return
-        }
-        libPinRefill = false
-        libCatHasMore[cat] = false
-        waves.loadLibrary(cat)
+        var groups = root.libGroupList()
+        if (groups.length === 0) return
+        groups[0].select(cat)
+        for (var i = 1; i < groups.length; ++i) groups[i].select(groups[i].category)
     }
     // Deep-link to the download-folder setting (from the folder gate/nudge), the
     // same instant jump the update notice uses, no scroll animation.
@@ -2654,12 +2666,12 @@ ApplicationWindow {
     function cancelSetupSignIn() {
         setupCards()
     }
-    // The TIDAL provider card's Sign in (Settings -> Providers) opens the
-    // welcome page on the same inline steps. No browser opens here: the
-    // steps' own button is the only caller of beginLogin.
+    // The TIDAL sign-in entry points (Settings -> Providers, the Search and
+    // Browse empty states, My Music's empty state) open the welcome page on
+    // the same inline steps. No browser opens here: the steps' own button is
+    // the only caller of beginLogin.
     function openSetupSignIn() {
-        openSetupPage()
-        setupMode = "tidal"
+        root.openProviderSignIn("tidal")
     }
     // A completed sign-in answers the first run, closes the welcome/sign-in
     // surface and lands on Search with its field focused.
@@ -7519,6 +7531,10 @@ ApplicationWindow {
     component LibPlaylistRow: Rectangle {
         id: plRow
         required property var model
+        // The source group that owns the drill-in this row opens: a folder
+        // belongs to one source's shelf, so the group's own folder state
+        // answers the click.
+        property var folderHost: null
         width: ListView.view.width; height: 64; radius: 10; color: root.surface; border.color: root.border1
         readonly property bool isFolder: model.kind === "folder"
         // The whole row opens the playlist page: resting on it has the page
@@ -7578,7 +7594,7 @@ ApplicationWindow {
         MouseArea {
             anchors.fill: parent; z: -1
             cursorShape: Qt.PointingHandCursor
-            onClicked: plRow.isFolder ? root.openPlFolder(plRow.model.id, plRow.model.title)
+            onClicked: plRow.isFolder ? (plRow.folderHost ? plRow.folderHost.openFolder(plRow.model.id, plRow.model.title) : undefined)
                                       : root.openPlaylistPage(plRow.model.id, plRow.model.title, plRow.model.art)
         }
     }
@@ -12100,12 +12116,16 @@ ApplicationWindow {
     component LibList: ListView {
         id: lv
         property string cat: ""
+        // The source group this pane belongs to: its category decides whether
+        // this pane shows, and every load/pagination call goes through it (the
+        // group names its source for the bridge).
+        property var host: null
         // Inset the list itself (not the delegate's x) so rows sit 22px from
         // each edge, matching the search results' centered column. A vertical
         // ListView manages its delegates' x, so an `x: 22` on the delegate is
         // silently overridden to 0; insetting the view is the reliable way.
         anchors.fill: parent; anchors.leftMargin: 22; anchors.rightMargin: 22
-        visible: root.libraryCategory === cat
+        visible: !!host && host.category === cat
         clip: true
         spacing: 8
         cacheBuffer: 800
@@ -12128,23 +12148,801 @@ ApplicationWindow {
         // appended (contentHeight grows) or if the first page doesn't fill the
         // viewport (so it can't scroll), contentY never changes on its own,
         // without these the loader would stall. All three are idempotent thanks
-        // to the libCatHasMore / libLoadingMore guards in libMaybeLoadMore.
-        onContentYChanged: root.libMaybeLoadMore(lv, lv.cat)
-        onContentHeightChanged: { applyRestore(); root.libMaybeLoadMore(lv, lv.cat) }
-        onHeightChanged: root.libMaybeLoadMore(lv, lv.cat)
+        // to the group's hasMore / loadingMore guards in maybeLoadMore.
+        onContentYChanged: if (lv.host) lv.host.maybeLoadMore(lv, lv.cat)
+        onContentHeightChanged: { applyRestore(); if (lv.host) lv.host.maybeLoadMore(lv, lv.cat) }
+        onHeightChanged: if (lv.host) lv.host.maybeLoadMore(lv, lv.cat)
         // Breathing space inside the scroll area (see BrowseScroll).
         header: Item { width: 1; height: 8 }
         footer: Item {
             width: lv.width
-            height: (root.libLoadingMore && root.libraryCategory === lv.cat) ? 48 : 20
+            height: (lv.host && lv.host.loadingMore && lv.host.category === lv.cat) ? 48 : 20
             Text {
                 anchors.centerIn: parent
-                visible: root.libLoadingMore && root.libraryCategory === lv.cat
+                visible: lv.host && lv.host.loadingMore && lv.host.category === lv.cat
                 text: "Loading more…"; color: root.textLo; font.pixelSize: 13
             }
         }
     }
 
+    // One My Music source group (issue #259): everything one provider's saved
+    // shelves need, and nothing provider-specific. The strip, its labels and
+    // the sort come from the source descriptor's categories; the panes are the
+    // app's neutral shelf shapes, each keep-alive; every page is fetched and
+    // every row built through the source's OWN provider
+    // (waves.loadLibrary(source, category) -> the provider's favorites_page /
+    // row_for), so a provider that later declares FAVORITES renders here with
+    // no edit to this file.
+    component LibSourceGroup: ColumnLayout {
+        id: group
+        property var sourceData: ({})
+        property bool primary: false
+        readonly property string sourceId: String(sourceData.id || "")
+        readonly property string sourceLabel: String(sourceData.label || "")
+        readonly property var categories: sourceData.categories || []
+        // The visible shelf. Keep-alive: switching only changes which pane
+        // shows, and every pane keeps its rows, expansion and scroll for the
+        // session (an account flip clears them).
+        property string category: ""
+        // Infinite scroll per category: whether more pages exist, whether one
+        // is in flight for the visible pane, and the armed pin for a quiet
+        // revalidate's refill (a sort change or a fresh load disarms it).
+        property var hasMore: ({})
+        property bool loadingMore: false
+        property bool pinRefill: false
+        // Per-category sort, {cat: {key, asc}}: the bridge holds the same
+        // choice for the fetch order, and only applySort mutates either.
+        property var sort: ({})
+        // This source's "Home" landing shelves (Browse-shaped, account-scoped).
+        property var homeSections: []
+        // The drilled-into playlist folder: per source, because the folder
+        // tree is the provider's own read.
+        property var folderStack: []
+        property string currentFolder: ""
+
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        spacing: 0
+
+        // The keep-alive panes' models: one set per group instance, so a
+        // second source's rows never land in the first source's lists.
+        ListModel { id: albumsModel }
+        ListModel { id: tracksModel }
+        ListModel { id: artistsModel }
+        ListModel { id: playlistsModel }
+        ListModel { id: mixesModel }
+        ListModel { id: videosModel }
+        // The drilled-into folder's rows. Its own model on purpose: a
+        // background revalidate of the playlists tab refills the six models
+        // above and must not wipe the folder the user is standing in.
+        ListModel { id: folderModel }
+
+        Component.onCompleted: {
+            // Start where the root expects the primary group, or at the first
+            // shelf this source can fill.
+            group.category = group.primary ? String(root.libraryCategory || "home")
+                                           : (group.categories.length ? String(group.categories[0].id) : "")
+            // A group that appears while the pane is open (a second source
+            // signs in) loads its shelf too, so it is not a blank pane.
+            if (root.libraryOpen) group.select(group.category)
+        }
+        onCategoryChanged: if (group.primary) root.libraryCategory = group.category
+
+        function modelFor(cat) {
+            // "folder" names the drill-in's own model (the playlists pane's
+            // second view); the rest are the shelf panes' models.
+            return cat === "albums" ? albumsModel : cat === "tracks" ? tracksModel
+                 : cat === "artists" ? artistsModel : cat === "playlists" ? playlistsModel
+                 : cat === "mixes" ? mixesModel : cat === "videos" ? videosModel
+                 : cat === "folder" ? folderModel : null
+        }
+        function viewFor(cat) {
+            return cat === "albums" ? albumsList : cat === "tracks" ? tracksList
+                 : cat === "artists" ? artistsGrid : cat === "playlists" ? playlistsList
+                 : cat === "mixes" ? mixesList : cat === "videos" ? videosList : null
+        }
+        function hasCategory(cat) {
+            for (var i = 0; i < group.categories.length; ++i)
+                if (String(group.categories[i].id) === String(cat)) return true
+            return false
+        }
+        function isMedia(cat) { return cat === "albums" || cat === "tracks" || cat === "videos" }
+        // `root.`-qualified for the page helpers: this component's own
+        // `fill` would otherwise shadow the root's model filler.
+        function fill(cat, items) { var m = group.modelFor(cat); if (m) { if (group.isMedia(cat)) fillMedia(m, items); else root.fill(m, items) } }
+        function append(cat, items) { var m = group.modelFor(cat); if (m) { if (group.isMedia(cat)) appendMedia(m, items); else appendPlain(m, items) } }
+        // Select a category and load it. "Home" is a self-contained,
+        // Browse-shaped landing kept on screen: re-opening My Music shows the
+        // shelves it already has, instantly. The backend serves the first load
+        // from its disk snapshot and every visit triggers a quiet, throttled
+        // revalidation (repainting only when the favourites changed), so an
+        // app left running still stays current. Every other category pane is
+        // keep-alive: a category that already has rows shows them as-is and
+        // revalidates quietly (the backend repaints only on change, and the
+        // refill pins the scroll spot); only a still-empty category does a
+        // visible first load.
+        function select(cat) {
+            group.category = String(cat || "")
+            group.loadingMore = false
+            if (group.category === "home") {
+                waves.loadHome(group.sourceId, group.homeSections.length > 0)
+                return
+            }
+            var m = group.modelFor(group.category)
+            if (m && m.count > 0) {
+                group.pinRefill = true
+                waves.loadLibrary(group.sourceId, group.category, true)
+                return
+            }
+            group.pinRefill = false
+            group.hasMore[group.category] = false
+            waves.loadLibrary(group.sourceId, group.category)
+        }
+        // From a Home preview shelf: open the full list of that category,
+        // forced newest-first so it lands on the items the preview showed.
+        function selectSorted(cat) {
+            var g = group.sortGet(cat)
+            if (g.key === "date" && !g.asc) { group.select(cat); return }
+            group.category = String(cat || "")
+            group.loadingMore = false
+            group.pinRefill = false
+            group.hasMore[cat] = false
+            var mm = group.modelFor(cat); if (mm) mm.clear()
+            var m = {}
+            for (var k in group.sort) m[k] = group.sort[k]
+            m[cat] = { key: "date", asc: false }
+            group.sort = m
+            waves.setLibrarySort(group.sourceId, cat, "date", "desc")
+        }
+        function sortGet(cat) { var s = group.sort[cat]; return s ? s : ({ key: "date", asc: false }) }
+        function sortCurrentIndex(cat) {
+            var opts = root.libSortOptions(cat), k = group.sortGet(cat).key
+            for (var i = 0; i < opts.length; ++i) if (opts[i][1] === k) return i
+            return 0
+        }
+        function applySort(cat, key, asc) {
+            // Clone into a NEW object: mutating and reassigning the SAME
+            // reference does not fire the var-property change signal, so the
+            // direction arrow's binding never re-evaluated and appeared stuck.
+            var m = {}
+            for (var k in group.sort) m[k] = group.sort[k]
+            m[cat] = { key: key, asc: asc }
+            group.sort = m
+            group.pinRefill = false          // a re-sorted list restarts at the top
+            group.hasMore[cat] = false
+            waves.setLibrarySort(group.sourceId, cat, key, asc ? "asc" : "desc")
+        }
+        // Called as the visible list scrolls; loads the next page well before
+        // the bottom (~1.5 viewports early) so it feels endless.
+        function maybeLoadMore(view, cat) {
+            if (cat !== group.category || !group.hasMore[cat] || group.loadingMore) return
+            if (view.count === 0 || view.contentHeight <= 0) return
+            if (view.contentY + view.height > view.contentHeight - view.height * 1.5) {
+                group.loadingMore = true
+                waves.loadMoreLibrary(group.sourceId, cat)
+            }
+        }
+        // A first page (or a quiet revalidate that found changes) landed for
+        // this source.
+        function applyLoaded(cat, items, more) {
+            group.hasMore[cat] = more
+            // A load for a category the user already left still lands in that
+            // category's own (hidden, keep-alive) pane: returning to it later
+            // is then instant. Only the ACTIVE pane needs the flags and the
+            // scroll pinning.
+            if (cat !== group.category) { group.fill(cat, items); return }
+            group.loadingMore = false
+            // A quiet revalidate that actually changed the rows replaces them
+            // under the user; pin the spot across the refill. Sort changes and
+            // fresh loads disarmed the pin, so those still land at the top.
+            var v = group.viewFor(cat)
+            var keepY = (group.pinRefill && v && v.visible && !v.moving && v.contentY > 0) ? v.contentY : -1
+            group.fill(cat, items)
+            if (keepY >= 0) { v.pendingY = keepY; v.applyRestore() }
+            else if (v) {
+                // A restarted list (fresh load, new sort order) begins at the
+                // top. Explicit, because a clear+refill leaves the old
+                // contentY in place when the new content is just as tall.
+                v.pendingY = -1
+                v.contentY = 0
+            }
+        }
+        function applyMore(cat, items, more) {
+            if (cat !== group.category) return
+            group.hasMore[cat] = more
+            group.loadingMore = false
+            group.append(cat, items)
+        }
+        // This source's Home landing answered. Only populate when the load
+        // actually returned shelves: an empty result (a transient fetch
+        // failure) must not wipe shelves already on screen, and a still-empty
+        // first load leaves the pane blank until the next visit retries.
+        function applyHome(sections) {
+            group.loadingMore = false      // Home is one self-contained landing
+            if (sections && sections.length) group.homeSections = sections
+        }
+        // The account flipped: every keep-alive pane here holds the previous
+        // account's rows for its whole life, so the flip is the one thing that
+        // clears them.
+        function clearPanes() {
+            albumsModel.clear(); tracksModel.clear(); artistsModel.clear()
+            playlistsModel.clear(); mixesModel.clear(); videosModel.clear()
+            folderModel.clear()
+            group.homeSections = []
+            group.hasMore = ({})
+            group.loadingMore = false
+            group.sort = ({})
+            group.pinRefill = false
+            group.folderStack = []
+            group.currentFolder = ""
+        }
+        // The playlist-folder drill-in (the playlists pane's own view).
+        function openFolder(fid, title) {
+            var st = group.folderStack.slice()
+            if (st.length) st[st.length - 1].y = folderList.contentY
+            st.push({ id: fid, title: title, y: 0 })
+            group.folderStack = st
+            group.currentFolder = fid
+            folderList.pendingY = 0
+            waves.openPlaylistFolder(group.sourceId, fid)
+        }
+        function crumbTo(level) {
+            if (level < 0) {
+                group.folderStack = []
+                group.currentFolder = ""
+                return
+            }
+            var entry = group.folderStack[level]
+            group.folderStack = group.folderStack.slice(0, level + 1)
+            group.currentFolder = entry.id
+            folderList.pendingY = (entry.y === undefined ? 0 : entry.y)
+            waves.openPlaylistFolder(group.sourceId, entry.id)
+        }
+        function folderReset() {
+            group.folderStack = []
+            group.currentFolder = ""
+            folderModel.clear()
+        }
+        function applyFolder(fid, rows, path) {
+            // Stale guard: the user already moved to another folder (or back
+            // to the root) while this answer was in flight.
+            if (fid !== group.currentFolder) return
+            root.fill(folderModel, rows)
+            folderList.applyRestore()
+        }
+
+        // One row: the source's label (only when more than one source
+        // contributes -- a lone source's rows ARE that source), the category
+        // strip, the sort and the direction toggle. The title rides the first
+        // group's row, so a lone source renders exactly as it always has.
+        RowLayout {
+            Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 2
+            Layout.bottomMargin: 6
+            spacing: 14
+            Text {
+                textFormat: Text.PlainText; text: "My Music"; color: root.textHi
+                font.pixelSize: 18; font.bold: true; Layout.alignment: Qt.AlignVCenter
+                visible: group.primary
+            }
+            Text {
+                objectName: "libSourceLabel"
+                visible: group.sourceLabel !== ""
+                textFormat: Text.PlainText
+                text: group.sourceLabel
+                color: root.textLo; font.pixelSize: 12; font.bold: true
+                Layout.alignment: Qt.AlignVCenter
+            }
+            // Wrap the tab strip in a plain Item that carries Layout.fillWidth,
+            // and flow against a DEFINITE width (parent.width). A Flow with
+            // Layout.fillWidth directly hits a stale-width feedback loop and
+            // wraps spuriously on narrower (but still valid) window sizes,
+            // leaving a dead band under the tabs. This is the pattern the other
+            // Flows in this file use.
+            Item {
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter
+                implicitHeight: libTabsFlow.implicitHeight
+                Flow {
+                    id: libTabsFlow
+                    objectName: "libTabsFlow"
+                    width: parent.width; spacing: 8
+                    Repeater {
+                        model: group.categories
+                        delegate: Rectangle {
+                            id: lchip
+                            required property var modelData
+                            readonly property bool on: group.category === modelData.id
+                            radius: 8; implicitHeight: 30; implicitWidth: lcRow.implicitWidth + 26
+                            color: on ? root.accentCont : "transparent"
+                            border.color: on ? root.accentDim : root.border1
+                            Row {
+                                id: lcRow; anchors.centerIn: parent; spacing: 7
+                                Rectangle { width: 6; height: 6; radius: 3; anchors.verticalCenter: parent.verticalCenter; color: lchip.on ? root.accent : root.textDim }
+                                Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: lchip.modelData.label; color: lchip.on ? root.accent : root.textLo; font.pixelSize: 13 }
+                            }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: group.select(lchip.modelData.id) }
+                        }
+                    }
+                }
+            }
+            // Sort (mirrors the Search sort); hidden on the Home landing,
+            // which is already newest-first and merged across kinds.
+            ComboBox {
+                id: libSortBox
+                // Kept in the layout on Home too (opacity/enabled, not
+                // visible) so the header keeps the same height and the tabs
+                // keep the same position on every tab. Toggling `visible`
+                // here dropped ~40px and shifted the whole pane vertically
+                // when switching to or from Home.
+                opacity: group.category === "home" ? 0 : 1
+                enabled: group.category !== "home"
+                visible: group.hasCategory(group.category)
+                Layout.alignment: Qt.AlignVCenter
+                implicitHeight: 40; implicitWidth: 160
+                model: root.libSortLabels(group.category)
+                // A Binding element (not an inline currentIndex) so the value
+                // survives the control's own imperative write on selection.
+                Binding {
+                    target: libSortBox; property: "currentIndex"
+                    value: group.sortCurrentIndex(group.category)
+                    restoreMode: Binding.RestoreBindingOrValue
+                }
+                onActivated: {
+                    var opts = root.libSortOptions(group.category)
+                    group.applySort(group.category, opts[currentIndex][1], group.sortGet(group.category).asc)
+                }
+                background: Rectangle { radius: 8; color: root.surface2; border.color: libSortBox.popup.visible ? root.accent : root.outline }
+                contentItem: Text {
+                    textFormat: Text.PlainText
+                    text: libSortBox.displayText; color: root.textHi; font.pixelSize: 14
+                    leftPadding: 14; rightPadding: 28; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+                }
+                indicator: ExpandChevron {
+                    x: libSortBox.width - 26; y: (libSortBox.height - 18) / 2; tile: 18; glyph: 13
+                    showTile: false; closedAngle: -90; openAngle: 0
+                    stroke: root.libraryOpen ? root.accent : "transparent"
+                    open: libSortBox.popup.visible
+                }
+                delegate: ItemDelegate {
+                    width: libSortBox.width
+                    contentItem: Text { textFormat: Text.PlainText; text: modelData; color: root.textHi; font.pixelSize: 14; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: highlighted ? root.surface3 : root.surface2 }
+                    highlighted: libSortBox.highlightedIndex === index
+                }
+                popup: Popup {
+                    y: libSortBox.height + 4; width: libSortBox.width; padding: 4
+                    implicitHeight: contentItem.implicitHeight + 8
+                    background: Rectangle { radius: 8; color: root.surface2; border.color: root.outline }
+                    contentItem: ListView {
+                        clip: true; implicitHeight: contentHeight
+                        model: libSortBox.popup.visible ? libSortBox.delegateModel : null
+                        ScrollBar.vertical: ScrollBar {}
+                    }
+                }
+            }
+            Rectangle {
+                // Reserve its space on Home too, matching libSortBox above,
+                // so the header height and tab positions never shift.
+                opacity: group.category === "home" ? 0 : 1
+                enabled: group.category !== "home"
+                visible: group.hasCategory(group.category)
+                Layout.alignment: Qt.AlignVCenter
+                implicitHeight: 40; implicitWidth: 40; radius: 8
+                color: root.surface2; border.color: root.outline
+                Text {
+                    textFormat: Text.PlainText
+                    anchors.centerIn: parent; text: group.sortGet(group.category).asc ? "↑" : "↓"
+                    color: root.textHi; font.family: root.mono; font.pixelSize: 18
+                }
+                MouseArea {
+                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                    onClicked: { var g = group.sortGet(group.category); group.applySort(group.category, g.key, !g.asc) }
+                }
+            }
+        }
+
+        // The source's shelves, one pane each, all keep-alive. The panes a
+        // source cannot fill (per its categories) simply never render.
+        Item {
+            Layout.fillWidth: true; Layout.fillHeight: true
+
+            LibList {
+                id: albumsList
+                cat: "albums"; model: albumsModel; host: group
+                delegate: AlbumBlock {
+                    required property var model
+                    width: ListView.view.width
+                    albumId: model.id; title: model.title; artistName: model.artist; artistId: ""
+                    art: model.art; year: model.year; releaseDate: model.date; listedDate: model.listed || ""; trackCount: model.tracks; durationSec: model.duration_sec || 0; quality: model.quality; popularity: model.popularity
+                }
+            }
+            LibList {
+                id: tracksList
+                cat: "tracks"; model: tracksModel; host: group
+                delegate: TrackRow {
+                    required property var model
+                    width: ListView.view.width
+                    tId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
+                    album: model.album; art: model.art; year: model.year; date: model.date; duration: model.duration; durationSec: model.duration_sec || 0; quality: model.quality; popularity: model.popularity
+                    albumId: model.album_id || ""
+                }
+            }
+            // Artists as a compact card grid (the Search artist card, shrunk)
+            // rather than tall full-width rows, so more fit on screen. Click
+            // opens the artist scoped to the user's library.
+            GridView {
+                id: artistsGrid
+                visible: group.category === "artists"
+                anchors.fill: parent; anchors.leftMargin: 22; anchors.rightMargin: 22
+                clip: true
+                model: artistsModel
+                property int cols: Math.max(3, Math.floor(width / 132))
+                cellWidth: width > 0 ? Math.floor(width / cols) : 132
+                // + name row + the preview row pinned to the card bottom
+                cellHeight: cellWidth + 46
+                cacheBuffer: 800
+                reuseItems: true
+                boundsBehavior: Flickable.StopAtBounds
+                // Breathing space inside the scroll area (see BrowseScroll).
+                header: Item { width: 1; height: 8 }
+                ScrollBar.vertical: ScrollBar {}
+                // Same revalidate scroll pinning as LibList (this grid is
+                // the one category pane that isn't a LibList).
+                property real pendingY: -1
+                function applyRestore() {
+                    if (pendingY < 0) return
+                    var maxY = Math.max(0, contentHeight - height)
+                    contentY = Math.min(pendingY, maxY)
+                    if (maxY >= pendingY) pendingY = -1
+                }
+                onMovementStarted: pendingY = -1
+                onContentYChanged: group.maybeLoadMore(artistsGrid, "artists")
+                onContentHeightChanged: { applyRestore(); group.maybeLoadMore(artistsGrid, "artists") }
+                onHeightChanged: group.maybeLoadMore(artistsGrid, "artists")
+                delegate: Item {
+                    id: agCell
+                    required property var model
+                    width: artistsGrid.cellWidth; height: artistsGrid.cellHeight
+                    // Resting on a followed artist has the page ready
+                    // before the click (see hoverPrefetch).
+                    readonly property var prefetchCard: ({ kind: "artist", id: "" + (model.id || ""), art: "" + (model.art || "") })
+                    HoverHandler {
+                        onHoveredChanged: hovered ? root.hoverPrefetch(agCell.prefetchCard) : root.hoverPrefetchCancel(agCell.prefetchCard)
+                    }
+                    Rectangle {
+                        anchors.fill: parent; anchors.margins: 5; radius: 10
+                        color: agMa.containsMouse ? root.surface2 : root.surface; border.color: root.border1
+                        Column {
+                            anchors.fill: parent; anchors.margins: 8; spacing: 6
+                            Item {
+                                width: parent.width; height: width
+                                Art {
+                                    anchors.centerIn: parent
+                                    width: parent.width; height: width; hoverFx: true
+                                    fxKind: "artist"; fxId: "" + (model.id || "")
+                                    url: model.art
+                                    // The one place you browse artists you
+                                    // follow should not be the one place that
+                                    // cannot say what you already hold. A
+                                    // child of the Art, so it takes the tilt
+                                    // and the rounded clip with it.
+                                    ArtistBadges {
+                                        bar: true
+                                        width: parent.width
+                                        anchors.bottom: parent.bottom
+                                        artistName: "" + (model.name || "")
+                                    }
+                                }
+                            }
+                            Text {
+                                textFormat: Text.PlainText; text: model.name
+                                color: root.textHi; font.pixelSize: 12; font.bold: true
+                                elide: Text.ElideRight; width: parent.width; horizontalAlignment: Text.AlignHCenter
+                            }
+                        }
+                        MouseArea { id: agMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: waves.loadArtistLibrary(model.id) }
+                        // compact preview row (the Browse card's control
+                        // line, shrunk): ▶ PREVIEW -> elapsed + · STOP, playing
+                        // this artist's top track via the shared preview
+                        // machinery. Declared after agMa so its clicks win
+                        // over the open-artist click underneath.
+                        Item {
+                            id: agPv
+                            readonly property string pst: root.pvSt("artist", "" + model.id)
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.bottom: parent.bottom; anchors.bottomMargin: 8
+                            width: agPvRow.implicitWidth; height: 16
+                            MouseArea {
+                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: root.togglePreview("artist", "" + model.id, 0)
+                            }
+                            Row {
+                                id: agPvRow
+                                anchors.verticalCenter: parent.verticalCenter; spacing: 4
+                                Ico {
+                                    visible: agPv.pst !== "loading"
+                                    name: agPv.pst === "playing" ? "pause" : "play"
+                                    color: agPv.pst === "error" ? root.red : root.accent
+                                    size: 10
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                                Text {
+                                    textFormat: Text.PlainText
+                                    text: agPv.pst === "" ? "PREVIEW"
+                                        : agPv.pst === "loading" ? "[buffering]"
+                                        : agPv.pst === "error" ? "RETRY"
+                                        : root.fmtMs(root.previewPosition)
+                                    color: agPv.pst === "error" ? root.red : root.accent
+                                    font.family: agPv.pst === "playing" || agPv.pst === "paused" || agPv.pst === "loading" ? root.mono : root.uiFont
+                                    font.pixelSize: 10; font.bold: true; font.letterSpacing: root.btnTrack
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    property real breathe: 1
+                                    opacity: agPv.pst === "loading" ? breathe : 1
+                                    SequentialAnimation on breathe {
+                                        running: agPv.pst === "loading"; loops: Animation.Infinite
+                                        NumberAnimation { from: 1.0; to: 0.3; duration: 520; easing.type: Easing.InOutSine }
+                                        NumberAnimation { from: 0.3; to: 1.0; duration: 520; easing.type: Easing.InOutSine }
+                                    }
+                                }
+                                Text {
+                                    textFormat: Text.PlainText
+                                    visible: agPv.pst === "playing" || agPv.pst === "paused"
+                                    text: "· STOP"
+                                    color: agStopMa.containsMouse ? root.red : root.textDim
+                                    font.family: root.uiFont; font.pixelSize: 9; font.bold: true; font.letterSpacing: root.btnTrack
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    MouseArea {
+                                        id: agStopMa
+                                        anchors.fill: parent; anchors.margins: -3
+                                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.stopPreview()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Home: a Browse-shaped landing scoped to the account. Rendered
+            // from homeSections (same shelf shape as Browse), so the app's own
+            // art-forward ArtCard / TrackRow shelves render it. Under a
+            // "Recently added" header sit two preview shelves, "Recent albums"
+            // and "Recent tracks"; each heading drills into that full tab,
+            // newest-first (openLibrarySorted).
+            Flickable {
+                id: homePane
+                visible: group.category === "home"
+                anchors.fill: parent; anchors.leftMargin: 22; anchors.rightMargin: 22
+                clip: true
+                contentWidth: width; contentHeight: homeCol.height + 32
+                ScrollBar.vertical: ScrollBar {}
+                boundsBehavior: Flickable.StopAtBounds
+                Column {
+                    id: homeCol
+                    // y matches the favourites lists' 8px in-scroll padding
+                    // exactly, or the content would jump vertically when
+                    // switching between the category tabs.
+                    y: 8
+                    width: homePane.width; spacing: 20
+                    Text {
+                        visible: group.homeSections.length > 0
+                        textFormat: Text.PlainText; text: "Recently added"
+                        color: root.textHi; font.pixelSize: 20; font.bold: true
+                    }
+                    Repeater {
+                        model: group.homeSections
+                        delegate: Column {
+                            id: homeSec
+                            required property var modelData
+                            readonly property string target: homeSec.modelData.target || ""
+                            width: homeCol.width; spacing: 10
+                            // Clickable shelf heading: drills into the matching
+                            // My Music tab, newest-first, showing the full list
+                            // this shelf previews. The hit area hugs the text.
+                            Item {
+                                implicitWidth: headRow.implicitWidth
+                                implicitHeight: headRow.implicitHeight
+                                Row {
+                                    id: headRow; spacing: 6
+                                    Text {
+                                        id: headText
+                                        textFormat: Text.PlainText
+                                        text: homeSec.modelData.title || ""
+                                        color: (headMouse.containsMouse && homeSec.target !== "") ? root.accent : root.textHi
+                                        font.pixelSize: 16; font.bold: true
+                                    }
+                                    Text {
+                                        visible: homeSec.target !== ""
+                                        anchors.verticalCenter: headText.verticalCenter
+                                        textFormat: Text.PlainText; text: "›"
+                                        color: headMouse.containsMouse ? root.accent : root.textLo
+                                        font.pixelSize: 18
+                                    }
+                                }
+                                MouseArea {
+                                    id: headMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    enabled: homeSec.target !== ""
+                                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    onClicked: root.openLibrarySorted(homeSec.modelData.source, homeSec.target)
+                                }
+                            }
+                            // Card shelf (Recent albums preview).
+                            ListView {
+                                visible: homeSec.modelData.rowKind === "cards"
+                                width: parent.width; height: 250
+                                orientation: ListView.Horizontal
+                                spacing: 14; clip: true
+                                boundsBehavior: Flickable.StopAtBounds
+                                // Local terms, not `visible` (effective visibility
+                                // tears cards down on tab leave, rebuilds them in
+                                // the returning click's turn; see the Browse shelves).
+                                model: homeSec.modelData.rowKind === "cards" ? homeSec.modelData.items : []
+                                delegate: ArtCard {
+                                    required property var modelData
+                                    card: modelData
+                                }
+                                ShelfWheelRedirect { pane: homePane }
+                                ShelfEdgeFades {}
+                            }
+                            // Recent tracks (vertical list, reuses TrackRow).
+                            Column {
+                                visible: homeSec.modelData.rowKind === "tracks"
+                                width: parent.width
+                                Repeater {
+                                    model: homeSec.modelData.rowKind === "tracks" ? homeSec.modelData.items : []
+                                    delegate: TrackRow {
+                                        required property var modelData
+                                        width: homeCol.width
+                                        tId: modelData.id; kind: modelData.kind || "track"
+                                        title: modelData.title; artistName: modelData.artist || ""; artistId: modelData.artist_id || ""
+                                        album: modelData.album || ""; art: modelData.art || ""; year: "" + (modelData.year || ""); date: modelData.date || ""
+                                        duration: modelData.duration || ""; durationSec: modelData.duration_sec || 0; quality: modelData.quality || ""; popularity: modelData.popularity || 0
+                                        albumId: modelData.album_id || ""
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            LibList {
+                id: playlistsList
+                cat: "playlists"; model: playlistsModel; host: group
+                // Hidden (state intact, scroll kept) while drilled into a
+                // folder; the folder view below takes over.
+                visible: group.category === "playlists" && group.folderStack.length === 0
+                delegate: LibPlaylistRow { folderHost: group }
+            }
+            // Drilled-into playlist folder: pinned breadcrumb strip + the
+            // folder's rows (subfolders first). Served from the cached
+            // sweep, so landing is instant and already positioned.
+            Item {
+                visible: group.category === "playlists" && group.folderStack.length > 0
+                anchors.fill: parent; anchors.leftMargin: 22; anchors.rightMargin: 22
+                Flow {
+                    id: plCrumbStrip
+                    anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
+                    anchors.topMargin: 8
+                    spacing: 6
+                    Rectangle {
+                        radius: 8; implicitHeight: 26; implicitWidth: crumbRootTx.implicitWidth + 20
+                        color: root.surface2; border.color: root.border1
+                        Text {
+                            id: crumbRootTx; anchors.centerIn: parent
+                            textFormat: Text.PlainText; text: "Playlists"
+                            color: root.textLo; font.pixelSize: 12
+                        }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: group.crumbTo(-1) }
+                    }
+                    Repeater {
+                        model: group.folderStack
+                        delegate: Row {
+                            id: crumbSeg
+                            required property var modelData
+                            required property int index
+                            spacing: 6
+                            readonly property bool last: index === group.folderStack.length - 1
+                            Text {
+                                textFormat: Text.PlainText; text: "›"
+                                color: root.textDim; font.pixelSize: 13
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            Rectangle {
+                                radius: 8; implicitHeight: 26; implicitWidth: crumbTx.implicitWidth + 20
+                                color: crumbSeg.last ? root.accentCont : root.surface2
+                                border.color: crumbSeg.last ? root.accentDim : root.border1
+                                Text {
+                                    id: crumbTx; anchors.centerIn: parent
+                                    textFormat: Text.PlainText; text: crumbSeg.modelData.title
+                                    color: crumbSeg.last ? root.accent : root.textLo
+                                    font.pixelSize: 12; font.bold: crumbSeg.last
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    enabled: !crumbSeg.last
+                                    onClicked: group.crumbTo(crumbSeg.index)
+                                }
+                            }
+                        }
+                    }
+                }
+                ListView {
+                    id: folderList
+                    anchors.top: plCrumbStrip.bottom; anchors.topMargin: 8
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                    clip: true; spacing: 8
+                    cacheBuffer: 800
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar {}
+                    header: Item { width: 1; height: 8 }
+                    footer: Item { width: 1; height: 20 }
+                    model: folderModel
+                    delegate: LibPlaylistRow { folderHost: group }
+                    // Land already positioned (crumb-back restores the
+                    // saved offset before paint; a fresh drill-in lands at
+                    // 0): the no-visible-scroll rule.
+                    property real pendingY: -1
+                    function applyRestore() {
+                        if (pendingY < 0) return
+                        var maxY = Math.max(0, contentHeight - height)
+                        contentY = Math.min(pendingY, maxY)
+                        if (maxY >= pendingY) pendingY = -1
+                    }
+                    onContentHeightChanged: applyRestore()
+                }
+            }
+            LibList {
+                id: mixesList
+                cat: "mixes"; model: mixesModel; host: group
+                delegate: Rectangle {
+                    required property var model
+                    width: ListView.view.width; height: 64; radius: 10; color: root.surface; border.color: root.border1
+                    RowLayout {
+                        anchors.fill: parent; anchors.margins: 10; spacing: 13
+                        Art {
+                            width: 44; height: 44; hoverFx: true
+                            fxKind: "mix"; fxId: "" + (model.id || "")
+                            url: model.art
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 2
+                            Text { textFormat: Text.PlainText; text: model.title; color: root.textHi; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Text { textFormat: Text.PlainText; text: model.subtitle ? model.subtitle : "Mix"; color: root.textLo; font.pixelSize: 12 }
+                        }
+                        DownloadButton { mediaId: model.id; chooserKind: "mix"; collectionCheck: true; label: "Download mix"; onTap: function(){ waves.downloadMix(model.id) } }
+                    }
+                }
+            }
+            LibList {
+                id: videosList
+                cat: "videos"; model: videosModel; host: group
+                delegate: Rectangle {
+                    required property var model
+                    width: ListView.view.width; height: 50; color: "transparent"
+                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.divider }
+                    RowLayout {
+                        anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6; spacing: 12
+                        VideoThumb { url: model.art; videoId: model.id; vTitle: model.title; vArtist: model.artist }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 1
+                            Text { textFormat: Text.PlainText; text: model.title; color: root.textHi; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Text { textFormat: Text.PlainText; text: model.artist; color: root.textLo; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
+                        }
+                        Text { textFormat: Text.PlainText; text: model.duration; color: root.textLo; font.pixelSize: 12; Layout.preferredWidth: 42 }
+                        DownIcon { mediaId: model.id; onTap: function(){ waves.downloadVideo(model.id) } }
+                    }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; z: -1; onClicked: root.openVideo(model.id, model.title, model.artist) }
+                }
+            }
+
+            // No placeholder for a loaded-empty category: the pane is
+            // transparent, so the ambient wave-loop background fills it on its
+            // own, never a card or glyph that flashes in for a beat and fades
+            // out.
+        }
+    }
     // Models
     ListModel { id: artistsModel }
     ListModel { id: albumsModel }
@@ -12161,20 +12959,9 @@ ApplicationWindow {
     ListModel { id: artistVideosModel }
     ListModel { id: artistEpModel }
     ListModel { id: artistTracksModel }
-    ListModel { id: libAlbumsModel }
-    ListModel { id: libTracksModel }
-    ListModel { id: libArtistsModel }
-    ListModel { id: libPlaylistsModel }
-    ListModel { id: libMixesModel }
-    ListModel { id: libVideosModel }
-    // Drilled-into playlist folder. Its own model on purpose: a
-    // background revalidate of the playlists tab clears the six lib models,
-    // and must not wipe the folder the user is standing in.
-    ListModel { id: libFolderModel }
-    // Stack of {id, title, y} from the root down to the open folder.
-    property var plFolderStack: []
-    property string plCurrentFolder: ""
     // folder_id -> playlists remaining in its "download all" (badge digit).
+    // Pane-wide: folder ids are the library's, and the badge rides the folder
+    // button wherever its row renders.
     property var folderRemainMap: ({})
     // Browse category DOWNLOAD ALL flow: which tile's resolve is pending a
     // download or a preview, and the confirm prompt ({path, title, count}).
@@ -12186,36 +12973,6 @@ ApplicationWindow {
     // a DIFFERENT category, and confirming that one silences the confirm for
     // good, which only a full settings reset can undo.
     function catDlDismiss() { catDlPrompt = null; cdSkip.checked = false }
-    function openPlFolder(fid, title) {
-        var st = plFolderStack.slice()
-        if (st.length) st[st.length - 1].y = libFolderList.contentY
-        st.push({ id: fid, title: title, y: 0 })
-        plFolderStack = st
-        plCurrentFolder = fid
-        libFolderList.pendingY = 0
-        waves.openPlaylistFolder(fid)
-    }
-    // level -1 = back to the root list; otherwise jump to that stack entry.
-    function plCrumbTo(level) {
-        if (level < 0) {
-            plFolderStack = []
-            plCurrentFolder = ""
-            libFolderModel.clear()
-            return
-        }
-        var entry = plFolderStack[level]
-        plFolderStack = plFolderStack.slice(0, level + 1)
-        plCurrentFolder = entry.id
-        libFolderList.pendingY = entry.y
-        waves.openPlaylistFolder(entry.id)
-    }
-    function plFolderReset() {
-        plFolderStack = []
-        plCurrentFolder = ""
-        libFolderModel.clear()
-        folderRemainMap = ({})
-    }
-    property var homeSections: []   // "Home" tab: Browse-shaped, account-scoped shelves
 
     function appendPlain(model, arr) { if (arr) for (var i = 0; i < arr.length; ++i) model.append(arr[i]) }
     function fill(model, arr) { model.clear(); appendPlain(model, arr) }
@@ -12672,80 +13429,55 @@ ApplicationWindow {
         if (media) root.artistsById = m
     }
 
-    // My Music: model routing + infinite-scroll prefetch
-    function libModelFor(cat) {
-        return cat === "albums" ? libAlbumsModel : cat === "tracks" ? libTracksModel
-             : cat === "artists" ? libArtistsModel : cat === "playlists" ? libPlaylistsModel
-             : cat === "mixes" ? libMixesModel : cat === "videos" ? libVideosModel : null
-    }
-    // The keep-alive view pane for a category (for scroll pinning across a
-    // revalidate refill). The playlists pane pins its ROOT list; the drilled
-    // folder view keeps its own pendingY machinery.
-    function libViewFor(cat) {
-        return cat === "albums" ? libAlbumsList : cat === "tracks" ? libTracksList
-             : cat === "artists" ? libArtistsGrid : cat === "playlists" ? libPlaylistsList
-             : cat === "mixes" ? libMixesList : cat === "videos" ? libVideosList : null
-    }
-    // My Music sort (per category)
-    // Options adapt to the category; every category shares a "Recently added"
-    // default so it matches the backend's default order with no extra fetch.
+    // My Music sort options (per category). Options adapt to the category;
+    // every category shares a "Recently added" default so it matches the
+    // backend's default order with no extra fetch. The per-source groups hold
+    // the chosen value (see LibSourceGroup.sortGet/applySort).
     function libSortOptions(cat) {
         if (cat === "albums") return [["Recently added", "date"], ["Name", "name"], ["Release date", "release"], ["Artist", "artist"]]
         if (cat === "tracks" || cat === "videos") return [["Recently added", "date"], ["Name", "name"], ["Artist", "artist"]]
         return [["Recently added", "date"], ["Name", "name"]]   // artists, playlists, mixes
     }
     function libSortLabels(cat) { return root.libSortOptions(cat).map(function(o){ return o[0] }) }
-    function libSortGet(cat) { var s = root.libSort[cat]; return s ? s : ({ key: "date", asc: false }) }
-    function libSortCurrentIndex(cat) {
-        var opts = root.libSortOptions(cat), k = root.libSortGet(cat).key
-        for (var i = 0; i < opts.length; ++i) if (opts[i][1] === k) return i
-        return 0
-    }
-    function libApplySort(cat, key, asc) {
-        // Clone into a NEW object: mutating and reassigning the SAME reference does
-        // not fire the var-property change signal, so the direction-arrow binding
-        // (libSortGet().asc) never re-evaluated and the arrow appeared stuck.
-        var m = {}
-        for (var k in root.libSort) m[k] = root.libSort[k]
-        m[cat] = { key: key, asc: asc }
-        root.libSort = m
-        libPinRefill = false          // a re-sorted list restarts at the top
-        libCatHasMore[cat] = false
-        waves.setLibrarySort(cat, key, asc ? "asc" : "desc")
-    }
-    // From a Home "Recently added" preview shelf, open the full My Music tab for
-    // that kind, forced to newest-first so it lands on the very items the preview
-    // showed and the complete list beneath them. If the tab is already
-    // newest-first, just switch to it (loadLib reuses its cache, no re-fetch);
-    // otherwise reset the sort, which reloads page one in date order.
-    function openLibrarySorted(cat) {
+    // From a Home "Recently added" preview shelf, open the full list of that
+    // kind on the shelf's OWN source, forced to newest-first so it lands on the
+    // very items the preview showed and the complete list beneath them. The
+    // section carries its source (the bridge composes it), so with two sources
+    // the heading opens the shelf it came from, never the first group's.
+    function openLibrarySorted(source, cat) {
         if (!cat) return
-        var g = root.libSortGet(cat)
-        if (g.key === "date" && !g.asc) { root.loadLib(cat); return }
-        libraryCategory = cat
-        libLoadingMore = false
-        libPinRefill = false          // the order is changing: land at the top
-        libCatHasMore[cat] = false
-        // Only this category restarts; the other keep-alive panes are untouched.
-        var mm = libModelFor(cat); if (mm) mm.clear()
-        var m = {}
-        for (var k in root.libSort) m[k] = root.libSort[k]
-        m[cat] = { key: "date", asc: false }
-        root.libSort = m
-        waves.setLibrarySort(cat, "date", "desc")   // one date-desc reload; onLibraryLoaded fills
+        var g = root.libGroupFor(source)
+        if (g) g.selectSorted(String(cat))
     }
-    function libIsMedia(cat) { return cat === "albums" || cat === "tracks" || cat === "videos" }
-    function libFill(cat, items) { var m = libModelFor(cat); if (m) { if (libIsMedia(cat)) fillMedia(m, items); else fill(m, items) } }
-    function libAppend(cat, items) { var m = libModelFor(cat); if (m) { if (libIsMedia(cat)) appendMedia(m, items); else appendPlain(m, items) } }
-    // Called as the active list scrolls; loads the next page well before the
-    // bottom (~1.5 viewports early) so it feels endless.
-    function libMaybeLoadMore(view, cat) {
-        if (cat !== root.libraryCategory || !root.libCatHasMore[cat] || root.libLoadingMore) return
-        if (view.count === 0 || view.contentHeight <= 0) return
-        if (view.contentY + view.height > view.contentHeight - view.height * 1.5) {
-            root.libLoadingMore = true
-            waves.loadMoreLibrary(cat)
-        }
+    // The empty state's click: the provider's own sign-in steps where this
+    // build ships them, its own setup verb otherwise. The action is a verb
+    // from the bridge, never a provider branch here.
+    function runMyMusicEmptyAction() {
+        var empty = root.myMusicEmpty || ({})
+        var provider = String(empty.provider || "")
+        if (!provider) return
+        if (String(empty.action) === "signin") { root.openProviderSignIn(provider); return }
+        waves.providerAction(provider, String(empty.action || ""))
+    }
+    // The providers whose inline sign-in steps this build ships. The steps are
+    // a UI component (a field, a button, a paste box), so a provider that
+    // brings one adds itself here and its surface; a provider without one
+    // lands on the cards, where its own card action lives, rather than a blank
+    // page.
+    readonly property var signInStepProviders: ["tidal"]
+    function openProviderSignIn(providerId) {
+        openSetupPage()
+        var id = String(providerId || "")
+        setupMode = root.signInStepProviders.indexOf(id) >= 0 ? id : "cards"
+    }
+    // The account flipped: every keep-alive My Music pane holds the previous
+    // account's rows for its whole life, so the flip is the one thing that
+    // clears them (per source group, each of which owns its own models).
+    function clearMyMusicPanes() {
+        var groups = root.libGroupList()
+        for (var i = 0; i < groups.length; ++i) groups[i].clearPanes()
+        // No category reset: the pane stays where the user left it, and the
+        // primary group's mirror keeps root.libraryCategory in step.
     }
 
     Connections {
@@ -12763,43 +13495,20 @@ ApplicationWindow {
         function onAppleSetupRequested(reason) {
             root.openAppleSetup(reason)
         }
-        function onLibraryLoaded(cat, items, more) {
-            root.libCatHasMore[cat] = more
-            // A load for a category the user already left still lands in that
-            // category's own (hidden, keep-alive) pane: returning to it later
-            // is then instant. Only the ACTIVE pane needs the flags and the
-            // scroll pinning.
-            if (cat !== root.libraryCategory) { root.libFill(cat, items); return }
-            root.libLoadingMore = false
-            // A quiet revalidate that actually changed the rows replaces them
-            // under the user; pin the spot across the refill (BrowseScroll's
-            // holdScroll idea). Sort changes and fresh loads disarmed the pin,
-            // so those still land at the top as a restarted list should.
-            var v = root.libViewFor(cat)
-            var keepY = (root.libPinRefill && v && v.visible && !v.moving && v.contentY > 0)
-                ? v.contentY : -1
-            root.libFill(cat, items)
-            if (keepY >= 0) { v.pendingY = keepY; v.applyRestore() }
-            else if (v) {
-                // A restarted list (fresh load, new sort order) begins at the
-                // top. Explicit, because a clear+refill leaves the old
-                // contentY in place when the new content is just as tall.
-                v.pendingY = -1
-                v.contentY = 0
-            }
+        // Every My Music emit names its SOURCE (issue #259): the group for
+        // that source applies the page, so two sources' panes fill
+        // independently and a closed source's late answer lands nowhere.
+        function onLibraryLoaded(source, cat, items, more) {
+            var g = root.libGroupFor(source)
+            if (g) g.applyLoaded(cat, items, more)
         }
-        function onLibraryMore(cat, items, more) {
-            if (cat !== root.libraryCategory) return
-            root.libCatHasMore[cat] = more
-            root.libLoadingMore = false
-            root.libAppend(cat, items)
+        function onLibraryMore(source, cat, items, more) {
+            var g = root.libGroupFor(source)
+            if (g) g.applyMore(cat, items, more)
         }
-        function onPlaylistFolderLoaded(fid, rows, path) {
-            // Stale guard: the user already moved to another folder (or back
-            // to the root) while this answer was in flight.
-            if (fid !== root.plCurrentFolder) return
-            root.fill(libFolderModel, rows)
-            libFolderList.applyRestore()
+        function onPlaylistFolderLoaded(source, fid, rows, path) {
+            var g = root.libGroupFor(source)
+            if (g) g.applyFolder(fid, rows, path)
         }
         function onFolderRemaining(fid, remaining, total) {
             // New object on purpose: mutate-and-reassign doesn't notify.
@@ -12822,14 +13531,9 @@ ApplicationWindow {
             else
                 waves.downloadPlaylistCategory(path)
         }
-        function onHomeLoaded(sections) {
-            if (root.libraryCategory !== "home") return
-            root.libLoadingMore = false      // Home is one self-contained landing
-            // Only populate when the load actually returned shelves. An empty
-            // result (a transient fetch failure) must not wipe shelves already on
-            // screen; a still-empty first load simply leaves the placeholder glyph
-            // up, and the next visit retries (homeSections is still empty).
-            if (sections && sections.length) root.homeSections = sections
+        function onHomeLoaded(source, sections) {
+            var g = root.libGroupFor(source)
+            if (g) g.applyHome(sections)
         }
         function onDownloadFolderMissing() { root.folderGateBlocking = true }
         function onDownloadFolderDefault() { root.folderNudge = true }
@@ -12872,7 +13576,6 @@ ApplicationWindow {
             root.navForwardHistory = []
             root._navRestoring = false
             root.browseHighlightId = ""
-            root.homeSections = []
             // A DOWNLOAD ALL or PREVIEW whose resolve the logout generation
             // bump threw away is still armed here. Left alone, the next resolve
             // of the same category path after signing back in consumes it: a
@@ -12883,17 +13586,14 @@ ApplicationWindow {
             root.catDlPrompt = null
             // The keep-alive My Music panes hold the previous account's
             // favourites for their whole life; only the account flip may
-            // clear them (loadLib no longer clears on category switches).
-            libAlbumsModel.clear(); libTracksModel.clear(); libArtistsModel.clear()
-            libPlaylistsModel.clear(); libMixesModel.clear(); libVideosModel.clear()
-            root.libCatHasMore = ({})
-            root.libLoadingMore = false
+            // clear them (switching categories never does).
+            root.clearMyMusicPanes()
             // The saved Search drill-in can hold the previous account's artist
             // page, restorable from the Search tab: same class of leak as the
             // history stacks dropped above.
             root.searchSaved = null
-            // The drilled-into folder view holds the previous account's rows.
-            root.plFolderReset()
+            // The folder badges are the previous account's too.
+            root.folderRemainMap = ({})
             if (root.signedIn && root.browseOpen) {
                 root.browseLoading = true
                 waves.loadBrowse()
@@ -15419,7 +16119,10 @@ ApplicationWindow {
             onFactoryResetRequested: root.confirmFactoryReset = true
         }
 
-        // Library page
+        // Library page (My Music): one source group per bridge source (issue
+        // #259), each with its own category strip and keep-alive panes, plus
+        // the one empty state while no source can fill a shelf. All of it is
+        // bridge data, so a second provider adds no QML here.
         ColumnLayout {
             id: libraryPane
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.topMargin: 8
@@ -15428,551 +16131,46 @@ ApplicationWindow {
             // each list carries its own 8px inside the scroll area.
             spacing: 0
 
-            // Top bar: title + category tabs on the left, sort inline on the
-            // right, all one row (like Settings). No separate back header (you
-            // arrive here from the nav) and no separate sort row underneath.
+            // Title row for the no-source case only: a source group's own row
+            // carries the title, so the pane gains nothing when one exists
+            // (and a hidden row costs no layout space).
             RowLayout {
+                visible: root.myMusicSources.length === 0
                 Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 2
                 spacing: 14
                 Text {
                     textFormat: Text.PlainText; text: "My Music"; color: root.textHi
                     font.pixelSize: 18; font.bold: true; Layout.alignment: Qt.AlignVCenter
                 }
-                // Wrap the tab strip in a plain Item that carries Layout.fillWidth,
-                // and flow against a DEFINITE width (parent.width). A Flow with
-                // Layout.fillWidth directly hits a stale-width feedback loop and
-                // wraps spuriously on narrower (but still valid) window sizes,
-                // leaving a dead band under the tabs. This is the pattern the other
-                // Flows in this file use.
-                Item {
-                    Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter
-                    // Signed out, the category strip is a row of dead ends:
-                    // the body shows one provider-named empty state instead
-                    // (issue #220).
-                    visible: root.signedIn
-                    implicitHeight: libTabsFlow.implicitHeight
-                    Flow {
-                        id: libTabsFlow
-                        objectName: "libTabsFlow"
-                        width: parent.width; spacing: 8
-                        Repeater {
-                            model: [["home", "Home"], ["albums", "Albums"], ["tracks", "Tracks"], ["artists", "Artists"], ["playlists", "Playlists"], ["mixes", "Mixes"], ["videos", "Videos"]]
-                            delegate: Rectangle {
-                                id: lchip
-                                required property var modelData
-                                readonly property bool on: root.libraryCategory === modelData[0]
-                                radius: 8; implicitHeight: 30; implicitWidth: lcRow.implicitWidth + 26
-                                color: on ? root.accentCont : "transparent"
-                                border.color: on ? root.accentDim : root.border1
-                                Row {
-                                    id: lcRow; anchors.centerIn: parent; spacing: 7
-                                    Rectangle { width: 6; height: 6; radius: 3; anchors.verticalCenter: parent.verticalCenter; color: lchip.on ? root.accent : root.textDim }
-                                    Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: lchip.modelData[1]; color: lchip.on ? root.accent : root.textLo; font.pixelSize: 13 }
-                                }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.loadLib(lchip.modelData[0]) }
-                            }
-                        }
-                    }
-                }
-                // Sort (mirrors the Search sort); hidden on the Recent strip,
-                // which is already newest-first and merged across kinds.
-                ComboBox {
-                    id: libSortBox
-                    // Kept in the layout on Home too (opacity/enabled, not
-                    // visible) so the header keeps the same height and the tabs
-                    // keep the same position on every tab. Toggling `visible`
-                    // here dropped ~40px and shifted the whole pane vertically
-                    // when switching to or from Home.
-                    opacity: root.libraryCategory === "home" ? 0 : 1
-                    enabled: root.libraryCategory !== "home"
-                    // No rows to order while signed out (issue #220).
-                    visible: root.signedIn
-                    Layout.alignment: Qt.AlignVCenter
-                    implicitHeight: 40; implicitWidth: 160
-                    model: root.libSortLabels(root.libraryCategory)
-                    // A Binding element (not an inline currentIndex) so the value
-                    // survives the control's own imperative write on selection.
-                    Binding {
-                        target: libSortBox; property: "currentIndex"
-                        value: root.libSortCurrentIndex(root.libraryCategory)
-                        restoreMode: Binding.RestoreBindingOrValue
-                    }
-                    onActivated: {
-                        var opts = root.libSortOptions(root.libraryCategory)
-                        root.libApplySort(root.libraryCategory, opts[currentIndex][1], root.libSortGet(root.libraryCategory).asc)
-                    }
-                    background: Rectangle { radius: 8; color: root.surface2; border.color: libSortBox.popup.visible ? root.accent : root.outline }
-                    contentItem: Text {
-                        textFormat: Text.PlainText
-                        text: libSortBox.displayText; color: root.textHi; font.pixelSize: 14
-                        leftPadding: 14; rightPadding: 28; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
-                    }
-                    indicator: ExpandChevron {
-                        x: libSortBox.width - 26; y: (libSortBox.height - 18) / 2; tile: 18; glyph: 13
-                        showTile: false; closedAngle: -90; openAngle: 0
-                        stroke: root.libraryOpen ? root.accent : "transparent"
-                        open: libSortBox.popup.visible
-                    }
-                    delegate: ItemDelegate {
-                        width: libSortBox.width
-                        contentItem: Text { textFormat: Text.PlainText; text: modelData; color: root.textHi; font.pixelSize: 14; verticalAlignment: Text.AlignVCenter }
-                        background: Rectangle { color: highlighted ? root.surface3 : root.surface2 }
-                        highlighted: libSortBox.highlightedIndex === index
-                    }
-                    popup: Popup {
-                        y: libSortBox.height + 4; width: libSortBox.width; padding: 4
-                        implicitHeight: contentItem.implicitHeight + 8
-                        background: Rectangle { radius: 8; color: root.surface2; border.color: root.outline }
-                        contentItem: ListView {
-                            clip: true; implicitHeight: contentHeight
-                            model: libSortBox.popup.visible ? libSortBox.delegateModel : null
-                            ScrollBar.vertical: ScrollBar {}
-                        }
-                    }
-                }
-                Rectangle {
-                    // Reserve its space on Home too, matching libSortBox above,
-                    // so the header height and tab positions never shift.
-                    opacity: root.libraryCategory === "home" ? 0 : 1
-                    enabled: root.libraryCategory !== "home"
-                    visible: root.signedIn
-                    Layout.alignment: Qt.AlignVCenter
-                    implicitHeight: 40; implicitWidth: 40; radius: 8
-                    color: root.surface2; border.color: root.outline
-                    Text {
-                        textFormat: Text.PlainText
-                        anchors.centerIn: parent; text: root.libSortGet(root.libraryCategory).asc ? "↑" : "↓"
-                        color: root.textHi; font.family: root.mono; font.pixelSize: 18
-                    }
-                    MouseArea {
-                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                        onClicked: { var g = root.libSortGet(root.libraryCategory); root.libApplySort(root.libraryCategory, g.key, !g.asc) }
-                    }
-                }
-            }
-
-            // Source label for the saved shelves below. The rows are one
-            // provider's today (TIDAL's), and the label only earns its
-            // place once a second provider contributes shelves -- the
-            // bridge decides (waves.myMusicSourceLabel), so the text is
-            // data, never QML copy, and a provider rename or a third
-            // provider needs no QML edit here (issue #221). Empty while
-            // TIDAL is the only source, so nothing renders above the
-            // lists and the pane looks exactly as it did.
-            Text {
-                objectName: "libSourceLabel"
-                Layout.fillWidth: true
-                Layout.leftMargin: 22; Layout.rightMargin: 22
-                Layout.bottomMargin: 4
-                visible: text !== ""
-                textFormat: Text.PlainText
-                text: waves.myMusicSourceLabel
-                color: root.textLo; font.pixelSize: 12
             }
 
             Item {
                 id: libArea
                 Layout.fillWidth: true; Layout.fillHeight: true
 
-                LibList {
-                    id: libAlbumsList
-                    cat: "albums"; model: libAlbumsModel
-                    delegate: AlbumBlock {
-                        required property var model
-                        width: ListView.view.width
-                        albumId: model.id; title: model.title; artistName: model.artist; artistId: ""
-                        art: model.art; year: model.year; releaseDate: model.date; listedDate: model.listed || ""; trackCount: model.tracks; durationSec: model.duration_sec || 0; quality: model.quality; popularity: model.popularity
-                    }
-                }
-                LibList {
-                    id: libTracksList
-                    cat: "tracks"; model: libTracksModel
-                    delegate: TrackRow {
-                        required property var model
-                        width: ListView.view.width
-                        tId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
-                        album: model.album; art: model.art; year: model.year; date: model.date; duration: model.duration; durationSec: model.duration_sec || 0; quality: model.quality; popularity: model.popularity
-                        albumId: model.album_id || ""
-                    }
-                }
-                // Artists as a compact card grid (the Search artist card, shrunk)
-                // rather than tall full-width rows, so more fit on screen. Click
-                // opens the artist scoped to the user's library.
-                GridView {
-                    id: libArtistsGrid
-                    visible: root.libraryCategory === "artists"
-                    anchors.fill: parent; anchors.leftMargin: 22; anchors.rightMargin: 22
-                    clip: true
-                    model: libArtistsModel
-                    property int cols: Math.max(3, Math.floor(width / 132))
-                    cellWidth: width > 0 ? Math.floor(width / cols) : 132
-                    // + name row + the preview row pinned to the card bottom
-                    cellHeight: cellWidth + 46
-                    cacheBuffer: 800
-                    reuseItems: true
-                    boundsBehavior: Flickable.StopAtBounds
-                    // Breathing space inside the scroll area (see BrowseScroll).
-                    header: Item { width: 1; height: 8 }
-                    ScrollBar.vertical: ScrollBar {}
-                    // Same revalidate scroll pinning as LibList (this grid is
-                    // the one category pane that isn't a LibList).
-                    property real pendingY: -1
-                    function applyRestore() {
-                        if (pendingY < 0) return
-                        var maxY = Math.max(0, contentHeight - height)
-                        contentY = Math.min(pendingY, maxY)
-                        if (maxY >= pendingY) pendingY = -1
-                    }
-                    onMovementStarted: pendingY = -1
-                    onContentYChanged: root.libMaybeLoadMore(libArtistsGrid, "artists")
-                    onContentHeightChanged: { applyRestore(); root.libMaybeLoadMore(libArtistsGrid, "artists") }
-                    onHeightChanged: root.libMaybeLoadMore(libArtistsGrid, "artists")
-                    delegate: Item {
-                        id: agCell
-                        required property var model
-                        width: libArtistsGrid.cellWidth; height: libArtistsGrid.cellHeight
-                        // Resting on a followed artist has the page ready
-                        // before the click (see hoverPrefetch).
-                        readonly property var prefetchCard: ({ kind: "artist", id: "" + (model.id || ""), art: "" + (model.art || "") })
-                        HoverHandler {
-                            onHoveredChanged: hovered ? root.hoverPrefetch(agCell.prefetchCard) : root.hoverPrefetchCancel(agCell.prefetchCard)
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 0
+                    Repeater {
+                        id: libSourceRep
+                        model: root.myMusicSources
+                        delegate: LibSourceGroup {
+                            required property var modelData
+                            required property int index
+                            sourceData: modelData
+                            primary: index === 0
                         }
-                        Rectangle {
-                            anchors.fill: parent; anchors.margins: 5; radius: 10
-                            color: agMa.containsMouse ? root.surface2 : root.surface; border.color: root.border1
-                            Column {
-                                anchors.fill: parent; anchors.margins: 8; spacing: 6
-                                Item {
-                                    width: parent.width; height: width
-                                    Art {
-                                        anchors.centerIn: parent
-                                        width: parent.width; height: width; hoverFx: true
-                                        fxKind: "artist"; fxId: "" + (model.id || "")
-                                        url: model.art
-                                        // The one place you browse artists you
-                                        // follow should not be the one place that
-                                        // cannot say what you already hold. A
-                                        // child of the Art, so it takes the tilt
-                                        // and the rounded clip with it.
-                                        ArtistBadges {
-                                            bar: true
-                                            width: parent.width
-                                            anchors.bottom: parent.bottom
-                                            artistName: "" + (model.name || "")
-                                        }
-                                    }
-                                }
-                                Text {
-                                    textFormat: Text.PlainText; text: model.name
-                                    color: root.textHi; font.pixelSize: 12; font.bold: true
-                                    elide: Text.ElideRight; width: parent.width; horizontalAlignment: Text.AlignHCenter
-                                }
-                            }
-                            MouseArea { id: agMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: waves.loadArtistLibrary(model.id) }
-                            // compact preview row (the Browse card's control
-                            // line, shrunk): ▶ PREVIEW -> elapsed + · STOP, playing
-                            // this artist's top track via the shared preview
-                            // machinery. Declared after agMa so its clicks win
-                            // over the open-artist click underneath.
-                            Item {
-                                id: agPv
-                                readonly property string pst: root.pvSt("artist", "" + model.id)
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                anchors.bottom: parent.bottom; anchors.bottomMargin: 8
-                                width: agPvRow.implicitWidth; height: 16
-                                MouseArea {
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.togglePreview("artist", "" + model.id, 0)
-                                }
-                                Row {
-                                    id: agPvRow
-                                    anchors.verticalCenter: parent.verticalCenter; spacing: 4
-                                    Ico {
-                                        visible: agPv.pst !== "loading"
-                                        name: agPv.pst === "playing" ? "pause" : "play"
-                                        color: agPv.pst === "error" ? root.red : root.accent
-                                        size: 10
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                    Text {
-                                        textFormat: Text.PlainText
-                                        text: agPv.pst === "" ? "PREVIEW"
-                                            : agPv.pst === "loading" ? "[buffering]"
-                                            : agPv.pst === "error" ? "RETRY"
-                                            : root.fmtMs(root.previewPosition)
-                                        color: agPv.pst === "error" ? root.red : root.accent
-                                        font.family: agPv.pst === "playing" || agPv.pst === "paused" || agPv.pst === "loading" ? root.mono : root.uiFont
-                                        font.pixelSize: 10; font.bold: true; font.letterSpacing: root.btnTrack
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        property real breathe: 1
-                                        opacity: agPv.pst === "loading" ? breathe : 1
-                                        SequentialAnimation on breathe {
-                                            running: agPv.pst === "loading"; loops: Animation.Infinite
-                                            NumberAnimation { from: 1.0; to: 0.3; duration: 520; easing.type: Easing.InOutSine }
-                                            NumberAnimation { from: 0.3; to: 1.0; duration: 520; easing.type: Easing.InOutSine }
-                                        }
-                                    }
-                                    Text {
-                                        textFormat: Text.PlainText
-                                        visible: agPv.pst === "playing" || agPv.pst === "paused"
-                                        text: "· STOP"
-                                        color: agStopMa.containsMouse ? root.red : root.textDim
-                                        font.family: root.uiFont; font.pixelSize: 9; font.bold: true; font.letterSpacing: root.btnTrack
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        MouseArea {
-                                            id: agStopMa
-                                            anchors.fill: parent; anchors.margins: -3
-                                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: root.stopPreview()
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Home: a Browse-shaped landing scoped to the account. Rendered
-                // from homeSections (same shelf shape as Browse), so the app's own
-                // art-forward ArtCard / TrackRow shelves render it. Under a
-                // "Recently added" header sit two preview shelves, "Recent albums"
-                // and "Recent tracks"; each heading drills into that full tab,
-                // newest-first (openLibrarySorted).
-                Flickable {
-                    id: homePane
-                    visible: root.libraryCategory === "home"
-                    anchors.fill: parent; anchors.leftMargin: 22; anchors.rightMargin: 22
-                    clip: true
-                    contentWidth: width; contentHeight: homeCol.height + 32
-                    ScrollBar.vertical: ScrollBar {}
-                    boundsBehavior: Flickable.StopAtBounds
-                    Column {
-                        id: homeCol
-                        // y matches the favourites lists' 8px in-scroll padding
-                        // exactly, or the content would jump vertically when
-                        // switching between the category tabs.
-                        y: 8
-                        width: homePane.width; spacing: 20
-                        Text {
-                            visible: root.homeSections.length > 0
-                            textFormat: Text.PlainText; text: "Recently added"
-                            color: root.textHi; font.pixelSize: 20; font.bold: true
-                        }
-                        Repeater {
-                            model: root.homeSections
-                            delegate: Column {
-                                id: homeSec
-                                required property var modelData
-                                readonly property string target: homeSec.modelData.target || ""
-                                width: homeCol.width; spacing: 10
-                                // Clickable shelf heading: drills into the matching
-                                // My Music tab, newest-first, showing the full list
-                                // this shelf previews. The hit area hugs the text.
-                                Item {
-                                    implicitWidth: headRow.implicitWidth
-                                    implicitHeight: headRow.implicitHeight
-                                    Row {
-                                        id: headRow; spacing: 6
-                                        Text {
-                                            id: headText
-                                            textFormat: Text.PlainText
-                                            text: homeSec.modelData.title || ""
-                                            color: (headMouse.containsMouse && homeSec.target !== "") ? root.accent : root.textHi
-                                            font.pixelSize: 16; font.bold: true
-                                        }
-                                        Text {
-                                            visible: homeSec.target !== ""
-                                            anchors.verticalCenter: headText.verticalCenter
-                                            textFormat: Text.PlainText; text: "›"
-                                            color: headMouse.containsMouse ? root.accent : root.textLo
-                                            font.pixelSize: 18
-                                        }
-                                    }
-                                    MouseArea {
-                                        id: headMouse
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        enabled: homeSec.target !== ""
-                                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                        onClicked: root.openLibrarySorted(homeSec.target)
-                                    }
-                                }
-                                // Card shelf (Recent albums preview).
-                                ListView {
-                                    visible: homeSec.modelData.rowKind === "cards"
-                                    width: parent.width; height: 250
-                                    orientation: ListView.Horizontal
-                                    spacing: 14; clip: true
-                                    boundsBehavior: Flickable.StopAtBounds
-                                    // Local terms, not `visible` (effective visibility
-                                    // tears cards down on tab leave, rebuilds them in
-                                    // the returning click's turn; see the Browse shelves).
-                                    model: homeSec.modelData.rowKind === "cards" ? homeSec.modelData.items : []
-                                    delegate: ArtCard {
-                                        required property var modelData
-                                        card: modelData
-                                    }
-                                    ShelfWheelRedirect { pane: homePane }
-                                    ShelfEdgeFades {}
-                                }
-                                // Recent tracks (vertical list, reuses TrackRow).
-                                Column {
-                                    visible: homeSec.modelData.rowKind === "tracks"
-                                    width: parent.width
-                                    Repeater {
-                                        model: homeSec.modelData.rowKind === "tracks" ? homeSec.modelData.items : []
-                                        delegate: TrackRow {
-                                            required property var modelData
-                                            width: homeCol.width
-                                            tId: modelData.id; kind: modelData.kind || "track"
-                                            title: modelData.title; artistName: modelData.artist || ""; artistId: modelData.artist_id || ""
-                                            album: modelData.album || ""; art: modelData.art || ""; year: "" + (modelData.year || ""); date: modelData.date || ""
-                                            duration: modelData.duration || ""; durationSec: modelData.duration_sec || 0; quality: modelData.quality || ""; popularity: modelData.popularity || 0
-                                            albumId: modelData.album_id || ""
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                LibList {
-                    id: libPlaylistsList
-                    cat: "playlists"; model: libPlaylistsModel
-                    // Hidden (state intact, scroll kept) while drilled into a
-                    // folder; the folder view below takes over.
-                    visible: root.libraryCategory === "playlists" && root.plFolderStack.length === 0
-                    delegate: LibPlaylistRow {}
-                }
-                // Drilled-into playlist folder: pinned breadcrumb strip + the
-                // folder's rows (subfolders first). Served from the cached
-                // sweep, so landing is instant and already positioned.
-                Item {
-                    visible: root.libraryCategory === "playlists" && root.plFolderStack.length > 0
-                    anchors.fill: parent; anchors.leftMargin: 22; anchors.rightMargin: 22
-                    Flow {
-                        id: plCrumbStrip
-                        anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
-                        anchors.topMargin: 8
-                        spacing: 6
-                        Rectangle {
-                            radius: 8; implicitHeight: 26; implicitWidth: crumbRootTx.implicitWidth + 20
-                            color: root.surface2; border.color: root.border1
-                            Text {
-                                id: crumbRootTx; anchors.centerIn: parent
-                                textFormat: Text.PlainText; text: "Playlists"
-                                color: root.textLo; font.pixelSize: 12
-                            }
-                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.plCrumbTo(-1) }
-                        }
-                        Repeater {
-                            model: root.plFolderStack
-                            delegate: Row {
-                                id: crumbSeg
-                                required property var modelData
-                                required property int index
-                                spacing: 6
-                                readonly property bool last: index === root.plFolderStack.length - 1
-                                Text {
-                                    textFormat: Text.PlainText; text: "›"
-                                    color: root.textDim; font.pixelSize: 13
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                                Rectangle {
-                                    radius: 8; implicitHeight: 26; implicitWidth: crumbTx.implicitWidth + 20
-                                    color: crumbSeg.last ? root.accentCont : root.surface2
-                                    border.color: crumbSeg.last ? root.accentDim : root.border1
-                                    Text {
-                                        id: crumbTx; anchors.centerIn: parent
-                                        textFormat: Text.PlainText; text: crumbSeg.modelData.title
-                                        color: crumbSeg.last ? root.accent : root.textLo
-                                        font.pixelSize: 12; font.bold: crumbSeg.last
-                                    }
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
-                                        enabled: !crumbSeg.last
-                                        onClicked: root.plCrumbTo(crumbSeg.index)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    ListView {
-                        id: libFolderList
-                        anchors.top: plCrumbStrip.bottom; anchors.topMargin: 8
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                        clip: true; spacing: 8
-                        cacheBuffer: 800
-                        boundsBehavior: Flickable.StopAtBounds
-                        ScrollBar.vertical: ScrollBar {}
-                        header: Item { width: 1; height: 8 }
-                        footer: Item { width: 1; height: 20 }
-                        model: libFolderModel
-                        delegate: LibPlaylistRow {}
-                        // Land already positioned (crumb-back restores the
-                        // saved offset before paint; a fresh drill-in lands at
-                        // 0): the no-visible-scroll rule.
-                        property real pendingY: -1
-                        function applyRestore() {
-                            if (pendingY < 0) return
-                            var maxY = Math.max(0, contentHeight - height)
-                            contentY = Math.min(pendingY, maxY)
-                            if (maxY >= pendingY) pendingY = -1
-                        }
-                        onContentHeightChanged: applyRestore()
-                    }
-                }
-                LibList {
-                    id: libMixesList
-                    cat: "mixes"; model: libMixesModel
-                    delegate: Rectangle {
-                        required property var model
-                        width: ListView.view.width; height: 64; radius: 10; color: root.surface; border.color: root.border1
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 10; spacing: 13
-                            Art {
-                                width: 44; height: 44; hoverFx: true
-                                fxKind: "mix"; fxId: "" + (model.id || "")
-                                url: model.art
-                            }
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 2
-                                Text { textFormat: Text.PlainText; text: model.title; color: root.textHi; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
-                                Text { textFormat: Text.PlainText; text: model.subtitle ? model.subtitle : "Mix"; color: root.textLo; font.pixelSize: 12 }
-                            }
-                            DownloadButton { mediaId: model.id; chooserKind: "mix"; collectionCheck: true; label: "Download mix"; onTap: function(){ waves.downloadMix(model.id) } }
-                        }
-                    }
-                }
-                LibList {
-                    id: libVideosList
-                    cat: "videos"; model: libVideosModel
-                    delegate: Rectangle {
-                        required property var model
-                        width: ListView.view.width; height: 50; color: "transparent"
-                        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.divider }
-                        RowLayout {
-                            anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6; spacing: 12
-                            VideoThumb { url: model.art; videoId: model.id; vTitle: model.title; vArtist: model.artist }
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 1
-                                Text { textFormat: Text.PlainText; text: model.title; color: root.textHi; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
-                                Text { textFormat: Text.PlainText; text: model.artist; color: root.textLo; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
-                            }
-                            Text { textFormat: Text.PlainText; text: model.duration; color: root.textLo; font.pixelSize: 12; Layout.preferredWidth: 42 }
-                            DownIcon { mediaId: model.id; onTap: function(){ waves.downloadVideo(model.id) } }
-                        }
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; z: -1; onClicked: root.openVideo(model.id, model.title, model.artist) }
                     }
                 }
 
-                // TIDAL signed out: one provider-named empty state for the
-                // whole pane instead of seven empty category lists (issue
-                // #220). The tabs and sort above are hidden on the same flag,
-                // so no category can be a dead end.
+                // No source can fill a shelf: one provider-named empty state
+                // for the whole pane instead of a row of dead tabs (issues
+                // #220, #259). The words, the provider and the action are the
+                // bridge's answer, so a second provider names itself here with
+                // no QML copy.
                 Item {
                     objectName: "libSignInCta"
-                    visible: !root.signedIn
+                    visible: root.myMusicSources.length === 0 && String(root.myMusicEmpty.message || "") !== ""
                     anchors.fill: parent
                     Column {
                         id: libCtaCol
@@ -15983,21 +16181,21 @@ ApplicationWindow {
                         Text {
                             width: parent.width; horizontalAlignment: Text.AlignHCenter
                             textFormat: Text.PlainText
-                            text: "My Music is your TIDAL library"
+                            text: String(root.myMusicEmpty.message || "")
                             color: root.textHi; font.pixelSize: 22
                         }
                         Text {
                             width: parent.width; horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.WordWrap
                             textFormat: Text.PlainText
-                            text: "Sign in to see your albums, tracks, artists, playlists, mixes and videos."
+                            text: String(root.myMusicEmpty.detail || "")
                             color: root.textLo; font.pixelSize: 13
                         }
                         GateAction {
                             objectName: "libSignInAction"
                             width: parent.width
-                            label: "Sign in to TIDAL"
-                            onClicked: root.openSetupSignIn()
+                            label: String(root.myMusicEmpty.action_label || "")
+                            onClicked: root.runMyMusicEmptyAction()
                         }
                     }
                 }
@@ -17644,13 +17842,7 @@ ApplicationWindow {
         // uiShown, so a pending terms gate keeps it down too.
         opacity: root.uiShown
         flick: root.artistOpen ? artistView
-             : root.libraryOpen ? (root.libraryCategory === "home" ? homePane
-                 : root.libraryCategory === "artists" ? libArtistsGrid
-                 : root.libraryCategory === "albums" ? libAlbumsList
-                 : root.libraryCategory === "tracks" ? libTracksList
-                 : root.libraryCategory === "playlists" ? libPlaylistsList
-                 : root.libraryCategory === "mixes" ? libMixesList
-                 : root.libraryCategory === "videos" ? libVideosList : null)
+             : root.libraryOpen ? root.libActiveView(root.libraryCategory)
              : root.browseOpen ? (root.browsePageKey === "" ? browseLanding : browseDrill)
              : root.settingsOpen ? null
              : root.setupOpen ? null

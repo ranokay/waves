@@ -372,6 +372,9 @@ class _LoadLibStub:
         self.saved = 0
         self._page = page
         self._fail = fail
+        # The loader resolves its source's provider first; a live one keeps
+        # the fetch path under test.
+        self.providers = {"tidal": object()}
 
     def _set_busy(self, on):
         pass
@@ -379,7 +382,7 @@ class _LoadLibStub:
     def _set_status(self, text):
         self.statuses.append(text)
 
-    def _library_page(self, category, offset, limit, order_override=None):
+    def _library_page(self, source, category, offset, limit, order_override=None):
         if self._fail:
             raise RuntimeError("first load failed")
         return self._page
@@ -390,15 +393,15 @@ class _LoadLibStub:
 
 def test_a_failed_first_library_load_is_published_but_never_cached():
     stub = _LoadLibStub(fail=True)
-    stub.loadLibrary("albums")
-    assert stub.libraryLoaded.emits == [("albums", [], False)]
+    stub.loadLibrary("tidal", "albums")
+    assert stub.libraryLoaded.emits == [("tidal", "albums", [], False)]
     assert stub._lib_cache == {} and stub.saved == 0, "the next tab visit must retry cold"
 
 
 def test_a_successful_first_library_load_still_caches():
     stub = _LoadLibStub(page=([{"id": "r1"}], True))
-    stub.loadLibrary("albums")
-    assert stub._lib_cache["albums"]["items"] == [{"id": "r1"}]
+    stub.loadLibrary("tidal", "albums")
+    assert stub._lib_cache[("tidal", "albums")]["items"] == [{"id": "r1"}]
     assert stub.saved == 1
 
 

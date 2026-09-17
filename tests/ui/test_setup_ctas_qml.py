@@ -351,7 +351,7 @@ def _run_tidal_cta_scenario() -> int:
         # One saved-shelf source (TIDAL signed in): no source label over the
         # shelves. The rule is the bridge's; a second source qualifies it
         # (tests/providers/test_my_music_shelves.py drives that data rule).
-        if q("String(waves.myMusicSourceLabel)") != "":
+        if q("root.myMusicSources.length") != 1 or q("String(root.myMusicSources[0].label)") != "":
             failures.append("a lone saved-shelf source grew a source label")
         if q(_visible("libraryPane", "libSourceLabel")):
             failures.append("the My Music source label rendered with one source")

@@ -2473,7 +2473,7 @@ def _release_date(obj) -> str:
 # and in ten years. Everything else keeps the date it has now.
 _LISTED_MIN_LAG_DAYS = 365
 # The on-disk page_cache.json schema; the history is on the writer.
-_PAGE_CACHE_VERSION = 6
+_PAGE_CACHE_VERSION = 7
 # The first year anywhere in the copyright line, which is what TIDAL's field
 # actually looks like: "2016 Nuclear Blast", or just "Nuclear Blast". It is
 # the ℗ year, but the mark itself is not in the data, so do NOT anchor this
@@ -3761,6 +3761,49 @@ def _provider_registry(bridge) -> list:
     return list(providers.values()) if isinstance(providers, dict) else []
 
 
+def _source_provider(bridge, source):
+    """The provider behind a My Music source id, or None.
+
+    A closed source (a sign-out that raced a load, a registry that moved on)
+    answers None and every loader treats it as "nothing to show": never
+    another provider's rows.
+    """
+    providers = getattr(bridge, "providers", None)
+    return providers.get(str(source or "")) if isinstance(providers, dict) else None
+
+
+def _source_rows(provider, row_kind: str, raw: list) -> list:
+    """One engine item per row, through the source's OWN row vocabulary.
+
+    The pane renders whatever its provider's ``row_for`` answers; an item a
+    provider cannot render (an empty row) is dropped rather than shown as a
+    blank. This is the one place the pane's rows are built, so a second
+    provider's shelves never take TIDAL's path (issue #259).
+    """
+    rows = []
+    for item in raw:
+        row = provider.row_for(row_kind, item)
+        if row:
+            rows.append(row)
+    return rows
+
+
+def _lib_key(source, category) -> tuple[str, str]:
+    """One My Music shelf page's cache key: a source's category is its own
+    page, sort, revalidation stamp and in-flight slot."""
+    return (str(source or ""), str(category or ""))
+
+
+def _lib_disk_key(source, category) -> str:
+    """The page cache's flat spelling of a shelf page.
+
+    Provider ids are registry keys and never carry a colon, so the pair is
+    unambiguous ("tidal:albums"); the version bump is what retires the older
+    bare-category keys.
+    """
+    return f"{source}:{category}"
+
+
 def _session_logged_in(bridge, provider) -> bool:
     """Whether a session-kind provider's card reads signed in.
 
@@ -3833,13 +3876,68 @@ def _provider_card(provider) -> dict:
     }
 
 
-# ----- My Music's saved-shelf sources (issue #221) -----
+# ----- My Music's saved-shelf sources (issue #221, generic in #259) -----
 #
-# Which providers contribute saved shelves to the My Music pane, and what
-# the pane's source label reads. Module-level and answer-only on purpose: a
-# provider that contributes shelves does so from its capability and its live
-# session, so a third provider needs no QML branch, and the label rule is
-# the part a stub bridge can drive in tests without a Qt session.
+# Which providers contribute saved shelves to the My Music pane, what each
+# source's group is labelled, and which shelf categories each can fill.
+# Module-level and answer-only on purpose: a provider that contributes
+# shelves does so from its capability and its live session, so a third
+# provider needs no QML branch, and these lists are what a stub bridge can
+# drive in tests without a Qt session.
+
+# The pane's neutral shelf vocabulary, in strip order: (id, label, the
+# capability a source must declare to fill it). The ids are the loaders'
+# category names and what the pane's panes switch on; the labels are the
+# strip's words; the ids never name a provider. "home" is a source's own
+# landing (its recent favourites); the rest are its shelves.
+_SHELF_CATEGORIES: tuple[tuple[str, str, Capability], ...] = (
+    ("home", "Home", Capability.FAVORITES),
+    ("albums", "Albums", Capability.FAVORITES),
+    ("tracks", "Tracks", Capability.FAVORITES),
+    ("artists", "Artists", Capability.FAVORITES),
+    ("playlists", "Playlists", Capability.PLAYLISTS),
+    ("mixes", "Mixes", Capability.MIXES),
+    ("videos", "Videos", Capability.VIDEOS),
+)
+
+# The favourites-backed categories: (category id, the favourites kind the
+# provider pages, the row_for kind its row vocabulary names). Everything the
+# pane loads through a source goes provider -> favourites_page -> row_for; a
+# provider that declares FAVORITES and answers those two calls contributes
+# real shelves with no bridge or QML branch.
+_FAVOURITES_CATEGORIES: dict[str, tuple[str, str]] = {
+    "albums": ("albums", "album"),
+    "tracks": ("tracks", "track"),
+    "artists": ("artists", "artist"),
+    "videos": ("videos", "video"),
+}
+
+
+def _source_categories(provider) -> list[dict]:
+    """The shelf categories one source's provider can fill, in strip order.
+
+    Capability-driven (ADR 0008): a provider that cannot fill a shelf
+    contributes no tab for it rather than an empty one, and a provider that
+    later declares one of these capabilities grows its strip with no QML
+    edit. The provider may be None (a registry entry with no live provider);
+    it then contributes nothing.
+    """
+    capabilities = getattr(provider, "capabilities", None) or frozenset()
+    return [
+        {"id": category_id, "label": label}
+        for category_id, label, capability in _SHELF_CATEGORIES
+        if capability in capabilities
+    ]
+
+
+def _human_join(words: list[str]) -> str:
+    """A list in the app's sentence prose: "a, b and c" (no Oxford comma)."""
+    parts = [str(w) for w in words if str(w)]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + f" and {parts[-1]}"
 
 
 def _provider_can_fill_shelves(bridge, provider) -> bool:
@@ -3882,6 +3980,60 @@ def _saved_shelf_sources(bridge) -> list[dict]:
         }
         for descriptor in descriptors
     ]
+
+
+def _my_music_sources(bridge) -> list[dict]:
+    """The pane's source groups: one descriptor per source, in registry
+    order, each carrying the shelf categories it can fill.
+
+    The pane renders exactly this list -- a strip from ``categories``, a
+    group label from ``label`` -- and every page it loads goes back through
+    the source's own provider, so a provider that later declares FAVORITES
+    (or PLAYLISTS/MIXES/VIDEOS) appears with no QML edit (issue #259).
+    """
+    providers = getattr(bridge, "providers", {})
+    providers = providers if isinstance(providers, dict) else {}
+    return [
+        {**source, "categories": _source_categories(providers.get(source["id"]))}
+        for source in _saved_shelf_sources(bridge)
+    ]
+
+
+def _my_music_empty(bridge) -> dict:
+    """The pane's one empty state while no source can fill a shelf.
+
+    A session provider that declares FAVORITES but has no live session is
+    the provider that could fill the pane, so the state names it and offers
+    its own sign-in verb; the sentences are composed from that provider's
+    descriptor and category list, so a second provider gets its own words
+    with no QML copy. Returns ``{}`` when no provider could fill shelves at
+    all (a signed-out Apple-only install has nothing to sign in to).
+    """
+    for provider in _provider_registry(bridge):
+        if Capability.FAVORITES not in getattr(provider, "capabilities", frozenset()):
+            continue
+        if _provider_can_fill_shelves(bridge, provider):
+            continue
+        descriptor = provider.descriptor()
+        if descriptor.status_kind != StatusKind.SESSION:
+            # Nothing here signs in (Apple's path is its setup wizard): the
+            # provider's own card action is the honest click to offer.
+            return {
+                "provider": descriptor.id,
+                "action": "setup",
+                "message": f"My Music is your {descriptor.name} library",
+                "detail": f"Set up {descriptor.name} to see what Waves can fetch from it.",
+                "action_label": descriptor.welcome_action or f"Set up {descriptor.name}",
+            }
+        shelves = [c["label"].lower() for c in _source_categories(provider) if c["id"] != "home"]
+        return {
+            "provider": descriptor.id,
+            "action": "signin",
+            "message": f"My Music is your {descriptor.name} library",
+            "detail": f"Sign in to see your {_human_join(shelves)}.",
+            "action_label": f"Sign in to {descriptor.name}",
+        }
+    return {}
 
 
 # ----- the header's per-provider lights (issue #223) -----
@@ -4034,12 +4186,15 @@ class WavesBridge(LibraryMixin, QObject):
     artistLoaded = Signal("QVariant")
     artistLoadFailed = Signal(str)  # id; a Back-restore clears its latch on this
     artistMetaLoaded = Signal(str, int)
-    libraryLoaded = Signal(str, "QVariant", bool)  # category, items (replace), hasMore
-    libraryMore = Signal(str, "QVariant", bool)  # category, items (append), hasMore
-    # "Home" tab: a Browse-shaped, account-scoped landing. Carries a list of
-    # shelf sections ({rowKind, title, items}) so the SAME card/track shelves
-    # that render Browse render Home too.
-    homeLoaded = Signal("QVariant")
+    # My Music shelves are per SOURCE (a provider whose session can fill them)
+    # and, within a source, per category: both travel on every emit, so a
+    # second source's panes fill independently with no QML branch (issue #259).
+    libraryLoaded = Signal(str, str, "QVariant", bool)  # source, category, items (replace), hasMore
+    libraryMore = Signal(str, str, "QVariant", bool)  # source, category, items (append), hasMore
+    # "Home" tab: a Browse-shaped, account-scoped landing, one per source.
+    # Carries a list of shelf sections ({rowKind, title, target, source, items})
+    # so the SAME card/track shelves that render Browse render Home too.
+    homeLoaded = Signal(str, "QVariant")  # source, sections
     # Browse (TIDAL editorial pages). browseLoaded carries the landing payload
     # {sections, genres, moods, decades, error}; browsePageLoaded carries one
     # drilled-into page {key, title, sections, error} where key is the page's
@@ -4108,7 +4263,7 @@ class WavesBridge(LibraryMixin, QObject):
     settingsPersistedExternally = Signal()
     # One drilled-into folder's rows (subfolders first, then its playlists),
     # served from the cached sweep: no network, so no staleness to guard.
-    playlistFolderLoaded = Signal(str, "QVariant", str)  # folder_id, rows, path
+    playlistFolderLoaded = Signal(str, str, "QVariant", str)  # source, folder_id, rows, path
     # A track's ownership or delivered quality changed (a fresh download landed);
     # QML re-queries ownershipOf for that id to refresh an "in your library" badge.
     ownershipChanged = Signal(str)
@@ -4340,6 +4495,23 @@ class WavesBridge(LibraryMixin, QObject):
         self._provider_status_probes = {
             CTX_APPLE: self._apple_live_flags,
         }
+        # TIDAL's row vocabulary: the app's row dicts for TIDAL objects are
+        # built by this bridge's own ``_*_dict`` bodies (search, Browse, the
+        # artist pages and the download slots have always read them there).
+        # The My Music pane asks each SOURCE's provider for its rows, so
+        # TIDAL's provider is handed the vocabulary it answers with -- one
+        # implementation, reached through the seam, so its pane rows can never
+        # drift from the rows every other surface renders.
+        self.providers[CTX_TIDAL].bind_row_vocabulary(
+            {
+                "album": self._album_dict,
+                "track": self._track_dict,
+                "video": self._video_dict,
+                "playlist": self._playlist_dict,
+                "mix": self._mix_dict,
+                "artist": self._fav_artist_dict,
+            }
+        )
         self._provider_verb_flows = {
             CTX_APPLE: {
                 "setup": self.refreshAppleSetup,
@@ -4555,18 +4727,20 @@ class WavesBridge(LibraryMixin, QObject):
         # (``.get``) stay lock-free (atomic under the GIL, and tolerant of a
         # racing eviction by design).
         self._objs_lock = Lock()
-        # Accumulated library rows keyed by category, {category: {"items": [...],
-        # "offset": int, "more": bool}}, so re-opening a category restores
-        # everything scrolled so far instantly, and infinite scroll knows where
-        # to fetch the next page from. `_lib_loading` guards against firing a
-        # second page request for a category while one is already in flight.
-        self._lib_cache: dict[str, dict] = {}
-        self._lib_loading: set[str] = set()
-        self._lib_gen = 0  # bumped per first-page load to drop stale category loads
-        # Per-category My Tidal sort, {category: (order_key, "asc"|"desc")}. Absent
-        # = the default (date-added, descending) order. Session-only: a non-default
-        # sort is never persisted to the disk page cache (see _save_page_cache).
-        self._lib_sort: dict[str, tuple[str, str]] = {}
+        # Accumulated library rows keyed by (source, category), {(source,
+        # category): {"items": [...], "offset": int, "more": bool}}, so
+        # re-opening a source's shelf restores everything scrolled so far
+        # instantly, and infinite scroll knows where to fetch the next page
+        # from. `_lib_loading` guards against firing a second page request for
+        # one (source, category) while one is already in flight.
+        self._lib_cache: dict[tuple[str, str], dict] = {}
+        self._lib_loading: set[tuple[str, str]] = set()
+        self._lib_gen = 0  # bumped per first-page load to drop stale shelf loads
+        # Per-(source, category) sort, {(source, category): (order_key,
+        # "asc"|"desc")}. Absent = the default (date-added, descending) order.
+        # Session-only: a non-default sort is never persisted to the disk page
+        # cache (see _save_page_cache).
+        self._lib_sort: dict[tuple[str, str], tuple[str, str]] = {}
         # Favourite album/track id sets for the library-scoped artist page, built
         # lazily and cleared on logout (Waves never mutates favourites itself, so
         # the only staleness is an external edit, tolerated like the page caches).
@@ -4637,20 +4811,22 @@ class WavesBridge(LibraryMixin, QObject):
         # edition compare, cached for the session on the same immutability
         # argument, so a revisit or a background revalidate costs no request.
         self._edition_tracks_cache: dict[str, list] = {}
-        # The My Tidal "Home" landing, stale-while-revalidate like the artist
+        # Each source's "Home" landing, stale-while-revalidate like the artist
         # pages and persisted to the disk snapshot for an instant first paint.
-        self._home_cache: list | None = None
-        self._home_loading = False
-        self._home_reval_ts = 0.0  # monotonic time of the last completed Home fetch
-        self._lib_reval_ts: dict[str, float] = {}  # per-category, quiet revisits only
-        # One full user_media_lists sweep (every playlist, root folder and
-        # mix). The playlists/mixes categories page and sort locally, so the
-        # sweep is fetched once and reused; see _media_lists for freshness.
-        self._media_lists_cache: tuple[float, dict, object] | None = None
+        # Keyed by source id: every source's shelves are its own account's.
+        self._home_cache: dict[str, list] = {}
+        self._home_loading: set[str] = set()
+        self._home_reval_ts: dict[str, float] = {}  # source -> last completed Home fetch
+        self._lib_reval_ts: dict[tuple[str, str], float] = {}  # per page, quiet revisits only
+        # One full user_media_lists sweep per source (every playlist, root
+        # folder and mix). The playlists/mixes categories page and sort
+        # locally, so the sweep is fetched once and reused; see _media_lists
+        # for freshness.
+        self._media_lists_cache: dict[str, tuple[float, dict, object | None]] = {}
         self._media_lists_lock = Lock()
-        # Playlist-folder tree from the same sweep (all levels + the
-        # playlist-id -> folder-path map that mirrors folders on disk).
-        self._folder_tree = None
+        # Playlist-folder tree per source, from the same sweep (all levels +
+        # the playlist-id -> folder-path map that mirrors folders on disk).
+        self._folder_tree: dict[str, object | None] = {}
         # Disk snapshot of the page caches (browse / artist / library first
         # pages) so the next launch starts warm instead of spinner-first. The
         # file is account-tagged and deleted on logout, browse embeds
@@ -5762,12 +5938,12 @@ class WavesBridge(LibraryMixin, QObject):
         self._artist_loading.clear()
         self._album_tracks_cache.clear()
         self._edition_tracks_cache.clear()
-        self._home_cache = None
-        self._home_loading = False
-        self._home_reval_ts = 0.0
+        self._home_cache.clear()
+        self._home_loading.clear()
+        self._home_reval_ts.clear()
         self._lib_reval_ts.clear()
-        self._media_lists_cache = None
-        self._folder_tree = None  # next account must not inherit this tree
+        self._media_lists_cache.clear()
+        self._folder_tree.clear()  # next account must not inherit this tree
         # Anything parked on the old account's tree must not replay on the new
         # one; the in-flight flag is left alone so the running sweep still
         # clears it when it lands.
@@ -5834,15 +6010,15 @@ class WavesBridge(LibraryMixin, QObject):
         # way dump's yielding pure-Python encoder demonstrably can.
         try:
             lib = {
-                cat: {
+                _lib_disk_key(source, category): {
                     "items": e["items"][:_LIBRARY_PAGE],
                     "offset": _LIBRARY_PAGE,
                     "more": e["more"] or len(e["items"]) > _LIBRARY_PAGE,
                 }
-                for cat, e in list(self._lib_cache.items())
+                for (source, category), e in list(self._lib_cache.items())
                 # Only persist the default order; a session-only custom sort restored
                 # from disk would be silently mislabelled as the default.
-                if cat not in self._lib_sort
+                if (source, category) not in self._lib_sort
             }
             data = {
                 # v2: the persisted default-sort library pages are now date-added
@@ -5858,6 +6034,10 @@ class WavesBridge(LibraryMixin, QObject):
                 # no mark until the revalidate landed.
                 # v6: an album page header's subtitle reads the full release
                 # day; an older snapshot would open showing only the year.
+                # v7: library pages are keyed by (source, category) --
+                # "source:category" on disk -- so a second provider's shelves
+                # restore as their own pages; a v6 snapshot's bare category
+                # keys would all read as one source's.
                 "version": _PAGE_CACHE_VERSION,
                 "user": self._cache_user_id(),
                 "browse_root": self._browse_root_cache,
@@ -5915,11 +6095,17 @@ class WavesBridge(LibraryMixin, QObject):
         for key, page in (data.get("artists") or {}).items():
             if isinstance(page, dict):
                 self._artist_cache.setdefault(str(key), page)
-        for cat, entry in (data.get("library") or {}).items():
-            if isinstance(entry, dict) and isinstance(entry.get("items"), list):
-                self._lib_cache.setdefault(str(cat), entry)
-        if self._home_cache is None and isinstance(data.get("home"), list) and data["home"]:
-            self._home_cache = data["home"]
+        for key, entry in (data.get("library") or {}).items():
+            key = str(key)
+            if ":" not in key or not isinstance(entry, dict) or not isinstance(entry.get("items"), list):
+                continue
+            source, _, category = key.partition(":")
+            self._lib_cache.setdefault((source, category), entry)
+        home = data.get("home")
+        if isinstance(home, dict):
+            for source, sections in home.items():
+                if isinstance(sections, list) and sections:
+                    self._home_cache.setdefault(str(source), sections)
         devlog.event(
             "cache",
             "page cache restored",
@@ -7185,9 +7371,9 @@ class WavesBridge(LibraryMixin, QObject):
     # round-trips; refreshing it more than once a minute buys nothing.
     _MEDIA_LISTS_TTL = 60.0
 
-    def _media_lists(self, refresh: bool, walk: bool = True) -> tuple[dict, object]:
-        """Session copy of the full playlists/folders/mixes listing, paired with
-        the folder tree walked in the SAME sweep.
+    def _media_lists(self, source: str, refresh: bool, walk: bool = True) -> tuple[dict, object | None]:
+        """One source's playlists/folders/mixes listing, paired with the folder
+        tree walked in the SAME sweep.
 
         The playlists and mixes categories are paged and sorted locally (see
         :meth:`_library_page`), so re-fetching the entire listing per page just
@@ -7195,7 +7381,8 @@ class WavesBridge(LibraryMixin, QObject):
         (``refresh=True``, the tab's usual stale-while-revalidate entry) re-run
         the sweep, and even those reuse a copy younger than
         ``_MEDIA_LISTS_TTL``; scroll pages and re-sorts always work against
-        the copy in hand.
+        the copy in hand. The listing and tree are the SOURCE's own (its
+        provider answers both), cached per source.
 
         The tree is returned alongside the listing rather than read separately:
         the playlists page interleaves folder rows with playlists by index, so
@@ -7206,8 +7393,11 @@ class WavesBridge(LibraryMixin, QObject):
         The mixes tab has no use for the tree, and the walk costs a request per
         folder, so paying it there only risks a rate-limit that would replace a
         good tree with a partial one."""
+        provider = getattr(self, "providers", {}).get(str(source or ""))
+        if provider is None:
+            return {}, None
         with self._media_lists_lock:
-            entry = self._media_lists_cache
+            entry = self._media_lists_cache.get(source)
         # A Mixes-first visit caches the listing WITHOUT a tree (its
         # walk=False sweep has no use for one). A walking caller must not
         # accept that entry, or Playlists within the TTL renders (and
@@ -7218,11 +7408,11 @@ class WavesBridge(LibraryMixin, QObject):
             and (not walk or entry[2] is not None)
         ):
             return entry[1], entry[2]
-        fresh = self.providers[CTX_TIDAL].user_collections()
+        fresh = provider.user_collections()
         if not walk:
             with self._media_lists_lock:
-                tree = self._folder_tree
-                self._media_lists_cache = (time.monotonic(), fresh, tree)
+                tree = self._folder_tree.get(source)
+                self._media_lists_cache[source] = (time.monotonic(), fresh, tree)
             return fresh, tree
         # Walk the folder tree in the same sweep (reusing the root folders
         # already fetched): every nested level's rows plus the playlist-id ->
@@ -7230,7 +7420,7 @@ class WavesBridge(LibraryMixin, QObject):
         # for accounts without folders.
         root_folders = [p for p in fresh.get("playlists", []) if not hasattr(p, "num_tracks")]
         t0 = devlog.clock()
-        tree = self.providers[CTX_TIDAL].folder_tree(root_folders=root_folders)
+        tree = provider.folder_tree(root_folders=root_folders)
         if tree.nodes:
             devlog.done(
                 "library",
@@ -7241,7 +7431,7 @@ class WavesBridge(LibraryMixin, QObject):
                 partial=tree.partial,
             )
         with self._media_lists_lock:
-            prev = self._folder_tree
+            prev = self._folder_tree.get(source)
             # A rate-limited sweep returns what it managed to walk. Caching that
             # as authoritative makes the unwalked folders (and every playlist
             # inside them) vanish from My Tidal, and resolves {folder_path} to
@@ -7249,16 +7439,19 @@ class WavesBridge(LibraryMixin, QObject):
             # last complete tree until a complete sweep replaces it.
             if tree.partial and prev is not None and not prev.partial and prev.nodes:
                 tree = prev
-            self._media_lists_cache = (time.monotonic(), fresh, tree)
-            self._folder_tree = tree
+            self._media_lists_cache[source] = (time.monotonic(), fresh, tree)
+            self._folder_tree[source] = tree
         return fresh, tree
 
-    def _current_folder_tree(self):
+    def _current_folder_tree(self, source: str = CTX_TIDAL):
+        """One source's playlist-folder tree (the engine's TIDAL one by
+        default: the download path resolves ``{folder_path}`` against it)."""
         with self._media_lists_lock:
-            return self._folder_tree
+            return self._folder_tree.get(str(source or ""))
 
-    def _warm_folder_tree(self, then, media_id: str = "") -> bool:
-        """Run the library sweep for its folder tree, then replay ``then``.
+    def _warm_folder_tree(self, then, media_id: str = "", source: str = CTX_TIDAL) -> bool:
+        """Run one source's library sweep for its folder tree, then replay
+        ``then``.
 
         The tree is written in exactly one place (the sweep in
         :meth:`_media_lists`), so anything that needs it before the user has
@@ -7279,9 +7472,10 @@ class WavesBridge(LibraryMixin, QObject):
         download path lights "preparing" before parking), and leaves retrying to
         the user's next click.
         """
-        if not self._logged_in:
+        source = str(source or "")
+        if not self._logged_in or _source_provider(self, source) is None:
             return False
-        self._tree_warm_waiting.append((then, str(media_id or "")))
+        self._tree_warm_waiting.append((then, str(media_id or ""), source))
         if self._tree_warm_inflight:
             return True
         self._tree_warm_inflight = True
@@ -7289,7 +7483,7 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             try:
-                self._media_lists(refresh=True)
+                self._media_lists(source, refresh=True)
             except Exception:
                 logger.exception("Could not warm the playlist-folder tree")
             self._folderTreeWarmed.emit()
@@ -7301,24 +7495,29 @@ class WavesBridge(LibraryMixin, QObject):
         self._tree_warm_inflight = False
         self._set_busy(False)
         waiting, self._tree_warm_waiting = self._tree_warm_waiting, []
-        if self._current_folder_tree() is None:
+        # Each waiter names its own source: replay only the callbacks whose
+        # sweep actually produced a tree.
+        ready = [entry for entry in waiting if self._current_folder_tree(entry[2]) is not None]
+        if not ready:
             # The sweep failed: don't replay (each callback would re-warm and
             # loop unbounded). Clear any buttons the parked downloads lit and
             # tell the user; their next click is the retry.
-            for _then, mid in waiting:
+            for _then, mid, _source in waiting:
                 if mid:
                     self.downloadState.emit(mid, "")
             if waiting:
                 self._set_status("Could not load your playlist folders, try again")
             return
-        for then, _mid in waiting:
+        for then, _mid, _source in ready:
             try:
                 then()
             except Exception:
                 logger.exception("Folder-tree warm follow-up failed")
 
-    def _library_page(self, category: str, offset: int, limit: int, order_override=None) -> tuple[list, bool]:
-        """Build one page of a library category for the API window
+    def _library_page(
+        self, source: str, category: str, offset: int, limit: int, order_override=None
+    ) -> tuple[list, bool]:
+        """Build one page of a source's shelf category for the API window
         ``[offset, offset+limit)``. Returns the rows and whether more items
         exist beyond this window.
 
@@ -7330,7 +7529,12 @@ class WavesBridge(LibraryMixin, QObject):
           from the total ``get_*_count``, not the returned length (the provider
           owns that verdict).
         Playlists and mixes come back as one list, paged and sorted locally
-        against the cached sweep (see :meth:`_media_lists`)."""
+        against the cached sweep (see :meth:`_media_lists`). Both the
+        favourites windows and the collections sweep are the SOURCE's own:
+        every call crosses to the provider the source names."""
+        provider = _source_provider(self, source)
+        if provider is None:
+            return [], False
         # order_override lets a caller force a specific order (e.g. Home's date-desc
         # previews) without touching the category's own persistent sort. Otherwise
         # use the category's chosen sort; when none is set, apply date-added
@@ -7339,16 +7543,19 @@ class WavesBridge(LibraryMixin, QObject):
         # a lie and disagree with the Home previews. Applying it explicitly keeps
         # the persistent sort map empty for the default (so the page cache still
         # persists) while the tab and Home show the same newest-first order.
-        order_spec = order_override if order_override is not None else self._lib_sort.get(category)
+        order_spec = order_override if order_override is not None else self._lib_sort.get(_lib_key(source, category))
         if order_spec is None:
             order_spec = ("date", "desc")
         if category in ("playlists", "mixes"):
-            lists, tree = self._media_lists(refresh=offset == 0, walk=category == "playlists")
+            lists, tree = self._media_lists(source, refresh=offset == 0, walk=category == "playlists")
             if category == "playlists":
                 # Folders first (file-manager convention, name order), then the
                 # playlists under the chosen sort. Folder rows come from the
                 # tree walked in the same sweep; drill-in is served separately
-                # (see openPlaylistFolder), this level lists only the root.
+                # (see openPlaylistFolder), this level lists only the root. The
+                # `num_tracks` split is the collections shape's own: a root
+                # entry that carries a track count is a playlist, the rest are
+                # the folders the tree walks.
                 full = [p for p in lists.get("playlists", []) if hasattr(p, "num_tracks")]
                 full = self._sort_local_library(full, order_spec)
                 roots = sorted(
@@ -7356,9 +7563,10 @@ class WavesBridge(LibraryMixin, QObject):
                     key=lambda n: n.name.lower(),
                 )
                 folder_rows = [self._folder_dict(n, tree) for n in roots]
-                total = len(folder_rows) + len(full)
+                playlist_rows = _source_rows(provider, "playlist", full)
+                total = len(folder_rows) + len(playlist_rows)
                 page = [
-                    folder_rows[i] if i < len(folder_rows) else self._playlist_dict(full[i - len(folder_rows)])
+                    folder_rows[i] if i < len(folder_rows) else playlist_rows[i - len(folder_rows)]
                     for i in range(offset, min(offset + limit, total))
                 ]
                 return page, offset + limit < total
@@ -7366,24 +7574,17 @@ class WavesBridge(LibraryMixin, QObject):
             # Paged locally, so sort the whole list here before slicing.
             full = self._sort_local_library(full, order_spec)
             page = full[offset : offset + limit]
-            return [self._mix_dict(m) for m in page], offset + limit < len(full)
-        # (favourites kind, row builder) -- the seam call names the kind
-        specs = {
-            "tracks": ("tracks", self._track_dict),
-            "albums": ("albums", self._album_dict),
-            "artists": ("artists", self._fav_artist_dict),
-            "videos": ("videos", self._video_dict),
-        }
-        spec = specs.get(category)
+            return _source_rows(provider, "mix", page), offset + limit < len(full)
+        spec = _FAVOURITES_CATEGORIES.get(category)
         if spec is None:
             return [], False
-        method_name, builder = spec
-        # One window of the user's favorites through the seam: the provider
-        # maps the neutral order spec onto its engine's order enums and owns
-        # the count-based "more" verdict (a short window alone would silently
-        # truncate the set).
-        raw, more = self.providers[CTX_TIDAL].favorites_page(method_name, offset, limit, order_spec)
-        return [builder(o) for o in raw], more
+        method_name, row_kind = spec
+        # One window of the source's favorites through the seam: the provider
+        # maps the neutral order spec onto its engine's order enums, owns the
+        # count-based "more" verdict (a short window alone would silently
+        # truncate the set) and answers the rows in its own vocabulary.
+        raw, more = provider.favorites_page(method_name, offset, limit, order_spec)
+        return _source_rows(provider, row_kind, raw), more
 
     def _lib_status(self, category: str, count: int, more: bool) -> str:
         return f"{count}{'+' if more else ''} {category}"
@@ -7396,14 +7597,23 @@ class WavesBridge(LibraryMixin, QObject):
             return sum(1 for r in items if not (isinstance(r, dict) and r.get("kind") == "folder"))
         return len(items)
 
-    @Slot(str)
-    def openPlaylistFolder(self, folder_id: str) -> None:
+    @Slot(str, str)
+    def openPlaylistFolder(self, source: str, folder_id: str) -> None:
         """One folder's rows for the drill-in view: subfolders (name order)
         first, then its playlists. Pure cache read of the sweep's tree, so it
         answers instantly and a background revalidate of the root list can
-        never wipe it (the drilled-in view has its own model in QML)."""
-        tree = self._current_folder_tree()
-        if tree is None and self._warm_folder_tree(lambda: self.openPlaylistFolder(folder_id)):
+        never wipe it (the drilled-in view has its own model in QML).
+
+        The source names whose shelf is drilled in, so the rows, the tree and
+        the emit all belong to the one provider that can fill it."""
+        source = str(source or "")
+        provider = _source_provider(self, source)
+        tree = self._current_folder_tree(source)
+        if (
+            tree is None
+            and provider is not None
+            and self._warm_folder_tree(lambda: self.openPlaylistFolder(source, folder_id))
+        ):
             # Warm launch: the page cache restores the folder rows (and makes
             # them clickable) before any sweep has run, and the drill-in view
             # has no empty state, no spinner and no retry. Emitting nothing here
@@ -7411,47 +7621,51 @@ class WavesBridge(LibraryMixin, QObject):
             return
         node = tree.node_by_id(folder_id) if tree is not None else None
         if node is None:
-            self.playlistFolderLoaded.emit(folder_id, [], "")
+            self.playlistFolderLoaded.emit(source, folder_id, [], "")
             return
         subs = sorted(tree.children_of(folder_id), key=lambda n: n.name.lower())
-        rows = [self._folder_dict(n, tree) for n in subs] + [self._playlist_dict(p) for p in node.playlists]
+        rows = [self._folder_dict(n, tree) for n in subs]
+        if provider is not None:
+            rows += _source_rows(provider, "playlist", node.playlists)
         devlog.event("library", "folder open", id=folder_id, n=len(rows))
-        self.playlistFolderLoaded.emit(folder_id, rows, node.path)
+        self.playlistFolderLoaded.emit(source, folder_id, rows, node.path)
 
-    @Slot(str)
-    @Slot(str, bool)
-    def loadLibrary(self, category: str, quiet: bool = False) -> None:
-        """Load the first page of a library category (or restore everything
-        already loaded this session from cache). Subsequent pages come from
-        :meth:`loadMoreLibrary` as the user scrolls.
+    @Slot(str, str)
+    @Slot(str, str, bool)
+    def loadLibrary(self, source: str, category: str, quiet: bool = False) -> None:
+        """Load the first page of one source's shelf category (or restore
+        everything already loaded this session from cache). Subsequent pages
+        come from :meth:`loadMoreLibrary` as the user scrolls.
 
         ``quiet`` marks a revisit whose rows are already on screen (reopening
-        the My Tidal tab): the cached emit is skipped so the list keeps its
+        the My Music tab): the cached emit is skipped so the list keeps its
         scroll and rows untouched, and only the background revalidation runs,
         throttled, repainting solely when something actually changed."""
-        if not self._logged_in:
-            self._set_status("Sign in to view your library")
+        key = _lib_key(source, category)
+        # The source's own provider is the gate, never the bridge's TIDAL flag:
+        # a second provider's shelves load while TIDAL is signed out.
+        if _source_provider(self, key[0]) is None:
             return
 
         # Bump the load generation so a slower in-flight first-page load for a
-        # category the user has since switched away from can't publish stale
-        # rows or clear the busy state out from under the newly-chosen category.
+        # shelf the user has since switched away from can't publish stale rows
+        # or clear the busy state out from under the newly-chosen one.
         self._lib_gen += 1
         gen = self._lib_gen
 
-        cached = self._lib_cache.get(category)
+        cached = self._lib_cache.get(key)
         if cached is not None:
             if not quiet:
                 self._set_busy(False)
                 devlog.event("library", f"{category} from cache", n=len(cached["items"]))
-                self.libraryLoaded.emit(category, cached["items"], cached["more"])
+                self.libraryLoaded.emit(key[0], key[1], cached["items"], cached["more"])
                 self._set_status(self._lib_status(category, self._lib_count(category, cached["items"]), cached["more"]))
             # Stale-while-revalidate, but only while the user is still on the
             # first page: re-emitting a fresh first page after infinite scroll
             # has appended more would truncate the list out from under them.
-            if cached["offset"] != _LIBRARY_PAGE or category in self._lib_loading:
+            if cached["offset"] != _LIBRARY_PAGE or key in self._lib_loading:
                 return
-            if quiet and time.monotonic() - self._lib_reval_ts.get(category, 0.0) < 60.0:
+            if quiet and time.monotonic() - self._lib_reval_ts.get(key, 0.0) < 60.0:
                 return  # revalidated moments ago; don't re-fetch per tab flip
             revalidate = True
         else:
@@ -7463,11 +7677,11 @@ class WavesBridge(LibraryMixin, QObject):
             t0 = devlog.clock()
             failed = False
             try:
-                items, more = self._library_page(category, 0, _LIBRARY_PAGE)
+                items, more = self._library_page(key[0], key[1], 0, _LIBRARY_PAGE)
             except Exception:
                 logger.exception("Could not load library category %s", category)
                 if revalidate:
-                    self._lib_loading.discard(category)
+                    self._lib_loading.discard(key)
                     return  # keep showing the cached page, never repaint with an error
                 items, more, failed = [], False, True
             # Guard the cache write with the generation too: a load that started
@@ -7476,78 +7690,80 @@ class WavesBridge(LibraryMixin, QObject):
             # API window to fetch (advances by the page size, since the window is
             # unfiltered-indexed, see _library_page).
             if revalidate:
-                self._lib_loading.discard(category)
-                self._lib_reval_ts[category] = time.monotonic()
-                entry = self._lib_cache.get(category)
+                self._lib_loading.discard(key)
+                self._lib_reval_ts[key] = time.monotonic()
+                entry = self._lib_cache.get(key)
                 if (
                     gen == self._lib_gen
                     and entry is not None
                     and entry["offset"] == _LIBRARY_PAGE
                     and (items != entry["items"] or more != entry["more"])
                 ):
-                    self._lib_cache[category] = {"items": items, "offset": _LIBRARY_PAGE, "more": more}
+                    self._lib_cache[key] = {"items": items, "offset": _LIBRARY_PAGE, "more": more}
                     self._save_page_cache()
-                    self.libraryLoaded.emit(category, items, more)
+                    self.libraryLoaded.emit(key[0], key[1], items, more)
                     self._set_status(self._lib_status(category, self._lib_count(category, items), more))
                 devlog.done("library", f"{category} revalidate", devlog.clock() - t0, n=len(items))
                 return
             if gen == self._lib_gen:
                 if failed:
-                    # A failed FIRST load must not become the category's cached
+                    # A failed FIRST load must not become the shelf's cached
                     # (and disk-persisted) truth: an empty page with more=False
                     # reads as a complete, empty library and disables the
                     # infinite-scroll retry. Leave the cache alone so the next
                     # tab visit takes the cold path and retries the fetch.
-                    self.libraryLoaded.emit(category, items, more)
+                    self.libraryLoaded.emit(key[0], key[1], items, more)
                     self._set_status("Could not load your library, reopen the tab to retry")
                     self._set_busy(False)
                 else:
-                    self._lib_cache[category] = {"items": items, "offset": _LIBRARY_PAGE, "more": more}
+                    self._lib_cache[key] = {"items": items, "offset": _LIBRARY_PAGE, "more": more}
                     self._save_page_cache()
-                    self.libraryLoaded.emit(category, items, more)
+                    self.libraryLoaded.emit(key[0], key[1], items, more)
                     self._set_status(self._lib_status(category, self._lib_count(category, items), more))
                     self._set_busy(False)
             devlog.done("library", category, devlog.clock() - t0, n=len(items), more=more)
 
         if revalidate:
-            # Blocks loadMoreLibrary for the category while the first-page
+            # Blocks loadMoreLibrary for the shelf while the first-page
             # revalidation is in flight (appending to a list that's about to
             # be replaced would interleave two windows).
-            self._lib_loading.add(category)
+            self._lib_loading.add(key)
         self.threadpool.start(Worker(work))
 
-    @Slot(str)
-    def loadMoreLibrary(self, category: str) -> None:
-        """Fetch and append the next page of a category for infinite scroll."""
-        if not self._logged_in:
+    @Slot(str, str)
+    def loadMoreLibrary(self, source: str, category: str) -> None:
+        """Fetch and append the next page of a source's shelf for infinite
+        scroll."""
+        key = _lib_key(source, category)
+        if _source_provider(self, key[0]) is None:
             return
-        cached = self._lib_cache.get(category)
-        if cached is None or not cached["more"] or category in self._lib_loading:
+        cached = self._lib_cache.get(key)
+        if cached is None or not cached["more"] or key in self._lib_loading:
             return
-        self._lib_loading.add(category)
+        self._lib_loading.add(key)
         offset = cached["offset"]
         gen = self._lib_gen
-        sort = self._lib_sort.get(category)
+        sort = self._lib_sort.get(key)
 
         def work() -> None:
             t0 = devlog.clock()
             failed = False
             try:
-                items, more = self._library_page(category, offset, _LIBRARY_PAGE)
+                items, more = self._library_page(key[0], key[1], offset, _LIBRARY_PAGE)
             except Exception:
-                # A transient fetch error must NOT mark the category exhausted,
+                # A transient fetch error must NOT mark the shelf exhausted,
                 # that would permanently kill infinite scroll for it after one
                 # blip. Leave 'more' truthy and don't advance the offset, so the
                 # next scroll retries the same window.
                 logger.exception("Could not load more of library category %s", category)
                 items, more, failed = [], True, True
-            if gen != self._lib_gen or sort != self._lib_sort.get(category):
-                # The category was re-sorted (or the account changed) while
-                # this page was in flight: appending it would splice the OLD
-                # order into the new list and skip a window of the new one.
-                self._lib_loading.discard(category)
+            if gen != self._lib_gen or sort != self._lib_sort.get(key):
+                # The shelf was re-sorted (or the account changed) while this
+                # page was in flight: appending it would splice the OLD order
+                # into the new list and skip a window of the new one.
+                self._lib_loading.discard(key)
                 return
-            entry = self._lib_cache.get(category)
+            entry = self._lib_cache.get(key)
             if entry is not None:
                 entry["items"].extend(items)
                 if not failed:
@@ -7556,40 +7772,41 @@ class WavesBridge(LibraryMixin, QObject):
                 shown = self._lib_count(category, entry["items"])
             else:
                 shown = self._lib_count(category, items)
-            self._lib_loading.discard(category)
-            self.libraryMore.emit(category, items, more)
+            self._lib_loading.discard(key)
+            self.libraryMore.emit(key[0], key[1], items, more)
             self._set_status(self._lib_status(category, shown, more))
             devlog.done("library", f"{category} page@{offset}", devlog.clock() - t0, n=len(items), more=more)
 
         self.threadpool.start(Worker(work))
 
-    @Slot(str, str, str)
-    def setLibrarySort(self, category: str, order: str, direction: str) -> None:
-        """Re-sort a My Tidal category and reload its first page. Server-paged
-        categories re-fetch in the new order; playlists/mixes re-sort locally. The
-        default (date, descending) clears the override so the category can reuse
-        the persisted page cache."""
-        if not self._logged_in:
+    @Slot(str, str, str, str)
+    def setLibrarySort(self, source: str, category: str, order: str, direction: str) -> None:
+        """Re-sort one source's shelf category and reload its first page.
+        Server-paged categories re-fetch in the new order; playlists/mixes
+        re-sort locally. The default (date, descending) clears the override so
+        the shelf can reuse the persisted page cache."""
+        key = _lib_key(source, category)
+        if _source_provider(self, key[0]) is None:
             return
-        category = str(category or "")
         order = str(order or "date")
         direction = "asc" if str(direction) == "asc" else "desc"
         if order == "date" and direction == "desc":
-            self._lib_sort.pop(category, None)  # the default order; no override
+            self._lib_sort.pop(key, None)  # the default order; no override
         else:
-            self._lib_sort[category] = (order, direction)
+            self._lib_sort[key] = (order, direction)
         # Drop the differently-ordered page (and any in-flight load) so loadLibrary
         # fetches page 1 fresh; it bumps _lib_gen, so a stale worker can't repaint.
-        self._lib_cache.pop(category, None)
-        self._lib_loading.discard(category)
-        self.loadLibrary(category)
+        self._lib_cache.pop(key, None)
+        self._lib_loading.discard(key)
+        self.loadLibrary(key[0], key[1])
 
-    @Slot()
-    @Slot(bool)
-    def loadHome(self, have_cached: bool = False) -> None:
-        """Build the 'Home' tab: a Browse-style landing scoped to the account.
-        Shelves are shaped like the Browse sections ({rowKind, title, items}),
-        each with a ``target`` naming the My Tidal category it previews:
+    @Slot(str)
+    @Slot(str, bool)
+    def loadHome(self, source: str, have_cached: bool = False) -> None:
+        """Build one source's 'Home' tab: a Browse-style landing scoped to its
+        account. Shelves are shaped like the Browse sections ({rowKind, title,
+        target, source, items}), each with a ``target`` naming the source's
+        own category it previews:
           * 'Recent albums' - the newest favourite albums, as album cards;
           * 'Recent tracks' - the newest favourite tracks, as a track list.
         Each shelf shows only the newest few; its heading drills into the full,
@@ -7606,17 +7823,18 @@ class WavesBridge(LibraryMixin, QObject):
         the cached emit is skipped (no pointless repaint) and only the quiet,
         throttled revalidation runs, so an app left running for weeks still
         picks up new favourites without a restart."""
-        if not self._logged_in:
-            self.homeLoaded.emit([])
+        source = str(source or "")
+        if _source_provider(self, source) is None:
+            self.homeLoaded.emit(source, [])
             return
-        cached = self._home_cache
+        cached = self._home_cache.get(source)
         if cached and not have_cached:
-            self.homeLoaded.emit(cached)
-        if self._home_loading:
+            self.homeLoaded.emit(source, cached)
+        if source in self._home_loading:
             return
-        if cached and time.monotonic() - self._home_reval_ts < 60.0:
+        if cached and time.monotonic() - self._home_reval_ts.get(source, 0.0) < 60.0:
             return  # revalidated moments ago; don't re-fetch per tab flip
-        self._home_loading = True
+        self._home_loading.add(source)
         gen = self._browse_gen  # account generation, bumped on logout
 
         def tagged(rows: list, kind: str) -> list:
@@ -7627,7 +7845,7 @@ class WavesBridge(LibraryMixin, QObject):
 
             def page(cat: str, n: int) -> list:
                 try:
-                    rows, _ = self._library_page(cat, 0, n, order_override=("date", "desc"))
+                    rows, _ = self._library_page(source, cat, 0, n, order_override=("date", "desc"))
                 except Exception:
                     logger.exception("Home: %s page failed", cat)
                     return []
@@ -7635,18 +7853,36 @@ class WavesBridge(LibraryMixin, QObject):
                     return rows
 
             # A generous preview of the newest of each kind; the heading opens the
-            # full, identically-sorted list in that category's own tab.
+            # full, identically-sorted list in that category's own tab. The
+            # source travels with every section: the drill-in loads THAT
+            # source's shelf, never whichever group happens to be first.
             albums = tagged(page("albums", 24), "album")
             tracks = tagged(page("tracks", 18), "track")
 
             sections: list[dict] = []
             if albums:
-                sections.append({"rowKind": "cards", "title": "Recent albums", "target": "albums", "items": albums})
+                sections.append(
+                    {
+                        "rowKind": "cards",
+                        "title": "Recent albums",
+                        "target": "albums",
+                        "source": source,
+                        "items": albums,
+                    }
+                )
             if tracks:
-                sections.append({"rowKind": "tracks", "title": "Recent tracks", "target": "tracks", "items": tracks})
+                sections.append(
+                    {
+                        "rowKind": "tracks",
+                        "title": "Recent tracks",
+                        "target": "tracks",
+                        "source": source,
+                        "items": tracks,
+                    }
+                )
 
-            self._home_loading = False
-            self._home_reval_ts = time.monotonic()
+            self._home_loading.discard(source)
+            self._home_reval_ts[source] = time.monotonic()
             if gen != self._browse_gen:
                 return  # logged out mid-fetch, see loadBrowse's work()
             # An all-empty landing is more likely a transient fetch failure than
@@ -7654,11 +7890,11 @@ class WavesBridge(LibraryMixin, QObject):
             # placeholder up for an empty emit) but never cache it or overwrite
             # good shelves with it.
             if sections and sections != cached:
-                self._home_cache = sections
+                self._home_cache[source] = sections
                 self._save_page_cache()
-                self.homeLoaded.emit(sections)
+                self.homeLoaded.emit(source, sections)
             elif not cached:
-                self.homeLoaded.emit(sections)
+                self.homeLoaded.emit(source, sections)
             devlog.done("library", "home", devlog.clock() - t0, n=len(sections))
 
         self.threadpool.start(Worker(work))
@@ -9509,29 +9745,29 @@ class WavesBridge(LibraryMixin, QObject):
 
     appleEnabled = Property(bool, _get_apple_enabled, notify=appleStatusChanged)
 
-    def _get_my_music_source_label(self) -> str:
-        """The source label above My Music's saved shelves.
+    @Slot(result="QVariant")
+    def myMusicSources(self) -> list:
+        """My Music's source groups, one per provider whose shelves it renders.
 
-        One string for the pane the QML renders: its shelves are TIDAL's
-        today, so the label names TIDAL's descriptor, and it reads "" until
-        a second provider contributes shelves (see
-        ``_saved_shelf_sources``) -- a lone source needs no label. The text
-        is bridge data, so a provider's own name reaches the pane without a
-        QML edit (issue #221).
+        Each carries the provider's identity, the label its group shows only
+        when a second source contributes, and the shelf categories that
+        provider can fill (issue #259). The pane renders this list and every
+        page it loads goes back through the source's own provider, so a
+        provider that later declares FAVORITES gets its own group with no QML
+        edit. Re-read on the same flips that move a session or the Apple
+        light (see refreshProviderSurfaces in Main.qml).
         """
-        sources = _saved_shelf_sources(self)
-        if len(sources) < 2:
-            return ""
-        pane_source = (getattr(self, "providers", None) or {}).get(CTX_TIDAL)
-        if pane_source is None:
-            return ""
-        source_id = pane_source.descriptor().id
-        return next((s["label"] for s in sources if s["id"] == source_id), "")
+        return _my_music_sources(self)
 
-    # notify: a second saved-shelf source can only arrive with a session
-    # (Capability.FAVORITES plus a live login); the registry itself is built
-    # once at launch.
-    myMusicSourceLabel = Property(str, _get_my_music_source_label, notify=loggedInChanged)
+    @Slot(result="QVariant")
+    def myMusicEmpty(self) -> dict:
+        """The pane's one empty state while no source can fill a shelf.
+
+        The words, the provider and the action are bridge data (never QML
+        copy), so a signed-out second provider names itself here with no QML
+        edit.
+        """
+        return _my_music_empty(self)
 
     @Slot(result=bool)
     def isAppleEnabled(self) -> bool:

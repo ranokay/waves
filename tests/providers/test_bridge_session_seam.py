@@ -320,12 +320,12 @@ def _seed_session_state(stub) -> None:
         "_artist_loading": {},
         "_album_tracks_cache": {},
         "_edition_tracks_cache": {},
-        "_home_cache": None,
-        "_home_loading": False,
-        "_home_reval_ts": 1.0,
+        "_home_cache": {},
+        "_home_loading": set(),
+        "_home_reval_ts": {},
         "_lib_reval_ts": {},
-        "_media_lists_cache": None,
-        "_folder_tree": None,
+        "_media_lists_cache": {},
+        "_folder_tree": {},
         "_tree_warm_waiting": [],
         "_search_cache": {},
         "_search_gen": 0,
@@ -559,18 +559,18 @@ class TestTheCatalogRoads:
             folder_tree=NS(nodes=[NS()], playlist_paths={"p1": "F"}, partial=False),
         )
         stub._media_lists_lock = threading.Lock()
-        stub._media_lists_cache = None
+        stub._media_lists_cache = {}
         stub._MEDIA_LISTS_TTL = 60.0
-        stub._folder_tree = None
+        stub._folder_tree = {}
 
-        fresh, tree = WavesBridge._media_lists.__get__(stub, type(stub))(refresh=True, walk=True)
+        fresh, tree = WavesBridge._media_lists.__get__(stub, type(stub))("tidal", refresh=True, walk=True)
 
         assert stub._provider.calls == [
             ("user_collections",),
             ("folder_tree", [fresh["playlists"][0]]),  # the root folders, reused
         ]
         assert tree.playlist_paths == {"p1": "F"}
-        assert stub._folder_tree is tree
+        assert stub._folder_tree["tidal"] is tree
 
     def test_browse_fetch_reads_the_provider(self):
         page = object()

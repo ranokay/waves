@@ -69,7 +69,7 @@ class _WarmStub:
     _needs_folder_tree = WavesBridge._needs_folder_tree
 
     def __init__(self):
-        self._folder_tree = None
+        self._folder_tree = {}
         self._media_lists_lock = Lock()
         self._logged_in = True
         self._tree_warm_waiting: list = []
@@ -80,6 +80,7 @@ class _WarmStub:
         self.downloadState = _Emit()
         self._objs = {"playlist": {"p1": SimpleNamespace(id="p1", name="Road Songs")}}
         self.settings = SimpleNamespace(data=SimpleNamespace(format_playlist="Playlists/{folder_path}{playlist_name}"))
+        self.providers = {"tidal": SimpleNamespace(id="tidal")}
 
     def _set_busy(self, on):
         pass

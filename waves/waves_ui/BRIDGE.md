@@ -82,11 +82,22 @@ for Search with Apple still enabled.
 | `artistMetaLoaded(artistId, popularity)`                   | Late-arriving artist metadata                                                                                                                              |
 | `playlistTracksLoaded(playlistId, tracks)`                 | A playlist's ordered track list arrives (playlist expansion); empty on failure                                                                             |
 | `artistLoadFailed(artistId)`                               | An artist page could not load and nothing is cached; clears the Back-restore latch so history recording continues                                          |
-| `libraryLoaded(category, items, hasMore)`                  | First page of a My Music category (replace)                                                                                                                |
-| `libraryMore(category, items, hasMore)`                    | Next page (append, infinite scroll)                                                                                                                        |
-| `homeLoaded(sections)`                                     | My Music's Home landing (Browse-shaped shelves, account-scoped)                                                                                            |
+| `libraryLoaded(source, category, items, hasMore)`          | First page of one My Music source's shelf category (replace); `source` is a provider id (issue #259)                                                       |
+| `libraryMore(source, category, items, hasMore)`            | Next page of that shelf (append, infinite scroll)                                                                                                          |
+| `homeLoaded(source, sections)`                             | One My Music source's Home landing (Browse-shaped shelves, account-scoped; each section names its source)                                                  |
 | `playlistCategoryResolved(apiPath, title, count, firstId)` | A Browse playlist category's members are known, so DOWNLOAD ALL can confirm with a count                                                                   |
-| `playlistFolderLoaded(folderId, rows, path)`               | A My Music playlist folder's contents arrive (issue #11); empty rows and path on failure                                                                   |
+| `playlistFolderLoaded(source, folderId, rows, path)`       | One source's My Music playlist folder contents arrive (issue #11); empty rows and path on failure                                                          |
+
+My Music renders **one source group per provider whose live session can fill
+shelves** (issue #259). `myMusicSources()` answers that list — each source's
+descriptor identity, the label its group shows only when a second source
+contributes, and the shelf categories its capabilities declare — and
+`myMusicEmpty()` answers the pane's one empty state (the provider that could
+fill it, its own sign-in or setup verb, and the sentences naming it) while no
+source can. Every page loads through the source's OWN provider
+(`favorites_page` for the favourites shelves, `user_collections`/`folder_tree`
+for playlists and mixes) and every row is built by that provider's `row_for`,
+so a provider that later declares FAVORITES appears with no QML edit.
 
 ## Browse (editorial pages)
 

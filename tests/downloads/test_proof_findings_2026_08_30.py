@@ -144,11 +144,11 @@ def _logout_stub(tmp_path):
     stub._browse_reval_ts = 0.0
     stub._prefetch_key = None
     stub._prefetch_claimed = False
-    stub._home_cache = None
-    stub._home_loading = False
-    stub._home_reval_ts = 0.0
-    stub._media_lists_cache = None
-    stub._folder_tree = None
+    stub._home_cache = {}
+    stub._home_loading = set()
+    stub._home_reval_ts = {}
+    stub._media_lists_cache = {}
+    stub._folder_tree = {}
     stub._tree_warm_waiting = []
     stub._search_gen = 0
     stub._objs = {"album": {}, "track": {}, "artist": {}, "playlist": {}, "video": {}, "mix": {}}

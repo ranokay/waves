@@ -173,6 +173,9 @@ class TidalProvider(Provider):
     def __init__(self, tidal: Tidal, stream_resolver=None):
         self._tidal = tidal
         self._stream_resolver = stream_resolver
+        # The app's row dictionaries for TIDAL objects, handed over by the
+        # bridge where the providers are wired (see bind_row_vocabulary).
+        self._row_builders: dict = {}
         # The editorial (Browse) reads serialize behind their own lock: they
         # parse through the session's SHARED page parser, which mutates itself
         # on every parse and is not thread-safe. The lock lives here because
@@ -559,6 +562,27 @@ class TidalProvider(Provider):
         if "LOSSLESS" in tags:
             return quality_rank(QualityTier.LOSSLESS)
         return None
+
+    # ----- catalog rows the pane renderers ask for
+
+    def bind_row_vocabulary(self, builders: dict) -> None:
+        """Hand TIDAL the app's row dictionaries for its engine objects.
+
+        The row vocabulary -- cover sizing, the listed-date rule, the quality
+        pill, the ``_remember`` that keeps a row's live object resolvable --
+        is app-side and still lives with the bridge that has always built it.
+        The My Music pane asks the *source's* provider for its rows
+        (:meth:`row_for`), so TIDAL answers by delegating to those very
+        bodies, bound where the providers are wired: one implementation,
+        reached through the seam, and TIDAL's pane rows can never drift from
+        the rows search, Browse and the artist pages render.
+        """
+        self._row_builders = dict(builders or {})
+
+    def row_for(self, kind: str, item) -> dict:
+        """One engine object as the app's row dict, in TIDAL's vocabulary."""
+        builder = self._row_builders.get(str(kind))
+        return builder(item) if builder is not None else {}
 
     # ----- per-track delivery
 

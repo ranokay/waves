@@ -87,13 +87,13 @@ class _LogoutStub:
         self._artist_loading: set = set()
         self._album_tracks_cache: dict = {}
         self._edition_tracks_cache: dict = {}
-        self._home_cache = None
-        self._home_loading = False
-        self._home_reval_ts = 1.0
+        self._home_cache: dict = {}
+        self._home_loading: set = set()
+        self._home_reval_ts: dict = {}
         self._lib_reval_ts: dict = {}
-        self._media_lists_cache = None
+        self._media_lists_cache: dict = {}
         self._media_lists_lock = Lock()
-        self._folder_tree = None
+        self._folder_tree: dict = {}
         self._tree_warm_waiting: list = []
         self._search_cache: dict = {}
         self._search_gen = 0  # logout supersedes in-flight search workers by bumping this
@@ -229,7 +229,8 @@ class _MoreStub:
 
     def __init__(self):
         self._logged_in = True
-        self._lib_cache = {"albums": {"items": [{"id": "old"}], "offset": 40, "more": True}}
+        self.providers = {"tidal": object()}
+        self._lib_cache = {("tidal", "albums"): {"items": [{"id": "old"}], "offset": 40, "more": True}}
         self._lib_loading: set = set()
         self._lib_gen = 1
         self._lib_sort: dict = {}
@@ -237,7 +238,7 @@ class _MoreStub:
         self.libraryMore = _Signal()
         self.statuses: list = []
 
-    def _library_page(self, category, offset, limit):
+    def _library_page(self, source, category, offset, limit):
         return [{"id": "page2"}], True
 
     def _lib_count(self, category, items):
@@ -252,24 +253,24 @@ class _MoreStub:
 
 def test_a_scroll_page_arriving_after_a_resort_is_dropped():
     stub = _MoreStub()
-    stub.loadMoreLibrary("albums")
+    stub.loadMoreLibrary("tidal", "albums")
     # The user re-sorts while the page is in flight (setLibrarySort replaces
     # the cache and bumps the generation via loadLibrary).
-    stub._lib_sort["albums"] = ("name", "asc")
-    stub._lib_cache["albums"] = {"items": [{"id": "resorted"}], "offset": 0, "more": True}
+    stub._lib_sort[("tidal", "albums")] = ("name", "asc")
+    stub._lib_cache[("tidal", "albums")] = {"items": [{"id": "resorted"}], "offset": 0, "more": True}
     stub.threadpool.workers[0].fn()
 
     assert stub.libraryMore.emits == [], "the stale window must not splice into the re-sorted list"
-    assert stub._lib_cache["albums"]["items"] == [{"id": "resorted"}]
-    assert "albums" not in stub._lib_loading, "the next scroll may load again"
+    assert stub._lib_cache[("tidal", "albums")]["items"] == [{"id": "resorted"}]
+    assert ("tidal", "albums") not in stub._lib_loading, "the next scroll may load again"
 
 
 def test_a_scroll_page_with_unchanged_sort_still_appends():
     stub = _MoreStub()
-    stub.loadMoreLibrary("albums")
+    stub.loadMoreLibrary("tidal", "albums")
     stub.threadpool.workers[0].fn()
-    assert stub.libraryMore.emits == [("albums", [{"id": "page2"}], True)]
-    assert [r["id"] for r in stub._lib_cache["albums"]["items"]] == ["old", "page2"]
+    assert stub.libraryMore.emits == [("tidal", "albums", [{"id": "page2"}], True)]
+    assert [r["id"] for r in stub._lib_cache[("tidal", "albums")]["items"]] == ["old", "page2"]
 
 
 # Finding 48: a walking caller never accepts the Mixes visit's treeless entry.
@@ -281,10 +282,11 @@ class _MediaListsStub:
 
     def __init__(self, cached_tree):
         self._media_lists_lock = Lock()
-        self._media_lists_cache = (time.monotonic(), {"playlists": []}, cached_tree)
-        self._folder_tree = cached_tree
+        self._media_lists_cache = {"tidal": (time.monotonic(), {"playlists": []}, cached_tree)}
+        self._folder_tree = {"tidal": cached_tree}
         self.tidal = SimpleNamespace(session=object())
-        # The listing sweep rides the Provider seam (ticket #20).
+        # The listing sweep rides the Provider seam (ticket #20) and is the
+        # source's own (a second source sweeps separately).
         self.providers = {"tidal": SimpleNamespace(user_collections=lambda: {"playlists": []})}
         self.swept = 0
 
@@ -294,13 +296,13 @@ def test_a_walking_caller_rejects_the_treeless_mixes_entry():
     tree = SimpleNamespace(nodes=[1], playlist_paths={}, partial=False)
     # The walk rides the provider (ticket #22).
     stub.providers["tidal"].folder_tree = lambda root_folders=None: tree
-    _fresh, got = stub._media_lists(refresh=True, walk=True)
+    _fresh, got = stub._media_lists("tidal", refresh=True, walk=True)
     assert got is tree, "Playlists within the TTL must sweep, not render folder-less"
 
 
 def test_a_treeless_entry_still_serves_non_walking_callers():
     stub = _MediaListsStub(cached_tree=None)
-    fresh, got = stub._media_lists(refresh=True, walk=False)
+    fresh, got = stub._media_lists("tidal", refresh=True, walk=False)
     assert fresh == {"playlists": []} and got is None, "Mixes keeps its fast path"
 
 

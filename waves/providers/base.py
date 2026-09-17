@@ -120,6 +120,7 @@ class Capability(StrEnum):
     ART = "art"
     BROWSE = "browse"
     FAVORITES = "favorites"
+    PLAYLISTS = "playlists"
     MIXES = "mixes"
     VIDEOS = "videos"
     PREVIEW = "preview"
