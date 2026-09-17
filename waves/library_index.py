@@ -2555,7 +2555,8 @@ class LibraryIndex:
     # (the album bucket entries and the track bucket entries), so the matcher
     # is handed the same facts it always was.
     _ALBUM_FACT_COLUMNS = (
-        "album, year, track_count, folder_path, codec, bitrate, bits, rate, declared, disc_no, disc_total, runtime"
+        "album, year, track_count, folder_path, codec, bitrate, bits, rate, declared, disc_no, disc_total,"
+        " runtime, has_atmos"
     )
 
     def _read(self, sql: str, params: tuple = ()) -> list:
@@ -2580,7 +2581,7 @@ class LibraryIndex:
 
     @staticmethod
     def _album_fact(row) -> dict:
-        album, year, tracks, path, codec, bitrate, bits, rate, declared, disc_no, disc_total, runtime = row
+        album, year, tracks, path, codec, bitrate, bits, rate, declared, disc_no, disc_total, runtime, has_atmos = row
         return {
             "title": str(album or ""),
             "year": str(year or ""),
@@ -2594,6 +2595,10 @@ class LibraryIndex:
             "disc_no": int(disc_no or 0),
             "disc_total": int(disc_total or 0),
             "runtime": int(runtime or 0),
+            # Atmos presence travels with the facts (issue #237): the matcher's
+            # ATMOS TOO badge reads it from `best`, so the SQL presence answer
+            # must carry the same fact the dict build does.
+            "has_atmos": bool(has_atmos),
         }
 
     def presence_facts(self, key) -> list[dict]:

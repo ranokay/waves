@@ -65,6 +65,25 @@ def test_deleted_file_self_heals(tmp_path):
     assert store.ownership_of("123") is not None
 
 
+def test_batch_answers_match_the_single_answer_for_a_version_filter(tmp_path):
+    """Issue #237 / LM-02: a row carrying only the audio_type column (no
+    audio_mode) answers the same through the batch query as through the
+    single one, filtered or not -- the batch used to omit the column and fall
+    back to the legacy mode."""
+    store = _store(tmp_path)
+    path = _track_file(tmp_path, "song.m4a")
+    store.record("123", path, "LOW", audio_type="atmos")
+
+    single = store.ownership_of("123", audio_type="atmos")
+    assert single is not None and single["audio_type"] == "atmos"
+    assert store.ownership_of_many(["123"], audio_type="atmos")["123"] == single
+    # Unfiltered, both answer the whole-track best copy.
+    assert store.ownership_of_many(["123"])["123"] == store.ownership_of("123")
+    # The other Version does not exist on disk, so the filter answers None.
+    assert store.ownership_of("123", audio_type="stereo") is None
+    assert store.ownership_of_many(["123"], audio_type="stereo")["123"] is None
+
+
 def test_best_surviving_quality_wins(tmp_path):
     store = _store(tmp_path)
     low = _track_file(tmp_path, "song.m4a")

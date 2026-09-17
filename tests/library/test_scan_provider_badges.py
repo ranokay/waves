@@ -153,6 +153,32 @@ def test_all_atmos_folder_promotes_everything_and_reports_no_too(tmp_path):
     assert album["has_atmos"] is False
 
 
+def test_presence_facts_carry_atmos_presence_through_the_sql_path(tmp_path):
+    """Issue #237 / LM-06: the SQL presence path answers the Atmos fact too.
+
+    ``decide_presence`` reads ``best["has_atmos"]`` for the ATMOS TOO badge;
+    the dict presence build carried it, the sqlite fact columns did not, so
+    the fact's availability rested on an invariant no code enforced. Every
+    presence fact now carries it, and the matcher's verdict keeps it."""
+    root_a = tmp_path / "case_a"
+    d = _mk(root_a, "lib/Artist/Album", ["01.flac", "02.m4a"])
+    stereo_only = _index(root_a, {d: _tags()}, audiomap={"02.m4a": "stereo"})
+    assert stereo_only.refresh(_mk(root_a, "lib", [])) == 1
+    key = matching.presence_key("Album", "Artist")
+    facts = stereo_only.presence_facts(key)
+    assert facts and all(f["has_atmos"] is False for f in facts)
+    assert matching.decide_presence("Album", "Artist", "2024", 2, {key: facts})["has_atmos"] is False
+
+    root_b = tmp_path / "case_b"
+    d = _mk(root_b, "lib/Artist/Album", ["01.flac", "02.m4a"])
+    with_atmos = _index(root_b, {d: _tags()}, audiomap={"02.m4a": "atmos"})
+    assert with_atmos.refresh(_mk(root_b, "lib", [])) == 1
+    key = matching.presence_key("Album", "Artist")
+    facts = with_atmos.presence_facts(key)
+    assert facts and any(f["has_atmos"] is True for f in facts)
+    assert matching.decide_presence("Album", "Artist", "2024", 2, {key: facts})["has_atmos"] is True
+
+
 def test_stereo_only_folder_reports_no_atmos(tmp_path):
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/Artist/Album", ["01.flac", "02.flac"])
