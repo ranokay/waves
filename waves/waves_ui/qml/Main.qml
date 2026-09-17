@@ -441,6 +441,10 @@ ApplicationWindow {
                                         || appleArtistsModel.count > 0 || appleAlbumsModel.count > 0
                                         || appleTracksModel.count > 0 || applePlaylistsModel.count > 0
                                         || searchTop !== null
+    // The one rule for "a provider that can issue a search is live": the
+    // search row and the build hint both follow it (J2: the row is live for a
+    // signed-out Apple-only user too).
+    readonly property bool searchAvailable: root.signedIn || root.appleEnabled
     // The query as it is sent: every run of whitespace (a pasted line break
     // or tab the single-line field never shows) becomes one space (issue #39).
     function searchQueryText(t) { return ("" + (t || "")).replace(/\s+/g, " ").trim() }
@@ -467,6 +471,10 @@ ApplicationWindow {
     property var videosRaw: []            // same, for videosModel
     property var appleAlbumsRaw: []
     property var appleTracksRaw: []
+    // The honest words when the last Apple catalog fetch failed (the payload's
+    // `apple.error`), shown in the Apple group's own head (issue #241 /
+    // audit UI-05) instead of a "0 results" that reads as an empty catalog.
+    property string appleSearchError: ""
     // True only when the backend emitted the optional Apple group. With Apple
     // disabled the old TIDAL-only page keeps its exact structure and headings.
     property bool appleSearchGrouped: false
@@ -902,17 +910,21 @@ ApplicationWindow {
     }
     // A provider header only makes sense while the active type filter can
     // still show one of its rows. Apple offers no videos or mixes in this
-    // slice, so those filters never show its header.
-    function providerGroupVisible(apple) {        if (!appleSearchGrouped) return false
+    // slice, so those filters never show its header. `errorStands` keeps the
+    // header while the provider's fetch failed: the honest words belong
+    // wherever its rows could have appeared (issue #241), which is still
+    // nowhere under a filter the provider has no rows for at all.
+    function providerGroupVisible(apple, errorStands) {
+        if (!appleSearchGrouped) return false
         var models = apple ? ({ artists: appleArtistsModel, albums: appleAlbumsModel, tracks: appleTracksModel, playlists: applePlaylistsModel })
                            : ({ artists: artistsModel, albums: albumsModel, tracks: tracksModel, videos: videosModel, playlists: playlistsModel, mixes: mixesModel })
         if (filterType !== "all") {
             var model = models[filterType]
-            return model !== undefined && model.count > 0
+            return model !== undefined && (errorStands === true || model.count > 0)
         }
         var total = 0
         for (var name in models) total += models[name].count
-        return total > 0
+        return total > 0 || errorStands === true
     }
     // A per-section cap for the mixed All view: the section's first 5 rows, or
     // everything once it is expanded; a specific section filter is never capped.
@@ -13503,6 +13515,9 @@ ApplicationWindow {
     function fill(model, arr) { model.clear(); appendPlain(model, arr) }
     function clearAppleSearch() {
         appleSearchGrouped = false
+        // The error goes with the rows: a stale message would keep the ghost
+        // group head mounted after Apple is turned off (issue #241).
+        appleSearchError = ""
         appleAlbumsRaw = []
         appleTracksRaw = []
         appleArtistsModel.clear()
@@ -14338,6 +14353,7 @@ ApplicationWindow {
                 root.tracksRaw = r.tracks || []
                 root.videosRaw = r.videos || []
                 var refreshApple = r.apple || null
+                root.appleSearchError = String((refreshApple && refreshApple.error) || "")
                 root.appleAlbumsRaw = refreshApple ? (refreshApple.albums || []) : []
                 root.appleTracksRaw = refreshApple ? (refreshApple.tracks || []) : []
                 root.applySort(true)
@@ -14378,6 +14394,7 @@ ApplicationWindow {
             // (searchArtistsExpanded and the list-section flags are pref-backed),
             // so nothing is reset here.
             var apple = r.apple || null
+            root.appleSearchError = String((apple && apple.error) || "")
             root.appleSearchGrouped = apple !== null
             // Arm the build veil BEFORE the fills: the Loaders each delegate
             // creates read searchBuilding for their asynchronous flag, and the
@@ -14411,7 +14428,11 @@ ApplicationWindow {
                     + (apple ? (apple.artists || []).length + (apple.albums || []).length
                              + (apple.tracks || []).length + (apple.playlists || []).length : 0)
                     + (r.top ? 1 : 0)
-            root.searchNoResultsFor = any === 0 ? root.lastSearchQuery : ""
+            // A failed fetch is not an empty catalog (issue #241 / UI-05):
+            // while the group's honest words stand, the page never also says
+            // "no results for X", which reads as a search that came back
+            // empty.
+            root.searchNoResultsFor = any === 0 && root.appleSearchError === "" ? root.lastSearchQuery : ""
         }
         // Assign a NEW object so the `var` property fires a change notification
         // (mutating + reassigning the same reference does not update bindings).
@@ -14809,8 +14830,8 @@ ApplicationWindow {
                     // Search + sort
                     RowLayout {
                         Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 10; spacing: 10
-                        enabled: root.signedIn || root.appleEnabled
-                        opacity: (root.signedIn || root.appleEnabled) ? 1 : 0.5
+                        enabled: root.searchAvailable
+                        opacity: root.searchAvailable ? 1 : 0.5
                         Rectangle {
                             id: searchBox
                             Layout.fillWidth: true; implicitHeight: 44; radius: 8; color: root.surface2
@@ -15768,10 +15789,14 @@ ApplicationWindow {
                     width: parent.width; horizontalAlignment: Text.AlignHCenter
                     textFormat: Text.PlainText; elide: Text.ElideMiddle
                     // A search that found nothing says so: the invitation left
-                    // up read as a search that never started (issue #39).
+                    // up read as a search that never started (issue #39). A
+                    // search that FAILED says that instead: the group's own
+                    // message carries the words (issue #241 / UI-05), so the
+                    // page never invites a first search it already ran.
                     text: root.searchNoResultsFor !== ""
                           ? "No results for “" + root.searchNoResultsFor + "”"
-                          : "Search for an artist, album, or track to begin"
+                          : (root.appleSearchError !== "" ? "Search failed"
+                                                          : "Search for an artist, album, or track to begin")
                     color: root.textLo; font.pixelSize: 22; topPadding: 96
                     // gentle breathing so the empty state feels alive
                     SequentialAnimation on opacity {
@@ -15817,7 +15842,7 @@ ApplicationWindow {
                 // The shared loading hint (WireHint.qml owns the look).
                 WireHint {
                     id: searchBuildHint
-                    active: root.signedIn && root.searchBuilding
+                    active: root.searchAvailable && root.searchBuilding
                     width: parent.width; tint: root.textLo
                     onScreen: root.onScreen
                 }
@@ -16163,7 +16188,12 @@ ApplicationWindow {
 
                 Item {
                     id: appleGroupHead
-                    visible: root.providerGroupVisible(true)
+                    // A failed fetch has no rows, so the count-based gate would
+                    // hide the very place the honest error belongs (issue #241
+                    // / UI-05). `errorStands` keeps the head under the filters
+                    // whose rows Apple could have answered with; a filter it
+                    // has no rows for stays clean of its furniture.
+                    visible: root.providerGroupVisible(true, root.appleSearchError !== "")
                     width: parent.width; height: 50
                     Row {
                         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
@@ -16189,9 +16219,37 @@ ApplicationWindow {
                     }
                     Text {
                         anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.bottomMargin: 11
+                        visible: root.appleSearchError === ""
                         textFormat: Text.PlainText
                         text: root.appleSearchCount + (root.appleSearchCount === 1 ? " result" : " results")
                         color: root.textDim; font.family: root.mono; font.pixelSize: 10
+                    }
+                    Text {
+                        objectName: "appleSearchError"
+                        // The words exist only where the group does: a refresh
+                        // landing after Apple was switched off writes the
+                        // error without a group, and a property-visible child
+                        // in a hidden head is a ghost waiting to be walked
+                        // into (issue #241).
+                        visible: root.appleSearchGrouped && root.appleSearchError !== ""
+                        anchors.left: parent.left; anchors.leftMargin: 28
+                        // The retry's own spot, reserved: a sibling declared
+                        // below this text cannot be referenced by its anchor.
+                        anchors.right: parent.right; anchors.rightMargin: 96
+                        anchors.bottom: parent.bottom; anchors.bottomMargin: 10
+                        textFormat: Text.PlainText; elide: Text.ElideRight
+                        text: root.appleSearchError
+                        color: root.gold; font.pixelSize: 12
+                    }
+                    SpecBtn {
+                        id: appleSearchRetry
+                        objectName: "appleSearchRetry"
+                        visible: root.appleSearchGrouped && root.appleSearchError !== ""
+                        compact: true; label: "RETRY"
+                        anchors.right: parent.right; anchors.rightMargin: 8
+                        anchors.bottom: parent.bottom; anchors.bottomMargin: 6
+                        z: 2
+                        onClicked: root.submitSearch(root.lastSearchQuery)
                     }
                     Rectangle {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom

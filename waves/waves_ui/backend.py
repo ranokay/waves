@@ -3582,6 +3582,52 @@ _STALE_STAMP = float("-inf")
 _SEARCH_DISK_MAX = 12
 
 
+def _empty_tidal_lists() -> dict:
+    """The ungrouped buckets of a payload no TIDAL search filled.
+
+    TIDAL's rows ride these keys. A search only Apple answered and a resolved
+    link both leave them empty, so the page shows exactly the group that
+    answered (issue #241 / UI-05)."""
+    return {
+        "artists": [],
+        "albums": [],
+        "tracks": [],
+        "videos": [],
+        "playlists": [],
+        "mixes": [],
+        "top": None,
+    }
+
+
+def _apple_block(apple: dict | None = None, *, error_text: str = "") -> dict:
+    """An Apple group in a search payload (issue #241 / UI-05).
+
+    One builder for the group's key set: the empty failure group, a resolved
+    link's single row and a fetched catalog all answer with the same keys, so
+    no reader -- the QML's payload handler, the seam tests -- ever has to
+    branch on which of them produced the payload.
+    """
+    apple = apple or {}
+    return {
+        "artists": list(apple.get("artists") or []),
+        "albums": list(apple.get("albums") or []),
+        "tracks": list(apple.get("tracks") or []),
+        "videos": list(apple.get("videos") or []),
+        "playlists": list(apple.get("playlists") or []),
+        "mixes": list(apple.get("mixes") or []),
+        "top": apple.get("top"),
+        "error": str(error_text or ""),
+    }
+
+
+def _failed_search_payload(error_text: str) -> dict:
+    """The payload for a search whose only provider failed with words of its
+    own: every list empty, the provider's honest message in its group (issue
+    #241 / UI-05). The group head renders it with a RETRY; the status line
+    repeats it. Nothing here is ever cached."""
+    return {**_empty_tidal_lists(), CTX_APPLE: _apple_block(error_text=error_text)}
+
+
 def _search_same(a: dict, b: dict) -> bool:
     """Whether two search payloads show the same page.
 
@@ -6269,35 +6315,21 @@ class WavesBridge(LibraryMixin, QObject):
         if not isinstance(item, dict) or not kind:
             return None
         provider = self.providers[CTX_APPLE]
-        empty_apple = {
-            "artists": [],
-            "albums": [],
-            "tracks": [],
-            "videos": [],
-            "playlists": [],
-            "mixes": [],
-            "top": None,
-        }
+        # The error key rides every Apple group (empty here): a resolved link
+        # cannot have failed, and one payload shape keeps readers from
+        # branching on its presence (issue #241).
+        apple = _apple_block()
         if kind == "artist":
-            empty_apple["artists"] = [provider.row_for("artist", item)]
+            apple["artists"] = [provider.row_for("artist", item)]
         elif kind == "album":
-            empty_apple["albums"] = [provider.row_for("album", item)]
+            apple["albums"] = [provider.row_for("album", item)]
         elif kind == "track":
-            empty_apple["tracks"] = [provider.row_for("track", item)]
+            apple["tracks"] = [provider.row_for("track", item)]
         elif kind == "playlist":
-            empty_apple["playlists"] = [provider.row_for("playlist", item)]
+            apple["playlists"] = [provider.row_for("playlist", item)]
         else:
             return None
-        return {
-            "artists": [],
-            "albums": [],
-            "tracks": [],
-            "videos": [],
-            "playlists": [],
-            "mixes": [],
-            "top": None,
-            CTX_APPLE: empty_apple,
-        }
+        return {**_empty_tidal_lists(), CTX_APPLE: apple}
 
     def _open_url(self, url: str) -> None:
         """Resolve a pasted TIDAL or Apple Music share URL into a single result."""
@@ -6495,12 +6527,24 @@ class WavesBridge(LibraryMixin, QObject):
                     ]
                 provider_results = {provider_id: result for provider_id, result, _error in fetched}
                 provider_errors = {provider_id: error for provider_id, _result, error in fetched if error is not None}
+            apple_error = provider_errors.get(CTX_APPLE)
             if provider_errors and len(provider_errors) == len(provider_ids):
                 # Every enabled fetch raised: a failure, never "0 results",
-                # which reads as a search that found nothing. Nothing is
-                # emitted or cached, so a stale page already painted stays.
-                if gen == self._search_gen:
+                # which reads as a search that found nothing. The one failure
+                # whose words reach a group is the Apple-only one (issue #241 /
+                # UI-05): no second provider can carry them, so a blank page
+                # would be the only answer. With a TIDAL leg in the fan-out a
+                # single provider's words would blame it for both failures, so
+                # the plain failure stays. A page that already holds rows is
+                # never blanked by a failure, and nothing here is cached.
+                stale_rows = bool(stale is not None and self._search_total(stale))
+                apple_only = provider_ids == [CTX_APPLE]
+                if gen == self._search_gen and apple_only and apple_error is not None and not stale_rows:
+                    self.searchResults.emit(_failed_search_payload(str(apple_error)))
+                    self._set_status(str(apple_error))
+                elif gen == self._search_gen:
                     self._set_status("Search failed")
+                if gen == self._search_gen:
                     self._set_busy(False)
                 return
             # Only TIDAL feeds the ungrouped buckets; an Apple-only search
@@ -6565,16 +6609,14 @@ class WavesBridge(LibraryMixin, QObject):
                 "top": top,
             }
             if apple_enabled:
-                apple = provider_results.get(CTX_APPLE, {})
-                payload[CTX_APPLE] = {
-                    "artists": list(apple.get("artists") or []),
-                    "albums": list(apple.get("albums") or []),
-                    "tracks": list(apple.get("tracks") or []),
-                    "videos": list(apple.get("videos") or []),
-                    "playlists": list(apple.get("playlists") or []),
-                    "mixes": list(apple.get("mixes") or []),
-                    "top": apple.get("top"),
-                }
+                # A failed Apple fetch says so in its OWN group (audit UI-05):
+                # the honest words ride the payload, so the group head can
+                # show them instead of painting "0 results" as if the catalog
+                # were empty.
+                payload[CTX_APPLE] = _apple_block(
+                    provider_results.get(CTX_APPLE, {}),
+                    error_text=str(apple_error) if apple_error is not None else "",
+                )
             total = self._search_total(payload)
             if stale is not None and total:
                 # The meters the stale page already shows: carried over so
@@ -6594,7 +6636,6 @@ class WavesBridge(LibraryMixin, QObject):
             if total and not provider_errors:  # an all-empty payload is more likely a failed fetch
                 self._remember_search(cache_key, payload)
                 self._save_page_cache()
-            apple_error = provider_errors.get(CTX_APPLE)
             self._set_status(str(apple_error) if apple_error is not None else f"{total} results")
             self._set_busy(False)
             elapsed = devlog.clock() - t0
