@@ -1207,7 +1207,7 @@ def write_sidecars(
         lyrics_file=bool(options.option("lyrics_file", False)),
         synced_only=bool(options.option("lyrics_file_synced_only", False)),
         ttml_file=bool(options.option("lyrics_ttml_file", False)),
-        is_apple=True,
+        ttml_supported=True,
     ):
         write_text_sidecar(dest.parent, dest.stem, suffix, text)
     # Same gate as the fetch decision above: a lone track files its cover

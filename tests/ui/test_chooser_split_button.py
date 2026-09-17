@@ -16,7 +16,8 @@ HOW THIS STAYS FIXED
 --------------------
 Method-bound stubs, no display and no session: chooserTiers names the tiers
 with spec detail text (Apple has no LOW); chooserDefaults answers provider /
-providerFixed / tier / audioType / atmosOnly / toggles from Settings;
+the segment tiles / tier / audioType / atmosOnly / toggles from
+provider metadata and Settings;
 saveChooserDefaults stages tier + audio + toggles through applySettings and
 refuses Apple LOW; downloadWithChooser pins tier + audio for that click only
 without touching _quality_overrides, both queues two rows, atmos/stereo queue
@@ -126,7 +127,6 @@ def _bridge(**over):
         "isAppleEnabled",
         "_provider_meta",
         "_chooser_provider_of",
-        "_chooser_is_collection_kind",
         "_chooser_tier_entries",
         "chooserTiers",
         "chooserDefaultTier",
@@ -197,12 +197,11 @@ def test_chooser_defaults_come_from_settings_per_provider():
     assert b.chooserDefaultTier("tidal") == "HI-RES"
     assert b.chooserDefaultTier("apple") == "HIGH"
     d = b.chooserDefaults("t1", "track")
-    assert d["provider"] == "tidal" and d["providerFixed"] is False
+    assert d["provider"] == "tidal"
     assert d["tier"] == "HI-RES" and d["audioType"] == "stereo"
     assert d["atmosOnly"] is False
     assert b.chooserSupported("t1", "track") is True, "the one owner of the chevron verdict"
-    d_album = b.chooserDefaults("a1", "album")
-    assert d_album["providerFixed"] is True
+    assert b.chooserSupported("a1", "album") is True
     d_apple = b.chooserDefaults("apple:456", "track")
     assert d_apple["provider"] == "apple" and d_apple["tier"] == "HIGH"
     assert [e["word"] for e in d_apple["tiers"]] == ["HI-RES", "LOSSLESS", "HIGH"]

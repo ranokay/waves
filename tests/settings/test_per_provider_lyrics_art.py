@@ -244,12 +244,10 @@ def test_chooser_defaults_read_the_row_provider_mirrors():
     }
     stub._provider_meta = WavesBridge._provider_meta.__get__(stub, type(stub))
     stub._chooser_provider_of = WavesBridge._chooser_provider_of.__get__(stub, type(stub))
-    stub._chooser_is_collection_kind = WavesBridge._chooser_is_collection_kind.__get__(stub, type(stub))
     stub._chooser_default_tier_word = lambda pid: "HI-RES"
     stub._chooser_default_audio = lambda: "stereo"
     stub._chooser_atmos_only = lambda mid, kind: False
     stub._chooser_tier_entries = lambda pid: []
-    stub._chooser_supports = lambda mid, kind: True
     stub._get_apple_enabled = lambda: False
     stub._psetting = WavesBridge._psetting.__get__(stub, type(stub))
     stub.chooserDefaults = WavesBridge.chooserDefaults.__get__(stub, type(stub))

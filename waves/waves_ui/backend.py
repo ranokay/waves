@@ -4129,8 +4129,10 @@ def _provider_lights(bridge) -> list[dict]:
 # descriptor with no QML branch.
 
 # The download kinds that carry the per-click control (spec §7.2): track rows
-# and collection pages. Bulk sweeps keep Settings and a single face. One owner
-# for the list, so QML no longer spells it and a new kind joins here.
+# and collection pages. Bulk sweeps keep Settings and a single face. QML no
+# longer spells it; ``downloadWithChooser``'s dispatch templates must cover
+# every kind that appears here (a kind it does not know falls back to the
+# plain download slot there).
 _CHOOSER_KINDS: tuple[str, ...] = ("track", "album", "playlist", "mix", "video")
 
 
@@ -10087,10 +10089,6 @@ class WavesBridge(LibraryMixin, QObject):
                 return provider_id
         return CTX_TIDAL
 
-    def _chooser_is_collection_kind(self, kind: str) -> bool:
-        """Whether a download kind belongs to a provider (fixed segment)."""
-        return str(kind or "").strip().lower() in ("album", "playlist", "mix", "artist", "folder", "category")
-
     def _chooser_tier_entries(self, provider_id: str) -> list:
         """The provider's tiers with detail text for the Chooser popover.
 
@@ -10219,8 +10217,7 @@ class WavesBridge(LibraryMixin, QObject):
     def chooserDefaults(self, media_id: str, kind: str = "") -> dict:
         """Everything the Chooser popover needs to open on this control.
 
-        provider: the row's provider id; providerFixed: True on collection rows
-        (a collection belongs to its provider); providers: the segment tiles
+        provider: the row's provider id; providers: the segment tiles
         (enabled providers, the row's own always present, each descriptor's
         name/mark/logo_width and which one is selected); tier: the Settings
         tier word for that provider; audioType: stereo/both from Settings,
@@ -10264,7 +10261,6 @@ class WavesBridge(LibraryMixin, QObject):
             audio_default = "stereo"
         return {
             "provider": provider_id,
-            "providerFixed": bool(self._chooser_is_collection_kind(kind)),
             "providers": _chooser_provider_tiles(self, provider_id),
             "tier": self._chooser_default_tier_word(provider_id),
             "audioType": audio_default,
@@ -10272,7 +10268,7 @@ class WavesBridge(LibraryMixin, QObject):
             "tiers": self._chooser_tier_entries(provider_id),
             "audioOptions": audio_options,
             "showLyrics": Capability.LYRICS in capabilities,
-            "showLyricsTtml": bool(getattr(provider, "ttml_lyrics", False)),
+            "showLyricsTtml": Capability.LYRICS in capabilities and bool(getattr(provider, "ttml_lyrics", False)),
             "showArt": Capability.ART in capabilities,
             "lyricsEmbed": lyrics_embed,
             "lyricsFile": lyrics_file,
@@ -17709,7 +17705,7 @@ class WavesBridge(LibraryMixin, QObject):
                     lyrics_file=bool(self._psetting(CTX_APPLE, "lyrics_file", False)),
                     synced_only=bool(self._psetting(CTX_APPLE, "lyrics_file_synced_only", False)),
                     ttml_file=bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False)),
-                    is_apple=True,
+                    ttml_supported=True,
                 ):
                     if write_text_sidecar(folder, stem, suffix, text) is not None:
                         wrote = True
@@ -17858,7 +17854,7 @@ class WavesBridge(LibraryMixin, QObject):
                     lyrics_file=bool(self._psetting(CTX_TIDAL, "lyrics_file", False)),
                     synced_only=bool(self._psetting(CTX_TIDAL, "lyrics_file_synced_only", False)),
                     ttml_file=False,
-                    is_apple=False,
+                    ttml_supported=False,
                 )
                 has_lyrics = bool(synced or unsynced)
                 embed_on = bool(self._psetting(CTX_TIDAL, "lyrics_embed", False))

@@ -6458,8 +6458,7 @@ ApplicationWindow {
             if (db.chooserKind === "" || ("" + db.mediaId) === "") return false
             try { return waves.chooserSupported(db.mediaId, db.chooserKind) === true } catch (e) { return false }
         }
-        readonly property bool chooserSupported: db.computeChooserSupported()
-        readonly property bool showChooser: chooserSupported
+        readonly property bool showChooser: db.computeChooserSupported()
         property bool chooserBuilt: false
         readonly property bool chooserOpen: chooserLoader.item !== null && chooserLoader.item.visible
         property string chooserProvider: ""
@@ -7222,8 +7221,10 @@ ApplicationWindow {
                 db.onTap()
             }
         }
-        // The chevron face. Visible only while Apple is enabled, so with Apple
-        // disabled the control keeps today's single face byte for byte.
+        // The chevron face: drawn exactly when the row's control carries the
+        // Chooser (the bridge's capability verdict), so it exists on a
+        // TIDAL-only install and never on a provider without per-click
+        // options.
         Rectangle {
             id: dbChev
             visible: db.showChooser

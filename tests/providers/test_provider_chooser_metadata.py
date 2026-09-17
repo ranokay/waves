@@ -72,7 +72,6 @@ def _bridge(providers=None, **settings_over):
     for name in (
         "_provider_meta",
         "_chooser_provider_of",
-        "_chooser_is_collection_kind",
         "_chooser_tier_entries",
         "chooserTiers",
         "chooserDefaultTier",
@@ -183,11 +182,10 @@ def test_chooser_default_tier_reads_each_providers_own_setting():
 def test_chooser_defaults_carry_provider_audio_options_and_toggles():
     b = _bridge()
     d = b.chooserDefaults("apple:1", "track")
-    assert d["provider"] == "apple" and d["providerFixed"] is False
+    assert d["provider"] == "apple"
     assert d["audioOptions"] == ["stereo", "atmos", "both"]
     assert d["tier"] == "LOSSLESS"
     assert d["lyricsEmbed"] is False and d["coverEmbed"] is True
-    assert b.chooserDefaults("t1", "album")["providerFixed"] is True
 
 
 def test_chooser_pins_only_listed_tiers_for_each_provider():
@@ -368,8 +366,9 @@ def test_the_chooser_qml_names_no_provider():
     from waves.waves_ui import backend as backend_module
 
     qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "Main.qml").read_text(encoding="utf-8")
-    start = qml.index("id: chooserComp")
-    end = qml.index("// Playlist-folder tile", start)
+    start = qml.find("id: chooserComp")
+    end = qml.find("// Playlist-folder tile", start + 1)
+    assert start != -1 and end != -1, "the guard found no chooser region to check"
     region = qml[start:end]
     assert "PROVIDER" in region, "the guard is looking at the wrong region"
     for needle in ("tidal", "apple", "assets/providers", "chooserRowProvider"):

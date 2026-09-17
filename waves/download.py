@@ -96,7 +96,7 @@ from waves.model.gui_data import ProgressBars
 from waves.playlists import populate_playlists
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress, TaskID
-from waves.providers.base import AudioType, Provider, RefusalKind, StreamInfo
+from waves.providers.base import AudioType, Provider, Refusal, RefusalKind, StreamInfo
 from waves.waves_ui.diagnostics import content as log_content
 
 # Child of "waves", so it inherits the app's handlers and its INFO records join
@@ -1429,8 +1429,12 @@ class Download:
             # settle green (issue #35). The words are the provider's own
             # (audit TS-09): the engine never names a service for another.
             self._note_unavailable_item(media)
+            try:
+                verdict = self.provider.classify_refusal(exc)
+            except Exception:
+                verdict = None
             self.fn_logger.info(
-                f"{self._refusal_words(exc, 'this item is not available')}. Skipping: "
+                f"{self._refusal_words(verdict, 'this item is not available')}. Skipping: "
                 f"{log_content(self._media_label(media, media_id))}"
             )
             return None
@@ -1505,7 +1509,7 @@ class Download:
             if not media.allow_streaming:
                 self._note_unavailable(media)
                 self.fn_logger.info(
-                    f"This item is not available for listening anymore on TIDAL. Skipping: {log_content(name_builder_title(media))}"
+                    f"This item is not available for listening anymore. Skipping: {log_content(name_builder_title(media))}"
                 )
                 return None
             return media
@@ -2694,7 +2698,7 @@ class Download:
 
         if verdict.kind is RefusalKind.THROTTLED:
             self.fn_logger.exception(
-                f"{self._refusal_words(error, 'the service is rate-limiting')}. "
+                f"{self._refusal_words(verdict, 'the service is rate-limiting')}. "
                 f"Skipping '{log_content(name_builder_item(media))}'. "
                 f"Consider to activate delay between downloads."
             )
@@ -2710,25 +2714,24 @@ class Download:
             # wrong" path.
             self._note_unavailable(media)
             self.fn_logger.info(
-                f"{self._refusal_words(error, 'this item is not available')}. Skipping: "
+                f"{self._refusal_words(verdict, 'this item is not available')}. Skipping: "
                 f"{log_content(name_builder_item(media))}"
             )
             return
 
         self.fn_logger.exception(f"Something went wrong. Skipping '{log_content(name_builder_item(media))}'.")
 
-    def _refusal_words(self, error: Exception, fallback: str) -> str:
+    @staticmethod
+    def _refusal_words(verdict: Refusal | None, fallback: str) -> str:
         """The provider's own words for a refusal, or the engine's fallback.
 
         User-facing refusal text is provider-owned (``classify_refusal``
-        restates the engine's error in the provider's vocabulary); the engine
-        supplies only a neutral fallback for a provider that says nothing, so a
-        third provider never reads TIDAL's words (audit TS-09).
+        restates the engine's error in the provider's vocabulary and the caller
+        already computed that verdict); the engine supplies only a neutral
+        fallback for a provider that says nothing, so a third provider never
+        reads TIDAL's words (audit TS-09).
         """
-        try:
-            message = str(getattr(self.provider.classify_refusal(error), "message", "") or "").strip()
-        except Exception:
-            message = ""
+        message = str(getattr(verdict, "message", "") or "").strip()
         return message or fallback
 
     def _get_track_stream_info(

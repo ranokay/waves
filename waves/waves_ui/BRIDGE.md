@@ -213,7 +213,7 @@ The per-click Chooser's two answer-only slots are capability-driven (issue
 says whether a control carries the split button at all (the covered kinds plus
 the row's provider metadata: a quality rung, an audio type, or a lyrics/art
 capability), and `chooserDefaults(mediaId, kind)` returns the popover's data --
-`provider`, `providerFixed`, `providers` (segment tiles: id, name, logo,
+`provider`, `providers` (segment tiles: id, name, logo,
 logo_width, selected, one per enabled provider with the row's own always
 present), `tier`, `audioType` (clamped to `audioOptions`), `audioOptions`,
 `atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt` and the

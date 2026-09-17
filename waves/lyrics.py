@@ -125,7 +125,7 @@ def lyrics_sidecar_choices(
     lyrics_file: bool = False,
     synced_only: bool = False,
     ttml_file: bool = False,
-    is_apple: bool = False,
+    ttml_supported: bool = False,
 ) -> list[tuple[str, str]]:
     """Every lyrics sidecar to write for one track, extensions never faked.
 
@@ -136,9 +136,11 @@ def lyrics_sidecar_choices(
       existing rule (:func:`lyrics_file_choice`): timed lyrics win as
       ``.lrc``, untimed text goes to ``.txt``, ``synced_only`` suppresses
       the ``.txt``.
-    - ``ttml_file`` governs the verbatim ``.ttml`` sidecar: Apple only,
-      saved exactly as served, zero conversion, sidecar-only (never
-      embedded). TIDAL has no TTML source, so the toggle is inert there.
+    - ``ttml_file`` governs the verbatim ``.ttml`` sidecar, saved exactly
+      as served, zero conversion, sidecar-only (never embedded).
+      ``ttml_supported`` is the provider's own fact (its ``ttml_lyrics``
+      capability): only where its engine serves TTML, so the chooser's
+      toggle and this writer can never disagree.
     - SRT is not shipped: a conversion artifact, not something Apple
       provides.
 
@@ -152,7 +154,7 @@ def lyrics_sidecar_choices(
         content, suffix = lyrics_file_choice(synced, plain, synced_only)
         if content and suffix:
             out.append((content, suffix))
-    if ttml_file and is_apple and ttml:
+    if ttml_file and ttml_supported and ttml:
         out.append((ttml, ".ttml"))
     return out
 
