@@ -279,6 +279,16 @@ _ADDED_COLUMNS = (
 )
 
 
+# The ownership read shape, in one place: path first and audio_type fifth
+# (the positions the Version filters and _best_surviving read). Both queries
+# select it in this order, so the batch answer is the single answer
+# (issue #237).
+_OWNERSHIP_COLUMNS = (
+    "path, quality_tier, quality_rank, audio_mode, audio_type, bit_depth,"
+    " sample_rate, codecs, recorded_at, requested_rank, ceiling_rank, degraded_tries"
+)
+
+
 def _best_surviving(rows, roots: list[str] | None = None) -> dict | None:
     """The first row (highest delivered quality first, then most recent) whose
     path still exists on disk, as the ownership record, or None.
@@ -290,12 +300,13 @@ def _best_surviving(rows, roots: list[str] | None = None) -> dict | None:
 
     With ``roots`` given, a row whose path is under none of them is skipped
     before any stat: it is never looked at, whatever is still on that disk.
-    None means unscoped (a bare store nobody configured). Rows carrying the
-    audio_type column (the single-track query) also answer with the copy's
-    normalized type; batch rows without it fall back to the legacy mode."""
+    None means unscoped (a bare store nobody configured). Every reader selects
+    ``_OWNERSHIP_COLUMNS`` in the same order (``path`` first, ``audio_type``
+    fifth), so the copy's Version can be normalized here for both the single
+    and the batch answer (issue #237: the batch query used to omit the column
+    and this inferred the row shape from its width)."""
     for row in rows:
-        path, tier, rank, mode = row[:4]
-        atype = row[4] if len(row) == 12 else None
+        path, tier, rank, mode, atype = row[:5]
         depth, rate, codecs, recorded_at, requested, ceiling, degraded = row[-7:]
         if not path:
             continue
@@ -734,26 +745,18 @@ class OwnershipStore:
         row is skipped, not removed, so re-creating the file makes it own again.
         Only paths inside the configured folders are considered (set_roots).
         """
-        want = str(audio_type or "").strip().lower() or None
-        if want not in (None, "stereo", "atmos"):
-            want = None
+        want = audio_type
         tid = namespaced_id(track_id)
         if user_id is None:
             rows = self._read(
-                """SELECT path, quality_tier, quality_rank, audio_mode, audio_type, bit_depth,
-                          sample_rate, codecs, recorded_at, requested_rank, ceiling_rank,
-                          degraded_tries
-                   FROM downloads WHERE track_id = ?
-                   ORDER BY quality_rank DESC, recorded_at DESC""",
+                f"SELECT {_OWNERSHIP_COLUMNS} FROM downloads WHERE track_id = ?"  # noqa: S608 (a column list)
+                " ORDER BY quality_rank DESC, recorded_at DESC",
                 (tid,),
             )
         else:
             rows = self._read(
-                """SELECT path, quality_tier, quality_rank, audio_mode, audio_type, bit_depth,
-                          sample_rate, codecs, recorded_at, requested_rank, ceiling_rank,
-                          degraded_tries
-                   FROM downloads WHERE track_id = ? AND user_id = ?
-                   ORDER BY quality_rank DESC, recorded_at DESC""",
+                f"SELECT {_OWNERSHIP_COLUMNS} FROM downloads WHERE track_id = ? AND user_id = ?"  # noqa: S608
+                " ORDER BY quality_rank DESC, recorded_at DESC",
                 (tid, str(user_id)),
             )
         if want is not None:
@@ -764,9 +767,14 @@ class OwnershipStore:
     # far fewer at a time, but the query is chunked regardless.
     _MANY_CHUNK = 400
 
-    def ownership_of_many(self, track_ids) -> dict[str, dict | None]:
+    def ownership_of_many(self, track_ids, *, audio_type: str | None = None) -> dict[str, dict | None]:
         """ownership_of for a whole batch of ids, one query per chunk instead
         of one per id, with exactly the same per-id answer.
+
+        ``audio_type`` ("stereo" / "atmos") narrows every answer to that
+        Version, the same filter ``ownership_of`` accepts (issue #237: the
+        batch query used to omit the column, so a type-only row always read
+        as unknown through this path).
 
         The landing's cards ask for the members of every collection they show
         (hundreds of ids at launch), and one query per id meant one prepared
@@ -775,6 +783,7 @@ class OwnershipStore:
         paint the launch water (sampled live: three pool threads inside
         sqlite for the whole build). The disk stat per surviving row is
         unchanged: it happens outside any query, per id, as before."""
+        want = audio_type
         ids = [str(t) for t in dict.fromkeys(track_ids)]
         out: dict[str, dict | None] = {}
         roots = self._scope()
@@ -788,18 +797,18 @@ class OwnershipStore:
             # The only text spliced into the statement is the placeholder list;
             # every id travels as a bound parameter.
             rows = self._read(
-                f"""SELECT track_id, path, quality_tier, quality_rank, audio_mode, bit_depth,
-                          sample_rate, codecs, recorded_at, requested_rank, ceiling_rank,
-                          degraded_tries
-                   FROM downloads WHERE track_id IN ({marks})
-                   ORDER BY quality_rank DESC, recorded_at DESC""",  # noqa: S608
+                f"SELECT track_id, {_OWNERSHIP_COLUMNS} FROM downloads WHERE track_id IN ({marks})"  # noqa: S608
+                " ORDER BY quality_rank DESC, recorded_at DESC",
                 tuple(lookup),
             )
             by_id: dict[str, list] = {}
             for row in rows:
                 by_id.setdefault(str(row[0]), []).append(row[1:])
             for tid in chunk:
-                out[tid] = _best_surviving(by_id.get(namespaced_id(tid), []), roots)
+                candidates = by_id.get(namespaced_id(tid), [])
+                if want is not None:
+                    candidates = [row for row in candidates if _matches_audio_type(row[4], row[3], want)]
+                out[tid] = _best_surviving(candidates, roots)
         return out
 
     def folder_names_under(self, base: str, limit: int = 5000) -> list[str]:
