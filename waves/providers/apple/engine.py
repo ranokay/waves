@@ -30,7 +30,19 @@ logger = logging.getLogger("waves.providers.apple.engine")
 
 
 class AppleCredentialsError(Exception):
-    """The cookies export is missing, unreadable, or no longer signed in."""
+    """A credential the fetch needed is missing, unreadable, or signed out.
+
+    ``credential`` names which one failed ("cookies" or "wrapper"), so the
+    recovery hold can wait for proof about the credential the fetch actually
+    needed: a wrapper-signed-in, cookies-broken job must not read success off
+    the wrapper probe and re-enter the identical failing fetch (AP-01). The
+    default is cookies, the failure the tier answers with most often; every
+    raise site names its own.
+    """
+
+    def __init__(self, message: str, *, credential: str = "cookies") -> None:
+        super().__init__(message)
+        self.credential = str(credential or "cookies").strip().lower()
 
 
 class AppleDownloadError(Exception):
@@ -107,7 +119,8 @@ def _require_cookies(cookies_path: str) -> str:
     path = str(cookies_path or "").strip()
     if not path or not Path(path).expanduser().is_file():
         raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
-            "Apple downloads need a cookies export: set one in Settings under Providers, Apple Music."
+            "Apple downloads need a cookies export: set one in Settings under Providers, Apple Music.",
+            credential="cookies",
         )
     return path
 
@@ -264,7 +277,8 @@ async def _create_cookies_stack(cookies_path: str):
         # Missing file, unparsable jar, or no media-user-token cookie: the
         # export is absent or the browser session is signed out.
         raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
-            "Apple downloads need a signed-in cookies export: set one in Settings under Providers, Apple Music."
+            "Apple downloads need a signed-in cookies export: set one in Settings under Providers, Apple Music.",
+            credential="cookies",
         ) from exc
     try:
         base_interface = await AppleMusicBaseInterface.create(apple_music_api=api)
@@ -542,7 +556,8 @@ class AppleFetchSession:
         """
         if not self.wrapper_url:
             raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
-                "Apple hi-res downloads need the managed wrapper: finish setup in Settings under Providers, Apple Music."
+                "Apple hi-res downloads need the managed wrapper: finish setup in Settings under Providers, Apple Music.",
+                credential="wrapper",
             )
         nm3u8dlre, ffmpeg = self._require_tools()
         workdir = Path(tempfile.mkdtemp(prefix="waves-apple-alac-"))
@@ -645,7 +660,8 @@ async def _open_wrapper_session(*, base_url: str, decrypt_host: str, decrypt_por
         text = f"{type(exc).__name__}: {exc}".lower()
         if "not authenticated" in text or "logged_out" in text or "login" in text:
             raise AppleCredentialsError(  # noqa: TRY003
-                "The Apple wrapper is not signed in: re-open setup in Settings under Providers, Apple Music, and complete the login step."
+                "The Apple wrapper is not signed in: re-open setup in Settings under Providers, Apple Music, and complete the login step.",
+                credential="wrapper",
             ) from exc
         raise AppleWrapperDown(f"Apple wrapper is unreachable at {base_url}: {exc}") from exc  # noqa: TRY003
 

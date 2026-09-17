@@ -1685,6 +1685,74 @@ def test_wait_for_session_returns_false_on_stop(tmp_path):
     assert runner.wait_for_session(runner.AppleJobHooks(), provider, abort) is False
 
 
+def test_a_cookies_hold_ignores_a_healthy_wrapper(tmp_path, monkeypatch):
+    """AP-01: the wrapper guest being signed in says nothing about the cookies
+    a fetch needed, and reading it as recovery re-ran the identical failing
+    fetch forever. The cookies hold watches the export alone, and past its
+    bound it hands the row to setup with the cookies words."""
+    from threading import Event
+
+    from waves.providers.apple import runner
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("broken export", encoding="utf-8")
+    provider = SimpleNamespace(cookies_path=str(cookies), wrapper_url="http://127.0.0.1:1234")
+    probes: list = []
+    requested: list = []
+    statuses: list = []
+    hooks = runner.AppleJobHooks(
+        refresh_wrapper_auth=lambda **kw: probes.append(kw) or {"logged_in": True},
+        setup_requested=lambda kind: requested.append(kind),
+        status=lambda message: statuses.append(message),
+    )
+    sleeps: list = []
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_FAILURES", 2)
+    monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: sleeps.append(seconds) or True)
+
+    with pytest.raises(runner._AppleSetupRequired) as excinfo:
+        runner.wait_for_session(hooks, provider, Event(), credential="cookies")
+
+    assert "cookies export" in str(excinfo.value)
+    assert "Settings" in str(excinfo.value)
+    assert probes == [], "the wrapper probe cannot answer for a cookies fetch"
+    assert requested == ["setup"], "the row's reason is the wizard's click"
+    assert statuses and "cookies export" in statuses[-1]
+    assert sleeps == [runner.HELD_POLL_SEC], "one poll before the bound"
+
+
+def test_a_wrapper_hold_waits_for_the_guest_not_the_cookies(tmp_path, monkeypatch):
+    """The mirror: an ALAC fetch needs the wrapper, so a changed cookies file
+    is not its recovery and the guest signing back in is."""
+    from threading import Event
+
+    from waves.providers.apple import runner
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("broken export", encoding="utf-8")
+    provider = SimpleNamespace(cookies_path=str(cookies), wrapper_url="http://127.0.0.1:1234")
+    state = {"logged_in": False}
+
+    def _probe(**kw):
+        return {"logged_in": state["logged_in"]}
+
+    def _change_cookies_and_sleep(seconds, job_abort):
+        cookies.write_text("fresh export", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_FAILURES", 2)
+    monkeypatch.setattr(runner, "sleep_abortable", _change_cookies_and_sleep)
+
+    with pytest.raises(runner._AppleSetupRequired) as excinfo:
+        runner.wait_for_session(
+            runner.AppleJobHooks(refresh_wrapper_auth=_probe), provider, Event(), credential="wrapper"
+        )
+    assert "wrapper session" in str(excinfo.value)
+
+    state["logged_in"] = True
+    hooks = runner.AppleJobHooks(refresh_wrapper_auth=_probe)
+    assert runner.wait_for_session(hooks, provider, Event(), credential="wrapper") is True
+
+
 def test_an_unchanged_cookies_resave_does_not_lift_the_expiry_marker():
     from waves.waves_ui.backend import _apple_cookies_resave_changed
 

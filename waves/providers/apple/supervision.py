@@ -65,6 +65,17 @@ HELD_POLL_SEC = 5.0
 # and a row that holds forever cannot say so.
 HELD_START_FAILURES = 2
 
+# How many consecutive dead-credential polls a held job tolerates before the
+# credential is pronounced unable to return on its own (AP-01: a
+# wrapper-signed-in, cookies-broken account used to hold for good). A cookies
+# export cannot be probed server-side, so the cookies hold watches the file
+# and this bound is the user's window to replace it; a wrapper guest that
+# stays signed out cannot refresh itself either. 24 polls at HELD_POLL_SEC is
+# about two minutes: long enough for a fix the wizard just asked for, short
+# enough that the row ends with the setup words instead of holding the queue
+# forever.
+HELD_CREDENTIAL_FAILURES = 24
+
 # The supervised container's fixed name: one sidecar per install, so ensure
 # and stop are idempotent across restarts and retries.
 WRAPPER_CONTAINER_NAME = "waves-wrapper-v2"
