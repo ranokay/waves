@@ -16176,8 +16176,13 @@ ApplicationWindow {
                     id: appleGroupHead
                     // A failed fetch has no rows, so the count-based gate would
                     // hide the very place the honest error belongs (issue #241
-                    // / UI-05): the group shows while its error stands.
-                    visible: root.providerGroupVisible(true) || root.appleSearchError !== ""
+                    // / UI-05): the group shows while its error stands. The
+                    // group has to be mounted for that: an in-place refresh
+                    // landing after clearAppleSearch() (Apple switched off)
+                    // still writes appleSearchError, and the bare OR put the
+                    // ghost head back with stale words.
+                    visible: root.providerGroupVisible(true)
+                             || (root.appleSearchGrouped && root.appleSearchError !== "")
                     width: parent.width; height: 50
                     Row {
                         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
@@ -16221,6 +16226,7 @@ ApplicationWindow {
                         color: root.gold; font.pixelSize: 12
                     }
                     SpecBtn {
+                        id: appleSearchRetry
                         objectName: "appleSearchRetry"
                         visible: root.appleSearchError !== ""
                         compact: true; label: "RETRY"
