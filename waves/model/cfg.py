@@ -434,8 +434,8 @@ class HelpSettings:
     )
     apple_quality_audio: str = (
         'Apple Music audio download quality as a Waves tier string: "HIGH" (up to 256 Kbps AAC, Apple '
-        'has no LOW), "LOSSLESS" (up to 16-bit, 44.1 kHz ALAC), "HI_RES_LOSSLESS" (up to 24-bit, '
-        "192 kHz ALAC). Default: the highest rung."
+        'has no LOW), "LOSSLESS" (up to 24-bit / 48 kHz ALAC), "HI_RES_LOSSLESS" (above 48 kHz, up '
+        "to 24-bit / 192 kHz ALAC). Default: the highest rung."
     )
     apple_cookies_path: str = (
         "Path to a cookies export (Netscape format) from a logged-in music.apple.com browser session. "

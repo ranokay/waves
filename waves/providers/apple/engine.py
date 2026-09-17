@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from waves.constants import quality_rank
+
 logger = logging.getLogger("waves.providers.apple.engine")
 
 
@@ -614,15 +616,16 @@ class AppleFetchSession:
             raise
         except Exception as exc:
             raise AppleDownloadError(f"Apple wrapper session failed for song {song_id}: {exc}") from exc  # noqa: TRY003
-        # One chooser for both asks: LOSSLESS caps the choice at 16-bit (the
-        # tier map decides hi-res by depth alone), a HI_RES ask takes the
-        # best rendition the master holds. The rendition decision is ours
-        # either way, so a hi-res master can never satisfy a LOSSLESS ask.
-        max_bit_depth = 16 if str(max_tier) == QualityTier.LOSSLESS.value else None
+        # One chooser for both asks: a LOSSLESS ask caps at the LOSSLESS
+        # rung (the same depth-and-rate map the delivery uses), a HI_RES ask
+        # takes the best rendition the master holds. A 24-bit/48 kHz-only
+        # master therefore satisfies a LOSSLESS ask instead of being refused
+        # into the lossy fallback (issue #239).
+        ceiling = QualityTier.LOSSLESS.value if str(max_tier) == QualityTier.LOSSLESS.value else None
         song_interface = AppleMusicSongInterface(
             base=base_interface,
             codec_priority=[SongCodec.ASK],
-            ask_codec_function=lambda playlists: _choose_alac_playlist(playlists, max_bit_depth),
+            ask_codec_function=lambda playlists: _choose_alac_playlist(playlists, ceiling),
         )
         interface = AppleMusicInterface(
             song=song_interface,
@@ -689,18 +692,22 @@ async def _open_wrapper_session(*, base_url: str, decrypt_host: str, decrypt_por
 _ALAC_AUDIO_RE = re.compile(r"^audio-alac-.*?-(\d{4,6})-(\d{1,2})(?:-.*)?$")
 
 
-def _choose_alac_playlist(playlists: list, max_bit_depth: int | None) -> dict | None:
-    """The best ALAC playlist at or below a bit-depth ceiling, or None.
+def _choose_alac_playlist(playlists: list, max_tier: str | None) -> dict | None:
+    """The best ALAC playlist at or below a rung ceiling, or None.
 
     Enhanced-HLS masters label each rendition's audio group
-    ``audio-alac-stereo-<sampleRate>-<bitDepth>``; the tier map decides
-    hi-res by depth alone, so a LOSSLESS ask caps at 16-bit while a HI_RES
-    ask takes the best the master holds. None means nothing qualified,
-    which gamdl surfaces as a format refusal; ``_fetch_song_staged`` turns
-    that into AppleVariantUnavailable, classified unavailable upstream so
-    the ceiling's fallback rules still apply.
+    ``audio-alac-stereo-<sampleRate>-<bitDepth>``. The ceiling is the Waves
+    rung an ask may reach, decided by the same depth-and-rate map the
+    delivery uses: a LOSSLESS ask takes the best LOSSLESS-class rendition
+    (16-bit at any rate, or 24-bit at 44.1/48 kHz), a HI_RES ask the best the
+    master holds. A master whose only lossless rendition is 24-bit/48 kHz
+    therefore satisfies a LOSSLESS ask rather than being refused into the
+    lossy fallback (issue #239). None means nothing qualified, which gamdl
+    surfaces as a format refusal; ``_fetch_song_staged`` turns that into
+    AppleVariantUnavailable, classified unavailable upstream so the ceiling's
+    fallback rules still apply.
     """
-    candidates: list[tuple[int, int, dict]] = []
+    candidates: list[tuple[int, int, int, dict]] = []
     for playlist in playlists:
         if not isinstance(playlist, dict):
             continue
@@ -709,12 +716,15 @@ def _choose_alac_playlist(playlists: list, max_bit_depth: int | None) -> dict | 
         if match is None:
             continue
         rate, depth = int(match.group(1)), int(match.group(2))
-        if max_bit_depth is not None and depth > max_bit_depth:
+        if max_tier is not None and quality_rank(apple_tier_for_delivery("alac", depth, rate)) > quality_rank(max_tier):
             continue
-        candidates.append((depth, rate, playlist))
+        candidates.append((quality_rank(apple_tier_for_delivery("alac", depth, rate)), depth, rate, playlist))
     if not candidates:
         return None
-    return max(candidates, key=lambda candidate: (candidate[0], candidate[1]))[2]
+    # Rung first, then depth and rate: the best on the rung the ask reaches
+    # (a 24/192 beats a 24/96 on the same rung; an oddity labelled above the
+    # ceiling's rung can never outrank a real one).
+    return max(candidates, key=lambda candidate: (candidate[0], candidate[1], candidate[2]))[3]
 
 
 def download_song_alac_file(
@@ -729,8 +739,9 @@ def download_song_alac_file(
 ) -> AppleDelivery:
     """Fetch one ALAC song through the managed wrapper into a fresh workdir.
 
-    ``max_tier`` caps the rendition (a Waves tier value): LOSSLESS picks an
-    ALAC at or below 16-bit, anything else the best the master holds. Session
+    ``max_tier`` caps the rendition (a Waves tier value): LOSSLESS picks the
+    best ALAC on that rung (16-bit at any rate, or 24-bit at 44.1/48 kHz),
+    anything else the best the master holds. Session
     persistence is the wrapper's own property (tokens survive a container
     restart): a second call with the same URL needs no re-login. Raises
     AppleCredentialsError when the guest is logged out or unreachable as a
@@ -844,13 +855,15 @@ def apple_tier_for_delivery(
 ) -> str:
     """An Apple delivery's honest Waves tier value (spec §4.3).
 
-    AAC 256 -> HIGH (Apple has no LOW); ALAC 16-bit -> LOSSLESS; ALAC
-    24-bit -> HI_RES_LOSSLESS (24/96 and 24/192 are both this rung; the
-    "24/192" detail rides label text, never rank). A converted FLAC answers
-    the same rungs as the ALAC it was converted from. Bit depth alone decides
-    hi-res: a rate without a depth never promotes (a 16-bit 48 kHz master
-    stays LOSSLESS). Atmos E-AC-3 answers HIGH: the drawer words it ATMOS,
-    never a rung. Unknown stays on the fallback, never invented.
+    AAC 256 -> HIGH (Apple has no LOW). ALAC (or a FLAC converted from it):
+    16-bit stays LOSSLESS whatever the rate; 24-bit (or deeper) is LOSSLESS
+    at 44.1/48 kHz or an unreadable rate and HI_RES_LOSSLESS only above
+    48 kHz (88.2 and up) -- Apple's own class boundary, so the rung never
+    overstates what the master carries, and 24/96 and 24/192 stay the one
+    rung whose numbers ride the label text, never rank (issue #239:
+    24/48 used to promote on depth alone). A rate without a depth never
+    promotes. Atmos E-AC-3 answers HIGH: the drawer words it ATMOS, never a
+    rung. Unknown stays on the fallback, never invented.
     """
     from waves.constants import QualityTier
 
@@ -858,15 +871,19 @@ def apple_tier_for_delivery(
     if norm in ("eac3", "ec3", "ac4"):
         return QualityTier.HIGH.value
     if norm in ("alac", "flac"):
-        # FLAC is the converted ALAC container: same lossless ladder, decided
-        # by depth alone, never by rate.
+        # FLAC is the converted ALAC container: same lossless ladder, the
+        # same depth-and-rate map.
         try:
             rate = int(str(sample_rate or "").strip())
         except (TypeError, ValueError):
             rate = 0
         depth = int(bit_depth) if isinstance(bit_depth, int) and bit_depth > 0 else 0
         if depth >= 24:
-            return QualityTier.HI_RES_LOSSLESS.value
+            # Apple's classes: Lossless reaches 24/48; Hi-Res Lossless is the
+            # 24-bit class above 48 kHz. An unreadable rate cannot promote.
+            if rate > 48000:
+                return QualityTier.HI_RES_LOSSLESS.value
+            return QualityTier.LOSSLESS.value
         if depth > 0:
             return QualityTier.LOSSLESS.value
         if rate > 0:

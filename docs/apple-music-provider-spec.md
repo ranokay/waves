@@ -84,7 +84,7 @@ The setup wizard (§9.3) provisions what Waves can, **FFmpeg-manager style** —
 
 ### 4.3 One quality model
 
-- The four rungs `LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS` become a **Waves-owned enum** (no longer tidalapi's `Quality`); each provider maps its engine codecs onto it. Apple: AAC 256 → HIGH (Apple has no LOW), ALAC 16/44.1 → LOSSLESS, ALAC 24/96·192 → HI_RES_LOSSLESS. **Audio type (stereo/Atmos) stays orthogonal** to quality everywhere.
+- The four rungs `LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS` become a **Waves-owned enum** (no longer tidalapi's `Quality`); each provider maps its engine codecs onto it. Apple: AAC 256 → HIGH (Apple has no LOW); ALAC 16-bit at any rate and ALAC 24-bit at 44.1/48 kHz → LOSSLESS; ALAC 24-bit above 48 kHz (88.2–192) → HI_RES_LOSSLESS (Apple's own Lossless-vs-Hi-Res class boundary, so the rung never overstates the master). **Audio type (stereo/Atmos) stays orthogonal** to quality everywhere.
 - The queue's pinned-quality string parses through the Waves enum, retiring the tidalapi `Quality(raw)` parse point (`backend.py:7586`). The three rank-comparison sites (ownership store, engine gate, bridge gate) keep their scale.
 - The Chooser renders provider detail ("ALAC 24/192") as **label text, never as rank**.
 - **Advertised vs delivered**: the Chooser shows what the catalog advertises (`advertised_deliveries` — Apple's `audioVariants` flags, with the exact tier available via one enhanced-HLS probe where it matters); after download, rows report the **delivered** quality in plain words (per the existing reporting), which ffprobe confirms (§6.1). 24/96 vs 24/192 is track-dependent; both are HI_RES_LOSSLESS.

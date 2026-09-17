@@ -270,7 +270,7 @@ def test_the_apple_choice_exists_with_honest_labels():
     assert [o["value"] for o in options] == ["LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS"]
     by_value = {o["value"]: o["label"] for o in options}
     assert by_value["HIGH"] == "High · Up to 256 Kbps (AAC)"
-    assert by_value["LOSSLESS"] == "Lossless · Up to 16-bit / 44.1 kHz (ALAC)"
+    assert by_value["LOSSLESS"] == "Lossless · Up to 24-bit / 48 kHz (ALAC)"
     assert by_value["HI_RES_LOSSLESS"] == "Max · Hi-Res · Up to 24-bit / 192 kHz (ALAC)"
     assert by_value["LOW"] == "LOW"
 

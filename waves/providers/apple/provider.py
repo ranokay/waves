@@ -1225,9 +1225,10 @@ class AppleProvider(Provider):
     def _resolve_via_wrapper(self, item: dict, want: QualityTier) -> StreamInfo:
         """One stereo song through the managed wrapper's ALAC path.
 
-        ``want`` caps the rendition: LOSSLESS takes an ALAC at or below
-        16-bit, HI_RES the best the master holds (the delivered tier is
-        probed off the bytes either way).
+        ``want`` caps the rendition: LOSSLESS takes the best ALAC on that
+        rung (16-bit at any rate, or 24-bit at 44.1/48 kHz), HI_RES the
+        best the master holds (the delivered tier is probed off the bytes
+        either way).
         """
         from waves.providers.apple.engine import (
             apple_delivery_detail,
