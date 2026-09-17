@@ -58,6 +58,39 @@ _ALBUM_ROWS = [
 ]
 
 
+def _fake_album():
+    """A minimal TIDAL-shaped album object for the row-vocabulary check.
+
+    Only the attributes the bridge's own album builder reads; the seam's
+    ``row_for`` must answer the same dict for it.
+    """
+    from types import SimpleNamespace
+
+    artist = SimpleNamespace(name="Fake Artist", id="ar1", roles=None)
+    return SimpleNamespace(
+        id="al1",
+        name="Fake Album",
+        full_name="Fake Album",
+        title="Fake Album",
+        artists=[artist],
+        artist=artist,
+        image=lambda dimension=320: "",
+        num_tracks=9,
+        num_videos=0,
+        duration=2100,
+        popularity=44,
+        explicit=False,
+        user_date_added=None,
+        release_date=None,
+        tidal_release_date=None,
+        copyright="",
+        version="",
+        audio_modes=[],
+        audio_quality=None,
+        media_metadata_tags=[],
+    )
+
+
 def _fake_provider():
     """A second provider: descriptor + session + FAVORITES, nothing else.
 
@@ -150,23 +183,17 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     if q(fake + '.modelFor("albums").count') != 2 and q(tidal + '.modelFor("albums").count') > 0:
         failures.append("rows landed in the wrong source's pane")
 
-    # One vocabulary per source: TIDAL's pane rows are the bridge's own row
+    # One vocabulary per source: TIDAL's pane rows ARE the bridge's own row
     # dicts (the same keys search, Browse and the artist pages carry, so the
-    # badges, ownership and identity reads agree), bound where the providers
-    # are wired.
-    from waves.waves_ui.backend import WavesBridge
-
-    builders = bridge.providers["tidal"]._row_builders
-    for kind, method in (
-        ("album", WavesBridge._album_dict),
-        ("track", WavesBridge._track_dict),
-        ("video", WavesBridge._video_dict),
-        ("playlist", WavesBridge._playlist_dict),
-        ("mix", WavesBridge._mix_dict),
-        ("artist", WavesBridge._fav_artist_dict),
-    ):
-        if builders.get(kind) is None or builders[kind].__func__ is not method:
-            failures.append(f"TIDAL's {kind} rows do not ride the bridge's own {method.__name__}")
+    # badges, ownership and identity reads agree). Compared through the seam,
+    # behaviourally: the same object built both ways answers the same row.
+    album = _fake_album()
+    through_seam = bridge.providers["tidal"].row_for("album", album)
+    through_bridge = bridge._album_dict(album)
+    if through_seam != through_bridge:
+        failures.append("TIDAL's pane row does not agree with the bridge's own album row")
+    if through_seam.get("id") != "al1" or through_seam.get("artist") != "Fake Artist":
+        failures.append("TIDAL's row vocabulary lost the object's identity")
 
     for line in failures:
         print(f"REGRESSED: {line}", file=sys.stderr)

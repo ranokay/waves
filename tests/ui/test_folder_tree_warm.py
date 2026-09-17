@@ -62,7 +62,7 @@ class _WarmStub:
         self._media_lists_lock = Lock()
         self._logged_in = logged_in
         self._tree_warm_waiting: list = []
-        self._tree_warm_inflight = False
+        self._tree_warm_inflight: set = set()
         # The pane's rows come through the source's own row vocabulary
         # (issue #259); the stub answers the one key these tests read.
         self.providers = {
@@ -126,6 +126,26 @@ def test_only_one_sweep_is_started_for_a_burst_of_clicks():
 
     started[0].fn()  # the sweep lands, both parked opens replay
     assert [c[1] for c in stub.playlistFolderLoaded.calls] == ["f1", "f2"]
+
+
+def test_two_sources_warm_their_own_trees():
+    """A warm is per source (issue #259): a second source's drill-in must not
+    join a sweep that never fetches its tree and then have its callback
+    dropped."""
+    stub = _WarmStub(_tree())
+    stub.providers["fake"] = SimpleNamespace(id="fake", row_for=lambda kind, item: {"kind": kind, "id": item.id})
+    started: list = []
+    stub.threadpool = SimpleNamespace(start=started.append)
+
+    stub.openPlaylistFolder("tidal", "f1")
+    stub.openPlaylistFolder("fake", "f1")
+    assert len(started) == 2, "each source's sweep is its own"
+    assert {entry[2] for entry in stub._tree_warm_waiting} == {"tidal", "fake"}
+
+    started[0].fn()  # TIDAL's sweep lands; only its waiter replays
+    assert [(c[0], c[1]) for c in stub.playlistFolderLoaded.calls] == [("tidal", "f1")]
+    started[1].fn()  # the fake's sweep lands and replays too
+    assert [c[0] for c in stub.playlistFolderLoaded.calls] == ["tidal", "fake"]
 
 
 def test_a_folder_that_is_really_gone_still_reports_empty_once():

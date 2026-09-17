@@ -657,8 +657,9 @@ def test_the_library_favorites_window_reads_the_provider():
             return {"id": f"row{int(item is o2)}"}
 
     provider = _RowProvider(favorites_page=([o1, o2], True))
-    stub = SimpleNamespace(providers={"tidal": provider}, _lib_sort={}, _source_provider=lambda source: provider)
-    stub._source_rows = lambda provider, row_kind, raw: WavesBridge._source_rows(stub, provider, row_kind, raw)
+    # The source lookup and the row build are module-level helpers reading
+    # ``providers`` / the provider itself, so the stub carries only those.
+    stub = SimpleNamespace(providers={"tidal": provider}, _lib_sort={})
 
     rows, more = WavesBridge._library_page(stub, "tidal", "tracks", 0, 10, order_override=("date", "desc"))
 
@@ -689,7 +690,7 @@ def test_the_library_window_drops_rows_a_provider_cannot_render():
 
 
 def test_a_source_with_no_provider_loads_nothing():
-    stub = SimpleNamespace(providers={}, _lib_sort={}, _source_provider=lambda source: None)
+    stub = SimpleNamespace(providers={}, _lib_sort={})
 
     assert WavesBridge._library_page(stub, "gone", "tracks", 0, 10) == ([], False)
 

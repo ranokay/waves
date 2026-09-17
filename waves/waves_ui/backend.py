@@ -4408,7 +4408,7 @@ class WavesBridge(LibraryMixin, QObject):
     # the tree before any library sweep had run, so the sweep was kicked off on
     # a worker and this queued hop replays the waiting callers on the GUI
     # thread (see _warm_folder_tree).
-    _folderTreeWarmed = Signal()
+    _folderTreeWarmed = Signal(str)  # source whose folder sweep finished
     backRequested = Signal()
     forwardRequested = Signal()
 
@@ -4872,10 +4872,11 @@ class WavesBridge(LibraryMixin, QObject):
         # events already posted from the same worker (FIFO event queue), or
         # _track_lifecycle finds the relay gone and skips membership recording.
         self._jobSignalsReleased.connect(self._drop_job_signals, QtCore.Qt.ConnectionType.QueuedConnection)
-        # Callers parked until the first folder sweep lands, drained on the GUI
-        # thread by _on_folder_tree_warmed.
+        # Callers parked until their source's folder sweep lands, drained on
+        # the GUI thread by _on_folder_tree_warmed (per source: two sources'
+        # drills warm their own trees).
         self._tree_warm_waiting: list = []
-        self._tree_warm_inflight = False
+        self._tree_warm_inflight: set[str] = set()
         self._folderTreeWarmed.connect(self._on_folder_tree_warmed)
         self._queue: list[dict] = []
         # qid -> row dict, mirroring _queue. _queue_item() is on the per-tick
@@ -7467,18 +7468,22 @@ class WavesBridge(LibraryMixin, QObject):
         exactly once, whether this call started the sweep or joined one already
         running, and ONLY if the sweep actually produced a tree: replaying into
         a still-missing tree would just re-warm, forever (every parked caller
-        re-tests ``_current_folder_tree() is None``), so a failed sweep drops
-        the callbacks instead, clears the button named by ``media_id`` (the
-        download path lights "preparing" before parking), and leaves retrying to
-        the user's next click.
+        re-tests ``_current_folder_tree(source) is None``), so a failed sweep
+        drops the callbacks instead, clears the button named by ``media_id``
+        (the download path lights "preparing" before parking), and leaves
+        retrying to the user's next click.
+
+        The warm is per SOURCE (each source's tree is its own read): a caller
+        for another source starts its own sweep rather than joining one that
+        would never fetch its tree and then dropping its callbacks.
         """
         source = str(source or "")
         if not self._logged_in or _source_provider(self, source) is None:
             return False
         self._tree_warm_waiting.append((then, str(media_id or ""), source))
-        if self._tree_warm_inflight:
+        if source in self._tree_warm_inflight:
             return True
-        self._tree_warm_inflight = True
+        self._tree_warm_inflight.add(source)
         self._set_busy(True)
 
         def work() -> None:
@@ -7486,29 +7491,31 @@ class WavesBridge(LibraryMixin, QObject):
                 self._media_lists(source, refresh=True)
             except Exception:
                 logger.exception("Could not warm the playlist-folder tree")
-            self._folderTreeWarmed.emit()
+            self._folderTreeWarmed.emit(source)
 
         self.threadpool.start(Worker(work))
         return True
 
-    def _on_folder_tree_warmed(self) -> None:
-        self._tree_warm_inflight = False
-        self._set_busy(False)
-        waiting, self._tree_warm_waiting = self._tree_warm_waiting, []
-        # Each waiter names its own source: replay only the callbacks whose
-        # sweep actually produced a tree.
+    def _on_folder_tree_warmed(self, source: str) -> None:
+        source = str(source or "")
+        self._tree_warm_inflight.discard(source)
+        self._set_busy(bool(self._tree_warm_inflight))
+        # Only this source's waiters drain: another source's sweep is its own
+        # warm (and its own emit).
+        waiting = [entry for entry in self._tree_warm_waiting if entry[2] == source]
+        self._tree_warm_waiting = [entry for entry in self._tree_warm_waiting if entry[2] != source]
         ready = [entry for entry in waiting if self._current_folder_tree(entry[2]) is not None]
         if not ready:
             # The sweep failed: don't replay (each callback would re-warm and
             # loop unbounded). Clear any buttons the parked downloads lit and
             # tell the user; their next click is the retry.
-            for _then, mid, _source in waiting:
+            for _then, mid, _waiter_source in waiting:
                 if mid:
                     self.downloadState.emit(mid, "")
             if waiting:
                 self._set_status("Could not load your playlist folders, try again")
             return
-        for then, _mid, _source in ready:
+        for then, _mid, _waiter_source in ready:
             try:
                 then()
             except Exception:
@@ -7612,7 +7619,7 @@ class WavesBridge(LibraryMixin, QObject):
         if (
             tree is None
             and provider is not None
-            and self._warm_folder_tree(lambda: self.openPlaylistFolder(source, folder_id))
+            and self._warm_folder_tree(lambda: self.openPlaylistFolder(source, folder_id), source=source)
         ):
             # Warm launch: the page cache restores the folder rows (and makes
             # them clickable) before any sweep has run, and the drill-in view
@@ -7736,6 +7743,11 @@ class WavesBridge(LibraryMixin, QObject):
         scroll."""
         key = _lib_key(source, category)
         if _source_provider(self, key[0]) is None:
+            # A closed source (a sign-out that raced the scroll): answer the
+            # page the pane's infinite scroll is waiting on, or its
+            # ``loadingMore`` flag would never clear and the shelf would stop
+            # paging even if the source came back.
+            self.libraryMore.emit(key[0], key[1], [], False)
             return
         cached = self._lib_cache.get(key)
         if cached is None or not cached["more"] or key in self._lib_loading:

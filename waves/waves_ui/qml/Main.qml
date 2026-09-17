@@ -12237,7 +12237,11 @@ ApplicationWindow {
                  : cat === "folder" ? folderModel : null
         }
         function viewFor(cat) {
-            return cat === "albums" ? albumsList : cat === "tracks" ? tracksList
+            // "home" is a pane too (the scroll dressing follows it, and it is
+            // the pane a fresh group shows); "folder" has its own view inside
+            // the playlists pane.
+            return cat === "home" ? homePane
+                 : cat === "albums" ? albumsList : cat === "tracks" ? tracksList
                  : cat === "artists" ? artistsGrid : cat === "playlists" ? playlistsList
                  : cat === "mixes" ? mixesList : cat === "videos" ? videosList : null
         }

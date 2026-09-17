@@ -73,7 +73,7 @@ class _WarmStub:
         self._media_lists_lock = Lock()
         self._logged_in = True
         self._tree_warm_waiting: list = []
-        self._tree_warm_inflight = False
+        self._tree_warm_inflight: set = set()
         # Parks the sweep instead of running it, so the button state published
         # for the wait is the only thing under test.
         self.threadpool = SimpleNamespace(start=lambda w: None)
