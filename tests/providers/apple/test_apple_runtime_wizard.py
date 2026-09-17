@@ -1738,6 +1738,7 @@ def test_a_cookies_hold_ignores_a_healthy_wrapper(tmp_path, monkeypatch):
     from threading import Event
 
     from waves.providers.apple import runner
+    from waves.providers.apple.engine import AppleCredential
 
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("broken export", encoding="utf-8")
@@ -1755,7 +1756,7 @@ def test_a_cookies_hold_ignores_a_healthy_wrapper(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: sleeps.append(seconds) or True)
 
     with pytest.raises(runner._AppleSetupRequired) as excinfo:
-        runner.wait_for_session(hooks, provider, Event(), credential="cookies")
+        runner.wait_for_session(hooks, provider, Event(), credential=AppleCredential.COOKIES)
 
     assert "cookies export" in str(excinfo.value)
     assert "Settings" in str(excinfo.value)
@@ -1765,12 +1766,28 @@ def test_a_cookies_hold_ignores_a_healthy_wrapper(tmp_path, monkeypatch):
     assert sleeps == [runner.HELD_POLL_SEC], "one poll before the bound"
 
 
+def test_a_dead_runtime_ends_the_wrapper_hold_for_the_down_path():
+    """A wrapper hold whose probe finds the runtime unreachable is not a
+    credential question: it returns at once so the retried fetch runs the
+    runtime's own held-not-failed path (spec §3), never blaming the session."""
+    from threading import Event
+
+    from waves.providers.apple import runner
+    from waves.providers.apple.engine import AppleCredential
+
+    provider = SimpleNamespace(cookies_path="", wrapper_url="http://127.0.0.1:1234")
+    hooks = runner.AppleJobHooks(refresh_wrapper_auth=lambda **kw: {"reachable": False, "logged_in": False})
+
+    assert runner.wait_for_session(hooks, provider, Event(), credential=AppleCredential.WRAPPER) is True
+
+
 def test_a_wrapper_hold_waits_for_the_guest_not_the_cookies(tmp_path, monkeypatch):
     """The mirror: an ALAC fetch needs the wrapper, so a changed cookies file
     is not its recovery and the guest signing back in is."""
     from threading import Event
 
     from waves.providers.apple import runner
+    from waves.providers.apple.engine import AppleCredential
 
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("broken export", encoding="utf-8")
@@ -1789,13 +1806,37 @@ def test_a_wrapper_hold_waits_for_the_guest_not_the_cookies(tmp_path, monkeypatc
 
     with pytest.raises(runner._AppleSetupRequired) as excinfo:
         runner.wait_for_session(
-            runner.AppleJobHooks(refresh_wrapper_auth=_probe), provider, Event(), credential="wrapper"
+            runner.AppleJobHooks(refresh_wrapper_auth=_probe),
+            provider,
+            Event(),
+            credential=AppleCredential.WRAPPER,
         )
     assert "wrapper session" in str(excinfo.value)
 
     state["logged_in"] = True
     hooks = runner.AppleJobHooks(refresh_wrapper_auth=_probe)
-    assert runner.wait_for_session(hooks, provider, Event(), credential="wrapper") is True
+    assert runner.wait_for_session(hooks, provider, Event(), credential=AppleCredential.WRAPPER) is True
+
+
+def test_the_landed_credential_reads_the_delivery():
+    """A landing lifts only the marker its own fetch answers for: an ALAC
+    landing (lossless/hi-res stereo) is wrapper proof; Atmos and lossy AAC
+    come through the cookies export (spec §3)."""
+    from waves.providers.apple import runner
+    from waves.providers.apple.engine import AppleCredential
+
+    assert runner._landed_credential({"quality": {"tier": "LOSSLESS", "audio_mode": "STEREO"}}) is (
+        AppleCredential.WRAPPER
+    )
+    assert (
+        runner._landed_credential({"quality": {"tier": "HI_RES_LOSSLESS", "audio_mode": "STEREO"}})
+        is AppleCredential.WRAPPER
+    )
+    assert runner._landed_credential({"quality": {"tier": "HI-RES", "audio_mode": "DOLBY_ATMOS"}}) is (
+        AppleCredential.COOKIES
+    )
+    assert runner._landed_credential({"quality": {"tier": "HIGH", "audio_mode": "STEREO"}}) is (AppleCredential.COOKIES)
+    assert runner._landed_credential({}) is AppleCredential.COOKIES
 
 
 def test_an_unchanged_cookies_resave_does_not_lift_the_expiry_marker():

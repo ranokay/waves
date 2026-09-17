@@ -1354,11 +1354,11 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     the identical failing fetch re-ran forever; now the hold watches the
     cookies export alone and past its bound the run ends with the cookies
     setup words (the row is retryable once the export is replaced)."""
-    from waves.providers.apple.engine import AppleCredentialsError
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
 
     provider = _FakeProvider()
     provider.resolve_stream = lambda raw, tier, audio_type: (_ for _ in ()).throw(
-        AppleCredentialsError("Apple downloads need a signed-in cookies export", credential="cookies")
+        AppleCredentialsError("Apple downloads need a signed-in cookies export", credential=AppleCredential.COOKIES)
     )
     base = tmp_path / "lib"
     stub = _bind(_stub(base, provider))
@@ -1401,10 +1401,14 @@ def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, mo
     the guest signed out, and the recovery probe finds it signed back in; the
     same track retries in place and lands."""
     from waves.providers.apple import engine as apple_engine
-    from waves.providers.apple.engine import AppleCredentialsError
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
 
     monkeypatch.setattr(
-        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+        apple_engine,
+        "probe_audio_file",
+        # The wrapper tier's delivery is stereo ALAC: the landing must read as
+        # the wrapper's proof, not the cookies tier's AAC.
+        lambda path, ffprobe_path="": {"codec": "alac", "sample_rate": "44100", "bit_depth": 16},
     )
     staged = tmp_path / "staged.m4a"
     _tone(staged)
@@ -1414,8 +1418,13 @@ def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, mo
     def _flaky(raw, tier, audio_type):
         calls.append(audio_type)
         if len(calls) == 1:
-            raise AppleCredentialsError("The Apple wrapper is not signed in", credential="wrapper")
-        return _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+            raise AppleCredentialsError("The Apple wrapper is not signed in", credential=AppleCredential.WRAPPER)
+        info = _FakeProvider.resolve_stream(provider, raw, tier, audio_type)
+        # The wrapper tier's delivery is stereo ALAC, and its own words must
+        # say so: the landing's credential proof reads the delivered codecs.
+        info.codecs = "alac"
+        info.delivered = {**info.delivered, "tier": QualityTier.LOSSLESS.value, "codecs": "alac"}
+        return info
 
     provider.resolve_stream = _flaky
     provider.wrapper_url = "http://127.0.0.1:1234"  # the guest tier is set up, its session expired

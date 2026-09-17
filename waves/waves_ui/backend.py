@@ -14241,7 +14241,7 @@ class WavesBridge(LibraryMixin, QObject):
             refresh_wrapper_auth=lambda timeout=5: self._refresh_apple_wrapper_auth(timeout=timeout),
             schedule_idle_stop=lambda: self._schedule_apple_idle_stop(),
             mark_session_expired=lambda credential: self._apple_mark_session_expired(credential),
-            clear_session_expired=lambda: self._apple_clear_session_expired(),
+            clear_session_expired=lambda credential: self._apple_clear_session_expired(credential),
             redact=lambda text: diagnostics.content(text),
             devlog_event=lambda *args, **kwargs: devlog.event(*args, **kwargs),
             devlog_done=lambda *args, **kwargs: devlog.done(*args, **kwargs),
@@ -14368,7 +14368,7 @@ class WavesBridge(LibraryMixin, QObject):
         names. Until then the light reports needs attention even if a cached
         probe still reads signed in.
         """
-        wanted = AppleCredential(getattr(credential, "value", credential))
+        wanted = AppleCredential.of(credential)
         was_expired = bool(getattr(self, "_apple_session_expired", False))
         changed = wanted != getattr(self, "_apple_session_credential", "")
         self._apple_session_expired = True
@@ -14390,7 +14390,7 @@ class WavesBridge(LibraryMixin, QObject):
             return
         pending = str(getattr(self, "_apple_session_credential", "") or "")
         if credential is not None and pending:
-            wanted = AppleCredential(getattr(credential, "value", credential))
+            wanted = AppleCredential.of(credential)
             if wanted != pending:
                 return
         self._apple_session_expired = False

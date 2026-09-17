@@ -221,7 +221,7 @@ class AppleJobHooks:
     refresh_wrapper_auth: Callable[..., Any] = _none
     schedule_idle_stop: Callable[[], None] = _noop
     mark_session_expired: Callable[..., None] = _noop
-    clear_session_expired: Callable[[], None] = _noop
+    clear_session_expired: Callable[..., None] = _noop
 
     redact: Callable[[Any], str] = str
     devlog_event: Callable[..., None] = _noop
@@ -1423,7 +1423,27 @@ def _setup_required(hooks: AppleJobHooks, message: str) -> _AppleSetupRequired:
     return _AppleSetupRequired(message)
 
 
-def _credential_words(credential) -> tuple[str, str]:
+def _landed_credential(delivered: dict) -> AppleCredential:
+    """Which credential a landed delivery exercised.
+
+    The wrapper serves stereo ALAC only; Atmos and lossy stereo come through
+    the cookies export. So a lossless/hi-res stereo landing is wrapper proof
+    and every other landing is cookies proof, letting a landed track lift only
+    the marker its own fetch answers for (spec §3: the light reads needs
+    attention while the export a tier needs is broken).
+    """
+    quality = dict((delivered or {}).get("quality") or {})
+    if str(quality.get("audio_mode") or "").upper() == "DOLBY_ATMOS":
+        return AppleCredential.COOKIES
+    if str(quality.get("tier") or "").upper() in (
+        QualityTier.LOSSLESS.value,
+        QualityTier.HI_RES_LOSSLESS.value,
+    ):
+        return AppleCredential.WRAPPER
+    return AppleCredential.COOKIES
+
+
+def _credential_words(credential: AppleCredential) -> tuple[str, str]:
     """The (hold, terminal) wording for the credential a fetch needed.
 
     Both name the repair path the wizard owns, so a held or failed row is
@@ -1472,7 +1492,16 @@ def wait_for_session(
             if str(getattr(provider, "wrapper_url", "") or "").strip():
                 try:
                     state = hooks.refresh_wrapper_auth(timeout=5) or {}
-                    recovered = bool(state.get("logged_in"))
+                    if bool(state.get("logged_in")):
+                        # The guest signed back in: the retried fetch is the
+                        # proof.
+                        return True
+                    if state.get("reachable") is False:
+                        # The runtime itself is not answering, which is not a
+                        # credential question: let the retried fetch run the
+                        # down path (held for the runtime, the setup words if
+                        # it will not start) instead of blaming the session.
+                        return True
                 except Exception:
                     logger.debug("Apple wrapper recovery probe failed", exc_info=True)
         else:
@@ -2366,10 +2395,11 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             continue
         ok += 1
         landed.append(pathlib.Path(delivered["path"]))
-        # A landed track proves the session works: lift the expiry marker
-        # even when recovery was never observed by a probe (spec §3).
+        # A landed track proves the credential its own fetch needed, and only
+        # that one: an ALAC landing cannot report a cookies-broken export
+        # healed (spec §3). A probe never has to have observed the recovery.
         with contextlib.suppress(Exception):
-            hooks.clear_session_expired()
+            hooks.clear_session_expired(_landed_credential(delivered))
         # Wrapper work stamps the idle clock so an in-flight run never
         # looks idle to the sidecar stop.
         with contextlib.suppress(Exception):

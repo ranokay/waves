@@ -42,6 +42,15 @@ class AppleCredential(StrEnum):
     COOKIES = "cookies"
     WRAPPER = "wrapper"
 
+    @classmethod
+    def of(cls, value) -> AppleCredential:
+        """The member for a member or its plain word; an unknown name raises.
+
+        One coercion for the error's constructor and the bridge's marker, so
+        a typo cannot silently route a hold or a light to the other credential.
+        """
+        return cls(getattr(value, "value", value))
+
 
 class AppleCredentialsError(Exception):
     """A credential the fetch needed is missing, unreadable, or signed out.
@@ -53,7 +62,7 @@ class AppleCredentialsError(Exception):
 
     def __init__(self, message: str, *, credential: AppleCredential = AppleCredential.COOKIES) -> None:
         super().__init__(message)
-        self.credential = AppleCredential(getattr(credential, "value", credential))
+        self.credential = AppleCredential.of(credential)
 
 
 class AppleDownloadError(Exception):
