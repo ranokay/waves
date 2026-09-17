@@ -17,14 +17,14 @@ from waves.constants import (
 class Settings:
     skip_existing: bool = True
     # ----- shared lyrics/artwork keys: migration carriers only -----
-    # The twelve keys below predate the per-provider mirrors further down and
-    # are read ONLY as provider_setting's fallback for a data object that lacks
-    # the mirror attribute (stub or legacy shapes): the real dataclass always
-    # defines every mirror, and the one-time migration
-    # (config._migrate_settings) is their last writer on a real install. They
-    # stay serialized so a pre-split settings.json keeps its meaning until that
-    # migration runs; editing one by hand after it has run changes nothing
-    # (audit LM-04).
+    # The keys below predate the per-provider mirrors further down. Two readers
+    # exist, both deliberate: provider_setting's fallback for a data object that
+    # lacks the mirror attribute (stub or legacy shapes), and the one-time
+    # migration (config._migrate_lyrics_art_providers), which reads them and
+    # writes the mirrors. A real install therefore reads the mirrors from then
+    # on; editing a shared key by hand after the migration changes nothing.
+    # They stay serialized so a pre-split settings.json keeps its meaning until
+    # that migration runs (audit LM-04).
     lyrics_embed: bool = False
     # Best-quality lyrics out of the box: sidecars on, so a track keeps its
     # finest timed source next to it -- .lrc on both providers, plus the

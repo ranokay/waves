@@ -122,9 +122,10 @@ def test_apple_cover_url_clamps_to_5000():
 
 def test_apple_cover_file_size_is_read(monkeypatch):
     """The Apple card's 'Separate cover file size' governs the sidecar fetch
-    (issue #236 / audit LM-01): the separate file's bytes are the embedded
-    fetch on 'follow' (no second request) and a fetch at the chosen size
-    otherwise, while the embedded bytes stay the embed's."""
+    (issue #236 / audit LM-01): the pair carries the embedded bytes for the
+    embed and, for the sidecar, the same bytes on 'follow' (no second
+    request) or a fetch at the chosen size, and a sidecar the toggles do not
+    want never pays for one."""
     from waves.constants import CoverDimensions
     from waves.providers.apple import runner
 
@@ -161,24 +162,29 @@ def test_apple_cover_file_size_is_read(monkeypatch):
             }.get(key, default)
         )
 
-    # Follow: the embedded fetch answers the sidecar unchanged, no second ask.
+    # Follow: both slots answer the one embedded fetch.
     hooks = _hooks(CoverDimensions.Px640, "follow")
-    embedded = runner.cover_bytes(hooks, _Provider(), {"id": "album-1"})
+    embedded, sidecar = runner.cover_bytes_pair(hooks, _Provider(), {"id": "album-1"}, want_file=True)
     assert asked == [640] and fetched == ["https://cover/640.jpg"]
-    assert runner.cover_file_bytes(hooks, _Provider(), {"id": "album-1"}, embedded) is embedded
-    assert fetched == ["https://cover/640.jpg"], "follow must not fetch again"
+    assert sidecar is embedded, "follow must not fetch again"
 
-    # An explicit choice is a fetch of its own at that size; the embedded
-    # fetch (and so the embed's bytes) stays at the embedded size.
+    # An explicit choice is a fetch of its own at that size; the embed keeps
+    # the embedded-size bytes.
     asked.clear()
     fetched.clear()
     hooks = _hooks(CoverDimensions.Px640, "Px1280")
-    embedded = runner.cover_bytes(hooks, _Provider(), {"id": "album-1"})
-    assert asked == [640] and fetched == ["https://cover/640.jpg"]
-    sidecar = runner.cover_file_bytes(hooks, _Provider(), {"id": "album-1"}, embedded)
+    embedded, sidecar = runner.cover_bytes_pair(hooks, _Provider(), {"id": "album-1"}, want_file=True)
     assert asked == [640, 1280], "the sidecar fetch must use the chosen size"
     assert sidecar == b"bytes:https://cover/1280.jpg"
-    assert sidecar != embedded, "the embed keeps the embedded-size bytes"
+    assert embedded == b"bytes:https://cover/640.jpg"
+
+    # A sidecar the toggles do not want is never fetched.
+    asked.clear()
+    fetched.clear()
+    hooks = _hooks(CoverDimensions.Px640, "Px1280")
+    embedded, sidecar = runner.cover_bytes_pair(hooks, _Provider(), {"id": "album-1"}, want_file=False)
+    assert asked == [640]
+    assert sidecar is embedded
 
 
 @pytest.mark.ffmpeg

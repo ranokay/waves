@@ -238,7 +238,7 @@ SRT is dropped for v1 (a conversion artifact, not something Apple provides).
 
 **Defaults** (fresh installs; existing installs keep their stored values): `lyrics_embed` off, `lyrics_file` **on**, `synced_only` off, `prefer_lrclib` on, word-timed **on**, `.ttml` sidecar **on** (Apple only; inert where the provider's engine serves no TTML). Every lyrics/art key additionally has a per-provider mirror under the provider's card; the shared keys are one-time migration carriers (`provider_setting` reads the mirror first), and a fresh install starts every mirror at these values.
 
-**Album art**: the existing `CoverDimensions` setting governs both providers; **ORIGIN maps per provider** — TIDAL keeps its exact current behavior (embedded cap included), Apple's ORIGIN is the true original-master image (URL-rewrite path), with the `{w}x{h}` template up to 5000×5000 otherwise. Sidecar format options: jpg (default) / png, plus raw-original on Apple; embedded format stays jpg for both. Animated artwork: post-v1 (§12).
+**Album art**: the existing `CoverDimensions` setting governs both providers; **ORIGIN maps per provider** — TIDAL keeps its exact current behavior (embedded cap included), Apple's ORIGIN is the true original-master image (URL-rewrite path), with the `{w}x{h}` template up to 5000×5000 otherwise. The separate cover file can carry its own size (`metadata_cover_file_dimension`: "follow" reuses the embedded size). Sidecar format options: **raw (default — the served bytes, Apple's true original master where available)** / jpg / png; embedded format stays jpg for both. Animated artwork: post-v1 (§12).
 
 ## 9.2 Settings architecture
 

@@ -1137,14 +1137,8 @@ def wants_cover(hooks: AppleJobHooks, collection: bool, options: _JobOptions | N
     )
 
 
-def cover_bytes(hooks: AppleJobHooks, provider, raw: dict, *, for_file: bool = False) -> bytes | None:
-    """The collection cover at the requested size, or None.
-
-    ``for_file`` asks for the SEPARATE cover file's size: "follow" (the
-    default preference) keeps the embedded size, any explicit choice fetches
-    at that size -- the same rule the TIDAL engine applies to its own
-    ``metadata_cover_file_dimension`` mirror, so the Apple card's control
-    governs the Apple sidecar too (issue #236).
+def _cover_bytes_at(provider, raw: dict, dimension) -> bytes | None:
+    """The collection cover at one size, or None.
 
     ORIGIN maps per provider (spec section 9.1): TIDAL keeps
     its exact current behavior (embedded cap included); Apple's ORIGIN
@@ -1154,10 +1148,6 @@ def cover_bytes(hooks: AppleJobHooks, provider, raw: dict, *, for_file: bool = F
     served bytes to the selected format (or keep their true extension),
     and embedding normalizes to jpg.
     """
-    dimension = hooks.psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
-    if for_file:
-        pref = str(hooks.psetting(CTX_APPLE, "metadata_cover_file_dimension", "follow") or "follow")
-        dimension = cover_file_dimension(dimension, pref)
     is_origin = str(getattr(dimension, "value", dimension)) == "origin"
     if is_origin:
         try:
@@ -1192,19 +1182,27 @@ def cover_bytes(hooks: AppleJobHooks, provider, raw: dict, *, for_file: bool = F
         return response.content or None
 
 
-def cover_file_bytes(hooks: AppleJobHooks, provider, raw: dict, embedded: bytes | None) -> bytes | None:
-    """The bytes the SEPARATE cover file gets.
+def cover_bytes_pair(
+    hooks: AppleJobHooks, provider, raw: dict, *, want_file: bool
+) -> tuple[bytes | None, bytes | None]:
+    """(embedded, separate-file) cover bytes for one track.
 
-    "follow" (the default) answers the embedded fetch unchanged -- no second
-    request; an explicit size fetches once more at that size (issue #236:
-    the Apple card's 'Separate cover file size' used to be saved and never
-    read).
+    One owner of the two sizes (issue #236): the embedded fetch always
+    happens, and the separate file answers with the same bytes on "follow"
+    (no second request) or a fetch at its own size -- exactly the rule the
+    TIDAL engine applies to its own ``metadata_cover_file_dimension`` mirror.
+    ``want_file`` False answers the embedded bytes for both slots, so a
+    sidecar the toggles do not want never pays for a fetch of its own.
     """
     embedded_dimension = hooks.psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
+    embedded = _cover_bytes_at(provider, raw, embedded_dimension)
+    if not want_file:
+        return embedded, embedded
     pref = str(hooks.psetting(CTX_APPLE, "metadata_cover_file_dimension", "follow") or "follow")
-    if cover_file_dimension(embedded_dimension, pref) == embedded_dimension:
-        return embedded
-    return cover_bytes(hooks, provider, raw, for_file=True)
+    file_dimension = cover_file_dimension(embedded_dimension, pref)
+    if file_dimension == embedded_dimension:
+        return embedded, embedded
+    return embedded, _cover_bytes_at(provider, raw, file_dimension)
 
 
 def write_sidecars(
@@ -1963,11 +1961,21 @@ def deliver_track(
             _drop_hold()
             break
     lyrics_synced, lyrics_unsynced, lyrics_ttml = lyrics_full(hooks, provider, row, facts, options=options)
-    cover_data = cover_bytes(hooks, provider, raw) if wants_cover(hooks, collection, options=options) else None
-    # The separate cover file can carry its own size (issue #236): "follow"
-    # (the default) reuses the embedded fetch, an explicit choice fetches once
-    # more at that size, so the Apple card's control is not silently ignored.
-    cover_file_data = cover_file_bytes(hooks, provider, raw, cover_data) if cover_data is not None else None
+    if wants_cover(hooks, collection, options=options):
+        # The separate cover file can carry its own size (issue #236); a
+        # sidecar the toggles do not want never pays for a second fetch.
+        cover_data, cover_file_data = cover_bytes_pair(
+            hooks,
+            provider,
+            raw,
+            want_file=_want_cover_file(
+                bool(options.option("cover_album_file", True)),
+                bool(collection),
+                bool(options.option("cover_single_track_file", False)),
+            ),
+        )
+    else:
+        cover_data, cover_file_data = None, None
     # Embedded art stays jpg (spec 9.1): an original-master PNG is
     # converted for the tag while the sidecar keeps the master bytes.
     embed_cover = embed_cover_bytes(hooks, cover_data) if options.option("metadata_cover_embed", True) else None

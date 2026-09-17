@@ -59,7 +59,6 @@ from waves.constants import (
     MetadataTargetUPC,
     QualityTier,
     QualityVideo,
-    cover_file_dimension,
     default_audio_is_both,
     provider_folder_name,
     quality_rank,
@@ -14938,10 +14937,13 @@ class WavesBridge(LibraryMixin, QObject):
         """Whether this job fetches cover art at all (runner policy)."""
         return runner.wants_cover(self._apple_job_hooks(), collection, options=options)
 
-    def _apple_cover_bytes(self, provider, raw: dict, *, for_file: bool = False) -> bytes | None:
-        """The collection cover at the embedded size (or the sidecar's own
-        size with ``for_file``), or None."""
-        return runner.cover_bytes(self._apple_job_hooks(), provider, raw, for_file=for_file)
+    def _apple_cover_bytes(self, provider, raw: dict) -> tuple[bytes | None, bytes | None]:
+        """(embedded, separate-file) cover bytes for one standalone action.
+
+        The pair comes from the runner's one size rule, so the COVER action
+        writes the sidecar at the chosen size and embeds the embedded one
+        (issue #236)."""
+        return runner.cover_bytes_pair(self._apple_job_hooks(), provider, raw, want_file=True)
 
     def _apple_write_sidecars(
         self,
@@ -17719,13 +17721,15 @@ class WavesBridge(LibraryMixin, QObject):
                 if not want and not bool(self._psetting(CTX_APPLE, "cover_album_file", True)):
                     continue
                 cover = None
+                embed_cover = None
                 try:
-                    # The standalone COVER action writes the sidecar at its own
-                    # size (issue #236); the embed below wants the embedded
-                    # size, so it fetches that separately when the two differ.
-                    cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row, for_file=True)
+                    # One pair from the runner's size rule (issue #236): the
+                    # sidecar bytes at the separate file's size, the embedded
+                    # bytes at the embedded size.
+                    embed_cover, cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row)
                 except Exception:
                     cover = None
+                    embed_cover = None
                 if not cover:
                     continue
                 if (
@@ -17739,17 +17743,7 @@ class WavesBridge(LibraryMixin, QObject):
                 ):
                     served += 1
                 if bool(self._psetting(CTX_APPLE, "metadata_cover_embed", True)):
-                    embed_cover = cover
-                    try:
-                        embedded_dim = self._psetting(CTX_APPLE, "metadata_cover_dimension", CoverDimensions.Px320)
-                        file_pref = str(
-                            self._psetting(CTX_APPLE, "metadata_cover_file_dimension", "follow") or "follow"
-                        )
-                        if cover_file_dimension(embedded_dim, file_pref) != embedded_dim:
-                            embed_cover = self._apple_cover_bytes(provider, raw if raw is not None else track_row)
-                    except Exception:
-                        embed_cover = cover
-                    self._apple_standalone_embed_cover(folder, stem, embed_cover, track_row, facts)
+                    self._apple_standalone_embed_cover(folder, stem, embed_cover or cover, track_row, facts)
         return served
 
     def _apple_standalone_embed(
