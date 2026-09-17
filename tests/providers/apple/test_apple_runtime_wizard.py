@@ -992,7 +992,6 @@ def _bridge_stub(tmp_path: Path, *, enabled=True, cookies=""):
     stub._apple_container_state = WavesBridge._apple_container_state.__get__(stub, SimpleNamespace)
     stub._apple_container_serves = WavesBridge._apple_container_serves.__get__(stub, SimpleNamespace)
     stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
-    stub._apple_wait_for_session = WavesBridge._apple_wait_for_session.__get__(stub, SimpleNamespace)
     stub.appleStatus = WavesBridge.appleStatus.__get__(stub, SimpleNamespace)
     stub.appleSetupState = WavesBridge.appleSetupState.__get__(stub, SimpleNamespace)
     stub._apple_wizard_steps = WavesBridge._apple_wizard_steps
@@ -1099,6 +1098,52 @@ def test_live_flags_report_an_expired_session_and_recover(tmp_path, monkeypatch)
 
     assert stub._apple_session_expired is False
     assert emitted, "the light re-reads when the session comes back"
+
+
+def test_a_wrapper_sign_in_does_not_lift_a_cookies_marker(tmp_path, monkeypatch):
+    """AP-01's light half: the marker remembers which credential failed, so a
+    healthy wrapper probe cannot report a cookies-broken session healed (and
+    the light keeps saying needs attention until the export is proven)."""
+    from waves.providers.apple.engine import AppleCredential
+
+    stub = _bridge_stub(tmp_path, enabled=True, cookies=_cookies_file(tmp_path, with_token=True))
+    stub.settings.data.path_binary_nm3u8dlre = _stub_binary(tmp_path)
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._apple_mark_session_expired(AppleCredential.COOKIES)
+
+    # A wrapper probe that authenticates is not the cookies proof.
+    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
+    stub._apple_wrapper_auth_cache = {"at": 0.0, "result": None}
+    monkeypatch.setattr(
+        "waves.providers.apple.runtime.wrapper_auth_state",
+        lambda url, **kwargs: {"reachable": True, "state": "authenticated", "logged_in": True, "account": "me"},
+    )
+    stub._refresh_apple_wrapper_auth = WavesBridge._refresh_apple_wrapper_auth.__get__(stub, SimpleNamespace)
+    stub._refresh_apple_wrapper_auth()
+    assert stub._apple_session_expired is True, "the wrapper probe cannot answer for a cookies failure"
+
+    # The cookies proof is its own: a saved export clears the cookies marker.
+    stub._apple_clear_session_expired(AppleCredential.COOKIES)
+    assert stub._apple_session_expired is False
+
+
+def test_a_cookies_proof_does_not_lift_a_wrapper_marker(tmp_path):
+    """The mirror gate: a fresh export is not the wrapper's recovery."""
+    from waves.providers.apple.engine import AppleCredential
+
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
+    stub._apple_clear_session_expired = WavesBridge._apple_clear_session_expired.__get__(stub, SimpleNamespace)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._apple_mark_session_expired(AppleCredential.WRAPPER)
+
+    stub._apple_clear_session_expired(AppleCredential.COOKIES)
+    assert stub._apple_session_expired is True, "a cookies proof cannot answer for a wrapper failure"
+
+    stub._apple_clear_session_expired(AppleCredential.WRAPPER)
+    assert stub._apple_session_expired is False
 
 
 def test_live_flags_downgrade_a_wrapper_session_without_a_runtime(tmp_path):
@@ -1706,7 +1751,7 @@ def test_a_cookies_hold_ignores_a_healthy_wrapper(tmp_path, monkeypatch):
         status=lambda message: statuses.append(message),
     )
     sleeps: list = []
-    monkeypatch.setattr(runner, "HELD_CREDENTIAL_FAILURES", 2)
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 2)
     monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: sleeps.append(seconds) or True)
 
     with pytest.raises(runner._AppleSetupRequired) as excinfo:
@@ -1739,7 +1784,7 @@ def test_a_wrapper_hold_waits_for_the_guest_not_the_cookies(tmp_path, monkeypatc
         cookies.write_text("fresh export", encoding="utf-8")
         return True
 
-    monkeypatch.setattr(runner, "HELD_CREDENTIAL_FAILURES", 2)
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 2)
     monkeypatch.setattr(runner, "sleep_abortable", _change_cookies_and_sleep)
 
     with pytest.raises(runner._AppleSetupRequired) as excinfo:

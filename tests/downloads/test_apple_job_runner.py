@@ -1370,7 +1370,7 @@ def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_s
     hooks.refresh_wrapper_auth = lambda **kw: probes.append(kw) or {"logged_in": True}
     held = []
     monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
-    monkeypatch.setattr(runner, "HELD_CREDENTIAL_FAILURES", 1)
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 1)
     monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
@@ -1429,7 +1429,7 @@ def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, mo
     hooks.refresh_wrapper_auth = lambda **kw: {"logged_in": True}
     held = []
     monkeypatch.setattr(runner, "set_held", lambda hooks, qid, detail="": held.append((qid, detail)))
-    monkeypatch.setattr(runner, "HELD_CREDENTIAL_FAILURES", 2)
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_POLLS", 2)
     monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
     relay = _Relay()
     spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
@@ -1450,6 +1450,52 @@ def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, mo
     assert stub._apple_session_expired is False, "a landed track lifts the marker"
     assert next(ev for ev in relay.events if ev.get("status") == "done")
     assert not any(ev.get("status") == "failed" for ev in relay.events)
+
+
+@pytest.mark.ffmpeg
+def test_a_credential_that_keeps_reading_recovered_ends_at_setup(tmp_path, monkeypatch):
+    """The wait's poll bound covers a credential that never changes; this caps
+    the other shape (R-15's "N immediate re-failures"): the probe keeps saying
+    the guest is back and the fetch keeps failing, so every hold reads as
+    recovery and the track would retry forever. After the hold cap the run
+    ends with the credential's setup words."""
+    from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
+
+    provider = _FakeProvider()
+    provider.wrapper_url = "http://127.0.0.1:1234"
+    calls = []
+
+    def _always_broken(raw, tier, audio_type):
+        calls.append(audio_type)
+        raise AppleCredentialsError("The Apple wrapper is not signed in", credential=AppleCredential.WRAPPER)
+
+    provider.resolve_stream = _always_broken
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub._apple_mark_session_expired = WavesBridge._apple_mark_session_expired.__get__(stub, SimpleNamespace)
+    stub.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    stub._set_status = lambda *args: None
+    hooks = stub._apple_job_hooks()
+    hooks.refresh_wrapper_auth = lambda **kw: {"logged_in": True}  # the probe keeps reading recovered
+    monkeypatch.setattr(runner, "HELD_CREDENTIAL_RETRIES", 2)
+    monkeypatch.setattr(runner, "sleep_abortable", lambda seconds, job_abort: True)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    with pytest.raises(DownloadIncomplete) as excinfo:
+        runner.run_apple_job(
+            hooks,
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+
+    assert "wrapper session" in str(excinfo.value)
+    assert len(calls) == 3, "held at most the cap; then setup, not another retry"
+    assert not any(ev.get("status") == "done" for ev in relay.events)
 
 
 def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path, monkeypatch):

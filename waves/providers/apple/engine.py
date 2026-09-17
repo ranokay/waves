@@ -24,25 +24,36 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 logger = logging.getLogger("waves.providers.apple.engine")
 
 
+class AppleCredential(StrEnum):
+    """Which credential an Apple fetch needed.
+
+    A credential failure names the one it needed, so the recovery hold can
+    wait for that credential alone (AP-01: a wrapper-signed-in, cookies-broken
+    job read the wrapper probe as recovery and re-ran the identical failing
+    fetch forever).
+    """
+
+    COOKIES = "cookies"
+    WRAPPER = "wrapper"
+
+
 class AppleCredentialsError(Exception):
     """A credential the fetch needed is missing, unreadable, or signed out.
 
-    ``credential`` names which one failed ("cookies" or "wrapper"), so the
-    recovery hold can wait for proof about the credential the fetch actually
-    needed: a wrapper-signed-in, cookies-broken job must not read success off
-    the wrapper probe and re-enter the identical failing fetch (AP-01). The
-    default is cookies, the failure the tier answers with most often; every
-    raise site names its own.
+    ``credential`` names which one failed, so the recovery hold waits for proof
+    about the credential the fetch actually needed. An unknown name is refused
+    loudly: routing a hold off a typo would wait on the wrong credential again.
     """
 
-    def __init__(self, message: str, *, credential: str = "cookies") -> None:
+    def __init__(self, message: str, *, credential: AppleCredential = AppleCredential.COOKIES) -> None:
         super().__init__(message)
-        self.credential = str(credential or "cookies").strip().lower()
+        self.credential = AppleCredential(getattr(credential, "value", credential))
 
 
 class AppleDownloadError(Exception):
@@ -120,7 +131,7 @@ def _require_cookies(cookies_path: str) -> str:
     if not path or not Path(path).expanduser().is_file():
         raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
             "Apple downloads need a cookies export: set one in Settings under Providers, Apple Music.",
-            credential="cookies",
+            credential=AppleCredential.COOKIES,
         )
     return path
 
@@ -278,7 +289,7 @@ async def _create_cookies_stack(cookies_path: str):
         # export is absent or the browser session is signed out.
         raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
             "Apple downloads need a signed-in cookies export: set one in Settings under Providers, Apple Music.",
-            credential="cookies",
+            credential=AppleCredential.COOKIES,
         ) from exc
     try:
         base_interface = await AppleMusicBaseInterface.create(apple_music_api=api)
@@ -557,7 +568,7 @@ class AppleFetchSession:
         if not self.wrapper_url:
             raise AppleCredentialsError(  # noqa: TRY003 (user-facing words by design)
                 "Apple hi-res downloads need the managed wrapper: finish setup in Settings under Providers, Apple Music.",
-                credential="wrapper",
+                credential=AppleCredential.WRAPPER,
             )
         nm3u8dlre, ffmpeg = self._require_tools()
         workdir = Path(tempfile.mkdtemp(prefix="waves-apple-alac-"))
@@ -661,7 +672,7 @@ async def _open_wrapper_session(*, base_url: str, decrypt_host: str, decrypt_por
         if "not authenticated" in text or "logged_out" in text or "login" in text:
             raise AppleCredentialsError(  # noqa: TRY003
                 "The Apple wrapper is not signed in: re-open setup in Settings under Providers, Apple Music, and complete the login step.",
-                credential="wrapper",
+                credential=AppleCredential.WRAPPER,
             ) from exc
         raise AppleWrapperDown(f"Apple wrapper is unreachable at {base_url}: {exc}") from exc  # noqa: TRY003
 

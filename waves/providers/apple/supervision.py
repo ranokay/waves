@@ -65,7 +65,7 @@ HELD_POLL_SEC = 5.0
 # and a row that holds forever cannot say so.
 HELD_START_FAILURES = 2
 
-# How many consecutive dead-credential polls a held job tolerates before the
+# How many consecutive unchanged polls a credential hold tolerates before the
 # credential is pronounced unable to return on its own (AP-01: a
 # wrapper-signed-in, cookies-broken account used to hold for good). A cookies
 # export cannot be probed server-side, so the cookies hold watches the file
@@ -74,7 +74,14 @@ HELD_START_FAILURES = 2
 # about two minutes: long enough for a fix the wizard just asked for, short
 # enough that the row ends with the setup words instead of holding the queue
 # forever.
-HELD_CREDENTIAL_FAILURES = 24
+HELD_CREDENTIAL_POLLS = 24
+
+# How many times one track may be held for a credential that keeps counting as
+# recovered and keeps failing (a guest re-auth racing gamdl's own login check,
+# or exports that are replaced with equally broken ones). A credential that
+# keeps arriving after every recovery is not coming back on its own, so the
+# track is handed to setup with the same words instead of retrying forever.
+HELD_CREDENTIAL_RETRIES = 3
 
 # The supervised container's fixed name: one sidecar per install, so ensure
 # and stop are idempotent across restarts and retries.

@@ -44,6 +44,7 @@ from waves.model.cfg import cover_sidecar_format, wants_both_default
 from waves.ownership import copy_is_current, record_names_a_broken_copy
 from waves.providers.apple import engine as apple_engine
 from waves.providers.apple.engine import (
+    AppleCredential,
     AppleCredentialsError,
     AppleDownloadError,
     AppleIntegrityError,
@@ -71,7 +72,8 @@ from waves.providers.apple.integrity import (
     resolve_quarantine_dir,
 )
 from waves.providers.apple.supervision import (
-    HELD_CREDENTIAL_FAILURES,
+    HELD_CREDENTIAL_POLLS,
+    HELD_CREDENTIAL_RETRIES,
     HELD_POLL_SEC,
     HELD_START_FAILURES,
     SETUP_PATH,
@@ -218,7 +220,7 @@ class AppleJobHooks:
     note_activity: Callable[[], None] = _noop
     refresh_wrapper_auth: Callable[..., Any] = _none
     schedule_idle_stop: Callable[[], None] = _noop
-    mark_session_expired: Callable[[], None] = _noop
+    mark_session_expired: Callable[..., None] = _noop
     clear_session_expired: Callable[[], None] = _noop
 
     redact: Callable[[Any], str] = str
@@ -1406,14 +1408,29 @@ def set_held(hooks: AppleJobHooks, qid: int, detail: str = "") -> None:
         hooks.status(message)
 
 
-def _credential_words(credential: str) -> tuple[str, str]:
+def _setup_required(hooks: AppleJobHooks, message: str) -> _AppleSetupRequired:
+    """The terminal verdict for a state only the user can fix.
+
+    Ask the wizard to open, say the words the row will carry, and answer the
+    exception the run ends with (retryable once setup works). One body for the
+    runtime that will not start and the credential that will not return, so
+    every "hand it to setup" path reads the same.
+    """
+    with contextlib.suppress(Exception):
+        hooks.setup_requested("setup")
+    with contextlib.suppress(Exception):
+        hooks.status(message)
+    return _AppleSetupRequired(message)
+
+
+def _credential_words(credential) -> tuple[str, str]:
     """The (hold, terminal) wording for the credential a fetch needed.
 
     Both name the repair path the wizard owns, so a held or failed row is
     actionable (AP-01: the hold used to name the wrong credential and the
     retry re-ran the identical failing fetch).
     """
-    if str(credential or "").strip().lower() == "wrapper":
+    if credential == AppleCredential.WRAPPER:
         return (
             f"Apple's wrapper session is signed out. Waiting for sign-in; finish setup in {SETUP_PATH}.",
             f"Apple's wrapper session is signed out. Finish setup in {SETUP_PATH}, then retry.",
@@ -1424,7 +1441,13 @@ def _credential_words(credential: str) -> tuple[str, str]:
     )
 
 
-def wait_for_session(hooks: AppleJobHooks, provider, job_abort, *, credential: str = "cookies") -> bool:
+def wait_for_session(
+    hooks: AppleJobHooks,
+    provider,
+    job_abort,
+    *,
+    credential: AppleCredential = AppleCredential.COOKIES,
+) -> bool:
     """Wait (abortably) until the credential the fetch NEEDED can serve again.
 
     Only that credential's own proof counts: a cookies-shaped failure is not
@@ -1434,14 +1457,14 @@ def wait_for_session(hooks: AppleJobHooks, provider, job_abort, *, credential: s
     a cookies export cannot be probed server-side, so the wait watches the
     file the provider names and retries once it changes.
 
-    The wait is bounded (HELD_CREDENTIAL_FAILURES polls without a change): a
+    The wait is bounded (HELD_CREDENTIAL_POLLS polls without a change): a
     credential that never changes cannot come back on its own, so the row is
-    handed to setup with the credential's own words (``_AppleSetupRequired``,
-    retryable once it is fixed) instead of holding the queue for good. Returns
-    True on a real change, False when STOP landed.
+    handed to setup with the credential's own words (retryable once it is
+    fixed) instead of holding the queue for good. Returns True on a real
+    change, False when STOP landed.
     """
     cookies_before = _apple_cookies_fingerprint(str(getattr(provider, "cookies_path", "") or ""))
-    wants_wrapper = str(credential or "").strip().lower() == "wrapper"
+    wants_wrapper = credential == AppleCredential.WRAPPER
     failures = 0
     while not job_abort.is_set():
         recovered = False
@@ -1460,13 +1483,9 @@ def wait_for_session(hooks: AppleJobHooks, provider, job_abort, *, credential: s
             # the retried fetch is the proof.
             return True
         failures += 1
-        if failures >= max(1, int(HELD_CREDENTIAL_FAILURES)):
+        if failures >= max(1, int(HELD_CREDENTIAL_POLLS)):
             _hold, terminal = _credential_words(credential)
-            with contextlib.suppress(Exception):
-                hooks.setup_requested("setup")
-            with contextlib.suppress(Exception):
-                hooks.status(terminal)
-            raise _AppleSetupRequired(terminal)
+            raise _setup_required(hooks, terminal)
         if not sleep_abortable(HELD_POLL_SEC, job_abort):
             return False
     return False
@@ -1543,11 +1562,7 @@ def ensure_sidecar(hooks: AppleJobHooks, qid: int, job_abort, *, need_wrapper: b
             terminal_message = f"Apple's wrapper tier is not set up. Finish setup in {SETUP_PATH}, then retry."
             failures += 1
         if failures >= max(1, int(HELD_START_FAILURES)):
-            with contextlib.suppress(Exception):
-                hooks.setup_requested("setup")
-            with contextlib.suppress(Exception):
-                hooks.status(terminal_message)
-            raise _AppleSetupRequired(terminal_message)
+            raise _setup_required(hooks, terminal_message)
         if not sleep_abortable(HELD_POLL_SEC, job_abort):
             return False
     return False
@@ -2207,6 +2222,7 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
         track_force = force or verdict == "force"
         owned_path = str((gate_rec or {}).get("path") or "") or None
         attempts = 0
+        credential_holds = 0
         try:
             while True:
                 try:
@@ -2235,19 +2251,24 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
                     break
                 except Exception as exc:
                     if isinstance(exc, AppleCredentialsError):
-                        # The saved session no longer works: tell the
-                        # light, hold the row with the failing credential's
-                        # own words, and wait for THAT credential to change
+                        # The saved session no longer works: tell the light,
+                        # hold the row with the failing credential's own
+                        # words, and wait for THAT credential to change
                         # instead of failing the run (spec §3). Waiting on
                         # the other credential is how a wrapper-signed-in,
                         # cookies-broken job looped the identical failing
-                        # fetch forever (AP-01); the wait is bounded and
-                        # hands the row to setup if it never changes. STOP
-                        # lands promptly and settles the row cancelled. The
-                        # retry re-runs THIS track.
-                        credential = str(getattr(exc, "credential", "cookies") or "cookies")
-                        hold_words, _terminal = _credential_words(credential)
-                        hooks.mark_session_expired()
+                        # fetch forever (AP-01); the wait is bounded, and a
+                        # track held once too often for a credential that
+                        # keeps reading recovered hands the row to setup
+                        # instead of retrying forever. STOP lands promptly
+                        # and settles the row cancelled. The retry re-runs
+                        # THIS track.
+                        credential = getattr(exc, "credential", AppleCredential.COOKIES)
+                        hold_words, terminal = _credential_words(credential)
+                        credential_holds += 1
+                        if credential_holds > max(1, int(HELD_CREDENTIAL_RETRIES)):
+                            raise _setup_required(hooks, terminal) from exc
+                        hooks.mark_session_expired(credential)
                         with contextlib.suppress(Exception):
                             set_held(hooks, qid, hold_words)
                         if not wait_for_session(hooks, provider, job_abort, credential=credential):
