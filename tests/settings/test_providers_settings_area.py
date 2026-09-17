@@ -319,13 +319,20 @@ def test_saving_an_overlapping_quarantine_folder_warns_with_the_used_path(tmp_pa
     _apply(stub, {"apple_quarantine_dir": str(tmp_path / "lib")})
 
     assert stub.settings.data.apple_quarantine_dir == str(tmp_path / "lib"), "the typed value is stored as given"
-    assert notes and "overlaps the download folder" in notes[-1]
+    assert notes and "Settings saved" in notes[-1], "the saved word survives the warning"
+    assert "overlaps the download folder" in notes[-1]
     assert "Waves Quarantine" in notes[-1]
 
     # A folder outside the download root saves with no warning.
     notes.clear()
     _apply(stub, {"apple_quarantine_dir": str(tmp_path / "quarantine")})
     assert notes == ["Settings saved"], "only the plain saved word"
+
+    # Moving the download folder onto an existing custom quarantine folder
+    # is the same divergence and warns too.
+    notes.clear()
+    _apply(stub, {"download_base_path": str(tmp_path / "quarantine")})
+    assert notes and "overlaps the download folder" in notes[-1]
 
 
 def test_the_quarantine_card_names_the_folder_really_in_use(tmp_path):

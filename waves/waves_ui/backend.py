@@ -21755,15 +21755,17 @@ class WavesBridge(LibraryMixin, QObject):
         # Quality / path / ffmpeg changes only take effect on a fresh Download.
         if self._logged_in:
             self._init_download()
-        self._set_status("Settings saved" + stopped_note)
-        if "apple_quarantine_dir" in values:
-            # Warn at save time when the typed folder is overridden (the
-            # resolver refuses one that overlaps the download root), so the
-            # user learns now rather than from the card's note later. It wins
-            # over the plain saved word: it is the news that matters.
+        status = "Settings saved" + stopped_note
+        if "apple_quarantine_dir" in values or "download_base_path" in values:
+            # Warn at save time when the stored quarantine folder is overridden
+            # (the resolver refuses one that overlaps the download root), so
+            # the user learns now rather than from the card's note later. The
+            # note rides the saved word instead of replacing it, so a stopped
+            # download count is never swallowed.
             quarantine_note = self._apple_quarantine_note()
             if quarantine_note:
-                self._set_status(quarantine_note)
+                status = f"{status}. {quarantine_note}"
+        self._set_status(status)
         devlog.done("save", f"{len(values)} keys", devlog.clock() - t0, keys=",".join(values))
 
     def _factory_default_values(self) -> dict:
