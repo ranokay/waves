@@ -102,8 +102,10 @@ contributes, and the shelf categories its capabilities declare — and
 fill it, its own sign-in or setup verb, and the sentences naming it) while no
 source can. Every page loads through the source's OWN provider
 (`favorites_page` for the favourites shelves, `user_collections`/`folder_tree`
-for playlists and mixes) and every row is built by that provider's `row_for`,
-so a provider that later declares FAVORITES appears with no QML edit.
+for playlists and mixes), and every favourites/playlist/mix row is built by
+that provider's `row_for` -- folder navigation rows keep the bridge's own
+folder vocabulary. A provider that later declares FAVORITES appears with no
+QML edit.
 
 ## Browse (editorial pages)
 

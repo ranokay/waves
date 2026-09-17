@@ -212,9 +212,17 @@ def test_clear_queue_aborts_removed_queued_items():
 # --------------------------------------------------------------------------- #
 def test_logout_bumps_lib_gen_and_clears_cache():
     stub = _Stub()
-    stub._lib_cache = {("tidal", "albums"): {"items": [1, 2], "offset": 100, "more": True}}
+    stub._lib_cache = {
+        ("tidal", "albums"): {"items": [1, 2], "offset": 100, "more": True},
+        ("fake", "albums"): {"items": [3], "offset": 100, "more": False},
+    }
     stub._lib_loading = {("tidal", "albums")}
     stub._lib_gen = {("tidal", "albums"): 5}
+    # The rest of the per-source shelves (issue #259): a warm Home landing,
+    # the media-lists sweep and the folder tree each keyed by source.
+    stub._home_cache = {"tidal": [{"title": "Recent albums"}]}
+    stub._media_lists_cache = {"tidal": (0.0, {"playlists": []}, object())}
+    stub._folder_tree = {"tidal": object()}
     captured = (stub._lib_epoch, stub._lib_gen[("tidal", "albums")])
     # logout() also resets the browse caches on the current build; provide them
     # so the SUT (the _lib_gen bump) runs regardless of that co-located cleanup.
@@ -254,6 +262,8 @@ def test_logout_bumps_lib_gen_and_clears_cache():
     assert stub._lib_cache == {}, "cache cleared on logout"
     assert stub._lib_loading == set()
     assert stub._lib_gen == {}, "per-page counters dropped with the account"
+    assert stub._home_cache == {} and stub._media_lists_cache == {}, "no source's pages survive the account"
+    assert stub._folder_tree == {}, "nor its folder tree"
     assert (stub._lib_epoch, 0) != captured, "the epoch moved, so a stale in-flight load is dropped"
     assert stub._prefetch_key is None and stub._prefetch_claimed is False, "no prefetch survives the account"
     assert stub._prefetch_unrecorded == set(), "a hover-built page of the old account is never recorded for the new one"
@@ -451,8 +461,14 @@ def test_page_cache_round_trip_and_account_guard(tmp_path):
     stub._browse_root_cache = {"sections": [{"rowKind": "cards"}], "genres": [], "error": False}
     stub._browse_pages = {"pages/rock": {"key": "pages/rock", "sections": [1], "error": False}}
     stub._artist_cache = {"42": {"id": "42", "name": "A"}}
-    stub._lib_cache = {("tidal", "albums"): {"items": list(range(150)), "offset": 300, "more": False}}
-    stub._home_cache = {"tidal": [{"rowKind": "cards", "title": "Recent albums", "items": []}]}
+    stub._lib_cache = {
+        ("tidal", "albums"): {"items": list(range(150)), "offset": 300, "more": False},
+        ("fake", "albums"): {"items": list(range(150)), "offset": 300, "more": False},
+    }
+    stub._home_cache = {
+        "tidal": [{"rowKind": "cards", "title": "Recent albums", "items": []}],
+        "fake": [{"rowKind": "cards", "title": "Fake recent", "items": []}],
+    }
     _bind(stub, "_save_page_cache")()
 
     fresh = _cache_stub(path, "7")
@@ -467,6 +483,11 @@ def test_page_cache_round_trip_and_account_guard(tmp_path):
     assert fresh._lib_cache[("tidal", "albums")]["offset"] == 100
     assert fresh._lib_cache[("tidal", "albums")]["more"] is True, "truncated tail must stay pageable"
     assert fresh._home_cache["tidal"][0]["title"] == "Recent albums"
+    # A second source's shelves round-trip as their own (issue #259): same
+    # truncation, same account tag, keyed by (source, category).
+    assert len(fresh._lib_cache[("fake", "albums")]["items"]) == 100
+    assert fresh._lib_cache[("fake", "albums")]["more"] is True
+    assert fresh._home_cache["fake"][0]["title"] == "Fake recent"
 
     other = _cache_stub(path, "8")  # different account
     _bind(other, "_load_page_cache")()

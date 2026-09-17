@@ -72,6 +72,7 @@ class _WarmStub:
         self._folder_tree = {}
         self._media_lists_lock = Lock()
         self._logged_in = True
+        self._tracked_sessions = frozenset({"tidal"})
         self._tree_warm_waiting: list = []
         self._tree_warm_inflight: set = set()
         # Parks the sweep instead of running it, so the button state published

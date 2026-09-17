@@ -6113,6 +6113,10 @@ class WavesBridge(LibraryMixin, QObject):
             if ":" not in key or not isinstance(entry, dict) or not isinstance(entry.get("items"), list):
                 continue
             source, _, category = key.partition(":")
+            if not source or not category:
+                # A hand-edited or half-written snapshot ("tidal:" / ":albums")
+                # names no shelf; caching it would re-persist the junk.
+                continue
             self._lib_cache.setdefault((source, category), entry)
         home = data.get("home")
         if isinstance(home, dict):
@@ -7475,8 +7479,9 @@ class WavesBridge(LibraryMixin, QObject):
         resolve ``{folder_path}`` to "" and land in a second directory
         alongside its real one.
 
-        Returns False when no warm could be started (signed out), so the caller
-        can keep its old not-ready behaviour. ``then`` runs on the GUI thread,
+        Returns False when no warm could be started (the source has no live
+        session), so the caller can keep its old not-ready behaviour. ``then``
+        runs on the GUI thread,
         exactly once, whether this call started the sweep or joined one already
         running, and ONLY if the sweep actually produced a tree: replaying into
         a still-missing tree would just re-warm, forever (every parked caller
@@ -7490,7 +7495,10 @@ class WavesBridge(LibraryMixin, QObject):
         would never fetch its tree and then dropping its callbacks.
         """
         source = str(source or "")
-        if not self._logged_in or _source_provider(self, source) is None:
+        provider = _source_provider(self, source)
+        # The source's own session is the gate, never TIDAL's flag: a second
+        # provider's drill-in must warm its own tree while TIDAL is signed out.
+        if provider is None or not _session_logged_in(self, provider):
             return False
         self._tree_warm_waiting.append((then, str(media_id or ""), source))
         if source in self._tree_warm_inflight:

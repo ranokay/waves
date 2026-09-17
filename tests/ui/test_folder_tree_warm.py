@@ -61,6 +61,9 @@ class _WarmStub:
         self._swept = tree
         self._media_lists_lock = Lock()
         self._logged_in = logged_in
+        # TIDAL's session is tracked by the bridge (the flag the warm's gate
+        # reads); a second source answers through its provider's own flag.
+        self._tracked_sessions = frozenset({"tidal"})
         self._tree_warm_waiting: list = []
         self._tree_warm_inflight: set = set()
         # The pane's rows come through the source's own row vocabulary
@@ -133,7 +136,9 @@ def test_two_sources_warm_their_own_trees():
     join a sweep that never fetches its tree and then have its callback
     dropped."""
     stub = _WarmStub(_tree())
-    stub.providers["fake"] = SimpleNamespace(id="fake", row_for=lambda kind, item: {"kind": kind, "id": item.id})
+    stub.providers["fake"] = SimpleNamespace(
+        id="fake", is_logged_in=True, row_for=lambda kind, item: {"kind": kind, "id": item.id}
+    )
     started: list = []
     stub.threadpool = SimpleNamespace(start=started.append)
 

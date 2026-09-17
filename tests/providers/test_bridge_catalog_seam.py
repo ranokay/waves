@@ -680,8 +680,7 @@ def test_the_library_window_drops_rows_a_provider_cannot_render():
             return {"id": "row1"} if item is o2 else {}
 
     provider = _RowProvider(favorites_page=([o1, o2], False))
-    stub = SimpleNamespace(providers={"tidal": provider}, _lib_sort={}, _source_provider=lambda source: provider)
-    stub._source_rows = lambda provider, row_kind, raw: WavesBridge._source_rows(stub, provider, row_kind, raw)
+    stub = SimpleNamespace(providers={"tidal": provider}, _lib_sort={})
 
     rows, more = WavesBridge._library_page(stub, "tidal", "tracks", 0, 10)
 
