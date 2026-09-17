@@ -269,7 +269,7 @@ def test_search_fans_out_over_enabled_providers_and_emits_separate_groups():
             "playlists": [],
             "mixes": [],
             "top": None,
-            "apple": apple_payload,
+            "apple": {**apple_payload, "error": ""},
         }
     ]
     assert stub.statuses[-1] == "2 results"
@@ -331,7 +331,9 @@ def test_search_with_tidal_signed_out_and_apple_enabled_asks_only_apple():
             "playlists": [],
             "mixes": [],
             "top": None,
-            "apple": apple_payload,
+            # A successful Apple fetch says so: the group's error word is
+            # empty (issue #241 / UI-05).
+            "apple": {**apple_payload, "error": ""},
         }
     ]
     assert stub.statuses[-1] == "1 results"
@@ -386,6 +388,9 @@ def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
     assert stub.statuses[-1] == "Apple changed its web app. A Waves update is needed."
     assert stub._search_cache == {}
     assert stub.searchResults.emits[0]["apple"]["tracks"] == []
+    # The honest words ride the Apple group itself (issue #241 / UI-05), so the
+    # group cannot paint "0 results" as if the catalog were empty.
+    assert stub.searchResults.emits[0]["apple"]["error"] == stub.statuses[-1]
 
 
 # --------------------------------------------------------------------------- #

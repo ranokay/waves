@@ -6564,6 +6564,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # section. Not a result of its own, so never counted.
                 "top": top,
             }
+            apple_error = provider_errors.get(CTX_APPLE)
             if apple_enabled:
                 apple = provider_results.get(CTX_APPLE, {})
                 payload[CTX_APPLE] = {
@@ -6574,6 +6575,11 @@ class WavesBridge(LibraryMixin, QObject):
                     "playlists": list(apple.get("playlists") or []),
                     "mixes": list(apple.get("mixes") or []),
                     "top": apple.get("top"),
+                    # A failed Apple fetch says so in its OWN group (audit
+                    # UI-05): the honest words ride the payload, so the group
+                    # head can show them instead of painting "0 results" as if
+                    # the catalog were empty.
+                    "error": str(apple_error) if apple_error is not None else "",
                 }
             total = self._search_total(payload)
             if stale is not None and total:
@@ -6594,7 +6600,6 @@ class WavesBridge(LibraryMixin, QObject):
             if total and not provider_errors:  # an all-empty payload is more likely a failed fetch
                 self._remember_search(cache_key, payload)
                 self._save_page_cache()
-            apple_error = provider_errors.get(CTX_APPLE)
             self._set_status(str(apple_error) if apple_error is not None else f"{total} results")
             self._set_busy(False)
             elapsed = devlog.clock() - t0

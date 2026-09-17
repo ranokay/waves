@@ -467,6 +467,10 @@ ApplicationWindow {
     property var videosRaw: []            // same, for videosModel
     property var appleAlbumsRaw: []
     property var appleTracksRaw: []
+    // The honest words when the last Apple catalog fetch failed (the payload's
+    // `apple.error`), shown in the Apple group's own head (issue #241 /
+    // audit UI-05) instead of a "0 results" that reads as an empty catalog.
+    property string appleSearchError: ""
     // True only when the backend emitted the optional Apple group. With Apple
     // disabled the old TIDAL-only page keeps its exact structure and headings.
     property bool appleSearchGrouped: false
@@ -14338,6 +14342,7 @@ ApplicationWindow {
                 root.tracksRaw = r.tracks || []
                 root.videosRaw = r.videos || []
                 var refreshApple = r.apple || null
+                root.appleSearchError = String((refreshApple && refreshApple.error) || "")
                 root.appleAlbumsRaw = refreshApple ? (refreshApple.albums || []) : []
                 root.appleTracksRaw = refreshApple ? (refreshApple.tracks || []) : []
                 root.applySort(true)
@@ -14378,6 +14383,7 @@ ApplicationWindow {
             // (searchArtistsExpanded and the list-section flags are pref-backed),
             // so nothing is reset here.
             var apple = r.apple || null
+            root.appleSearchError = String((apple && apple.error) || "")
             root.appleSearchGrouped = apple !== null
             // Arm the build veil BEFORE the fills: the Loaders each delegate
             // creates read searchBuilding for their asynchronous flag, and the
@@ -15817,7 +15823,7 @@ ApplicationWindow {
                 // The shared loading hint (WireHint.qml owns the look).
                 WireHint {
                     id: searchBuildHint
-                    active: root.signedIn && root.searchBuilding
+                    active: (root.signedIn || root.appleEnabled) && root.searchBuilding
                     width: parent.width; tint: root.textLo
                     onScreen: root.onScreen
                 }
@@ -16163,7 +16169,10 @@ ApplicationWindow {
 
                 Item {
                     id: appleGroupHead
-                    visible: root.providerGroupVisible(true)
+                    // A failed fetch has no rows, so the count-based gate would
+                    // hide the very place the honest error belongs (issue #241
+                    // / UI-05): the group shows while its error stands.
+                    visible: root.providerGroupVisible(true) || root.appleSearchError !== ""
                     width: parent.width; height: 50
                     Row {
                         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
@@ -16189,9 +16198,29 @@ ApplicationWindow {
                     }
                     Text {
                         anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.bottomMargin: 11
+                        visible: root.appleSearchError === ""
                         textFormat: Text.PlainText
                         text: root.appleSearchCount + (root.appleSearchCount === 1 ? " result" : " results")
                         color: root.textDim; font.family: root.mono; font.pixelSize: 10
+                    }
+                    Text {
+                        objectName: "appleSearchError"
+                        visible: root.appleSearchError !== ""
+                        anchors.left: parent.left; anchors.leftMargin: 28
+                        anchors.right: appleSearchRetry.left; anchors.rightMargin: 8
+                        anchors.bottom: parent.bottom; anchors.bottomMargin: 10
+                        textFormat: Text.PlainText; elide: Text.ElideRight
+                        text: root.appleSearchError
+                        color: root.gold; font.pixelSize: 12
+                    }
+                    SpecBtn {
+                        objectName: "appleSearchRetry"
+                        visible: root.appleSearchError !== ""
+                        compact: true; label: "RETRY"
+                        anchors.right: parent.right; anchors.rightMargin: 8
+                        anchors.bottom: parent.bottom; anchors.bottomMargin: 6
+                        z: 2
+                        onClicked: root.submitSearch(root.lastSearchQuery)
                     }
                     Rectangle {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
