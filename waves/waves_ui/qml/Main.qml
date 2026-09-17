@@ -12287,6 +12287,10 @@ ApplicationWindow {
         // libraryIndexReady).
         property bool scanning: false
         property bool indexReady: true
+        // A scan published while the pane was hidden: the rows and counts on
+        // screen are from before it, so the section reloads on return
+        // (see invalidate / ensureLoaded).
+        property bool stale: false
 
         // The pane gives the section its share explicitly (see the usage in
         // libraryPane): a layout item that carries a size hint takes the
@@ -12301,12 +12305,20 @@ ApplicationWindow {
         }
         function modelFor(v) { return v === "all" ? libAllModel : libSavedModel }
         function listFor(v) { return v === "all" ? libAllList : libSavedList }
-        // Open the pane: load the visible view unless it already has rows.
+        // Open the pane: load the visible view unless it already has rows,
+        // and always when a scan published while the pane was hidden.
         function ensureLoaded() {
-            if (configured && listFor(category).count === 0) reload()
+            if (!configured) return
+            if (stale || listFor(category).count === 0) reload()
+        }
+        // A publish landed with the pane out of sight: remember it, do not
+        // spend a page read on a list nobody is looking at.
+        function invalidate() {
+            stale = true
         }
         function reload() {
             if (!configured) return
+            stale = false
             // A reload supersedes any in-flight append for this view (the
             // bridge drops the stale page), and pins the list's spot so a
             // refresh landing under the user keeps it (LibList's own
@@ -14068,8 +14080,10 @@ ApplicationWindow {
             root._resolveLibraryPresence()
             // The Library section's file lists are the scan's own: a publish
             // can have added, retagged or pruned rows, so the visible view
-            // reloads (a no-op on an unconfigured or unopened section).
+            // reloads, and a hidden pane is marked stale so returning to it
+            // refreshes (a no-op on an unconfigured section).
             if (root.libraryOpen) libSection.reload()
+            else libSection.invalidate()
             // A search page waiting behind the veil for its badges can have
             // them now. Handed to a zero-interval timer rather than revealed
             // here: this handler belongs to a Connections created when the
