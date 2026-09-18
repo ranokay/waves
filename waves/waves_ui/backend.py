@@ -10269,6 +10269,16 @@ class WavesBridge(LibraryMixin, QObject):
         """
         if not str(artist_id or "").strip():
             return False  # no artist, no control
+        try:
+            return self._artist_download_supports(artist_id)
+        except Exception:
+            # The sibling chooserSupported guard: a probe that raises hides the
+            # control, it never fails open to a live button (issue #288).
+            logger.debug("Artist download capability probe failed; hiding the control", exc_info=True)
+            return False
+
+    def _artist_download_supports(self, artist_id: str) -> bool:
+        """The capability answer itself, unguarded (see the slot above)."""
         provider = self._provider_meta(self._chooser_provider_of(artist_id))
         if provider is None:
             return False

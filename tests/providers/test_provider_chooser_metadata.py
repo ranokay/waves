@@ -80,6 +80,7 @@ def _bridge(providers=None, **settings_over):
         "_chooser_atmos_only",
         "_chooser_supports",
         "chooserSupported",
+        "_artist_download_supports",
         "artistDownloadSupported",
         "chooserDefaults",
         "saveChooserDefaults",
@@ -297,6 +298,22 @@ def test_the_artist_download_verdict_is_capability_driven_not_provider_identity(
 
     bare = _bridge(providers={CTX_TIDAL: _metadata(TidalProvider), "bare": _metadata(BareProvider)})
     assert bare.artistDownloadSupported("bare:artist-1") is False
+
+
+class _RaisingCapabilities:
+    """A malformed registration whose capability answer blows up."""
+
+    @property
+    def capabilities(self):
+        raise RuntimeError("no capability answer")
+
+
+def test_a_failing_capability_probe_hides_the_control():
+    """A probe that raises must hide the control, never fail open to a live
+    button (the same contract chooserSupported's guard keeps, issue #288)."""
+    b = _bridge(providers={CTX_TIDAL: _metadata(TidalProvider), "apple": _RaisingCapabilities()})
+
+    assert b.artistDownloadSupported("apple:artist-1") is False
 
 
 def test_chooser_segment_tiles_come_from_the_enabled_providers_descriptors():
