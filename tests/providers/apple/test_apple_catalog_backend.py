@@ -393,6 +393,83 @@ def test_apple_click_after_a_prefetch_serves_the_warmed_cache():
     assert stub.statuses[-1] == "Aphex Twin"
 
 
+def _summary_artist_catalog():
+    """Apple's search summary for an artist: a named artist whose album
+    relationship lists reference stubs (id/type/href, no attributes) and which
+    carries no views -- the captured live shape behind audit F-02. The
+    canonical fetch answers with the attributed artist, so only a bridge that
+    refetches projects a populated page. Returns ``(catalog, fetch_calls)``."""
+
+    calls: list = []
+
+    class _SummaryCatalog(_Catalog):
+        async def get_search_results(self, term, types):
+            return {
+                "results": {
+                    "artists": {
+                        "data": [
+                            {
+                                "id": "artist-1",
+                                "type": "artists",
+                                "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
+                                "relationships": {
+                                    "albums": {
+                                        "data": [
+                                            {
+                                                "id": "album-1",
+                                                "type": "albums",
+                                                "href": "/v1/catalog/us/albums/album-1",
+                                            }
+                                        ]
+                                    }
+                                },
+                            }
+                        ]
+                    },
+                    "albums": {"data": []},
+                    "songs": {"data": []},
+                    "playlists": {"data": []},
+                }
+            }
+
+        async def get_artist(self, artist_id):
+            calls.append(("artist", artist_id))
+            return {"data": [self._artist]}
+
+    canonical = {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
+        "relationships": {"albums": {"data": [_album()]}},
+        "views": {"top-songs": {"data": [_song()]}},
+    }
+    return _SummaryCatalog(album=_album(), artist=canonical, song=_song()), calls
+
+
+def test_apple_artist_payload_projects_named_rows_and_top_tracks():
+    """R-11's acceptance at the bridge's own seam (issue #247): the payload the
+    artist page renders carries a named album row with art, a track count and
+    a date, plus the top-tracks section. The pre-fix bridge projected Apple's
+    attribute-less search summary into blank rows (audit F-02)."""
+    catalog, calls = _summary_artist_catalog()
+    provider = AppleProvider(catalog=catalog)
+    provider.search("aphex")  # the summary copy a click would see
+    stub = _prefetch_stub(providers={"apple": provider})
+
+    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+
+    (payload,) = stub.artistLoaded.emits
+    assert payload["name"] == "Aphex Twin"
+    (album,) = payload["albums"]
+    assert album["title"] == "Selected Ambient Works 85-92"
+    assert album["artist"] == "Aphex Twin"
+    assert album["art"] == "https://img/album/320x320bb.jpg"
+    assert album["tracks"] == 13
+    assert (album["date"], album["year"]) == ("1992-02-12", "1992")
+    assert [row["title"] for row in payload["tracks"]] == ["Xtal"]
+    assert ("artist", "artist-1") in calls, "the summary was never refetched"
+
+
 class _FailingArtistCatalog:
     async def get_artist(self, artist_id):
         raise RuntimeError("network died")

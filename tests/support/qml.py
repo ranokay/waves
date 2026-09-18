@@ -222,6 +222,14 @@ def boot_main_qml(keep_settings: bool = False):
     asserts on; the root is resized, shown, and pushed past the boot overlay.
     ``keep_settings`` skips the store clear, so a second child can read what
     a first one persisted (the restart scenarios).
+
+    Those three patches are why no scenario exercises the *composed* launch
+    (real login racing the overlay, the launch sweep, the Browse fetch): with
+    them real, the boot overlay and the welcome gate would eat the synthetic
+    clicks a scenario drives (TT-10, accepted as recorded). The composed
+    launch is covered where it can be asserted honestly instead: the real
+    entry point twice in ``tests/ui/test_cold_process_boot.py`` and the real
+    bridge from isolated settings in ``tests/ui/test_bridge_boot_isolated.py``.
     """
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
