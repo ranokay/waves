@@ -30,8 +30,36 @@ from support.paths import QML_MAIN
 from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
-# QAccessible::Button.
+# QAccessible::Button / CheckBox / RadioButton.
 _ROLE_BUTTON = 43
+_ROLE_CHECKBOX = 44
+_ROLE_RADIO = 45
+
+# The Chooser popover's own rows: every named, tab-reachable item inside it,
+# with the state a reader announces (issue #284).
+_CHOOSER_ROWS_BODY = """
+    var pop = findObject(root, "chooserPopover");
+    if (!pop || !pop.visible) return JSON.stringify({open: false, rows: []});
+    // Walk the contentItem only: reading Accessible off the Popup object
+    // itself is what Qt warns about, and the rows live in the content.
+    var out = [];
+    function walk(o) {
+        if (!o) return;
+        var name = "" + (o.Accessible && o.Accessible.name ? o.Accessible.name : "");
+        if (name !== "" && o.activeFocusOnTab === true && o.visible !== false && o.width > 0) {
+            out.push({ name: name,
+                       role: Number(o.Accessible.role),
+                       checkable: o.Accessible.checkable === true,
+                       checked: o.Accessible.checked === true });
+        }
+        var kids = o.children || [];
+        for (var i = 0; i < kids.length; i++) walk(kids[i]);
+        if (o.item) walk(o.item);
+    }
+    walk(pop.contentItem);
+    return JSON.stringify({ open: true, rows: out });
+"""
+
 
 TRACK = {
     "id": "t1",
@@ -166,7 +194,7 @@ def _run_scenario() -> int:
         return EXIT_REGRESSED
 
 
-def _scenario_body() -> int:
+def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
@@ -196,6 +224,66 @@ def _scenario_body() -> int:
         "the search result's download button",
     )
 
+    # --- The Chooser (issue #284): its rows are named, tab-reachable controls,
+    # and a keyboard user's picks reach the queue through the shared paths.
+    opened = q(scene_js("""
+        var b = findFirst(root, function (o) { return o.chooserKind !== undefined && ('' + o.mediaId) === 't1'; });
+        if (!b) return false;
+        b.openChooser();
+        return true;
+    """))
+    if not opened:
+        problems.append("the search result's download button could not open its Chooser")
+    settle(250)
+    popover = json.loads(q(scene_js(_CHOOSER_ROWS_BODY)))
+    if not popover["open"]:
+        problems.append("the Chooser popover did not open")
+    rows = popover["rows"]
+    tiers = [r for r in rows if r["role"] == _ROLE_RADIO and not r["name"].startswith("Audio:")]
+    audio = [r for r in rows if r["role"] == _ROLE_RADIO and r["name"].startswith("Audio:")]
+    toggles = [r for r in rows if r["role"] == _ROLE_CHECKBOX]
+    actions = [r for r in rows if r["role"] == _ROLE_BUTTON]
+    if len(tiers) < 3:
+        problems.append(f"the Chooser's tier rows are not exposed as pickers ({len(tiers)} found)")
+    if not any(t["checked"] for t in tiers):
+        problems.append("no Chooser tier row reports itself as picked")
+    if len(audio) < 1:
+        problems.append("the Chooser's audio rows are not exposed as pickers")
+    if len(toggles) < 1:
+        problems.append("the Chooser's lyrics/art toggles are not exposed as checkboxes")
+    if len(actions) < 2:
+        problems.append(f"the Chooser's actions are not both reachable ({len(actions)} found)")
+    names = [r["name"] for r in rows]
+    if len(names) != len(set(names)):
+        problems.append(f"the Chooser's rows repeat a spoken name: {names}")
+    if any(not r["name"] for r in rows):
+        problems.append("a Chooser row carries no accessible name")
+
+    # The pick/confirm paths the handlers call (the key handlers themselves are
+    # pinned by the companion source test): choose a tier and an audio word and
+    # flip a toggle, confirm, and read the parked click's ask.
+    q(scene_js("""
+        var b = findFirst(root, function (o) { return o.chooserKind !== undefined && ('' + o.mediaId) === 't1'; });
+        if (!b) return false;
+        b.chooserPickTier("LOSSLESS");
+        b.chooserPickAudio("atmos");
+        b.chooserToggle("cover_file");
+        b.confirmChooser();
+        return true;
+    """))
+    settle(250)
+    parked = getattr(bridge, "_chooser_refetch_pins", {}).get(("track", "t1"))
+    if parked is None:
+        problems.append("confirming the Chooser never parked its click's ask")
+    else:
+        kind, tier, audio_word, toggles_picked = parked
+        if (kind, tier, audio_word) != ("track", "LOSSLESS", "atmos"):
+            problems.append(f"the Chooser confirmed the wrong ask: {parked}")
+        if toggles_picked.get("cover_album_file") is not False:
+            problems.append(f"the Chooser's toggle never reached the ask: {parked}")
+    if bool(q(scene_js('var p = findObject(root, "chooserPopover"); return p ? p.visible : false;'))):
+        problems.append("the Chooser popover stayed open after confirming")
+
     # The queue drawer's actions are SpecBtns (their own primary/danger/icon
     # trio is this component's shape and no other's). A queued row puts PAUSE
     # beside the always-present close button, so the assertion sees drawer
@@ -220,6 +308,54 @@ def _scenario_body() -> int:
         "a queue action",
         minimum=2,
     )
+
+    # Repeated CLEAR / RETRY ALL controls must name their own section
+    # (issue #284's second item). Two sections are on screen, so the names have
+    # to differ; the view pools headers, so identical (name) pairs from the
+    # same section dedupe before the uniqueness read.
+    q(
+        "queueModel.append({'qid': 'a11y-failed', 'title': 'Broken', 'sub': 'Artist', 'state': 'failed', 'uiGroup': 'failed'})"
+    )
+    settle(200)
+    drawer_names = sorted(
+        {
+            row["name"]
+            for row in _buttons(
+                q,
+                "function (o) { return o.primary !== undefined && o.danger !== undefined && o.icon !== undefined; }",
+                "[queueDrawer.contentItem]",
+            )
+            if row["name"]
+        }
+    )
+    clears = [name for name in drawer_names if name.startswith("Clear ")]
+    if len(clears) < 2 or len(clears) != len(set(clears)):
+        problems.append(f"the queue's CLEAR controls do not name their own sections: {drawer_names}")
+    if not any("Retry all" in name for name in drawer_names):
+        problems.append(f"the queue's RETRY ALL control does not name its section: {drawer_names}")
+
+    # No tab stop may sit behind a closed popup (issue #284's third item, for
+    # the Chooser): after confirming, nothing in the popover keeps
+    # activeFocusOnTab.
+    q("queueDrawer.close()")
+    settle(250)
+    hidden = list(json.loads(q(scene_js("""
+        var pop = findObject(root, "chooserPopover");
+        var out = [];
+        function walk(o) {
+            if (!o) return;
+            if (o.activeFocusOnTab === true && o.visible !== true) {
+                out.push("" + (o.Accessible && o.Accessible.name ? o.Accessible.name : "?"));
+            }
+            var kids = o.children || [];
+            for (var i = 0; i < kids.length; i++) walk(kids[i]);
+            if (o.item) walk(o.item);
+        }
+        if (pop) walk(pop.contentItem);
+        return JSON.stringify(out);
+    """))))
+    if hidden:
+        problems.append(f"controls inside the closed Chooser keep a tab stop: {hidden}")
 
     if problems:
         for line in problems:
