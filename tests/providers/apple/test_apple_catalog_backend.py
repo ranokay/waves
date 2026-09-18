@@ -62,6 +62,21 @@ def _album():
     }
 
 
+def _summary_artist() -> dict:
+    """Apple's search summary for artist-1: a named artist whose album
+    relationship lists reference stubs (id/type/href, no attributes) and which
+    carries no views -- the captured live shape behind audit F-02 (issue #216).
+    A fresh dict per call, so a caller may remember or mutate it freely."""
+    return {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
+        "relationships": {
+            "albums": {"data": [{"id": "album-1", "type": "albums", "href": "/v1/catalog/us/albums/album-1"}]}
+        },
+    }
+
+
 class _Catalog:
     def __init__(self, album=None, artist=None, playlist=None, song=None):
         self._album = album
@@ -272,14 +287,7 @@ def test_standalone_apple_artist_ignores_a_cached_summary():
     """The LYRICS/COVER standalone path must not build an artist page from a
     cached search summary: its album entries are reference stubs, so the
     canonical artist is fetched instead (issue #216)."""
-    summary = {
-        "id": "artist-1",
-        "type": "artists",
-        "attributes": {"name": "Aphex Twin"},
-        "relationships": {
-            "albums": {"data": [{"id": "album-1", "type": "albums", "href": "/v1/catalog/us/albums/album-1"}]}
-        },
-    }
+    summary = _summary_artist()
     canonical = {
         "id": "artist-1",
         "type": "artists",
@@ -391,6 +399,63 @@ def test_apple_click_after_a_prefetch_serves_the_warmed_cache():
     (payload,) = stub.artistLoaded.emits
     assert payload["name"] == "Aphex Twin"
     assert stub.statuses[-1] == "Aphex Twin"
+
+
+def _summary_artist_catalog():
+    """A catalog whose search answers with Apple's attribute-less artist
+    summary (``_summary_artist``) and whose canonical fetch returns the
+    attributed artist, so only a bridge that refetches projects a populated
+    page. Returns ``(catalog, fetch_calls)``."""
+
+    calls: list = []
+
+    class _SummaryCatalog(_Catalog):
+        async def get_search_results(self, term, types):
+            return {
+                "results": {
+                    "artists": {"data": [_summary_artist()]},
+                    "albums": {"data": []},
+                    "songs": {"data": []},
+                    "playlists": {"data": []},
+                }
+            }
+
+        async def get_artist(self, artist_id):
+            calls.append(("artist", artist_id))
+            return {"data": [self._artist]}
+
+    canonical = {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
+        "relationships": {"albums": {"data": [_album()]}},
+        "views": {"top-songs": {"data": [_song()]}},
+    }
+    return _SummaryCatalog(album=_album(), artist=canonical, song=_song()), calls
+
+
+def test_apple_artist_payload_projects_named_rows_and_top_tracks():
+    """R-11's acceptance at the bridge's own seam (issue #247): the payload the
+    artist page renders carries a named album row with art, a track count and
+    a date, plus the top-tracks section. The pre-fix bridge projected Apple's
+    attribute-less search summary into blank rows (audit F-02)."""
+    catalog, calls = _summary_artist_catalog()
+    provider = AppleProvider(catalog=catalog)
+    provider.search("aphex")  # the summary copy a click would see
+    stub = _prefetch_stub(providers={"apple": provider})
+
+    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+
+    (payload,) = stub.artistLoaded.emits
+    assert payload["name"] == "Aphex Twin"
+    (album,) = payload["albums"]
+    assert album["title"] == "Selected Ambient Works 85-92"
+    assert album["artist"] == "Aphex Twin"
+    assert album["art"] == "https://img/album/320x320bb.jpg"
+    assert album["tracks"] == 13
+    assert (album["date"], album["year"]) == ("1992-02-12", "1992")
+    assert [row["title"] for row in payload["tracks"]] == ["Xtal"]
+    assert ("artist", "artist-1") in calls, "the summary was never refetched"
 
 
 class _FailingArtistCatalog:

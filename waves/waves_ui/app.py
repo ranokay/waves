@@ -582,6 +582,20 @@ def _log_config_migration() -> None:
         logging.getLogger("waves.config").warning("config migration failed; the legacy folder stays in use")
 
 
+def _install_test_quit(app: QGuiApplication) -> None:
+    """Test seam: quit a launched app by itself a fixed delay after its event
+    loop starts.
+
+    Integration tests need the real entry point (settings load, migrations,
+    the geometry restore, the quit flush) to run in a subprocess and exit
+    cleanly. ``WAVES_QUIT_AFTER_BOOT_MS`` is that request, timed from
+    ``run()`` so the boot sequence has certainly run; a real launch never
+    sets it."""
+    quit_after_ms = os.environ.get("WAVES_QUIT_AFTER_BOOT_MS", "")
+    if quit_after_ms.isdigit() and int(quit_after_ms) > 0:
+        QTimer.singleShot(int(quit_after_ms), app.quit)
+
+
 def waves_activate(tidal: Tidal | None = None) -> int:
     _tune_interpreter_for_gui()
     _install_crash_diagnostics()
@@ -696,6 +710,8 @@ def waves_activate(tidal: Tidal | None = None) -> int:
             f"WAVES window: root_type={type(root_objects[0]).__name__} "
             f"is_qwindow={isinstance(root_objects[0], QWindow)} icon_set={icon is not None}"
         )
+
+    _install_test_quit(app)  # WAVES_QUIT_AFTER_BOOT_MS, the integration tests' seam
 
     rc = app.exec()
     if owns_app:
