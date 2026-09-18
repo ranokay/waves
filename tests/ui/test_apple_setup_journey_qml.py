@@ -145,22 +145,18 @@ _APPLE_TRACK_ROW = {
 def _apple_only_payload() -> dict:
     """An answer carrying Apple's own group and no TIDAL rows."""
     return {
-        "artists": [],
-        "albums": [],
-        "tracks": [],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-        "apple": {
-            "artists": [],
-            "albums": [],
-            "tracks": [_APPLE_TRACK_ROW],
-            "videos": [],
-            "playlists": [],
-            "mixes": [],
-            "top": None,
-        },
+        "groups": [
+            {
+                "provider": "apple",
+                "artists_layout": "flow",
+                "artists": [],
+                "albums": [],
+                "tracks": [_APPLE_TRACK_ROW],
+                "playlists": [],
+                "top": None,
+                "error": "",
+            }
+        ]
     }
 
 
@@ -320,7 +316,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight journey)
     q("root._searchSeq = root._navSeq; root.lastSearchQuery = 'ambient'")
     bridge.searchResults.emit(_apple_only_payload())
     settle(500)
-    if not bool(q("appleGroupHead.visible")):
+    if not bool(q("root.searchGroupFor('apple').headVisible")):
         failures.append("an Apple-only signed-out search showed no Apple group")
     if bool(q("emptyHint.visible")):
         failures.append("the Search empty state stayed over an answered search")

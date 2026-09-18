@@ -112,12 +112,20 @@ def _results(tag: str) -> dict:
         return {"id": f"{tag}pl{i}", "title": f"{tag} Playlist {i}", "art": "", "tracks": 12, "creator": "Someone"}
 
     return {
-        "artists": [artist(i) for i in range(12)],
-        "albums": [album(i) for i in range(10)],
-        "tracks": [track(i) for i in range(10)],
-        "videos": [video(i) for i in range(6)],
-        "playlists": [playlist(i) for i in range(5)],
-        "mixes": [],
+        "groups": [
+            {
+                "provider": "tidal",
+                "artists_layout": "strip",
+                "artists": [artist(i) for i in range(12)],
+                "albums": [album(i) for i in range(10)],
+                "tracks": [track(i) for i in range(10)],
+                "videos": [video(i) for i in range(6)],
+                "playlists": [playlist(i) for i in range(5)],
+                "mixes": [],
+                "top": None,
+                "error": "",
+            }
+        ]
     }
 
 
@@ -201,8 +209,8 @@ def _run_scenario() -> int:
 
     # 2. Scroll down the page and sideways along the artist strip.
     q("results.contentY = 300")
-    q("artistStrip.contentX = 150")
-    if q("results.contentY") < 250 or q("artistStrip.contentX") < 100:
+    q("root.searchGroupFor('tidal').scrollStrip(150)")
+    if q("results.contentY") < 250 or q("root.searchGroupFor('tidal').stripX") < 100:
         print("could not establish non-top offsets", file=sys.stderr)
         return EXIT_PRECONDITION
 
@@ -215,7 +223,7 @@ def _run_scenario() -> int:
     settle()
 
     y = q("results.contentY")
-    x = q("artistStrip.contentX")
+    x = q("root.searchGroupFor('tidal').stripX")
     reset = y <= 2 and x <= 2
     print(f"finalY={y:.0f} finalStripX={x:.0f} reset={reset}", flush=True)
     return EXIT_OK if reset else EXIT_REGRESSED

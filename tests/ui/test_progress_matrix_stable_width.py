@@ -58,9 +58,10 @@ from support.qml import (
     EXIT_OK,
     EXIT_PRECONDITION,
     EXIT_REGRESSED,
-    ROLLING_ALBUM,
+    ROLLING_ALBUM_ROW,
     boot_main_qml,
     run_scenario,
+    seed_tidal_search,
 )
 
 # The steps that used to resize the bar: the first real percent (the "…"
@@ -236,11 +237,9 @@ def _run_scenario() -> int:
         return booted
     _root, q, settle, _bridge = booted
     q("root.openSearch()")
-    q("albumsModel.clear()")
-    q(f"albumsModel.append({ROLLING_ALBUM})")
+    seed_tidal_search(q, _bridge, albums=[ROLLING_ALBUM_ROW], expanded=("albums",))
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
-    q("root.searchAlbumsExpanded = true")
     settle(700)
 
     def measure() -> str:

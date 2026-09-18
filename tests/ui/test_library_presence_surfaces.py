@@ -43,6 +43,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    seed_tidal_search,
 )
 
 ARTIST = "Miss May I"
@@ -174,10 +175,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
 
     # ---- 1 + 3: the search page (expanded album panel, artist cards) --------
     q("root.openSearch()")
-    q("albumsModel.clear()")
-    q("tracksModel.clear()")
-    q("artistsModel.clear()")
-    q("root.searchArtistsExpanded = true")
+    q("waves.setWavesPref('tidal_search_sec_artists_expanded', true)")
     album = json.dumps(
         {
             "id": "al-held",
@@ -192,13 +190,19 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
             "popularity": 50,
         }
     )
-    q(f"albumsModel.append({album})")
-    for aid, name in (("a-held", ARTIST), ("a-absent", "Nobody At All")):
-        card = json.dumps({"id": aid, "name": name, "art": "", "popularity": 50})
-        q(f"artistsModel.append({card})")
+    cards = [
+        json.dumps({"id": aid, "name": name, "art": "", "popularity": 50})
+        for aid, name in (("a-held", ARTIST), ("a-absent", "Nobody At All"))
+    ]
+    seed_tidal_search(
+        q,
+        bridge,
+        albums=[json.loads(album)],
+        artists=[json.loads(card) for card in cards],
+        expanded=("albums",),
+    )
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
-    q("root.searchAlbumsExpanded = true")
     settle(400)
 
     # The panel's rows come from the QML track cache, so seeding it expands the

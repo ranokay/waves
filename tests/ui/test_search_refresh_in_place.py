@@ -76,13 +76,20 @@ def _artist(ident: str, name: str) -> dict:
 
 def _payload(albums: list, artists: list, *, refresh: bool) -> dict:
     out = {
-        "artists": artists,
-        "albums": albums,
-        "tracks": [],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
+        "groups": [
+            {
+                "provider": "tidal",
+                "artists_layout": "strip",
+                "artists": artists,
+                "albums": albums,
+                "tracks": [],
+                "videos": [],
+                "playlists": [],
+                "mixes": [],
+                "top": None,
+                "error": "",
+            }
+        ]
     }
     if refresh:
         out["refresh"] = True
@@ -147,7 +154,8 @@ def _run_scenario() -> int:
             failures.append(what)
 
     def ids(model: str) -> list:
-        return [q(f"{model}.get({i}).id") for i in range(int(q(f"{model}.count")))]
+        ref = f"root.searchGroupFor('tidal').modelFor('{model}')"
+        return [q(f"{ref}.get({i}).id") for i in range(int(q(f"{ref}.count")))]
 
     q(PARK_LOGIN_QML)
     settle(200)
@@ -166,7 +174,7 @@ def _run_scenario() -> int:
     # scenario would pass against a reconcile that does nothing at all.
     q("results.contentHeight")
     settle(150)
-    check(ids("albumsModel") == ["al1", "al2", "al3"], f"the fresh search did not fill: {ids('albumsModel')}")
+    check(ids("albums") == ["al1", "al2", "al3"], f"the fresh search did not fill: {ids('albums')}")
     # The delegate sitting at row 0 right now. A refill destroys every one of
     # these and builds new ones, which is the cost; the reconcile keeps them.
     # The model's contents cannot show the difference, so identity is asked.
@@ -177,7 +185,7 @@ def _run_scenario() -> int:
     # index 0 afterwards, so this asks whether its delegate was carried over or
     # thrown away and built again. Comparing a fixed INDEX would prove nothing:
     # index 0 holds a different album after the move, quite correctly.
-    before = q("String(albumsRep.itemAt(2))")
+    before = q("String(root.searchGroupFor('tidal').albumRepeater.itemAt(2))")
     check(bool(before), "the album rows were never built, so this scenario proves nothing")
 
     # The correction: al2 is gone, al3 moved up, al4 is new, and al1's title
@@ -191,24 +199,25 @@ def _run_scenario() -> int:
     bridge.searchResults.emit(_payload(second, [_artist("ar2", "Beta"), _artist("ar9", "Gamma")], refresh=True))
     settle(300)
 
-    got = ids("albumsModel")
+    got = ids("albums")
     check(got == ["al3", "al1", "al4"], f"the refresh left the wrong rows, or the wrong order: {got}")
+    albums = "root.searchGroupFor('tidal').modelFor('albums')"
     check(
-        q("albumsModel.get(1).title") == "One (Remastered)",
-        f"a changed field was not written: {q('albumsModel.get(1).title')!r}",
+        q(albums + ".get(1).title") == "One (Remastered)",
+        f"a changed field was not written: {q(albums + '.get(1).title')!r}",
     )
     check(
-        q("albumsModel.get(1).quality") == "HI_RES_LOSSLESS",
-        f"a second changed field on the same row was not written: {q('albumsModel.get(1).quality')!r}",
+        q(albums + ".get(1).quality") == "HI_RES_LOSSLESS",
+        f"a second changed field on the same row was not written: {q(albums + '.get(1).quality')!r}",
     )
-    check(q("albumsModel.get(0).title") == "Three", "an unchanged row lost its title")
-    after = q("String(albumsRep.itemAt(0))")  # al3 again, one row up
+    check(q(albums + ".get(0).title") == "Three", "an unchanged row lost its title")
+    after = q("String(root.searchGroupFor('tidal').albumRepeater.itemAt(0))")  # al3 again, one row up
     check(bool(after), "the album rows went away entirely")
     check(
         after == before,
         f"the refresh rebuilt the row delegates instead of reconciling them: {before} -> {after}",
     )
-    check(ids("artistsModel") == ["ar2", "ar9"], f"the artist strip did not reconcile: {ids('artistsModel')}")
+    check(ids("artists") == ["ar2", "ar9"], f"the artist strip did not reconcile: {ids('artists')}")
 
     # The page must not have been veiled: this path is the one that never
     # flashes, and a veil here would mean it fell back to a full rebuild.

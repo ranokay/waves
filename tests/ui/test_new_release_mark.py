@@ -519,7 +519,7 @@ def _run_scenario() -> int:
     q("openSearch()")
     settle()
     q("_searchSeq = _navSeq")
-    bridge.searchResults.emit(results)
+    bridge.searchResults.emit({"groups": [{**results, "provider": "tidal", "artists_layout": "strip", "error": ""}]})
     if not pump(lambda: not q("searchBuilding")):
         print("search never finished building", file=sys.stderr)
         return EXIT_PRECONDITION

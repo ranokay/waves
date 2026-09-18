@@ -12,6 +12,7 @@ click the title and assert the browse surface keys to the playlist page.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    seed_tidal_search,
 )
 
 _PLAYLIST = '{"id":"pl1","title":"DMX Essentials","art":"","tracks":25,"creator":"TIDAL"}'
@@ -135,11 +137,9 @@ def _run_scenario() -> int:
     q("bootContentShown = 1")
     q(PARK_LOGIN_QML)
     q("root.openSearch()")
-    q("playlistsModel.clear()")
-    q(f"playlistsModel.append({_PLAYLIST})")
+    seed_tidal_search(q, bridge, playlists=[json.loads(_PLAYLIST)], expanded=("playlists",))
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
-    q("root.searchPlaylistsExpanded = true")
     settle(700)
 
     # Locate the PlaylistBlock's header row inside the results column.
@@ -207,8 +207,6 @@ def _run_scenario() -> int:
         settle(100)
 
     # 2) Delivered tracks render as rows (count via the block's trackList).
-    import json
-
     bridge.playlistTracksLoaded.emit("pl1", json.loads(json.dumps(_ROWS)))
     settle(300)
     n = q(

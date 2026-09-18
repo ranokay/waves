@@ -435,12 +435,103 @@ ApplicationWindow {
     }
     // True once a search has populated any result model. Gates the filter chips
     // and the empty-state hint, so the chips materialize only after a search.
-    readonly property bool hasResults: artistsModel.count > 0 || albumsModel.count > 0
-                                        || tracksModel.count > 0 || videosModel.count > 0
-                                        || playlistsModel.count > 0 || mixesModel.count > 0
-                                        || appleArtistsModel.count > 0 || appleAlbumsModel.count > 0
-                                        || appleTracksModel.count > 0 || applePlaylistsModel.count > 0
-                                        || searchTop !== null
+    readonly property bool hasResults: {
+        var groups = root.searchGroups || []
+        for (var i = 0; i < groups.length; ++i) {
+            if (groups[i].top) return true
+            if ((groups[i].artists || []).length + (groups[i].albums || []).length
+                + (groups[i].tracks || []).length + (groups[i].videos || []).length
+                + (groups[i].playlists || []).length + (groups[i].mixes || []).length > 0) return true
+        }
+        return false
+    }
+    // The search payload's provider groups, in provider order (issue #292).
+    // The results page renders one SearchProviderGroup per entry, and every
+    // root read of the page (counts, empty states, the sort) goes through it.
+    property var searchGroups: []
+    // True only while a payload's groups are applied in place (a refresh):
+    // each group's data handler picks reconcile over rebuild from this.
+    property bool searchRefreshMode: false
+    // The honest words when the last search's failure left them in its group
+    // (the payload's `error`), shown in that group's own head (issue #241 /
+    // UI-05) and in the empty line instead of a "0 results" that reads as an
+    // empty catalog.
+    readonly property string searchGroupError: {
+        var groups = root.searchGroups || []
+        for (var i = 0; i < groups.length; ++i) {
+            var words = String(groups[i].error || "")
+            if (words !== "") return words
+        }
+        return ""
+    }
+    function searchGroupList() {
+        var out = []
+        for (var i = 0; i < searchGroupRep.count; ++i) {
+            var g = searchGroupRep.itemAt(i)
+            if (g) out.push(g)
+        }
+        return out
+    }
+    function searchGroupFor(provider) {
+        var want = String(provider || "")
+        var groups = root.searchGroupList()
+        for (var i = 0; i < groups.length; ++i)
+            if (String(groups[i].providerId) === want) return groups[i]
+        return null
+    }
+    // Apply one search payload's groups (issue #292). A fresh search replaces
+    // the list -- the empty step forces every group to rebuild, so the build
+    // veil's Loaders tick exactly once per row -- while a refresh swaps the
+    // rows of the groups the page already shows: it can neither mount nor
+    // unmount a provider, so a refresh after a switch-off cannot put a ghost
+    // head back (issue #241's rule, kept).
+    function applySearchGroups(groups, refresh) {
+        groups = groups || []
+        root.searchRefreshMode = refresh === true
+        if (refresh === true) {
+            var next = []
+            for (var i = 0; i < root.searchGroups.length; ++i) {
+                var current = root.searchGroups[i]
+                var match = null
+                for (var j = 0; j < groups.length; ++j)
+                    if (String(groups[j].provider) === String(current.provider)) { match = groups[j]; break }
+                next.push(match || current)
+            }
+            root.searchGroups = next
+        } else {
+            root.searchGroups = []
+            root.searchGroups = groups
+        }
+        root.searchRefreshMode = false
+    }
+    // The provider's group leaves the page (Apple switching off): its rows and
+    // its fold go with it, and a later refresh cannot put it back.
+    function clearSearchGroup(provider) {
+        var next = []
+        for (var i = 0; i < root.searchGroups.length; ++i)
+            if (String(root.searchGroups[i].provider) !== String(provider))
+                next.push(root.searchGroups[i])
+        if (next.length === root.searchGroups.length) return
+        root.searchGroups = next
+        if (searchBuilding) _searchBuildStart(0)
+    }
+    // The pinned rows read their clickable artists from the same side map the
+    // section rows fill (appendMedia); the top item lands there too, but
+    // register it here so a pin never depends on it. A fresh object each call:
+    // the same reference assigned back notifies nothing, and every binding on
+    // artistsById would keep its previous credits.
+    function registerPinnedArtists() {
+        var list = root.searchGroupList()
+        var next = null
+        for (var i = 0; i < list.length; ++i) {
+            var top = list[i].topRow
+            if (top && top.artists) {
+                if (next === null) next = Object.assign({}, root.artistsById)
+                next[top.id] = top.artists
+            }
+        }
+        if (next !== null) root.artistsById = next
+    }
     // The one rule for "a provider that can issue a search is live": the
     // search row and the build hint both follow it (J2: the row is live for a
     // signed-out Apple-only user too).
@@ -458,34 +549,14 @@ ApplicationWindow {
         waves.search(q)
     }
     // ---- Search results / artist page / My Music ------------------------
-    // Result rows live in the *Model ListModels (declared further down) and
-    // are replaced wholesale on each search; these hold the sort order and
-    // per-page state around them.
+    // Result rows live in the provider groups' own ListModels (declared in
+    // SearchProviderGroup) and are replaced wholesale on each search; these
+    // hold the sort order and per-page state around them.
     // Both halves of the sort control are pref-backed (search_sort by name,
     // search_sort_asc), so a launch opens on the order last chosen.
     property bool sortAsc: waves.wavesPref("search_sort_asc") === true
     readonly property var sortKeys: ["relevance", "date", "name", "popularity"]
     property bool bioExpanded: false
-    property var albumsRaw: []            // unsorted album dicts, re-sorted into albumsModel
-    property var tracksRaw: []            // same, for tracksModel
-    property var videosRaw: []            // same, for videosModel
-    property var appleAlbumsRaw: []
-    property var appleTracksRaw: []
-    // The honest words when the last Apple catalog fetch failed (the payload's
-    // `apple.error`), shown in the Apple group's own head (issue #241 /
-    // audit UI-05) instead of a "0 results" that reads as an empty catalog.
-    property string appleSearchError: ""
-    // True only when the backend emitted the optional Apple group. With Apple
-    // disabled the old TIDAL-only page keeps its exact structure and headings.
-    property bool appleSearchGrouped: false
-    readonly property int tidalSearchCount: artistsModel.count + albumsModel.count + tracksModel.count
-                                                    + videosModel.count + playlistsModel.count + mixesModel.count
-    readonly property int appleSearchCount: appleArtistsModel.count + appleAlbumsModel.count + appleTracksModel.count
-                                                    + applePlaylistsModel.count
-    // TIDAL's best match for the search (a row dict tagged with its kind:
-    // album, track, video or playlist), or null. Pinned above every section
-    // of the mixed All view; the item still sits in its own section below.
-    property var searchTop: null
     // Default "home": the first My Music press of a session lands there, and
     // later presses return to whichever category this last held (openLibrary).
     property string libraryCategory: "home"
@@ -855,75 +926,21 @@ ApplicationWindow {
     }
     // The search page (mixed All view) shows each section's first 5 results with
     // a SHOW ALL beneath it, so the page reads as a quick overview instead of a
-    // wall. A section the user expands is remembered (prefs) and stays expanded
-    // on the next search, per section, the same way the artist page remembers a
-    // folded section. A specific section filter always shows everything (no cap).
+    // wall. The fold and the SHOW ALL state live on each provider's own group
+    // (SearchProviderGroup, issue #292): pref-backed per provider and section,
+    // so they survive a restart exactly as the shipped two did. A specific
+    // section filter always shows everything (no cap).
     //
-    // ARTISTS is the exception to the layout: its collapsed view is a horizontal
-    // scroll strip of fixed-size cards (a resize reveals more cards, never
-    // re-fits the ones on screen, which is what keeps it smooth) and SHOW ALL
-    // expands it to a fill grid. stripMode drives which layout is live and gates
-    // the two layouts' Loaders so exactly one set is active, which keeps the
-    // build veil's one-tick-per-artist accounting balanced. Its expanded state
-    // persists the same as the list sections.
-    property bool searchArtistsExpanded: waves.wavesPref("search_sec_artists_expanded") === true
-    readonly property bool searchArtistsStripMode: root.filterType === "all" && !root.searchArtistsExpanded
-    property bool searchAlbumsExpanded: waves.wavesPref("search_sec_albums_expanded") === true
-    property bool searchTracksExpanded: waves.wavesPref("search_sec_tracks_expanded") === true
-    property bool searchVideosExpanded: waves.wavesPref("search_sec_videos_expanded") === true
-    property bool searchPlaylistsExpanded: waves.wavesPref("search_sec_playlists_expanded") === true
-    property bool searchMixesExpanded: waves.wavesPref("search_sec_mixes_expanded") === true
-    property bool appleSearchArtistsExpanded: waves.wavesPref("apple_search_sec_artists_expanded") === true
-    property bool appleSearchAlbumsExpanded: waves.wavesPref("apple_search_sec_albums_expanded") === true
-    property bool appleSearchTracksExpanded: waves.wavesPref("apple_search_sec_tracks_expanded") === true
-    property bool appleSearchPlaylistsExpanded: waves.wavesPref("apple_search_sec_playlists_expanded") === true
-    function toggleProviderSearchSection(which, apple) {
-        var title = which.charAt(0).toUpperCase() + which.slice(1)
-        var propertyName = (apple ? "appleSearch" : "search") + title + "Expanded"
-        root[propertyName] = !root[propertyName]
-        waves.setWavesPref((apple ? "apple_" : "") + "search_sec_" + which + "_expanded", root[propertyName])
-    }
-    function toggleSearchSection(which) { toggleProviderSearchSection(which, false) }
-    function toggleAppleSearchSection(which) { toggleProviderSearchSection(which, true) }
-    // Provider groups in Search: each provider header collapses
-    // its whole result group, so users need not scroll through one provider
-    // to reach the next. Default expanded; the fold persists per session and
-    // across restarts via prefs, per provider, alongside the section SHOW ALL
-    // memory above. Filter chips keep working: they filter rows, never the
-    // fold, so a collapsed group stays collapsed under any chip.
-    property bool tidalSearchGroupCollapsed: waves.wavesPref("search_provider_tidal_collapsed") === true
-    property bool appleSearchGroupCollapsed: waves.wavesPref("search_provider_apple_collapsed") === true
-    function toggleSearchProviderGroup(apple) {
-        if (apple) {
-            appleSearchGroupCollapsed = !appleSearchGroupCollapsed
-            waves.setWavesPref("search_provider_apple_collapsed", appleSearchGroupCollapsed)
-        } else {
-            tidalSearchGroupCollapsed = !tidalSearchGroupCollapsed
-            waves.setWavesPref("search_provider_tidal_collapsed", tidalSearchGroupCollapsed)
-        }
-    }
-    // Provider identity never comes from parsing an id here: the bridge
-    // answers a descriptor for a media id (or a provider id) through
-    // waves.providerDescriptor, and every badge and group head renders it
-    // (issue #278).
-    // A provider header only makes sense while the active type filter can
-    // still show one of its rows. Apple offers no videos or mixes in this
-    // slice, so those filters never show its header. `errorStands` keeps the
-    // header while the provider's fetch failed: the honest words belong
-    // wherever its rows could have appeared (issue #241), which is still
-    // nowhere under a filter the provider has no rows for at all.
-    function providerGroupVisible(apple, errorStands) {
-        if (!appleSearchGrouped) return false
-        var models = apple ? ({ artists: appleArtistsModel, albums: appleAlbumsModel, tracks: appleTracksModel, playlists: applePlaylistsModel })
-                           : ({ artists: artistsModel, albums: albumsModel, tracks: tracksModel, videos: videosModel, playlists: playlistsModel, mixes: mixesModel })
-        if (filterType !== "all") {
-            var model = models[filterType]
-            return model !== undefined && (errorStands === true || model.count > 0)
-        }
-        var total = 0
-        for (var name in models) total += models[name].count
-        return total > 0 || errorStands === true
-    }
+    // ARTISTS is the exception to the layout, and the layout is the provider's
+    // own: a strip provider (TIDAL) collapses to a horizontal scroll strip of
+    // fixed-size cards (a resize reveals more cards, never re-fits the ones on
+    // screen, which is what keeps it smooth) and SHOW ALL expands it to a fill
+    // grid; a flow provider (Apple, and the neutral default) caps its grid at
+    // the mixed view's five. The group gates the two layouts' Loaders so
+    // exactly one set is active, which keeps the build veil's
+    // one-tick-per-artist accounting balanced.
+    // A per-section cap for the mixed All view: the section's first 5 rows, or
+    // everything once it is expanded; a specific section filter is never capped.
     // A per-section cap for the mixed All view: the section's first 5 rows, or
     // everything once it is expanded; a specific section filter is never capped.
     // `cap` is the mixed view's default row count, 5 unless the section
@@ -2633,9 +2650,10 @@ ApplicationWindow {
         trackCache = ({}); resetExpandedAlbums({})
         playlistTrackCache = ({}); expandedPlaylists = ({})
         _searchBuildStart(0)   // a mid-build blank must drop the veil with the cards
-        artistsModel.clear(); albumsRaw = []; tracksRaw = []; videosRaw = []; searchTop = null; applySort()
-        playlistsModel.clear(); mixesModel.clear()
-        clearAppleSearch()
+        // Every provider's group goes with the blank page: the rows, the
+        // folds, the errors and the pinned tops all live on those instances
+        // (issue #292).
+        searchGroups = []
         searchField.forceActiveFocus()
     }
     // The pane's shelves are the source groups' (issue #259): opening My Music
@@ -8719,16 +8737,523 @@ ApplicationWindow {
     // SHOW ALL / SHOW LESS toggle for a search-page list section (Albums,
     // Tracks, Videos, Playlists, Mixes). Shows only in the mixed All view and
     // only when the section has more than the 5 rows shown by default; clicking
-    // flips (and persists) that section's expanded flag via toggleSearchSection.
+    // flips (and persists) that section's expanded flag on its own provider
+    // group (issue #292).
     component SearchSectionMore: ShowAllLabel {
         property string section: ""
         property int cap: 5
-        // Provider-group fold: the caller passes its group's
-        // open state; a collapsed group hides its SHOW ALL with its rows.
-        property bool groupOpen: true
+        // The provider group this section belongs to: the caller passes its
+        // instance, so the toggle lands on the group's own expanded map (and
+        // its own provider-keyed pref) and a collapsed group hides its SHOW
+        // ALL with its rows.
+        property var group: null
         opacity: root.searchReveal
-        visible: groupOpen && root.filterType === "all" && count > cap
-        onToggled: root.toggleSearchSection(section)
+        visible: (group === null || !group.collapsed) && root.filterType === "all" && count > cap
+        onToggled: if (group !== null) group.toggleExpanded(section)
+    }
+
+    // One provider's group in the search results (issue #292).
+    //
+    // The search payload is a list of provider groups; this component renders
+    // one, and nothing here names a provider: the head's name, mark and sizes
+    // come from the descriptor the bridge answers for the group's provider id
+    // (issue #278), the sections render from the group's own rows, the fold
+    // and the per-section SHOW ALL persist under the provider's own pref keys,
+    // and the artists layout is the one the payload says the provider ships.
+    // TIDAL, Apple and any later SEARCH provider all land through this same
+    // body -- the results page's Repeater is the only caller.
+    component SearchProviderGroup: Column {
+        id: group
+        property var groupData: ({})
+        // Set once the declared children exist: the data handler must not run
+        // mid-construction, when the models are not there yet.
+        property bool ready: false
+        readonly property string providerId: String(group.groupData.provider || "")
+        readonly property var descriptor: waves.providerDescriptor(group.providerId)
+        readonly property string errorText: String(group.groupData.error || "")
+        readonly property bool errorStands: group.errorText !== ""
+        // "strip" keeps TIDAL's horizontal shelf; every other layout flows.
+        readonly property bool stripArtists: String(group.groupData.artists_layout || "") === "strip"
+        // A lone group's head stays off when its provider says the page is
+        // already its own shape (TIDAL); anything else keeps it.
+        readonly property bool headWhenAlone: group.groupData.head_when_alone !== false
+        // The provider's pinned best match, a row dict tagged with its kind,
+        // or null (TIDAL answers one; a provider that does not leaves null).
+        readonly property var topRow: group.groupData.top || null
+        // The fold, and the SHOW ALL state, are per provider: pref-backed so
+        // they survive a restart exactly as the shipped two did.
+        property bool collapsed: false
+        property var expanded: ({})
+        // This group's sortable rows, held raw (not the lossy model copies) so
+        // every field, the full date included, survives a re-sort.
+        property var albumsRaw: []
+        property var tracksRaw: []
+        property var videosRaw: []
+        width: parent ? parent.width : 0
+        spacing: 8
+        // A group with nothing to show (no rows, no pin, no error) takes no
+        // room and no Column spacing: the payload carries every enabled
+        // provider, and an empty one must not pad the page. The head's own
+        // gate is separate (a lone TIDAL group shows rows and no head).
+        visible: group.rowCount > 0 || group.topRow !== null || group.errorStands
+
+        // This group's own row models: one set per group instance, so a second
+        // provider's rows can never land in the first provider's lists.
+        ListModel { id: artistsModel }
+        ListModel { id: albumsModel }
+        ListModel { id: tracksModel }
+        ListModel { id: videosModel }
+        ListModel { id: playlistsModel }
+        ListModel { id: mixesModel }
+        // The pinned row's section gate (the header and the row read it), and
+        // read handles for the scenarios that compare layout or delegate
+        // identity across a refresh.
+        readonly property bool topVisible: !group.collapsed && root.filterType === "all" && group.topRow !== null
+        property alias topHeadItem: topHead
+        property alias artistsHeadItem: artistsHead
+        property alias albumRepeater: albumsRep
+        property alias videoGridItem: videoGrid
+        readonly property real stripX: artistStrip.contentX
+        function scrollStrip(x) { artistStrip.contentX = x }
+
+        function modelFor(name) {
+            return name === "artists" ? artistsModel : name === "albums" ? albumsModel
+                 : name === "tracks" ? tracksModel : name === "videos" ? videosModel
+                 : name === "playlists" ? playlistsModel : name === "mixes" ? mixesModel : null
+        }
+        function countFor(name) { var m = group.modelFor(name); return m ? m.count : 0 }
+        readonly property int rowCount: group.countFor("artists") + group.countFor("albums") + group.countFor("tracks")
+                                              + group.countFor("videos") + group.countFor("playlists") + group.countFor("mixes")
+        // A bucket the payload omits is one this provider's search never
+        // answers, so the active type filter can never host this group's head
+        // (issue #241 / UI-05's videos/mixes rule, generic in #292).
+        function hostable(name) { return group.groupData[name] !== undefined }
+        function isExpanded(name) { return group.expanded[name] === true }
+        function toggleExpanded(name) {
+            var next = {}
+            for (var key in group.expanded) next[key] = group.expanded[key]
+            next[name] = !group.isExpanded(name)
+            group.expanded = next
+            waves.setWavesPref(group.providerId + "_search_sec_" + name + "_expanded", next[name])
+        }
+        function readPrefs() {
+            group.collapsed = waves.wavesPref("search_provider_" + group.providerId + "_collapsed") === true
+            var next = ({})
+            var names = ["artists", "albums", "tracks", "videos", "playlists", "mixes"]
+            for (var i = 0; i < names.length; ++i)
+                next[names[i]] = waves.wavesPref(group.providerId + "_search_sec_" + names[i] + "_expanded") === true
+            group.expanded = next
+        }
+        function toggleCollapsed() {
+            group.collapsed = !group.collapsed
+            waves.setWavesPref("search_provider_" + group.providerId + "_collapsed", group.collapsed)
+        }
+        // A section shows while the group is open and the active chip can host
+        // its rows (root.sectionVisible is the shared filter rule).
+        function sectionVisible(name) { return !group.collapsed && root.sectionVisible(name, group.countFor(name)) }
+        // The head only makes sense while the active chip can still show one
+        // of this group's rows; a failed fetch has no rows, so its words keep
+        // the head wherever its rows could have appeared. A lone group shows
+        // no head when its provider says the page is already its own shape
+        // (TIDAL-only stays the shipped headless page), but the honest words
+        // always keep it (issue #241 / UI-05).
+        readonly property bool headVisible: {
+            if (group.providerId === "") return false
+            if (root.filterType !== "all" && !group.hostable(root.filterType)) return false
+            var rows = root.filterType === "all" ? group.rowCount : group.countFor(root.filterType)
+            if (rows <= 0 && !group.errorStands) return false
+            return !(root.searchGroups.length <= 1 && !group.headWhenAlone && !group.errorStands)
+        }
+        function applyGroup(inPlace) {
+            group.albumsRaw = group.groupData.albums || []
+            group.tracksRaw = group.groupData.tracks || []
+            group.videosRaw = group.groupData.videos || []
+            group.applySort(inPlace === true)
+        }
+        function applySort(inPlace) {
+            // inPlace: a refresh swapping rows under a page the user is already
+            // reading, where a clear+rebuild would freeze the window (see
+            // root.reconcileById). Every other caller, a fresh search and the
+            // sort control alike, is a deliberate full rebuild.
+            if (inPlace === true) {
+                root.reconcileById(artistsModel, group.groupData.artists || [], false)
+                root.reconcileById(albumsModel, root.searchOrdered(group.albumsRaw, true), true)
+                root.reconcileById(tracksModel, root.searchOrdered(group.tracksRaw, true), true)
+                root.reconcileById(videosModel, root.searchOrdered(group.videosRaw, false), true)
+                root.reconcileById(playlistsModel, group.groupData.playlists || [], false)
+                root.reconcileById(mixesModel, group.groupData.mixes || [], false)
+            } else {
+                root.fill(artistsModel, group.groupData.artists || [])
+                root.fillMedia(albumsModel, root.searchOrdered(group.albumsRaw, true))
+                root.fillMedia(tracksModel, root.searchOrdered(group.tracksRaw, true))
+                root.fillMedia(videosModel, root.searchOrdered(group.videosRaw, false))
+                root.fill(playlistsModel, group.groupData.playlists || [])
+                root.fill(mixesModel, group.groupData.mixes || [])
+            }
+        }
+        function updateArtistPop(id, pop) {
+            for (var i = 0; i < artistsModel.count; ++i)
+                if (artistsModel.get(i).id === id) { artistsModel.setProperty(i, "popularity", pop); break }
+        }
+        // A fresh search lands at the top of every section: the strip keeps
+        // its own horizontal offset, reset alongside the page scroll.
+        function resetStripOffset() { artistStrip.contentX = 0 }
+
+        Component.onCompleted: {
+            group.readPrefs()
+            group.ready = true
+            group.applyGroup(root.searchRefreshMode)
+        }
+        // A removal can shift a later provider's group onto this delegate
+        // (Repeater reuses items by index): its fold and SHOW ALL state belong
+        // to the provider now in groupData, so the prefs re-read with it.
+        onProviderIdChanged: if (group.ready) group.readPrefs()
+        onGroupDataChanged: if (group.ready) group.applyGroup(root.searchRefreshMode)
+
+        // The provider head: name, mark and sizes from its descriptor, count
+        // or the honest error words + RETRY, and the whole head folds the
+        // group. The shipped TIDAL head owns the look (hover-lit name, accent
+        // rule); the error furniture is the shipped Apple one (#241 / UI-05).
+        Item {
+            id: groupHead
+            readonly property var provider: group.descriptor
+            visible: group.headVisible
+            width: parent.width; height: 42
+            Row {
+                anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
+                spacing: 8
+                ExpandChevron {
+                    anchors.verticalCenter: parent.verticalCenter
+                    open: !group.collapsed; hovered: groupHeadMa.containsMouse
+                    tile: 20; glyph: 14; showTile: false
+                    stroke: groupHeadMa.containsMouse ? root.accent : root.textLo
+                }
+                Image {
+                    anchors.verticalCenter: parent.verticalCenter
+                    source: groupHead.provider ? groupHead.provider.logo : ""
+                    width: groupHead.provider ? groupHead.provider.logo_header_width : 0
+                    height: groupHead.provider ? groupHead.provider.logo_header_height : 0
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true; cache: true
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.PlainText
+                    text: groupHead.provider ? String(groupHead.provider.name).toUpperCase() : ""
+                    color: groupHeadMa.containsMouse ? root.textHi : root.accent
+                    font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
+                }
+            }
+            Text {
+                anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.bottomMargin: 11
+                visible: !group.errorStands
+                textFormat: Text.PlainText
+                text: group.rowCount + (group.rowCount === 1 ? " result" : " results")
+                color: root.textDim; font.family: root.mono; font.pixelSize: 10
+            }
+            Text {
+                objectName: "searchGroupError"
+                // The words exist only where the group does; a refresh landing
+                // after the provider was switched off cannot mount one.
+                visible: group.errorStands
+                anchors.left: parent.left; anchors.leftMargin: 28
+                // The retry's own spot, reserved: a sibling declared below
+                // this text cannot be referenced by its anchor.
+                anchors.right: parent.right; anchors.rightMargin: 96
+                anchors.bottom: parent.bottom; anchors.bottomMargin: 10
+                textFormat: Text.PlainText; elide: Text.ElideRight
+                text: group.errorText
+                color: root.gold; font.pixelSize: 12
+            }
+            SpecBtn {
+                objectName: "searchGroupRetry"
+                visible: group.errorStands
+                compact: true; label: "RETRY"
+                anchors.right: parent.right; anchors.rightMargin: 8
+                anchors.bottom: parent.bottom; anchors.bottomMargin: 6
+                z: 2
+                onClicked: if (root.lastSearchQuery !== "") root.submitSearch(root.lastSearchQuery)
+            }
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                height: 2; color: root.accentDim
+            }
+            MouseArea {
+                id: groupHeadMa
+                anchors.fill: parent
+                hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                onClicked: group.toggleCollapsed()
+            }
+        }
+
+        // TOP RESULT: the provider's own best match, pinned above every
+        // section of the mixed All view (TIDAL answers one; a provider that
+        // does not pins nothing). The item still sits in its section below:
+        // this is a pointer, not a move.
+        SectionHeader { id: topHead; opacity: root.searchReveal; visible: group.topVisible; label: "TOP RESULT" }
+        Repeater {
+            model: group.topRow !== null ? [group.topRow] : []
+            delegate: Loader {
+                id: topLd
+                required property var modelData
+                visible: group.topVisible
+                width: parent.width
+                asynchronous: root.searchBuilding
+                opacity: root.searchReveal
+                onLoaded: root._searchBuildTick()
+                sourceComponent: topLd.modelData.kind === "album" ? topAlbumComp
+                               : topLd.modelData.kind === "playlist" ? topPlaylistComp : topTrackComp
+                Component {
+                    id: topAlbumComp
+                    AlbumBlock {
+                        albumId: topLd.modelData.id; title: topLd.modelData.title; artistName: topLd.modelData.artist; artistId: topLd.modelData.artist_id || ""
+                        art: topLd.modelData.art; year: "" + (topLd.modelData.year || ""); releaseDate: topLd.modelData.date || ""; listedDate: topLd.modelData.listed || ""; trackCount: topLd.modelData.tracks || 0
+                        durationSec: topLd.modelData.duration_sec || 0; quality: topLd.modelData.quality || ""; popularity: topLd.modelData.popularity || 0
+                    }
+                }
+                Component {
+                    id: topTrackComp
+                    TrackRow {
+                        tId: topLd.modelData.id; kind: topLd.modelData.kind
+                        title: topLd.modelData.title; artistName: topLd.modelData.artist || ""; artistId: topLd.modelData.artist_id || ""
+                        album: topLd.modelData.album || ""; art: topLd.modelData.art || ""; year: "" + (topLd.modelData.year || ""); date: topLd.modelData.date || ""
+                        duration: topLd.modelData.duration || ""; durationSec: topLd.modelData.duration_sec || 0; quality: topLd.modelData.quality || ""; popularity: topLd.modelData.popularity || 0
+                        albumId: topLd.modelData.album_id || ""
+                    }
+                }
+                Component {
+                    id: topPlaylistComp
+                    PlaylistBlock {
+                        plId: topLd.modelData.id; title: topLd.modelData.title; creator: topLd.modelData.creator || ""
+                        art: topLd.modelData.art; trackCount: topLd.modelData.tracks || 0
+                    }
+                }
+            }
+        }
+
+        // ARTISTS. The strip is the horizontal shelf the provider's payload
+        // asks for (TIDAL); every other provider flows and caps at the mixed
+        // view's five with SHOW ALL, as Apple's always has. Gating the two
+        // layouts' Loaders keeps exactly one set active, so the build veil's
+        // one-tick-per-artist count stays balanced.
+        SectionHeader { id: artistsHead; opacity: root.searchReveal; visible: group.sectionVisible("artists"); label: "ARTISTS"; count: artistsModel.count }
+        Flickable {
+            id: artistStrip
+            visible: group.sectionVisible("artists") && group.stripArtists && root.filterType === "all" && !group.isExpanded("artists")
+            width: parent.width; height: artistRow.height
+            contentWidth: artistRow.width; contentHeight: artistRow.height
+            clip: true
+            flickableDirection: Flickable.HorizontalFlick
+            boundsBehavior: Flickable.StopAtBounds
+            readonly property real cardW: 200
+            Row {
+                id: artistRow
+                spacing: 12
+                Repeater {
+                    model: artistsModel
+                    delegate: Loader {
+                        width: artistStrip.cardW
+                        // Reserve a fixed cell (width + 142) while the async Loader is
+                        // still empty (item null) so the strip does not collapse behind
+                        // the build veil; snap to the card's exact height once loaded.
+                        height: item ? item.implicitHeight : width + 142
+                        // Live only in strip mode, so exactly one of the strip and the
+                        // grid instantiates its cards (see above).
+                        active: group.stripArtists && root.filterType === "all" && !group.isExpanded("artists")
+                        asynchronous: root.searchBuilding
+                        opacity: root.searchReveal
+                        onLoaded: root._searchBuildTick()
+                        sourceComponent: ArtistSearchCard {
+                            aArt: model.art; aName: model.name; aPop: model.popularity; aId: model.id
+                        }
+                    }
+                }
+            }
+            // Vertical wheel scrolls the page, sideways wheel/trackpad
+            // scrolls the strip (shared with the browse shelves).
+            ShelfWheelRedirect { pane: results }
+            ShelfEdgeFades {}
+        }
+        Flow {
+            id: artistFlow
+            visible: group.sectionVisible("artists")
+                     && !(group.stripArtists && root.filterType === "all" && !group.isExpanded("artists"))
+            width: parent.width; spacing: 12
+            property int cols: Math.max(1, Math.floor((width + spacing) / (190 + spacing)))
+            property real cardW: (width - (cols - 1) * spacing) / cols
+            Repeater {
+                model: artistsModel
+                delegate: Loader {
+                    // The strip layout uses the grid only when expanded or
+                    // filtered, where every row shows; a flow provider caps at
+                    // the mixed view's five until SHOW ALL.
+                    visible: group.stripArtists ? true
+                             : root.searchRowVisible("artists", artistsModel.count, index, group.isExpanded("artists"))
+                    width: artistFlow.cardW
+                    height: item ? item.implicitHeight : width + 142
+                    // Complement of the strip: live only when NOT in strip mode.
+                    active: group.stripArtists ? !(root.filterType === "all" && !group.isExpanded("artists")) : true
+                    asynchronous: root.searchBuilding
+                    opacity: root.searchReveal
+                    onLoaded: root._searchBuildTick()
+                    sourceComponent: ArtistSearchCard {
+                        aArt: model.art; aName: model.name; aPop: model.popularity; aId: model.id
+                    }
+                }
+            }
+        }
+        ShowAllLabel {
+            objectName: "artistsShowAll"
+            opacity: root.searchReveal
+            sectionTop: artistsHead
+            // Offer SHOW ALL only when there is more to reveal: the strip's
+            // overflow, or the flow's five-row cap. The count gate is what the
+            // sections get from sectionVisible(); without it the expanded flag
+            // alone (pref-backed) kept this label on screen over an empty page.
+            visible: group.sectionVisible("artists") && root.filterType === "all" && artistsModel.count > 0
+                     && (group.isExpanded("artists")
+                         || (group.stripArtists ? artistStrip.contentWidth > artistStrip.width + 1
+                                                : artistsModel.count > 5))
+            expanded: group.isExpanded("artists")
+            count: artistsModel.count
+            onToggled: group.toggleExpanded("artists")
+        }
+
+        // ALBUMS
+        SectionHeader { id: albumsHead; opacity: root.searchReveal; visible: group.sectionVisible("albums"); label: "ALBUMS"; count: albumsModel.count }
+        Repeater {
+            id: albumsRep
+            model: albumsModel
+            delegate: Loader {
+                // The section filter must hide the LOADER (the Column child);
+                // an invisible item inside a sized Loader would still occupy
+                // its row. In the mixed All view only the first 5 show until
+                // SHOW ALL; the delegate still loads (and fires its build-veil
+                // tick) while hidden, so the one-tick-per-item count stays
+                // exact.
+                visible: !group.collapsed && root.searchRowVisible("albums", albumsModel.count, index, group.isExpanded("albums"))
+                width: parent.width
+                asynchronous: root.searchBuilding
+                opacity: root.searchReveal
+                onLoaded: root._searchBuildTick()
+                sourceComponent: AlbumBlock {
+                    albumId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
+                    art: model.art; year: model.year; releaseDate: model.date; listedDate: model.listed || ""; trackCount: model.tracks; durationSec: model.duration_sec || 0; quality: model.quality; popularity: model.popularity
+                }
+            }
+        }
+        SearchSectionMore { section: "albums"; sectionTop: albumsHead; count: albumsModel.count; expanded: group.isExpanded("albums"); group: group }
+
+        // TRACKS
+        SectionHeader { id: tracksHead; opacity: root.searchReveal; visible: group.sectionVisible("tracks"); label: "TRACKS"; count: tracksModel.count }
+        Repeater {
+            model: tracksModel
+            delegate: Loader {
+                visible: !group.collapsed && root.searchRowVisible("tracks", tracksModel.count, index, group.isExpanded("tracks"))
+                width: parent.width
+                asynchronous: root.searchBuilding
+                opacity: root.searchReveal
+                onLoaded: root._searchBuildTick()
+                sourceComponent: TrackRow {
+                    tId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
+                    album: model.album; art: model.art; year: model.year; date: model.date; duration: model.duration; durationSec: model.duration_sec || 0; quality: model.quality; popularity: model.popularity
+                    albumId: model.album_id || ""
+                }
+            }
+        }
+        SearchSectionMore { section: "tracks"; sectionTop: tracksHead; count: tracksModel.count; expanded: group.isExpanded("tracks"); group: group }
+
+        // VIDEOS: art-first results, 16:9 thumbnails at grid size, with the
+        // title, artist, release date and a full download button reading
+        // underneath. Cells are sized from the section width, so the column
+        // count follows the window.
+        SectionHeader { id: videosHead; opacity: root.searchReveal; visible: group.sectionVisible("videos"); label: "VIDEOS"; count: videosModel.count }
+        Flow {
+            id: videoGrid
+            width: parent.width
+            spacing: 18
+            readonly property int cols: Math.max(2, Math.floor(width / 320))
+            readonly property real cellW: (width - (cols - 1) * spacing) / cols
+            // The mixed view's five, rounded up to whole rows: a grid three
+            // wide showed five cells and left the sixth blank, a hole SHOW
+            // ALL then filled. Six at three columns, six at two, eight at four.
+            readonly property int cap: cols * Math.ceil(5 / cols)
+            Repeater {
+                model: videosModel
+                delegate: Loader {
+                    visible: !group.collapsed && root.searchRowVisible("videos", videosModel.count, index, group.isExpanded("videos"), videoGrid.cap)
+                    width: videoGrid.cellW
+                    height: Math.round(videoGrid.cellW * 9 / 16) + 54
+                    asynchronous: root.searchBuilding
+                    opacity: root.searchReveal
+                    onLoaded: root._searchBuildTick()
+                    sourceComponent: VideoCell {
+                        width: videoGrid.cellW
+                        vid: model.id; vcTitle: model.title; vcArtist: model.artist
+                        artUrl: model.art; artBigUrl: model.art_big || ""
+                        vcDuration: model.duration
+                        vcExplicit: model.explicit === true
+                        vcSpec: model.quality || ""
+                        vcDate: model.date
+                    }
+                }
+            }
+        }
+        SearchSectionMore { section: "videos"; sectionTop: videosHead; count: videosModel.count; expanded: group.isExpanded("videos"); group: group; cap: videoGrid.cap }
+
+        // PLAYLISTS
+        SectionHeader { id: playlistsHead; opacity: root.searchReveal; visible: group.sectionVisible("playlists"); label: "PLAYLISTS"; count: playlistsModel.count }
+        Repeater {
+            model: playlistsModel
+            delegate: Loader {
+                visible: !group.collapsed && root.searchRowVisible("playlists", playlistsModel.count, index, group.isExpanded("playlists"))
+                width: parent.width
+                asynchronous: root.searchBuilding
+                opacity: root.searchReveal
+                // Reserve the collapsed row's height while the async build
+                // runs (same rationale as the artist strip's fixed cell):
+                // without it the section collapses to zero and pops open as
+                // each row lands.
+                height: item ? item.implicitHeight : 64
+                onLoaded: root._searchBuildTick()
+                sourceComponent: PlaylistBlock {
+                    plId: model.id; title: model.title; creator: model.creator || ""
+                    art: model.art; trackCount: model.tracks
+                }
+            }
+        }
+        SearchSectionMore { section: "playlists"; sectionTop: playlistsHead; count: playlistsModel.count; expanded: group.isExpanded("playlists"); group: group }
+
+        // MIXES
+        SectionHeader { id: mixesHead; opacity: root.searchReveal; visible: group.sectionVisible("mixes"); label: "MIXES"; count: mixesModel.count }
+        Repeater {
+            model: mixesModel
+            delegate: Loader {
+                visible: !group.collapsed && root.searchRowVisible("mixes", mixesModel.count, index, group.isExpanded("mixes"))
+                width: parent.width; height: 66
+                asynchronous: root.searchBuilding
+                opacity: root.searchReveal
+                onLoaded: root._searchBuildTick()
+                sourceComponent: Rectangle {
+                    radius: 10; color: root.surface; border.color: root.border1
+                    RowLayout {
+                        anchors.fill: parent; anchors.margins: 10; spacing: 13
+                        Art {
+                            width: 46; height: 46; hoverFx: true
+                            fxKind: "mix"; fxId: "" + (model.id || "")
+                            url: model.art
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 2
+                            Text { textFormat: Text.PlainText; text: model.title; color: root.textHi; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Text { textFormat: Text.PlainText; text: model.subtitle ? model.subtitle : "Mix"; color: root.textLo; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
+                        }
+                        DownloadButton { mediaId: model.id; chooserKind: "mix"; collectionCheck: true; label: "Download mix"; onTap: function(){ waves.downloadMix(model.id) } }
+                    }
+                }
+            }
+        }
+        SearchSectionMore { section: "mixes"; sectionTop: mixesHead; count: mixesModel.count; expanded: group.isExpanded("mixes"); group: group }
     }
 
     // Video thumbnail: 16:9-ish art with a scanline play strip.
@@ -13641,17 +14166,10 @@ ApplicationWindow {
             // out.
         }
     }
-    // Models
-    ListModel { id: artistsModel }
-    ListModel { id: albumsModel }
-    ListModel { id: tracksModel }
-    ListModel { id: videosModel }
-    ListModel { id: playlistsModel }
-    ListModel { id: mixesModel }
-    ListModel { id: appleArtistsModel }
-    ListModel { id: appleAlbumsModel }
-    ListModel { id: appleTracksModel }
-    ListModel { id: applePlaylistsModel }
+    // Models. The search result rows live on each provider's own group
+    // instance (SearchProviderGroup), one model set per group, so no set is
+    // needed here (issue #292); the rest are the queue, the artist page and
+    // the library's sections.
     ListModel { id: queueModel }
     ListModel { id: artistAlbumsModel }
     ListModel { id: artistVideosModel }
@@ -13674,19 +14192,6 @@ ApplicationWindow {
 
     function appendPlain(model, arr) { if (arr) for (var i = 0; i < arr.length; ++i) model.append(arr[i]) }
     function fill(model, arr) { model.clear(); appendPlain(model, arr) }
-    function clearAppleSearch() {
-        appleSearchGrouped = false
-        // The error goes with the rows: a stale message would keep the ghost
-        // group head mounted after Apple is turned off (issue #241).
-        appleSearchError = ""
-        appleAlbumsRaw = []
-        appleTracksRaw = []
-        appleArtistsModel.clear()
-        appleAlbumsModel.clear()
-        appleTracksModel.clear()
-        applePlaylistsModel.clear()
-        if (searchBuilding) _searchBuildStart(0)
-    }
 
     // In-place reconcile for the download queue: update existing rows by qid,
     // append new ones, drop removed, then partition into grouped order. Keeping
@@ -14189,7 +14694,7 @@ ApplicationWindow {
             // search-group clearing both read the same fresh light.
             root.appleLight = waves.appleStatus()
             root.refreshProviderSurfaces()
-            if (waves.appleStatus().state === "off") root.clearAppleSearch()
+            if (waves.appleStatus().state === "off") root.clearSearchGroup("apple")
         }
         function onSetupRequested() {
             root.openSetupPage()
@@ -14490,38 +14995,17 @@ ApplicationWindow {
             // in the backend's search cache, re-searching is instant.
             if (root._searchSeq !== root._navSeq
                 || root.browseOpen || root.libraryOpen || root.settingsOpen) return
+            var groups = r.groups || []
             if (r.refresh) {
                 // The wire's answer to a search painted from an older result
                 // (the backend's stale-then-revalidate, see search()): the
                 // rows swap in place and nothing else moves. No history
                 // entry, no scroll reset, no build veil, no cache reset: the
                 // page the user is already reading just becomes current.
-                root.searchTop = r.top || null
-                if (root.searchTop && root.searchTop.artists) {
-                    // A fresh object: assigning the same reference back
-                    // notifies nothing, so every binding on artistsById kept
-                    // the previous credits.
-                    var abm2 = Object.assign({}, root.artistsById)
-                    abm2[root.searchTop.id] = root.searchTop.artists
-                    root.artistsById = abm2
-                }
-                // Reconciled, not refilled. This branch runs with the build
-                // veil down, so a clear+rebuild would incubate every card
-                // synchronously on the GUI thread and freeze the window for
-                // the length of it. See reconcileById.
-                root.reconcileById(artistsModel, r.artists, false)
-                root.albumsRaw = r.albums || []
-                root.tracksRaw = r.tracks || []
-                root.videosRaw = r.videos || []
-                var refreshApple = r.apple || null
-                root.appleSearchError = String((refreshApple && refreshApple.error) || "")
-                root.appleAlbumsRaw = refreshApple ? (refreshApple.albums || []) : []
-                root.appleTracksRaw = refreshApple ? (refreshApple.tracks || []) : []
-                root.applySort(true)
-                root.reconcileById(playlistsModel, r.playlists, false)
-                root.reconcileById(mixesModel, r.mixes, false)
-                root.fill(appleArtistsModel, refreshApple ? refreshApple.artists : [])
-                root.fill(applePlaylistsModel, refreshApple ? refreshApple.playlists : [])
+                // Only the groups already on the page refresh; a refresh can
+                // neither mount nor unmount a provider (issue #292).
+                root.applySearchGroups(groups, true)
+                root.registerPinnedArtists()
                 root.searchNoResultsFor = ""
                 return
             }
@@ -14531,10 +15015,13 @@ ApplicationWindow {
             // A fresh search always lands at the top. The page keeps one
             // scroll position for every section (the sections stack inside
             // the one results Flickable), so without this the new results
-            // render at the old search's scroll offset. The artist strip
-            // keeps its own horizontal offset, reset alongside.
+            // render at the old search's scroll offset. The artist strips
+            // keep their own horizontal offsets, reset alongside.
             results.contentY = 0
-            artistStrip.contentX = 0
+            for (var stripIndex = 0; stripIndex < searchGroupRep.count; ++stripIndex) {
+                var stripGroup = searchGroupRep.itemAt(stripIndex)
+                if (stripGroup) stripGroup.resetStripOffset()
+            }
             root.navOrigin = "search"
             root.browseOpen = false
             root.artistOpen = false
@@ -14551,58 +15038,46 @@ ApplicationWindow {
             // later search (an artist could not be found at all). Reset here,
             // where new results land, so it also covers cache-served searches.
             root.filterType = "all"
-            // A section a user expanded stays expanded on the next search
-            // (searchArtistsExpanded and the list-section flags are pref-backed),
-            // so nothing is reset here.
-            var apple = r.apple || null
-            root.appleSearchError = String((apple && apple.error) || "")
-            root.appleSearchGrouped = apple !== null
-            // Arm the build veil BEFORE the fills: the Loaders each delegate
-            // creates read searchBuilding for their asynchronous flag, and the
-            // ready ticks only ever arrive on later frames, never mid-fill.
-            root._searchBuildStart((r.artists || []).length + (r.albums || []).length
-                                 + (r.tracks || []).length + (r.videos || []).length
-                                 + (r.playlists || []).length + (r.mixes || []).length
-                                 + (apple ? (apple.artists || []).length + (apple.albums || []).length
-                                          + (apple.tracks || []).length + (apple.playlists || []).length : 0)
-                                 + (r.top ? 1 : 0))
-            // The pinned row reads its clickable artists from the same side
-            // map the section rows fill (appendMedia); the same item lands
-            // there too, but register it here so the pin never depends on it.
-            root.searchTop = r.top || null
-            if (root.searchTop && root.searchTop.artists) {
-                var abm = root.artistsById; abm[root.searchTop.id] = root.searchTop.artists; root.artistsById = abm
+            // A section a user expanded stays expanded on the next search (the
+            // groups' pref-backed flags), so nothing is reset here.
+            // Arm the build veil BEFORE the groups fill: the Loaders each
+            // delegate creates read searchBuilding for their asynchronous
+            // flag, and the ready ticks only ever arrive on later frames,
+            // never mid-fill. One tick per row the page will instantiate.
+            var buildTotal = 0
+            for (var i = 0; i < groups.length; ++i) {
+                var rows = groups[i]
+                buildTotal += (rows.artists || []).length + (rows.albums || []).length
+                            + (rows.tracks || []).length + (rows.videos || []).length
+                            + (rows.playlists || []).length + (rows.mixes || []).length
+                            + (rows.top ? 1 : 0)
             }
-            root.fill(artistsModel, r.artists)
-            root.albumsRaw = r.albums || []
-            root.tracksRaw = r.tracks || []
-            root.videosRaw = r.videos || []
-            root.fill(appleArtistsModel, apple ? apple.artists : [])
-            root.appleAlbumsRaw = apple ? (apple.albums || []) : []
-            root.appleTracksRaw = apple ? (apple.tracks || []) : []
-            root.applySort()
-            root.fill(playlistsModel, r.playlists)
-            root.fill(mixesModel, r.mixes)
-            root.fill(applePlaylistsModel, apple ? apple.playlists : [])
-            var any = (r.artists || []).length + (r.albums || []).length + (r.tracks || []).length
-                    + (r.videos || []).length + (r.playlists || []).length + (r.mixes || []).length
-                    + (apple ? (apple.artists || []).length + (apple.albums || []).length
-                             + (apple.tracks || []).length + (apple.playlists || []).length : 0)
-                    + (r.top ? 1 : 0)
+            root._searchBuildStart(buildTotal)
+            root.applySearchGroups(groups, false)
+            root.registerPinnedArtists()
+            var any = 0
+            for (var j = 0; j < groups.length; ++j) {
+                var groupRows = groups[j]
+                any += (groupRows.artists || []).length + (groupRows.albums || []).length
+                     + (groupRows.tracks || []).length + (groupRows.videos || []).length
+                     + (groupRows.playlists || []).length + (groupRows.mixes || []).length
+                     + (groupRows.top ? 1 : 0)
+            }
             // A failed fetch is not an empty catalog (issue #241 / UI-05):
             // while the group's honest words stand, the page never also says
             // "no results for X", which reads as a search that came back
             // empty.
-            root.searchNoResultsFor = any === 0 && root.appleSearchError === "" ? root.lastSearchQuery : ""
+            root.searchNoResultsFor = any === 0 && root.searchGroupError === "" ? root.lastSearchQuery : ""
         }
         // Assign a NEW object so the `var` property fires a change notification
         // (mutating + reassigning the same reference does not update bindings).
         function onAlbumTracksLoaded(id, tracks) { var c = Object.assign({}, root.trackCache); c[id] = tracks; root.trackCache = c }
         function onPlaylistTracksLoaded(id, tracks) { var c = Object.assign({}, root.playlistTrackCache); c[id] = tracks; root.playlistTrackCache = c }
         function onArtistMetaLoaded(id, pop) {
-            for (var i = 0; i < artistsModel.count; ++i) {
-                if (artistsModel.get(i).id === id) { artistsModel.setProperty(i, "popularity", pop); break }
-            }
+            // TIDAL enriches its search artists in the background; the row
+            // lives on that provider's group.
+            var list = root.searchGroupList()
+            for (var i = 0; i < list.length; ++i) list[i].updateArtistPop(id, pop)
         }
         function onArtistLoadFailed(id) {
             // A Back-restore whose artist reload failed (offline, API error):
@@ -15957,7 +16432,7 @@ ApplicationWindow {
                     // page never invites a first search it already ran.
                     text: root.searchNoResultsFor !== ""
                           ? "No results for “" + root.searchNoResultsFor + "”"
-                          : (root.appleSearchError !== "" ? "Search failed"
+                          : (root.searchGroupError !== "" ? "Search failed"
                                                           : "Search for an artist, album, or track to begin")
                     color: root.textLo; font.pixelSize: 22; topPadding: 96
                     // gentle breathing so the empty state feels alive
@@ -16009,556 +16484,17 @@ ApplicationWindow {
                     onScreen: root.onScreen
                 }
 
-                Item {
-                    id: tidalGroupHead
-                    // The head's name, mark and sizes come from the provider's
-                    // own descriptor (issue #278); only this id query names
-                    // one, and the furniture renders whatever it answers.
-                    readonly property var provider: waves.providerDescriptor("tidal")
-                    visible: root.providerGroupVisible(false)
-                    width: parent.width; height: 42
-                    Row {
-                        anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
-                        spacing: 8
-                        ExpandChevron {
-                            anchors.verticalCenter: parent.verticalCenter
-                            open: !root.tidalSearchGroupCollapsed; hovered: tidalHeadMa.containsMouse
-                            tile: 20; glyph: 14; showTile: false
-                            stroke: tidalHeadMa.containsMouse ? root.accent : root.textLo
-                        }
-                        Image {
-                            anchors.verticalCenter: parent.verticalCenter
-                            source: tidalGroupHead.provider ? tidalGroupHead.provider.logo : ""
-                            width: tidalGroupHead.provider ? tidalGroupHead.provider.logo_header_width : 0
-                            height: tidalGroupHead.provider ? tidalGroupHead.provider.logo_header_height : 0
-                            fillMode: Image.PreserveAspectFit
-                            smooth: true; cache: true
-                        }
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            textFormat: Text.PlainText
-                            text: tidalGroupHead.provider ? String(tidalGroupHead.provider.name).toUpperCase() : ""
-                            color: tidalHeadMa.containsMouse ? root.textHi : root.accent
-                            font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
-                        }
-                    }
-                    Text {
-                        anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.bottomMargin: 11
-                        textFormat: Text.PlainText
-                        text: root.tidalSearchCount + (root.tidalSearchCount === 1 ? " result" : " results")
-                        color: root.textDim; font.family: root.mono; font.pixelSize: 10
-                    }
-                    Rectangle {
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                        height: 2; color: root.accentDim
-                    }
-                    MouseArea {
-                        id: tidalHeadMa
-                        anchors.fill: parent
-                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                        onClicked: root.toggleSearchProviderGroup(false)
-                    }
-                }
-
-                // TOP RESULT
-                // TIDAL names one best match in every search reply, and for a
-                // specific query ("this song by this artist") it is reliably
-                // the thing asked for. Pinned above every section of the
-                // mixed All view, so the answer is the first row rather than
-                // the first row under whichever artists shared a word with
-                // the query. Mixed view only: a filtered section is already
-                // in relevance order with the same item first. The row is the
-                // section's own delegate (AlbumBlock, TrackRow, PlaylistBlock),
-                // and the item keeps its place in its section below; this is
-                // a pointer, not a move. A one-item Repeater rather than a
-                // lone Loader so each search rebuilds the row and its build
-                // veil tick lands exactly once, like every section row.
-                SectionHeader { id: topHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.filterType === "all" && root.searchTop !== null; label: "TOP RESULT" }
+                // One group per provider that answered, in the payload's own
+                // order (TIDAL, Apple, then any later provider): the shared
+                // renderer reads each group's descriptor and rows, so a third
+                // SEARCH provider lands here with no edit to this page
+                // (issue #292).
                 Repeater {
-                    model: root.searchTop ? [root.searchTop] : []
-                    delegate: Loader {
-                        id: topLd
-                        required property var modelData
-                        visible: !root.tidalSearchGroupCollapsed && root.filterType === "all"
-                        width: contentCol.width
-                        asynchronous: root.searchBuilding
-                        opacity: root.searchReveal
-                        onLoaded: root._searchBuildTick()
-                        sourceComponent: topLd.modelData.kind === "album" ? topAlbumComp
-                                       : topLd.modelData.kind === "playlist" ? topPlaylistComp : topTrackComp
-                        Component {
-                            id: topAlbumComp
-                            AlbumBlock {
-                                albumId: topLd.modelData.id; title: topLd.modelData.title; artistName: topLd.modelData.artist; artistId: topLd.modelData.artist_id || ""
-                                art: topLd.modelData.art; year: "" + (topLd.modelData.year || ""); releaseDate: topLd.modelData.date || ""; listedDate: topLd.modelData.listed || ""; trackCount: topLd.modelData.tracks || 0
-                                durationSec: topLd.modelData.duration_sec || 0; quality: topLd.modelData.quality || ""; popularity: topLd.modelData.popularity || 0
-                            }
-                        }
-                        Component {
-                            id: topTrackComp
-                            TrackRow {
-                                tId: topLd.modelData.id; kind: topLd.modelData.kind
-                                title: topLd.modelData.title; artistName: topLd.modelData.artist || ""; artistId: topLd.modelData.artist_id || ""
-                                album: topLd.modelData.album || ""; art: topLd.modelData.art || ""; year: "" + (topLd.modelData.year || ""); date: topLd.modelData.date || ""
-                                duration: topLd.modelData.duration || ""; durationSec: topLd.modelData.duration_sec || 0; quality: topLd.modelData.quality || ""; popularity: topLd.modelData.popularity || 0
-                                albumId: topLd.modelData.album_id || ""
-                            }
-                        }
-                        Component {
-                            id: topPlaylistComp
-                            PlaylistBlock {
-                                plId: topLd.modelData.id; title: topLd.modelData.title; creator: topLd.modelData.creator || ""
-                                art: topLd.modelData.art; trackCount: topLd.modelData.tracks || 0
-                            }
-                        }
+                    id: searchGroupRep
+                    model: root.searchGroups.length
+                    delegate: SearchProviderGroup {
+                        groupData: root.searchGroups[index] || ({})
                     }
-                }
-
-                // ARTISTS
-                SectionHeader { id: artistsHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("artists", artistsModel.count); label: "ARTISTS"; count: artistsModel.count }
-                // Collapsed default (the mixed All view): a horizontal strip of
-                // fixed-width cards that scrolls left/right, like the browse
-                // shelves. A window resize reveals more or fewer cards but never
-                // resizes the ones on screen, so it stays smooth (the browse tabs
-                // are smooth for the same reason). SHOW ALL switches to the fill
-                // grid below. The strip is a plain Row (not a virtualized
-                // ListView) so all cards instantiate and each still fires one
-                // build-veil tick; only ~12 artist cards, so that is cheap.
-                Flickable {
-                    id: artistStrip
-                    visible: !root.tidalSearchGroupCollapsed && root.searchArtistsStripMode && root.sectionVisible("artists", artistsModel.count)
-                    width: parent.width; height: artistRow.height
-                    contentWidth: artistRow.width; contentHeight: artistRow.height
-                    clip: true
-                    flickableDirection: Flickable.HorizontalFlick
-                    boundsBehavior: Flickable.StopAtBounds
-                    readonly property real cardW: 200
-                    Row {
-                        id: artistRow
-                        spacing: 12
-                        Repeater {
-                            model: artistsModel
-                            delegate: Loader {
-                                width: artistStrip.cardW
-                                // Reserve a fixed cell (width + 142) while the async Loader is
-                                // still empty (item null) so the strip does not collapse behind
-                                // the build veil; snap to the card's exact height once loaded.
-                                height: item ? item.implicitHeight : width + 142
-                                // Live only in strip mode, so exactly one of the strip and the
-                                // grid instantiates its cards. That keeps the build veil's
-                                // one-tick-per-artist count exact (never zero, never doubled).
-                                active: root.searchArtistsStripMode
-                                asynchronous: root.searchBuilding
-                                opacity: root.searchReveal
-                                onLoaded: root._searchBuildTick()
-                                sourceComponent: ArtistSearchCard {
-                                    aArt: model.art; aName: model.name; aPop: model.popularity; aId: model.id
-                                }
-                            }
-                        }
-                    }
-                    // Vertical wheel scrolls the page, sideways wheel/trackpad
-                    // scrolls the strip (shared with the browse shelves).
-                    ShelfWheelRedirect { pane: results }
-                    ShelfEdgeFades {}
-                }
-                // Expanded (SHOW ALL) or the Artists filter: the fill grid. Cards
-                // stretch edge-to-edge and the column count snaps at whole-column
-                // boundaries. A resize here re-fits the cards, which the user
-                // opts into by expanding; the results Flickable anchors its
-                // scroll (see _resizeRatio) so the page below does not jump.
-                // The column count is how many 190px cards FIT the width, never
-                // clamped to how many artists there are: clamping to two would
-                // give two half-window cards, posters so tall their buttons
-                // sat below the fold.
-                Flow {
-                    id: artistFlow
-                    visible: !root.tidalSearchGroupCollapsed && !root.searchArtistsStripMode && root.sectionVisible("artists", artistsModel.count)
-                    width: parent.width; spacing: 12
-                    property int cols: Math.max(1, Math.floor((width + spacing) / (190 + spacing)))
-                    property real cardW: (width - (cols - 1) * spacing) / cols
-                    Repeater {
-                        model: artistsModel
-                        delegate: Loader {
-                            width: artistFlow.cardW
-                            height: item ? item.implicitHeight : width + 142
-                            // Complement of the strip: live only when NOT in strip mode.
-                            active: !root.searchArtistsStripMode
-                            asynchronous: root.searchBuilding
-                            opacity: root.searchReveal
-                            onLoaded: root._searchBuildTick()
-                            sourceComponent: ArtistSearchCard {
-                                aArt: model.art; aName: model.name; aPop: model.popularity; aId: model.id
-                            }
-                        }
-                    }
-                }
-                ShowAllLabel {
-                    objectName: "artistsShowAll"
-                    opacity: root.searchReveal
-                    sectionTop: artistsHead
-                    // Offer SHOW ALL only when the strip overflows (there is more
-                    // to reveal than fits); SHOW LESS collapses the grid back to
-                    // the strip. Mixed (All) view only.
-                    // The count gate is what the strip and the grid get from
-                    // sectionVisible(): without it, the expanded flag alone kept
-                    // this label on screen, and that flag is pref-backed, so a
-                    // launch with no search at all drew a lone SHOW LESS over an
-                    // empty page.
-                    visible: !root.tidalSearchGroupCollapsed && root.filterType === "all" && artistsModel.count > 0
-                             && (root.searchArtistsExpanded || artistStrip.contentWidth > artistStrip.width + 1)
-                    expanded: root.searchArtistsExpanded
-                    count: artistsModel.count
-                    onToggled: root.toggleSearchSection("artists")
-                }
-
-                // ALBUMS
-                SectionHeader { id: albumsHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("albums", albumsModel.count); label: "ALBUMS"; count: albumsModel.count }
-                Repeater {
-                    // Named so a scenario can ask whether a refresh KEPT these
-                    // delegates or rebuilt them: that is the whole difference
-                    // between the in-place reconcile and a refill, and it is
-                    // invisible in the model's contents.
-                    id: albumsRep
-                    model: albumsModel
-                    delegate: Loader {
-                        // The section filter must hide the LOADER (the Column
-                        // child); an invisible item inside a sized Loader would
-                        // still occupy its row. In the mixed All view only the
-                        // first 5 show until SHOW ALL; the delegate still loads
-                        // (and fires its build-veil tick) while hidden, so the
-                        // one-tick-per-item count stays exact.
-                        visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("albums", albumsModel.count, index, root.searchAlbumsExpanded)
-                        width: contentCol.width
-                        asynchronous: root.searchBuilding
-                        opacity: root.searchReveal
-                        onLoaded: root._searchBuildTick()
-                        sourceComponent: AlbumBlock {
-                            albumId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
-                            art: model.art; year: model.year; releaseDate: model.date; listedDate: model.listed || ""; trackCount: model.tracks; durationSec: model.duration_sec || 0; quality: model.quality; popularity: model.popularity
-                        }
-                    }
-                }
-                SearchSectionMore { section: "albums"; sectionTop: albumsHead; count: albumsModel.count; expanded: root.searchAlbumsExpanded; groupOpen: !root.tidalSearchGroupCollapsed }
-
-                // TRACKS
-                SectionHeader { id: tracksHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("tracks", tracksModel.count); label: "TRACKS"; count: tracksModel.count }
-                Repeater {
-                    model: tracksModel
-                    delegate: Loader {
-                        visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("tracks", tracksModel.count, index, root.searchTracksExpanded)
-                        width: contentCol.width
-                        asynchronous: root.searchBuilding
-                        opacity: root.searchReveal
-                        onLoaded: root._searchBuildTick()
-                        sourceComponent: TrackRow {
-                            tId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
-                            album: model.album; art: model.art; year: model.year; date: model.date; duration: model.duration; durationSec: model.duration_sec || 0; quality: model.quality; popularity: model.popularity
-                            albumId: model.album_id || ""
-                        }
-                    }
-                }
-                SearchSectionMore { section: "tracks"; sectionTop: tracksHead; count: tracksModel.count; expanded: root.searchTracksExpanded; groupOpen: !root.tidalSearchGroupCollapsed }
-
-                // VIDEOS
-                SectionHeader { id: videosHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("videos", videosModel.count); label: "VIDEOS"; count: videosModel.count }
-                // Art-first video results: 16:9 thumbnails at grid size, with
-                // the title, artist, release date and a full download button
-                // reading underneath. Cells are sized from the section width,
-                // so the column count follows the window.
-                Flow {
-                    id: videoGrid
-                    width: contentCol.width
-                    spacing: 18
-                    readonly property int cols: Math.max(2, Math.floor(width / 320))
-                    readonly property real cellW: (width - (cols - 1) * spacing) / cols
-                    // The mixed view's five, rounded up to whole rows: a grid
-                    // three wide showed five cells and left the sixth blank,
-                    // a hole SHOW ALL then filled. Six at three columns, six
-                    // at two, eight at four.
-                    readonly property int cap: cols * Math.ceil(5 / cols)
-                    Repeater {
-                        model: videosModel
-                        delegate: Loader {
-                            visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("videos", videosModel.count, index, root.searchVideosExpanded, videoGrid.cap)
-                            width: videoGrid.cellW
-                            height: Math.round(videoGrid.cellW * 9 / 16) + 54
-                            asynchronous: root.searchBuilding
-                            opacity: root.searchReveal
-                            onLoaded: root._searchBuildTick()
-                            sourceComponent: VideoCell {
-                                width: videoGrid.cellW
-                                vid: model.id; vcTitle: model.title; vcArtist: model.artist
-                                artUrl: model.art; artBigUrl: model.art_big || ""
-                                vcDuration: model.duration
-                                vcExplicit: model.explicit === true
-                                vcSpec: model.quality || ""
-                                vcDate: model.date
-                            }
-                        }
-                    }
-                }
-                SearchSectionMore { section: "videos"; sectionTop: videosHead; count: videosModel.count; expanded: root.searchVideosExpanded; groupOpen: !root.tidalSearchGroupCollapsed; cap: videoGrid.cap }
-
-                // PLAYLISTS
-                SectionHeader { id: playlistsHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("playlists", playlistsModel.count); label: "PLAYLISTS"; count: playlistsModel.count }
-                Repeater {
-                    model: playlistsModel
-                    delegate: Loader {
-                        visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("playlists", playlistsModel.count, index, root.searchPlaylistsExpanded)
-                        width: contentCol.width
-                        asynchronous: root.searchBuilding
-                        opacity: root.searchReveal
-                        // Reserve the collapsed row's height while the async
-                        // build runs (same rationale as the artist strip's
-                        // fixed cell): without it the section collapses to
-                        // zero and pops open as each row lands.
-                        height: item ? item.implicitHeight : 64
-                        onLoaded: root._searchBuildTick()
-                        sourceComponent: PlaylistBlock {
-                            plId: model.id; title: model.title; creator: model.creator || ""
-                            art: model.art; trackCount: model.tracks
-                        }
-                    }
-                }
-                SearchSectionMore { section: "playlists"; sectionTop: playlistsHead; count: playlistsModel.count; expanded: root.searchPlaylistsExpanded; groupOpen: !root.tidalSearchGroupCollapsed }
-
-                // MIXES
-                SectionHeader { id: mixesHead; opacity: root.searchReveal; visible: !root.tidalSearchGroupCollapsed && root.sectionVisible("mixes", mixesModel.count); label: "MIXES"; count: mixesModel.count }
-                Repeater {
-                    model: mixesModel
-                    delegate: Loader {
-                        visible: !root.tidalSearchGroupCollapsed && root.searchRowVisible("mixes", mixesModel.count, index, root.searchMixesExpanded)
-                        width: contentCol.width; height: 66
-                        asynchronous: root.searchBuilding
-                        opacity: root.searchReveal
-                        onLoaded: root._searchBuildTick()
-                        sourceComponent: Rectangle {
-                        radius: 10; color: root.surface; border.color: root.border1
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 10; spacing: 13
-                            Art {
-                                width: 46; height: 46; hoverFx: true
-                                fxKind: "mix"; fxId: "" + (model.id || "")
-                                url: model.art
-                            }
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 2
-                                Text { textFormat: Text.PlainText; text: model.title; color: root.textHi; font.pixelSize: 15; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
-                                Text { textFormat: Text.PlainText; text: model.subtitle ? model.subtitle : "Mix"; color: root.textLo; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
-                            }
-                            DownloadButton { mediaId: model.id; chooserKind: "mix"; collectionCheck: true; label: "Download mix"; onTap: function(){ waves.downloadMix(model.id) } }
-                        }
-                        }
-                    }
-                }
-                SearchSectionMore { section: "mixes"; sectionTop: mixesHead; count: mixesModel.count; expanded: root.searchMixesExpanded; groupOpen: !root.tidalSearchGroupCollapsed }
-
-                Item {
-                    id: appleGroupHead
-                    // The head's name, mark and sizes come from the provider's
-                    // own descriptor (issue #278); only this id query names
-                    // one, and the furniture renders whatever it answers.
-                    readonly property var provider: waves.providerDescriptor("apple")
-                    // A failed fetch has no rows, so the count-based gate would
-                    // hide the very place the honest error belongs (issue #241
-                    // / UI-05). `errorStands` keeps the head under the filters
-                    // whose rows Apple could have answered with; a filter it
-                    // has no rows for stays clean of its furniture.
-                    visible: root.providerGroupVisible(true, root.appleSearchError !== "")
-                    width: parent.width; height: 50
-                    Row {
-                        anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
-                        spacing: 8
-                        ExpandChevron {
-                            anchors.verticalCenter: parent.verticalCenter
-                            open: !root.appleSearchGroupCollapsed; hovered: appleHeadMa.containsMouse
-                            tile: 20; glyph: 14; showTile: false
-                            stroke: appleHeadMa.containsMouse ? root.accent : root.textLo
-                        }
-                        Image {
-                            anchors.verticalCenter: parent.verticalCenter
-                            source: appleGroupHead.provider ? appleGroupHead.provider.logo : ""
-                            width: appleGroupHead.provider ? appleGroupHead.provider.logo_header_width : 0
-                            height: appleGroupHead.provider ? appleGroupHead.provider.logo_header_height : 0
-                            fillMode: Image.PreserveAspectFit
-                            smooth: true; cache: true
-                        }
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            textFormat: Text.PlainText
-                            text: appleGroupHead.provider ? String(appleGroupHead.provider.name).toUpperCase() : ""
-                            color: root.textHi; font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
-                        }
-                    }
-                    Text {
-                        anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.bottomMargin: 11
-                        visible: root.appleSearchError === ""
-                        textFormat: Text.PlainText
-                        text: root.appleSearchCount + (root.appleSearchCount === 1 ? " result" : " results")
-                        color: root.textDim; font.family: root.mono; font.pixelSize: 10
-                    }
-                    Text {
-                        objectName: "appleSearchError"
-                        // The words exist only where the group does: a refresh
-                        // landing after Apple was switched off writes the
-                        // error without a group, and a property-visible child
-                        // in a hidden head is a ghost waiting to be walked
-                        // into (issue #241).
-                        visible: root.appleSearchGrouped && root.appleSearchError !== ""
-                        anchors.left: parent.left; anchors.leftMargin: 28
-                        // The retry's own spot, reserved: a sibling declared
-                        // below this text cannot be referenced by its anchor.
-                        anchors.right: parent.right; anchors.rightMargin: 96
-                        anchors.bottom: parent.bottom; anchors.bottomMargin: 10
-                        textFormat: Text.PlainText; elide: Text.ElideRight
-                        text: root.appleSearchError
-                        color: root.gold; font.pixelSize: 12
-                    }
-                    SpecBtn {
-                        id: appleSearchRetry
-                        objectName: "appleSearchRetry"
-                        visible: root.appleSearchGrouped && root.appleSearchError !== ""
-                        compact: true; label: "RETRY"
-                        anchors.right: parent.right; anchors.rightMargin: 8
-                        anchors.bottom: parent.bottom; anchors.bottomMargin: 6
-                        z: 2
-                        onClicked: root.submitSearch(root.lastSearchQuery)
-                    }
-                    Rectangle {
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                        height: 2; color: root.outline
-                    }
-                    MouseArea {
-                        id: appleHeadMa
-                        anchors.fill: parent
-                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                        onClicked: root.toggleSearchProviderGroup(true)
-                    }
-                }
-
-                // Apple catalog rows open full pages and preview 30-second clips
-                // like TIDAL rows; downloads ride the setup wizard.
-                SectionHeader {
-                    id: appleArtistsHead
-                    opacity: root.searchReveal
-                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("artists", appleArtistsModel.count)
-                    label: "ARTISTS"; count: appleArtistsModel.count
-                }
-                Flow {
-                    id: appleArtistFlow
-                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("artists", appleArtistsModel.count)
-                    width: parent.width; spacing: 12
-                    property int cols: Math.max(1, Math.floor((width + spacing) / (190 + spacing)))
-                    property real cardW: (width - (cols - 1) * spacing) / cols
-                    Repeater {
-                        model: appleArtistsModel
-                        delegate: Loader {
-                            visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.searchRowVisible("artists", appleArtistsModel.count, index, root.appleSearchArtistsExpanded)
-                            width: appleArtistFlow.cardW
-                            height: item ? item.implicitHeight : width + 142
-                            asynchronous: root.searchBuilding
-                            opacity: root.searchReveal
-                            onLoaded: root._searchBuildTick()
-                            sourceComponent: ArtistSearchCard {
-                                aArt: model.art; aName: model.name; aPop: model.popularity; aId: model.id
-                            }
-                        }
-                    }
-                }
-                ShowAllLabel {
-                    sectionTop: appleArtistsHead; opacity: root.searchReveal
-                    count: appleArtistsModel.count; expanded: root.appleSearchArtistsExpanded
-                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.filterType === "all" && appleArtistsModel.count > 5
-                    onToggled: root.toggleAppleSearchSection("artists")
-                }
-
-                SectionHeader {
-                    id: appleAlbumsHead
-                    opacity: root.searchReveal
-                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("albums", appleAlbumsModel.count)
-                    label: "ALBUMS"; count: appleAlbumsModel.count
-                }
-                Repeater {
-                    model: appleAlbumsModel
-                    delegate: Loader {
-                        visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed
-                                 && root.searchRowVisible("albums", appleAlbumsModel.count, index, root.appleSearchAlbumsExpanded)
-                        width: contentCol.width
-                        asynchronous: root.searchBuilding
-                        opacity: root.searchReveal
-                        onLoaded: root._searchBuildTick()
-                        sourceComponent: AlbumBlock {
-                            albumId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
-                            art: model.art; year: model.year; releaseDate: model.date; trackCount: model.tracks
-                            durationSec: model.duration_sec || 0; quality: model.quality; popularity: model.popularity
-                        }
-                    }
-                }
-                ShowAllLabel {
-                    sectionTop: appleAlbumsHead; opacity: root.searchReveal
-                    count: appleAlbumsModel.count; expanded: root.appleSearchAlbumsExpanded
-                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.filterType === "all" && appleAlbumsModel.count > 5
-                    onToggled: root.toggleAppleSearchSection("albums")
-                }
-
-                SectionHeader {
-                    id: appleTracksHead
-                    opacity: root.searchReveal
-                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("tracks", appleTracksModel.count)
-                    label: "TRACKS"; count: appleTracksModel.count
-                }
-                Repeater {
-                    model: appleTracksModel
-                    delegate: Loader {
-                        visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed
-                                 && root.searchRowVisible("tracks", appleTracksModel.count, index, root.appleSearchTracksExpanded)
-                        width: contentCol.width
-                        asynchronous: root.searchBuilding
-                        opacity: root.searchReveal
-                        onLoaded: root._searchBuildTick()
-                        sourceComponent: TrackRow {
-                            tId: model.id; title: model.title; artistName: model.artist; artistId: model.artist_id
-                            album: model.album; art: model.art; year: model.year; date: model.date
-                            duration: model.duration; durationSec: model.duration_sec || 0
-                            quality: model.quality; popularity: model.popularity; albumId: model.album_id || ""
-                        }
-                    }
-                }
-                ShowAllLabel {
-                    sectionTop: appleTracksHead; opacity: root.searchReveal
-                    count: appleTracksModel.count; expanded: root.appleSearchTracksExpanded
-                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.filterType === "all" && appleTracksModel.count > 5
-                    onToggled: root.toggleAppleSearchSection("tracks")
-                }
-
-                SectionHeader {
-                    id: applePlaylistsHead
-                    opacity: root.searchReveal
-                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.sectionVisible("playlists", applePlaylistsModel.count)
-                    label: "PLAYLISTS"; count: applePlaylistsModel.count
-                }
-                Repeater {
-                    model: applePlaylistsModel
-                    delegate: Loader {
-                        visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed
-                                 && root.searchRowVisible("playlists", applePlaylistsModel.count, index, root.appleSearchPlaylistsExpanded)
-                        width: contentCol.width
-                        height: item ? item.implicitHeight : 64
-                        asynchronous: root.searchBuilding
-                        opacity: root.searchReveal
-                        onLoaded: root._searchBuildTick()
-                        sourceComponent: PlaylistBlock {
-                            plId: model.id; title: model.title; creator: model.creator || ""
-                            art: model.art; trackCount: model.tracks
-                        }
-                    }
-                }
-                ShowAllLabel {
-                    sectionTop: applePlaylistsHead; opacity: root.searchReveal
-                    count: applePlaylistsModel.count; expanded: root.appleSearchPlaylistsExpanded
-                    visible: root.appleSearchGrouped && !root.appleSearchGroupCollapsed && root.filterType === "all" && applePlaylistsModel.count > 5
-                    onToggled: root.toggleAppleSearchSection("playlists")
                 }
             }
         }
@@ -17489,40 +17425,34 @@ ApplicationWindow {
 
     // Sort the original full search data (not a lossy model copy) so every
     // field, including the full date, survives re-sorting. One control, every
-    // section that has the data: albums, tracks and videos all follow it.
+    // provider group: each group re-orders its own albums, tracks and videos.
     // Artists, playlists and mixes carry no date to sort by and stay in the
     // API's relevance order.
-    // Relevance is TIDAL's own order, kept as it arrived. Reading it as
+    //
+    // Relevance is the provider's own order, kept as it arrived. Reading it as
     // "popularity, most first" would bury exactly the result a specific
     // search is after: a single released this week has a popularity of 0
     // and sits under every older track that shares one word with the query,
-    // while TIDAL ranks it first. Popularity is its own option.
+    // while the provider ranks it first. Popularity is its own option.
+    //
+    // inPlace: a refresh swapping rows under a page the user is already
+    // reading, where a clear+rebuild would freeze the window (see
+    // reconcileById). Every other caller, the sort control included, is a
+    // deliberate full rebuild of a small model.
     function applySort(inPlace) {
+        var list = root.searchGroupList()
+        for (var i = 0; i < list.length; ++i) list[i].applySort(inPlace === true)
+    }
+    // The order one group's raw rows land in, the sort control's rule in one
+    // place (see applySort above).
+    function searchOrdered(raw, hasPop) {
         var dir = root.sortAsc ? 1 : -1
-        function ordered(raw, hasPop) {
-            var arr = (raw || []).slice()
-            if (sortBox.currentIndex === 1) arr.sort(function(a, b){ return dir * ((a.listed || a.date || a.year || "").localeCompare(b.listed || b.date || b.year || "")) })
-            else if (sortBox.currentIndex === 2) arr.sort(function(a, b){ return dir * a.title.localeCompare(b.title) })
-            else if (sortBox.currentIndex === 3 && hasPop) arr.sort(function(a, b){ return dir * ((a.popularity || 0) - (b.popularity || 0)) })
-            else if (root.sortAsc) arr.reverse()  // Relevance (or no popularity data): the API's order, the arrow flips it
-            return arr
-        }
-        // inPlace: a refresh swapping rows under a page the user is already
-        // reading, where a clear+rebuild would freeze the window (see
-        // reconcileById). Every other caller, the sort control included, is a
-        // deliberate full rebuild of a small model. Apple rows are small and
-        // refill in both paths.
-        if (inPlace) {
-            root.reconcileById(albumsModel, ordered(root.albumsRaw, true), true)
-            root.reconcileById(tracksModel, ordered(root.tracksRaw, true), true)
-            root.reconcileById(videosModel, ordered(root.videosRaw, false), true)
-        } else {
-            root.fillMedia(albumsModel, ordered(root.albumsRaw, true))
-            root.fillMedia(tracksModel, ordered(root.tracksRaw, true))
-            root.fillMedia(videosModel, ordered(root.videosRaw, false))
-        }
-        root.fillMedia(appleAlbumsModel, ordered(root.appleAlbumsRaw, true))
-        root.fillMedia(appleTracksModel, ordered(root.appleTracksRaw, true))
+        var arr = (raw || []).slice()
+        if (sortBox.currentIndex === 1) arr.sort(function(a, b){ return dir * ((a.listed || a.date || a.year || "").localeCompare(b.listed || b.date || b.year || "")) })
+        else if (sortBox.currentIndex === 2) arr.sort(function(a, b){ return dir * a.title.localeCompare(b.title) })
+        else if (sortBox.currentIndex === 3 && hasPop) arr.sort(function(a, b){ return dir * ((a.popularity || 0) - (b.popularity || 0)) })
+        else if (root.sortAsc) arr.reverse()  // Relevance (or no popularity data): the API's order, the arrow flips it
+        return arr
     }
 
     // ====================================================================

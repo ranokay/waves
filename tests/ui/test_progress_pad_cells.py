@@ -112,18 +112,16 @@ _WALKERS = """
 
 
 def _run_pad_scenario() -> int:
-    from support.qml import ROLLING_ALBUM, boot_main_qml
+    from support.qml import ROLLING_ALBUM_ROW, boot_main_qml, seed_tidal_search
 
     booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
     _root, q, settle, _bridge = booted
     q("root.openSearch()")
-    q("albumsModel.clear()")
-    q(f"albumsModel.append({ROLLING_ALBUM})")
+    seed_tidal_search(q, _bridge, albums=[ROLLING_ALBUM_ROW], expanded=("albums",))
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
-    q("root.searchAlbumsExpanded = true")
     settle(700)
 
     def set_pct(pct: float) -> None:

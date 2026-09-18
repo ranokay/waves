@@ -97,18 +97,22 @@ def _results(top: bool) -> dict:
         }
 
     pops = [0, 64, 58, 60, 59]  # the wanted single first, older hits behind it
-    payload = {
-        "artists": [artist(i) for i in range(3)],
-        "albums": [album(i, p) for i, p in enumerate(pops)],
-        "tracks": [track(i, p) for i, p in enumerate(pops)],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
+    return {
+        "groups": [
+            {
+                "provider": "tidal",
+                "artists_layout": "strip",
+                "artists": [artist(i) for i in range(3)],
+                "albums": [album(i, p) for i, p in enumerate(pops)],
+                "tracks": [track(i, p) for i, p in enumerate(pops)],
+                "videos": [],
+                "playlists": [],
+                "mixes": [],
+                "top": {"kind": "album", **album(0, 0)} if top else None,
+                "error": "",
+            }
+        ]
     }
-    if top:
-        payload["top"] = {"kind": "album", **album(0, 0)}
-    return payload
 
 
 def _run_scenario() -> int:
@@ -195,21 +199,29 @@ def _run_scenario() -> int:
         return EXIT_PRECONDITION
     settle()
 
-    if not q("topHead.visible"):
+    tidal = "root.searchGroupFor('tidal')"
+    if not q(tidal + ".topVisible"):
         failures.append("TOP RESULT header not visible in the All view")
-    top_y = q("topHead.y")
-    artists_y = q("artistsHead.y")
+    top_y = q(tidal + ".topHeadItem.y")
+    artists_y = q(tidal + ".artistsHeadItem.y")
     if not (top_y < artists_y):
         failures.append(f"TOP RESULT header (y={top_y}) is not above ARTISTS (y={artists_y})")
     # The pinned row is the album's own delegate, rendered and sized.
-    pin_h = q("topHead.parent.children[topHead.parent.children.indexOf(topHead) + 1].height")
+    pin_h = q(
+        tidal
+        + ".topHeadItem.parent.children["
+        + tidal
+        + ".topHeadItem.parent.children.indexOf("
+        + tidal
+        + ".topHeadItem) + 1].height"
+    )
     if not (pin_h and pin_h > 40):
         failures.append(f"pinned row has no height (h={pin_h})")
 
     # 2. Relevance keeps TIDAL's order: the pop-0 single stays first.
     if q("sortBox.currentIndex") != 0:
         failures.append("sort control does not default to Relevance")
-    if q("tracksModel.get(0).id") != "t0" or q("albumsModel.get(0).id") != "al0":
+    if q(tidal + ".modelFor('tracks').get(0).id") != "t0" or q(tidal + ".modelFor('albums').get(0).id") != "al0":
         failures.append("Relevance re-sorted the sections away from TIDAL's order")
 
     # 3. Popularity is its own option and does reorder.
@@ -218,14 +230,14 @@ def _run_scenario() -> int:
     q("sortBox.currentIndex = 3")
     q("sortBox.activated(3)")
     settle(50)
-    if q("tracksModel.get(0).id") != "t1":
+    if q(tidal + ".modelFor('tracks').get(0).id") != "t1":
         failures.append("Popularity sort did not put the most popular track first")
     if q('waves.wavesPref("search_sort")') != "popularity":
         failures.append("choosing Popularity did not persist search_sort")
     q("sortBox.currentIndex = 0")
     q("sortBox.activated(0)")
     settle(50)
-    if q("tracksModel.get(0).id") != "t0":
+    if q(tidal + ".modelFor('tracks').get(0).id") != "t0":
         failures.append("returning to Relevance did not restore TIDAL's order")
     if q('waves.wavesPref("search_sort")') != "relevance":
         failures.append("returning to Relevance did not persist search_sort")
@@ -239,7 +251,7 @@ def _run_scenario() -> int:
     # 4. A section filter hides the pin (the section is in relevance order).
     q('filterType = "albums"')
     settle(50)
-    if q("topHead.visible"):
+    if q(tidal + ".topVisible"):
         failures.append("TOP RESULT still visible under the Albums filter")
     q('filterType = "all"')
     settle(50)
@@ -251,7 +263,7 @@ def _run_scenario() -> int:
         print("second search never finished building", file=sys.stderr)
         return EXIT_PRECONDITION
     settle()
-    if q("topHead.visible") or q("searchTop") is not None:
+    if q(tidal + ".topVisible") or q(tidal + ".topRow") is not None:
         failures.append("a reply without a top hit still shows TOP RESULT")
 
     for f in failures:

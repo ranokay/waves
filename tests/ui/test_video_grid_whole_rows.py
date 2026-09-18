@@ -21,7 +21,9 @@ def _block(start: str, end: str) -> str:
 def test_the_video_grid_caps_at_whole_rows():
     grid = _block("id: videoGrid", 'SearchSectionMore { section: "videos"')
     assert "readonly property int cap: cols * Math.ceil(5 / cols)" in grid
-    assert 'root.searchRowVisible("videos", videosModel.count, index, root.searchVideosExpanded, videoGrid.cap)' in grid
+    assert (
+        'root.searchRowVisible("videos", videosModel.count, index, group.isExpanded("videos"), videoGrid.cap)' in grid
+    )
 
 
 def test_show_all_for_videos_waits_for_the_rounded_count():

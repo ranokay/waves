@@ -155,33 +155,41 @@ def _run_scenario() -> int:
         "added": "",
     }
     payload = {
-        "artists": [],
-        "albums": [],
-        "tracks": [track],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-        "apple": {
-            "artists": [],
-            "albums": [],
-            "tracks": [{**track, "id": "apple:t1"}],
-            "videos": [],
-            "playlists": [],
-            "mixes": [],
-            "top": None,
-        },
+        "groups": [
+            {
+                "provider": "tidal",
+                "artists_layout": "strip",
+                "artists": [],
+                "albums": [],
+                "tracks": [track],
+                "videos": [],
+                "playlists": [],
+                "mixes": [],
+                "top": None,
+                "error": "",
+            },
+            {
+                "provider": "apple",
+                "artists_layout": "flow",
+                "artists": [],
+                "albums": [],
+                "tracks": [{**track, "id": "apple:t1"}],
+                "playlists": [],
+                "top": None,
+                "error": "",
+            },
+        ]
     }
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit(payload)
     settle(500)
-    if not bool(q("tidalGroupHead.visible")):
+    if not bool(q("root.searchGroupFor('tidal').headVisible")):
         problems.append("the TIDAL search group header did not appear")
-    if not bool(q("appleGroupHead.visible")):
+    if not bool(q("root.searchGroupFor('apple').headVisible")):
         problems.append("the Apple search group header did not appear")
     for scope, name, asset in (
-        ("tidalGroupHead", "TIDAL", "tidal.png"),
-        ("appleGroupHead", "APPLE MUSIC", "apple-music.png"),
+        ("root.searchGroupFor('tidal')", "TIDAL", "tidal.png"),
+        ("root.searchGroupFor('apple')", "APPLE MUSIC", "apple-music.png"),
     ):
         if not visible_mark(scope, asset):
             problems.append(f"the {name} search header shows no visible mark")

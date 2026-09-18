@@ -51,6 +51,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    seed_tidal_search,
 )
 
 
@@ -257,14 +258,14 @@ def _run_scenario() -> int:
     q("bootContentShown = 1")
     q(PARK_LOGIN_QML)
     q("root.openSearch()")
-    q("albumsModel.clear()")
-    q(f"albumsModel.append({_OWNED})")
-    q(f"albumsModel.append({_PARTIAL})")
-    q(f"albumsModel.append({_ONE_SHORT})")
-    q(f"albumsModel.append({_UNDATED})")
+    seed_tidal_search(
+        q,
+        bridge,
+        albums=[json.loads(row) for row in (_OWNED, _PARTIAL, _ONE_SHORT, _UNDATED)],
+        expanded=("albums",),
+    )
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
-    q("root.searchAlbumsExpanded = true")
     settle(700)
 
     # Walk the results tree for each AlbumBlock's row DownloadButton (the one

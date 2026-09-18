@@ -44,26 +44,35 @@ def _album(media_id: str) -> dict:
 
 
 def _payload(grouped: bool) -> dict:
-    payload = {
-        "artists": [],
-        "albums": [_album("tidal:1")],
-        "tracks": [],
-        "videos": [_video("tidal:2")],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-    }
-    if grouped:
-        payload["apple"] = {
+    groups = [
+        {
+            "provider": "tidal",
+            "artists_layout": "strip",
+            "head_when_alone": False,
             "artists": [],
-            "albums": [_album("apple:1")],
+            "albums": [_album("tidal:1")],
             "tracks": [],
-            "videos": [],
+            "videos": [_video("tidal:2")],
             "playlists": [],
             "mixes": [],
             "top": None,
+            "error": "",
         }
-    return payload
+    ]
+    if grouped:
+        groups.append(
+            {
+                "provider": "apple",
+                "artists_layout": "flow",
+                "artists": [],
+                "albums": [_album("apple:1")],
+                "tracks": [],
+                "playlists": [],
+                "top": None,
+                "error": "",
+            }
+        )
+    return {"groups": groups}
 
 
 def _scenario() -> int:
@@ -112,12 +121,14 @@ def _scenario() -> int:
     q("_searchSeq = _navSeq")
     bridge.searchResults.emit(_payload(grouped=True))
     settle(500)
+    tidal = "root.searchGroupFor('tidal')"
+    apple = "root.searchGroupFor('apple')"
     grouped_ok = (
-        q("tidalGroupHead.visible")
-        and q("appleGroupHead.visible")
-        and q("tidalGroupHead.y") < q("appleGroupHead.y")
-        and q("albumsModel.count") == 1
-        and q("appleAlbumsModel.count") == 1
+        q(tidal + ".headVisible")
+        and q(apple + ".headVisible")
+        and q(tidal + ".y") < q(apple + ".y")
+        and q(tidal + ".modelFor('albums').count") == 1
+        and q(apple + ".modelFor('albums').count") == 1
     )
 
     # Filtered views show a provider header only when that provider still has
@@ -125,24 +136,28 @@ def _scenario() -> int:
     # videos belongs to TIDAL alone in this slice.
     q('filterType = "albums"')
     settle(50)
-    filter_ok = q("tidalGroupHead.visible") and q("appleGroupHead.visible")
+    filter_ok = q(tidal + ".headVisible") and q(apple + ".headVisible")
     q('filterType = "tracks"')
     settle(50)
-    filter_ok = filter_ok and not q("tidalGroupHead.visible") and not q("appleGroupHead.visible")
+    filter_ok = filter_ok and not q(tidal + ".headVisible") and not q(apple + ".headVisible")
     q('filterType = "videos"')
     settle(50)
-    filter_ok = filter_ok and q("tidalGroupHead.visible") and not q("appleGroupHead.visible")
+    filter_ok = filter_ok and q(tidal + ".headVisible") and not q(apple + ".headVisible")
     q('filterType = "all"')
     settle(50)
-    filter_ok = filter_ok and q("tidalGroupHead.visible") and q("appleGroupHead.visible")
+    filter_ok = filter_ok and q(tidal + ".headVisible") and q(apple + ".headVisible")
 
-    q("searchAlbumsExpanded = false; appleSearchAlbumsExpanded = false")
-    q('toggleAppleSearchSection("albums")')
-    expansion_ok = not q("searchAlbumsExpanded") and q("appleSearchAlbumsExpanded")
+    q(apple + ".toggleExpanded('albums')")
+    expansion_ok = not q(tidal + ".isExpanded('albums')") and q(apple + ".isExpanded('albums')")
+    q(apple + ".toggleExpanded('albums')")
 
     q("openSearch()")
     settle(200)
-    blank_ok = q("albumsModel.count") == 0 and q("appleAlbumsModel.count") == 0 and not q("appleGroupHead.visible")
+    blank_ok = (
+        q("root.searchGroupList().length") == 0
+        and q("root.searchGroupFor('apple')") is None
+        and not q(apple + " ? " + apple + ".headVisible : false")
+    )
 
     q("_searchSeq = _navSeq")
     bridge.searchResults.emit(_payload(grouped=True))
@@ -150,12 +165,18 @@ def _scenario() -> int:
     bridge.settings.data.apple_enabled = False
     bridge.appleStatusChanged.emit()
     settle(500)
+    # A TIDAL-only page is the search page itself: the group head (which
+    # exists to separate providers) goes with Apple, the rows stay.
     tidal_only_ok = (
-        not q("tidalGroupHead.visible")
-        and not q("appleGroupHead.visible")
-        and q("albumsModel.count") == 1
-        and q("appleAlbumsModel.count") == 0
+        q("root.searchGroupFor('apple')") is None
+        and not q(tidal + ".headVisible")
+        and q(tidal + ".modelFor('albums').count") == 1
     )
+    if not (grouped_ok and filter_ok and expansion_ok and blank_ok and tidal_only_ok):
+        print(
+            f"legs grouped={grouped_ok} filter={filter_ok} expansion={expansion_ok} blank={blank_ok} tidal_only={tidal_only_ok}",
+            file=sys.stderr,
+        )
     return 0 if grouped_ok and filter_ok and expansion_ok and blank_ok and tidal_only_ok else 1
 
 

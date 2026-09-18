@@ -66,22 +66,31 @@ def _track(media_id: str) -> dict:
 
 def _payload() -> dict:
     return {
-        "artists": [],
-        "albums": [_album("tidal:1")],
-        "tracks": [_track("tidal:2")],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-        "apple": {
-            "artists": [],
-            "albums": [_album("apple:1")],
-            "tracks": [_track("apple:2")],
-            "videos": [],
-            "playlists": [],
-            "mixes": [],
-            "top": None,
-        },
+        "groups": [
+            {
+                "provider": "tidal",
+                "artists_layout": "strip",
+                "head_when_alone": False,
+                "artists": [],
+                "albums": [_album("tidal:1")],
+                "tracks": [_track("tidal:2")],
+                "videos": [],
+                "playlists": [],
+                "mixes": [],
+                "top": None,
+                "error": "",
+            },
+            {
+                "provider": "apple",
+                "artists_layout": "flow",
+                "artists": [],
+                "albums": [_album("apple:1")],
+                "tracks": [_track("apple:2")],
+                "playlists": [],
+                "top": None,
+                "error": "",
+            },
+        ]
     }
 
 
@@ -171,22 +180,24 @@ def _scenario() -> int:
     q("_searchSeq = _navSeq")
     bridge.searchResults.emit(_payload())
     settle(500)
-    q("toggleSearchProviderGroup(true)")
+    tidal = "root.searchGroupFor('tidal')"
+    apple = "root.searchGroupFor('apple')"
+    q(apple + ".toggleCollapsed()")
     settle(50)
     q('filterType = "albums"')
     settle(50)
     chips_ok = (
-        q("tidalGroupHead.visible")
-        and q("appleGroupHead.visible")
-        and q("albumsHead.visible")
-        and not q("appleAlbumsHead.visible")
-        and not q("tracksHead.visible")
-        and not q("appleTracksHead.visible")
+        q(tidal + ".headVisible")
+        and q(apple + ".headVisible")
+        and q(tidal + ".sectionVisible('albums')")
+        and not q(apple + ".sectionVisible('albums')")
+        and not q(tidal + ".sectionVisible('tracks')")
+        and not q(apple + ".sectionVisible('tracks')")
     )
     q('filterType = "all"')
     settle(50)
-    chips_ok = chips_ok and q("albumsHead.visible") and not q("appleAlbumsHead.visible")
-    q("toggleSearchProviderGroup(true)")
+    chips_ok = chips_ok and q(tidal + ".sectionVisible('albums')") and not q(apple + ".sectionVisible('albums')")
+    q(apple + ".toggleCollapsed()")
     settle(50)
 
     # Follow sticks to the bottom; a manual scroll up takes over.
@@ -228,7 +239,7 @@ def _scenario() -> int:
     diagnostics.set_verbose(False)
 
     # The fold reached the persisted prefs and the file on disk...
-    q("toggleSearchProviderGroup(true)")
+    q(apple + ".toggleCollapsed()")
     settle(50)
     bridge._config_writer.flush()
     settle(100)
@@ -244,8 +255,13 @@ def _scenario() -> int:
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
     settle(300)
     roots = engine.rootObjects()
-    restart_ok = len(roots) == 2 and q("appleSearchGroupCollapsed", roots[1])
-    restart_ok = restart_ok and not q("tidalSearchGroupCollapsed", roots[1])
+    second = roots[1]
+    q("openSearch()", second)
+    q("_searchSeq = _navSeq", second)
+    bridge.searchResults.emit(_payload())
+    settle(500)
+    restart_ok = len(roots) == 2 and q("searchGroupFor('apple').collapsed", second)
+    restart_ok = restart_ok and not q("searchGroupFor('tidal').collapsed", second)
 
     ok = (
         button_ok

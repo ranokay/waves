@@ -71,7 +71,23 @@ def _payload() -> dict:
         dict(_ROW, id=f"a{i}", title=f"Album {i}", tracks=10, duration_sec=2400, quality="HI-RES")
         for i in range(_ALBUMS)
     ]
-    return {"artists": [], "albums": albums, "tracks": [], "videos": [], "playlists": [], "mixes": []}
+    return {
+        "groups": [
+            {
+                "provider": "tidal",
+                "artists_layout": "strip",
+                "head_when_alone": False,
+                "artists": [],
+                "albums": albums,
+                "tracks": [],
+                "videos": [],
+                "playlists": [],
+                "mixes": [],
+                "top": None,
+                "error": "",
+            }
+        ]
+    }
 
 
 _FIND_BLOCKS = """
