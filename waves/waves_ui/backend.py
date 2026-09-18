@@ -1212,7 +1212,7 @@ _APPLE_STEP_ACTION_LABELS = {
 }
 
 
-# Batch size for "My Tidal" infinite scroll. Each category is fetched one page
+# Batch size for My Music's infinite scroll. Each category is fetched one page
 # at a time (with a network offset) and QML renders the rows lazily in a
 # virtualised ListView, prefetching the next page before the user hits the
 # bottom, so even a multi-thousand-item library loads smoothly and never builds
@@ -3593,9 +3593,9 @@ _SEARCH_SECTIONS: tuple[str, ...] = ("artists", "albums", "tracks", "videos", "p
 def _search_sections(provider) -> tuple[str, ...]:
     """The buckets a provider's search group carries: its own declaration,
     narrowed to the sections the page renders. A provider that declares
-    nothing answers them all -- every SEARCH provider before #292 did; one
-    that names a section the page does not render (a typo, or a newer
-    contract) contributes no bucket for it rather than failing the search."""
+    nothing answers them all; one that names a section the page does not
+    render (a typo, or a newer contract) contributes no bucket for it rather
+    than failing the search."""
     declared = tuple(getattr(provider, "search_sections", ()) or ())
     if not declared:
         return _SEARCH_SECTIONS
@@ -4238,10 +4238,10 @@ def _provider_lights(bridge) -> list[dict]:
 # descriptor with no QML branch.
 
 # The download kinds that carry the per-click control (spec §7.2): track rows
-# and collection pages. Bulk sweeps keep Settings and a single face. QML no
-# longer spells it; ``downloadWithChooser``'s dispatch templates must cover
-# every kind that appears here (a kind it does not know falls back to the
-# plain download slot there).
+# and collection pages. Bulk sweeps keep Settings and a single face.
+# ``downloadWithChooser``'s dispatch templates must cover every kind that
+# appears here (a kind it does not know falls back to the plain download slot
+# there).
 _CHOOSER_KINDS: tuple[str, ...] = ("track", "album", "playlist", "mix", "video")
 
 
@@ -4373,7 +4373,7 @@ class WavesBridge(LibraryMixin, QObject):
       ``_job_signals`` (the GUI-thread progress relay), and ``_job_tracks``
       (per-track rows behind the queue drawer expansion, kept for terminal
       rows until their row leaves).
-    * Session caches: ``_lib_cache`` (My Tidal pages + scroll offsets),
+    * Session caches: ``_lib_cache`` (My Music pages + scroll offsets),
       ``_browse_root_cache``/``_browse_pages`` (editorial pages), and
       ``_artist_cache`` (stale-while-revalidate artist pages). A snapshot of
       these is persisted to ``page_cache.json`` so the next launch starts
@@ -4970,18 +4970,17 @@ class WavesBridge(LibraryMixin, QObject):
         # (which drops every cached page), and ``_lib_gen`` counts the loads
         # started for one (source, category) page. A worker captures the pair
         # before its fetch and drops its answer when either half moved: its own
-        # shelf was reloaded or re-sorted, or the account flipped. One global
-        # counter did this before, which meant a load for one source's shelf
-        # silently cancelled another source's in-flight load.
+        # shelf was reloaded or re-sorted, or the account flipped. The pair is
+        # per page, so a load for one source's shelf never cancels another
+        # source's in-flight load.
         self._lib_epoch = 0
         self._lib_gen: dict[tuple[str, str], int] = {}
         # The Library section's own load state (ADR 0007, issue #222), keyed
-        # by view ("saved"/"all") instead of (source, category): one counter
-        # per view so a reload of one view drops only its own in-flight
-        # answer, plus the in-flight append's generation per view, so a
-        # superseded worker can neither leak the guard (infinite scroll would
-        # stall) nor clear a newer append's guard (a second window could
-        # start).
+        # by view ("saved"/"all"): one counter per view so a reload of one
+        # view drops only its own in-flight answer, plus the in-flight
+        # append's generation per view, so a superseded worker can neither
+        # leak the guard (infinite scroll would stall) nor clear a newer
+        # append's guard (a second window could start).
         self._library_files_gen: dict[str, int] = {}
         self._library_files_loading: dict[str, tuple] = {}
         # Per-(source, category) sort, {(source, category): (order_key,
@@ -7711,7 +7710,7 @@ class WavesBridge(LibraryMixin, QObject):
             prev = self._folder_tree.get(source)
             # A rate-limited sweep returns what it managed to walk. Caching that
             # as authoritative makes the unwalked folders (and every playlist
-            # inside them) vanish from My Tidal, and resolves {folder_path} to
+            # inside them) vanish from My Music, and resolves {folder_path} to
             # "" for them so their downloads land outside their folder. Keep the
             # last complete tree until a complete sweep replaces it.
             if tree.partial and prev is not None and not prev.partial and prev.nodes:
@@ -7732,7 +7731,7 @@ class WavesBridge(LibraryMixin, QObject):
 
         The tree is written in exactly one place (the sweep in
         :meth:`_media_lists`), so anything that needs it before the user has
-        opened My Tidal, or straight after a sign-in that nulled it, finds it
+        opened My Music, or straight after a sign-in that nulled it, finds it
         None. Callers must warm it rather than fail silently in that window: a
         folder tile restored from the disk page cache would drill into a
         permanently blank list, and a playlist downloaded from search would
@@ -7740,7 +7739,7 @@ class WavesBridge(LibraryMixin, QObject):
         alongside its real one.
 
         Returns False when no warm could be started (the source has no live
-        session), so the caller can keep its old not-ready behaviour. ``then``
+        session), so the caller keeps its not-ready behaviour. ``then``
         runs on the GUI thread,
         exactly once, whether this call started the sweep or joined one already
         running, and ONLY if the sweep actually produced a tree: replaying into
@@ -8063,8 +8062,8 @@ class WavesBridge(LibraryMixin, QObject):
                 items, more, failed = [], True, True
             if gen != self._lib_generation(key) or sort != self._lib_sort.get(key):
                 # The shelf was re-sorted (or the account changed) while this
-                # page was in flight: appending it would splice the OLD order
-                # into the new list and skip a window of the new one.
+                # page was in flight: appending it would splice its rows into
+                # the new order and skip a window of it.
                 self._lib_loading.discard(key)
                 return
             entry = self._lib_cache.get(key)
@@ -10247,20 +10246,18 @@ class WavesBridge(LibraryMixin, QObject):
     def isAppleEnabled(self) -> bool:
         """Whether the Apple provider section is enabled (spec §7.1).
 
-        The split-button chooser is no longer gated on this (issue #235: the
-        control belongs to every provider); the Apple surfaces that still read
-        it are the provider's own cards, panes and download gates."""
+        The provider's own cards, panes and download gates are what read this
+        (the chooser reads provider capabilities instead, issue #235)."""
         return self._get_apple_enabled()
 
     def _provider_meta(self, provider_id: str):
         """The registered provider a chooser word names, or None when the
         word names none.
 
-        A None keeps the legacy free-form answers the old identity branches
-        gave (the stereo/atmos/both audio options) and answers empty where a
-        provider names its own options (its tiers, its default tier); a
-        resolved provider is gated by its metadata, so one declaring no audio
-        type offers stereo alone.
+        A None answers with the free-form options (the stereo/atmos/both audio
+        list) and empty where a provider names its own options (its tiers, its
+        default tier); a resolved provider is gated by its metadata, so one
+        declaring no audio type offers stereo alone.
         """
         providers = getattr(self, "providers", None) or {}
         return providers.get(str(provider_id or "").strip().lower())
@@ -12294,10 +12291,9 @@ class WavesBridge(LibraryMixin, QObject):
         try:
             with open(self._waves_prefs_path, encoding="utf-8") as handle:
                 stored = json.load(handle)
-            # #292 renamed TIDAL's section prefs to the provider-keyed shape
-            # (search_sec_* -> tidal_search_sec_*): an existing value carries
-            # over once, then the legacy keys fall away (they are not in the
-            # defaults and the shape rule below no longer accepts them).
+            # Legacy TIDAL section prefs (search_sec_*) carry over once into
+            # the provider-keyed shape (tidal_search_sec_*); the legacy keys
+            # are not in the defaults and the shape rule below rejects them.
             for section in _SEARCH_SECTIONS:
                 legacy = f"search_sec_{section}_expanded"
                 if legacy in stored:
@@ -17018,7 +17014,7 @@ class WavesBridge(LibraryMixin, QObject):
             return
         # Paste a share link on a cold session and this is the whole story: no
         # tree, so the tracks land outside the playlist's folder, and the same
-        # download after opening My Tidal writes a second full copy inside it.
+        # download after opening My Music writes a second full copy inside it.
         if self._needs_folder_tree() and self._warm_folder_tree(
             lambda: self.downloadPlaylist(playlist_id), playlist_id
         ):

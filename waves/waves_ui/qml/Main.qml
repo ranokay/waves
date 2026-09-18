@@ -100,7 +100,7 @@ ApplicationWindow {
             // The Library section's shape moves with the folder (a saved
             // configuration flips `configured`), so the pane's data re-reads
             // here, where the card's own commit announces the change, and the
-            // section drops the old folder's rows.
+            // section drops the rows of the folder it was showing.
             root.refreshMyMusicSources()
             libSection.reset()
         }
@@ -380,7 +380,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         // One-time onboarding seed: an existing user's answered picker keeps
-        // them out of the new welcome surface; the legacy key is cleared.
+        // them out of the welcome surface; the legacy key is cleared.
         setupSettings.migrateOnboarding()
         root.appleLight = waves.appleStatus()
         // Restore the saved window frame BEFORE the first present (see the
@@ -1034,12 +1034,12 @@ ApplicationWindow {
     // and each header pulses its own number when that number rises.
     // Which section header should pulse its count, and a tick to fire on. The
     // pulse is addressed to a SECTION, never to a header instance: the view
-    // pools those and re-sections them as rows move between groups, and a
-    // pulse started on the instance that was Completed at that instant played
-    // out on the same instance after it had been handed to Downloading. What
-    // the user saw was DOWNLOADING bouncing as its count fell. A header that
-    // is handed the pulse section after the tick re-arms on the change, so
-    // the pulse follows the section however the pooled instances swap.
+    // pools those and re-sections them as rows move between groups, so a
+    // pulse started on the instance holding Completed at that instant can
+    // play out on the same instance after it is handed to Downloading. A
+    // header that is handed the pulse section after the tick re-arms on the
+    // change, so the pulse follows the section however the pooled instances
+    // swap.
     property string pulseSection: ""
     property int pulseTick: 0
     property bool completedCollapsed: true
@@ -13207,9 +13207,9 @@ ApplicationWindow {
             model.clear()
             for (var i = 0; i < items.length; ++i) model.append(items[i])
             var m = Object.assign({}, more); m[v] = hasMore === true; more = m
-            // The total is stored even when it is -1 (a failed page): that is
-            // the state the section's status text reports, and dropping it
-            // made a read error read as "no saved files yet".
+            // The total is stored even when it is -1 (a failed page): the
+            // section's status text reports it, so a read error must not read
+            // as "no saved files yet".
             if (total !== undefined) { var c = Object.assign({}, counts); c[v] = total; counts = c }
             if (v === category) {
                 loading = false
@@ -13549,8 +13549,8 @@ ApplicationWindow {
         }
         function applySort(cat, key, asc) {
             // Clone into a NEW object: mutating and reassigning the SAME
-            // reference does not fire the var-property change signal, so the
-            // direction arrow's binding never re-evaluated and appeared stuck.
+            // reference does not fire the var-property change signal, so no
+            // binding on `sort` re-evaluates.
             var m = {}
             for (var k in group.sort) m[k] = group.sort[k]
             m[cat] = { key: key, asc: asc }
@@ -15386,9 +15386,8 @@ ApplicationWindow {
                     }
                 }
                 // Per-provider status lights (issue #223): one compact dot
-                // per provider the bridge reports, replacing the old
-                // TIDAL-only connection pill. The account actions live with
-                // the accounts now: sign-out is on the TIDAL card in
+                // per provider the bridge reports. The account actions live
+                // with the accounts: sign-out is on the TIDAL card in
                 // Settings. The dot's colour states availability; the word
                 // rides the accessible name and a hover label, so the
                 // header stays compact and no global offline word exists
@@ -15446,8 +15445,7 @@ ApplicationWindow {
                 // Drop out of the scene graph entirely once fully collapsed
                 // (visible stays true through the height animation). clip alone
                 // is not enough: the sort dropdown's caret is a QtQuick.Shapes
-                // item, and Shapes can leak through an ancestor's clip/opacity,
-                // it kept painting over Browse / My Music at the tier's old spot.
+                // item, and Shapes can leak through an ancestor's clip/opacity.
                 visible: height > 0
                 readonly property bool shown: !root.settingsOpen && !root.libraryOpen && !root.browseOpen
                 height: shown ? tierContent.implicitHeight : 0
@@ -15626,8 +15624,7 @@ ApplicationWindow {
                                 showTile: false; closedAngle: -90; openAngle: 0
                                 // Blank the stroke as soon as the tier starts collapsing (not when
                                 // it finishes hiding): the caret is a QtQuick.Shapes node, and a
-                                // hidden Shape can keep painting its last-synced stroke, this
-                                // bled over Browse / My Music at the tier's old position.
+                                // hidden Shape can keep painting its last-synced stroke.
                                 stroke: searchTier.shown ? root.accent : "transparent"
                                 open: sortBox.popup.visible
                             }
@@ -16422,11 +16419,10 @@ ApplicationWindow {
                     visible: !root.hasResults
                     width: parent.width; horizontalAlignment: Text.AlignHCenter
                     textFormat: Text.PlainText; elide: Text.ElideMiddle
-                    // A search that found nothing says so: the invitation left
-                    // up read as a search that never started (issue #39). A
-                    // search that FAILED says that instead: the group's own
-                    // message carries the words (issue #241 / UI-05), so the
-                    // page never invites a first search it already ran.
+                    // A search that found nothing says so; a search that
+                    // FAILED says that instead: the group's own message
+                    // carries the words (issue #241 / UI-05), so the page
+                    // never invites a first search it already ran.
                     text: root.searchNoResultsFor !== ""
                           ? "No results for “" + root.searchNoResultsFor + "”"
                           : (root.searchGroupError !== "" ? "Search failed"
