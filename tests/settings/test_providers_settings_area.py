@@ -479,8 +479,9 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     assert "action_label" in qml
     # The schema snapshots TIDAL's session, so login/logout must rebuild it.
     assert "onLoggedInChanged" in qml
-    # The Apple switch is reachable without a pointer.
-    assert "activeFocusOnTab: true" in qml
+    # The Apple switch is reachable without a pointer while its row is on
+    # screen, and drops out of the tab order with the page (issue #295).
+    assert "activeFocusOnTab: visible" in qml
     assert "Accessible.role: Accessible.CheckBox" in qml
     assert "Keys.onPressed" in qml
     assert "!event.isAutoRepeat" in qml

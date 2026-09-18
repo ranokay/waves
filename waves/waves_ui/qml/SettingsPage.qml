@@ -2569,7 +2569,10 @@ Item {
                                                     visible: statusCol.hasSwitch
                                                     Layout.alignment: Qt.AlignVCenter
                                                     implicitWidth: swRow.width; implicitHeight: swRow.height
-                                                    activeFocusOnTab: true
+                                                    // The page hides as a whole; a tab stop that
+                                                    // follows its own visibility drops out with it
+                                                    // (issue #295, the #284 convention).
+                                                    activeFocusOnTab: visible
                                                     Accessible.role: Accessible.CheckBox
                                                     Accessible.name: modelData.label
                                                     Accessible.checkable: true

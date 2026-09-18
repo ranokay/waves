@@ -17,11 +17,17 @@ keyboard-only:
 - the search field is named;
 - the Chooser's rows are named, uniquely, as pickers/checkboxes/buttons, its
   picks and toggle reach the parked ask through the shared paths, and a closed
-  popover leaves no tab stop inside it (issue #284).
+  popover leaves no tab stop inside it (issue #284);
+- a real Tab walk (QtTest key delivery) never lands on a control that is not
+  on screen: thousands of controls inside closed surfaces (mostly Qt's own
+  TextField/ComboBox defaults in the hidden Settings page) keep
+  ``activeFocusOnTab`` flags, but Qt's chain filters on effective visibility,
+  and the walk proves it (issue #295).
 
-The companion source test pins the key handlers, because a name alone cannot
-be activated by a screen reader without its press action and QML cannot be
-driven with synthetic key events from the scenario harness.
+The companion source test pins the activation handlers (Return/Enter/Space,
+Escape, Delete), which the scenario does not drive; the Tab walk below uses
+real QtTest key delivery on the chain itself, so a hidden control that somehow
+entered it fails the scenario rather than passing on flag reads.
 """
 
 from __future__ import annotations
@@ -65,6 +71,42 @@ _CHOOSER_ROWS_BODY = """
     }
     walk(pop.contentItem);
     return JSON.stringify({ open: true, rows: out });
+"""
+
+# One stop of a real Tab walk (issue #295): the stop's tree path (for cycle
+# detection), what it is, and the effective flags Qt's chain filters on. A
+# stop inside the hidden Settings page is a failure, whatever its flags say.
+_TAB_STOP_BODY = """
+    function pathOf(o, target, path, depth) {
+        if (!o || depth > 200) return null;
+        if (o === target) return path;
+        var kids = o.children || [];
+        for (var i = 0; i < kids.length; i++) {
+            var hit = pathOf(kids[i], target, path + "/c" + i, depth + 1);
+            if (hit) return hit;
+        }
+        if (o.contentItem && o.contentItem !== o) {
+            var content = pathOf(o.contentItem, target, path + "/content", depth + 1);
+            if (content) return content;
+        }
+        if (o.item && o.item !== o) {
+            var loaded = pathOf(o.item, target, path + "/item", depth + 1);
+            if (loaded) return loaded;
+        }
+        return null;
+    }
+    var it = root.activeFocusItem;
+    if (!it) return JSON.stringify({ path: null });
+    function inTree(o, needle) {
+        while (o) { if (o === needle) return true; o = o.parent; }
+        return false;
+    }
+    return JSON.stringify({ path: pathOf(root, it, "root", 0),
+                            object: "" + (it.objectName || ""),
+                            type: "" + it,
+                            visible: it.visible !== false,
+                            enabled: it.enabled !== false,
+                            inSettings: inTree(it, settingsPage) });
 """
 
 
@@ -203,6 +245,30 @@ def _show_search_results(q, settle, bridge) -> None:
     settle(400)
 
 
+def _tab_cycle(q, settle, root, *, limit: int = 500) -> list[dict]:
+    """One cycle of real Tab presses from the current focus (issue #295).
+
+    Returns every stop until the chain returns to its first stop or ``limit``
+    presses have been sent. A stop whose ``path`` is None means the press left
+    nothing focused, which the caller reads as a broken chain.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    stops: list[dict] = []
+    for _ in range(limit):
+        QTest.keyClick(root, Qt.Key_Tab)
+        settle(20)
+        stop = json.loads(q(scene_js(_TAB_STOP_BODY)))
+        if stop["path"] is None:
+            stops.append(stop)
+            break
+        if stops and stop["path"] == stops[0]["path"]:
+            break
+        stops.append(stop)
+    return stops
+
+
 def _run_scenario() -> int:
     import traceback
 
@@ -217,7 +283,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
-    _, q, settle, bridge = booted
+    root, q, settle, bridge = booted
 
     # A visible main surface: the first-run surfaces answered and dismissed
     # (the same three keys every scenario sets).
@@ -242,6 +308,53 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         _buttons(q, "function (o) { return o.chooserKind !== undefined && ('' + o.mediaId) === 't1'; }"),
         "the search result's download button",
     )
+
+    # --- The real Tab chain (issue #295). Flag reads (this scenario's and
+    # #284's) find thousands of hidden tab stops: every TextField/ComboBox
+    # default inside the closed Settings page keeps `activeFocusOnTab`, and
+    # the Chooser's rows did before #284. Qt's chain filters on effective
+    # visibility and enabled, so a keyboard user never reaches them. One full
+    # cycle of real Tab presses proves it: every stop must be a control that
+    # is on screen, and the closed Settings page owns none of them.
+    root.requestActivate()
+    settle(100)
+    stops = _tab_cycle(q, settle, root)
+    if not stops or stops[0]["path"] is None:
+        problems.append("a Tab press left nothing focused")
+    else:
+        offscreen = [s for s in stops if not s["visible"] or not s["enabled"] or s["inSettings"]]
+        if offscreen:
+            problems.append(f"Tab reaches a control that is not on screen: {offscreen[:3]}")
+        if len(stops) < 4:
+            labels = [s["object"] or s["type"] for s in stops]
+            problems.append(f"the Tab walk stalled after {len(stops)} stops: {labels}")
+        objects = {s["object"] for s in stops}
+        if "queueBtn" not in objects or not any(s["type"].startswith("NavTab") for s in stops):
+            problems.append(f"the Tab walk missed the top bar's controls: {sorted(objects)}")
+
+        # Two-sided proof for the Settings page's fields: none of them is
+        # reachable while the page is closed (above), and they are once the
+        # page is open. The page's programmatic close restores the surface.
+        if bool(q("root.settingsOpen")):
+            problems.append("the Tab walk ran with the Settings page open")
+        else:
+            opened_settings = bool(q(scene_js("""
+                var tab = findFirst(root, function (o) { return o.label === "Settings" && o.clicked !== undefined; });
+                if (!tab) return false;
+                tab.clicked();
+                return true;
+            """)))
+            settle(300)
+            if not opened_settings or not bool(q("root.settingsOpen")):
+                problems.append("the Settings tab did not open the Settings page")
+            else:
+                page_stops = _tab_cycle(q, settle, root, limit=80)
+                if not any(s.get("inSettings") for s in page_stops):
+                    problems.append("the Settings page's fields are not in the tab order while the page is open")
+                if any(not s["visible"] or not s["enabled"] for s in page_stops):
+                    problems.append(f"Tab reached a hidden control on the open Settings page: {page_stops[:3]}")
+                q("settingsPage.closed()")
+                settle(250)
 
     # --- The Chooser (issue #284): its rows are named, tab-reachable controls,
     # and a keyboard user's picks reach the queue through the shared paths.
