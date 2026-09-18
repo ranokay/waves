@@ -10267,8 +10267,6 @@ class WavesBridge(LibraryMixin, QObject):
         refusal. The verb itself stays refused on the bridge side for any
         other caller (say, a keyboard path).
         """
-        if not str(artist_id or "").strip():
-            return False  # no artist, no control
         try:
             return self._artist_download_supports(artist_id)
         except Exception:
@@ -10278,7 +10276,11 @@ class WavesBridge(LibraryMixin, QObject):
             return False
 
     def _artist_download_supports(self, artist_id: str) -> bool:
-        """The capability answer itself, unguarded (see the slot above)."""
+        """The capability answer itself, unguarded by try/except (the slot
+        above guards the probe). No artist id answers False, mirroring
+        _chooser_supports: there is nothing to sweep."""
+        if not str(artist_id or "").strip():
+            return False
         provider = self._provider_meta(self._chooser_provider_of(artist_id))
         if provider is None:
             return False
@@ -17224,8 +17226,14 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadArtist(self, artist_id: str) -> None:
-        """Queue every album of an artist for download."""
-        if str(artist_id).startswith(f"{CTX_APPLE}:"):
+        """Queue every album of an artist for download.
+
+        Whether the sweep can run at all is the artist's provider capability
+        (issue #288): a provider whose catalog answers no artist sweep is
+        refused here with the same words the hidden control would have shown,
+        so the verb is honest however it is reached (a card, a keyboard
+        path), and the capability stays the one source of that fact."""
+        if not self.artistDownloadSupported(artist_id):
             self._set_status(_APPLE_UNAVAILABLE_STATUS)
             return
         if self._dl is None:

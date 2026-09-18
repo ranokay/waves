@@ -14,6 +14,7 @@ from conftest import _Signal
 
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as CfgSettings
+from waves.providers import Capability
 from waves.waves_ui.backend import WavesBridge
 
 
@@ -68,8 +69,15 @@ class VideoArtist:
 
 class DiscoStub:
     downloadArtist = WavesBridge.downloadArtist
+    _provider_meta = WavesBridge._provider_meta
+    _chooser_provider_of = WavesBridge._chooser_provider_of
+    _artist_download_supports = WavesBridge._artist_download_supports
+    artistDownloadSupported = WavesBridge.artistDownloadSupported
 
     def __init__(self, artist, video_download: bool):
+        # The capability the sweep's gate reads (issue #288): these stubs
+        # stand in for a TIDAL artist, so the sweep runs.
+        self.providers = {"tidal": SimpleNamespace(capabilities=frozenset(Capability))}
         self._dl = object()
         # Stereo default on purpose: the sweep's Atmos filter runs
         # (and must pass a spatial-free release list through untouched).

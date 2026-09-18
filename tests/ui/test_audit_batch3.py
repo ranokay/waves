@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from tidalapi.album import Album
 
+from waves.providers import Capability
 from waves.waves_ui.backend import WavesBridge
 
 
@@ -488,8 +489,19 @@ class _DownloadArtistStub:
     downloadArtist = WavesBridge.downloadArtist
     _ffmpeg_gate_holds = WavesBridge._ffmpeg_gate_holds
     _stash_pending_download = WavesBridge._stash_pending_download
+    _provider_meta = WavesBridge._provider_meta
+    _chooser_provider_of = WavesBridge._chooser_provider_of
+    _artist_download_supports = WavesBridge._artist_download_supports
+    artistDownloadSupported = WavesBridge.artistDownloadSupported
 
     def __init__(self):
+        # The capabilities the sweep's gate reads (issue #288): TIDAL answers
+        # an artist sweep (so the scan tests below reach the scan), Apple's
+        # catalog does not (so its refusal path is what the Apple test sees).
+        self.providers = {
+            "tidal": SimpleNamespace(capabilities=frozenset(Capability)),
+            "apple": SimpleNamespace(capabilities=frozenset()),
+        }
         self._dl = object()
         self._ffmpeg_gate_bypassed = True
         self._pending_lock = Lock()

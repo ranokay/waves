@@ -10366,8 +10366,13 @@ ApplicationWindow {
             // Preview plays the artist's top track and doubles as a scrubber.
             PreviewBar { width: parent.width; pid: aId }
             DownloadButton {
+                objectName: "artistCardDownload"
                 width: parent.width
                 mediaId: aId; chooserKind: "artist"; label: "Download artist"
+                // A card is a surface too: the same capability verdict the
+                // artist page's control reads keeps an Apple artist card from
+                // offering a sweep its catalog cannot run (issue #288).
+                visible: waves.artistDownloadSupported(aId)
                 // What the strip on the cover already says, said again by the
                 // control that would act on it: a catalogue you partly hold
                 // is not a fresh grab.
