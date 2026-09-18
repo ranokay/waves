@@ -22,7 +22,9 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.integration
+# `integration` because it crosses the disk/config boundary; `qml` because the
+# bridge builds real Qt objects, so a Qt-less host must skip, not error.
+pytestmark = [pytest.mark.qml, pytest.mark.integration]
 
 
 def _wait_for(predicate, *, timeout: float = 30.0, step: float = 0.05) -> bool:
@@ -35,18 +37,21 @@ def _wait_for(predicate, *, timeout: float = 30.0, step: float = 0.05) -> bool:
     return predicate()
 
 
-def _pop_launch_settings() -> None:
-    """Drop ``config.Settings``'s process-wide singleton.
+def _pop_singletons() -> None:
+    """Drop the process-wide instances a real boot mints.
 
-    ``Settings`` is a ``SingletonMeta`` instance whose ``file_path`` is read
-    once, at whichever test first built it. A fresh boot here means a fresh
-    instance, and the pops around it keep this test's sandbox instance from
-    leaking into every later test (the same dance
-    tests/library/test_restart_upgrade_baseline.py does)."""
+    ``config.Settings`` and ``config.WavesTidal`` are ``SingletonMeta``
+    instances whose ``file_path``/token path is read once, at whichever test
+    first built them. A fresh boot here means fresh instances, and the pops
+    around it keep this test's sandbox instances from leaking into every later
+    test (the same dance tests/library/test_restart_upgrade_baseline.py does
+    for Settings alone)."""
     from waves.config import Settings as LaunchSettings
     from waves.helper.decorator import SingletonMeta
+    from waves.waves_ui.session import WavesTidal
 
     SingletonMeta._instances.pop(LaunchSettings, None)
+    SingletonMeta._instances.pop(WavesTidal, None)
 
 
 def test_a_real_bridge_boots_from_isolated_settings(tmp_path, monkeypatch):
@@ -71,7 +76,7 @@ def test_a_real_bridge_boots_from_isolated_settings(tmp_path, monkeypatch):
 
     from waves.waves_ui.backend import WavesBridge
 
-    _pop_launch_settings()
+    _pop_singletons()
     bridge = WavesBridge()
     try:
         # The provider registry the app runs with, and the isolated settings
@@ -98,4 +103,4 @@ def test_a_real_bridge_boots_from_isolated_settings(tmp_path, monkeypatch):
         assert bridge.libraryIndexReady() is True
     finally:
         bridge.shutdown()
-        _pop_launch_settings()
+        _pop_singletons()

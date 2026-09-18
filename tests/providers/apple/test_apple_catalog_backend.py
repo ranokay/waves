@@ -62,6 +62,21 @@ def _album():
     }
 
 
+def _summary_artist() -> dict:
+    """Apple's search summary for artist-1: a named artist whose album
+    relationship lists reference stubs (id/type/href, no attributes) and which
+    carries no views -- the captured live shape behind audit F-02 (issue #216).
+    A fresh dict per call, so a caller may remember or mutate it freely."""
+    return {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
+        "relationships": {
+            "albums": {"data": [{"id": "album-1", "type": "albums", "href": "/v1/catalog/us/albums/album-1"}]}
+        },
+    }
+
+
 class _Catalog:
     def __init__(self, album=None, artist=None, playlist=None, song=None):
         self._album = album
@@ -272,14 +287,7 @@ def test_standalone_apple_artist_ignores_a_cached_summary():
     """The LYRICS/COVER standalone path must not build an artist page from a
     cached search summary: its album entries are reference stubs, so the
     canonical artist is fetched instead (issue #216)."""
-    summary = {
-        "id": "artist-1",
-        "type": "artists",
-        "attributes": {"name": "Aphex Twin"},
-        "relationships": {
-            "albums": {"data": [{"id": "album-1", "type": "albums", "href": "/v1/catalog/us/albums/album-1"}]}
-        },
-    }
+    summary = _summary_artist()
     canonical = {
         "id": "artist-1",
         "type": "artists",
@@ -394,11 +402,10 @@ def test_apple_click_after_a_prefetch_serves_the_warmed_cache():
 
 
 def _summary_artist_catalog():
-    """Apple's search summary for an artist: a named artist whose album
-    relationship lists reference stubs (id/type/href, no attributes) and which
-    carries no views -- the captured live shape behind audit F-02. The
-    canonical fetch answers with the attributed artist, so only a bridge that
-    refetches projects a populated page. Returns ``(catalog, fetch_calls)``."""
+    """A catalog whose search answers with Apple's attribute-less artist
+    summary (``_summary_artist``) and whose canonical fetch returns the
+    attributed artist, so only a bridge that refetches projects a populated
+    page. Returns ``(catalog, fetch_calls)``."""
 
     calls: list = []
 
@@ -406,26 +413,7 @@ def _summary_artist_catalog():
         async def get_search_results(self, term, types):
             return {
                 "results": {
-                    "artists": {
-                        "data": [
-                            {
-                                "id": "artist-1",
-                                "type": "artists",
-                                "attributes": {"name": "Aphex Twin", "artwork": {"url": "https://img/{w}x{h}bb.jpg"}},
-                                "relationships": {
-                                    "albums": {
-                                        "data": [
-                                            {
-                                                "id": "album-1",
-                                                "type": "albums",
-                                                "href": "/v1/catalog/us/albums/album-1",
-                                            }
-                                        ]
-                                    }
-                                },
-                            }
-                        ]
-                    },
+                    "artists": {"data": [_summary_artist()]},
                     "albums": {"data": []},
                     "songs": {"data": []},
                     "playlists": {"data": []},
