@@ -15853,8 +15853,9 @@ ApplicationWindow {
 
                 Item {
                     id: tidalGroupHead
-                    // The head's name and mark come from the provider's own
-                    // descriptor (issue #278); nothing here names a provider.
+                    // The head's name, mark and sizes come from the provider's
+                    // own descriptor (issue #278); only this id query names
+                    // one, and the furniture renders whatever it answers.
                     readonly property var provider: waves.providerDescriptor("tidal")
                     visible: root.providerGroupVisible(false)
                     width: parent.width; height: 42
@@ -16197,8 +16198,9 @@ ApplicationWindow {
 
                 Item {
                     id: appleGroupHead
-                    // The head's name and mark come from the provider's own
-                    // descriptor (issue #278); nothing here names a provider.
+                    // The head's name, mark and sizes come from the provider's
+                    // own descriptor (issue #278); only this id query names
+                    // one, and the furniture renders whatever it answers.
                     readonly property var provider: waves.providerDescriptor("apple")
                     // A failed fetch has no rows, so the count-based gate would
                     // hide the very place the honest error belongs (issue #241

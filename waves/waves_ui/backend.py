@@ -10324,11 +10324,12 @@ class WavesBridge(LibraryMixin, QObject):
             for provider in _provider_registry(self):
                 try:
                     descriptor = provider.descriptor()
+                    if str(getattr(descriptor, "id", "") or "") != candidate:
+                        continue
                 except Exception:
                     logger.debug("Could not read a provider descriptor", exc_info=True)
                     continue
-                if str(descriptor.id) == candidate:
-                    return _provider_descriptor_dict(descriptor)
+                return _provider_descriptor_dict(descriptor)
         return None
 
     @Slot(str, str, result="QVariant")

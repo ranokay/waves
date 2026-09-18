@@ -346,6 +346,11 @@ def test_provider_descriptor_answers_by_namespace_or_provider_id():
     )
     assert broken.providerDescriptor("broken:artist-1") is None
 
+    none_descriptor = _bridge(
+        providers={CTX_TIDAL: _metadata(TidalProvider), "none": _metadata(BareProvider, descriptor=lambda: None)}
+    )
+    assert none_descriptor.providerDescriptor("none:artist-1") is None
+
 
 def test_chooser_segment_tiles_come_from_the_enabled_providers_descriptors():
     """The provider segment is bridge data (issue #235): a disabled provider
