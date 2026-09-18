@@ -17696,7 +17696,7 @@ ApplicationWindow {
                     // fires the animation twice on one header. Arming on
                     // Component.onCompleted instead guards nothing: the
                     // first-row case is served by the pool, as
-                    // tests/test_queue_section_pulse.py pins.
+                    // tests/ui/test_queue_section_pulse.py pins.
                     property int secPulsedTick: 0
                     property int secArmedTick: -1
                     // Whether this header holds the section that rose and has
