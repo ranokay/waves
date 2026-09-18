@@ -1,0 +1,68 @@
+name: "setup-env"
+description: "Composite action to set up the mise/uv toolchain and the locked Python environment."
+
+inputs:
+  python-version:
+    required: false
+    description: "The Python version to use; blank keeps mise.toml's default"
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Pin the requested Python and trust the repo mise config
+      run: |
+        {
+          echo "MISE_TRUSTED_CONFIG_PATHS=$GITHUB_WORKSPACE"
+          if [ -n "${{ inputs.python-version }}" ]; then
+            echo "MISE_PYTHON_VERSION=${{ inputs.python-version }}"
+          fi
+        } >> "$GITHUB_ENV"
+      shell: bash
+
+    - name: Install the toolchain (mise, Python, uv)
+      uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      with:
+        cache: true
+
+    - name: Cache uv's download cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/uv
+        key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+        restore-keys: |
+          uv-${{ runner.os }}-
+
+    # Retried, because a single dropped connection here costs a whole release.
+    # The PySide6 wheels are ~165MB each and PyPI does occasionally cut a
+    # transfer short ("IncompleteRead ... more expected"), which failed one leg
+    # of the v0.1.12 build 38 seconds in and left the release a draft: the
+    # signing job needs every matrix leg. A truncated wheel can land in uv's
+    # cache, so clear it between attempts rather than retrying onto the same
+    # bad file.
+    - name: Install dependencies
+      run: |
+        set -u
+        # Pin uv's interpreter to the matrix's Python when one was requested,
+        # so the venv cannot silently come from a stray system python.
+        PY_PYTHON="${MISE_PYTHON_VERSION:-}"
+        sync() {
+          if [ -n "$PY_PYTHON" ]; then
+            uv sync --locked --all-extras --python "$PY_PYTHON"
+          else
+            uv sync --locked --all-extras
+          fi
+        }
+        for attempt in 1 2 3; do
+          if sync; then
+            exit 0
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            echo "::error::uv sync failed after $attempt attempts"
+            exit 1
+          fi
+          echo "::warning::uv sync failed (attempt $attempt); clearing the uv cache and retrying"
+          uv cache clean
+          sleep $((attempt * 15))
+        done
+      shell: bash

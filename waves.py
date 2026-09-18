@@ -10,11 +10,11 @@ stays a normal package, untouched.
 This file lives at the repo root, NOT inside the package: as ``waves/waves.py``
 it would shadow the ``waves`` package for its own absolute imports, and Nuitka
 names the build artifacts (``dist/waves.app`` / ``dist/waves.dist``) after this
-file's basename, which the Makefile and CI key on, so neither its name nor its
+file's basename, which the build and CI key on, so neither its name nor its
 location may change casually.
 
 From a source checkout, ``python -m waves.waves_ui`` remains the way to run;
-this file exists so ``make gui-waves`` can produce the frozen app.
+this file exists so ``tools/build_waves.sh`` (task ``build``) can produce the frozen app.
 
 The ``nuitka-project`` directives below are the canonical build recipe. They
 target the QML front-end: the PySide6 plugin pulls
@@ -64,8 +64,8 @@ along as data files so ``app.py`` finds them next to itself at runtime.
 # Qt 6.11 added a Qt.labs.assetdownloader QML module that ships ONLY as a
 # static library, which Nuitka cannot process. It arrives through the qml
 # plugin scan rather than the DLL list, so --noinclude-dlls does not reach
-# it; the Makefile prunes it from the build virtualenv beforehand instead
-# (tools/prune_static_qml_plugins.py, run from the Makefile).
+# it; tools/build_waves.sh prunes it from the build virtualenv beforehand
+# instead (tools/prune_static_qml_plugins.py).
 # Drop the heavy Qt modules Waves never loads, it is a QtQuick app that only
 # imports QtQuick(.Controls.Basic/.Layouts/.Effects/.Shapes/.Dialogs) + QtCore.
 # NOTE: on a macOS standalone build Nuitka names the Qt libraries without the

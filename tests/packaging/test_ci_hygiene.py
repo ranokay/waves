@@ -1,10 +1,10 @@
 """The update hygiene stays wired: Dependabot targets develop and the release
 build carries Nuitka's build tree between runs.
 
-Dependabot reads Poetry through the "pip" ecosystem; the ignored names are
-the pins that move by hand (docs/dependency-updates.md). The cache is the
-difference between a release that relinks and one that recompiles every
-module from a cold runner.
+Dependabot reads the PEP 621 metadata and uv.lock through the "pip" ecosystem;
+the ignored names are the pins that move by hand (docs/dependency-updates.md).
+The cache is the difference between a release that relinks and one that
+recompiles every module from a cold runner.
 """
 
 from __future__ import annotations
@@ -44,12 +44,12 @@ def test_dependabot_updates_develop_and_leaves_the_deliberate_pins_alone():
     cfg = yaml.safe_load(DEPENDABOT.read_text())
     assert cfg["version"] == 2
 
-    poetry = _entry(cfg, "pip")
-    assert poetry["target-branch"] == "develop"
-    assert poetry["groups"], "a week of bumps should arrive as one grouped PR"
+    python_deps = _entry(cfg, "pip")
+    assert python_deps["target-branch"] == "develop"
+    assert python_deps["groups"], "a week of bumps should arrive as one grouped PR"
     # Exact set: adding a pin to the ignore list means updating the playbook's
     # story too, and this fails until it does.
-    ignored = {entry["dependency-name"] for entry in poetry["ignore"]}
+    ignored = {entry["dependency-name"] for entry in python_deps["ignore"]}
     assert ignored == {"gamdl", "yt-dlp", "nuitka", "pyside6"}
 
     actions = _entry(cfg, "github-actions")
@@ -87,21 +87,21 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
     # recipe changes.
     key = str(with_block["key"])
     restore_keys = str(with_block["restore-keys"])
-    for part in ("matrix.OS_ARCH", "Makefile", "pyproject.toml", "release-or-test-build.yml"):
+    for part in ("matrix.OS_ARCH", "mise.toml", "tools/build_waves.sh", "pyproject.toml", "release-or-test-build.yml"):
         assert part in key, part
         assert part in restore_keys, part
-    assert "poetry.lock" in key
-    assert key == restore_keys.strip() + "${{ hashFiles('poetry.lock') }}"
+    assert "uv.lock" in key
+    assert key == restore_keys.strip() + "${{ hashFiles('uv.lock') }}"
 
     # The cached ccache must stay inside the repository cache budget.
     assert wf["jobs"]["build"]["env"]["CCACHE_MAXSIZE"] == "2G"
 
 
 def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:
-    make = shutil.which("make")
-    assert make, "make is not on PATH; every release build needs it"
-    result = subprocess.run(  # noqa: S603 (fixed argv: the resolved make, one dry-run target)
-        [make, "-n", "gui-waves"],
+    bash = shutil.which("bash")
+    assert bash, "bash is not on PATH; every release build needs it"
+    result = subprocess.run(  # noqa: S603 (fixed argv: the resolved bash, the repo's own build script, --dry-run)
+        [bash, "tools/build_waves.sh", "--dry-run"],
         cwd=REPO_ROOT,
         env={**os.environ, **extra_env},
         capture_output=True,
@@ -125,8 +125,9 @@ def test_windows_builds_ask_nuitka_for_low_memory():
     for leg in windows_legs:
         assert "WAVES_NUITKA_FLAGS=--low-memory" in str(leg["CMD_BUILD"]), leg["os"]
 
-    # The Makefile default is what local Windows builds get; it must resolve
-    # from OS=Windows_NT alone and stay out of the other platforms' commands.
+    # The build script's Windows default is what a local Windows build gets; it
+    # must resolve from OS=Windows_NT alone and stay out of the other
+    # platforms' commands.
     assert "--low-memory" in _dry_run_nuitka_command({"OS": "Windows_NT"})
     assert "--low-memory" not in _dry_run_nuitka_command({"OS": ""})
 
@@ -140,7 +141,7 @@ def test_the_build_excludes_yt_dlps_lazy_extractor_table():
     to the real extractor modules when the table is absent, so the artifact
     keeps every extractor. The CI Windows legs export
     WAVES_NUITKA_FLAGS=--low-memory themselves, so the exclusion has to survive
-    an environment-provided value, not just resolve from the Makefile's own
+    an environment-provided value, not just resolve from the build script's own
     default."""
     for env in ({"OS": "Windows_NT"}, {"OS": ""}, {"OS": "Windows_NT", "WAVES_NUITKA_FLAGS": "--low-memory"}):
         command = _dry_run_nuitka_command(env)

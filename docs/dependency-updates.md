@@ -1,6 +1,6 @@
 # Dependency and engine updates
 
-Waves pins several things that do not move through `poetry.lock`: the Apple
+Waves pins several things that do not move through `uv.lock`: the Apple
 engine (gamdl/yt-dlp), the wrapper image and its digest, the N_m3u8DL-RE
 binaries, the blessed APK with its guest libraries, FFmpeg from managed
 sources, and Qt. This page is the playbook for moving any of them.
@@ -33,7 +33,7 @@ never leaks into the default run or CI.
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wrapper-upstream-check` (Mondays 09:00) | Opens one deduped issue when `glomatico/wrapper-v2` moves past `.github/wrapper-upstream.sha`. Never builds or publishes.                                                                                                                                                           |
 | Pin-drift tests                          | Fail when the image tag, digest, APK pin, guest-lib pin and runbook drift (`test_wrapper_image_pins.py`), when gamdl drops a member the engine calls (`test_pinned_client_contract.py`), or when the Dependabot ignores or the release cache step disappear (`test_ci_hygiene.py`). |
-| Dependabot (`.github/dependabot.yml`)    | Weekly grouped PRs for `poetry.lock` and GitHub Actions, targeting `develop`. Ignores the deliberate pins below.                                                                                                                                                                    |
+| Dependabot (`.github/dependabot.yml`)    | Weekly grouped PRs for `uv.lock` and GitHub Actions, targeting `develop`. Ignores the deliberate pins below.                                                                                                                                                                        |
 | The in-app updater                       | Ships app and engine bumps to users through normal releases; no side channel (spec §10.4).                                                                                                                                                                                          |
 | The release build cache                  | Carries Nuitka's build tree between runs so a routine release relinks instead of recompiling every module.                                                                                                                                                                          |
 
@@ -41,22 +41,22 @@ never leaks into the default run or CI.
 
 | Artifact         | Pinned in                                                            | Cadence                                     | Procedure                                                                                                          |
 | ---------------- | -------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| gamdl            | `pyproject.toml` (`~3.8.5`, patch-only on purpose)                   | When Apple breaks, or a monthly glance      | Branch off `develop`, open the constraint to the needed minor and relock, then gate on tests + live suite (below). |
-| yt-dlp           | Floored to gamdl's own floor; the lockfile holds the version         | Only with a gamdl bump                      | `poetry lock` after the gamdl change; never bump it alone.                                                         |
+| gamdl            | `pyproject.toml` (`>=3.8.5,<3.9`, patch-only on purpose)             | When Apple breaks, or a monthly glance      | Branch off `develop`, open the constraint to the needed minor and relock, then gate on tests + live suite (below). |
+| yt-dlp           | Floored to gamdl's own floor; the lockfile holds the version         | Only with a gamdl bump                      | `uv lock` after the gamdl change; never bump it alone.                                                             |
 | Wrapper image    | `WRAPPER_V2_IMAGE` + `WRAPPER_V2_IMAGE_DIGEST`                       | On the watcher's issue, or when ALAC breaks | Dispatch `wrapper-image` with the new upstream SHA, then move tag + digest + runbook in one commit (below).        |
 | APK / guest libs | `APK_PINNED_VERSION`, runbook, private asset                         | Only with an image rebuild                  | The image build re-pins libs from the blessed APK; the app never manages them.                                     |
 | N_m3u8DL-RE      | `waves/providers/apple/runtime.py` version, asset and SHA-256 tables | When a needed fix lands                     | Re-pin asset names and hashes together in one commit; the pin test enforces coverage; a live fetch confirms.       |
 | FFmpeg           | The FFmpeg manager's sources (martin-riedl, BtbN)                    | On breakage                                 | Bump the manager's parser/pin when a source changes shape; smoke-test a managed install.                           |
 | Qt / PySide6     | `pyproject.toml`, locked                                             | Deliberately, per release                   | Re-check the macOS floor, the 6.9.3 legacy overlay and the QML suite (below).                                      |
-| Everything else  | `poetry.lock`                                                        | Weekly via Dependabot, or on advisories     | Review the grouped PR: `poetry update <pkg>`, `make check`, full suite.                                            |
+| Everything else  | `uv.lock`                                                            | Weekly via Dependabot, or on advisories     | Review the grouped PR: `uv lock --upgrade-package <pkg>`, `mise run check`, full suite.                            |
 
 ### gamdl
 
 ```bash
 git checkout develop && git checkout -b chore/bump-gamdl
-poetry add 'gamdl@~3.9'          # edits pyproject.toml and poetry.lock
-poetry run pytest                # the pinned-client contract fails first on surface changes
-WAVES_ACCOUNT_TESTS=1 .venv/bin/python -m pytest -q tests/account
+uv add 'gamdl>=3.9,<3.10'        # edits pyproject.toml and uv.lock
+uv run --locked --all-extras pytest                    # the pinned-client contract fails first on surface changes
+WAVES_ACCOUNT_TESTS=1 uv run --locked --all-extras pytest -q -m account tests
 ```
 
 The contract test names the members the engine calls; an intentional surface
@@ -92,9 +92,9 @@ honor their macOS 12 tag. Treat a Qt bump like a release, not a chore.
 ## Reviewing a Dependabot PR
 
 - The test workflow is manual-only, so the PR shows no checks: run
-  `make check` and the full suite locally (or dispatch `master.yml`) before
+  `mise run check` and the full suite locally (or dispatch `master.yml`) before
   merging.
-- `poetry.lock` is what users get. If the grouped PR touches something with
+- `uv.lock` is what users get. If the grouped PR touches something with
   a platform floor or a live-service surface, review it as an engine bump.
 - The ignored names (gamdl, yt-dlp, Nuitka, PySide6) are deliberate;
   Dependabot will not propose them. Their bumps use the sections above.
@@ -114,7 +114,7 @@ minutes locally. Two trees make that cost disappear from later runs:
 
 The `build` job restores both with `actions/cache`, keyed per leg, on the
 lockfile and on the build inputs that change the compiled objects (the
-Makefile, `pyproject.toml` and the workflow file), so a flag or toolchain
+build script, `mise.toml`, `pyproject.toml` and the workflow file), so a flag or toolchain
 change does not silently reuse a tree built by a different configuration. The
 restore-key fallback is salted the same way and warms the first build after a
 dependency bump, with unchanged modules still skipping. `CCACHE_MAXSIZE=2G`

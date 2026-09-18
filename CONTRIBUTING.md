@@ -45,7 +45,7 @@ If you are proposing a new feature:
 # Get Started!
 
 Ready to contribute? Here's how to set up `Waves` for local development.
-Please note this documentation assumes you already have `poetry` and `Git` installed and ready to go.
+Please note this documentation assumes you already have `mise` (which brings `uv` and the pinned Python) and `Git` installed and ready to go.
 
 1. Fork the `Waves` repo on GitHub.
 
@@ -62,29 +62,20 @@ git clone git@github.com:YOUR_NAME/Waves.git
 cd Waves
 ```
 
-If you are using `pyenv`, select a version to use locally. (See installed versions with `pyenv versions`)
+Then install the environment with:
 
 ```bash
-pyenv local <x.y.z>
+mise run install
 ```
 
-Then, install and activate the environment with:
+`mise` reads `mise.toml`, which pins the Python and `uv` versions, and the
+task creates the uv-managed virtual environment (`.venv`) with every runtime
+and dev dependency, then installs the pre-commit hooks. (`mise` itself can be
+installed from <https://mise.jdx.dev>; `uv` comes with it.) If you prefer not
+to use mise, `uv sync --all-extras && uv run pre-commit install` does the same
+with a `uv` you installed yourself.
 
-```bash
-poetry install --with dev
-poetry env activate
-```
-
-(The `dev` group is optional in `pyproject.toml`, so a bare `poetry install`
-leaves out pytest, pre-commit and the linters the steps below rely on.)
-
-4. Install pre-commit to run linters/formatters at commit time:
-
-```bash
-poetry run pre-commit install
-```
-
-5. Create a branch for local development:
+4. Create a branch for local development:
 
 ```bash
 git checkout -b name-of-your-bugfix-or-feature
@@ -92,31 +83,33 @@ git checkout -b name-of-your-bugfix-or-feature
 
 Now you can make your changes locally.
 
-6. Don't forget to add test cases for your added functionality to the `tests` directory.
+5. Don't forget to add test cases for your added functionality to the `tests` directory.
 
-7. When you're done making changes, check that your changes pass the formatting tests.
-
-```bash
-make check
-```
-
-8. Now, validate that all unit tests are passing:
+6. When you're done making changes, check that your changes pass the formatting tests.
 
 ```bash
-make test
+mise run check
 ```
 
-9. Before raising a pull request you should also run tox.
-   This will run the tests across different versions of Python:
+7. Now, validate that all unit tests are passing:
 
 ```bash
-tox
+mise run test
 ```
 
-This requires you to have multiple versions of Python installed.
-This step is also triggered in the CI/CD pipeline, so you could also choose to skip this step locally.
+8. Before raising a pull request, run the merge gate — the strict group,
+   everything but the live account tests:
 
-10. Commit your changes and push your branch to GitHub:
+```bash
+mise run test-strict
+```
+
+The same group runs across Python 3.12, 3.13 and 3.14 in CI
+(`master.yml`). To run another version locally, re-sync the venv onto it
+first (uv keeps the existing interpreter otherwise):
+`uv sync --locked --all-extras --python 3.14 && mise run test-strict`.
+
+9. Commit your changes and push your branch to GitHub:
 
 ```bash
 git add .
@@ -124,7 +117,7 @@ git commit -m "Your detailed description of your changes."
 git push origin name-of-your-bugfix-or-feature
 ```
 
-11. Submit a pull request through the GitHub website.
+10. Submit a pull request through the GitHub website.
 
 # Pull Request Guidelines
 

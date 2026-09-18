@@ -92,7 +92,7 @@ jobs:
       # gates real releases; test-build / artifact-only runs are unaffected.
       - name: Check out (release-config guard)
         if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Guard, a published release must be able to self-update
         if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
         run: |
@@ -170,7 +170,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Create the Release (empty draft, assets attached by the matrix)
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
         with:
@@ -200,7 +200,7 @@ jobs:
           # macOS legs ship a zip of the trimmed Waves.app: both a manual
           # unzip-and-drag install and the exact shape the in-app updater extracts.
           # Both legs build on runners NEWER than the oldest macOS we support
-          # (WAVES_MACOS_MIN in the Makefile), so nothing here can ever prove a
+          # (WAVES_MACOS_MIN in tools/build_waves.sh), so nothing here can ever prove a
           # bundle runs on that floor. The "Assert macOS version floor" step
           # below checks it statically instead: every shipped Mach-O must not
           # demand anything newer (issue #14: PySide6 6.10 wheels smuggled in
@@ -223,8 +223,7 @@ jobs:
             CMD_BUILD: >
               ls -l /usr/local/lib/libcrypto* /usr/local/lib/libssl* || true;
               rm -f /usr/local/lib/libcrypto*.dylib /usr/local/lib/libssl*.dylib || true;
-              source $VENV &&
-              poetry run make gui-waves &&
+              bash tools/build_waves.sh &&
               cd dist &&
               zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_MACOS_X64}}${{needs.compute.outputs.ASSET_EXTENSION}} waves.app -x "*.DS_Store" &&
               cd ..
@@ -235,18 +234,18 @@ jobs:
             CMD_BUILD: >
               ls -l /opt/homebrew/lib/libcrypto* /opt/homebrew/lib/libssl* || true;
               rm -f /opt/homebrew/lib/libcrypto*.dylib /opt/homebrew/lib/libssl*.dylib || true;
-              source $VENV &&
-              poetry run make gui-waves &&
+              bash tools/build_waves.sh &&
               cd dist &&
               zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_MACOS_ARM64}}${{needs.compute.outputs.ASSET_EXTENSION}} waves.app -x "*.DS_Store" &&
               cd ..
           # Legacy macOS flavor for macOS 12 through 14 (see the env note on the
           # _LEGACY names): the locked PySide6 is overlaid with 6.9.3, the newest
           # release whose macOS binaries honor their macOS 12 wheel tag, and the
-          # floor drops to 12.0 (WAVES_MACOS_MIN is ?= in the Makefile, so the
-          # env override reaches Nuitka's MACOSX_DEPLOYMENT_TARGET and the
-          # Info.plist declaration). --force-reinstall --no-deps: exactly these
-          # four wheels swap, everything else stays as the lock resolved it.
+          # floor drops to 12.0 (the build script takes WAVES_MACOS_MIN from the
+          # environment, default 15.0, so the override reaches Nuitka's
+          # MACOSX_DEPLOYMENT_TARGET and the Info.plist declaration).
+          # --force-reinstall --no-deps: exactly these four wheels swap,
+          # everything else stays as the lock resolved it.
           - os: "macos-15-intel"
             TARGET: "macos-15-intel legacy"
             OS_ARCH: ${{needs.compute.outputs.ARCH_MACOS_X64_LEGACY}}
@@ -254,10 +253,9 @@ jobs:
             CMD_BUILD: >
               ls -l /usr/local/lib/libcrypto* /usr/local/lib/libssl* || true;
               rm -f /usr/local/lib/libcrypto*.dylib /usr/local/lib/libssl*.dylib || true;
-              source $VENV &&
-              poetry run pip install --force-reinstall --no-deps
+              uv pip install --force-reinstall --no-deps
               pyside6==6.9.3 pyside6-addons==6.9.3 pyside6-essentials==6.9.3 shiboken6==6.9.3 &&
-              WAVES_MACOS_MIN=12.0 poetry run make gui-waves &&
+              WAVES_MACOS_MIN=12.0 bash tools/build_waves.sh &&
               cd dist &&
               zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_MACOS_X64_LEGACY}}${{needs.compute.outputs.ASSET_EXTENSION}} waves.app -x "*.DS_Store" &&
               cd ..
@@ -268,10 +266,9 @@ jobs:
             CMD_BUILD: >
               ls -l /opt/homebrew/lib/libcrypto* /opt/homebrew/lib/libssl* || true;
               rm -f /opt/homebrew/lib/libcrypto*.dylib /opt/homebrew/lib/libssl*.dylib || true;
-              source $VENV &&
-              poetry run pip install --force-reinstall --no-deps
+              uv pip install --force-reinstall --no-deps
               pyside6==6.9.3 pyside6-addons==6.9.3 pyside6-essentials==6.9.3 shiboken6==6.9.3 &&
-              WAVES_MACOS_MIN=12.0 poetry run make gui-waves &&
+              WAVES_MACOS_MIN=12.0 bash tools/build_waves.sh &&
               cd dist &&
               zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_MACOS_ARM64_LEGACY}}${{needs.compute.outputs.ASSET_EXTENSION}} waves.app -x "*.DS_Store" &&
               cd ..
@@ -282,8 +279,7 @@ jobs:
             TARGET: "ubuntu-24.04"
             OS_ARCH: ${{needs.compute.outputs.ARCH_LINUX_X64}}
             CMD_BUILD: >
-              source $VENV &&
-              poetry run make gui-waves-linux &&
+              bash tools/build_waves.sh &&
               cd dist &&
               mv waves.dist Waves &&
               zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_LINUX_X64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
@@ -293,25 +289,23 @@ jobs:
             TARGET: "ubuntu-24.04-arm"
             OS_ARCH: ${{needs.compute.outputs.ARCH_LINUX_ARM64}}
             CMD_BUILD: >
-              source $VENV &&
-              poetry run make gui-waves-linux &&
+              bash tools/build_waves.sh &&
               cd dist &&
               mv waves.dist Waves &&
               zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_LINUX_ARM64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
               bash ../tools/build_appimage.sh Waves ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_LINUX_ARM64}}.AppImage &&
               cd ..
           # Both Windows legs set the low-memory flag explicitly as well as
-          # inheriting the Makefile default: Nuitka's parallel C compilation
-          # runs MSVC out of heap on the bundled yt-dlp ("fatal error C1002"),
-          # and an explicit setting survives any environment where make's
-          # OS=Windows_NT detection is unavailable.
+          # inheriting the build script's Windows default (OS=Windows_NT):
+          # Nuitka's parallel C compilation runs MSVC out of heap on the
+          # bundled yt-dlp ("fatal error C1002"), and an explicit setting
+          # survives any environment where that detection is unavailable.
           - os: "windows-2022"
             TARGET: "windows-2022"
             OS_ARCH: ${{needs.compute.outputs.ARCH_WINDOWS_X64}}
             CMD_BUILD: >
-              choco install zip make -y &&
-              source $VENV &&
-              WAVES_NUITKA_FLAGS=--low-memory poetry run make gui-waves-windows &&
+              choco install zip -y &&
+              WAVES_NUITKA_FLAGS=--low-memory bash tools/build_waves.sh &&
               cd dist &&
               mv waves.dist Waves &&
               zip -9 -r ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_WINDOWS_X64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
@@ -320,9 +314,8 @@ jobs:
             TARGET: "windows-11-arm"
             OS_ARCH: ${{needs.compute.outputs.ARCH_WINDOWS_ARM64}}
             CMD_BUILD: >
-              choco install zip make -y &&
-              source $VENV &&
-              WAVES_NUITKA_FLAGS=--low-memory poetry run make gui-waves-windows &&
+              choco install zip -y &&
+              WAVES_NUITKA_FLAGS=--low-memory bash tools/build_waves.sh &&
               cd dist &&
               mv waves.dist Waves &&
               zip -9 -r ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_WINDOWS_ARM64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
@@ -335,35 +328,36 @@ jobs:
     steps:
       # Skip checkout + setup on legs the `only` filter excludes, so a targeted
       # dispatch (e.g. only=windows-x64) does not spin the other legs (notably the
-      # 10x-billed macOS runners) through a full poetry install just to build
+      # 10x-billed macOS runners) through a full environment install just to build
       # nothing. Releases and test-build pushes leave `only` blank, so every leg
       # still runs. Same guard the build / smoke / checksum / upload steps use.
       - name: Check out
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up the environment
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
-        uses: ./.github/actions/setup-poetry-env
+        uses: ./.github/actions/setup-env
       # Carry Nuitka's build tree and its cache root (ccache, module cache,
       # downloads) between runs: content signatures skip recompiling modules
       # whose generated C is unchanged, so a warm cache turns a routine
       # release into a relink. Keyed per leg, on the lockfile and on the build
-      # inputs that change the objects (the Makefile, pyproject.toml and this
-      # workflow), so a flag or toolchain change never reuses a tree built by
+      # inputs that change the objects (the build script, mise.toml,
+      # pyproject.toml and this workflow), so a flag or toolchain change never
+      # reuses a tree built by
       # another configuration; the restore-key fallback is salted the same
       # way. The policy and the size budget live in docs/dependency-updates.md.
       - name: Restore the Nuitka build cache
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             dist/waves.build
             ~/.cache/Nuitka
             ~/Library/Caches/Nuitka
             ~/AppData/Local/Nuitka/Nuitka/Cache
-          key: nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('Makefile', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-${{ hashFiles('poetry.lock') }}
+          key: nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('Makefile', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-
+            nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-
       - name: Build Waves for ${{matrix.TARGET}}
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         run: ${{matrix.CMD_BUILD}}
@@ -525,13 +519,13 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         # Tiny per-asset checksums collected by the sign job into one manifest
         # (the glob picks up the AppImage's sidecar on the linux legs).
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sha256-${{matrix.OS_ARCH}}
           path: ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}*.sha256
       - name: Upload Build Artifact (workflow_dispatch / test-build)
         if: ${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/test-build') && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}
           path: |
@@ -547,7 +541,7 @@ jobs:
         # unambiguous Release by tag and just appends its two files, instead
         # of racing to create it themselves.
         if: ${{ ((github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')) && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) }}
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
         with:
@@ -573,11 +567,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up the environment
-        uses: ./.github/actions/setup-poetry-env
+        uses: ./.github/actions/setup-env
       - name: Collect per-asset checksums
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: sha256-*
           merge-multiple: true
@@ -599,8 +593,7 @@ jobs:
           WAVES_SIGNING_KEY: ${{ secrets.WAVES_SIGNING_KEY }}
         run: |
           if [ -n "$WAVES_SIGNING_KEY" ]; then
-            source $VENV
-            poetry run python tools/sign_manifest.py SHA256SUMS SHA256SUMS.sig
+            uv run --no-sync python tools/sign_manifest.py SHA256SUMS SHA256SUMS.sig
           else
             echo "::error::WAVES_SIGNING_KEY is not set; a tagged release MUST be signed or the in-app updater (fail-closed) will refuse every update. Add the WAVES_SIGNING_KEY secret before tagging."
             exit 1
@@ -652,7 +645,7 @@ jobs:
             gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --notes-file RELEASE_NOTES.md
           fi
       - name: Publish manifest + signature
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
         with:
@@ -688,7 +681,7 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
     steps:
       - name: Collect per-asset checksums
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: sha256-*
           merge-multiple: true

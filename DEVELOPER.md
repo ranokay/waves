@@ -103,9 +103,9 @@ album_id)`, look the album up in `self._objs["album"]`, do the work on
 ## Testing and verification
 
 ```bash
-poetry run pytest                     # unit tests, incl. the QML guards
-poetry run python -m waves.waves_ui   # run the app from source
-make gui-waves                        # Nuitka build -> dist/waves.app
+mise run test                         # unit tests, incl. the QML guards
+mise run app                          # run the app from source
+mise run build                        # Nuitka build -> dist/waves.app
 ```
 
 ### Test groups
@@ -116,27 +116,29 @@ timing-sensitive under load. Counts and runtimes below are as of 2026-09-17
 (macOS arm64, offscreen Qt); the budget is the limit the group must stay
 within on this host.
 
-| Group                                                  | Command                                                                                                              |  Cases |                   Budget (measured) |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | -----: | ----------------------------------: |
-| fast (no Qt, ffmpeg, slow, integration or account)     | `pytest --doctest-modules -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests` | ~4,194 |                      < 1 min (37 s) |
-| quick QML (the heaviest boots skipped)                 | `pytest --doctest-modules -rs -q -m "qml and not slow and not integration and not account" --require-qml tests`      |    ~91 |                < 5 min (4 min 12 s) |
-| default (all but the live account tests)               | `pytest --doctest-modules -rs -m "not account" tests`                                                                | ~4,354 |               < 10 min (6 min 48 s) |
-| strict (the merge gate; default plus `--require-qml`)  | `pytest --doctest-modules -rs --require-qml -m "not account" tests`                                                  | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
-| ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips) | `pytest --doctest-modules -rs -q -m "ffmpeg and not account" tests`                                                  |    ~56 |                      < 1 min (11 s) |
-| live account (never in CI; needs credentials)          | `WAVES_ACCOUNT_TESTS=1 pytest -q -m account tests`                                                                   |      4 |                                 n/a |
+| Group                                                  | Command                                                                         |  Cases |                   Budget (measured) |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------- | -----: | ----------------------------------: |
+| fast (no Qt, ffmpeg, slow, integration or account)     | `mise run test-fast`                                                            | ~4,194 |                      < 1 min (37 s) |
+| quick QML (the heaviest boots skipped)                 | `mise run test-qml`                                                             |    ~91 |                < 5 min (4 min 12 s) |
+| default (all but the live account tests)               | `mise run test-default`                                                         | ~4,354 |               < 10 min (6 min 48 s) |
+| strict (the merge gate; default plus `--require-qml`)  | `mise run test-strict`                                                          | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
+| ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips) | `mise run test-ffmpeg`                                                          |    ~56 |                      < 1 min (11 s) |
+| live account (never in CI; needs credentials)          | `WAVES_ACCOUNT_TESTS=1 uv run --locked --all-extras pytest -q -m account tests` |      4 |                                 n/a |
 
 `--require-qml` turns a missing Qt into a failure instead of a silent skip of
 the whole QML half. The `slow` marker names the heaviest QML boots (each case
 at least 8 s) and always sits beside `qml`, so `qml and not slow` covers the
 GUI surface without them. `integration` tests (nested runners, process
 boundaries) have no quick group of their own; run them through strict.
-`make test-fast`, `make test-qml`, `make test-default`, `make test-strict`
-and `make test-ffmpeg` wrap the first five groups; the live account group has
-no wrapper and never runs in CI.
+`mise run test-fast`, `mise run test-qml`, `mise run test-default`,
+`mise run test-strict` and `mise run test-ffmpeg` wrap the first five groups;
+the live account group has no wrapper and never runs in CI. Every test and
+check task runs the command through `uv run --locked --all-extras`, so the
+lockfile is the environment and drift fails the run.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
-`pip uninstall tidaler` in the old venv, then re-run `poetry install` (or
-`pip install -e ".[gui]"`). A stale editable install keeps `import tidaler`
+`uv pip uninstall tidaler`, then `mise run install` (or
+`uv sync --all-extras`). A stale editable install keeps `import tidaler`
 resolving against dead code, and without the `waves` distribution installed
 the app treats the run as a dev environment and opens against the separate
 `Waves-dev` config folder, which looks like being signed out.
@@ -154,7 +156,7 @@ reason), and `tools/launch_probe.py` measures a real launch with Qt's own
 render-loop log, no Python on the measured path, and prints a verdict:
 
 ```bash
-poetry run python tools/launch_probe.py        # 12 s, gaps over 45 ms
+uv run python tools/launch_probe.py        # 12 s, gaps over 45 ms
 ```
 
 Run it twice (the first launch after a build is colder) before and after
