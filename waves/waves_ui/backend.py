@@ -184,11 +184,6 @@ from .bridge_surfaces import (
     _source_provider,
     _source_rows,
 )
-
-# Re-exported for the saved-shelf tests, which reach it through backend today.
-from .bridge_surfaces import (
-    _saved_shelf_sources as _saved_shelf_sources,
-)
 from .ffmpeg_manager import FfmpegCancelled, FfmpegManager
 from .library_proc import LibraryWorker
 from .updater import AppUpdater, UpdateCancelled

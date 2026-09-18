@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from support.provider_fakes import StubProvider, stub_bridge
 
 from waves.providers import Capability
-from waves.waves_ui import backend
+from waves.waves_ui import bridge_surfaces
 from waves.waves_ui.backend import WavesBridge
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -49,7 +49,7 @@ def _shelf_provider(provider_id, name, *, logged_in=True, capabilities=None):
 def test_a_lone_saved_shelf_source_carries_no_label():
     # One provider contributes: the pane's rows are that provider, so the
     # label stays "" and the pane renders exactly as it did (issue #221).
-    sources = backend._saved_shelf_sources(stub_bridge({"tidal": _shelf_provider("tidal", "TIDAL")}))
+    sources = bridge_surfaces._saved_shelf_sources(stub_bridge({"tidal": _shelf_provider("tidal", "TIDAL")}))
 
     assert sources == [{"id": "tidal", "name": "TIDAL", "label": ""}]
 
@@ -58,7 +58,7 @@ def test_a_second_saved_shelf_source_qualifies_every_label():
     # The paper test: a provider that is not TIDAL contributes a second saved
     # section from its descriptor and its session alone -- the labels become
     # source-qualified together, with no QML edit.
-    sources = backend._saved_shelf_sources(
+    sources = bridge_surfaces._saved_shelf_sources(
         stub_bridge(
             {
                 "tidal": _shelf_provider("tidal", "TIDAL"),
@@ -76,13 +76,13 @@ def test_a_provider_that_cannot_fill_shelves_is_not_a_source():
     # cannot fill saved shelves, so neither contributes a section.
     no_capability = _shelf_provider("apple", "Apple Music", capabilities=frozenset({Capability.SEARCH}))
     signed_out = _shelf_provider("tidal", "TIDAL", logged_in=False)
-    assert backend._saved_shelf_sources(stub_bridge({"tidal": signed_out, "apple": no_capability})) == []
+    assert bridge_surfaces._saved_shelf_sources(stub_bridge({"tidal": signed_out, "apple": no_capability})) == []
 
     # A tracked session answers from the bridge's flag (the one the login
     # flow and every catalog read move together), not the provider's.
     tracked = _shelf_provider("tidal", "TIDAL", logged_in=True)
-    assert backend._saved_shelf_sources(stub_bridge({"tidal": tracked}, tracked=frozenset({"tidal"}))) == []
-    sourced = backend._saved_shelf_sources(
+    assert bridge_surfaces._saved_shelf_sources(stub_bridge({"tidal": tracked}, tracked=frozenset({"tidal"}))) == []
+    sourced = bridge_surfaces._saved_shelf_sources(
         stub_bridge({"tidal": tracked}, logged_in=True, tracked=frozenset({"tidal"}))
     )
     assert [s["id"] for s in sourced] == ["tidal"]
@@ -93,7 +93,7 @@ def test_a_source_carries_the_categories_its_provider_can_fill():
     # always rendered them and with the strip's own capitalisation.
     tidal = StubProvider("tidal", "TIDAL", capabilities=frozenset(Capability), logged_in=True)
 
-    sourced = backend._my_music_sources(stub_bridge({"tidal": tidal}))
+    sourced = bridge_surfaces._my_music_sources(stub_bridge({"tidal": tidal}))
 
     assert [c["id"] for c in sourced[0]["categories"]] == _TIDAL_CATEGORIES
     assert [c["label"] for c in sourced[0]["categories"]][:3] == ["Home", "Albums", "Tracks"]
@@ -104,13 +104,13 @@ def test_the_categories_are_capability_driven():
     # no empty Mixes/Videos tab (ADR 0008). A provider that later declares
     # one of these grows its strip with no QML edit.
     fake = StubProvider("fake", "Fake Music", capabilities=frozenset({Capability.FAVORITES}), logged_in=True)
-    sourced = backend._my_music_sources(stub_bridge({"fake": fake}))
+    sourced = bridge_surfaces._my_music_sources(stub_bridge({"fake": fake}))
     assert [c["id"] for c in sourced[0]["categories"]] == ["home", "albums", "tracks", "artists"]
 
     videoed = StubProvider(
         "fake", "Fake Music", capabilities=frozenset({Capability.FAVORITES, Capability.VIDEOS}), logged_in=True
     )
-    assert [c["id"] for c in backend._my_music_sources(stub_bridge({"fake": videoed}))[0]["categories"]] == [
+    assert [c["id"] for c in bridge_surfaces._my_music_sources(stub_bridge({"fake": videoed}))[0]["categories"]] == [
         "home",
         "albums",
         "tracks",
@@ -121,7 +121,7 @@ def test_the_categories_are_capability_driven():
     # A provider with no FAVORITES is not a source at all: no shelves exist
     # for it to fill.
     browsing = StubProvider("fake", "Fake Music", capabilities=frozenset({Capability.BROWSE}), logged_in=True)
-    assert backend._my_music_sources(stub_bridge({"fake": browsing})) == []
+    assert bridge_surfaces._my_music_sources(stub_bridge({"fake": browsing})) == []
 
 
 def test_a_third_provider_adds_its_own_group_with_no_surface_edit():
@@ -131,7 +131,7 @@ def test_a_third_provider_adds_its_own_group_with_no_surface_edit():
     tidal = StubProvider("tidal", "TIDAL", capabilities=frozenset(Capability), logged_in=True)
     fake = StubProvider("fake", "Fake Music", capabilities=frozenset({Capability.FAVORITES}), logged_in=True)
 
-    sourced = backend._my_music_sources(stub_bridge({"tidal": tidal, "fake": fake}))
+    sourced = bridge_surfaces._my_music_sources(stub_bridge({"tidal": tidal, "fake": fake}))
 
     assert [s["id"] for s in sourced] == ["tidal", "fake"]
     assert [s["label"] for s in sourced] == ["Saved from TIDAL", "Saved from Fake Music"]
@@ -143,7 +143,7 @@ def test_the_signed_out_empty_state_names_the_provider_that_could_fill_it():
     # action, and the detail line listing exactly the shelves it would fill.
     tidal = StubProvider("tidal", "TIDAL", capabilities=frozenset(Capability), logged_in=False)
 
-    empty = backend._my_music_empty(stub_bridge({"tidal": tidal}))
+    empty = bridge_surfaces._my_music_empty(stub_bridge({"tidal": tidal}))
 
     assert empty["provider"] == "tidal" and empty["action"] == "signin"
     assert empty["message"] == "My Music is your TIDAL library"
@@ -159,7 +159,7 @@ def test_the_empty_state_follows_the_provider_and_its_categories():
         "fake", "Fake Music", capabilities=frozenset({Capability.FAVORITES, Capability.VIDEOS}), logged_in=False
     )
 
-    empty = backend._my_music_empty(stub_bridge({"fake": fake}))
+    empty = bridge_surfaces._my_music_empty(stub_bridge({"fake": fake}))
 
     assert empty["message"] == "My Music is your Fake Music library"
     assert empty["action_label"] == "Sign in to Fake Music"
@@ -169,7 +169,7 @@ def test_the_empty_state_follows_the_provider_and_its_categories():
 def test_a_signed_in_source_leaves_no_empty_state():
     tidal = _shelf_provider("tidal", "TIDAL", logged_in=True)
 
-    assert backend._my_music_empty(stub_bridge({"tidal": tidal})) == {}
+    assert bridge_surfaces._my_music_empty(stub_bridge({"tidal": tidal})) == {}
 
 
 def test_no_favourites_provider_means_no_empty_state():
@@ -180,8 +180,8 @@ def test_no_favourites_provider_means_no_empty_state():
     from waves.providers import StatusKind
 
     apple = StubProvider("apple", "Apple Music", capabilities=frozenset({Capability.SEARCH}))
-    assert backend._my_music_empty(stub_bridge({"apple": apple})) == {}
-    assert backend._my_music_empty(stub_bridge({})) == {}
+    assert bridge_surfaces._my_music_empty(stub_bridge({"apple": apple})) == {}
+    assert bridge_surfaces._my_music_empty(stub_bridge({})) == {}
     setup_only = StubProvider(
         "fake",
         "Fake Music",
@@ -189,7 +189,7 @@ def test_no_favourites_provider_means_no_empty_state():
         status_kind=StatusKind.SETUP,
         logged_in=False,
     )
-    assert backend._my_music_empty(stub_bridge({"fake": setup_only})) == {}
+    assert bridge_surfaces._my_music_empty(stub_bridge({"fake": setup_only})) == {}
 
 
 def test_the_pane_count_agrees_with_the_favourites_the_badges_read():
@@ -242,7 +242,7 @@ def test_the_pane_count_agrees_with_the_favourites_the_badges_read():
     rows: list = []
     offset, more = 0, True
     while more:
-        page, more = backend.WavesBridge._library_page(bridge, "tidal", "albums", offset, 3)
+        page, more = WavesBridge._library_page(bridge, "tidal", "albums", offset, 3)
         rows.extend(page)
         offset += 3
 
