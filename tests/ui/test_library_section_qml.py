@@ -197,7 +197,7 @@ def _row_badge_logo(list_name: str, index: int) -> str:
         f"  var row = findObject(root, {json.dumps(list_name)}).itemAtIndex({index});\n"
         "  if (!row) return '(no row)';\n"
         "  var b = findFirst(row, function (o) { return o.objectName === 'trackProviderBadge'; });\n"
-        "  return b ? String(b.logo) : '(no badge)';\n"
+        "  return b && b.descriptor ? String(b.descriptor.logo) : '(no badge)';\n"
     )
 
 
@@ -206,7 +206,7 @@ def _row_badge_provider(list_name: str, index: int) -> str:
         f"  var row = findObject(root, {json.dumps(list_name)}).itemAtIndex({index});\n"
         "  if (!row) return '(no row)';\n"
         "  var b = findFirst(row, function (o) { return o.objectName === 'trackProviderBadge'; });\n"
-        "  return b ? String(b.provider) : '(no badge)';\n"
+        "  return b && b.descriptor ? String(b.descriptor.id) : '(no badge)';\n"
     )
 
 

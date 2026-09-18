@@ -902,12 +902,10 @@ ApplicationWindow {
             waves.setWavesPref("search_provider_tidal_collapsed", tidalSearchGroupCollapsed)
         }
     }
-    // Provider badge: drill pages carry namespaced ids
-    // ("apple:…" vs bare TIDAL ids), so a header reads its provider off
-    // the id it already shows. Unknown ids read TIDAL, the historic shape.
-    function providerOfId(id) {
-        return ("" + (id || "")).indexOf("apple:") === 0 ? "apple" : "tidal"
-    }
+    // Provider identity never comes from parsing an id here: the bridge
+    // answers a descriptor for a media id (or a provider id) through
+    // waves.providerDescriptor, and every badge and group head renders it
+    // (issue #278).
     // A provider header only makes sense while the active type filter can
     // still show one of its rows. Apple offers no videos or mixes in this
     // slice, so those filters never show its header. `errorStands` keeps the
@@ -8503,20 +8501,21 @@ ApplicationWindow {
     // Logo sizes follow the Chooser provider segments (wide TIDAL mark,
     // square Apple mark).
     component ProviderBadge: Rectangle {
-        property string provider: "tidal"   // "tidal" | "apple"
-        // The descriptor's own mark for this provider, when the caller has one
-        // (the Library section's rows do, issue #222): a namespace the id
-        // fallbacks below never heard of still badges with ITS provider's
-        // logo, never another provider's.
-        property string logo: ""
-        readonly property bool isApple: provider === "apple"
+        id: pb
+        // The provider's descriptor, from the bridge (issue #278): the badge
+        // renders the mark it carries, so a third registered provider badges
+        // like the first two and no id prefix or asset path is parsed here.
+        // The mark fits one shared box; the descriptor's own header sizes stay
+        // for the section heads.
+        property var descriptor: null
+        readonly property string mark: pb.descriptor ? String(pb.descriptor.logo || "") : ""
+        visible: pb.mark !== ""
         width: 34; height: 24; radius: 7
         color: "#cc101318"; border.color: root.outline
         Image {
             anchors.centerIn: parent
-            source: parent.logo !== "" ? parent.logo
-                    : parent.isApple ? "assets/providers/apple-music.png" : "assets/providers/tidal.png"
-            width: parent.isApple ? 14 : 20; height: parent.isApple ? 14 : 13
+            source: pb.descriptor ? String(pb.descriptor.logo || "") : ""
+            width: 18; height: 14
             fillMode: Image.PreserveAspectFit; smooth: true; cache: true
         }
     }
@@ -10193,8 +10192,7 @@ ApplicationWindow {
                         // and the badge must not fall back to another
                         // provider's mark for it.
                         visible: trow.local && trow.providerLogo !== ""
-                        provider: trow.provider
-                        logo: trow.providerLogo
+                        descriptor: ({id: trow.provider, logo: trow.providerLogo})
                     }
                     QualPick {
                         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
@@ -15454,12 +15452,13 @@ ApplicationWindow {
                         // has landed, else the key the page was opened with,
                         // so the skeleton names its provider from the first
                         // frame instead of flashing TIDAL.
-                        readonly property string provider: {
+                        readonly property string mediaId: {
                             var id = hd ? ("" + (hd.id || "")) : ""
                             if (id === "" && root.browsePageKey.indexOf("item:") === 0)
                                 id = root.browsePageKey.split(":").slice(2).join(":")
-                            return root.providerOfId(id)
+                            return id
                         }
+                        readonly property var provider: waves.providerDescriptor(mediaId)
                         visible: hd !== null || skeleton
                         width: parent.width; height: visible ? 224 : 0
                         radius: 14; clip: true
@@ -15524,7 +15523,7 @@ ApplicationWindow {
                                     id: bihProviderBadge
                                     anchors.right: parent.right; anchors.top: parent.top
                                     anchors.rightMargin: 8; anchors.topMargin: 8
-                                    provider: browseItemHeader.provider
+                                    descriptor: browseItemHeader.provider
                                 }
                             }
                             Column {
@@ -15854,6 +15853,9 @@ ApplicationWindow {
 
                 Item {
                     id: tidalGroupHead
+                    // The head's name and mark come from the provider's own
+                    // descriptor (issue #278); nothing here names a provider.
+                    readonly property var provider: waves.providerDescriptor("tidal")
                     visible: root.providerGroupVisible(false)
                     width: parent.width; height: 42
                     Row {
@@ -15867,14 +15869,16 @@ ApplicationWindow {
                         }
                         Image {
                             anchors.verticalCenter: parent.verticalCenter
-                            source: "assets/providers/tidal.png"
-                            width: 22; height: 15
+                            source: tidalGroupHead.provider ? tidalGroupHead.provider.logo : ""
+                            width: tidalGroupHead.provider ? tidalGroupHead.provider.logo_header_width : 0
+                            height: tidalGroupHead.provider ? tidalGroupHead.provider.logo_header_height : 0
                             fillMode: Image.PreserveAspectFit
                             smooth: true; cache: true
                         }
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            textFormat: Text.PlainText; text: "TIDAL"
+                            textFormat: Text.PlainText
+                            text: tidalGroupHead.provider ? String(tidalGroupHead.provider.name).toUpperCase() : ""
                             color: tidalHeadMa.containsMouse ? root.textHi : root.accent
                             font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
                         }
@@ -16193,6 +16197,9 @@ ApplicationWindow {
 
                 Item {
                     id: appleGroupHead
+                    // The head's name and mark come from the provider's own
+                    // descriptor (issue #278); nothing here names a provider.
+                    readonly property var provider: waves.providerDescriptor("apple")
                     // A failed fetch has no rows, so the count-based gate would
                     // hide the very place the honest error belongs (issue #241
                     // / UI-05). `errorStands` keeps the head under the filters
@@ -16211,14 +16218,16 @@ ApplicationWindow {
                         }
                         Image {
                             anchors.verticalCenter: parent.verticalCenter
-                            source: "assets/providers/apple-music.png"
-                            width: 18; height: 18
+                            source: appleGroupHead.provider ? appleGroupHead.provider.logo : ""
+                            width: appleGroupHead.provider ? appleGroupHead.provider.logo_header_width : 0
+                            height: appleGroupHead.provider ? appleGroupHead.provider.logo_header_height : 0
                             fillMode: Image.PreserveAspectFit
                             smooth: true; cache: true
                         }
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            textFormat: Text.PlainText; text: "APPLE MUSIC"
+                            textFormat: Text.PlainText
+                            text: appleGroupHead.provider ? String(appleGroupHead.provider.name).toUpperCase() : ""
                             color: root.textHi; font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
                         }
                     }
@@ -16492,8 +16501,7 @@ ApplicationWindow {
                                 id: artistProviderBadge
                                 anchors.right: parent.right; anchors.top: parent.top
                                 anchors.rightMargin: 8; anchors.topMargin: 8
-                                provider: root.providerOfId(root.artistData.id || "")
-                                visible: (root.artistData.id || "") !== ""
+                                descriptor: waves.providerDescriptor(root.artistData.id || "")
                             }
                         }
                         // No idle Preview button on the artist's own page, but if a

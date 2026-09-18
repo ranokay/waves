@@ -82,6 +82,7 @@ def _bridge(providers=None, **settings_over):
         "chooserSupported",
         "_artist_download_supports",
         "artistDownloadSupported",
+        "providerDescriptor",
         "chooserDefaults",
         "saveChooserDefaults",
         "_chooser_ask_for",
@@ -314,6 +315,36 @@ def test_a_failing_capability_probe_hides_the_control():
     b = _bridge(providers={CTX_TIDAL: _metadata(TidalProvider), "apple": _RaisingCapabilities()})
 
     assert b.artistDownloadSupported("apple:artist-1") is False
+
+
+def test_provider_descriptor_answers_by_namespace_or_provider_id():
+    """Issue #278: every badge and group head renders the descriptor this
+    answers, so QML never parses an id prefix nor carries a provider asset
+    path. A bare legacy id reads as TIDAL's, a provider id matches exactly
+    (a head asking for its own provider), an id no registered provider claims
+    answers None (never another provider's mark), and a descriptor that
+    cannot be read contributes nothing."""
+    b = _bridge()
+
+    apple = b.providerDescriptor("apple:artist-1")
+    assert apple is not None and apple["id"] == "apple" and apple["logo"].endswith("apple-music.png")
+    assert b.providerDescriptor("artist-1")["id"] == "tidal"
+    assert b.providerDescriptor("apple")["id"] == "apple"
+    assert b.providerDescriptor("tidal")["id"] == "tidal"
+    assert b.providerDescriptor("unclaimed:artist-1") is None
+    assert b.providerDescriptor("") is None
+
+    qobuz = _metadata(_QOBUZ, descriptor=_qobuz_descriptor)
+    third = _bridge(providers={CTX_TIDAL: _metadata(TidalProvider), "qobuz": qobuz})
+    assert third.providerDescriptor("qobuz:album-1")["logo"].endswith("qobuz.png")
+
+    def _broken():
+        raise RuntimeError("no descriptor")
+
+    broken = _bridge(
+        providers={CTX_TIDAL: _metadata(TidalProvider), "broken": _metadata(BareProvider, descriptor=_broken)}
+    )
+    assert broken.providerDescriptor("broken:artist-1") is None
 
 
 def test_chooser_segment_tiles_come_from_the_enabled_providers_descriptors():

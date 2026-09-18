@@ -225,6 +225,14 @@ declares `Capability.ARTIST_DOWNLOAD`, so an Apple artist page renders no
 control for the verb its catalog cannot answer (the click is refused with
 honest words either way).
 
+`providerDescriptor(value)` is the identity answer every badge and group head
+renders (issue #278): `{id, name, logo, logo_header_width, logo_header_height}`
+for a media id (resolved by its namespace: a bare legacy id reads as TIDAL's)
+or a provider id matched exactly (a head asking for its own provider), and
+`None` for an id no registered provider claims -- an unknown namespace wears no
+mark, never another provider's. QML carries no provider asset path and never
+parses an id prefix to pick one.
+
 ## Local library presence (the "in your library" badge)
 
 The scan family lives in `bridge_library.py` (`LibraryMixin`, mixed into

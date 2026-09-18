@@ -4047,6 +4047,25 @@ def _library_file_row(row: dict, logos: dict[str, str] | None = None) -> dict:
     }
 
 
+def _provider_descriptor_dict(descriptor) -> dict:
+    """The badge/head fields of a provider descriptor (issue #278).
+
+    One shape for every surface that renders a provider's identity: the badge
+    (logo), the section heads (name plus the header tile's mark sizes) and the
+    tests. Nothing here names a provider.
+    """
+    return {
+        # getattr, not attribute access: a third provider's descriptor may
+        # carry only the fields its own surfaces need, and a badge must still
+        # render its mark.
+        "id": str(getattr(descriptor, "id", "") or ""),
+        "name": str(getattr(descriptor, "name", "") or ""),
+        "logo": str(getattr(descriptor, "logo", "") or ""),
+        "logo_header_width": int(getattr(descriptor, "logo_header_width", 0) or 0),
+        "logo_header_height": int(getattr(descriptor, "logo_header_height", 0) or 0),
+    }
+
+
 def _provider_logos(bridge) -> dict[str, str]:
     """Every registered provider's mark by id, from its own descriptor.
 
@@ -10285,6 +10304,32 @@ class WavesBridge(LibraryMixin, QObject):
         if provider is None:
             return False
         return Capability.ARTIST_DOWNLOAD in provider.capabilities
+
+    @Slot(str, result="QVariant")
+    def providerDescriptor(self, value: str) -> dict | None:
+        """The descriptor a badge or a section head renders for an id.
+
+        ``value`` is either a media id -- resolved by its namespace, the
+        download gate's own rule: a bare legacy id reads as TIDAL's, an id no
+        registered provider claims names nothing -- or a registered provider id
+        matched exactly (a group head asking for its own provider). QML renders
+        id/name/logo and the header tile's sizes from this and never parses an
+        id prefix nor carries a provider asset path (issue #278); None means
+        render no mark, never another provider's.
+        """
+        wanted = str(value or "").strip()
+        if not wanted:
+            return None
+        for candidate in (wanted, namespaced_id(wanted).partition(":")[0]):
+            for provider in _provider_registry(self):
+                try:
+                    descriptor = provider.descriptor()
+                except Exception:
+                    logger.debug("Could not read a provider descriptor", exc_info=True)
+                    continue
+                if str(descriptor.id) == candidate:
+                    return _provider_descriptor_dict(descriptor)
+        return None
 
     @Slot(str, str, result="QVariant")
     def chooserDefaults(self, media_id: str, kind: str = "") -> dict:
