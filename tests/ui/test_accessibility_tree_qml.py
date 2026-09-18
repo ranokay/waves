@@ -75,7 +75,8 @@ _CHOOSER_ROWS_BODY = """
 
 # One stop of a real Tab walk (issue #295): the stop's tree path (for cycle
 # detection), what it is, and the effective flags Qt's chain filters on. A
-# stop inside the hidden Settings page is a failure, whatever its flags say.
+# stop inside a closed surface (the Settings page, the Chooser popover, the
+# queue drawer) is a failure, whatever its flags say.
 _TAB_STOP_BODY = """
     function pathOf(o, target, path, depth) {
         if (!o || depth > 200) return null;
@@ -101,12 +102,16 @@ _TAB_STOP_BODY = """
         while (o) { if (o === needle) return true; o = o.parent; }
         return false;
     }
+    var chooser = findObject(root, "chooserPopover");
     return JSON.stringify({ path: pathOf(root, it, "root", 0),
                             object: "" + (it.objectName || ""),
+                            label: "" + (it.label || ""),
                             type: "" + it,
                             visible: it.visible !== false,
                             enabled: it.enabled !== false,
-                            inSettings: inTree(it, settingsPage) });
+                            inSettings: inTree(it, settingsPage),
+                            inChooser: chooser ? inTree(it, chooser.contentItem) : false,
+                            inDrawer: queueDrawer.contentItem ? inTree(it, queueDrawer.contentItem) : false });
 """
 
 
@@ -170,8 +175,8 @@ def test_primary_controls_carry_accessible_names_and_focus():
 
 
 def test_the_handlers_behind_the_keyboard_paths_exist():
-    """The scenario proves the metadata; this pins the handlers it cannot
-    drive (the harness sends no key events). Every press action has its own
+    """The scenario proves the metadata and drives Tab; this pins the
+    activation handlers it does not drive. Every press action has its own
     Return/Enter/Space handler, each accepts the event and ignores
     auto-repeat, and the two extra keys (Down opens the chooser, Escape
     clears the search box, Delete cancels a queued row) are present."""
@@ -245,12 +250,13 @@ def _show_search_results(q, settle, bridge) -> None:
     settle(400)
 
 
-def _tab_cycle(q, settle, root, *, limit: int = 500) -> list[dict]:
-    """One cycle of real Tab presses from the current focus (issue #295).
+def _tab_cycle(q, settle, root, *, limit: int = 500) -> tuple[list[dict], bool]:
+    """Real Tab presses from the current focus (issue #295).
 
-    Returns every stop until the chain returns to its first stop or ``limit``
-    presses have been sent. A stop whose ``path`` is None means the press left
-    nothing focused, which the caller reads as a broken chain.
+    Returns every stop and whether the chain came back to its first stop.
+    A stop whose ``path`` is None is one the walk could not locate in the tree
+    (the focused control or the harness is off), which the caller reads as a
+    broken chain; it ends the walk.
     """
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
@@ -262,11 +268,22 @@ def _tab_cycle(q, settle, root, *, limit: int = 500) -> list[dict]:
         stop = json.loads(q(scene_js(_TAB_STOP_BODY)))
         if stop["path"] is None:
             stops.append(stop)
-            break
+            return stops, False
         if stops and stop["path"] == stops[0]["path"]:
-            break
+            return stops, True
         stops.append(stop)
-    return stops
+    return stops, False
+
+
+# The closed surfaces a stop must never belong to: all three are closed at
+# every walk in the scenario, so any stop inside one is a failure even when
+# its own `visible` read is true (the #284 popup case).
+_CLOSED_SURFACES = ("inSettings", "inChooser", "inDrawer")
+
+
+def _offscreen(stop: dict) -> bool:
+    """Whether a keyboard user must never reach this stop."""
+    return not stop["visible"] or not stop["enabled"] or any(stop[key] for key in _CLOSED_SURFACES)
 
 
 def _run_scenario() -> int:
@@ -315,26 +332,28 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     # the Chooser's rows did before #284. Qt's chain filters on effective
     # visibility and enabled, so a keyboard user never reaches them. One full
     # cycle of real Tab presses proves it: every stop must be a control that
-    # is on screen, and the closed Settings page owns none of them.
+    # is on screen, and none of the closed surfaces may own a stop.
     root.requestActivate()
     settle(100)
-    stops = _tab_cycle(q, settle, root)
-    if not stops or stops[0]["path"] is None:
-        problems.append("a Tab press left nothing focused")
+    stops, cycled = _tab_cycle(q, settle, root)
+    if any(s["path"] is None for s in stops):
+        problems.append("the Tab walk lost the focused control")
+    elif not cycled:
+        problems.append(f"the Tab walk made {len(stops)} stops without returning to its first")
     else:
-        offscreen = [s for s in stops if not s["visible"] or not s["enabled"] or s["inSettings"]]
+        offscreen = [s for s in stops if _offscreen(s)]
         if offscreen:
             problems.append(f"Tab reaches a control that is not on screen: {offscreen[:3]}")
-        if len(stops) < 4:
+        if len(stops) < 5:
             labels = [s["object"] or s["type"] for s in stops]
             problems.append(f"the Tab walk stalled after {len(stops)} stops: {labels}")
-        objects = {s["object"] for s in stops}
-        if "queueBtn" not in objects or not any(s["type"].startswith("NavTab") for s in stops):
-            problems.append(f"the Tab walk missed the top bar's controls: {sorted(objects)}")
+        if "queueBtn" not in {s["object"] for s in stops} or not any(s["label"] == "Settings" for s in stops):
+            problems.append(f"the Tab walk missed the top bar's controls: {[s['object'] or s['type'] for s in stops]}")
 
         # Two-sided proof for the Settings page's fields: none of them is
         # reachable while the page is closed (above), and they are once the
-        # page is open. The page's programmatic close restores the surface.
+        # page is open. The page's programmatic close restores the surface,
+        # and the walk after it must lose the fields again.
         if bool(q("root.settingsOpen")):
             problems.append("the Tab walk ran with the Settings page open")
         else:
@@ -348,13 +367,20 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
             if not opened_settings or not bool(q("root.settingsOpen")):
                 problems.append("the Settings tab did not open the Settings page")
             else:
-                page_stops = _tab_cycle(q, settle, root, limit=80)
-                if not any(s.get("inSettings") for s in page_stops):
+                page_stops, _ = _tab_cycle(q, settle, root, limit=80)
+                if not any(s["inSettings"] for s in page_stops):
                     problems.append("the Settings page's fields are not in the tab order while the page is open")
                 if any(not s["visible"] or not s["enabled"] for s in page_stops):
                     problems.append(f"Tab reached a hidden control on the open Settings page: {page_stops[:3]}")
                 q("settingsPage.closed()")
                 settle(250)
+                closed_stops, _ = _tab_cycle(q, settle, root, limit=80)
+                if any(s["inSettings"] for s in closed_stops):
+                    problems.append("the closed Settings page kept a tab stop")
+                if any(_offscreen(s) for s in closed_stops):
+                    problems.append(
+                        f"Tab reaches a control that is not on screen after closing Settings: {closed_stops[:3]}"
+                    )
 
     # --- The Chooser (issue #284): its rows are named, tab-reachable controls,
     # and a keyboard user's picks reach the queue through the shared paths.
@@ -501,6 +527,30 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     """))))
     if hidden:
         problems.append(f"controls inside the closed Chooser keep a tab stop: {hidden}")
+
+    # The drawer and the popover have now been built and closed; a real Tab
+    # walk from here must not land inside either, whatever their rows' flags
+    # say (issue #295's closed-surface invariant for the popup surfaces that
+    # only exist after a first open). The guard keeps a surface that went
+    # missing from passing the walk vacuously.
+    settle(100)
+    built = json.loads(q(scene_js("""
+        var pop = findObject(root, "chooserPopover");
+        return JSON.stringify({ pop: pop !== null,
+                                drawer: queueDrawer.contentItem !== null,
+                                popOpen: pop ? pop.visible : false,
+                                drawerOpen: queueDrawer.visible });
+    """)))
+    if not built["pop"] or not built["drawer"] or built["popOpen"] or built["drawerOpen"]:
+        problems.append(f"the closed surfaces are not ready for the Tab walk: {built}")
+    else:
+        final_stops, _ = _tab_cycle(q, settle, root, limit=80)
+        if any(s["path"] is None for s in final_stops):
+            problems.append("the closing Tab walk lost the focused control")
+        else:
+            stray = [s for s in final_stops if _offscreen(s)]
+            if stray:
+                problems.append(f"Tab reaches a control behind a closed surface: {stray[:3]}")
 
     if problems:
         for line in problems:
