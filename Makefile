@@ -47,12 +47,13 @@ WAVES_NUITKA_FLAGS += --nofollow-import-to=yt_dlp.extractor.lazy_extractors
 # through ctypes (load_pycryptodome_raw_lib), which Nuitka's import following
 # cannot see. --include-package pulls only the package's Python submodules, so
 # without these explicit includes the bundle ships an empty Crypto/Cipher and
-# every Apple cookies-tier download dies at the FairPlay AES step ("Cannot
-# load native module 'Crypto.Cipher._raw_aes'", issue #304; the follow-up was
-# 'Crypto.Hash._SHA1'). The list is every native module of the pinned
-# PyCryptodome; the packaging tests fail when an installed module is missing
-# from it, the bundle trim leaves them alone, and tools/inspect_bundle.py
-# fails a bundle that dropped one of the download-path modules.
+# Apple downloads die at the first native load ("Cannot load native module
+# 'Crypto.Cipher._raw_aes'", then 'Crypto.Hash._SHA1', issue #304). The list
+# is the native set of the pinned PyCryptodome on the reference platform; the
+# packaging tests fail on a stale name and require every signing/download
+# module to be listed (x86_64-only AES-NI/CLMUL extras are copied through
+# Nuitka's implicit-import table), and tools/inspect_bundle.py fails a bundle
+# that dropped one of the required modules.
 WAVES_CRYPTO_NATIVE = \
 	Crypto.Cipher._ARC4 Crypto.Cipher._Salsa20 Crypto.Cipher._chacha20 \
 	Crypto.Cipher._pkcs1_decode Crypto.Cipher._raw_aes \

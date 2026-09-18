@@ -9,6 +9,7 @@ module from a cold runner.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import shutil
@@ -20,6 +21,15 @@ from support.paths import REPO_ROOT
 
 DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-or-test-build.yml"
+
+
+def _inspector_module():
+    """The bundle inspector as a module: its required-native list is what the
+    build's include list is checked against, so the two cannot drift apart."""
+    spec = importlib.util.spec_from_file_location("inspect_bundle", REPO_ROOT / "tools" / "inspect_bundle.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _entry(cfg: dict, ecosystem: str) -> dict:
@@ -168,21 +178,11 @@ def test_the_build_includes_the_pycryptodome_native_modules():
         if path.suffix in (".so", ".pyd")
     }
     assert listed <= installed, f"the include list names modules this platform lacks: {sorted(listed - installed)}"
-    needed = {
-        "Crypto.Cipher._raw_aes",
-        "Crypto.Cipher._raw_cbc",
-        "Crypto.Cipher._raw_ctr",
-        "Crypto.Cipher._raw_ecb",
-        "Crypto.Hash._SHA1",
-        "Crypto.Hash._SHA512",
-        "Crypto.Hash._ghash_portable",
-        "Crypto.Hash._keccak",
-        "Crypto.Math._modexp",
-        "Crypto.PublicKey._ed25519",
-        "Crypto.Util._cpuid_c",
-        "Crypto.Util._strxor",
-    }
-    assert needed <= listed, f"the include list dropped: {sorted(needed - listed)}"
+    needed = {name for name, _kind in _inspector_module()._REQUIRED_NATIVE}
+    missing = [
+        name for name in sorted(needed) if not re.search(rf"--include-module=\S+\.{re.escape(name)}(\s|$)", command)
+    ]
+    assert missing == [], f"the include list dropped: {missing}"
 
 
 def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):

@@ -30,12 +30,12 @@ def _fake(*, rc: int = 0, stdout: str = "", stderr: str = "") -> SimpleNamespace
     return SimpleNamespace(returncode=rc, stdout=stdout, stderr=stderr)
 
 
-def _bundle(tmp_path, names: tuple[str, ...], *, crypto: bool = True):
+def _bundle(tmp_path, names: tuple[str, ...], *, with_natives: bool = True):
     root = tmp_path / "waves.app"
     (root / "Contents" / "MacOS").mkdir(parents=True)
     (root / "Contents" / "MacOS" / "waves").write_bytes(b"\x00")
-    if crypto:
-        for module in ("_raw_aes", "_raw_cbc", "_SHA1"):
+    if with_natives:
+        for module, _kind in inspect_bundle_tool._REQUIRED_NATIVE:
             path = root / "Contents" / "MacOS" / "Crypto" / "Cipher" / f"{module}.abi3.so"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"\x00")
@@ -187,32 +187,42 @@ def test_a_missing_codesign_fails_closed(tmp_path):
 
 
 def test_a_missing_pycryptodome_native_module_fails_the_inspection(tmp_path):
-    """The runtime loads the AES modules by name through ctypes, so a size trim
-    can delete them silently and every Apple cookies-tier download then dies at
-    the FairPlay AES step (issue #304)."""
-    bundle = _bundle(tmp_path, (), crypto=False)
+    """The runtime loads these by name through ctypes, so a build or a trim can
+    drop them silently and the Apple download path then dies at the first
+    native load (issue #304)."""
+    bundle = _bundle(tmp_path, (), with_natives=False)
 
     report = inspect_bundle_tool.inspect_bundle(bundle, verify_signature=False)
 
-    assert report["missing"] == [
-        "PyCryptodome's AES native module (Crypto.Cipher._raw_aes)",
-        "PyCryptodome's CBC native module (Crypto.Cipher._raw_cbc)",
-        "PyCryptodome's SHA-1 native module (Crypto.Hash._SHA1)",
-    ]
+    assert report["missing"] == [kind for _name, kind in inspect_bundle_tool._REQUIRED_NATIVE]
+    assert report["ok"] is False
+
+
+def test_a_native_module_outside_crypto_does_not_satisfy_the_guard(tmp_path):
+    """The guard looks inside the bundle's Crypto package; a same-named file
+    anywhere else must not pass it."""
+    bundle = _bundle(tmp_path, ("_raw_aes.so",), with_natives=False)
+
+    report = inspect_bundle_tool.inspect_bundle(bundle, verify_signature=False)
+
+    assert report["missing"] == [kind for _name, kind in inspect_bundle_tool._REQUIRED_NATIVE]
     assert report["ok"] is False
 
 
 def test_every_platform_spelling_of_the_native_modules_is_accepted(tmp_path):
-    for index, name in enumerate(("_raw_aes.abi3.so", "_raw_aes.cpython-313-darwin.so", "_raw_aes.pyd")):
-        bundle = _bundle(tmp_path / str(index), (), crypto=False)
-        for module in ("_raw_aes", "_raw_cbc", "_SHA1"):
-            path = bundle / "Contents" / "MacOS" / "Crypto" / "Cipher" / name.replace("_raw_aes", module)
+    """The same module file is `_raw_aes.abi3.so`, `_raw_aes.cpython-…so` or
+    `_raw_aes.pyd` depending on OS and packaging; all spellings satisfy the
+    guard."""
+    for index, suffix in enumerate((".abi3.so", ".cpython-313-darwin.so", ".pyd")):
+        bundle = _bundle(tmp_path / str(index), (), with_natives=False)
+        for module, _kind in inspect_bundle_tool._REQUIRED_NATIVE:
+            path = bundle / "Contents" / "MacOS" / "Crypto" / "Cipher" / f"{module}{suffix}"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"\x00")
 
         report = inspect_bundle_tool.inspect_bundle(bundle, verify_signature=False)
 
-        assert report["missing"] == [], name
+        assert report["missing"] == [], suffix
         assert report["ok"] is True
 
 

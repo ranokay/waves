@@ -60,15 +60,24 @@ _EMBEDDED_MARKERS = (
     (re.compile(r"^yt_dlp(\.|$)"), "yt-dlp"),
 )
 # Native modules the bundle must carry: loaded by name at runtime (ctypes), so
-# a build or a trim can drop them silently (the #304 case). The Apple HLS
-# download path loads these three in turn (AES-CBC segment decrypt plus SHA-1);
-# the signing path's Ed25519 modules are checked by the updater's own tests.
-# The name-only match covers every platform's extension spelling
-# (_raw_aes.abi3.so, _raw_aes.pyd, ...).
+# a build or a trim can drop them silently (the #304 case). The names are the
+# modules the signing surface (waves_ui/signing.py) and the Apple HLS download
+# path load; extensions differ per OS, so only the basename up to the first
+# dot is matched (_raw_aes.abi3.so, _raw_aes.pyd, ...), and only under a
+# Crypto/ directory.
 _REQUIRED_NATIVE = (
-    (re.compile(r"^_raw_aes(\.|$)"), "PyCryptodome's AES native module (Crypto.Cipher._raw_aes)"),
-    (re.compile(r"^_raw_cbc(\.|$)"), "PyCryptodome's CBC native module (Crypto.Cipher._raw_cbc)"),
-    (re.compile(r"^_SHA1(\.|$)"), "PyCryptodome's SHA-1 native module (Crypto.Hash._SHA1)"),
+    ("_raw_aes", "PyCryptodome's AES native module (Crypto.Cipher._raw_aes)"),
+    ("_raw_cbc", "PyCryptodome's CBC native module (Crypto.Cipher._raw_cbc)"),
+    ("_raw_ctr", "PyCryptodome's CTR native module (Crypto.Cipher._raw_ctr)"),
+    ("_raw_ecb", "PyCryptodome's ECB native module (Crypto.Cipher._raw_ecb)"),
+    ("_ghash_portable", "PyCryptodome's GCM hash native module (Crypto.Hash._ghash_portable)"),
+    ("_SHA1", "PyCryptodome's SHA-1 native module (Crypto.Hash._SHA1)"),
+    ("_SHA512", "PyCryptodome's SHA-512 native module (Crypto.Hash._SHA512)"),
+    ("_keccak", "PyCryptodome's Keccak native module (Crypto.Hash._keccak)"),
+    ("_ed25519", "PyCryptodome's Ed25519 native module (Crypto.PublicKey._ed25519)"),
+    ("_modexp", "PyCryptodome's modexp native module (Crypto.Math._modexp)"),
+    ("_strxor", "PyCryptodome's strxor native module (Crypto.Util._strxor)"),
+    ("_cpuid_c", "PyCryptodome's cpuid native module (Crypto.Util._cpuid_c)"),
 )
 
 
@@ -149,7 +158,6 @@ def inspect_bundle(
     runner = runner or _default_runner
     target_platform = platform or sys.platform
     entries = sorted(path.rglob("*"))
-    names = [entry.name for entry in entries]
     forbidden: list[dict] = []
     clients: list[str] = []
     for entry in entries:
@@ -164,7 +172,15 @@ def inspect_bundle(
                 if pattern.match(name):
                     clients.append(f"{client}: {rel}")
                     break
-    missing = [kind for pattern, kind in _REQUIRED_NATIVE if not any(pattern.match(name) for name in names)]
+    missing = [
+        kind
+        for name, kind in _REQUIRED_NATIVE
+        if not any(
+            entry.name == name or entry.name.startswith(f"{name}.")
+            for entry in entries
+            if "Crypto" in entry.relative_to(path).parts
+        )
+    ]
     seen = {item.split(":", 1)[0] for item in clients}
     clients.extend(item for item in _embedded_clients(_scan_targets(path), runner) if item.split(":", 1)[0] not in seen)
     signature = (
