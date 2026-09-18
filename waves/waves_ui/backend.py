@@ -83,7 +83,7 @@ from waves.helper.tidal import (
     name_builder_title,
     quality_audio_highest,
 )
-from waves.ids import namespaced_id
+from waves.ids import provider_of_id
 from waves.library_index import (
     FILES_VIEWS,
     POLL_GAUGE,
@@ -4028,7 +4028,7 @@ def _library_file_row(row: dict, logos: dict[str, str] | None = None) -> dict:
     """
     item_id = str(row.get("item_id") or "")
     length = int(row.get("length", 0) or 0)
-    provider = namespaced_id(item_id).partition(":")[0] if item_id else ""
+    provider = provider_of_id(item_id)
     return {
         "id": item_id,
         "item_id": item_id,
@@ -4050,9 +4050,11 @@ def _library_file_row(row: dict, logos: dict[str, str] | None = None) -> dict:
 def _provider_descriptor_dict(descriptor) -> dict:
     """The badge/head fields of a provider descriptor (issue #278).
 
-    One shape for every surface that renders a provider's identity: the badge
-    (logo), the section heads (name plus the header tile's mark sizes) and the
-    tests. Nothing here names a provider.
+    One shape for the surfaces that ask the bridge: a badge renders the logo,
+    a section head the name and the header tile's mark sizes, and the tests
+    read all of it. The library's bulk rows carry the same fields instead (see
+    ``_library_file_row``), so a badge there costs no per-row crossing. Nothing
+    here names a provider.
     """
     return {
         # getattr, not attribute access: a third provider's descriptor may
@@ -4061,8 +4063,10 @@ def _provider_descriptor_dict(descriptor) -> dict:
         "id": str(getattr(descriptor, "id", "") or ""),
         "name": str(getattr(descriptor, "name", "") or ""),
         "logo": str(getattr(descriptor, "logo", "") or ""),
-        "logo_header_width": int(getattr(descriptor, "logo_header_width", 0) or 0),
-        "logo_header_height": int(getattr(descriptor, "logo_header_height", 0) or 0),
+        # The dataclass's own defaults, not zero: a partial descriptor still
+        # renders a mark, never a zero-size one.
+        "logo_header_width": int(getattr(descriptor, "logo_header_width", 14) or 14),
+        "logo_header_height": int(getattr(descriptor, "logo_header_height", 14) or 14),
     }
 
 
@@ -10309,28 +10313,36 @@ class WavesBridge(LibraryMixin, QObject):
     def providerDescriptor(self, value: str) -> dict | None:
         """The descriptor a badge or a section head renders for an id.
 
-        ``value`` is either a media id -- resolved by its namespace, the
-        download gate's own rule: a bare legacy id reads as TIDAL's, an id no
-        registered provider claims names nothing -- or a registered provider id
-        matched exactly (a group head asking for its own provider). QML renders
-        id/name/logo and the header tile's sizes from this and never parses an
-        id prefix nor carries a provider asset path (issue #278); None means
-        render no mark, never another provider's.
+        ``value`` is either a media id -- resolved by its namespace
+        (``waves.ids.provider_of_id``: a bare legacy id reads as TIDAL's) -- or
+        a registered provider id matched exactly (a group head asking for its
+        own provider). Only an id a registered provider answers is resolved:
+        None means render no mark, never another provider's (issue #222's rule,
+        and the request that keeps a badge honest). QML renders id/name/logo and
+        the header tile's sizes from this and never parses an id prefix nor
+        carries a provider asset path (issue #278). The library's bulk rows
+        carry the same descriptor's fields on the row instead, so a badge there
+        costs no per-row crossing.
         """
         wanted = str(value or "").strip()
         if not wanted:
             return None
-        for candidate in (wanted, namespaced_id(wanted).partition(":")[0]):
-            for provider in _provider_registry(self):
-                try:
-                    descriptor = provider.descriptor()
-                    if str(getattr(descriptor, "id", "") or "") != candidate:
-                        continue
-                except Exception:
-                    logger.debug("Could not read a provider descriptor", exc_info=True)
-                    continue
-                return _provider_descriptor_dict(descriptor)
-        return None
+        providers = getattr(self, "providers", None) or {}
+        provider = providers.get(wanted)
+        if provider is None:
+            provider = providers.get(provider_of_id(wanted))
+        if provider is None:
+            return None
+        try:
+            descriptor = provider.descriptor()
+        except Exception:
+            # A descriptor that cannot be read contributes nothing: the mark
+            # is decoration, the row is not.
+            logger.debug("Could not read a provider descriptor", exc_info=True)
+            return None
+        if descriptor is None:
+            return None  # a provider answering no descriptor wears no mark either
+        return _provider_descriptor_dict(descriptor)
 
     @Slot(str, str, result="QVariant")
     def chooserDefaults(self, media_id: str, kind: str = "") -> dict:

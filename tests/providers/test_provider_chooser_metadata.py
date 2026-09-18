@@ -336,7 +336,11 @@ def test_provider_descriptor_answers_by_namespace_or_provider_id():
 
     qobuz = _metadata(_QOBUZ, descriptor=_qobuz_descriptor)
     third = _bridge(providers={CTX_TIDAL: _metadata(TidalProvider), "qobuz": qobuz})
-    assert third.providerDescriptor("qobuz:album-1")["logo"].endswith("qobuz.png")
+    mark = third.providerDescriptor("qobuz:album-1")
+    assert mark["logo"].endswith("qobuz.png")
+    # A descriptor that omits the header sizes (the real dataclass always has
+    # them) still renders a mark at the defaults, never a zero-size one.
+    assert (mark["logo_header_width"], mark["logo_header_height"]) == (14, 14)
 
     def _broken():
         raise RuntimeError("no descriptor")

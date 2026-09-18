@@ -8498,8 +8498,8 @@ ApplicationWindow {
 
     // Provider badge: the official logo chip overlaid top-right
     // of drill header artwork, so a page names its provider at a glance.
-    // Logo sizes follow the Chooser provider segments (wide TIDAL mark,
-    // square Apple mark).
+    // The badge is a fixed chip and every mark fits one box; only the
+    // descriptor the bridge answers chooses which mark (issue #278).
     component ProviderBadge: Rectangle {
         id: pb
         // The provider's descriptor, from the bridge (issue #278): the badge

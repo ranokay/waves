@@ -15,6 +15,21 @@ existing query and every existing file answered.
 DEFAULT_PROVIDER = "tidal"
 
 
+def provider_of_id(value) -> str:
+    """The provider namespace a media id carries, or "" when it carries none.
+
+    The namespace spelling's own reader, built on ``namespaced_id``'s rule: a
+    bare legacy id reads as the default provider, an id that already carries a
+    namespace passes through, and an empty value answers "". A caller that must
+    not guess -- a badge renders no mark for a namespace nobody claimed --
+    checks the provider registry on top of this.
+    """
+    text = str(value or "")
+    if not text:
+        return ""
+    return namespaced_id(text).partition(":")[0]
+
+
 def namespaced_id(value) -> str:
     """An id in the namespaced spelling; a bare value reads as tidal.
 
