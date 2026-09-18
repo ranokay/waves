@@ -3712,11 +3712,15 @@ ApplicationWindow {
                 visible: false
                 // The row's own decode flag (see the pool comment above): the
                 // hover scenario polls it to know the pool is actually warm.
-                // The index identity is re-read because a load that outlives
-                // an eviction shift must not mark another row ready.
+                // The row is re-read because a load that outlives an eviction
+                // shift must not mark another row ready; `w` is half of the
+                // pool key (a url is deliberately warmed at two widths), so
+                // the identity is the whole key, not the url alone.
                 onStatusChanged: if (status === Image.Ready) {
                     var i = index
-                    if (i >= 0 && i < warmArtModel.count && warmArtModel.get(i).u === ("" + source))
+                    if (i >= 0 && i < warmArtModel.count
+                            && warmArtModel.get(i).u === ("" + source)
+                            && warmArtModel.get(i).w === sourceSize.width)
                         warmArtModel.setProperty(i, "ready", true)
                 }
             }

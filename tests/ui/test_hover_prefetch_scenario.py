@@ -316,28 +316,29 @@ def _run_scenario() -> int:
 
     # The card's cover and the page's covers are in the warm pool at the sizes
     # the page will ask for (the hero Art decodes at 360, its backdrop at 480,
-    # the discs at 68). Listed is not warm: wait (bounded) for the pool's own
-    # Images to decode each row, so the click below tests the prefetch rather
-    # than racing the decoder. A row that never decodes fails here.
-    def pool_row(url: str, width: int) -> int:
-        for i in range(int(q("warmArtModel.count"))):
-            if q(f"warmArtModel.get({i}).u") == url and int(q(f"warmArtModel.get({i}).w")) == width:
-                return i
-        return -1
-
-    def pool_ready(url: str, width: int) -> bool:
-        i = pool_row(url, width)
-        return i >= 0 and q(f"warmArtModel.get({i}).ready") is True
-
-    def pool_dump() -> list:
+    # the discs at root.discDecode). Listed is not warm: wait (bounded) for the
+    # pool's own Images to decode each row, so the click below tests the
+    # prefetch rather than racing the decoder. A row that never decodes fails
+    # here, and the sizes are the page's own facts, not copies.
+    def pool_rows() -> list:
         return [
-            (q(f"warmArtModel.get({i}).u"), q(f"warmArtModel.get({i}).w"), q(f"warmArtModel.get({i}).ready"))
+            (q(f"warmArtModel.get({i}).u"), int(q(f"warmArtModel.get({i}).w")), q(f"warmArtModel.get({i}).ready"))
             for i in range(int(q("warmArtModel.count")))
         ]
 
-    warmed = [(hint_art, 360), (hero_art, 360), (hero_art, 480), (row_art, 68)]
-    if not pump(lambda: all(pool_ready(u, w) for u, w in warmed), 3000):
-        print(f"the warm pool did not decode the prefetched covers: {pool_dump()}", file=sys.stderr)
+    warmed = [
+        (hint_art, 360),  # the clicked card's cover, the hero's stand-in
+        (hero_art, 360),  # the page hero
+        (hero_art, 480),  # its backdrop
+        (row_art, int(q("root.discDecode"))),  # the track discs
+    ]
+
+    def pool_warm() -> bool:
+        rows = pool_rows()
+        return all(any(u == url and w == width and ready is True for u, w, ready in rows) for url, width in warmed)
+
+    if not pump(pool_warm, 3000):
+        print(f"the warm pool did not decode the prefetched covers: {pool_rows()}", file=sys.stderr)
         return EXIT_REGRESSED
     if q("root.busy") is True:
         print("a hover prefetch flipped the busy indicator", file=sys.stderr)
