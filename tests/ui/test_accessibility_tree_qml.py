@@ -50,7 +50,9 @@ _CHOOSER_ROWS_BODY = """
     function walk(o) {
         if (!o) return;
         var name = "" + (o.Accessible && o.Accessible.name ? o.Accessible.name : "");
-        if (name !== "" && o.activeFocusOnTab === true && o.visible !== false && o.width > 0) {
+        // Every tab-reachable row is collected, named or not: a row that loses
+        // its name must fail the Python assertion, not vanish from the walk.
+        if (o.activeFocusOnTab === true && o.visible !== false && o.width > 0) {
             out.push({ name: name,
                        object: "" + (o.objectName || ""),
                        role: Number(o.Accessible.role),
@@ -262,14 +264,23 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     actions = [r for r in rows if r["object"] in ("chooserSetDefaults", "chooserConfirm")]
     if len(tiers) < 3:
         problems.append(f"the Chooser's tier rows are not exposed as pickers ({len(tiers)} found)")
+    elif any(t["role"] != _ROLE_RADIO for t in tiers):
+        problems.append(f"a Chooser tier row is not a radio button: {[t['role'] for t in tiers]}")
     if not any(t["checked"] for t in tiers):
         problems.append("no Chooser tier row reports itself as picked")
     if len(audio) < 1:
         problems.append("the Chooser's audio rows are not exposed as pickers")
+    elif any(a["role"] != _ROLE_RADIO for a in audio):
+        problems.append(f"a Chooser audio tile is not a radio button: {[a['role'] for a in audio]}")
     if len(toggles) < 1:
         problems.append("the Chooser's lyrics/art toggles are not exposed as checkboxes")
+    elif any(t["role"] != _ROLE_CHECKBOX for t in toggles):
+        problems.append(f"a Chooser toggle is not a checkbox: {[t['role'] for t in toggles]}")
     if len(actions) < 2:
         problems.append(f"the Chooser's actions are not both reachable ({len(actions)} found)")
+    unnamed = [r["object"] or "?" for r in rows if not r["name"]]
+    if unnamed:
+        problems.append(f"a Chooser row carries no accessible name: {unnamed}")
     names = [r["name"] for r in rows]
     if len(names) != len(set(names)):
         problems.append(f"the Chooser's rows repeat a spoken name: {names}")
@@ -348,7 +359,8 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     clears = sorted(name for name in drawer_names if name.startswith("Clear "))
     if len(clears) < 2:
         problems.append(f"the queue's CLEAR controls do not name their own sections: {drawer_names}")
-    if not any("Retry all" in name for name in drawer_names):
+    retries = sorted(name for name in drawer_names if name.startswith("Retry all "))
+    if retries != ["Retry all Failed downloads"]:
         problems.append(f"the queue's RETRY ALL control does not name its section: {drawer_names}")
 
     # No tab stop may sit behind a closed popup (issue #284's third item, for
