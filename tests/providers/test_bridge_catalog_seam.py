@@ -255,20 +255,94 @@ def test_a_cached_search_never_reaches_the_provider_twice():
     assert stub.busy[-1] is False
 
 
-def test_a_failed_provider_search_reports_failure_not_an_empty_payload():
-    # An all-failed fetch is a failure, never "0 results" (which reads as a
-    # search that found nothing): nothing is emitted or cached, so a stale
-    # page already painted stays. A BUILD failure is the other "Search
-    # failed" road (tests/downloads/test_worker_latch_and_logout.py).
-    provider = _provider(search=RuntimeError("network died"))
+def test_a_lone_failed_provider_answers_its_own_group():
+    # A LONE enabled provider's failure answers its own group (issue #241 /
+    # UI-05, generalized in #292): no second provider can carry the words, so
+    # a blank page would be the only answer. The status repeats them, nothing
+    # is cached, and busy is never latched. A BUILD failure is the other
+    # "Search failed" road (tests/downloads/test_worker_latch_and_logout.py).
+    provider = _provider(search=RuntimeError("network died"), search_head_when_alone=False)
     stub = _SearchStub(provider)
 
     stub.search("aphex")
 
     assert stub.busy == [True, False]
-    assert stub.statuses[-1] == "Search failed"
-    assert stub.searchResults.emits == []
+    (payload,) = stub.searchResults.emits
+    group = payload["groups"][0]
+    assert group["provider"] == "tidal"
+    assert group["error"] == "network died" and group["albums"] == []
+    assert stub.statuses[-1] == "network died"
     assert stub._search_cache == {}
+
+
+def test_a_partial_tidal_failure_answers_the_tidal_group():
+    # One provider failed while the other answered: the failure's words ride
+    # ITS group (never the successful one's), and the status names it.
+    tidal = _provider(search=RuntimeError("network died"), search_head_when_alone=False)
+    apple = _provider(
+        search={"tracks": [{"id": "apple:song-1", "title": "Xtal"}], "top_hit": None},
+        search_sections=_APPLE_SECTIONS,
+    )
+    stub = _SearchStub(tidal)
+    stub.providers["apple"] = apple
+    stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
+
+    stub.search("aphex")
+
+    (payload,) = stub.searchResults.emits
+    tidal_group = next(g for g in payload["groups"] if g["provider"] == "tidal")
+    apple_group = next(g for g in payload["groups"] if g["provider"] == "apple")
+    assert tidal_group["error"] == "network died" and tidal_group["albums"] == []
+    assert apple_group["error"] == "" and apple_group["tracks"] != []
+    assert stub.statuses[-1] == "network died"
+    assert stub._search_cache == {}
+
+
+def test_search_enabled_reads_every_registered_provider_and_its_gate():
+    # The search row's generic gate (issue #292): a registered SEARCH provider
+    # with a gate that says on, or no gate at all, keeps it live; a provider
+    # without SEARCH, or with a gate that says off, does not.
+    bridge = SimpleNamespace(providers={}, _provider_search_gates={"tidal": lambda: False}, _logged_in=False)
+    assert WavesBridge.searchEnabled(bridge) is False
+
+    bridge.providers["tidal"] = _provider()
+    assert WavesBridge.searchEnabled(bridge) is False, "a gated-off provider is not on"
+    bridge._provider_search_gates["tidal"] = lambda: True
+    assert WavesBridge.searchEnabled(bridge) is True
+
+    # No gate: taken at its word (a third provider needs no wiring).
+    bridge.providers["fake"] = _provider()
+    bridge._provider_search_gates["tidal"] = lambda: False
+    assert WavesBridge.searchEnabled(bridge) is True
+
+    # A provider that cannot search never keeps the row live.
+    bridge.providers.clear()
+    bridge.providers["catalog"] = SimpleNamespace(capabilities=frozenset({Capability.CATALOG}))
+    assert WavesBridge.searchEnabled(bridge) is False
+
+
+def test_search_sections_narrows_a_provider_declaration_to_the_page():
+    all_six = ("artists", "albums", "tracks", "videos", "playlists", "mixes")
+    assert backend._search_sections(SimpleNamespace()) == all_six, "undeclared answers everything"
+    assert backend._search_sections(SimpleNamespace(search_sections=("artists", "albums"))) == (
+        "artists",
+        "albums",
+    )
+    assert backend._search_sections(SimpleNamespace(search_sections=("artists", "songs"))) == (
+        "artists",
+    ), "a section the page does not render contributes no bucket"
+
+
+def test_search_enabled_answers_the_bridge_slot_through_the_real_seam():
+    # The QML calls waves.searchEnabled(); the real bridge answers it over its
+    # own registry and gates.
+    tidal = _provider(search_head_when_alone=False)
+    stub = _SearchStub(tidal)
+    assert WavesBridge.searchEnabled(stub) is True, "a signed-in TIDAL keeps the row live"
+    stub._logged_in = False
+    assert WavesBridge.searchEnabled(stub) is False
+    stub.providers["fake"] = _provider()
+    assert WavesBridge.searchEnabled(stub) is True, "a gate-less third provider joins the gate"
 
 
 class _FanoutProvider(_FakeProvider):

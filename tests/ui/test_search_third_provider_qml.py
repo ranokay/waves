@@ -255,8 +255,9 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     if q(fake + ".rowCount") != 4:
         failures.append(f"the third provider's count reads {q(fake + '.rowCount')}, expected 4")
 
-    # Sections are driven by its own rows: it declares no videos, so the
-    # filter can never host its head, and its videos section stays empty.
+    # Sections are driven by its own rows: it declares no search_sections, so
+    # it answers the page's six sections (the undeclared default), and it
+    # returned no videos -- the bucket is hostable, the section is empty.
     if q(fake + ".hostable('videos')") is not True:
         failures.append("the third provider's payload did not carry its videos bucket")
     if q(fake + ".sectionVisible('videos')"):
@@ -313,6 +314,44 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     settle(100)
     if not q(fake + ".sectionVisible('albums')") or q(fake + ".modelFor('albums').count") != 1:
         failures.append("the shifted group did not come back with its own rows")
+
+    # A third provider alone keeps the search row live (the bridge's generic
+    # gate) and answers its own lone failure with its words + RETRY.
+    bridge._logged_in = False
+    bridge.loggedInChanged.emit()
+    settle(200)
+    if not q("searchAvailable") or not q("searchField.enabled"):
+        failures.append("a lone search-capable provider left the search row dead")
+
+    def _fake_is_down(needle):
+        raise RuntimeError("Fake Music is down")
+
+    bridge.providers["fake"].search = _fake_is_down
+    q("root.submitSearch('boom')")
+    landed = _settle_until(
+        q, settle, lambda: bool(q(fake)) and q(fake + ".errorText") == "Fake Music is down", timeout_ms=4000
+    )
+    if not landed:
+        failures.append(
+            f"the third provider's lone failure did not answer its group ({q(fake + '.errorText') if q(fake) else None!r})"
+        )
+    else:
+        if q("root.searchGroupError") != "Fake Music is down":
+            failures.append("the page did not carry the third provider's failure words")
+        retry = json.loads(
+            q(
+                _walk_expression(
+                    fake,
+                    "for (var i = 0; i < all.length; i++)"
+                    " if (all[i].objectName === 'searchGroupRetry' && all[i].visible)"
+                    "  out.push(true);",
+                )
+            )
+        )
+        if not retry:
+            failures.append("the third provider's failed group showed no RETRY")
+        if q("emptyHint.text") != "Search failed":
+            failures.append("the empty line did not name the failure")
 
     for line in failures:
         print(f"REGRESSED: {line}", file=sys.stderr)

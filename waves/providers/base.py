@@ -182,6 +182,13 @@ class ProviderDescriptor:
     logo_width: int = 20  # the card tile's mark width, px
     logo_header_width: int = 14  # the section header tile's mark width, px
     logo_header_height: int = 14  # the section header tile's mark height, px
+    # The search group head's furniture (issue #292): "accent" is the shipped
+    # TIDAL look (hover-lit accent name, accent rule, compact 42px head) and
+    # "plain" is the neutral head (bright name, outline rule, 50px) Apple has
+    # always shown. It rides the descriptor because the head already renders
+    # its mark and sizes from there; a provider with no preference head is
+    # plain.
+    head_style: str = "plain"
     capability_summary: str = ""  # one honest line, for onboarding cards
     card_desc: str = ""  # the Settings card's longer blurb
     welcome_action: str = ""  # the welcome card's action label (the provider's own words)

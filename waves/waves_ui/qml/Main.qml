@@ -433,22 +433,25 @@ ApplicationWindow {
         // comes back on appUpdatePending.
         waves.resumePendingUpdate()
     }
-    // True once a search has populated any result model. Gates the filter chips
-    // and the empty-state hint, so the chips materialize only after a search.
-    readonly property bool hasResults: {
-        var groups = root.searchGroups || []
-        for (var i = 0; i < groups.length; ++i) {
-            if (groups[i].top) return true
-            if ((groups[i].artists || []).length + (groups[i].albums || []).length
-                + (groups[i].tracks || []).length + (groups[i].videos || []).length
-                + (groups[i].playlists || []).length + (groups[i].mixes || []).length > 0) return true
-        }
-        return false
-    }
     // The search payload's provider groups, in provider order (issue #292).
     // The results page renders one SearchProviderGroup per entry, and every
     // root read of the page (counts, empty states, the sort) goes through it.
     property var searchGroups: []
+    // Rows a payload's groups hold (the pinned top included): one sum for the
+    // empty-state gate, the build veil's total and the page count.
+    function searchRowTotal(groups) {
+        var total = 0
+        for (var i = 0; i < (groups || []).length; ++i) {
+            var g = groups[i]
+            total += (g.artists || []).length + (g.albums || []).length + (g.tracks || []).length
+                   + (g.videos || []).length + (g.playlists || []).length + (g.mixes || []).length
+                   + (g.top ? 1 : 0)
+        }
+        return total
+    }
+    // True once a search has populated any result model. Gates the filter chips
+    // and the empty-state hint, so the chips materialize only after a search.
+    readonly property bool hasResults: root.searchRowTotal(root.searchGroups) > 0
     // True only while a payload's groups are applied in place (a refresh):
     // each group's data handler picks reconcile over rebuild from this.
     property bool searchRefreshMode: false
@@ -534,8 +537,11 @@ ApplicationWindow {
     }
     // The one rule for "a provider that can issue a search is live": the
     // search row and the build hint both follow it (J2: the row is live for a
-    // signed-out Apple-only user too).
-    readonly property bool searchAvailable: root.signedIn || root.appleEnabled
+    // signed-out Apple-only user too). The bridge answers the generic half
+    // (any registered SEARCH provider that is on, issue #292), so a third
+    // provider alone keeps the row live; the shipped two ride their reactive
+    // flags so a sign-in or switch-off flips the row at once.
+    readonly property bool searchAvailable: root.signedIn || root.appleEnabled || waves.searchEnabled()
     // The query as it is sent: every run of whitespace (a pasted line break
     // or tab the single-line field never shows) becomes one space (issue #39).
     function searchQueryText(t) { return ("" + (t || "")).replace(/\s+/g, " ").trim() }
@@ -939,8 +945,6 @@ ApplicationWindow {
     // the mixed view's five. The group gates the two layouts' Loaders so
     // exactly one set is active, which keeps the build veil's
     // one-tick-per-artist accounting balanced.
-    // A per-section cap for the mixed All view: the section's first 5 rows, or
-    // everything once it is expanded; a specific section filter is never capped.
     // A per-section cap for the mixed All view: the section's first 5 rows, or
     // everything once it is expanded; a specific section filter is never capped.
     // `cap` is the mixed view's default row count, 5 unless the section
@@ -8780,6 +8784,10 @@ ApplicationWindow {
         // The provider's pinned best match, a row dict tagged with its kind,
         // or null (TIDAL answers one; a provider that does not leaves null).
         readonly property var topRow: group.groupData.top || null
+        // The head's furniture is the provider's own (issue #292): "accent"
+        // is TIDAL's shipped head (hover-lit accent name, accent rule, 42px),
+        // anything else the neutral 50px head Apple has always shown.
+        readonly property bool accentHead: String(group.descriptor ? group.descriptor.head_style : "") === "accent"
         // The fold, and the SHOW ALL state, are per provider: pref-backed so
         // they survive a restart exactly as the shipped two did.
         property bool collapsed: false
@@ -8913,13 +8921,15 @@ ApplicationWindow {
 
         // The provider head: name, mark and sizes from its descriptor, count
         // or the honest error words + RETRY, and the whole head folds the
-        // group. The shipped TIDAL head owns the look (hover-lit name, accent
-        // rule); the error furniture is the shipped Apple one (#241 / UI-05).
+        // group. The descriptor's head style picks the shipped furniture
+        // (TIDAL's hover-lit accent head vs Apple's neutral one), so both
+        // providers' heads look exactly as they did (issue #292); the error
+        // furniture is the shipped Apple one (#241 / UI-05).
         Item {
             id: groupHead
             readonly property var provider: group.descriptor
             visible: group.headVisible
-            width: parent.width; height: 42
+            width: parent.width; height: group.accentHead ? 42 : 50
             Row {
                 anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.bottomMargin: 10
                 spacing: 8
@@ -8941,7 +8951,7 @@ ApplicationWindow {
                     anchors.verticalCenter: parent.verticalCenter
                     textFormat: Text.PlainText
                     text: groupHead.provider ? String(groupHead.provider.name).toUpperCase() : ""
-                    color: groupHeadMa.containsMouse ? root.textHi : root.accent
+                    color: group.accentHead ? (groupHeadMa.containsMouse ? root.textHi : root.accent) : root.textHi
                     font.pixelSize: 15; font.bold: true; font.letterSpacing: 1
                 }
             }
@@ -8977,7 +8987,7 @@ ApplicationWindow {
             }
             Rectangle {
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                height: 2; color: root.accentDim
+                height: 2; color: group.accentHead ? root.accentDim : root.outline
             }
             MouseArea {
                 id: groupHeadMa
@@ -15046,25 +15056,10 @@ ApplicationWindow {
             // delegate creates read searchBuilding for their asynchronous
             // flag, and the ready ticks only ever arrive on later frames,
             // never mid-fill. One tick per row the page will instantiate.
-            var buildTotal = 0
-            for (var i = 0; i < groups.length; ++i) {
-                var rows = groups[i]
-                buildTotal += (rows.artists || []).length + (rows.albums || []).length
-                            + (rows.tracks || []).length + (rows.videos || []).length
-                            + (rows.playlists || []).length + (rows.mixes || []).length
-                            + (rows.top ? 1 : 0)
-            }
-            root._searchBuildStart(buildTotal)
+            root._searchBuildStart(root.searchRowTotal(groups))
             root.applySearchGroups(groups, false)
             root.registerPinnedArtists()
-            var any = 0
-            for (var j = 0; j < groups.length; ++j) {
-                var groupRows = groups[j]
-                any += (groupRows.artists || []).length + (groupRows.albums || []).length
-                     + (groupRows.tracks || []).length + (groupRows.videos || []).length
-                     + (groupRows.playlists || []).length + (groupRows.mixes || []).length
-                     + (groupRows.top ? 1 : 0)
-            }
+            var any = root.searchRowTotal(groups)
             // A failed fetch is not an empty catalog (issue #241 / UI-05):
             // while the group's honest words stand, the page never also says
             // "no results for X", which reads as a search that came back

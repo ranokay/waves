@@ -157,6 +157,7 @@ class TidalProvider(Provider):
             logo_width=24,
             logo_header_width=18,
             logo_header_height=12,
+            head_style="accent",
             capability_summary="Sign in to search, browse and download.",
             card_desc=(
                 "Your TIDAL session, the audio quality its downloads ask for, and its lyrics and cover options."

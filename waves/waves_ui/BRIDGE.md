@@ -226,14 +226,22 @@ control for the verb its catalog cannot answer (the click is refused with
 honest words either way).
 
 `providerDescriptor(value)` is the identity answer the badges and group heads
-render (issue #278): `{id, name, logo, logo_header_width, logo_header_height}`
-for a media id (resolved by its namespace: a bare legacy id reads as TIDAL's)
-or a provider id matched exactly (a head asking for its own provider), and
-`None` for an id no registered provider claims -- an unknown namespace wears no
-mark, never another provider's. The Library section's bulk rows carry the same
-fields (`provider`, `provider_logo`) so a badge there costs no per-row
-crossing. QML carries no provider asset path and never parses an id prefix to
-pick one.
+render (issue #278): `{id, name, logo, logo_header_width, logo_header_height,
+head_style}` for a media id (resolved by its namespace: a bare legacy id reads
+as TIDAL's) or a provider id matched exactly (a head asking for its own
+provider), and `None` for an id no registered provider claims -- an unknown
+namespace wears no mark, never another provider's. `head_style` picks the
+search group head's furniture ("accent" is TIDAL's shipped look; "plain" the
+neutral one), so each provider's head keeps its own shape (issue #292). The
+Library section's bulk rows carry the same fields (`provider`, `provider_logo`)
+so a badge there costs no per-row crossing. QML carries no provider asset path
+and never parses an id prefix to pick one.
+
+`searchEnabled()` answers whether any registered `Capability.SEARCH` provider
+is on right now (its gate read where the providers are wired; a provider with
+no gate is taken at its word). The search row's QML gate reads it alongside
+the reactive `signedIn`/`appleEnabled` flags, so a third provider alone keeps
+the row live with no QML edit (issue #292).
 
 ## Local library presence (the "in your library" badge)
 

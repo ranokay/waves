@@ -3593,10 +3593,17 @@ _SEARCH_SECTIONS: tuple[str, ...] = ("artists", "albums", "tracks", "videos", "p
 def _search_sections(provider) -> tuple[str, ...]:
     """The buckets a provider's search group carries: its own declaration,
     narrowed to the sections the page renders. A provider that declares
-    nothing answers them all -- every SEARCH provider before #292 did."""
+    nothing answers them all -- every SEARCH provider before #292 did; one
+    that names a section the page does not render (a typo, or a newer
+    contract) contributes no bucket for it rather than failing the search."""
     declared = tuple(getattr(provider, "search_sections", ()) or ())
-    known = tuple(section for section in declared if section in _SEARCH_SECTIONS)
-    return known or _SEARCH_SECTIONS
+    if not declared:
+        return _SEARCH_SECTIONS
+    sections = tuple(section for section in declared if section in _SEARCH_SECTIONS)
+    if len(sections) != len(declared):
+        unknown = [section for section in declared if section not in _SEARCH_SECTIONS]
+        logger.warning("A provider's search_sections names unknown sections %s", unknown)
+    return sections
 
 
 def _search_group(provider_id: str, provider, rows: dict | None = None, *, top=None, error_text: str = "") -> dict:
@@ -4102,6 +4109,9 @@ def _provider_descriptor_dict(descriptor) -> dict:
         # renders a mark, never a zero-size one.
         "logo_header_width": int(getattr(descriptor, "logo_header_width", 14) or 14),
         "logo_header_height": int(getattr(descriptor, "logo_header_height", 14) or 14),
+        # The search group head's furniture (issue #292): a descriptor that
+        # names no style renders the neutral one.
+        "head_style": str(getattr(descriptor, "head_style", "") or "plain"),
     }
 
 
@@ -6614,23 +6624,28 @@ class WavesBridge(LibraryMixin, QObject):
                     ]
                 provider_results = {provider_id: result for provider_id, result, _error in fetched}
                 provider_errors = {provider_id: error for provider_id, _result, error in fetched if error is not None}
-            apple_error = provider_errors.get(CTX_APPLE)
+            # The first failing provider's words, in registry order: the
+            # status line's honest answer when a fetch failed (see below).
+            status_error = next(
+                (provider_errors[provider_id] for provider_id in provider_ids if provider_id in provider_errors),
+                None,
+            )
             if provider_errors and len(provider_errors) == len(provider_ids):
                 # Every enabled fetch raised: a failure, never "0 results",
-                # which reads as a search that found nothing. The one failure
-                # whose words reach a group is the Apple-only one (issue #241 /
-                # UI-05): no second provider can carry them, so a blank page
-                # would be the only answer. With a TIDAL leg in the fan-out a
-                # single provider's words would blame it for both failures, so
+                # which reads as a search that found nothing. A LONE enabled
+                # provider's failure answers its own group (issue #241 /
+                # UI-05): no second provider can carry the words, so a blank
+                # page would be the only answer. With two providers failing,
+                # one provider's words would blame it for both failures, so
                 # the plain failure stays. A page that already holds rows is
                 # never blanked by a failure, and nothing here is cached.
                 stale_rows = bool(stale is not None and self._search_total(stale))
-                apple_only = provider_ids == [CTX_APPLE]
-                if gen == self._search_gen and apple_only and apple_error is not None and not stale_rows:
+                if gen == self._search_gen and len(provider_ids) == 1 and not stale_rows:
+                    only = provider_ids[0]
                     self.searchResults.emit(
-                        _failed_search_payload(CTX_APPLE, self.providers[CTX_APPLE], str(apple_error))
+                        _failed_search_payload(only, self.providers[only], str(provider_errors[only]))
                     )
-                    self._set_status(str(apple_error))
+                    self._set_status(str(provider_errors[only]))
                 elif gen == self._search_gen:
                     self._set_status("Search failed")
                 if gen == self._search_gen:
@@ -6698,9 +6713,10 @@ class WavesBridge(LibraryMixin, QObject):
             # One group per provider that answered, in registry order (TIDAL
             # then Apple, then any later provider): the page's Repeater renders
             # exactly this list, head and sections included (issue #292). A
-            # failed Apple fetch says so in its OWN group (audit UI-05): the
-            # honest words ride the payload, so the group head can show them
-            # instead of painting "0 results" as if the catalog were empty.
+            # failed fetch says so in its OWN group (audit UI-05, generic in
+            # #292): the provider's honest words ride the payload, so the
+            # group head can show them instead of painting "0 results" as if
+            # the catalog were empty.
             groups = []
             for provider_id in provider_ids:
                 provider = self.providers[provider_id]
@@ -6716,7 +6732,7 @@ class WavesBridge(LibraryMixin, QObject):
                         provider,
                         group_rows,
                         top=group_top,
-                        error_text=str(apple_error) if provider_id == CTX_APPLE and apple_error is not None else "",
+                        error_text=str(provider_errors[provider_id]) if provider_id in provider_errors else "",
                     )
                 )
             payload = {"groups": groups}
@@ -6739,7 +6755,7 @@ class WavesBridge(LibraryMixin, QObject):
             if total and not provider_errors:  # an all-empty payload is more likely a failed fetch
                 self._remember_search(cache_key, payload)
                 self._save_page_cache()
-            self._set_status(str(apple_error) if apple_error is not None else f"{total} results")
+            self._set_status(str(status_error) if status_error is not None else f"{total} results")
             self._set_busy(False)
             elapsed = devlog.clock() - t0
             devlog.done(
@@ -10153,6 +10169,23 @@ class WavesBridge(LibraryMixin, QObject):
             return False
 
     appleEnabled = Property(bool, _get_apple_enabled, notify=appleStatusChanged)
+
+    @Slot(result=bool)
+    def searchEnabled(self) -> bool:
+        """Whether any registered SEARCH provider is on right now.
+
+        The search row's own gate, generic over providers (issue #292): a
+        third provider registered with Capability.SEARCH makes the row live
+        with no QML edit. Read alongside the QML's reactive signedIn /
+        appleEnabled flags (which cover the shipped providers' live flips);
+        a provider with no gate is taken at its word (see
+        ``_search_provider_on``).
+        """
+        return any(
+            Capability.SEARCH in getattr(provider, "capabilities", frozenset())
+            and _search_provider_on(self, provider_id)
+            for provider_id, provider in (getattr(self, "providers", None) or {}).items()
+        )
 
     @Slot(result="QVariant")
     def myMusicSources(self) -> list:
