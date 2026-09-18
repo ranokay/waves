@@ -77,8 +77,9 @@ def test_a_real_bridge_boots_from_isolated_settings(tmp_path, monkeypatch):
     from waves.waves_ui.backend import WavesBridge
 
     _pop_singletons()
-    bridge = WavesBridge()
+    bridge: WavesBridge | None = None
     try:
+        bridge = WavesBridge()
         # The provider registry the app runs with, and the isolated settings
         # file read back (not the defaults).
         assert set(bridge.providers) == {"tidal", "apple"}
@@ -102,5 +103,8 @@ def test_a_real_bridge_boots_from_isolated_settings(tmp_path, monkeypatch):
         ), f"the launch sweep never finished: {bridge.libraryScanStatus()}"
         assert bridge.libraryIndexReady() is True
     finally:
-        bridge.shutdown()
+        if bridge is not None:
+            bridge.shutdown()
+        # Pop even when the boot itself raised: a sandbox singleton must not
+        # outlive the test that made it.
         _pop_singletons()
