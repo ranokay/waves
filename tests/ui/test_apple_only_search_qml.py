@@ -107,10 +107,13 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
     every step below still goes through the bridge's real search slot and the
     QML's real payload handler, so the states are the states a user gets. The
     stub answers rows, fails once for "flaky" (the fetch error Apple's own
-    exception carries), and finds nothing for "nothingmatches".
+    exception carries), and finds nothing for "nothingmatches". Since #292 the
+    group lives on the page's provider groups and is read through
+    root.searchGroupFor('apple').
     """
     from waves.providers.apple import AppleCatalogUnavailable
 
+    apple = "root.searchGroupFor('apple')"
     bridge.settings.data.apple_enabled = True
     bridge.appleStatusChanged.emit()
     _settle_until(q, settle, lambda: q("appleEnabled"), timeout_ms=2000, step_ms=10)
@@ -135,7 +138,7 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
     def _rows_landed() -> bool:
         nonlocal hint_seen
         hint_seen = hint_seen or bool(q("searchBuildHint.active"))
-        return bool(q("root.appleSearchGrouped")) and q("root.appleSearchCount") == len(_ARTISTS)
+        return bool(q(apple)) and q(apple + ".rowCount") == len(_ARTISTS)
 
     rows_landed = _settle_until(q, settle, _rows_landed, step_ms=0)
     # The veil's total is what holds it up until every Apple card has loaded:
@@ -148,30 +151,31 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
     # RETRY, and the RETRY issues the search again: the words give way to the
     # rows when the fetch answers.
     q("root.submitSearch('flaky')")
-    error_shown = _settle_until(q, settle, lambda: q("root.appleSearchError") == APPLE_WORDS)
+    error_shown = _settle_until(q, settle, lambda: q(apple + ".errorText") == APPLE_WORDS)
     error_ok = (
         error_shown
-        and bool(_find_visible(q, "appleSearchError"))
-        and bool(_find_visible(q, "appleSearchRetry"))
+        and bool(_find_visible(q, "searchGroupError"))
+        and bool(_find_visible(q, "searchGroupRetry"))
         # A failed fetch is not an empty catalog: the page never reports the
         # query as having found nothing, and its own line names the failure
         # instead of inviting a first search it already ran.
         and q("root.searchNoResultsFor") == ""
+        and q("root.searchGroupError") == APPLE_WORDS
         and q("emptyHint.text") == "Search failed"
     )
     # The head answers to the same type filter as the group's rows: Apple
     # serves no videos or mixes, so that filter never shows its head -- error
     # or not -- while the filters it does answer under keep it.
     q("root.filterType = 'videos'")
-    filter_ok = _settle_until(q, settle, lambda: not bool(q("appleGroupHead.visible")), timeout_ms=1000, step_ms=5)
+    filter_ok = _settle_until(q, settle, lambda: not bool(q(apple + ".headVisible")), timeout_ms=1000, step_ms=5)
     q("root.filterType = 'tracks'")
     filter_ok = filter_ok and _settle_until(
-        q, settle, lambda: bool(q("appleGroupHead.visible")), timeout_ms=1000, step_ms=5
+        q, settle, lambda: bool(q(apple + ".headVisible")), timeout_ms=1000, step_ms=5
     )
     q("root.filterType = 'all'")
-    q("appleSearchRetry.clicked()")
+    q("(" + (_FIND_VISIBLE % "searchGroupRetry") + ").clicked()")
     retried = _settle_until(
-        q, settle, lambda: q("root.appleSearchError") == "" and q("root.appleSearchCount") == len(_ARTISTS)
+        q, settle, lambda: q(apple + ".errorText") == "" and q(apple + ".rowCount") == len(_ARTISTS)
     )
     error_ok = error_ok and filter_ok and retried and searches.count("flaky") == 2
 
@@ -183,49 +187,47 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
     empty_ok = (
         empty_shown
         and bool(q("emptyHint.visible"))
-        and q("root.appleSearchError") == ""
-        and bool(q("root.appleSearchGrouped"))
-        and q("root.appleSearchCount") == 0
+        and q(apple + ".errorText") == ""
+        and bool(q(apple))
+        and q(apple + ".rowCount") == 0
     )
 
     # Switching Apple off clears the group; a refresh landing afterwards (the
     # in-place revalidation of a page built with Apple on) still carries the
-    # error field, and must not resurrect the group head on stale words.
+    # group, and must not resurrect a head for a provider that is off.
     bridge.settings.data.apple_enabled = False
     bridge.appleStatusChanged.emit()
-    cleared = _settle_until(q, settle, lambda: not bool(q("root.appleSearchGrouped")), timeout_ms=2000, step_ms=10)
+    cleared = _settle_until(q, settle, lambda: not bool(q(apple)), timeout_ms=2000, step_ms=10)
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit({**_payload(error=APPLE_WORDS), "refresh": True})
-    # The words did land (the premise), under no group and no head.
+    settle(150)
+    # The refresh cannot mount the provider's group, so there is no head, no
+    # words and no retry anywhere.
     ghost_ok = (
         cleared
-        and q("root.appleSearchError") == APPLE_WORDS
-        and not bool(q("appleGroupHead.visible"))
-        and not bool(_find_visible(q, "appleSearchError"))
+        and not bool(q(apple))
+        and q("root.searchGroupError") == ""
+        and not bool(_find_visible(q, "searchGroupError"))
+        and not bool(_find_visible(q, "searchGroupRetry"))
     )
     return loading_ok, error_ok, empty_ok, ghost_ok
 
 
 def _payload(*, error: str) -> dict:
-    apple = {
-        "artists": [],
-        "albums": [],
-        "tracks": [],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-        "error": error,
-    }
+    """A one-group Apple payload, shaped like the bridge's own (#292)."""
     return {
-        "artists": [],
-        "albums": [],
-        "tracks": [],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-        "apple": apple,
+        "groups": [
+            {
+                "provider": "apple",
+                "artists_layout": "flow",
+                "artists": [],
+                "albums": [],
+                "tracks": [],
+                "playlists": [],
+                "top": None,
+                "error": error,
+            }
+        ]
     }
 
 

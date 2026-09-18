@@ -108,8 +108,11 @@ def test_apple_link_payload_carries_the_single_row_in_the_apple_group():
 
     payload = WavesBridge._apple_link_payload(stub, resolved)
 
-    assert [row["id"] for row in payload["apple"]["albums"]] == ["apple:album-1"]
-    assert payload["albums"] == [] and payload["tracks"] == []
+    group = payload["groups"][0]
+    assert group["provider"] == "apple"
+    assert [row["id"] for row in group["albums"]] == ["apple:album-1"]
+    assert "videos" not in group and "mixes" not in group, "Apple's group carries only the sections its search answers"
+    assert group["tracks"] == []
     assert WavesBridge._apple_link_payload(stub, {"kind": "nope", "item": {}}) is None
     assert WavesBridge._apple_link_payload(stub, "not-a-dict") is None
 

@@ -46,14 +46,19 @@ def _boom(needle):
     raise RuntimeError("network down")
 
 
-def test_a_raised_fetch_reports_failure_not_zero_results():
+def test_a_lone_raised_fetch_reports_its_own_words_not_zero_results():
+    # A lone enabled provider's failure answers its own group with the
+    # provider's words (issue #241 / UI-05, generalized in #292), never a
+    # silent "Search failed" with a blank page; nothing is cached and busy is
+    # released. The page-count line still never says "N results".
     stub = _Stub()
     stub.providers = {"tidal": _provider(_boom)}
     stub.search("needle")
-    assert stub.statuses[-1] == "Search failed"
+    assert stub.statuses[-1] == "network down"
     assert not any(s.endswith(" results") for s in stub.statuses)
     assert stub.busy[-1] is False
-    assert stub.searchResults.emits == []
+    (payload,) = _payloads(stub)
+    assert payload["groups"][0]["error"] == "network down"
     assert stub.saves == 0 and "needle" not in stub._search_cache
 
 
@@ -64,5 +69,7 @@ def test_a_raised_fetch_keeps_the_stale_page():
     stub.search("needle")
     emitted = _payloads(stub)
     assert len(emitted) == 1 and "refresh" not in emitted[0], "only the stale page, nothing replaces it"
+    # The page holds rows, so the failure never blanks it: plain status, no
+    # payload.
     assert stub.statuses[-1] == "Search failed"
     assert stub._search_cache["tidal:needle"][0] == _STALE_STAMP

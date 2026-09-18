@@ -8,12 +8,13 @@ section is empty, because the strip, the grid and the header all gate on
 whether the view was the mixed All one and whether the row was expanded or
 overflowing.
 
-``searchArtistsExpanded`` is pref-backed (``search_sec_artists_expanded``), so
-it comes back true at launch for anyone who has ever expanded the ARTISTS row.
-With no search run there are no artists, the strip and the grid are correctly
-gone, and the toggle was the only piece of the section left: a lone SHOW LESS
-floating over an empty Search tab. Clicking it wrote the pref false, so it
-vanished and did not come back, which is what made it look like a phantom.
+The expanded flag is pref-backed
+(``tidal_search_sec_artists_expanded`` since issue #292's provider-keyed
+prefs), so it comes back true for anyone who has ever expanded the ARTISTS
+row. With a group that answered with no artists, the strip and the grid are
+correctly gone, and the toggle must be too: a lone SHOW LESS floating over an
+empty Search page. Clicking it wrote the pref false, so it vanished and did
+not come back, which is what made it look like a phantom.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -80,9 +81,9 @@ def _run_scenario() -> int:
 
     bridge = WavesBridge(tidal=None)
     # The state the bug needs, and the only state it needs: someone expanded
-    # the ARTISTS row in an earlier session. Written BEFORE the QML loads,
-    # because searchArtistsExpanded reads the pref once at creation.
-    bridge.setWavesPref("search_sec_artists_expanded", True)
+    # the ARTISTS row in an earlier session. Written BEFORE the QML loads: the
+    # group reads its pref once, when the payload creates it.
+    bridge.setWavesPref("tidal_search_sec_artists_expanded", True)
 
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("waves", bridge)
@@ -116,6 +117,47 @@ def _run_scenario() -> int:
     q("root.openSearch()")
     settle(250)
 
+    # A page that answered with no artists at all: the group is mounted (the
+    # pref-backed fold came with it), its ARTISTS row is empty, and the SHOW
+    # ALL label must stay hidden.
+    q("_searchSeq = _navSeq")
+    bridge.searchResults.emit(
+        {
+            "groups": [
+                {
+                    "provider": "tidal",
+                    "artists_layout": "strip",
+                    "artists": [],
+                    "albums": [
+                        {
+                            "id": "tidal:al1",
+                            "title": "Album",
+                            "artist": "Artist",
+                            "artist_id": "",
+                            "artists": [],
+                            "art": "",
+                            "year": "2026",
+                            "date": "2026-01-01",
+                            "tracks": 3,
+                            "duration_sec": 300,
+                            "quality": "LOSSLESS",
+                            "popularity": -1,
+                            "explicit": False,
+                            "added": "",
+                        }
+                    ],
+                    "tracks": [],
+                    "videos": [],
+                    "playlists": [],
+                    "mixes": [],
+                    "top": None,
+                    "error": "",
+                }
+            ]
+        }
+    )
+    settle(300)
+
     # Walks `data`, not `children`: the label is not a visual child of the item
     # that declares it, so a children-only walk reports MISSING and the whole
     # scenario skips itself green.
@@ -142,27 +184,32 @@ def _run_scenario() -> int:
             return (hit.visible ? 'SHOWN' : 'HIDDEN') + '|' + (blocked || 'ancestors-visible');
         })()"""
 
-    if not bool(q("root.searchArtistsExpanded")):
+    if not bool(q("root.searchGroupFor('tidal')")):
+        print("no TIDAL group rendered; the scenario proves nothing", file=sys.stderr)
+        return EXIT_PRECONDITION
+    if not bool(q("root.searchGroupFor('tidal').isExpanded('artists')")):
         print("the pref did not reach the page; the scenario proves nothing", file=sys.stderr)
         return EXIT_PRECONDITION
-    if int(q("artistsModel.count")) != 0:
+    if int(q("root.searchGroupFor('tidal').modelFor('artists').count")) != 0:
         print("a fresh page already held artists", file=sys.stderr)
         return EXIT_PRECONDITION
 
     state = str(q(_SHOWN))
     if state == "MISSING":
+        # The label is instantiated with its group; a walk that cannot find it
+        # is a finder regression, not a pass.
         print("no item named artistsShowAll in the tree", file=sys.stderr)
         return EXIT_PRECONDITION
     if not state.endswith("|ancestors-visible"):
         print(f"the search page is not on screen ({state}); the read proves nothing", file=sys.stderr)
         return _PAGE_NOT_SHOWN
-    if not state.startswith("HIDDEN"):
+    if state.startswith("SHOWN"):
         print(f"SHOW LESS floated over a search page with no artists (label read {state})", file=sys.stderr)
         return _FLOATED
 
     # The positive leg: one artist, the row still expanded, and the toggle is
     # back. Without this an always-false binding would pass the check above.
-    q("""artistsModel.append({ 'id': '1', 'name': 'A', 'art': '', 'popularity': 0 })""")
+    q("root.searchGroupFor('tidal').modelFor('artists').append({ 'id': '1', 'name': 'A', 'art': '', 'popularity': 0 })")
     settle(250)
     state = str(q(_SHOWN))
     if not state.startswith("SHOWN"):

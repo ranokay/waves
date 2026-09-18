@@ -93,7 +93,7 @@ def test_factory_defaults_cover_schema_keys_in_apply_shape():
 
 def test_factory_defaults_leave_housekeeping_alone():
     values = _bind(_values_stub(), "_factory_default_values")()
-    for key in ("win_x", "win_w", "win_max", "update_last_check", "search_sec_albums_expanded"):
+    for key in ("win_x", "win_w", "win_max", "update_last_check", "tidal_search_sec_albums_expanded"):
         assert key not in values, f"housekeeping key {key} must not be reset"
 
 

@@ -19,6 +19,9 @@ from support.search_fakes import (
     SearchStub as _Stub,
 )
 from support.search_fakes import (
+    group_of as _group_of,
+)
+from support.search_fakes import (
     search_payload as _payload,
 )
 from support.search_fakes import (
@@ -42,13 +45,13 @@ def test_a_restored_search_paints_first_and_the_wire_corrects_it_in_place(monkey
     stub.search("needle")
 
     first, second = _payloads(stub)
-    assert [a["id"] for a in first["albums"]] == ["al1"] and "refresh" not in first, "the old page, at once"
-    assert second["refresh"] is True and [a["id"] for a in second["albums"]] == ["al1", "al2"]
-    assert second["artists"][0]["popularity"] == 40, "the meter the stale page shows is carried over"
+    assert [a["id"] for a in _group_of(first)["albums"]] == ["al1"] and "refresh" not in first, "the old page, at once"
+    assert second["refresh"] is True and [a["id"] for a in _group_of(second)["albums"]] == ["al1", "al2"]
+    assert _group_of(second)["artists"][0]["popularity"] == 40, "the meter the stale page shows is carried over"
     assert True not in stub.busy, "rows are on screen the whole time: no spinner"
     assert stub.statuses[0].startswith("Searching") and stub.statuses[-1] == "3 results"
     stamp, kept = stub._search_cache["tidal:needle"]
-    assert stamp > _STALE_STAMP and "refresh" not in kept and len(kept["albums"]) == 2
+    assert stamp > _STALE_STAMP and "refresh" not in kept and len(_group_of(kept)["albums"]) == 2
     assert stub.saves >= 1, "the corrected page reaches the snapshot"
 
 
@@ -103,7 +106,7 @@ def test_the_enrichment_writes_the_meter_into_the_cached_page(monkeypatch):
     stub = _Stub()
     _wire(monkeypatch, stub, pop=73)
     stub.search("needle")
-    assert stub._search_cache["tidal:needle"][1]["artists"][0]["popularity"] == 73
+    assert _group_of(stub._search_cache["tidal:needle"][1])["artists"][0]["popularity"] == 73
     assert stub.saves == 2, "once with the rows, once more with the meters"
 
 

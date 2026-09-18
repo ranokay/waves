@@ -243,13 +243,21 @@ def _show_search_results(q, settle, bridge) -> None:
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit(
         {
-            "artists": [],
-            "albums": [],
-            "tracks": [TRACK],
-            "videos": [],
-            "playlists": [],
-            "mixes": [],
-            "top": None,
+            "groups": [
+                {
+                    "provider": "tidal",
+                    "artists_layout": "strip",
+                    "head_when_alone": False,
+                    "artists": [],
+                    "albums": [],
+                    "tracks": [TRACK],
+                    "videos": [],
+                    "playlists": [],
+                    "mixes": [],
+                    "top": None,
+                    "error": "",
+                }
+            ]
         }
     )
     settle(400)

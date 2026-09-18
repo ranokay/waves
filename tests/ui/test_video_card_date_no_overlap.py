@@ -11,6 +11,7 @@ and assert the date text stays clear of the download button.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    seed_tidal_search,
 )
 
 _VIDEO = (
@@ -107,15 +109,13 @@ def _run_scenario() -> int:
     q("bootContentShown = 1")
     q(PARK_LOGIN_QML)
     q("root.openSearch()")
-    q("videosModel.clear()")
-    q(f"videosModel.append({_VIDEO})")
+    seed_tidal_search(q, bridge, videos=[json.loads(_VIDEO)], expanded=("videos",))
     # A FRESH map object: reassigning the same reference back to the var
     # property does not signal, and the cell may already exist, so its
     # ArtistLinks binding would keep the stale empty list.
     q(f"(function(){{ var m = {{}}; m['v1'] = {_ARTISTS}; root.artistsById = m; return 1 }})()")
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
-    q("root.searchVideosExpanded = true")
     settle(700)
 
     # Walk the first video cell: [BigVideoThumb, meta Item]; the meta Item is
@@ -123,8 +123,9 @@ def _run_scenario() -> int:
     # date Text. Compare window-mapped edges.
     report = q(
         "(function(){"
-        " for (var i = 0; i < videoGrid.children.length; i++) {"
-        "  var cell = videoGrid.children[i];"
+        " var grid = root.searchGroupFor('tidal').videoGridItem;"
+        " for (var i = 0; i < grid.children.length; i++) {"
+        "  var cell = grid.children[i];"
         "  if (!cell || !cell.item) continue;"
         "  var thumb = cell.item.children[0];"
         "  if (!thumb || thumb.videoId === undefined) continue;"

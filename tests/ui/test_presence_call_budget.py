@@ -46,6 +46,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    seed_tidal_search,
 )
 
 # A spy that measured ZERO calls after the consumer-count preconditions have
@@ -229,30 +230,28 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     q("bootContentShown = 1")
     q(PARK_LOGIN_QML)
     q("root.openSearch()")
-    q("albumsModel.clear()")
-    q("tracksModel.clear()")
-    q("artistsModel.clear()")
     # Chosen BEFORE the rows land, unlike the album and track sections. The
     # artists section has two forms (a strip when collapsed, a grid when
     # expanded) and switching between them tears one set of cards down and
     # builds the other, so flipping it afterwards would count two page builds
-    # and read as a fan-out that is not there.
-    q("root.searchArtistsExpanded = true")
+    # and read as a fan-out that is not there. The group's pref is read when
+    # the payload creates it, so it is written before the seed.
+    q("waves.setWavesPref('tidal_search_sec_artists_expanded', true)")
     settle(200)
 
     calls["n"] = 0  # count the page build only, not the boot
     tcalls["n"] = 0
     acalls["n"] = 0
-    for a in albums:
-        q(f"albumsModel.append({a})")
-    for t in tracks:
-        q(f"tracksModel.append({t})")
-    for ar in artists:
-        q(f"artistsModel.append({ar})")
+    seed_tidal_search(
+        q,
+        bridge,
+        albums=[json.loads(a) for a in albums],
+        tracks=[json.loads(t) for t in tracks],
+        artists=[json.loads(ar) for ar in artists],
+        expanded=("albums", "tracks"),
+    )
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
-    q("root.searchAlbumsExpanded = true")
-    q("root.searchTracksExpanded = true")
     settle(1500)
 
     # Every consumer that actually resolved presence: a Download button holding

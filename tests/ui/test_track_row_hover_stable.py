@@ -105,13 +105,21 @@ def _run_scenario() -> int:
         "added": "",
     }
     payload = {
-        "artists": [],
-        "albums": [],
-        "tracks": [track],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
+        "groups": [
+            {
+                "provider": "tidal",
+                "artists_layout": "strip",
+                "head_when_alone": False,
+                "artists": [],
+                "albums": [],
+                "tracks": [track],
+                "videos": [],
+                "playlists": [],
+                "mixes": [],
+                "top": None,
+                "error": "",
+            }
+        ]
     }
     q("root._searchSeq = root._navSeq")
     bridge.searchResults.emit(payload)

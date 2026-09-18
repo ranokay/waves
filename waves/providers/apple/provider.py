@@ -102,6 +102,10 @@ class AppleProvider(Provider):
             Capability.PREVIEW,
         }
     )
+    # Apple's catalog answers artists, albums, tracks and playlists; it has no
+    # videos or mixes, so its search group carries no such buckets and the
+    # page's videos/mixes filters never show its head (issue #292).
+    search_sections = ("artists", "albums", "tracks", "playlists")
 
     # ----- chooser metadata
 

@@ -11,6 +11,7 @@ still, and assert the dwell completes and the peek opens.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    seed_tidal_search,
 )
 
 _VIDEO = (
@@ -101,16 +103,14 @@ def _run_scenario() -> int:
     q("bootContentShown = 1")
     q(PARK_LOGIN_QML)
     q("root.openSearch()")
-    q("videosModel.clear()")
-    q(f"videosModel.append({_VIDEO})")
+    seed_tidal_search(q, bridge, videos=[json.loads(_VIDEO)], expanded=("videos",))
     q("root.searchReveal = 1")
     q("root.searchBuilding = false")
-    q("root.searchVideosExpanded = true")
     settle(700)
 
     centre = q(
         "(function(){"
-        " var cell = videoGrid.children[0];"
+        " var cell = root.searchGroupFor('tidal').videoGridItem.children[0];"
         " if (!cell || !cell.item) return '';"
         " var t = cell.item.children[0];"
         " if (!t || t.videoId === undefined) return '';"

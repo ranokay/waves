@@ -3582,50 +3582,87 @@ _STALE_STAMP = float("-inf")
 _SEARCH_DISK_MAX = 12
 
 
-def _empty_tidal_lists() -> dict:
-    """The ungrouped buckets of a payload no TIDAL search filled.
-
-    TIDAL's rows ride these keys. A search only Apple answered and a resolved
-    link both leave them empty, so the page shows exactly the group that
-    answered (issue #241 / UI-05)."""
-    return {
-        "artists": [],
-        "albums": [],
-        "tracks": [],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-    }
+#: The result sections a search group can carry, in render order. A provider
+#: declares the subset its catalog answers (``Provider.search_sections``), and
+#: the group only carries those buckets, so the page's type filter can tell
+#: "this provider answered nothing" from "this provider never answers these"
+#: (issue #241 / UI-05's videos/mixes rule).
+_SEARCH_SECTIONS: tuple[str, ...] = ("artists", "albums", "tracks", "videos", "playlists", "mixes")
 
 
-def _apple_block(apple: dict | None = None, *, error_text: str = "") -> dict:
-    """An Apple group in a search payload (issue #241 / UI-05).
+def _search_sections(provider) -> tuple[str, ...]:
+    """The buckets a provider's search group carries: its own declaration,
+    narrowed to the sections the page renders. A provider that declares
+    nothing answers them all -- every SEARCH provider before #292 did; one
+    that names a section the page does not render (a typo, or a newer
+    contract) contributes no bucket for it rather than failing the search."""
+    declared = tuple(getattr(provider, "search_sections", ()) or ())
+    if not declared:
+        return _SEARCH_SECTIONS
+    sections = tuple(section for section in declared if section in _SEARCH_SECTIONS)
+    if len(sections) != len(declared):
+        unknown = [section for section in declared if section not in _SEARCH_SECTIONS]
+        logger.warning("A provider's search_sections names unknown sections %s", unknown)
+    return sections
 
-    One builder for the group's key set: the empty failure group, a resolved
-    link's single row and a fetched catalog all answer with the same keys, so
-    no reader -- the QML's payload handler, the seam tests -- ever has to
-    branch on which of them produced the payload.
+
+def _search_group(provider_id: str, provider, rows: dict | None = None, *, top=None, error_text: str = "") -> dict:
+    """One provider's group in a search payload (issue #292).
+
+    The group carries its provider id (the page resolves the head's name,
+    mark and sizes through ``providerDescriptor``, issue #278), the result
+    buckets the provider's search answers, its own best match, and its own
+    failure words. One builder for a fetched catalog, a resolved link and the
+    empty failure group, so no reader -- the QML's payload handler, the seam
+    tests -- ever branches on which of them produced the payload. A bucket
+    the provider does not answer is absent, which is what tells the page the
+    active type filter can never host that group's head.
     """
-    apple = apple or {}
-    return {
-        "artists": list(apple.get("artists") or []),
-        "albums": list(apple.get("albums") or []),
-        "tracks": list(apple.get("tracks") or []),
-        "videos": list(apple.get("videos") or []),
-        "playlists": list(apple.get("playlists") or []),
-        "mixes": list(apple.get("mixes") or []),
-        "top": apple.get("top"),
-        "error": str(error_text or ""),
+    source = rows or {}
+    group = {
+        "provider": str(provider_id),
+        # The artists section's shape is the provider's own (TIDAL's
+        # horizontal strip vs the wrapping grid); the page renders whichever
+        # it finds, with no provider branch (issue #292).
+        "artists_layout": str(getattr(provider, "search_artists_layout", "") or "flow"),
+        # A lone group's head is the provider's own call too: TIDAL-only pages
+        # stay headless, every other provider's head says whose rows these
+        # are (issue #292).
+        "head_when_alone": bool(getattr(provider, "search_head_when_alone", True)),
     }
+    for section in _search_sections(provider):
+        group[section] = list(source.get(section) or [])
+    group["top"] = top
+    group["error"] = str(error_text or "")
+    return group
 
 
-def _failed_search_payload(error_text: str) -> dict:
+def _search_provider_on(bridge, provider_id: str) -> bool:
+    """Whether a registered provider takes part in searches right now.
+
+    The gates live where the providers are wired (TIDAL's session flag,
+    Apple's enable switch); a provider with no gate declared SEARCH and
+    the bridge has no reason to doubt it, so a third provider joins the
+    fan-out with no wiring edit (issue #292). Module-level on purpose: the
+    search slots' test stubs bind ``search`` alone and must not have to
+    carry this too.
+    """
+    gate = (getattr(bridge, "_provider_search_gates", None) or {}).get(provider_id)
+    if gate is None:
+        return True
+    try:
+        return bool(gate())
+    except Exception:
+        logger.debug("A provider's search gate failed", exc_info=True)
+        return False
+
+
+def _failed_search_payload(provider_id: str, provider, error_text: str) -> dict:
     """The payload for a search whose only provider failed with words of its
-    own: every list empty, the provider's honest message in its group (issue
-    #241 / UI-05). The group head renders it with a RETRY; the status line
-    repeats it. Nothing here is ever cached."""
-    return {**_empty_tidal_lists(), CTX_APPLE: _apple_block(error_text=error_text)}
+    own: an empty group carrying the provider's honest message (issue #241 /
+    UI-05). The group head renders it with a RETRY; the status line repeats
+    it. Nothing here is ever cached."""
+    return {"groups": [_search_group(provider_id, provider, error_text=error_text)]}
 
 
 def _search_same(a: dict, b: dict) -> bool:
@@ -3636,9 +3673,14 @@ def _search_same(a: dict, b: dict) -> bool:
     meter is the same page: swapping it in would rebuild every row for
     nothing."""
 
-    def strip(p: dict) -> dict:
-        out = {k: v for k, v in p.items() if k != "refresh"}
-        out["artists"] = [{**c, "popularity": -1} for c in p.get("artists") or []]
+    def strip(payload: dict) -> dict:
+        out = {key: value for key, value in payload.items() if key != "refresh"}
+        groups = []
+        for group in out.get("groups") or []:
+            stripped = dict(group)
+            stripped["artists"] = [{**card, "popularity": -1} for card in group.get("artists") or []]
+            groups.append(stripped)
+        out["groups"] = groups
         return out
 
     return strip(a) == strip(b)
@@ -4067,6 +4109,9 @@ def _provider_descriptor_dict(descriptor) -> dict:
         # renders a mark, never a zero-size one.
         "logo_header_width": int(getattr(descriptor, "logo_header_width", 14) or 14),
         "logo_header_height": int(getattr(descriptor, "logo_header_height", 14) or 14),
+        # The search group head's furniture (issue #292): a descriptor that
+        # names no style renders the neutral one.
+        "head_style": str(getattr(descriptor, "head_style", "") or "plain"),
     }
 
 
@@ -4280,6 +4325,26 @@ def _browse_nav(bridge) -> dict:
 # and one constant keeps the artist, mix and video refusals from drifting apart
 # (R-28 / UI-03).
 _APPLE_UNAVAILABLE_STATUS = "Not available for Apple Music yet"
+
+
+def _is_provider_surface_pref(key: str) -> bool:
+    """Whether a waves.json key is one of the search page's provider-keyed
+    housekeeping prefs (issue #292): a provider group's fold
+    (``search_provider_<id>_collapsed``) or a section's SHOW ALL state
+    (``<id>_search_sec_<section>_expanded``).
+
+    Validated by shape rather than enumerated, because a provider the app has
+    never heard of must still save and restore its own state with no wiring;
+    every accepted key holds a bool, so ``setWavesPref`` materializes it as
+    one.
+    """
+    if key.startswith("search_provider_") and key.endswith("_collapsed"):
+        return len(key) > len("search_provider__collapsed")
+    for section in _SEARCH_SECTIONS:
+        suffix = f"_search_sec_{section}_expanded"
+        if key.endswith(suffix) and len(key) > len(suffix):
+            return True
+    return False
 
 
 class WavesBridge(LibraryMixin, QObject):
@@ -4645,6 +4710,15 @@ class WavesBridge(LibraryMixin, QObject):
         # the light composer names no provider.
         self._provider_status_probes = {
             CTX_APPLE: self._apple_live_flags,
+        }
+        # Whether a registered SEARCH provider takes part in a search right
+        # now (issue #292): TIDAL's session flag and Apple's enable switch,
+        # registered where the providers are wired so the fan-out names no
+        # provider. A provider with no gate is taken at its word, so a third
+        # provider joins with no wiring edit.
+        self._provider_search_gates = {
+            CTX_TIDAL: lambda: bool(self._logged_in),
+            CTX_APPLE: self._get_apple_enabled,
         }
         # The providers whose sign-in the welcome surface completes on its
         # inline steps. Those steps are UI components this build ships per
@@ -6310,7 +6384,7 @@ class WavesBridge(LibraryMixin, QObject):
         if str(data.get("user", "")) != self._cache_user_id():
             return
         for key, page in (data.get("searches") or {}).items():
-            if isinstance(page, dict) and isinstance(page.get("artists"), list):
+            if isinstance(page, dict) and isinstance(page.get("groups"), list):
                 # A stamp no window can cover: every restored search is stale
                 # by definition and takes the paint-then-revalidate path.
                 self._search_cache.setdefault(str(key), (_STALE_STAMP, page))
@@ -6333,10 +6407,10 @@ class WavesBridge(LibraryMixin, QObject):
         self._remember_capped(self._album_tracks_cache, album_id, rows, self._ALBUM_TRACKS_CACHE_MAX)
 
     def _apple_link_payload(self, resolved: object) -> dict | None:
-        """A resolved Apple link as a search payload with one Apple row.
+        """A resolved Apple link as a search payload with one Apple group.
 
-        The Apple group carries the row; the TIDAL buckets stay empty so the
-        page shows exactly the linked item.
+        The Apple group carries the row; no other group exists, so the page
+        shows exactly the linked item.
         """
         if not isinstance(resolved, dict):
             return None
@@ -6345,21 +6419,18 @@ class WavesBridge(LibraryMixin, QObject):
         if not isinstance(item, dict) or not kind:
             return None
         provider = self.providers[CTX_APPLE]
-        # The error key rides every Apple group (empty here): a resolved link
-        # cannot have failed, and one payload shape keeps readers from
-        # branching on its presence (issue #241).
-        apple = _apple_block()
+        rows: dict[str, list] = {}
         if kind == "artist":
-            apple["artists"] = [provider.row_for("artist", item)]
+            rows["artists"] = [provider.row_for("artist", item)]
         elif kind == "album":
-            apple["albums"] = [provider.row_for("album", item)]
+            rows["albums"] = [provider.row_for("album", item)]
         elif kind == "track":
-            apple["tracks"] = [provider.row_for("track", item)]
+            rows["tracks"] = [provider.row_for("track", item)]
         elif kind == "playlist":
-            apple["playlists"] = [provider.row_for("playlist", item)]
+            rows["playlists"] = [provider.row_for("playlist", item)]
         else:
             return None
-        return {**_empty_tidal_lists(), CTX_APPLE: apple}
+        return {"groups": [_search_group(CTX_APPLE, provider, rows)]}
 
     def _open_url(self, url: str) -> None:
         """Resolve a pasted TIDAL or Apple Music share URL into a single result."""
@@ -6422,29 +6493,21 @@ class WavesBridge(LibraryMixin, QObject):
                     self._set_busy(False)
                 return
             try:
-                payload = {
-                    "artists": [],
-                    "albums": [],
-                    "tracks": [],
-                    "videos": [],
-                    "playlists": [],
-                    "mixes": [],
-                    "top": None,
-                }
+                rows: dict[str, list] = {}
                 if kind == "albums":
-                    payload["albums"] = [self._album_dict(media)]
+                    rows["albums"] = [self._album_dict(media)]
                 elif kind == "tracks":
-                    payload["tracks"] = [self._track_dict(media)]
+                    rows["tracks"] = [self._track_dict(media)]
                 elif kind == "videos":
-                    payload["videos"] = [self._video_dict(media)]
+                    rows["videos"] = [self._video_dict(media)]
                 elif kind == "playlists":
-                    payload["playlists"] = [self._playlist_dict(media)]
+                    rows["playlists"] = [self._playlist_dict(media)]
                 elif kind == "mixes":
-                    payload["mixes"] = [self._mix_dict(media)]
+                    rows["mixes"] = [self._mix_dict(media)]
                 elif kind == "artists":
                     key = str(getattr(media, "id", id(media)))
                     self._remember("artist", key, media)
-                    payload["artists"] = [
+                    rows["artists"] = [
                         {
                             "id": key,
                             "name": getattr(media, "name", ""),
@@ -6453,6 +6516,7 @@ class WavesBridge(LibraryMixin, QObject):
                             "popularity": -1,
                         }
                     ]
+                payload = {"groups": [_search_group(CTX_TIDAL, self.providers[CTX_TIDAL], rows)]}
             except Exception:
                 # Same latch as search: one malformed row must fail the open
                 # visibly instead of leaving busy turning for good.
@@ -6477,10 +6541,16 @@ class WavesBridge(LibraryMixin, QObject):
         needle = " ".join((needle or "").split())
         if not needle:
             return
-        settings = getattr(self, "settings", None)
-        apple_enabled = bool(settings is not None and settings.data.apple_enabled and CTX_APPLE in self.providers)
-        tidal_enabled = bool(self._logged_in and CTX_TIDAL in self.providers)
-        if not tidal_enabled and not apple_enabled:
+        # The enabled set is every registered provider that can search and is
+        # on right now (TIDAL's session, Apple's enable switch, a provider
+        # with no gate is taken at its word -- issue #292's generic fan-out).
+        enabled_ids = [
+            provider_id
+            for provider_id, provider in self.providers.items()
+            if Capability.SEARCH in getattr(provider, "capabilities", frozenset())
+            and _search_provider_on(self, provider_id)
+        ]
+        if not enabled_ids:
             self._set_status("Sign in to search")
             return
         if "tidal.com" in needle or "music.apple.com" in needle or needle.startswith("http"):
@@ -6490,9 +6560,6 @@ class WavesBridge(LibraryMixin, QObject):
         # newer one's results (or re-fire its busy/status) once it finally returns.
         self._search_gen += 1
         gen = self._search_gen
-        enabled_ids = [
-            provider_id for provider_id, on in ((CTX_TIDAL, tidal_enabled), (CTX_APPLE, apple_enabled)) if on
-        ]
         # The enabled set is part of the key: an Apple-only page and a
         # TIDAL+Apple page carry different rows and must not serve each other.
         cache_key = f"{'+'.join(enabled_ids)}:{needle.lower()}"
@@ -6507,10 +6574,10 @@ class WavesBridge(LibraryMixin, QObject):
             self._set_status(f"{total} results")
             self._set_busy(False)
             devlog.event("search", "served from cache", n=total)
-            for card in payload["artists"]:
-                pop = self._pop_cached(card["id"])
+            for artist_id in self._search_artist_meters(payload):
+                pop = self._pop_cached(artist_id)
                 if pop >= 0:
-                    self.artistMetaLoaded.emit(card["id"], pop)
+                    self.artistMetaLoaded.emit(artist_id, pop)
             return
         # An older answer to the same search (this session's past its
         # window, or the last launch's, restored from disk) paints at once;
@@ -6557,28 +6624,37 @@ class WavesBridge(LibraryMixin, QObject):
                     ]
                 provider_results = {provider_id: result for provider_id, result, _error in fetched}
                 provider_errors = {provider_id: error for provider_id, _result, error in fetched if error is not None}
-            apple_error = provider_errors.get(CTX_APPLE)
+            # The first failing provider's words, in registry order: the
+            # status line's honest answer when a fetch failed (see below).
+            status_error = next(
+                (provider_errors[provider_id] for provider_id in provider_ids if provider_id in provider_errors),
+                None,
+            )
             if provider_errors and len(provider_errors) == len(provider_ids):
                 # Every enabled fetch raised: a failure, never "0 results",
-                # which reads as a search that found nothing. The one failure
-                # whose words reach a group is the Apple-only one (issue #241 /
-                # UI-05): no second provider can carry them, so a blank page
-                # would be the only answer. With a TIDAL leg in the fan-out a
-                # single provider's words would blame it for both failures, so
+                # which reads as a search that found nothing. A LONE enabled
+                # provider's failure answers its own group (issue #241 /
+                # UI-05): no second provider can carry the words, so a blank
+                # page would be the only answer. With two providers failing,
+                # one provider's words would blame it for both failures, so
                 # the plain failure stays. A page that already holds rows is
                 # never blanked by a failure, and nothing here is cached.
                 stale_rows = bool(stale is not None and self._search_total(stale))
-                apple_only = provider_ids == [CTX_APPLE]
-                if gen == self._search_gen and apple_only and apple_error is not None and not stale_rows:
-                    self.searchResults.emit(_failed_search_payload(str(apple_error)))
-                    self._set_status(str(apple_error))
+                if gen == self._search_gen and len(provider_ids) == 1 and not stale_rows:
+                    only = provider_ids[0]
+                    self.searchResults.emit(
+                        _failed_search_payload(only, self.providers[only], str(provider_errors[only]))
+                    )
+                    self._set_status(str(provider_errors[only]))
                 elif gen == self._search_gen:
                     self._set_status("Search failed")
                 if gen == self._search_gen:
                     self._set_busy(False)
                 return
-            # Only TIDAL feeds the ungrouped buckets; an Apple-only search
-            # leaves them empty and carries its rows in the Apple group.
+            # TIDAL's reply is the one that still carries engine objects; the
+            # bridge builds its rows (its legacy renderer). Every other
+            # provider hands over the row dicts themselves, so its group is
+            # built straight from the reply.
             results = provider_results.get(CTX_TIDAL, {})
             api = devlog.clock() - t0
             if gen != self._search_gen:
@@ -6626,33 +6702,46 @@ class WavesBridge(LibraryMixin, QObject):
 
             if gen != self._search_gen:
                 return  # superseded while building the payload
-            payload = {
+            tidal_rows = {
                 "artists": artists,
                 "albums": albums,
                 "tracks": tracks,
                 "videos": videos,
                 "playlists": playlists,
                 "mixes": mixes,
-                # TIDAL's one best match for the query (None when it named an
-                # artist or nothing): the mixed All view pins it above every
-                # section. Not a result of its own, so never counted.
-                "top": top,
             }
-            if apple_enabled:
-                # A failed Apple fetch says so in its OWN group (audit UI-05):
-                # the honest words ride the payload, so the group head can
-                # show them instead of painting "0 results" as if the catalog
-                # were empty.
-                payload[CTX_APPLE] = _apple_block(
-                    provider_results.get(CTX_APPLE, {}),
-                    error_text=str(apple_error) if apple_error is not None else "",
+            # One group per provider that answered, in registry order (TIDAL
+            # then Apple, then any later provider): the page's Repeater renders
+            # exactly this list, head and sections included (issue #292). A
+            # failed fetch says so in its OWN group (audit UI-05, generic in
+            # #292): the provider's honest words ride the payload, so the
+            # group head can show them instead of painting "0 results" as if
+            # the catalog were empty.
+            groups = []
+            for provider_id in provider_ids:
+                provider = self.providers[provider_id]
+                if provider_id == CTX_TIDAL:
+                    group_rows: dict = tidal_rows
+                    group_top = top
+                else:
+                    group_rows = provider_results.get(provider_id, {}) or {}
+                    group_top = group_rows.get("top")
+                groups.append(
+                    _search_group(
+                        provider_id,
+                        provider,
+                        group_rows,
+                        top=group_top,
+                        error_text=str(provider_errors[provider_id]) if provider_id in provider_errors else "",
+                    )
                 )
+            payload = {"groups": groups}
             total = self._search_total(payload)
             if stale is not None and total:
                 # The meters the stale page already shows: carried over so
                 # the swap does not blank them while the enrichment below
                 # fills them again.
-                known = {c["id"]: c.get("popularity", -1) for c in stale.get("artists") or []}
+                known = self._search_artist_meters(stale)
                 for card in artists:
                     card["popularity"] = known.get(card["id"], -1)
             if stale is not None and _search_same(payload, stale):
@@ -6666,7 +6755,7 @@ class WavesBridge(LibraryMixin, QObject):
             if total and not provider_errors:  # an all-empty payload is more likely a failed fetch
                 self._remember_search(cache_key, payload)
                 self._save_page_cache()
-            self._set_status(str(apple_error) if apple_error is not None else f"{total} results")
+            self._set_status(str(status_error) if status_error is not None else f"{total} results")
             self._set_busy(False)
             elapsed = devlog.clock() - t0
             devlog.done(
@@ -6732,11 +6821,24 @@ class WavesBridge(LibraryMixin, QObject):
     @staticmethod
     def _search_total(payload: dict) -> int:
         """Result count for the status line: the per-type lists only."""
-        total = sum(len(v) for v in payload.values() if isinstance(v, list))
-        apple = payload.get(CTX_APPLE)
-        if isinstance(apple, dict):
-            total += sum(len(v) for v in apple.values() if isinstance(v, list))
+        total = 0
+        for group in payload.get("groups") or []:
+            total += sum(len(group.get(section) or []) for section in _SEARCH_SECTIONS)
         return total
+
+    @staticmethod
+    def _search_artist_meters(payload: dict) -> dict[str, int]:
+        """Every group's artist ids (the cache-serve meter replay keys).
+
+        A missing or null meter reads -1; a real 0 is a meter like any other
+        (a just-released item's popularity), never folded into "unknown".
+        """
+        meters: dict[str, int] = {}
+        for group in payload.get("groups") or []:
+            for card in group.get("artists") or []:
+                raw = card.get("popularity", -1)
+                meters[str(card.get("id", ""))] = -1 if raw is None else int(raw)
+        return meters
 
     def _top_hit_dict(self, hit) -> dict | None:
         """The search reply's best match as a row dict tagged with its kind.
@@ -10068,6 +10170,23 @@ class WavesBridge(LibraryMixin, QObject):
 
     appleEnabled = Property(bool, _get_apple_enabled, notify=appleStatusChanged)
 
+    @Slot(result=bool)
+    def searchEnabled(self) -> bool:
+        """Whether any registered SEARCH provider is on right now.
+
+        The search row's own gate, generic over providers (issue #292): a
+        third provider registered with Capability.SEARCH makes the row live
+        with no QML edit. Read alongside the QML's reactive signedIn /
+        appleEnabled flags (which cover the shipped providers' live flips);
+        a provider with no gate is taken at its word (see
+        ``_search_provider_on``).
+        """
+        return any(
+            Capability.SEARCH in getattr(provider, "capabilities", frozenset())
+            and _search_provider_on(self, provider_id)
+            for provider_id, provider in (getattr(self, "providers", None) or {}).items()
+        )
+
     @Slot(result="QVariant")
     def myMusicSources(self) -> list:
         """My Music's source groups, one per provider whose shelves it renders.
@@ -12137,18 +12256,13 @@ class WavesBridge(LibraryMixin, QObject):
             "artist_sec_tracks_collapsed": False,
             "artist_sec_albums_collapsed": False,
             "artist_sec_eps_collapsed": False,
-            # Search-page sections (mixed All view): each shows its first 5
-            # results with a SHOW ALL beneath. A section the user expands stays
-            # expanded on the next search until collapsed again.
-            "search_sec_artists_expanded": False,
-            "search_sec_albums_expanded": False,
-            "search_sec_tracks_expanded": False,
-            "search_sec_videos_expanded": False,
-            "search_sec_playlists_expanded": False,
-            "search_sec_mixes_expanded": False,
-            # Search-page provider groups: a collapsed provider
-            # group stays collapsed on the next search and across restarts,
-            # per provider, alongside the section memory above.
+            # Search-page provider groups (issue #292): the fold and each
+            # section's SHOW ALL state are keyed by provider id
+            # (search_provider_<id>_collapsed, <id>_search_sec_<section>_expanded),
+            # so a provider the app has never heard of saves and restores its
+            # own state. The two shipped folds are declared here; every
+            # provider-keyed key is otherwise accepted by shape
+            # (_is_provider_surface_pref) and materialized on first write.
             "search_provider_tidal_collapsed": False,
             "search_provider_apple_collapsed": False,
             # The search sort control, remembered across launches: the order
@@ -12180,7 +12294,15 @@ class WavesBridge(LibraryMixin, QObject):
         try:
             with open(self._waves_prefs_path, encoding="utf-8") as handle:
                 stored = json.load(handle)
-            prefs.update({k: v for k, v in stored.items() if k in prefs})
+            # #292 renamed TIDAL's section prefs to the provider-keyed shape
+            # (search_sec_* -> tidal_search_sec_*): an existing value carries
+            # over once, then the legacy keys fall away (they are not in the
+            # defaults and the shape rule below no longer accepts them).
+            for section in _SEARCH_SECTIONS:
+                legacy = f"search_sec_{section}_expanded"
+                if legacy in stored:
+                    prefs.setdefault(f"tidal_search_sec_{section}_expanded", bool(stored[legacy]))
+            prefs.update({k: v for k, v in stored.items() if k in prefs or _is_provider_surface_pref(k)})
         except FileNotFoundError:
             # A fresh install (or a config folder someone moved): defaults are
             # the whole answer and there is nothing to keep.
@@ -12367,7 +12489,14 @@ class WavesBridge(LibraryMixin, QObject):
     @Slot(str, "QVariant")
     def setWavesPref(self, key: str, value) -> None:
         if key not in self._waves_prefs:
-            return
+            # A provider-keyed search surface pref (issue #292) the app has
+            # not seen yet: materialize it as the bool housekeeping state it
+            # is, so a provider that never shipped a default can still save
+            # its fold and SHOW ALL state. Anything else is a typo and stays
+            # refused.
+            if not _is_provider_surface_pref(key):
+                return
+            self._waves_prefs[key] = False
         old = self._waves_prefs[key]
         # Preserve the pref's type, a bool stored via str() becomes the truthy
         # string "False", so coerce against the existing default's type.

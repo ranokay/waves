@@ -121,22 +121,18 @@ _APPLE_ROW = {
 
 def _search_payload_with_apple() -> dict:
     return {
-        "artists": [],
-        "albums": [],
-        "tracks": [],
-        "videos": [],
-        "playlists": [],
-        "mixes": [],
-        "top": None,
-        "apple": {
-            "artists": [],
-            "albums": [_APPLE_ROW],
-            "tracks": [],
-            "videos": [],
-            "playlists": [],
-            "mixes": [],
-            "top": None,
-        },
+        "groups": [
+            {
+                "provider": "apple",
+                "artists_layout": "flow",
+                "artists": [],
+                "albums": [_APPLE_ROW],
+                "tracks": [],
+                "playlists": [],
+                "top": None,
+                "error": "",
+            }
+        ]
     }
 
 
@@ -254,7 +250,7 @@ def _run_apple_cta_scenario() -> int:
     q("root._searchSeq = root._navSeq; root.lastSearchQuery = 'ambient'")
     bridge.searchResults.emit(_search_payload_with_apple())
     settle(500)
-    if not bool(q("appleGroupHead.visible")):
+    if not bool(q("root.searchGroupFor('apple').headVisible")):
         failures.append("an Apple-only signed-out search showed no Apple group")
     if not q(_text_visible("results", "APPLE MUSIC")):
         failures.append("the Apple group rendered no provider header")
