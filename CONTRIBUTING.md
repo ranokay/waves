@@ -105,8 +105,9 @@ mise run test-strict
 ```
 
 The same group runs across Python 3.12, 3.13 and 3.14 in CI
-(`master.yml`). To run another version locally,
-`MISE_PYTHON_VERSION=3.14 mise run test-strict`.
+(`master.yml`). To run another version locally, re-sync the venv onto it
+first (uv keeps the existing interpreter otherwise):
+`uv sync --locked --all-extras --python 3.14 && mise run test-strict`.
 
 9. Commit your changes and push your branch to GitHub:
 

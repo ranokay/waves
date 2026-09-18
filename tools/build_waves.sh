@@ -19,6 +19,7 @@ done
 
 WAVES_APP_NAME="Waves"
 WAVES_VERSION="$(grep -m 1 '__version__' waves/waves_ui/__init__.py | tr -d ' "' | cut -d'=' -f2)"
+[ -n "$WAVES_VERSION" ] || { echo "error: could not parse __version__ from waves/waves_ui/__init__.py" >&2; exit 1; }
 DIST="dist"
 # Oldest macOS the bundle can run on: the most demanding file shipped inside
 # decides this, in practice the PySide6 wheels (see the note in pyproject.toml).

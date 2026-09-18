@@ -41,6 +41,10 @@ run = 'uv run --locked --all-extras pytest --doctest-modules -rs --require-qml -
 description = "The ffmpeg group (assumes ffmpeg on PATH; < 1 min)"
 run = 'uv run --locked --all-extras pytest --doctest-modules -rs -q -m "ffmpeg and not account" tests'
 
+[tasks.app]
+description = "Run the Waves app from source"
+run = "uv run --locked --all-extras python -m waves.waves_ui"
+
 [tasks.build]
 description = "Build the Waves QML app (Nuitka); on macOS this yields dist/waves.app"
 run = "bash tools/build_waves.sh"

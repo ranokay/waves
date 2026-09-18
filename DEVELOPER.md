@@ -104,7 +104,7 @@ album_id)`, look the album up in `self._objs["album"]`, do the work on
 
 ```bash
 mise run test                         # unit tests, incl. the QML guards
-uv run python -m waves.waves_ui       # run the app from source
+mise run app                          # run the app from source
 mise run build                        # Nuitka build -> dist/waves.app
 ```
 
@@ -116,14 +116,14 @@ timing-sensitive under load. Counts and runtimes below are as of 2026-09-17
 (macOS arm64, offscreen Qt); the budget is the limit the group must stay
 within on this host.
 
-| Group                                                  | Command                                                   |  Cases |                   Budget (measured) |
-| ------------------------------------------------------ | --------------------------------------------------------- | -----: | ----------------------------------: |
-| fast (no Qt, ffmpeg, slow, integration or account)     | `mise run test-fast`                                      | ~4,194 |                      < 1 min (37 s) |
-| quick QML (the heaviest boots skipped)                 | `mise run test-qml`                                       |    ~91 |                < 5 min (4 min 12 s) |
-| default (all but the live account tests)               | `mise run test-default`                                   | ~4,354 |               < 10 min (6 min 48 s) |
-| strict (the merge gate; default plus `--require-qml`)  | `mise run test-strict`                                    | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
-| ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips) | `mise run test-ffmpeg`                                    |    ~56 |                      < 1 min (11 s) |
-| live account (never in CI; needs credentials)          | `WAVES_ACCOUNT_TESTS=1 uv run pytest -q -m account tests` |      4 |                                 n/a |
+| Group                                                  | Command                                                                         |  Cases |                   Budget (measured) |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------- | -----: | ----------------------------------: |
+| fast (no Qt, ffmpeg, slow, integration or account)     | `mise run test-fast`                                                            | ~4,194 |                      < 1 min (37 s) |
+| quick QML (the heaviest boots skipped)                 | `mise run test-qml`                                                             |    ~91 |                < 5 min (4 min 12 s) |
+| default (all but the live account tests)               | `mise run test-default`                                                         | ~4,354 |               < 10 min (6 min 48 s) |
+| strict (the merge gate; default plus `--require-qml`)  | `mise run test-strict`                                                          | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
+| ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips) | `mise run test-ffmpeg`                                                          |    ~56 |                      < 1 min (11 s) |
+| live account (never in CI; needs credentials)          | `WAVES_ACCOUNT_TESTS=1 uv run --locked --all-extras pytest -q -m account tests` |      4 |                                 n/a |
 
 `--require-qml` turns a missing Qt into a failure instead of a silent skip of
 the whole QML half. The `slow` marker names the heaviest QML boots (each case
@@ -132,12 +132,12 @@ GUI surface without them. `integration` tests (nested runners, process
 boundaries) have no quick group of their own; run them through strict.
 `mise run test-fast`, `mise run test-qml`, `mise run test-default`,
 `mise run test-strict` and `mise run test-ffmpeg` wrap the first five groups;
-the live account group has no wrapper and never runs in CI. Every task runs
-the command through `uv run --locked --all-extras`, so the lockfile is the
-environment and drift fails the run.
+the live account group has no wrapper and never runs in CI. Every test and
+check task runs the command through `uv run --locked --all-extras`, so the
+lockfile is the environment and drift fails the run.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
-`pip uninstall tidaler`, then `mise run install` (or
+`uv pip uninstall tidaler`, then `mise run install` (or
 `uv sync --all-extras`). A stale editable install keeps `import tidaler`
 resolving against dead code, and without the `waves` distribution installed
 the app treats the run as a dev environment and opens against the separate

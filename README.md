@@ -169,8 +169,8 @@ Prefer to run from source?
 
 ```bash
 # from a clone of this repository
-uv sync --all-extras       # uv installs the pinned Python itself (https://docs.astral.sh/uv/)
-uv run python -m waves.waves_ui
+mise run install           # pins Python/uv via mise.toml and the locked env (https://mise.jdx.dev)
+mise run app
 ```
 
 Waves is GUI‑first and does not ship a command‑line interface. If you prefer the command line, use the upstream **[Tidaler](https://github.com/maya-doshi/tidaler)** project directly; it provides a maintained, CLI‑focused build (`tidaler` / `tdn`) of the same engine Waves is built on.

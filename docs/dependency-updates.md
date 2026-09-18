@@ -55,8 +55,8 @@ never leaks into the default run or CI.
 ```bash
 git checkout develop && git checkout -b chore/bump-gamdl
 uv add 'gamdl>=3.9,<3.10'        # edits pyproject.toml and uv.lock
-uv run pytest                    # the pinned-client contract fails first on surface changes
-WAVES_ACCOUNT_TESTS=1 .venv/bin/python -m pytest -q tests/account
+uv run --locked --all-extras pytest                    # the pinned-client contract fails first on surface changes
+WAVES_ACCOUNT_TESTS=1 uv run --locked --all-extras pytest -q -m account tests
 ```
 
 The contract test names the members the engine calls; an intentional surface
