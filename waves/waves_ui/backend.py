@@ -4970,9 +4970,10 @@ class WavesBridge(LibraryMixin, QObject):
         # (which drops every cached page), and ``_lib_gen`` counts the loads
         # started for one (source, category) page. A worker captures the pair
         # before its fetch and drops its answer when either half moved: its own
-        # shelf was reloaded or re-sorted, or the account flipped. The pair is
-        # per page, so a load for one source's shelf never cancels another
-        # source's in-flight load.
+        # shelf was reloaded or re-sorted, or the account flipped. ``_lib_gen``
+        # is per page, so a load for one source's shelf never cancels another
+        # source's in-flight load; the epoch invalidates every page at once
+        # when the account changes.
         self._lib_epoch = 0
         self._lib_gen: dict[tuple[str, str], int] = {}
         # The Library section's own load state (ADR 0007, issue #222), keyed
@@ -10246,8 +10247,10 @@ class WavesBridge(LibraryMixin, QObject):
     def isAppleEnabled(self) -> bool:
         """Whether the Apple provider section is enabled (spec §7.1).
 
-        The provider's own cards, panes and download gates are what read this
-        (the chooser reads provider capabilities instead, issue #235)."""
+        Apple-specific availability reads this: the welcome gate and its
+        choices, the search row, and the search empty state's hints. The
+        chooser is not gated on it (issue #235: the control belongs to every
+        provider and reads capabilities instead)."""
         return self._get_apple_enabled()
 
     def _provider_meta(self, provider_id: str):

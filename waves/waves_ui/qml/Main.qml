@@ -487,7 +487,7 @@ ApplicationWindow {
     // veil's Loaders tick exactly once per row -- while a refresh swaps the
     // rows of the groups the page already shows: it can neither mount nor
     // unmount a provider, so a refresh after a switch-off cannot put a ghost
-    // head back (issue #241's rule, kept).
+    // head back (issue #241's rule).
     function applySearchGroups(groups, refresh) {
         groups = groups || []
         root.searchRefreshMode = refresh === true
@@ -934,7 +934,7 @@ ApplicationWindow {
     // a SHOW ALL beneath it, so the page reads as a quick overview instead of a
     // wall. The fold and the SHOW ALL state live on each provider's own group
     // (SearchProviderGroup, issue #292): pref-backed per provider and section,
-    // so they survive a restart exactly as the shipped two did. A specific
+    // so they survive a restart. A specific
     // section filter always shows everything (no cap).
     //
     // ARTISTS is the exception to the layout, and the layout is the provider's
@@ -7557,7 +7557,7 @@ ApplicationWindow {
                                 opacity: db.chooserShowTtml ? 1 : 0.4
                                 // Enabled only where the provider serves TTML:
                                 // an inert tile leaves the tab order (issue #240's
-                                // rule, kept here).
+                                // rule).
                                 activeFocusOnTab: chooserPop.visible && db.chooserShowTtml
                                 enabled: db.chooserShowTtml
                                 Accessible.role: Accessible.CheckBox
@@ -8789,7 +8789,7 @@ ApplicationWindow {
         // anything else the neutral 50px head Apple has always shown.
         readonly property bool accentHead: String(group.descriptor ? group.descriptor.head_style : "") === "accent"
         // The fold, and the SHOW ALL state, are per provider: pref-backed so
-        // they survive a restart exactly as the shipped two did.
+        // they survive a restart.
         property bool collapsed: false
         property var expanded: ({})
         // This group's sortable rows, held raw (not the lossy model copies) so
@@ -8921,10 +8921,9 @@ ApplicationWindow {
 
         // The provider head: name, mark and sizes from its descriptor, count
         // or the honest error words + RETRY, and the whole head folds the
-        // group. The descriptor's head style picks the shipped furniture
-        // (TIDAL's hover-lit accent head vs Apple's neutral one), so both
-        // providers' heads look exactly as they did (issue #292); the error
-        // furniture is the shipped Apple one (#241 / UI-05).
+        // group. The descriptor's head style picks the furniture (TIDAL's
+        // hover-lit accent head vs Apple's neutral one, issue #292); the
+        // error furniture is the shipped Apple one (#241 / UI-05).
         Item {
             id: groupHead
             readonly property var provider: group.descriptor
@@ -9121,7 +9120,7 @@ ApplicationWindow {
             // Offer SHOW ALL only when there is more to reveal: the strip's
             // overflow, or the flow's five-row cap. The count gate is what the
             // sections get from sectionVisible(); without it the expanded flag
-            // alone (pref-backed) kept this label on screen over an empty page.
+            // (pref-backed) would keep this label on screen over an empty page.
             visible: group.sectionVisible("artists") && root.filterType === "all" && artistsModel.count > 0
                      && (group.isExpanded("artists")
                          || (group.stripArtists ? artistStrip.contentWidth > artistStrip.width + 1
