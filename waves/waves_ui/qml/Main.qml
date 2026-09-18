@@ -12393,7 +12393,7 @@ ApplicationWindow {
         property bool landing: false
         // The scroll pane and content column this section lives in, for
         // wheel redirection, row windowing and highlight centering.
-        property Item pane: null
+        property Flickable pane: null
         property Item col: null
         // Where this section sits in the pane's scroll space. The row window
         // is measured from HERE, never from the top of the page: on the

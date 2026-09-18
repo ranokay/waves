@@ -47,7 +47,7 @@ repos:
       - id: qmllint
         name: qmllint
         entry: bash tools/lint_qml.sh
-        files: \.(qml|js)$
+        files: ^waves/waves_ui/qml/.*\.(qml|js)$
         language: system
 
   - repo: local
