@@ -116,6 +116,10 @@ class Capability(StrEnum):
     OPEN_URL = "open_url"
     CATALOG = "catalog"
     DOWNLOAD = "download"
+    # The whole-discography verb, on top of DOWNLOAD: TIDAL answers an artist
+    # sweep; a catalog without it (Apple) renders no artist-page control at all
+    # instead of a live button whose only answer is a refusal (issue #288).
+    ARTIST_DOWNLOAD = "artist_download"
     LYRICS = "lyrics"
     ART = "art"
     BROWSE = "browse"

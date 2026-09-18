@@ -219,6 +219,11 @@ present), `tier`, `audioType` (clamped to `audioOptions`), `audioOptions`,
 `atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt` and the
 lyrics/art quick-toggles. A provider whose metadata offers nothing per-click
 answers `chooserSupported` False, so no chevron renders.
+`artistDownloadSupported(artistId)` is the same kind of answer for the artist
+page's discography control (issue #288): True only where the artist's provider
+declares `Capability.ARTIST_DOWNLOAD`, so an Apple artist page renders no
+control for the verb its catalog cannot answer (the click is refused with
+honest words either way).
 
 ## Local library presence (the "in your library" badge)
 

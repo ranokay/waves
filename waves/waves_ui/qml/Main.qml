@@ -16518,9 +16518,15 @@ ApplicationWindow {
                         Row {
                             spacing: 12
                             DownloadButton {
+                                objectName: "artistDownload"
                                 mediaId: root.artistData.id || ""
                                 chooserKind: "artist"
                                 label: "Download discography"
+                                // Only where the provider answers an artist
+                                // sweep: Apple's catalog has no discography
+                                // verb, and a live control that can only
+                                // refuse is worse than none (issue #288).
+                                visible: waves.artistDownloadSupported(root.artistData.id || "")
                                 // The badge directly above says what is held;
                                 // this says what a click would add to.
                                 libArtist: root.artistData.name || ""

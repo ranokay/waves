@@ -10256,6 +10256,24 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Chooser capability probe failed; hiding the control", exc_info=True)
             return False
 
+    @Slot(str, result=bool)
+    def artistDownloadSupported(self, artist_id: str) -> bool:
+        """Whether the artist's provider can queue a discography sweep.
+
+        The provider's capability decides, never an id prefix in the QML
+        (issue #288): Apple's provider does not declare
+        ``Capability.ARTIST_DOWNLOAD``, so an Apple artist page renders no
+        discography control instead of a live button whose only answer is a
+        refusal. The verb itself stays refused on the bridge side for any
+        other caller (say, a keyboard path).
+        """
+        if not str(artist_id or "").strip():
+            return False  # no artist, no control
+        provider = self._provider_meta(self._chooser_provider_of(artist_id))
+        if provider is None:
+            return False
+        return Capability.ARTIST_DOWNLOAD in provider.capabilities
+
     @Slot(str, str, result="QVariant")
     def chooserDefaults(self, media_id: str, kind: str = "") -> dict:
         """Everything the Chooser popover needs to open on this control.

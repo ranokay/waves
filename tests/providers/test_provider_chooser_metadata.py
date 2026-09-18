@@ -80,6 +80,7 @@ def _bridge(providers=None, **settings_over):
         "_chooser_atmos_only",
         "_chooser_supports",
         "chooserSupported",
+        "artistDownloadSupported",
         "chooserDefaults",
         "saveChooserDefaults",
         "_chooser_ask_for",
@@ -277,6 +278,25 @@ def test_chooser_supported_is_capability_driven_not_provider_identity():
     )
     b = _bridge(providers={"mute": bare})
     assert b.chooserSupported("mute:1", "track") is False
+
+
+def test_the_artist_download_verdict_is_capability_driven_not_provider_identity():
+    """Issue #288: the artist page's discography control renders from a
+    provider capability, so no QML branch names a provider. Apple's catalog
+    answers no artist sweep; TIDAL's does; a third provider declaring the
+    capability gets the control and one without it never does."""
+    b = _bridge()
+
+    assert b.artistDownloadSupported("") is False, "no artist, no control"
+    assert b.artistDownloadSupported(f"{CTX_APPLE}:artist-1") is False
+    assert b.artistDownloadSupported("artist-1") is True
+
+    qobuz = _metadata(_QOBUZ, capabilities=frozenset({Capability.ARTIST_DOWNLOAD}))
+    third = _bridge(providers={CTX_TIDAL: _metadata(TidalProvider), "qobuz": qobuz})
+    assert third.artistDownloadSupported("qobuz:artist-1") is True
+
+    bare = _bridge(providers={CTX_TIDAL: _metadata(TidalProvider), "bare": _metadata(BareProvider)})
+    assert bare.artistDownloadSupported("bare:artist-1") is False
 
 
 def test_chooser_segment_tiles_come_from_the_enabled_providers_descriptors():

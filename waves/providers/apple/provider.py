@@ -87,6 +87,10 @@ def _catalog_path_id(type_seg: str, raw_id: str) -> tuple[str, str, None] | None
 class AppleProvider(Provider):
     id = CTX_APPLE
     name = "Apple Music"
+    # No Capability.ARTIST_DOWNLOAD: an artist discography sweep is the one
+    # verb this catalog cannot answer (`downloadArtist` refuses it with the
+    # present-tense words), so the artist page renders no control for it
+    # (issue #288). Album/playlist/track downloads are all here.
     capabilities = frozenset(
         {
             Capability.SEARCH,
