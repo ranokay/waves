@@ -12393,7 +12393,7 @@ ApplicationWindow {
         property bool landing: false
         // The scroll pane and content column this section lives in, for
         // wheel redirection, row windowing and highlight centering.
-        property Item pane: null
+        property Flickable pane: null
         property Item col: null
         // Where this section sits in the pane's scroll space. The row window
         // is measured from HERE, never from the top of the page: on the
@@ -15358,7 +15358,7 @@ ApplicationWindow {
                 // queue (outlined) with count badge
                 Rectangle {
                     objectName: "queueBtn"
-                    implicitHeight: qrow.implicitHeight + root.btnPadV * 2; implicitWidth: qrow.implicitWidth + root.btnPadH * 2; radius: root.btnRad
+                    implicitHeight: queueBtnRow.implicitHeight + root.btnPadV * 2; implicitWidth: queueBtnRow.implicitWidth + root.btnPadH * 2; radius: root.btnRad
                     activeFocusOnTab: true
                     Accessible.role: Accessible.Button
                     Accessible.name: "Queue, " + root.activeQueueCount + (root.activeQueueCount === 1 ? " active item" : " active items")
@@ -15368,7 +15368,7 @@ ApplicationWindow {
                     Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; queueDrawer.open() } }
                     color: "transparent"; border.color: root.border1
                     RowLayout {
-                        id: qrow; anchors.centerIn: parent; spacing: 7
+                        id: queueBtnRow; anchors.centerIn: parent; spacing: 7
                         Ico { name: "arrow-down"; color: root.accent; size: 15; bold: 10 }
                         Text { text: "QUEUE"; color: root.textLo; font.pixelSize: 13; font.family: root.uiFont; font.bold: true; font.letterSpacing: root.btnTrack }
                         Rectangle {
@@ -15673,13 +15673,13 @@ ApplicationWindow {
                                 required property var modelData
                                 required property int index
                                 readonly property bool on: root.filterType === modelData[0]
-                                radius: 8; implicitHeight: 30; implicitWidth: chipRow.implicitWidth + 26
+                                radius: 8; implicitHeight: 30; implicitWidth: fchipRow.implicitWidth + 26
                                 color: on ? root.accentCont : "transparent"
                                 border.color: on ? root.accentDim : root.border1
                                 opacity: 0
                                 transform: Translate { id: chipTr; y: -7 }
                                 Row {
-                                    id: chipRow; anchors.centerIn: parent; spacing: 7
+                                    id: fchipRow; anchors.centerIn: parent; spacing: 7
                                     Rectangle { width: 6; height: 6; radius: 3; anchors.verticalCenter: parent.verticalCenter; color: tchip.on ? root.accent : root.textDim }
                                     Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: tchip.modelData[1]; color: tchip.on ? root.accent : root.textLo; font.pixelSize: 13 }
                                 }

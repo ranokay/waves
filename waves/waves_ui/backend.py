@@ -3579,7 +3579,7 @@ def _search_sections(provider) -> tuple[str, ...]:
     nothing answers them all; one that names a section the page does not
     render (a typo, or a newer contract) contributes no bucket for it rather
     than failing the search."""
-    declared = tuple(getattr(provider, "search_sections", ()) or ())
+    declared: tuple[str, ...] = tuple(getattr(provider, "search_sections", ()) or ())
     if not declared:
         return _SEARCH_SECTIONS
     sections = tuple(section for section in declared if section in _SEARCH_SECTIONS)
@@ -4480,7 +4480,7 @@ class WavesBridge(LibraryMixin, QObject):
         # per distinct item, so resolving the gate replays EVERY download the
         # user asked for. A single-slot version silently dropped all but the
         # last click when several downloads hit an unreachable mount together.
-        self._pending_downloads: list[tuple[str, object]] = []
+        self._pending_downloads: list[tuple[str, Callable[[], object]]] = []
         self._pending_lock = Lock()
         # Serializes structural queue mutations (append, rebind-filter). The
         # GUI thread appends via _enqueue while download workers withdraw rows
@@ -4763,7 +4763,7 @@ class WavesBridge(LibraryMixin, QObject):
         # GUI thread, so their slots have a running event loop.
         self._library_poll_in_flight = False
         self._library_watcher = None
-        self._watched_paths: set[str] = set()
+        self._watched_paths = set()
         self._library_watch_pending_add: list[str] = []
         self._library_watch_burst_start = 0.0
         # When the current run of landing downloads began, so the debounce below
@@ -13024,7 +13024,7 @@ class WavesBridge(LibraryMixin, QObject):
         self._recovery_poll.stop()
         self._run_pending_downloads()
 
-    def _stash_pending_download(self, media_id: str, retry) -> None:
+    def _stash_pending_download(self, media_id: str, retry: Callable[[], object]) -> None:
         """Hold a gated download for later replay. Keyed by media id so a
         re-click of the same item replaces its held copy (instead of queueing
         it twice on resolve), while clicks on different items all survive."""
@@ -13242,8 +13242,8 @@ class WavesBridge(LibraryMixin, QObject):
         media_id: str,
         merge_plan: list | None = None,
         provider_id: str = CTX_TIDAL,
-        keep_ask: tuple | None = None,
-        chooser_ask: tuple | None = None,
+        keep_ask: tuple[str, str, str | None] | None = None,
+        chooser_ask: tuple[str, str] | None = None,
         chooser_audio: str | None = None,
         chooser_toggles: dict | None = None,
     ) -> bool:
@@ -13329,13 +13329,12 @@ class WavesBridge(LibraryMixin, QObject):
         # on the item, stated by its badge, until the item is given another
         # tier, so the badge does not fall back to the catalog's word.
         if chooser_ask is not None and chooser_ask[0]:
-            ask, ask_tier = (
-                str(chooser_ask[0]),
-                str(chooser_ask[1] if len(chooser_ask) > 1 else "" or _tier_word(chooser_ask[0])),
-            )
+            ask = str(chooser_ask[0])
+            ask_tier = str(chooser_ask[1]) if len(chooser_ask) > 1 else _tier_word(ask)
             keep_ver = None
         elif keep_ask is not None and keep_ask[0]:
-            ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] if len(keep_ask) > 1 else "" or _tier_word(keep_ask[0]))
+            ask = str(keep_ask[0])
+            ask_tier = str(keep_ask[1]) if len(keep_ask) > 1 else _tier_word(ask)
             # A retry is of THIS row: it keeps the Version the row asked at,
             # not a fresh dual pair (each row carries its own retry).
             keep_ver = str(keep_ask[2] if len(keep_ask) > 2 else "" or "").strip().lower() or None
@@ -13570,9 +13569,9 @@ class WavesBridge(LibraryMixin, QObject):
         file_template: str,
         collection: bool,
         media_id: str,
-        keep_ask: tuple | None = None,
+        keep_ask: tuple[str, str, str | None] | None = None,
         is_retry: bool = False,
-        chooser_ask: tuple | None = None,
+        chooser_ask: tuple[str, str] | None = None,
         chooser_audio: str | None = None,
         chooser_toggles: dict | None = None,
     ) -> bool:
@@ -13673,10 +13672,8 @@ class WavesBridge(LibraryMixin, QObject):
         ):
             return False
         if chooser_ask is not None and chooser_ask[0]:
-            ask, ask_tier = (
-                str(chooser_ask[0]),
-                str(chooser_ask[1] if len(chooser_ask) > 1 else "" or _tier_word(chooser_ask[0])),
-            )
+            ask = str(chooser_ask[0])
+            ask_tier = str(chooser_ask[1]) if len(chooser_ask) > 1 else _tier_word(ask)
             keep_ver = None
         elif keep_ask is not None and keep_ask[0]:
             # A retry asks at what its row asked, not at a setting that moved
@@ -13684,7 +13681,8 @@ class WavesBridge(LibraryMixin, QObject):
             # Whether this re-entry IS a retry rides is_retry (set by
             # _start_retry); keep_ask alone only pins the ask, so a deferred
             # replay of a fresh row keeps its ask without becoming a retry.
-            ask, ask_tier = str(keep_ask[0]), str(keep_ask[1] if len(keep_ask) > 1 else "" or _tier_word(keep_ask[0]))
+            ask = str(keep_ask[0])
+            ask_tier = str(keep_ask[1]) if len(keep_ask) > 1 else _tier_word(ask)
             keep_ver = str(keep_ask[2] if len(keep_ask) > 2 else "" or "").strip().lower() or None
             keep_ver = keep_ver if keep_ver in ("stereo", "atmos") else None
         else:
@@ -18991,9 +18989,10 @@ class WavesBridge(LibraryMixin, QObject):
             cookies_error = ""
         auth_probe = getattr(self, "apple_wrapper_auth_state", None)
         try:
-            wrapper_auth = auth_probe() if callable(auth_probe) else {}
+            probed = auth_probe() if callable(auth_probe) else {}
         except Exception:
-            wrapper_auth = {}
+            probed = {}
+        wrapper_auth: dict = probed if isinstance(probed, dict) else {}
         manager = getattr(self, "_apple_runtime", None)
         try:
             runtime = (

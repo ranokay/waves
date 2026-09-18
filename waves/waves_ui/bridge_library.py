@@ -42,6 +42,7 @@ import re
 import sys
 import threading
 import time
+from typing import cast
 
 from pathvalidate import sanitize_filename
 from PySide6 import QtCore, QtGui
@@ -707,6 +708,10 @@ def _rehome_map(folded: dict, by_id: dict) -> dict:
 class LibraryMixin:
     """The local music-library scan, watch and presence family, mixed into
     WavesBridge (see the module docstring)."""
+
+    # Declared here (the concrete bridge assigns it per instance in __init__)
+    # so the watcher half type-checks without the bridge.
+    _watched_paths: set[str]
 
     # revealLibraryAlbum resolved its target on a worker (the ancestor walk can
     # stat a dead network mount); openUrl must run on the GUI thread.
@@ -1521,7 +1526,9 @@ class LibraryMixin:
             self._teardown_library_watch()
             return
         if self._library_watcher is None:
-            self._library_watcher = QtCore.QFileSystemWatcher(self)
+            # cast: the concrete bridge is the QObject; a cooperative mixin
+            # cannot say so, and the checker has no other way to see it.
+            self._library_watcher = QtCore.QFileSystemWatcher(cast(QtCore.QObject, self))
             self._library_watcher.directoryChanged.connect(self._on_library_dir_changed)
         desired = set(container_paths)
         gone = self._watched_paths - desired
@@ -2220,7 +2227,7 @@ class LibraryMixin:
             gen = self._library_gen
             lib = self._library
         root = self._library_root()
-        found: int | None = None
+        found: object = None
         try:
             if not root or lib is None:
                 return False

@@ -65,6 +65,7 @@ dev = [
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
   # bump invalidates it (docs/dependency-updates.md).
   "nuitka==2.8.4",
+  "basedpyright>=1.40.1",
 ]
 
 [build-system]
@@ -73,6 +74,29 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+
+[tool.basedpyright]
+# Hand-written UI code is typed; the inherited engine is exempt (its own
+# concern, and typing it is a separate campaign). Basic mode only: the point
+# is catching slot/signal, call/return and assignment mistakes in the bridge,
+# not a full annotation campaign.
+typeCheckingMode = "basic"
+include = ["waves/waves_ui"]
+pythonVersion = "3.12"
+
+# Downgraded, with reasons. All three stay visible as warnings; the gate
+# still fails on every other category. Burn-down is tracked in issue #319.
+# - reportAttributeAccessIssue: catalog/engine objects cross the provider seam
+#   as plain objects by design (the row-dict contract), so their members are
+#   intentionally opaque to the checker until the engine seam is protocolized.
+# - reportArgumentType: the same seam, plus PySide6/Qt stubs (property type
+#   strings like "QVariant", QByteArray buffers) and the urllib/tidalapi
+#   stubs' narrow parameter types.
+# - reportOptionalMemberAccess: dynamic per-job attributes on engine objects
+#   (`download.write_count`) that the checker sees as Optional.
+reportAttributeAccessIssue = "warning"
+reportArgumentType = "warning"
+reportOptionalMemberAccess = "warning"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -90,6 +114,8 @@ target-version = "py312"
 line-length = 120
 fix = true
 # Overview: https://docs.astral.sh/ruff/rules/
+
+[tool.ruff.lint]
 select = [
   # flake8-2020
   "YTT",
@@ -141,7 +167,7 @@ ignore = [
   "RUF003",
 ]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 # Tests use asserts (S101), terse error messages (TRY003) and throwaway temp
 # paths like "/tmp/x" as never-touched dummy dirs (S108).
 "tests/*" = ["S101", "TRY003", "S108"]

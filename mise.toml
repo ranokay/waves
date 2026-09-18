@@ -14,8 +14,17 @@ description = "Create/sync the dev environment and install the pre-commit hooks"
 run = "uv sync --locked --all-extras && uv run --locked --all-extras pre-commit install"
 
 [tasks.check]
-description = "Lock drift, pre-commit hooks and unused dependencies"
+description = "Lock drift, static analysis, pre-commit hooks and unused dependencies"
+depends = ["lint-qml", "typecheck"]
 run = "uv lock --check && uv run --locked --all-extras pre-commit run -a && uv run --locked --all-extras deptry ."
+
+[tasks.lint-qml]
+description = "qmllint the QML tree (errors fail; warnings are summarized)"
+run = "bash tools/lint_qml.sh"
+
+[tasks.typecheck]
+description = "basedpyright (basic) over the hand-written UI code"
+run = "uv run --locked --all-extras basedpyright"
 
 [tasks.test]
 description = "Run the whole suite (unit tests, incl. the QML guards)"
