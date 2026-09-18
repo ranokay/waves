@@ -30,10 +30,15 @@ def _fake(*, rc: int = 0, stdout: str = "", stderr: str = "") -> SimpleNamespace
     return SimpleNamespace(returncode=rc, stdout=stdout, stderr=stderr)
 
 
-def _bundle(tmp_path, names: tuple[str, ...]):
+def _bundle(tmp_path, names: tuple[str, ...], *, crypto: bool = True):
     root = tmp_path / "waves.app"
     (root / "Contents" / "MacOS").mkdir(parents=True)
     (root / "Contents" / "MacOS" / "waves").write_bytes(b"\x00")
+    if crypto:
+        for module in ("_raw_aes", "_raw_cbc", "_SHA1"):
+            path = root / "Contents" / "MacOS" / "Crypto" / "Cipher" / f"{module}.abi3.so"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"\x00")
     for name in names:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +184,36 @@ def test_a_missing_codesign_fails_closed(tmp_path):
     assert report["signature"]["kind"] == "unavailable"
     assert report["signature"]["verified"] is False
     assert report["ok"] is False
+
+
+def test_a_missing_pycryptodome_native_module_fails_the_inspection(tmp_path):
+    """The runtime loads the AES modules by name through ctypes, so a size trim
+    can delete them silently and every Apple cookies-tier download then dies at
+    the FairPlay AES step (issue #304)."""
+    bundle = _bundle(tmp_path, (), crypto=False)
+
+    report = inspect_bundle_tool.inspect_bundle(bundle, verify_signature=False)
+
+    assert report["missing"] == [
+        "PyCryptodome's AES native module (Crypto.Cipher._raw_aes)",
+        "PyCryptodome's CBC native module (Crypto.Cipher._raw_cbc)",
+        "PyCryptodome's SHA-1 native module (Crypto.Hash._SHA1)",
+    ]
+    assert report["ok"] is False
+
+
+def test_every_platform_spelling_of_the_native_modules_is_accepted(tmp_path):
+    for index, name in enumerate(("_raw_aes.abi3.so", "_raw_aes.cpython-313-darwin.so", "_raw_aes.pyd")):
+        bundle = _bundle(tmp_path / str(index), (), crypto=False)
+        for module in ("_raw_aes", "_raw_cbc", "_SHA1"):
+            path = bundle / "Contents" / "MacOS" / "Crypto" / "Cipher" / name.replace("_raw_aes", module)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"\x00")
+
+        report = inspect_bundle_tool.inspect_bundle(bundle, verify_signature=False)
+
+        assert report["missing"] == [], name
+        assert report["ok"] is True
 
 
 def test_a_missing_bundle_raises(tmp_path):

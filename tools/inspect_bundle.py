@@ -10,6 +10,13 @@ under ADR 0004 and are reported, never failed unless
 the main executable, so its module markers are scanned as well as the
 bundle's files.
 
+It also checks the other direction: native modules the runtime loads by name
+must be present. PyCryptodome's cipher modules are the known case (issue
+#304): ``load_pycryptodome_raw_lib`` uses ctypes, so Nuitka's import
+following cannot see ``_raw_aes`` and a build without the explicit package
+include ships an empty ``Crypto/Cipher``; every Apple cookies-tier download
+then dies at the FairPlay AES step.
+
 The classification is name-based by design: it catches engine artifacts
 shipped under their real names, not bytes renamed to something innocent. A
 content audit of every file belongs to the distribution review, not here.
@@ -19,8 +26,9 @@ Usage:
     python tools/inspect_bundle.py <path/to/waves.app|waves.dist> [--json] [--no-signature]
                                    [--strict-clients] [--require-developer-id]
 
-Exit status 0 when no forbidden artifact is found, the client policy holds
-and, on macOS with a ``.app`` bundle, codesign verifies. 1 otherwise.
+Exit status 0 when no forbidden artifact is found, every required native
+module is present, the client policy holds and, on macOS with a ``.app``
+bundle, codesign verifies. 1 otherwise.
 """
 
 from __future__ import annotations
@@ -50,6 +58,17 @@ _CLIENTS = (
 _EMBEDDED_MARKERS = (
     (re.compile(r"^gamdl(\.|$)"), "gamdl"),
     (re.compile(r"^yt_dlp(\.|$)"), "yt-dlp"),
+)
+# Native modules the bundle must carry: loaded by name at runtime (ctypes), so
+# a build or a trim can drop them silently (the #304 case). The Apple HLS
+# download path loads these three in turn (AES-CBC segment decrypt plus SHA-1);
+# the signing path's Ed25519 modules are checked by the updater's own tests.
+# The name-only match covers every platform's extension spelling
+# (_raw_aes.abi3.so, _raw_aes.pyd, ...).
+_REQUIRED_NATIVE = (
+    (re.compile(r"^_raw_aes(\.|$)"), "PyCryptodome's AES native module (Crypto.Cipher._raw_aes)"),
+    (re.compile(r"^_raw_cbc(\.|$)"), "PyCryptodome's CBC native module (Crypto.Cipher._raw_cbc)"),
+    (re.compile(r"^_SHA1(\.|$)"), "PyCryptodome's SHA-1 native module (Crypto.Hash._SHA1)"),
 )
 
 
@@ -121,16 +140,19 @@ def inspect_bundle(
 
     ``strict_clients`` fails the report when an open-source client ships (the
     ADR 0004 alternative); ``require_developer_id`` fails anything that is not
-    a verified Developer ID signature, for release pipelines.
+    a verified Developer ID signature, for release pipelines. A missing
+    required native module (``_REQUIRED_NATIVE``) always fails the report.
     """
     path = Path(bundle)
     if not path.exists():
         raise FileNotFoundError(str(path))
     runner = runner or _default_runner
     target_platform = platform or sys.platform
+    entries = sorted(path.rglob("*"))
+    names = [entry.name for entry in entries]
     forbidden: list[dict] = []
     clients: list[str] = []
-    for entry in sorted(path.rglob("*")):
+    for entry in entries:
         name = entry.name
         rel = str(entry.relative_to(path))
         for pattern, kind in _FORBIDDEN:
@@ -142,6 +164,7 @@ def inspect_bundle(
                 if pattern.match(name):
                     clients.append(f"{client}: {rel}")
                     break
+    missing = [kind for pattern, kind in _REQUIRED_NATIVE if not any(pattern.match(name) for name in names)]
     seen = {item.split(":", 1)[0] for item in clients}
     clients.extend(item for item in _embedded_clients(_scan_targets(path), runner) if item.split(":", 1)[0] not in seen)
     signature = (
@@ -152,10 +175,11 @@ def inspect_bundle(
     signature_ok = not signature["checked"] or signature["verified"]
     if require_developer_id:
         signature_ok = signature["checked"] and signature["verified"] and signature["kind"] == "Developer ID"
-    ok = not forbidden and signature_ok and (not strict_clients or not clients)
+    ok = not forbidden and not missing and signature_ok and (not strict_clients or not clients)
     return {
         "bundle": str(path),
         "forbidden": forbidden,
+        "missing": missing,
         "clients": clients,
         "signature": signature,
         "policy": {"strict_clients": strict_clients, "require_developer_id": require_developer_id},
@@ -184,6 +208,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"bundle: {report['bundle']}")
         for item in report["forbidden"]:
             print(f"FORBIDDEN {item['kind']}: {item['path']}")
+        for item in report["missing"]:
+            print(f"MISSING REQUIRED: {item}")
         for client in report["clients"]:
             print(f"client shipped (ADR 0004): {client}")
         sig = report["signature"]

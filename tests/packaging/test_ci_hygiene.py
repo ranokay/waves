@@ -10,8 +10,10 @@ module from a cold runner.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import yaml
 from support.paths import REPO_ROOT
@@ -133,3 +135,81 @@ def test_the_build_excludes_yt_dlps_lazy_extractor_table():
     for env in ({"OS": "Windows_NT"}, {"OS": ""}, {"OS": "Windows_NT", "WAVES_NUITKA_FLAGS": "--low-memory"}):
         command = _dry_run_nuitka_command(env)
         assert "--nofollow-import-to=yt_dlp.extractor.lazy_extractors" in command, env
+
+
+def test_the_build_includes_the_pycryptodome_native_modules():
+    """PyCryptodome loads its native modules by name through ctypes
+    (load_pycryptodome_raw_lib), which Nuitka's import following cannot see:
+    --include-package pulls only the Python submodules, so every needed native
+    module must be included explicitly or the bundle ships an empty
+    Crypto/Cipher and Apple downloads die at the first native load
+    ("Crypto.Cipher._raw_aes", then "Crypto.Hash._SHA1", issue #304). Like the
+    extractor exclusion, the includes must survive an environment-provided
+    WAVES_NUITKA_FLAGS value. The list is resolved against the host's pinned
+    PyCryptodome: every flag must name a module this platform installs (so a
+    bump that renames one fails here), and the signing/download path's modules
+    must all be on it (x86_64 hosts install extra AES-NI/CLMUL modules Nuitka
+    picks up on its own)."""
+    for env in ({"OS": "Windows_NT"}, {"OS": ""}, {"OS": "Windows_NT", "WAVES_NUITKA_FLAGS": "--low-memory"}):
+        command = _dry_run_nuitka_command(env)
+        assert "--include-module=Crypto.Cipher._raw_aes" in command, env
+        assert "--include-module=Crypto.Hash._SHA1" in command, env
+
+    command = _dry_run_nuitka_command({})
+    listed = set(re.findall(r"--include-module=(Crypto\.[^\s]+)", command))
+    assert listed, "the build lost its PyCryptodome native-module includes"
+
+    import Crypto
+
+    base = Path(Crypto.__file__).parent
+    installed = {
+        f"{base.name}.{'.'.join([*path.relative_to(base).parts[:-1], path.name.split('.')[0]])}"
+        for path in base.rglob("*")
+        if path.suffix in (".so", ".pyd")
+    }
+    assert listed <= installed, f"the include list names modules this platform lacks: {sorted(listed - installed)}"
+    needed = {
+        "Crypto.Cipher._raw_aes",
+        "Crypto.Cipher._raw_cbc",
+        "Crypto.Cipher._raw_ctr",
+        "Crypto.Cipher._raw_ecb",
+        "Crypto.Hash._SHA1",
+        "Crypto.Hash._SHA512",
+        "Crypto.Hash._ghash_portable",
+        "Crypto.Hash._keccak",
+        "Crypto.Math._modexp",
+        "Crypto.PublicKey._ed25519",
+        "Crypto.Util._cpuid_c",
+        "Crypto.Util._strxor",
+    }
+    assert needed <= listed, f"the include list dropped: {sorted(needed - listed)}"
+
+
+def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
+    """The trim's first Crypto allowlist, built for the signing surface alone,
+    deleted the native modules Apple downloads load by name and broke them
+    twice in a row ('_raw_aes', then '_SHA1', issue #304). Crypto natives are
+    no longer trimmed: run the real script on a fake bundle and assert they
+    survive."""
+    bundle = tmp_path / "waves.app"
+    libdir = bundle / "Contents" / "MacOS"
+    (libdir / "PySide6").mkdir(parents=True)
+    natives = [
+        libdir / "Crypto" / "Cipher" / "_raw_aes.so",
+        libdir / "Crypto" / "Cipher" / "_raw_cbc.so",
+        libdir / "Crypto" / "Hash" / "_SHA1.so",
+    ]
+    for native in natives:
+        native.parent.mkdir(parents=True, exist_ok=True)
+        native.write_bytes(b"\x00")
+
+    bash = shutil.which("bash")
+    assert bash, "bash is required to run the bundle trim"
+    subprocess.run(  # noqa: S603 (fixed argv: the resolved bash, the repo's own trim script, a fake bundle)
+        [bash, str(REPO_ROOT / "tools" / "trim_qt_bundle.sh"), str(bundle)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert all(native.exists() for native in natives)

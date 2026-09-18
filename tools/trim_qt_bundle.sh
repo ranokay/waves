@@ -156,25 +156,17 @@ rm -rf "$LIBDIR/PySide6/qt-plugins/iconengines" "$LIBDIR/PySide6/Qt/plugins/icon
 rm -f "$LIBDIR/PySide6/qt-plugins/multimedia/libdarwinmediaplugin.dylib" \
       "$LIBDIR/PySide6/Qt/plugins/multimedia/libdarwinmediaplugin.dylib"
 
-# pycryptodome native modules: the app's ONLY Crypto surface is the updater's
-# Ed25519 verify() (waves_ui/signing.py, raw 32-byte key, no PEM), so of the
-# ~2.6 MB of Crypto .so Nuitka copies, six files cover it, proven by the
-# perf-pass sandbox probe (delete the rest, sign a manifest with the full
-# venv Crypto, verify it in the gutted copy: real signature True, tampered
-# False, shipped-key walk False without raising). Kept: _ed25519 (the curve),
-# _SHA512 + _keccak (eddsa imports SHA512 and SHAKE256 at module level),
-# _modexp (Integer backend on machines without GMP; small, never risk it),
-# _strxor + _cpuid_c (Util plumbing loaded by the raw-lib loader). The
-# producer half (keygen/sign) runs only from source and CI, never from the
-# bundle. Extensions differ per OS (.so / .pyd), match both.
-if [ -d "$LIBDIR/Crypto" ]; then
-  find "$LIBDIR/Crypto" \( -name '*.so' -o -name '*.pyd' \) -print0 | while IFS= read -r -d '' f; do
-    case "$(basename "$f")" in
-      _ed25519.*|_SHA512.*|_keccak.*|_modexp.*|_strxor.*|_cpuid_c.*) : ;;
-      *) rm -f "$f" ;;
-    esac
-  done
-fi
+# pycryptodome native modules are NOT trimmed here. The app reaches them by
+# name at runtime (ctypes), so a deletion is invisible at build time and only
+# fails in the field: the updater's Ed25519 verify() needs
+# _ed25519/_SHA512/_keccak, and the Apple HLS download path needs the AES
+# family plus _SHA1 (the first trim allowlist, built for signing alone, broke
+# downloads twice in a row -- "Cannot load native module
+# 'Crypto.Cipher._raw_aes'", then 'Crypto.Hash._SHA1', issue #304). The full
+# native set is ~2.6 MB of a 237 MB bundle; correctness wins over that. The
+# build includes every module explicitly (`WAVES_CRYPTO_NATIVE` in the
+# Makefile) and tools/inspect_bundle.py fails a bundle that dropped one of
+# the download-path modules. Extensions differ per OS (.so / .pyd).
 
 # On the arm64 macOS legs Nuitka copies BOTH the versioned Homebrew OpenSSL
 # libraries and their unversioned symlink twins; only the versioned pair is
