@@ -23,7 +23,7 @@ repos:
     # Pinned to the ruff line the tree is linted against (pyproject selects
     # modern rules like S/UP/RUF/TRY; an older hook stripped the noqa comments
     # the selected rules require, failing every file that carries one).
-    rev: "v0.15.9"
+    rev: "v0.16.8"
     hooks:
       - id: ruff
 
