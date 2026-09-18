@@ -1709,6 +1709,16 @@ ApplicationWindow {
         else if (kind === "artist") waves.downloadArtist(card.id)
     }
 
+    // The queue section's own word and count, for its header label and for the
+    // spoken names of the actions riding it (issue #284): several sections
+    // carry a CLEAR and two carry a RETRY ALL, so each must say which section
+    // it acts on.
+    function queueSectionWord(section) {
+        return section === "completed" ? "Completed"
+             : section === "failed" ? "Failed"
+             : section === "stopped" ? "Stopped"
+             : section === "downloading" ? "Downloading" : "Queued"
+    }
     // Dev timing: measure how long a section switch takes to process
     // markNav() stamps the start and arms a zero-interval Timer; the Timer fires
     // on the next GUI-thread event-loop turn, after the visibility bindings and
@@ -6597,6 +6607,17 @@ ApplicationWindow {
             }
             db.closeChooser()
         }
+        // The Chooser's rows are real controls (issue #284): the pointer, the
+        // keyboard and a screen reader all take these one paths.
+        function chooserPickTier(word) { db.chooserTier = "" + word }
+        function chooserPickAudio(word) { db.chooserAudio = "" + word }
+        function chooserToggle(key) {
+            if (key === "lyrics_embed") db.chooserLyricsEmbed = !db.chooserLyricsEmbed
+            else if (key === "lyrics_file") db.chooserLyricsFile = !db.chooserLyricsFile
+            else if (key === "lyrics_ttml_file") { if (db.chooserShowTtml) db.chooserLyricsTtml = !db.chooserLyricsTtml }
+            else if (key === "cover_embed") db.chooserCoverEmbed = !db.chooserCoverEmbed
+            else if (key === "cover_file") db.chooserCoverFile = !db.chooserCoverFile
+        }
         function saveChooserAsDefaults() {
             var vals = {
                 provider: "" + (db.chooserProvider || ""),
@@ -7321,6 +7342,9 @@ ApplicationWindow {
                 width: 320; padding: 12
                 modal: false; focus: true
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                // Focus the popover's own scope on open: Tab then walks its
+                // rows in draw order, and Escape closes from anywhere in it.
+                onOpened: contentItem.forceActiveFocus()
                 background: Rectangle { radius: 10; color: root.surfaceHi; border.color: root.outline }
                 contentItem: Column {
                     spacing: 10
@@ -7368,18 +7392,32 @@ ApplicationWindow {
                         Repeater {
                             model: db.chooserTiers
                             delegate: Rectangle {
+                                objectName: "chooserTierRow"
+                                id: tierRow
                                 required property var modelData
+                                readonly property bool picked: ("" + modelData.word) === ("" + db.chooserTier)
                                 width: 296; height: 26; radius: 5
-                                color: ("" + modelData.word) === ("" + db.chooserTier) ? root.qualTint(modelData.word) : "transparent"
-                                border.color: ("" + modelData.word) === ("" + db.chooserTier) ? root.qualBorder(modelData.word) : "transparent"
+                                color: tierRow.picked ? root.qualTint(modelData.word) : "transparent"
+                                border.color: tierRow.activeFocus ? root.accent
+                                            : tierRow.picked ? root.qualBorder(modelData.word) : "transparent"
                                 border.width: 1
+                                // A picker row a keyboard or reader user can
+                                // take (issue #284).
+                                activeFocusOnTab: chooserPop.visible
+                                Accessible.role: Accessible.RadioButton
+                                Accessible.name: db.chooserKind + " in " + modelData.word
+                                Accessible.checkable: true; Accessible.checked: tierRow.picked
+                                Accessible.onPressAction: function() { db.chooserPickTier(modelData.word) }
+                                Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserPickTier(modelData.word) } }
+                                Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserPickTier(modelData.word) } }
+                                Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserPickTier(modelData.word) } }
                                 Row {
                                     anchors.left: parent.left; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter; spacing: 6
                                     Rectangle { width: 6; height: 6; radius: 3; color: root.qualDot(modelData.word); anchors.verticalCenter: parent.verticalCenter }
                                     Text { textFormat: Text.PlainText; text: "" + modelData.word; color: root.qualFg(modelData.word); font.family: root.mono; font.pixelSize: 10; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
                                     Text { textFormat: Text.PlainText; text: "" + (modelData.detail || ""); color: root.textLo; font.family: root.mono; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
                                 }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserTier = "" + modelData.word }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserPickTier(modelData.word) }
                             }
                         }
                     }
@@ -7400,12 +7438,25 @@ ApplicationWindow {
                             Repeater {
                                 model: db.chooserAudioOptions
                                 delegate: Rectangle {
+                                    objectName: "chooserAudioTile"
+                                    id: audioTile
                                     required property string modelData
+                                    readonly property bool picked: db.chooserAudio === modelData
                                     width: 94; height: 26; radius: 6
-                                    color: db.chooserAudio === modelData ? root.accentCont : root.surface3
-                                    border.color: db.chooserAudio === modelData ? root.accentDim : root.outline; border.width: 1
-                                    Text { textFormat: Text.PlainText; text: modelData.toUpperCase(); color: db.chooserAudio === modelData ? root.accentContTx : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
-                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserAudio = modelData }
+                                    color: audioTile.picked ? root.accentCont : root.surface3
+                                    border.color: audioTile.activeFocus ? root.accent
+                                                : audioTile.picked ? root.accentDim : root.outline
+                                    border.width: 1
+                                    activeFocusOnTab: chooserPop.visible
+                                    Accessible.role: Accessible.RadioButton
+                                    Accessible.name: "Audio type: " + modelData.toUpperCase()
+                                    Accessible.checkable: true; Accessible.checked: audioTile.picked
+                                    Accessible.onPressAction: function() { db.chooserPickAudio(modelData) }
+                                    Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserPickAudio(modelData) } }
+                                    Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserPickAudio(modelData) } }
+                                    Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserPickAudio(modelData) } }
+                                    Text { textFormat: Text.PlainText; text: modelData.toUpperCase(); color: audioTile.picked ? root.accentContTx : root.textLo; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserPickAudio(modelData) }
                                 }
                             }
                         }
@@ -7417,26 +7468,66 @@ ApplicationWindow {
                         Row {
                             spacing: 8
                             Rectangle {
+                                objectName: "chooserLyricsEmbed"
+                                id: lyricsEmbedTile
                                 width: 90; height: 24; radius: 5
                                 color: db.chooserLyricsEmbed ? root.accentCont : root.surface3
-                                border.color: db.chooserLyricsEmbed ? root.accentDim : root.outline; border.width: 1
+                                border.color: lyricsEmbedTile.activeFocus ? root.accent
+                                            : db.chooserLyricsEmbed ? root.accentDim : root.outline
+                                border.width: 1
+                                activeFocusOnTab: chooserPop.visible
+                                Accessible.role: Accessible.CheckBox
+                                Accessible.name: "Embed lyrics"
+                                Accessible.checkable: true; Accessible.checked: db.chooserLyricsEmbed
+                                Accessible.onPressAction: function() { db.chooserToggle("lyrics_embed") }
+                                Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("lyrics_embed") } }
+                                Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("lyrics_embed") } }
+                                Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("lyrics_embed") } }
                                 Text { textFormat: Text.PlainText; text: db.chooserLyricsEmbed ? "EMBED ON" : "EMBED OFF"; color: db.chooserLyricsEmbed ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsEmbed = !db.chooserLyricsEmbed } }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserToggle("lyrics_embed") }
                             }
                             Rectangle {
+                                objectName: "chooserLyricsFile"
+                                id: lyricsLrcTile
                                 width: 70; height: 24; radius: 5
                                 color: db.chooserLyricsFile ? root.accentCont : root.surface3
-                                border.color: db.chooserLyricsFile ? root.accentDim : root.outline; border.width: 1
+                                border.color: lyricsLrcTile.activeFocus ? root.accent
+                                            : db.chooserLyricsFile ? root.accentDim : root.outline
+                                border.width: 1
+                                activeFocusOnTab: chooserPop.visible
+                                Accessible.role: Accessible.CheckBox
+                                Accessible.name: "Save the .lrc lyrics file"
+                                Accessible.checkable: true; Accessible.checked: db.chooserLyricsFile
+                                Accessible.onPressAction: function() { db.chooserToggle("lyrics_file") }
+                                Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("lyrics_file") } }
+                                Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("lyrics_file") } }
+                                Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("lyrics_file") } }
                                 Text { textFormat: Text.PlainText; text: db.chooserLyricsFile ? ".LRC ON" : ".LRC OFF"; color: db.chooserLyricsFile ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsFile = !db.chooserLyricsFile } }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserToggle("lyrics_file") }
                             }
                             Rectangle {
+                                objectName: "chooserLyricsTtml"
+                                id: lyricsTtmlTile
                                 width: 80; height: 24; radius: 5
                                 color: db.chooserLyricsTtml ? root.accentCont : root.surface3
-                                border.color: db.chooserLyricsTtml ? root.accentDim : root.outline; border.width: 1
+                                border.color: lyricsTtmlTile.activeFocus ? root.accent
+                                            : db.chooserLyricsTtml ? root.accentDim : root.outline
+                                border.width: 1
                                 opacity: db.chooserShowTtml ? 1 : 0.4
+                                // Enabled only where the provider serves TTML:
+                                // an inert tile leaves the tab order (issue #240's
+                                // rule, kept here).
+                                activeFocusOnTab: chooserPop.visible && db.chooserShowTtml
+                                enabled: db.chooserShowTtml
+                                Accessible.role: Accessible.CheckBox
+                                Accessible.name: "Save the verbatim .ttml lyrics file"
+                                Accessible.checkable: true; Accessible.checked: db.chooserLyricsTtml
+                                Accessible.onPressAction: function() { db.chooserToggle("lyrics_ttml_file") }
+                                Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("lyrics_ttml_file") } }
+                                Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("lyrics_ttml_file") } }
+                                Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("lyrics_ttml_file") } }
                                 Text { textFormat: Text.PlainText; text: db.chooserLyricsTtml ? ".TTML ON" : ".TTML OFF"; color: db.chooserLyricsTtml ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; enabled: db.chooserShowTtml; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserLyricsTtml = !db.chooserLyricsTtml } }
+                                MouseArea { anchors.fill: parent; enabled: db.chooserShowTtml; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserToggle("lyrics_ttml_file") }
                             }
                         }
                     }
@@ -7447,31 +7538,76 @@ ApplicationWindow {
                         Row {
                             spacing: 8
                             Rectangle {
+                                objectName: "chooserCoverFile"
+                                id: coverFileTile
                                 width: 130; height: 24; radius: 5
                                 color: db.chooserCoverFile ? root.accentCont : root.surface3
-                                border.color: db.chooserCoverFile ? root.accentDim : root.outline; border.width: 1
+                                border.color: coverFileTile.activeFocus ? root.accent
+                                            : db.chooserCoverFile ? root.accentDim : root.outline
+                                border.width: 1
+                                activeFocusOnTab: chooserPop.visible
+                                Accessible.role: Accessible.CheckBox
+                                Accessible.name: "Save the cover as a sidecar file"
+                                Accessible.checkable: true; Accessible.checked: db.chooserCoverFile
+                                Accessible.onPressAction: function() { db.chooserToggle("cover_file") }
+                                Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("cover_file") } }
+                                Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("cover_file") } }
+                                Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("cover_file") } }
                                 Text { textFormat: Text.PlainText; text: db.chooserCoverFile ? "SIDECAR ON" : "SIDECAR OFF"; color: db.chooserCoverFile ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserCoverFile = !db.chooserCoverFile } }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserToggle("cover_file") }
                             }
                             Rectangle {
+                                objectName: "chooserCoverEmbed"
+                                id: coverEmbedTile
                                 width: 110; height: 24; radius: 5
                                 color: db.chooserCoverEmbed ? root.accentCont : root.surface3
-                                border.color: db.chooserCoverEmbed ? root.accentDim : root.outline; border.width: 1
+                                border.color: coverEmbedTile.activeFocus ? root.accent
+                                            : db.chooserCoverEmbed ? root.accentDim : root.outline
+                                border.width: 1
+                                activeFocusOnTab: chooserPop.visible
+                                Accessible.role: Accessible.CheckBox
+                                Accessible.name: "Embed the cover art"
+                                Accessible.checkable: true; Accessible.checked: db.chooserCoverEmbed
+                                Accessible.onPressAction: function() { db.chooserToggle("cover_embed") }
+                                Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("cover_embed") } }
+                                Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("cover_embed") } }
+                                Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserToggle("cover_embed") } }
                                 Text { textFormat: Text.PlainText; text: db.chooserCoverEmbed ? "EMBED ON" : "EMBED OFF"; color: db.chooserCoverEmbed ? root.accentContTx : root.textLo; font.family: root.mono; font.pixelSize: 9; anchors.centerIn: parent }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { db.chooserCoverEmbed = !db.chooserCoverEmbed } }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserToggle("cover_embed") }
                             }
                         }
                     }
                     Row {
                         spacing: 8
                         Rectangle {
+                            objectName: "chooserSetDefaults"
+                            id: chooserDefaultsBtn
                             width: 150; height: 30; radius: 6; color: "transparent"
-                            border.color: root.accentDim; border.width: 1
+                            border.color: chooserDefaultsBtn.activeFocus ? root.accent : root.accentDim
+                            border.width: chooserDefaultsBtn.activeFocus ? 2 : 1
+                            activeFocusOnTab: chooserPop.visible
+                            Accessible.role: Accessible.Button
+                            Accessible.name: "Set as defaults"
+                            Accessible.onPressAction: function() { db.saveChooserAsDefaults() }
+                            Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.saveChooserAsDefaults() } }
+                            Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.saveChooserAsDefaults() } }
+                            Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.saveChooserAsDefaults() } }
                             Text { textFormat: Text.PlainText; text: "SET AS DEFAULTS"; color: root.accentContTx; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.saveChooserAsDefaults() }
                         }
                         Rectangle {
+                            objectName: "chooserConfirm"
+                            id: chooserConfirmBtn
                             width: 120; height: 30; radius: 6; color: root.accent
+                            border.color: chooserConfirmBtn.activeFocus ? root.textHi : "transparent"
+                            border.width: 2
+                            activeFocusOnTab: chooserPop.visible
+                            Accessible.role: Accessible.Button
+                            Accessible.name: "Download with these options"
+                            Accessible.onPressAction: function() { db.confirmChooser() }
+                            Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.confirmChooser() } }
+                            Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.confirmChooser() } }
+                            Keys.onSpacePressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.confirmChooser() } }
                             Text { textFormat: Text.PlainText; text: "DOWNLOAD"; color: root.accentText; font.family: root.uiFont; font.pixelSize: 10; font.bold: true; anchors.centerIn: parent }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.confirmChooser() }
                         }
@@ -8101,7 +8237,10 @@ ApplicationWindow {
         MouseArea { id: gcMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: gcard.clicked() }
         activeFocusOnTab: gcard.visible
         Accessible.role: Accessible.Button
-        Accessible.name: gcard.title + (gcard.desc !== "" ? ", " + gcard.desc : "")
+        // The chip (RECOMMENDED, the detected version) is what tells two cards
+        // in one gate apart, so it rides the spoken name too (issue #284).
+        Accessible.name: gcard.title + (gcard.chip !== "" ? ", " + gcard.chip : "")
+                         + (gcard.desc !== "" ? ", " + gcard.desc : "")
         Accessible.onPressAction: gcard.clicked()
         Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; gcard.clicked() } }
         Keys.onEnterPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; gcard.clicked() } }
@@ -17450,11 +17589,7 @@ ApplicationWindow {
                         Text {
                             textFormat: Text.PlainText
                             id: secLbl
-                            text: secItem.section === "completed" ? "COMPLETED · " + root.completedCount
-                                : secItem.section === "failed" ? "FAILED · " + root.failedCount
-                                : secItem.section === "stopped" ? "STOPPED · " + root.stoppedCount
-                                : secItem.section === "downloading" ? "DOWNLOADING · " + root.downloadingCount
-                                : "QUEUED · " + root.queuedCount
+                            text: root.queueSectionWord(secItem.section).toUpperCase() + " · " + root.queueGroupCount(secItem.section)
                             // Brightness tracks how live the section is: the work
                             // happening right now reads near-white, what is only
                             // waiting stays dim, so the eye lands on Downloading
@@ -17478,6 +17613,7 @@ ApplicationWindow {
                         // else. Each header retries its own section only.
                         SpecBtn {
                             compact: true; primary: true; label: "RETRY ALL"
+                            accessibleLabel: "Retry all " + root.queueSectionWord(secItem.section) + " downloads"
                             visible: secItem.section === "failed" || secItem.section === "stopped"
                             Layout.alignment: Qt.AlignVCenter
                             onClicked: {
@@ -17500,6 +17636,7 @@ ApplicationWindow {
                             primary: secItem.section === "completed"
                             danger: secItem.section !== "completed"
                             label: "CLEAR"
+                            accessibleLabel: "Clear " + root.queueSectionWord(secItem.section) + " downloads"
                             visible: secItem.section !== "downloading"
                             Layout.alignment: Qt.AlignVCenter
                             onClicked: {
