@@ -306,6 +306,11 @@ ignore = [
 
 [tool.black]
 # https://github.com/psf/black
+# The target versions are the syntax FLOOR, not the support matrix: code must
+# parse on 3.12, so the formatter must not emit 3.13+/3.14-only syntax. Black 26
+# also warns and skips its AST safety check when a target is newer than the
+# interpreter running it (CI and the pre-commit hook run 3.13), so targeting
+# 3.14 would buy nothing and cost the check.
 target-version = ["py312", "py313"]
 line-length = 120
 color = true
