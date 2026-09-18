@@ -97,7 +97,12 @@ _TAB_STOP_BODY = """
         return null;
     }
     var it = root.activeFocusItem;
-    if (!it) return JSON.stringify({ path: null });
+    // No focused control: keep the stop's full shape so callers can read its
+    // flags without a KeyError (the path is the broken-chain signal).
+    if (!it) return JSON.stringify({ path: null,
+                                     object: "", label: "", type: "",
+                                     visible: false, enabled: false,
+                                     inSettings: false, inChooser: false, inDrawer: false });
     function inTree(o, needle) {
         while (o) { if (o === needle) return true; o = o.parent; }
         return false;
@@ -368,19 +373,25 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
                 problems.append("the Settings tab did not open the Settings page")
             else:
                 page_stops, _ = _tab_cycle(q, settle, root, limit=80)
-                if not any(s["inSettings"] for s in page_stops):
-                    problems.append("the Settings page's fields are not in the tab order while the page is open")
-                if any(not s["visible"] or not s["enabled"] for s in page_stops):
-                    problems.append(f"Tab reached a hidden control on the open Settings page: {page_stops[:3]}")
+                if any(s["path"] is None for s in page_stops):
+                    problems.append("the Tab walk lost the focused control on the open Settings page")
+                else:
+                    if not any(s["inSettings"] for s in page_stops):
+                        problems.append("the Settings page's fields are not in the tab order while the page is open")
+                    if any(not s["visible"] or not s["enabled"] for s in page_stops):
+                        problems.append(f"Tab reached a hidden control on the open Settings page: {page_stops[:3]}")
                 q("settingsPage.closed()")
                 settle(250)
                 closed_stops, _ = _tab_cycle(q, settle, root, limit=80)
-                if any(s["inSettings"] for s in closed_stops):
-                    problems.append("the closed Settings page kept a tab stop")
-                if any(_offscreen(s) for s in closed_stops):
-                    problems.append(
-                        f"Tab reaches a control that is not on screen after closing Settings: {closed_stops[:3]}"
-                    )
+                if any(s["path"] is None for s in closed_stops):
+                    problems.append("the Tab walk lost the focused control after closing Settings")
+                else:
+                    if any(s["inSettings"] for s in closed_stops):
+                        problems.append("the closed Settings page kept a tab stop")
+                    if any(_offscreen(s) for s in closed_stops):
+                        problems.append(
+                            f"Tab reaches a control that is not on screen after closing Settings: {closed_stops[:3]}"
+                        )
 
     # --- The Chooser (issue #284): its rows are named, tab-reachable controls,
     # and a keyboard user's picks reach the queue through the shared paths.
