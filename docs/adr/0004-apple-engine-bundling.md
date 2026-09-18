@@ -43,7 +43,7 @@ item if that reading is ever adopted.
 
 ## Consequences
 
-- `make gui-waves` runs `tools/inspect_bundle.py` after trimming and signing,
+- `tools/build_waves.sh` (task `build`) runs `tools/inspect_bundle.py` after trimming and signing,
   so every local and CI matrix build fails on forbidden material.
 - The client report is informational by default; `--strict-clients` flips it
   to a failure for the strict reading.

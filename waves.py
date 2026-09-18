@@ -14,7 +14,7 @@ file's basename, which the Makefile and CI key on, so neither its name nor its
 location may change casually.
 
 From a source checkout, ``python -m waves.waves_ui`` remains the way to run;
-this file exists so ``make gui-waves`` can produce the frozen app.
+this file exists so ``tools/build_waves.sh`` (task ``build``) can produce the frozen app.
 
 The ``nuitka-project`` directives below are the canonical build recipe. They
 target the QML front-end: the PySide6 plugin pulls

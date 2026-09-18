@@ -11,7 +11,7 @@ which is why this tool exists.)
 
 Manual only, never CI. Usage:
 
-    poetry run python tools/launch_probe.py [seconds] [gap_ms]
+    uv run python tools/launch_probe.py [seconds] [gap_ms]
 
 Prints every gap over gap_ms (default 45, four missed frames at 120 Hz,
 three at 60) and a verdict line: the first frame is exempt (the window's

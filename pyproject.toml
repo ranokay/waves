@@ -16,24 +16,31 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-requires-python = ">=3.12,<3.14"
-dynamic = ["dependencies"]
+requires-python = ">=3.12,<3.15"
+
+dependencies = [
+  "requests~=2.32.5",
+  "mutagen>=1.47.0,<2",
+  "dataclasses-json>=0.6.7,<0.7",
+  "pathvalidate>=3.3.1,<4",
+  "m3u8>=6.0.0,<7",
+  "gamdl>=3.8.5,<3.9",
+  "tidalapi>=0.8.10,<0.9",
+  "python-ffmpeg>=2.0.12,<3",
+  # Direct import in waves/providers/apple/engine.py (the cookies-tier fallback shells
+  # through it); pinned to gamdl's own floor so the two can never disagree.
+  "yt-dlp>=2025.10.22",
+  "pycryptodome>=3.23.0,<4",
+  "certifi>=2026.4.22",
+  "urllib3>=2.7.0,<3",
+]
 
 [project.urls]
 homepage = "https://getwaves.dev"
 repository = "https://github.com/iamprivacy/Waves"
 documentation = "https://getwaves.dev"
 
-[tool.poetry]
-packages = [{ include = "waves" }]
-
-[tool.poetry.dependencies]
-requests = "~2.32.5"
-mutagen = "^1.47.0"
-dataclasses-json = "^0.6.7"
-pathvalidate = "^3.3.1"
-m3u8 = "^6.0.0"
-gamdl = "~3.8.5"
+[project.optional-dependencies]
 # Exact pin. PySide6 6.10.0 through 6.11.1 ship macOS binding libraries built
 # for macOS 15 despite their macosx_13_0 wheel tag, so on macOS this version
 # really requires Sequoia (dyld kills the app on anything older, issue #14).
@@ -41,38 +48,30 @@ gamdl = "~3.8.5"
 # pin (floor 15.0), and CI's legacy macOS legs overlay pyside6==6.9.3 (the
 # newest release whose binaries honor their macOS 12 wheel tag) on top of the
 # locked venv for a "_legacy" bundle with floor 12.0 (see WAVES_MACOS_MIN in
-# the Makefile and the legacy legs in release-or-test-build.yml). CI's "Assert
+# mise.toml and the legacy legs in release-or-test-build.yml). CI's "Assert
 # macOS version floor" step enforces each flavor's floor on every macOS build;
 # when a PySide6 release honors its wheel tags again the legacy legs can go.
-pyside6 = { version = "6.11.1", optional = true }
-tidalapi = "^0.8.10"
-python-ffmpeg = "^2.0.12"
-# Direct import in waves/providers/apple/engine.py (the cookies-tier fallback shells
-# through it); pinned to gamdl's own floor so the two can never disagree.
-yt-dlp = ">=2025.10.22"
-pycryptodome = "^3.23.0"
-certifi = ">=2026.4.22"
-urllib3 = "^2.7.0"
+gui = ["pyside6==6.11.1"]
 
-[project.optional-dependencies]
-gui = ["pyside6"]
-
-[tool.poetry.group.dev]
-optional = true
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^9.0.1"
-deptry = "^0.24.0"
-pre-commit = "^4.5.0"
-tox = "^4.32.0"
-pyupgrade = "^3.21.2"
-pillow = "^12.0.0"
-black = "^25.11.0"
-nuitka = "2.8.4"
+[dependency-groups]
+dev = [
+  "pytest>=9.0.1,<10",
+  "deptry>=0.24.0,<0.25",
+  "pre-commit>=4.5.0,<5",
+  "pyupgrade>=3.21.2,<4",
+  "pillow>=12.0.0,<13",
+  "black>=25.11.0,<26",
+  # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
+  # bump invalidates it (docs/dependency-updates.md).
+  "nuitka==2.8.4",
+]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.12.16,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

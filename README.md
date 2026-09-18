@@ -10,7 +10,7 @@
      lines into a row, but other renderers (the mirror frontends among them)
      treat each source line as its own line and stack the badges vertically. -->
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License: AGPL-3.0"></a> <a href="#install"><img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-informational" alt="Platforms"></a> <a href="#install"><img src="https://img.shields.io/badge/python-3.12%20%7C%203.13-blue" alt="Python"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License: AGPL-3.0"></a> <a href="#install"><img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-informational" alt="Platforms"></a> <a href="#install"><img src="https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue" alt="Python"></a>
 </p>
 
 <p align="center">
@@ -136,7 +136,7 @@ The log lives at `waves_dev.log`, next to `crash.log`, in the Waves config folde
 
 - A **paid TIDAL plan** and a one‑time sign‑in (Waves walks you through the browser login on first launch and reuses the cached token afterwards).
 - On macOS: **macOS 12 Monterey or newer**, on Intel and Apple silicon alike. The regular macOS builds need **macOS 15 Sequoia**; on Monterey through Sonoma, grab the `legacy` build instead (same app, an older bundled Qt). Homebrew and the in‑app updater pick the right one for your machine automatically.
-- Python 3.12 or 3.13 (if running from source).
+- Python 3.12, 3.13 or 3.14 (if running from source).
 - FFmpeg is used for in‑app previews and a few conversions (e.g. some video / hi‑res cases). Waves can install it for you with one click (see above).
 
 ---
@@ -169,9 +169,8 @@ Prefer to run from source?
 
 ```bash
 # from a clone of this repository
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e ".[gui]"     # the [gui] extra pulls in PySide6 / Qt
-python -m waves.waves_ui
+uv sync --all-extras       # uv installs the pinned Python itself (https://docs.astral.sh/uv/)
+uv run python -m waves.waves_ui
 ```
 
 Waves is GUI‑first and does not ship a command‑line interface. If you prefer the command line, use the upstream **[Tidaler](https://github.com/maya-doshi/tidaler)** project directly; it provides a maintained, CLI‑focused build (`tidaler` / `tdn`) of the same engine Waves is built on.

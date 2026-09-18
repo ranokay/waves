@@ -11,7 +11,7 @@ Run this once, offline, before the first signed release. It prints two things:
 
 Usage::
 
-    poetry run python tools/waves_release_keygen.py
+    uv run python tools/waves_release_keygen.py
 """
 
 from __future__ import annotations

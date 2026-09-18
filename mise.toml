@@ -1,0 +1,50 @@
+# Tool versions and the task surface (the Makefile's successor).
+#
+# uv owns Python resolution, installation and the lockfile (uv.lock is the one
+# authoritative lock; `uv lock --check` fails on drift); mise owns which
+# Python and uv those are, and the tasks below are the commands DEVELOPER.md
+# and CI both call. `mise run install` once after cloning, then any task.
+
+[tools]
+python = "3.13"
+uv = "0.12.16"
+
+[tasks.install]
+description = "Create/sync the dev environment and install the pre-commit hooks"
+run = "uv sync --all-extras && uv run pre-commit install"
+
+[tasks.check]
+description = "Lock drift, pre-commit hooks and unused dependencies"
+run = "uv lock --check && uv run --locked --all-extras pre-commit run -a && uv run --locked --all-extras deptry ."
+
+[tasks.test]
+description = "Run the whole suite (unit tests, incl. the QML guards)"
+run = 'uv run --locked --all-extras pytest --doctest-modules'
+
+[tasks.test-fast]
+description = "The fast group (no Qt, ffmpeg, slow, integration or account; < 1 min)"
+run = 'uv run --locked --all-extras pytest --doctest-modules -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests'
+
+[tasks.test-qml]
+description = "The quick QML group (Qt required; < 5 min)"
+run = 'uv run --locked --all-extras pytest --doctest-modules -rs -q -m "qml and not slow and not integration and not account" --require-qml tests'
+
+[tasks.test-default]
+description = "The default group (all but the live account tests; < 10 min)"
+run = 'uv run --locked --all-extras pytest --doctest-modules -rs -m "not account" tests'
+
+[tasks.test-strict]
+description = "The merge gate (everything but the live account tests; < 10 min)"
+run = 'uv run --locked --all-extras pytest --doctest-modules -rs --require-qml -m "not account" tests'
+
+[tasks.test-ffmpeg]
+description = "The ffmpeg group (assumes ffmpeg on PATH; < 1 min)"
+run = 'uv run --locked --all-extras pytest --doctest-modules -rs -q -m "ffmpeg and not account" tests'
+
+[tasks.build]
+description = "Build the Waves QML app (Nuitka); on macOS this yields dist/waves.app"
+run = "bash tools/build_waves.sh"
+
+[tasks.star-history]
+description = "Copy the star-history chart from the public repo into this tree"
+run = "bash tools/sync_star_history.sh"
