@@ -89,8 +89,9 @@ pythonVersion = "3.12"
 # - reportAttributeAccessIssue: catalog/engine objects cross the provider seam
 #   as plain objects by design (the row-dict contract), so their members are
 #   intentionally opaque to the checker until the engine seam is protocolized.
-# - reportArgumentType: the same seam, plus PySide6 property type strings
-#   ("QVariant", "QVariantList") that the stubs type narrowly.
+# - reportArgumentType: the same seam, plus PySide6/Qt stubs (property type
+#   strings like "QVariant", QByteArray buffers) and the urllib/tidalapi
+#   stubs' narrow parameter types.
 # - reportOptionalMemberAccess: dynamic per-job attributes on engine objects
 #   (`download.write_count`) that the checker sees as Optional.
 reportAttributeAccessIssue = "warning"

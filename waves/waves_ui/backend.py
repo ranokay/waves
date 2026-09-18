@@ -4763,7 +4763,7 @@ class WavesBridge(LibraryMixin, QObject):
         # GUI thread, so their slots have a running event loop.
         self._library_poll_in_flight = False
         self._library_watcher = None
-        self._watched_paths: set[str] = set()
+        self._watched_paths = set()
         self._library_watch_pending_add: list[str] = []
         self._library_watch_burst_start = 0.0
         # When the current run of landing downloads began, so the debounce below
@@ -13242,8 +13242,8 @@ class WavesBridge(LibraryMixin, QObject):
         media_id: str,
         merge_plan: list | None = None,
         provider_id: str = CTX_TIDAL,
-        keep_ask: tuple[str, ...] | None = None,
-        chooser_ask: tuple[str, ...] | None = None,
+        keep_ask: tuple[str, str, str | None] | None = None,
+        chooser_ask: tuple[str, str] | None = None,
         chooser_audio: str | None = None,
         chooser_toggles: dict | None = None,
     ) -> bool:
@@ -13569,9 +13569,9 @@ class WavesBridge(LibraryMixin, QObject):
         file_template: str,
         collection: bool,
         media_id: str,
-        keep_ask: tuple[str, ...] | None = None,
+        keep_ask: tuple[str, str, str | None] | None = None,
         is_retry: bool = False,
-        chooser_ask: tuple[str, ...] | None = None,
+        chooser_ask: tuple[str, str] | None = None,
         chooser_audio: str | None = None,
         chooser_toggles: dict | None = None,
     ) -> bool:
