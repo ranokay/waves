@@ -32,7 +32,8 @@ EXIT_PRECONDITION = 78
 
 # The album the progress/queue scenarios seed into the search model and then
 # drive through root.dlHolder("al-roll"); shared so every matrix scenario
-# reads the same row shape.
+# reads the same row shape. ROW is the parsed dict the payload seeder takes;
+# the JSON string stays for the scenarios that splice it into a QML call.
 ROLLING_ALBUM = json.dumps(
     {
         "id": "al-roll",
@@ -47,8 +48,35 @@ ROLLING_ALBUM = json.dumps(
         "popularity": 50,
     }
 )
+ROLLING_ALBUM_ROW = json.loads(ROLLING_ALBUM)
 
 _REQUIRE_QML = False
+
+
+def seed_tidal_search(q, bridge, *, artists=(), albums=(), tracks=(), videos=(), playlists=(), mixes=(), expanded=()):
+    """Put one TIDAL group's rows on the search page of a booted Main.qml.
+
+    Scenarios that drive a row widget (a progress bar, a hover, a row layout)
+    need a live results page, not a real search: this emits the one-provider
+    payload a TIDAL search produces (issue #292's group shape) and opens the
+    sections the caller asks for. The caller owns ``openSearch()`` and any
+    page state around it.
+    """
+    from support.search_fakes import qml_search_payload
+
+    q("_searchSeq = _navSeq")
+    bridge.searchResults.emit(
+        qml_search_payload(
+            artists=list(artists),
+            albums=list(albums),
+            tracks=list(tracks),
+            videos=list(videos),
+            playlists=list(playlists),
+            mixes=list(mixes),
+        )
+    )
+    for section in expanded:
+        q(f"root.searchGroupFor('tidal').toggleExpanded('{section}')")
 
 
 def set_require_qml(required: bool) -> None:

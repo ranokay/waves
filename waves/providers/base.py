@@ -66,10 +66,15 @@ from typing import NamedTuple
 #
 # Payloads built from those rows:
 #   search payload:
-#     {artists, albums, tracks, videos, playlists, mixes: [row...], top}
-#     top: the provider's best match as a row dict tagged with its kind
-#     ("album"/"track"/"video"/"playlist" -- an artist top hit is dropped,
-#     the artist strip already leads with it), or None.
+#     {groups: [{provider, artists_layout, artists, albums, tracks, videos,
+#                playlists, mixes, top, error}, ...]}
+#     One group per provider that answered, in registry order, carrying the
+#     buckets its ``search_sections`` declares (a bucket it does not answer is
+#     absent), its best match (``top``: a row dict tagged with its kind
+#     ("album"/"track"/"video"/"playlist"; an artist top hit is dropped, the
+#     artist strip already leads with it) or None) and its own failure words
+#     in ``error`` (empty on success). TIDAL's ``top`` comes from the reply's
+#     ``top_hit``; every other provider answers ``top`` itself.
 #   album expansion rows:  {id, num, title, duration, popularity, explicit}
 #     num: 1-based position in the album.
 #   playlist expansion rows:
@@ -315,6 +320,30 @@ class Provider(ABC):
     The neutral default is False, so the Chooser disables its TTML toggle for a
     provider that cannot produce one, capability instead of provider identity
     (issue #235)."""
+
+    # ----- search surface (what a group in the results page renders)
+
+    search_sections: tuple[str, ...] = ("artists", "albums", "tracks", "videos", "playlists", "mixes")
+    """The result sections this provider's search answers, in render order.
+    The bridge stamps them onto the provider's search group and the page
+    renders exactly those, so a provider whose catalog has no videos (Apple)
+    never grows a VIDEOS head -- or shows one under a filter it cannot host
+    (issue #241 / UI-05, generic in #292)."""
+
+    search_artists_layout: str = "flow"
+    """How the search page renders this provider's ARTISTS section: "flow"
+    (the wrapping grid; a catalog that returns a handful) or "strip" (the
+    horizontal shelf TIDAL has always used for a reply that can carry
+    dozens). The bridge stamps it onto the provider's search group, so the
+    page renders the provider's own shape with no QML branch (issue #292)."""
+
+    search_head_when_alone: bool = True
+    """Whether this provider's group still carries a head when it is the only
+    group on the search page. True answers for every provider whose rows are
+    an additional catalog beside the page's own shape; TIDAL answers False,
+    because a TIDAL-only page has always rendered as the search page itself
+    (its head exists to separate providers, and there is nothing to separate
+    when it is alone). The bridge stamps it onto the group (issue #292)."""
 
     @classmethod
     def descriptor(cls) -> ProviderDescriptor:

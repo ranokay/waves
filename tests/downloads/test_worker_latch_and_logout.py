@@ -153,6 +153,7 @@ def test_an_unresolvable_artist_still_reports_failure():
 class _SearchStub(_StubBase):
     search = WavesBridge.search
     _search_total = WavesBridge._search_total
+    _search_artist_meters = WavesBridge._search_artist_meters
 
     def __init__(self):
         super().__init__()
@@ -163,6 +164,7 @@ class _SearchStub(_StubBase):
         self.tidal = SimpleNamespace(session=object())
         self.searchResults = _Signal()
         self.artistMetaLoaded = _Signal()
+        self._provider_search_gates = {"tidal": lambda: bool(self._logged_in)}
 
     def _remember(self, kind, key, obj):
         self._objs[kind][key] = obj

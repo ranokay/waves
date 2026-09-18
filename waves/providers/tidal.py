@@ -124,6 +124,12 @@ class TidalProvider(Provider):
     id = CTX_TIDAL
     name = "TIDAL"
     capabilities = frozenset(Capability)
+    # TIDAL's search reply can carry dozens of artists, so its group keeps the
+    # horizontal strip the page has always shown (issue #292).
+    search_artists_layout = "strip"
+    # A TIDAL-only page is the search page itself: its group head exists to
+    # separate providers, so alone it stays off (issue #292).
+    search_head_when_alone = False
 
     # ----- chooser metadata
 

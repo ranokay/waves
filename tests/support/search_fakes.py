@@ -24,6 +24,7 @@ from waves.waves_ui.backend import WavesBridge
 class SearchStub:
     search = WavesBridge.search
     _search_total = staticmethod(WavesBridge._search_total)
+    _search_artist_meters = staticmethod(WavesBridge._search_artist_meters)
     _pop_cached = WavesBridge._pop_cached
     _remember_capped = WavesBridge._remember_capped
     _remember_search = WavesBridge._remember_search
@@ -47,6 +48,10 @@ class SearchStub:
         self.tidal = SimpleNamespace(session=object())
         self.searchResults = _Signal()
         self.artistMetaLoaded = _Signal()
+        # The real bridge registers TIDAL's session and Apple's switch as its
+        # search gates; a stub that only carries TIDAL wires the session one
+        # (an un-gated provider is taken at its word, issue #292).
+        self._provider_search_gates = {"tidal": lambda: bool(self._logged_in)}
 
     def _set_status(self, text):
         self.statuses.append(text)
@@ -93,8 +98,12 @@ def search_payloads(stub):
     return [e[0] if isinstance(e, tuple) else e for e in stub.searchResults.emits]
 
 
-def search_payload(album_ids=("al1",), pop=-1):
+def search_group(provider="tidal", album_ids=("al1",), pop=-1) -> dict:
+    """One provider's group, shaped like the bridge's own builder (#292)."""
     return {
+        "provider": provider,
+        "artists_layout": "strip" if provider == "tidal" else "flow",
+        "head_when_alone": provider != "tidal",
         "artists": [{"id": "a1", "name": "Artist 1", "art": "", "roles": "", "popularity": pop}],
         "albums": [{"id": i} for i in album_ids],
         "tracks": [],
@@ -102,7 +111,67 @@ def search_payload(album_ids=("al1",), pop=-1):
         "playlists": [],
         "mixes": [],
         "top": None,
+        "error": "",
     }
+
+
+def search_payload(album_ids=("al1",), pop=-1) -> dict:
+    return {"groups": [search_group(album_ids=album_ids, pop=pop)]}
+
+
+def group_of(payload, provider="tidal") -> dict:
+    """The payload's group for one provider (the pipeline's own order)."""
+    for group in payload.get("groups") or []:
+        if group.get("provider") == provider:
+            return group
+    return {}
+
+
+#: Apple's search answers four result kinds; its group carries no video/mix
+#: buckets (issue #292). The QML scenario payloads below mirror the bridge's
+#: own builder, so a seeded page has the shape a real search produces.
+_APPLE_SECTIONS = ("artists", "albums", "tracks", "playlists")
+
+
+def qml_search_payload(
+    *,
+    provider="tidal",
+    artists=(),
+    albums=(),
+    tracks=(),
+    videos=(),
+    playlists=(),
+    mixes=(),
+    top=None,
+    error="",
+    layout=None,
+) -> dict:
+    """A one-provider search payload for QML scenarios (issue #292).
+
+    Row dicts go in untouched; only the buckets the provider's search answers
+    are carried, exactly as the bridge composes them.
+    """
+    rows = {
+        "artists": list(artists),
+        "albums": list(albums),
+        "tracks": list(tracks),
+        "videos": list(videos),
+        "playlists": list(playlists),
+        "mixes": list(mixes),
+    }
+    names = _APPLE_SECTIONS if provider == "apple" else tuple(rows)
+    group = {
+        "provider": provider,
+        "artists_layout": layout or ("strip" if provider == "tidal" else "flow"),
+        # A lone TIDAL group is the page's own shape and stays headless; any
+        # other provider's head says whose rows these are (issue #292).
+        "head_when_alone": provider != "tidal",
+    }
+    for name in names:
+        group[name] = rows[name]
+    group["top"] = top
+    group["error"] = error
+    return {"groups": [group]}
 
 
 def wire_search(monkeypatch, stub, album_ids=("al1",), pop=50):
@@ -119,6 +188,8 @@ def wire_search(monkeypatch, stub, album_ids=("al1",), pop=50):
         "tidal": SimpleNamespace(
             name="TIDAL",
             capabilities=frozenset({Capability.SEARCH}),
+            search_artists_layout="strip",
+            search_head_when_alone=False,
             search=lambda needle: {
                 "artists": [artist],
                 "albums": [SimpleNamespace(id=i) for i in album_ids],
