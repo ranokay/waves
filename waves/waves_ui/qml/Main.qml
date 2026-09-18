@@ -17687,17 +17687,23 @@ ApplicationWindow {
                     // it, while the instance that receives the section has
                     // already asked and declined. So a section change into the
                     // pulse section arms again, under two guards: secArmedTick
-                    // is the tick this instance was armed for, so only a
-                    // header alive at the tick may re-arm (one the view
-                    // creates or recycles later was armed for an older tick
-                    // and stays still, never replaying an old rise), and
-                    // secSeenTick is the tick this instance already pulsed, so
-                    // one rise never fires the animation twice on one header.
-                    // Arming on Component.onCompleted instead guards nothing:
-                    // the first-row case is served by the pool, as
+                    // is the tick this instance was armed for, so a change
+                    // re-arms only a header armed for the current tick (a
+                    // header created later never armed, and one whose last arm
+                    // is an older tick stays still, so no rise plays on a
+                    // header that was not part of it), and secPulsedTick is
+                    // the tick this instance already pulsed, so one rise never
+                    // fires the animation twice on one header. Arming on
+                    // Component.onCompleted instead guards nothing: the
+                    // first-row case is served by the pool, as
                     // tests/test_queue_section_pulse.py pins.
-                    property int secSeenTick: 0
+                    property int secPulsedTick: 0
                     property int secArmedTick: -1
+                    // Whether this header holds the section that rose and has
+                    // not pulsed for the current tick yet.
+                    function secPulseDue() {
+                        return secItem.section === root.pulseSection && secPulsedTick !== root.pulseTick
+                    }
                     Connections { target: root; function onPulseTickChanged() {
                         secArmedTick = root.pulseTick
                         secArm.restart()
@@ -17706,15 +17712,15 @@ ApplicationWindow {
                         id: secArm
                         interval: 16
                         onTriggered: {
-                            if (secItem.section === root.pulseSection && secSeenTick !== root.pulseTick) {
-                                secSeenTick = root.pulseTick
+                            if (secPulseDue()) {
+                                secPulsedTick = root.pulseTick
                                 secPulse.restart()
                             }
                         }
                     }
                     onSectionChanged: {
                         secPulse.stop(); secLbl.scale = 1
-                        if (section === root.pulseSection && secArmedTick === root.pulseTick && secSeenTick !== root.pulseTick) secArm.restart()
+                        if (secArmedTick === root.pulseTick && secPulseDue()) secArm.restart()
                     }
                     SequentialAnimation {
                         id: secPulse
