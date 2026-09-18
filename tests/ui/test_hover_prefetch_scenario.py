@@ -313,9 +313,31 @@ def _run_scenario() -> int:
     if prefetched[0].get("art") != hero_art or list(prefetched[0].get("rowArts") or []) != [row_art]:
         print(f"prefetch summary carried the wrong covers: {prefetched[0]}", file=sys.stderr)
         return EXIT_REGRESSED
-    # The card's cover and the page's covers are in the warm pool.
-    if not pump(lambda: q("warmArtModel.count") >= 3, 2000):
-        print(f"warm pool did not take the prefetched covers (count={q('warmArtModel.count')})", file=sys.stderr)
+
+    # The card's cover and the page's covers are in the warm pool at the sizes
+    # the page will ask for (the hero Art decodes at 360, its backdrop at 480,
+    # the discs at 68). Listed is not warm: wait (bounded) for the pool's own
+    # Images to decode each row, so the click below tests the prefetch rather
+    # than racing the decoder. A row that never decodes fails here.
+    def pool_row(url: str, width: int) -> int:
+        for i in range(int(q("warmArtModel.count"))):
+            if q(f"warmArtModel.get({i}).u") == url and int(q(f"warmArtModel.get({i}).w")) == width:
+                return i
+        return -1
+
+    def pool_ready(url: str, width: int) -> bool:
+        i = pool_row(url, width)
+        return i >= 0 and q(f"warmArtModel.get({i}).ready") is True
+
+    def pool_dump() -> list:
+        return [
+            (q(f"warmArtModel.get({i}).u"), q(f"warmArtModel.get({i}).w"), q(f"warmArtModel.get({i}).ready"))
+            for i in range(int(q("warmArtModel.count")))
+        ]
+
+    warmed = [(hint_art, 360), (hero_art, 360), (hero_art, 480), (row_art, 68)]
+    if not pump(lambda: all(pool_ready(u, w) for u, w in warmed), 3000):
+        print(f"the warm pool did not decode the prefetched covers: {pool_dump()}", file=sys.stderr)
         return EXIT_REGRESSED
     if q("root.busy") is True:
         print("a hover prefetch flipped the busy indicator", file=sys.stderr)
@@ -353,27 +375,49 @@ def _run_scenario() -> int:
         print('"Reading the wire…" showed for a prefetched page', file=sys.stderr)
         return EXIT_REGRESSED
     grab("1-prefetched-open")
-    # Over the next second the hero must never be in the state that shows the
-    # "art: GET" box (waited, with no stand-in up), and must end up ready.
-    for _ in range(40):
+
+    # The prefetched open paints whole: the covers were decoded in the pool
+    # before the click, so neither the hero's "art: GET" box nor a disc's
+    # loading mark may face the frame. Both are drawn only while their cover
+    # is still loading past its grace and the frame has nothing else to show
+    # (the hero's stand-in; a disc has none). Read those gates until every
+    # cover has decided (bounded), not on a fixed grid: a verdict left on
+    # record by a load that has already painted is not a face the user saw,
+    # and a frame that keeps loading with the box up still fails.
+    def hero_boxed() -> bool:
+        return (
+            q("bihArt.artState") == "loading" and q("bihArt.artWaited") is True and q("bihArt.underReady") is not True
+        )
+
+    def disc_marked(marks: list) -> bool:
+        return any(d.property("artState") == "loading" and d.property("artWaited") is True for d in marks)
+
+    decided = False
+    for _ in range(120):  # up to 3 s: the paints decide, not a fixed window
         settle(25)
-        if q("bihArt.artWaited") is True and q("bihArt.underReady") is not True:
+        marks = discs()
+        if hero_boxed():
             print("the hero showed the art: GET box after a prefetched open", file=sys.stderr)
             return EXIT_REGRESSED
+        if disc_marked(marks):
+            print("a warm disc showed its loading mark on a prefetched page", file=sys.stderr)
+            return EXIT_REGRESSED
+        if q("bihArt.artState") != "loading" and not any(d.property("artState") == "loading" for d in marks):
+            decided = True
+            break
+    if not decided:
+        print("the prefetched page never finished its covers", file=sys.stderr)
+        return EXIT_REGRESSED
     if q("bihArt.artState") != "ready":
         print(f"hero never became ready (state={q('bihArt.artState')})", file=sys.stderr)
         return EXIT_REGRESSED
-    # The rows' discs came from the warm pool: ready, and none of them ever
-    # waited, so no mark was shown and nothing faded.
+    # The rows' discs all painted from the warm pool.
     warm = discs()
     if not warm:
         print("no track discs on the opened page", file=sys.stderr)
         return EXIT_PRECONDITION
     if disc_states() != ["ready"]:
         print(f"a warm page's discs were not all ready: {disc_states()}", file=sys.stderr)
-        return EXIT_REGRESSED
-    if any(d.property("artWaited") is True for d in warm):
-        print("a warm disc showed the waiting state (it would flash the mark and fade)", file=sys.stderr)
         return EXIT_REGRESSED
 
     # 3. Back, then open a never-hovered card whose page is slow: the header
