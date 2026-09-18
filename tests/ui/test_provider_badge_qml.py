@@ -1,15 +1,18 @@
-"""Provider badge on drill headers (issue #69).
+"""Provider badges on drill headers (issue #69), descriptor-driven (issue #278).
 
-Album/song drill headers (browseItemHeader) and the artist header carry
-the official provider logo top-right of the artwork, read off the
-namespaced page id ("apple:…" vs bare TIDAL ids). The skeleton names its
-provider from the page key, so no wrong badge flashes before the payload.
+Album/song drill headers (browseItemHeader) and the artist header carry the
+official provider mark top-right of the artwork, rendered from the descriptor
+``waves.providerDescriptor`` answers for the page's id -- no id prefix parsed
+here, no provider asset path in QML. The skeleton names its provider from the
+page key, so no wrong badge flashes before the payload; and a third provider
+registered with a descriptor badges like the first two with no QML change.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from support.paths import QML_MAIN
@@ -26,6 +29,7 @@ def _scenario() -> int:
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
+    from waves.providers.base import ProviderDescriptor
     from waves.waves_ui.app import _load_mono
     from waves.waves_ui.backend import WavesBridge
 
@@ -54,6 +58,12 @@ def _scenario() -> int:
         QTimer.singleShot(timeout_ms, loop.quit)
         loop.exec()
 
+    def badge_ok(object_name: str, provider_id: str) -> bool:
+        """The badge is visible and renders the descriptor of that provider."""
+        prefix = f'{object_name}.descriptor ? {object_name}.descriptor.id : ""'
+        mark = f"{object_name}.mark"
+        return bool(q(f"{object_name}.visible")) and q(prefix) == provider_id and provider_id in str(q(mark))
+
     settle()
     q(PARK_LOGIN_QML)
     settle()
@@ -69,15 +79,13 @@ def _scenario() -> int:
     q("browsePageKey = 'item:album:apple:1'")
     q("browsePage = ({header: %s})" % (header % "apple:1"))
     settle(200)
-    apple_ok = (
-        q("browseItemHeader.visible") and q("bihProviderBadge.visible") and q("bihProviderBadge.provider") == "apple"
-    )
+    apple_ok = badge_ok("bihProviderBadge", "apple")
 
     # ...TIDAL album page badges TIDAL.
     q("browsePageKey = 'item:album:123'")
     q("browsePage = ({header: %s})" % (header % "123"))
     settle(200)
-    tidal_ok = q("bihProviderBadge.visible") and q("bihProviderBadge.provider") == "tidal"
+    tidal_ok = badge_ok("bihProviderBadge", "tidal")
 
     # Skeleton names its provider from the key: no wrong flash.
     q("browsePage = null")
@@ -85,7 +93,7 @@ def _scenario() -> int:
     q("browseTitleHint = 'Hint Album'")
     q("browseHighlightId = ''")
     settle(200)
-    skeleton_ok = q("browseItemHeader.visible") and q("bihProviderBadge.provider") == "apple"
+    skeleton_ok = q("browseItemHeader.visible") and badge_ok("bihProviderBadge", "apple")
     q("browseTitleHint = ''")
     q("browsePageKey = ''")
 
@@ -93,7 +101,7 @@ def _scenario() -> int:
     q("browsePageKey = 'item:album:apple:7'")
     q("browsePage = ({header: %s})" % (header % "apple:7"))
     settle(200)
-    track_ok = q("bihProviderBadge.visible") and q("bihProviderBadge.provider") == "apple"
+    track_ok = badge_ok("bihProviderBadge", "apple")
     q("browsePage = null")
     q("browsePageKey = ''")
     q("browseOpen = false")
@@ -103,16 +111,62 @@ def _scenario() -> int:
     q("artistOpen = true")
     q("artistData = ({id: 'apple:artist-1', name: 'Aphex Twin', art: '', bio: ''})")
     settle(200)
-    artist_apple_ok = q("artistProviderBadge.visible") and q("artistProviderBadge.provider") == "apple"
+    artist_apple_ok = badge_ok("artistProviderBadge", "apple")
     q("artistData = ({id: '42', name: 'Aphex Twin', art: '', bio: ''})")
     settle(200)
-    artist_tidal_ok = q("artistProviderBadge.visible") and q("artistProviderBadge.provider") == "tidal"
+    artist_tidal_ok = badge_ok("artistProviderBadge", "tidal")
     q("artistData = ({})")
     settle(200)
     artist_hidden_ok = not q("artistProviderBadge.visible")
 
-    ok = apple_ok and tidal_ok and skeleton_ok and track_ok and artist_apple_ok and artist_tidal_ok
-    return 0 if ok and artist_hidden_ok else 1
+    # A third provider registered with a descriptor badges its own rows with
+    # no QML edit at all (issue #278's acceptance).
+    bridge.providers["qobuz"] = SimpleNamespace(
+        descriptor=lambda: ProviderDescriptor(
+            id="qobuz",
+            name="Qobuz",
+            logo="assets/providers/qobuz.png",
+            logo_header_width=22,
+            logo_header_height=13,
+        )
+    )
+    q("browseOpen = true")
+    q("browsePageKey = 'item:album:qobuz:77'")
+    q("browsePage = ({header: %s})" % (header % "qobuz:77"))
+    settle(200)
+    q("artistOpen = false")
+    q("artistData = ({})")
+    third_ok = badge_ok("bihProviderBadge", "qobuz")
+    q("artistOpen = true")
+    q("artistData = ({id: 'qobuz:artist-1', name: 'Third Artist', art: '', bio: ''})")
+    settle(200)
+    third_artist_ok = badge_ok("artistProviderBadge", "qobuz")
+    # An unclaimed namespace wears no mark at all (never another provider's).
+    q("browsePage = null")
+    q("browsePageKey = ''")
+    q("artistData = ({id: 'unclaimed:artist-1', name: 'Nobody', art: '', bio: ''})")
+    settle(200)
+    unclaimed_ok = not q("artistProviderBadge.visible") and not q("bihProviderBadge.visible")
+
+    problems = [
+        name
+        for name, ok in (
+            ("the Apple album header's badge", apple_ok),
+            ("the TIDAL album header's badge", tidal_ok),
+            ("the skeleton's badge", skeleton_ok),
+            ("the track drill's badge", track_ok),
+            ("the Apple artist page's badge", artist_apple_ok),
+            ("the TIDAL artist page's badge", artist_tidal_ok),
+            ("the hidden badge on no artist", artist_hidden_ok),
+            ("the third provider's album badge", third_ok),
+            ("the third provider's artist badge", third_artist_ok),
+            ("the unclaimed namespace's badge", unclaimed_ok),
+        )
+        if not ok
+    ]
+    for problem in problems:
+        print(f"regressed: {problem}", file=sys.stderr)
+    return 0 if not problems else 1
 
 
 @pytest.mark.qml

@@ -107,9 +107,15 @@ def test_every_cached_image_asks_for_the_same_pixels() -> None:
     for line, block in _cached_image_blocks():
         span = raw_lines[line - 1 : line + block.count("\n")]
         joined = "\n".join(span)
-        if "assets/providers/" in joined or "modelData.logo" in joined:
+        if (
+            "assets/providers/" in joined
+            or "modelData.logo" in joined
+            or "provider.logo" in joined
+            or "descriptor.logo" in joined
+        ):
             # Provider marks are not covers and keep their own aspect; the
-            # welcome surface takes its marks from the provider descriptors.
+            # welcome surface and the badges take their marks from the
+            # provider descriptors (issue #278).
             continue
         found = re.search(r"\bfillMode\s*:\s*(Image\.\w+)", block)
         if not found or found.group(1) != ART_FILL_MODE:
