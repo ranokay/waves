@@ -10366,8 +10366,13 @@ ApplicationWindow {
             // Preview plays the artist's top track and doubles as a scrubber.
             PreviewBar { width: parent.width; pid: aId }
             DownloadButton {
+                objectName: "artistCardDownload"
                 width: parent.width
                 mediaId: aId; chooserKind: "artist"; label: "Download artist"
+                // A card is a surface too: the same capability verdict the
+                // artist page's control reads keeps an Apple artist card from
+                // offering a sweep its catalog cannot run (issue #288).
+                visible: waves.artistDownloadSupported(aId)
                 // What the strip on the cover already says, said again by the
                 // control that would act on it: a catalogue you partly hold
                 // is not a fresh grab.
@@ -16518,9 +16523,15 @@ ApplicationWindow {
                         Row {
                             spacing: 12
                             DownloadButton {
+                                objectName: "artistDownload"
                                 mediaId: root.artistData.id || ""
                                 chooserKind: "artist"
                                 label: "Download discography"
+                                // Only where the provider answers an artist
+                                // sweep: Apple's catalog has no discography
+                                // verb, and a live control that can only
+                                // refuse is worse than none (issue #288).
+                                visible: waves.artistDownloadSupported(root.artistData.id || "")
                                 // The badge directly above says what is held;
                                 // this says what a click would add to.
                                 libArtist: root.artistData.name || ""

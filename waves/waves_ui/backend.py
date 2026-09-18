@@ -10256,6 +10256,36 @@ class WavesBridge(LibraryMixin, QObject):
             logger.debug("Chooser capability probe failed; hiding the control", exc_info=True)
             return False
 
+    @Slot(str, result=bool)
+    def artistDownloadSupported(self, artist_id: str) -> bool:
+        """Whether the artist's provider can queue a discography sweep.
+
+        The provider's capability decides, never an id prefix in the QML
+        (issue #288): Apple's provider does not declare
+        ``Capability.ARTIST_DOWNLOAD``, so an Apple artist page renders no
+        discography control instead of a live button whose only answer is a
+        refusal. The verb itself stays refused on the bridge side for any
+        other caller (say, a keyboard path).
+        """
+        try:
+            return self._artist_download_supports(artist_id)
+        except Exception:
+            # The sibling chooserSupported guard: a probe that raises hides the
+            # control, it never fails open to a live button (issue #288).
+            logger.debug("Artist download capability probe failed; hiding the control", exc_info=True)
+            return False
+
+    def _artist_download_supports(self, artist_id: str) -> bool:
+        """The capability answer itself, unguarded by try/except (the slot
+        above guards the probe). No artist id answers False, mirroring
+        _chooser_supports: there is nothing to sweep."""
+        if not str(artist_id or "").strip():
+            return False
+        provider = self._provider_meta(self._chooser_provider_of(artist_id))
+        if provider is None:
+            return False
+        return Capability.ARTIST_DOWNLOAD in provider.capabilities
+
     @Slot(str, str, result="QVariant")
     def chooserDefaults(self, media_id: str, kind: str = "") -> dict:
         """Everything the Chooser popover needs to open on this control.
@@ -17196,8 +17226,14 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadArtist(self, artist_id: str) -> None:
-        """Queue every album of an artist for download."""
-        if str(artist_id).startswith(f"{CTX_APPLE}:"):
+        """Queue every album of an artist for download.
+
+        Whether the sweep can run at all is the artist's provider capability
+        (issue #288): a provider whose catalog answers no artist sweep is
+        refused here with the same words the hidden control would have shown,
+        so the verb is honest however it is reached (a card, a keyboard
+        path), and the capability stays the one source of that fact."""
+        if not self.artistDownloadSupported(artist_id):
             self._set_status(_APPLE_UNAVAILABLE_STATUS)
             return
         if self._dl is None:
