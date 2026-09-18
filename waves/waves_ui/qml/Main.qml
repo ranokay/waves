@@ -3663,6 +3663,10 @@ ApplicationWindow {
     // shares each pixmap with whatever is on screen rather than holding a copy
     // of it, so what it costs is only the covers that have left the page:
     // worst case ~100 MB of RAM at typical tile sizes, usually far less.
+    // Each row carries `ready`: false until the pool's own Image has decoded
+    // it. A cover being listed is not a cover being warm; the hover scenario
+    // waits for `ready` before clicking, so its assertion measures the
+    // prefetch, not a race against the decoder.
     // The track disc's decode size, in one place: PreviewArt asks for it and
     // the prefetch handler warms at it, and the pool keys on the exact size,
     // so two literals that drift apart would silently warm nothing.
@@ -3673,7 +3677,7 @@ ApplicationWindow {
         var k = u + "@" + w
         if (_warmSeen[k]) return
         _warmSeen[k] = true
-        warmArtModel.append({ u: "" + u, w: w, h: h })
+        warmArtModel.append({ u: "" + u, w: w, h: h, ready: false })
         if (warmArtModel.count > 220) {
             var old = warmArtModel.get(0)
             delete _warmSeen[old.u + "@" + old.w]
@@ -3706,6 +3710,19 @@ ApplicationWindow {
                 asynchronous: true
                 cache: true
                 visible: false
+                // The row's own decode flag (see the pool comment above): the
+                // hover scenario polls it to know the pool is actually warm.
+                // The row is re-read because a load that outlives an eviction
+                // shift must not mark another row ready; `w` is half of the
+                // pool key (a url is deliberately warmed at two widths), so
+                // the identity is the whole key, not the url alone.
+                onStatusChanged: if (status === Image.Ready) {
+                    var i = index
+                    if (i >= 0 && i < warmArtModel.count
+                            && warmArtModel.get(i).u === ("" + source)
+                            && warmArtModel.get(i).w === sourceSize.width)
+                        warmArtModel.setProperty(i, "ready", true)
+                }
             }
         }
     }

@@ -217,6 +217,21 @@ def test_prefetched_covers_warm_at_the_sizes_the_page_asks_for():
     assert "68" not in handler, "the warm loop must ask root.discDecode, never repeat the literal"
 
 
+def test_the_warm_pool_reports_a_row_ready_only_once_its_pixmap_decoded():
+    # "Listed in the pool" is not "warm": a row carries `ready`, flipped by the
+    # pool's own Image when its pixmap lands. The hover scenario waits on it
+    # before clicking, so the click cannot race the pool's asynchronous decode
+    # (issue #296); dropping the flag would leave that wait vacuous.
+    assert 'warmArtModel.append({ u: "" + u, w: w, h: h, ready: false })' in MAIN_QML
+    # The same locator the cache-key guard uses (test_qml_art_cache_keys.py):
+    # the pool block through the Item that wraps its Repeater.
+    match = re.search(r"ListModel\s*\{\s*id:\s*warmArtModel\s*\}(.{0,2600}?)\n    \}\n", MAIN_QML, re.S)
+    assert match, "could not find the warm pool Repeater under warmArtModel"
+    pool = match.group(1)
+    assert "status === Image.Ready" in pool
+    assert 'warmArtModel.setProperty(i, "ready", true)' in pool
+
+
 # ----- the round track disc says which state it is in -------------------------
 
 
