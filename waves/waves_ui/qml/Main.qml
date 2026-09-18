@@ -1016,7 +1016,9 @@ ApplicationWindow {
     // pools those and re-sections them as rows move between groups, and a
     // pulse started on the instance that was Completed at that instant played
     // out on the same instance after it had been handed to Downloading. What
-    // the user saw was DOWNLOADING bouncing as its count fell.
+    // the user saw was DOWNLOADING bouncing as its count fell. A header that
+    // is handed the pulse section after the tick re-arms on the change, so
+    // the pulse follows the section however the pooled instances swap.
     property string pulseSection: ""
     property int pulseTick: 0
     property bool completedCollapsed: true
@@ -17678,18 +17680,42 @@ ApplicationWindow {
                     // headers to the brand new section, and the timer fires
                     // afterwards and asks what section it is holding by then.
                     // So the header that pulses need never have existed when
-                    // the count moved. Arming on Component.onCompleted as well
-                    // was tried and reverted: it guards nothing (proved in
-                    // tests/test_queue_section_pulse.py) and it would need a
-                    // freshness window to stop a header the view recycles
-                    // minutes later replaying an old pulse.
-                    Connections { target: root; function onPulseTickChanged() { secArm.restart() } }
+                    // the count moved.
+                    // The handoff can also land AFTER the arm fired: the
+                    // instance holding the section when the tick arrived
+                    // starts the pulse and is then re-sectioned away, dropping
+                    // it, while the instance that receives the section has
+                    // already asked and declined. So a section change into the
+                    // pulse section arms again, under two guards: secArmedTick
+                    // is the tick this instance was armed for, so only a
+                    // header alive at the tick may re-arm (one the view
+                    // creates or recycles later was armed for an older tick
+                    // and stays still, never replaying an old rise), and
+                    // secSeenTick is the tick this instance already pulsed, so
+                    // one rise never fires the animation twice on one header.
+                    // Arming on Component.onCompleted instead guards nothing:
+                    // the first-row case is served by the pool, as
+                    // tests/test_queue_section_pulse.py pins.
+                    property int secSeenTick: 0
+                    property int secArmedTick: -1
+                    Connections { target: root; function onPulseTickChanged() {
+                        secArmedTick = root.pulseTick
+                        secArm.restart()
+                    } }
                     Timer {
                         id: secArm
                         interval: 16
-                        onTriggered: if (secItem.section === root.pulseSection) secPulse.restart()
+                        onTriggered: {
+                            if (secItem.section === root.pulseSection && secSeenTick !== root.pulseTick) {
+                                secSeenTick = root.pulseTick
+                                secPulse.restart()
+                            }
+                        }
                     }
-                    onSectionChanged: { secPulse.stop(); secLbl.scale = 1 }
+                    onSectionChanged: {
+                        secPulse.stop(); secLbl.scale = 1
+                        if (section === root.pulseSection && secArmedTick === root.pulseTick && secSeenTick !== root.pulseTick) secArm.restart()
+                    }
                     SequentialAnimation {
                         id: secPulse
                         objectName: "queueSectionPulse"

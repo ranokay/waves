@@ -84,6 +84,15 @@ _SECTIONS = """
 
 
 def _pulse_of(section: str) -> str:
+    """The pulse state of the header holding ``section``: the animation's own
+    identity and whether it runs, pipe-joined.
+
+    Each header owns one pulse animation, so the animation's JS string
+    ("QQuickSequentialAnimation(0x...)") is stable for that header's lifetime.
+    The view pools these headers and can hand the section from one to another
+    while the promotion settles, so a verdict keyed to the section NAME alone
+    can read the pulse of the instance already on its way out.
+    """
     return """
 (function(){
     var found = null
@@ -99,7 +108,8 @@ def _pulse_of(section: str) -> str:
         for (var i = 0; i < c.length && !found; i++) walk(c[i])
     }
     walk(queueList)
-    return found
+    if (!found) return "__NONE__"
+    return String(found) + "|" + (found.running ? "1" : "0")
 })()
 """.replace("__SECTION__", section)
 
@@ -194,7 +204,15 @@ def _run_scenario(first_row: bool = False) -> int:
     # sampled once: a single fixed settle can land before the arming frame on
     # a loaded machine and past the whole pulse on a very slow one, and both
     # read as "COMPLETED did not pulse".
-    running_by_section: dict[str, bool] = {}
+    #
+    # The read keys to the INSTANCE holding the section, sampled to the end of
+    # the window: the view hands a pooled header to a section while the row
+    # lands, so judging the pulse the instant one is seen can bless an
+    # animation on the instance being swapped away. The verdict below is the
+    # holder at the END, the header the section keeps: it must have pulsed,
+    # and only a rise may pulse.
+    running_by_section: dict[str, str] = {}
+    holder_by_section: dict[str, str] = {}
     sections: list[str] = []
     for _ in range(20):
         settle(16)
@@ -202,28 +220,28 @@ def _run_scenario(first_row: bool = False) -> int:
         if "completed" not in sections:
             continue
         for section in sections:
-            pulse = q(_pulse_of(section))
-            if pulse is None:
+            state = str(q(_pulse_of(section)))
+            ident, _, running = state.partition("|")
+            if ident == "__NONE__":
                 # NOT a precondition: a header with no pulse animation is the
                 # regression this test exists to catch. Routing it to a skip
                 # meant deleting the animation turned the guard green.
                 print(f"the {section!r} header has no pulse animation", file=sys.stderr)
                 return EXIT_REGRESSED
-            if bool(pulse.property("running")):
-                running_by_section[section] = True
-        if running_by_section:
-            break
+            holder_by_section[section] = ident
+            if running == "1":
+                running_by_section[section] = ident
     if "completed" not in sections or "downloading" not in sections:
         print(f"the two headers the promotion touches were not both built: {sections}", file=sys.stderr)
         return EXIT_PRECONDITION
     bad: list[str] = []
     for section in sections:
-        running = running_by_section.get(section, False)
+        running = running_by_section.get(section) == holder_by_section.get(section)
         # Completed just gained the promoted row; every other section either
         # lost one or did not move, and a loss must never be celebrated.
         if section == "completed" and not running:
             bad.append("COMPLETED gained a row and did not pulse")
-        if section != "completed" and running:
+        if section != "completed" and section in running_by_section:
             bad.append(f"{section.upper()} pulsed without its count rising")
 
     if bad:
