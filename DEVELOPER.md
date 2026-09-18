@@ -136,6 +136,16 @@ the live account group has no wrapper and never runs in CI. Every test and
 check task runs the command through `uv run --locked --all-extras`, so the
 lockfile is the environment and drift fails the run.
 
+`mise run check` also carries the two static gates:
+
+- `mise run lint-qml` — qmllint over `waves/waves_ui/qml`, also wired as a
+  pre-commit hook for changed QML. Errors fail; the thousands of existing
+  `[unqualified]` warnings are counted, not printed (they would bury errors).
+- `mise run typecheck` — basedpyright in basic mode over `waves/waves_ui`.
+  The bridge's dynamic-seam categories (attribute access, argument types,
+  optional members) are warnings, with the reasons in `pyproject.toml`; every
+  other category fails. The burn-down is tracked in issue #319.
+
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
 `uv pip uninstall tidaler`, then `mise run install` (or
 `uv sync --all-extras`). A stale editable install keeps `import tidaler`

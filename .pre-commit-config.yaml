@@ -44,6 +44,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: qmllint
+        name: qmllint
+        entry: bash tools/lint_qml.sh
+        files: \.(qml|js)$
+        language: system
+
+  - repo: local
+    hooks:
       - id: pyupgrade
         name: pyupgrade
         entry: uv run pyupgrade --py312-plus

@@ -107,7 +107,7 @@ class LibraryWorker:
             env["WAVES_LIBRARY_WORKER"] = "1"
             cwd = None if self._command else _source_root()
             try:
-                self._proc = self._spawn(
+                child = self._spawn(
                     command,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
@@ -125,20 +125,19 @@ class LibraryWorker:
                 self._disabled = True
                 self._log_fallback(f"{type(exc).__name__}")
                 raise WorkerFailed(str(exc)) from exc
+            self._proc = child
             self._results = queue.Queue()
             self._stopping = False
-            self._reader = threading.Thread(
-                target=self._read, args=(self._proc,), name="waves-library-worker", daemon=True
-            )
+            self._reader = threading.Thread(target=self._read, args=(child,), name="waves-library-worker", daemon=True)
             self._reader.start()
             threading.Thread(
                 target=self._read_stderr,
-                args=(self._proc,),
+                args=(child,),
                 name="waves-library-worker-stderr",
                 daemon=True,
             ).start()
             logger.info("library scanner process started")
-            return self._proc
+            return child
 
     def _read_stderr(self, process: subprocess.Popen) -> None:
         """Drain the child's stderr into this process's log. Anything here is
@@ -169,6 +168,8 @@ class LibraryWorker:
         import json
 
         stream = process.stdout
+        if stream is None:
+            return
         try:
             for raw in stream:
                 try:
@@ -287,7 +288,7 @@ class LibraryWorker:
         self._kill()
 
     # ----- jobs ------------------------------------------------------------
-    def _run(self, job: dict, *, alive, on_progress=None, kinds: tuple[str, ...]) -> dict:
+    def _run(self, job: dict, *, alive, on_progress=None, kinds: tuple[str, ...]) -> dict | None:
         """Send one job and wait for its reply, relaying progress meanwhile.
         Raises WorkerFailed when the child could not be used (spawn failure,
         a crash mid-job), and returns None when ``alive`` turned false (the

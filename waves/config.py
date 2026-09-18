@@ -91,10 +91,17 @@ def _replace_with_retry(tmp_path: str, file_path: str) -> None:
             return
 
 
-class BaseConfig:
-    data: ModelSettings | ModelToken
+class BaseConfig[TModel: (ModelSettings, ModelToken)]:
+    """The shared read/save skin over one config file.
+
+    Generic over the model it owns: ``Settings`` carries ``ModelSettings`` and
+    ``Tidal`` carries ``ModelToken``, so ``.data`` is the concrete model and
+    attribute access on it type-checks.
+    """
+
+    data: TModel
     file_path: str
-    cls_model: ModelSettings | ModelToken
+    cls_model: type[TModel]
     path_base: str = path_config_base()
 
     def save(self, config_to_compare: str = None) -> None:
@@ -424,7 +431,7 @@ def _migrate_lyrics_art_providers(data: ModelSettings) -> bool:
     return True
 
 
-class Settings(BaseConfig, metaclass=SingletonMeta):
+class Settings(BaseConfig[ModelSettings], metaclass=SingletonMeta):
     def __init__(self):
         self.cls_model = ModelSettings
         self.file_path = path_file_settings()
@@ -625,7 +632,7 @@ def harden_api_session(session: tidalapi.Session) -> None:
     session.request_session.mount("http://", adapter)
 
 
-class Tidal(BaseConfig, metaclass=SingletonMeta):
+class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
     session: tidalapi.Session
     token_from_storage: bool = False
     settings: Settings
