@@ -1719,13 +1719,6 @@ ApplicationWindow {
              : section === "stopped" ? "Stopped"
              : section === "downloading" ? "Downloading" : "Queued"
     }
-    function queueSectionCount(section) {
-        return section === "completed" ? root.completedCount
-             : section === "failed" ? root.failedCount
-             : section === "stopped" ? root.stoppedCount
-             : section === "downloading" ? root.downloadingCount : root.queuedCount
-    }
-
     // Dev timing: measure how long a section switch takes to process
     // markNav() stamps the start and arms a zero-interval Timer; the Timer fires
     // on the next GUI-thread event-loop turn, after the visibility bindings and
@@ -7399,6 +7392,7 @@ ApplicationWindow {
                         Repeater {
                             model: db.chooserTiers
                             delegate: Rectangle {
+                                objectName: "chooserTierRow"
                                 id: tierRow
                                 required property var modelData
                                 readonly property bool picked: ("" + modelData.word) === ("" + db.chooserTier)
@@ -7444,6 +7438,7 @@ ApplicationWindow {
                             Repeater {
                                 model: db.chooserAudioOptions
                                 delegate: Rectangle {
+                                    objectName: "chooserAudioTile"
                                     id: audioTile
                                     required property string modelData
                                     readonly property bool picked: db.chooserAudio === modelData
@@ -7454,7 +7449,7 @@ ApplicationWindow {
                                     border.width: 1
                                     activeFocusOnTab: chooserPop.visible
                                     Accessible.role: Accessible.RadioButton
-                                    Accessible.name: "Audio: " + (modelData === "both" ? "stereo and Atmos" : modelData)
+                                    Accessible.name: "Audio type: " + modelData.toUpperCase()
                                     Accessible.checkable: true; Accessible.checked: audioTile.picked
                                     Accessible.onPressAction: function() { db.chooserPickAudio(modelData) }
                                     Keys.onReturnPressed: function(event) { if (!event.isAutoRepeat) { event.accepted = true; db.chooserPickAudio(modelData) } }
@@ -7473,6 +7468,7 @@ ApplicationWindow {
                         Row {
                             spacing: 8
                             Rectangle {
+                                objectName: "chooserLyricsEmbed"
                                 id: lyricsEmbedTile
                                 width: 90; height: 24; radius: 5
                                 color: db.chooserLyricsEmbed ? root.accentCont : root.surface3
@@ -7491,6 +7487,7 @@ ApplicationWindow {
                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserToggle("lyrics_embed") }
                             }
                             Rectangle {
+                                objectName: "chooserLyricsFile"
                                 id: lyricsLrcTile
                                 width: 70; height: 24; radius: 5
                                 color: db.chooserLyricsFile ? root.accentCont : root.surface3
@@ -7509,6 +7506,7 @@ ApplicationWindow {
                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserToggle("lyrics_file") }
                             }
                             Rectangle {
+                                objectName: "chooserLyricsTtml"
                                 id: lyricsTtmlTile
                                 width: 80; height: 24; radius: 5
                                 color: db.chooserLyricsTtml ? root.accentCont : root.surface3
@@ -7540,6 +7538,7 @@ ApplicationWindow {
                         Row {
                             spacing: 8
                             Rectangle {
+                                objectName: "chooserCoverFile"
                                 id: coverFileTile
                                 width: 130; height: 24; radius: 5
                                 color: db.chooserCoverFile ? root.accentCont : root.surface3
@@ -7558,6 +7557,7 @@ ApplicationWindow {
                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.chooserToggle("cover_file") }
                             }
                             Rectangle {
+                                objectName: "chooserCoverEmbed"
                                 id: coverEmbedTile
                                 width: 110; height: 24; radius: 5
                                 color: db.chooserCoverEmbed ? root.accentCont : root.surface3
@@ -7580,6 +7580,7 @@ ApplicationWindow {
                     Row {
                         spacing: 8
                         Rectangle {
+                            objectName: "chooserSetDefaults"
                             id: chooserDefaultsBtn
                             width: 150; height: 30; radius: 6; color: "transparent"
                             border.color: chooserDefaultsBtn.activeFocus ? root.accent : root.accentDim
@@ -7595,6 +7596,7 @@ ApplicationWindow {
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: db.saveChooserAsDefaults() }
                         }
                         Rectangle {
+                            objectName: "chooserConfirm"
                             id: chooserConfirmBtn
                             width: 120; height: 30; radius: 6; color: root.accent
                             border.color: chooserConfirmBtn.activeFocus ? root.textHi : "transparent"
@@ -17587,7 +17589,7 @@ ApplicationWindow {
                         Text {
                             textFormat: Text.PlainText
                             id: secLbl
-                            text: root.queueSectionWord(secItem.section).toUpperCase() + " · " + root.queueSectionCount(secItem.section)
+                            text: root.queueSectionWord(secItem.section).toUpperCase() + " · " + root.queueGroupCount(secItem.section)
                             // Brightness tracks how live the section is: the work
                             // happening right now reads near-white, what is only
                             // waiting stays dim, so the eye lands on Downloading
