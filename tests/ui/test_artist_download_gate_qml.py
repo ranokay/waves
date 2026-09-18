@@ -106,6 +106,7 @@ def _search_payload(*, apple: bool) -> dict:
                 {
                     "provider": "apple",
                     "artists_layout": "flow",
+                    "head_when_alone": True,
                     "artists": [_card("apple:artist-1", "Apple Artist")],
                     "albums": [],
                     "tracks": [],
@@ -120,6 +121,7 @@ def _search_payload(*, apple: bool) -> dict:
             {
                 "provider": "tidal",
                 "artists_layout": "strip",
+                "head_when_alone": False,
                 "artists": [_card("artist-1", "Tidal Artist")],
                 "albums": [],
                 "tracks": [],

@@ -123,6 +123,7 @@ def _payload() -> dict:
             {
                 "provider": "tidal",
                 "artists_layout": "strip",
+                "head_when_alone": False,
                 "artists": [],
                 "albums": albums,
                 "tracks": tracks,

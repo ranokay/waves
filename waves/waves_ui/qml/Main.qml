@@ -8810,6 +8810,7 @@ ApplicationWindow {
         // identity across a refresh.
         readonly property bool topVisible: !group.collapsed && root.filterType === "all" && group.topRow !== null
         property alias topHeadItem: topHead
+        property alias topRepeater: topRep
         property alias artistsHeadItem: artistsHead
         property alias albumRepeater: albumsRep
         property alias videoGridItem: videoGrid
@@ -8992,6 +8993,7 @@ ApplicationWindow {
         // this is a pointer, not a move.
         SectionHeader { id: topHead; opacity: root.searchReveal; visible: group.topVisible; label: "TOP RESULT" }
         Repeater {
+            id: topRep
             model: group.topRow !== null ? [group.topRow] : []
             delegate: Loader {
                 id: topLd

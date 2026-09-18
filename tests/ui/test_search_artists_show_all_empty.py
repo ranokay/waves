@@ -179,16 +179,16 @@ def _run_scenario() -> int:
 
     state = str(q(_SHOWN))
     if state == "MISSING":
-        # An empty group takes no room at all (all its rows are hidden), so
-        # the label may be absent rather than merely hidden; either way it is
-        # not floating over the page.
-        return EXIT_OK
-    if not state.startswith("SHOWN") and not state.startswith("HIDDEN"):
-        print(f"the label read as neither shown nor hidden ({state})", file=sys.stderr)
+        # The label is instantiated with its group; a walk that cannot find it
+        # is a finder regression, not a pass.
+        print("no item named artistsShowAll in the tree", file=sys.stderr)
         return EXIT_PRECONDITION
     if state.startswith("SHOWN"):
         print(f"SHOW LESS floated over a search page with no artists (label read {state})", file=sys.stderr)
         return _FLOATED
+    if not state.startswith("HIDDEN"):
+        print(f"the label read as neither shown nor hidden ({state})", file=sys.stderr)
+        return EXIT_PRECONDITION
 
     # The positive leg: one artist, the row still expanded, and the toggle is
     # back. Without this an always-false binding would pass the check above.

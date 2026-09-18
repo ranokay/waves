@@ -6812,11 +6812,16 @@ class WavesBridge(LibraryMixin, QObject):
 
     @staticmethod
     def _search_artist_meters(payload: dict) -> dict[str, int]:
-        """Every group's artist ids (the cache-serve meter replay keys)."""
+        """Every group's artist ids (the cache-serve meter replay keys).
+
+        A missing or null meter reads -1; a real 0 is a meter like any other
+        (a just-released item's popularity), never folded into "unknown".
+        """
         meters: dict[str, int] = {}
         for group in payload.get("groups") or []:
             for card in group.get("artists") or []:
-                meters[str(card.get("id", ""))] = int(card.get("popularity", -1) or -1)
+                raw = card.get("popularity", -1)
+                meters[str(card.get("id", ""))] = -1 if raw is None else int(raw)
         return meters
 
     def _top_hit_dict(self, hit) -> dict | None:
@@ -12222,8 +12227,9 @@ class WavesBridge(LibraryMixin, QObject):
             # section's SHOW ALL state are keyed by provider id
             # (search_provider_<id>_collapsed, <id>_search_sec_<section>_expanded),
             # so a provider the app has never heard of saves and restores its
-            # own state. The two shipped ids stay declared here; the shape rule
-            # (_is_provider_surface_pref) accepts any provider's keys.
+            # own state. The two shipped folds are declared here; every
+            # provider-keyed key is otherwise accepted by shape
+            # (_is_provider_surface_pref) and materialized on first write.
             "search_provider_tidal_collapsed": False,
             "search_provider_apple_collapsed": False,
             # The search sort control, remembered across launches: the order

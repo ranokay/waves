@@ -207,14 +207,7 @@ def _run_scenario() -> int:
     if not (top_y < artists_y):
         failures.append(f"TOP RESULT header (y={top_y}) is not above ARTISTS (y={artists_y})")
     # The pinned row is the album's own delegate, rendered and sized.
-    pin_h = q(
-        tidal
-        + ".topHeadItem.parent.children["
-        + tidal
-        + ".topHeadItem.parent.children.indexOf("
-        + tidal
-        + ".topHeadItem) + 1].height"
-    )
+    pin_h = q(tidal + ".topRepeater.itemAt(0) ? " + tidal + ".topRepeater.itemAt(0).height : 0")
     if not (pin_h and pin_h > 40):
         failures.append(f"pinned row has no height (h={pin_h})")
 

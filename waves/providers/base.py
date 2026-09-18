@@ -66,8 +66,8 @@ from typing import NamedTuple
 #
 # Payloads built from those rows:
 #   search payload:
-#     {groups: [{provider, artists_layout, artists, albums, tracks, videos,
-#                playlists, mixes, top, error}, ...]}
+#     {groups: [{provider, artists_layout, head_when_alone, artists, albums,
+#                tracks, videos, playlists, mixes, top, error}, ...]}
 #     One group per provider that answered, in registry order, carrying the
 #     buckets its ``search_sections`` declares (a bucket it does not answer is
 #     absent), its best match (``top``: a row dict tagged with its kind

@@ -152,8 +152,8 @@ def test_an_unresolvable_artist_still_reports_failure():
 # --------------------------------------------------------------------------- #
 class _SearchStub(_StubBase):
     search = WavesBridge.search
-    _search_total = WavesBridge._search_total
-    _search_artist_meters = WavesBridge._search_artist_meters
+    _search_total = staticmethod(WavesBridge._search_total)
+    _search_artist_meters = staticmethod(WavesBridge._search_artist_meters)
 
     def __init__(self):
         super().__init__()
