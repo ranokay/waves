@@ -20,7 +20,7 @@ classifiers = [
 requires-python = ">=3.12,<3.15"
 
 dependencies = [
-  "requests~=2.32.5",
+  "requests>=2.34.2,<3",
   "mutagen>=1.47.0,<2",
   "dataclasses-json>=0.6.7,<0.7",
   "pathvalidate>=3.3.1,<4",
@@ -57,11 +57,11 @@ gui = ["pyside6==6.11.1"]
 [dependency-groups]
 dev = [
   "pytest>=9.0.1,<10",
-  "deptry>=0.24.0,<0.25",
+  "deptry>=0.25.1,<0.26",
   "pre-commit>=4.5.0,<5",
   "pyupgrade>=3.21.2,<4",
   "pillow>=12.0.0,<13",
-  "black>=25.11.0,<26",
+  "black>=26.5.1,<27",
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
   # bump invalidates it (docs/dependency-updates.md).
   "nuitka==2.8.4",
@@ -306,7 +306,12 @@ ignore = [
 
 [tool.black]
 # https://github.com/psf/black
-target-version = ["py312", "py313", "py314"]
+# The target versions are the syntax FLOOR, not the support matrix: code must
+# parse on 3.12, so the formatter must not emit 3.13+/3.14-only syntax. Black 26
+# also warns and skips its AST safety check when a target is newer than the
+# interpreter running it (CI and the pre-commit hook run 3.13), so targeting
+# 3.14 would buy nothing and cost the check.
+target-version = ["py312", "py313"]
 line-length = 120
 color = true
 preview = true
