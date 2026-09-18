@@ -11,7 +11,7 @@ uv = "0.12.16"
 
 [tasks.install]
 description = "Create/sync the dev environment and install the pre-commit hooks"
-run = "uv sync --all-extras && uv run pre-commit install"
+run = "uv sync --locked --all-extras && uv run --locked --all-extras pre-commit install"
 
 [tasks.check]
 description = "Lock drift, pre-commit hooks and unused dependencies"

@@ -241,10 +241,11 @@ jobs:
           # Legacy macOS flavor for macOS 12 through 14 (see the env note on the
           # _LEGACY names): the locked PySide6 is overlaid with 6.9.3, the newest
           # release whose macOS binaries honor their macOS 12 wheel tag, and the
-          # floor drops to 12.0 (WAVES_MACOS_MIN is ?= in the Makefile, so the
-          # env override reaches Nuitka's MACOSX_DEPLOYMENT_TARGET and the
-          # Info.plist declaration). --force-reinstall --no-deps: exactly these
-          # four wheels swap, everything else stays as the lock resolved it.
+          # floor drops to 12.0 (the build script takes WAVES_MACOS_MIN from the
+          # environment, default 15.0, so the override reaches Nuitka's
+          # MACOSX_DEPLOYMENT_TARGET and the Info.plist declaration).
+          # --force-reinstall --no-deps: exactly these four wheels swap,
+          # everything else stays as the lock resolved it.
           - os: "macos-15-intel"
             TARGET: "macos-15-intel legacy"
             OS_ARCH: ${{needs.compute.outputs.ARCH_MACOS_X64_LEGACY}}

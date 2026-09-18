@@ -78,10 +78,11 @@ fork. Upstream's 14-minute build is the same workflow without the engine.
 ## Mitigation and outcome
 
 The first patch gave Windows builds Nuitka's low-memory mode: `--low-memory`
-through `WAVES_NUITKA_FLAGS` (Makefile default on `OS=Windows_NT`, set
+through `WAVES_NUITKA_FLAGS` (build-script default on `OS=Windows_NT`, set
 explicitly by the workflow's Windows legs), one C compiler job at a time. The
-release build cache's input hash now covers the Makefile, `pyproject.toml`
-and the workflow, so the slower cold pass is paid once per leg.
+release build cache's input hash covers the build script, `mise.toml`,
+`pyproject.toml` and the workflow, so the slower cold pass is paid once per
+leg.
 
 Verification run `35019374456` (both Windows legs, 2026-09-15/16) confirmed
 the flag reached Nuitka and failed anyway, on one module:

@@ -164,9 +164,9 @@ rm -f "$LIBDIR/PySide6/qt-plugins/multimedia/libdarwinmediaplugin.dylib" \
 # downloads twice in a row -- "Cannot load native module
 # 'Crypto.Cipher._raw_aes'", then 'Crypto.Hash._SHA1', issue #304). The full
 # native set is ~2.6 MB of a 237 MB bundle; correctness wins over that. The
-# build includes every module explicitly (`WAVES_CRYPTO_NATIVE` in the
-# Makefile) and tools/inspect_bundle.py fails a bundle that dropped one of
-# the download-path modules. Extensions differ per OS (.so / .pyd).
+# build includes every module explicitly (`WAVES_CRYPTO_NATIVE` in
+# tools/build_waves.sh) and tools/inspect_bundle.py fails a bundle that dropped
+# one of the download-path modules. Extensions differ per OS (.so / .pyd).
 
 # On the arm64 macOS legs Nuitka copies BOTH the versioned Homebrew OpenSSL
 # libraries and their unversioned symlink twins; only the versioned pair is
