@@ -247,6 +247,7 @@ def _show_search_results(q, settle, bridge) -> None:
                 {
                     "provider": "tidal",
                     "artists_layout": "strip",
+                    "head_when_alone": False,
                     "artists": [],
                     "albums": [],
                     "tracks": [TRACK],

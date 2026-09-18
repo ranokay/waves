@@ -159,6 +159,7 @@ def _run_scenario() -> int:
             {
                 "provider": "tidal",
                 "artists_layout": "strip",
+                "head_when_alone": False,
                 "artists": [],
                 "albums": [],
                 "tracks": [track],
@@ -171,6 +172,7 @@ def _run_scenario() -> int:
             {
                 "provider": "apple",
                 "artists_layout": "flow",
+                "head_when_alone": True,
                 "artists": [],
                 "albums": [],
                 "tracks": [{**track, "id": "apple:t1"}],

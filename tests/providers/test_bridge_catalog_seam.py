@@ -321,16 +321,22 @@ def test_search_enabled_reads_every_registered_provider_and_its_gate():
     assert WavesBridge.searchEnabled(bridge) is False
 
 
-def test_search_sections_narrows_a_provider_declaration_to_the_page():
-    all_six = ("artists", "albums", "tracks", "videos", "playlists", "mixes")
-    assert backend._search_sections(SimpleNamespace()) == all_six, "undeclared answers everything"
-    assert backend._search_sections(SimpleNamespace(search_sections=("artists", "albums"))) == (
-        "artists",
-        "albums",
+def test_search_group_carries_only_the_sections_its_provider_declares():
+    # The declaration is consumed through the group builder: a provider that
+    # names a subset carries exactly those buckets, and one that names nothing
+    # answers everything (every SEARCH provider before #292 did). A name the
+    # page does not render contributes no bucket.
+    provider = SimpleNamespace(
+        search_sections=("artists", "albums", "songs"),
+        search_artists_layout="strip",
+        search_head_when_alone=False,
     )
-    assert backend._search_sections(SimpleNamespace(search_sections=("artists", "songs"))) == (
-        "artists",
-    ), "a section the page does not render contributes no bucket"
+    group = backend._search_group("fake", provider, {"artists": [1], "albums": [2], "videos": [3], "mixes": [4]})
+    assert group["artists"] == [1] and group["albums"] == [2]
+    assert "videos" not in group and "mixes" not in group
+
+    undeclared = backend._search_group("fake", SimpleNamespace(), {})
+    assert set(_ALL_SECTIONS) <= set(undeclared), "an undeclared provider answers them all"
 
 
 def test_search_enabled_answers_the_bridge_slot_through_the_real_seam():
@@ -463,7 +469,7 @@ def test_an_apple_only_failure_delivers_its_words_to_the_group():
     group = next(g for g in payload["groups"] if g["provider"] == CTX_APPLE)
     assert group["error"] == "Apple changed its web app. A Waves update is needed."
     assert group["albums"] == []
-    assert "videos" not in group, "Apple's group carries no buckets its search does not answer"
+    assert "videos" not in group and "mixes" not in group, "Apple's group carries no buckets its search does not answer"
     assert stub.statuses[-1] == group["error"]
     assert stub._search_cache == {}
 

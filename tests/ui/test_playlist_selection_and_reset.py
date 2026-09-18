@@ -94,6 +94,7 @@ def _results(tag: str) -> dict:
             {
                 "provider": "tidal",
                 "artists_layout": "strip",
+                "head_when_alone": False,
                 "artists": [],
                 "albums": [],
                 "tracks": [],

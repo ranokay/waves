@@ -128,7 +128,24 @@ def _run_scenario() -> int:
                     "provider": "tidal",
                     "artists_layout": "strip",
                     "artists": [],
-                    "albums": [],
+                    "albums": [
+                        {
+                            "id": "tidal:al1",
+                            "title": "Album",
+                            "artist": "Artist",
+                            "artist_id": "",
+                            "artists": [],
+                            "art": "",
+                            "year": "2026",
+                            "date": "2026-01-01",
+                            "tracks": 3,
+                            "duration_sec": 300,
+                            "quality": "LOSSLESS",
+                            "popularity": -1,
+                            "explicit": False,
+                            "added": "",
+                        }
+                    ],
                     "tracks": [],
                     "videos": [],
                     "playlists": [],
@@ -183,12 +200,12 @@ def _run_scenario() -> int:
         # is a finder regression, not a pass.
         print("no item named artistsShowAll in the tree", file=sys.stderr)
         return EXIT_PRECONDITION
+    if not state.endswith("|ancestors-visible"):
+        print(f"the search page is not on screen ({state}); the read proves nothing", file=sys.stderr)
+        return _PAGE_NOT_SHOWN
     if state.startswith("SHOWN"):
         print(f"SHOW LESS floated over a search page with no artists (label read {state})", file=sys.stderr)
         return _FLOATED
-    if not state.startswith("HIDDEN"):
-        print(f"the label read as neither shown nor hidden ({state})", file=sys.stderr)
-        return EXIT_PRECONDITION
 
     # The positive leg: one artist, the row still expanded, and the toggle is
     # back. Without this an always-false binding would pass the check above.
