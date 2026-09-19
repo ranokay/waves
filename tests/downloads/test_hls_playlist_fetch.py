@@ -40,13 +40,14 @@ def _iter_source_files():
 
 def test_no_bare_m3u8_load_anywhere():
     """Every m3u8.load call must pass an explicit http_client."""
-    offenders = []
-    for path, src in _iter_source_files():
-        # Real calls only: prose like "m3u8.load()" in docstrings has an
-        # immediately closed argument list.
-        for m in re.finditer(r"m3u8\.load\(\s*([^)\s][^\n]*)", src):
-            if "http_client=" not in m.group(1):
-                offenders.append(f"{path.relative_to(REPO_ROOT)}: {m.group(0)}")
+    # Real calls only: prose like "m3u8.load()" in docstrings has an
+    # immediately closed argument list.
+    offenders = [
+        f"{path.relative_to(REPO_ROOT)}: {m.group(0)}"
+        for path, src in _iter_source_files()
+        for m in re.finditer(r"m3u8\.load\(\s*([^)\s][^\n]*)", src)
+        if "http_client=" not in m.group(1)
+    ]
     assert not offenders, f"m3u8.load without http_client= (urllib fetch, breaks in packaged builds): {offenders}"
 
 

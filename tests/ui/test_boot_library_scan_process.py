@@ -94,9 +94,9 @@ def test_the_probe_goes_to_the_worker_with_the_spellings():
     s = _stub(w)
     assert s._library_worker_probe(_Lib(), "/music", ["Ab"], 1, 20.0) == 2
     assert w.jobs[0]["spellings"] == {"Ab": ["Ab", "AB"]}
-    assert (
-        _stub(_Worker(None))._library_worker_probe(_Lib(), "/music", ["Ab"], 1, 20.0) is None
-    ), "busy or superseded: never asked"
+    assert _stub(_Worker(None))._library_worker_probe(_Lib(), "/music", ["Ab"], 1, 20.0) is None, (
+        "busy or superseded: never asked"
+    )
     assert _stub(_Worker(fail=True))._library_worker_probe(_Lib(), "/music", ["Ab"], 1, 20.0) is _IN_PROCESS
     assert _stub(None)._library_worker_probe(_Lib(), "/music", ["Ab"], 1, 20.0) is _IN_PROCESS
 

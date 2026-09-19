@@ -280,8 +280,7 @@ def test_verify_cookies_missing_file(tmp_path):
 def test_verify_cookies_rejects_an_expired_token(tmp_path):
     path = tmp_path / "cookies.txt"
     path.write_text(
-        "# Netscape HTTP Cookie File\n"
-        f".apple.com\tTRUE\t/\tTRUE\t{int(time.time()) - 60}\tmedia-user-token\tabc123\n",
+        f"# Netscape HTTP Cookie File\n.apple.com\tTRUE\t/\tTRUE\t{int(time.time()) - 60}\tmedia-user-token\tabc123\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="expired"):
@@ -499,14 +498,16 @@ def test_login_provisions_the_port_then_posts_with_that_url(tmp_path, monkeypatc
     _bind_wrapper_login(stub)
     monkeypatch.setattr(
         "waves.providers.apple.runtime.wrapper_login",
-        lambda url, username, password: events.append("post")
-        or {
-            "ok": True,
-            "needs_2fa": False,
-            "error": "",
-            "url": url,
-            "provider_url": provider.wrapper_url,
-        },
+        lambda url, username, password: (
+            events.append("post")
+            or {
+                "ok": True,
+                "needs_2fa": False,
+                "error": "",
+                "url": url,
+                "provider_url": provider.wrapper_url,
+            }
+        ),
     )
 
     stub.appleWrapperLogin("me@example.com", "secret")

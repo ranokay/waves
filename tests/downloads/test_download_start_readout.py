@@ -154,9 +154,9 @@ def test_zero_percent_lands_before_running():
     kinds = [(name, args[1]) for name, args in log]
     assert ("progress", 0.0) in kinds, log
     assert ("state", "running") in kinds, log
-    assert kinds.index(("progress", 0.0)) < kinds.index(
-        ("state", "running")
-    ), "the running frame must already read 0%, not the placeholder: " + repr(log)
+    assert kinds.index(("progress", 0.0)) < kinds.index(("state", "running")), (
+        "the running frame must already read 0%, not the placeholder: " + repr(log)
+    )
 
 
 def test_running_and_zero_percent_are_about_the_same_id():

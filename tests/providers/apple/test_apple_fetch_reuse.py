@@ -136,8 +136,9 @@ def test_engine_session_reuses_one_wrapper_client_across_alac_tracks(tmp_path, m
     monkeypatch.setattr(
         engine,
         "probe_audio_file",
-        lambda path, ffprobe_path="": probes.append(str(path))
-        or {"codec": "alac", "sample_rate": "44100", "bit_depth": 16},
+        lambda path, ffprobe_path="": (
+            probes.append(str(path)) or {"codec": "alac", "sample_rate": "44100", "bit_depth": 16}
+        ),
     )
     monkeypatch.setattr(engine, "decode_check", lambda staged, ffmpeg_path="": None)
 
@@ -314,14 +315,16 @@ def test_provider_fetches_one_shot_outside_a_job_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(
         engine,
         "download_song_file",
-        lambda **kwargs: calls.append(kwargs)
-        or SimpleNamespace(
-            staged_path=tmp_path / "staged.m4a",
-            workdir=tmp_path,
-            is_atmos=False,
-            codec="",
-            probe={},
-            verified=False,
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or SimpleNamespace(
+                staged_path=tmp_path / "staged.m4a",
+                workdir=tmp_path,
+                is_atmos=False,
+                codec="",
+                probe={},
+                verified=False,
+            )
         ),
     )
     monkeypatch.setattr(
@@ -625,8 +628,9 @@ def test_wrapper_album_end_to_end_one_stack_one_probe_per_track(tmp_path, monkey
     monkeypatch.setattr(
         engine,
         "probe_audio_file",
-        lambda path, ffprobe_path="": probes.append(str(path))
-        or {"codec": "alac", "sample_rate": "44100", "bit_depth": 16},
+        lambda path, ffprobe_path="": (
+            probes.append(str(path)) or {"codec": "alac", "sample_rate": "44100", "bit_depth": 16}
+        ),
     )
     monkeypatch.setattr(engine, "decode_check", lambda staged, ffmpeg_path="": decodes.append(str(staged)))
     _CountingSession.built = 0

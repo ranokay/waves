@@ -215,8 +215,7 @@ def _settled_queue(stub, live=0, done=0, failed=0):
     """A queue in arrival order: `live` still queued, then `done` finished,
     then `failed`. Returns the qids in that order."""
     order = []
-    for i in range(live):
-        order.append(stub._enqueue(f"live{i}", "album", media_id=f"L{i}"))
+    order.extend(stub._enqueue(f"live{i}", "album", media_id=f"L{i}") for i in range(live))
     for i in range(done):
         qid = stub._enqueue(f"done{i}", "album", media_id=f"D{i}")
         stub._queue_item(qid)["status"] = "done"

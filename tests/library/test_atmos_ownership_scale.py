@@ -256,9 +256,9 @@ def test_an_all_atmos_album_you_hold_reports_finished_not_failed(tmp_path):
 
     verdicts = [dl._ownership_decision(_track(tid))[0] for tid in tids]
     assert verdicts == ["skip", "skip", "skip"], verdicts
-    assert (
-        _collection_incomplete_reason(0, len(tids), 0) is None
-    ), "an album whose every file is already on disk reported itself incomplete"
+    assert _collection_incomplete_reason(0, len(tids), 0) is None, (
+        "an album whose every file is already on disk reported itself incomplete"
+    )
 
 
 def test_an_atmos_only_track_you_do_not_hold_is_still_left_to_the_engine(tmp_path):

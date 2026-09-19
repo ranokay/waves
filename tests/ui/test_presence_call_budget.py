@@ -318,8 +318,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     # and gets its own FAILING exit code rather than the precondition skip.
     if calls["n"] == 0 or tcalls["n"] == 0 or acalls["n"] == 0:
         print(
-            f"spy measured zero calls (album={calls['n']}, track={tcalls['n']}, "
-            f"artist={acalls['n']}): overload drift?",
+            f"spy measured zero calls (album={calls['n']}, track={tcalls['n']}, artist={acalls['n']}): overload drift?",
             file=sys.stderr,
         )
         return EXIT_DEAD_SPY

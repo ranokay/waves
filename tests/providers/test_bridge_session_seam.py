@@ -47,8 +47,9 @@ def _self_tidal_reaches(source: str) -> list[tuple[int, str]]:
     """Every ``self.tidal.<attr>`` reach, as (line, attr), except the bare
     ``self.tidal`` references (construction and the engine hand-off)."""
     tree = ast.parse(source)
-    reaches: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    reaches: list[tuple[int, str]] = [
+        (node.lineno, node.attr)
+        for node in ast.walk(tree)
         if (
             isinstance(node, ast.Attribute)
             and node.attr != "tidal"
@@ -56,8 +57,8 @@ def _self_tidal_reaches(source: str) -> list[tuple[int, str]]:
             and node.value.attr == "tidal"
             and isinstance(node.value.value, ast.Name)
             and node.value.value.id == "self"
-        ):
-            reaches.append((node.lineno, node.attr))
+        )
+    ]
     return reaches
 
 
@@ -86,7 +87,7 @@ class TestTheStaticContract:
             if not (start <= line <= end) and attr not in allowed
         ]
         assert offenders == [], (
-            "the bridge reached the TIDAL object directly (route through " f"self.providers instead): {offenders}"
+            f"the bridge reached the TIDAL object directly (route through self.providers instead): {offenders}"
         )
 
     def test_no_getattr_reach_either(self):

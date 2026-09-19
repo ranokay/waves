@@ -97,7 +97,7 @@ def test_decline_changes_nothing():
 
 def test_gate_keeps_its_one_time_non_naggy_shape():
     src = QML_MAIN.read_text(encoding="utf-8")
-    m = re.search(r"id: updateOptInGate\b.*?shouldShow:(.*?)// Rather than pop", src, re.S)
+    m = re.search(r"id: updateOptInGate\b.*?shouldShow:(.*?)// Rather than pop", src, re.DOTALL)
     assert m, "the update opt-in gate must exist in Main.qml"
     cond = m.group(1)
     # The whole first-run chain comes first: never over login, FFmpeg or terms
@@ -128,7 +128,7 @@ def test_gate_keeps_its_one_time_non_naggy_shape():
     assert "property bool updatePromptFresh: false" in src
     # Above the video overlay (z 999): the prompt must never paint under a
     # playing video.
-    m = re.search(r"id: updateOptInGate\b.*?z: (\d+)", src, re.S)
+    m = re.search(r"id: updateOptInGate\b.*?z: (\d+)", src, re.DOTALL)
     assert m and int(m.group(1)) > 999, "the opt-in gate must stack above the video overlay"
 
 

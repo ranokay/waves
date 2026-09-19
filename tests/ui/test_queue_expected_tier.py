@@ -261,7 +261,8 @@ def _run_scenario() -> int:
     settle(400)
 
     def ledger() -> str:
-        return str(q("""(function () {
+        return str(
+            q("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -272,7 +273,8 @@ def _run_scenario() -> int:
                 }
                 walk(queueList.itemAtIndex(0));
                 return out.join(' | ');
-            })()"""))
+            })()""")
+        )
 
     got = ledger()
     if got != "LOSSLESS@faded | HI-RES@faded":

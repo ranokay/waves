@@ -125,7 +125,8 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
 
     def rows_built() -> int:
         """How many ledger delegates actually EXIST, which is the cost."""
-        return int(q("""(function () {
+        return int(
+            q("""(function () {
                 var n = 0;
                 function walk(o) {
                     if (!o) return;
@@ -135,10 +136,12 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
                 }
                 walk(queueList.itemAtIndex(0));
                 return n;
-            })()"""))
+            })()""")
+        )
 
     def more_line() -> str:
-        return str(q("""(function () {
+        return str(
+            q("""(function () {
                 var out = '';
                 function walk(o) {
                     if (!o) return;
@@ -148,7 +151,8 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
                 }
                 walk(queueList.itemAtIndex(0));
                 return out;
-            })()"""))
+            })()""")
+        )
 
     def seed(count: int, kind: str, name: str) -> int:
         qid = bridge._enqueue(name, kind, media_id=f"c-{count}", collection=True, tracks=count)

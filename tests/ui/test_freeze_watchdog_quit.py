@@ -140,9 +140,9 @@ def test_shutdown_stops_the_watchdog_before_it_drains_the_pools():
         diagnostics.stop_freeze_watchdog = real_stop  # type: ignore[assignment]
 
     assert "watchdog-stopped" in order, "shutdown() never stopped the freeze watchdog"
-    assert order.index("watchdog-stopped") < min(
-        i for i, step in enumerate(order) if step.startswith("drain:")
-    ), f"the watchdog was still armed while the pools drained: {order}"
+    assert order.index("watchdog-stopped") < min(i for i, step in enumerate(order) if step.startswith("drain:")), (
+        f"the watchdog was still armed while the pools drained: {order}"
+    )
 
 
 _EXIT_PROBE = """

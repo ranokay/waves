@@ -265,9 +265,9 @@ def _run_held(*, press: str, merge_plan=None) -> _JobStub:
 def test_a_press_during_the_probe_drops_the_replay_the_gate_stashed():
     stub = _run_held(press="clear")
 
-    assert (
-        stub._pending_downloads == []
-    ), "the cancelled album stayed in the stash and downloads itself when the share answers"
+    assert stub._pending_downloads == [], (
+        "the cancelled album stayed in the stash and downloads itself when the share answers"
+    )
 
 
 def test_a_stop_during_the_probe_keeps_its_stopped_row():
@@ -322,7 +322,7 @@ def _folder_death_stub(*, dead: bool = True):
     """A bridge stand-in for the mid-download folder-death path: the share was
     fine at the gate and dies while the bytes are landing."""
     s = _queue_stub(["running"])
-    s._probe_download_base = lambda timeout_s=4.0: (("timeout", "") if dead else ("ok", ""))
+    s._probe_download_base = lambda timeout_s=4.0: ("timeout", "") if dead else ("ok", "")
     s._last_probe_remounted = False
     s._recovery_dialog_shown = False
     s._recovery_dialog_deadline = 0.0

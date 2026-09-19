@@ -185,8 +185,7 @@ def test_a_lossless_only_release_settles_at_a_hi_res_target(tmp_path):
     store.record(
         "101", path, "LOSSLESS", requested_rank=quality_rank("HI_RES_LOSSLESS"), ceiling_rank=quality_rank("LOSSLESS")
     )
-    for _ in range(2):
-        seen.append(dl._ownership_decision(track)[0])
+    seen.extend(dl._ownership_decision(track)[0] for _ in range(2))
     assert seen == ["skip", "skip", "skip"], f"the gate never settles: {seen}"
 
 

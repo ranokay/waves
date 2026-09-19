@@ -9,7 +9,6 @@ from waves.progress import Progress, TaskID
 
 
 class TestDownloadCancellation:
-
     @pytest.fixture
     def mock_settings(self):
         settings = MagicMock()

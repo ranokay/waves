@@ -322,17 +322,17 @@ def _creation_candidates(payload: dict) -> list[str]:
     with contextlib.suppress(Exception):
         tags = (payload.get("format") or {}).get("tags") or {}
         if isinstance(tags, dict):
-            for key in ("creation_time", "creationdate", "encoded_date"):
-                if tags.get(key):
-                    candidates.append(str(tags[key]))
+            candidates.extend(
+                str(tags[key]) for key in ("creation_time", "creationdate", "encoded_date") if tags.get(key)
+            )
         for stream in payload.get("streams") or []:
             tags = (stream or {}).get("tags") or {}
             if isinstance(tags, dict) and any(
                 tags.get(key) for key in ("creation_time", "creationdate", "encoded_date")
             ):
-                for key in ("creation_time", "creationdate", "encoded_date"):
-                    if tags.get(key):
-                        candidates.append(str(tags[key]))
+                candidates.extend(
+                    str(tags[key]) for key in ("creation_time", "creationdate", "encoded_date") if tags.get(key)
+                )
     return candidates
 
 

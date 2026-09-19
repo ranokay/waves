@@ -133,7 +133,8 @@ def _run_scenario() -> int:
     q(f"root.queueExpanded = ({{ {qid}: true }})")
     settle(400)
 
-    words = str(q("""(function () {
+    words = str(
+        q("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -144,13 +145,15 @@ def _run_scenario() -> int:
                 }
                 walk(queueList.itemAtIndex(0));
                 return out.join(' | ');
-            })()"""))
+            })()""")
+    )
     if words != WANT:
         bad.append(f"the expanded ledger's outcome column read {words!r}, want {WANT!r}")
 
     # 2. UNAVAILABLE must not wear the failure red: the two states call for
     #    different things from the reader, and only one of them can be retried.
-    colors = str(q("""(function () {
+    colors = str(
+        q("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -161,7 +164,8 @@ def _run_scenario() -> int:
                 }
                 walk(queueList.itemAtIndex(0));
                 return out.join(' | ');
-            })()"""))
+            })()""")
+    )
     seen = dict(part.split("=", 1) for part in colors.split(" | ") if "=" in part)
     if seen.get("UNAVAILABLE") == seen.get("FAILED"):
         bad.append(f"UNAVAILABLE is painted the same as FAILED ({colors!r})")

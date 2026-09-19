@@ -19,13 +19,22 @@ repos:
       - id: trailing-whitespace
         exclude: ^assets/star-history/
 
-  - repo: https://github.com/charliermarsh/ruff-pre-commit
-    # Pinned to the ruff line the tree is linted against (pyproject selects
-    # modern rules like S/UP/RUF/TRY; an older hook stripped the noqa comments
-    # the selected rules require, failing every file that carries one).
-    rev: "v0.16.8"
+  # ruff runs from the project's own environment (the dev dependency is
+  # pinned in pyproject.toml), not a separately-installed hook: one ruff
+  # version lints locally, here and in CI, and --force-exclude keeps the
+  # pyproject excludes honored when pre-commit passes explicit filenames.
+  - repo: local
     hooks:
       - id: ruff
+        name: ruff check
+        entry: uv run --locked --all-extras ruff check --force-exclude
+        types_or: [python, pyi]
+        language: system
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --locked --all-extras ruff format --check --force-exclude
+        types_or: [python, pyi]
+        language: system
 
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: "v3.1.0"
@@ -55,13 +64,5 @@ repos:
       - id: pyupgrade
         name: pyupgrade
         entry: uv run pyupgrade --py312-plus
-        types: [python]
-        language: system
-
-  - repo: local
-    hooks:
-      - id: black
-        name: black
-        entry: uv run black --config pyproject.toml
         types: [python]
         language: system

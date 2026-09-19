@@ -366,9 +366,7 @@ class HelpSettings:
     tidal_lyrics_ttml_file: str = (
         "Save the verbatim TTML beside the track. No effect on TIDAL, which has no TTML source."
     )
-    tidal_metadata_cover_dimension: str = (
-        "The square dimensions of the cover image embedded into the TIDAL track. Possible values: 80, 160, 320, 640, 1280, origin."
-    )
+    tidal_metadata_cover_dimension: str = "The square dimensions of the cover image embedded into the TIDAL track. Possible values: 80, 160, 320, 640, 1280, origin."
     tidal_metadata_cover_file_dimension: str = (
         "Size of the saved 'cover.jpg' for TIDAL downloads. 'Same as embedded' matches the embedded "
         "cover size; otherwise pick an independent size (80, 160, 320, 640, 1280, origin)."
@@ -382,7 +380,7 @@ class HelpSettings:
     )
     apple_lyrics_embed: str = "Embed lyrics in the Apple Music audio file, if lyrics are available."
     apple_lyrics_file: str = (
-        "Save lyrics next to the Apple Music track: timed lyrics as a *.lrc file, untimed ones as " "*.txt. Default on."
+        "Save lyrics next to the Apple Music track: timed lyrics as a *.lrc file, untimed ones as *.txt. Default on."
     )
     apple_lyrics_file_synced_only: str = (
         "Only save a lyrics file when timed (synced) lyrics exist; untimed lyrics then produce no *.txt file."
@@ -396,7 +394,7 @@ class HelpSettings:
         "line-timed LRCLIB hit. Default on."
     )
     apple_lyrics_ttml_file: str = (
-        "Save Apple's verbatim TTML beside the track (zero conversion, sidecar-only, never " "embedded). Default on."
+        "Save Apple's verbatim TTML beside the track (zero conversion, sidecar-only, never embedded). Default on."
     )
     apple_metadata_cover_dimension: str = (
         "The square dimensions of the cover image embedded into the Apple Music track. Possible "
@@ -501,9 +499,7 @@ class HelpSettings:
         "Path to FFmpeg binary file (executable). Only necessary if FFmpeg is not set in $PATH. Mandatory for Windows: "
         "The directory of `ffmpeg.exe` must be set in %PATH%."
     )
-    metadata_cover_dimension: str = (
-        "The square dimensions of the cover image embedded into the track. Possible values: 80, 160, 320, 640, 1280, origin."
-    )
+    metadata_cover_dimension: str = "The square dimensions of the cover image embedded into the track. Possible values: 80, 160, 320, 640, 1280, origin."
     metadata_cover_file_dimension: str = (
         "Size of the saved 'cover.jpg'. 'Same as embedded' matches the embedded cover size; "
         "otherwise pick an independent size (80, 160, 320, 640, 1280, origin)."
@@ -562,12 +558,8 @@ class HelpSettings:
         "' · ' for ':' keeps 'Rarities Edition · Live' readable. Characters left "
         "alone follow the general stand-in."
     )
-    metadata_target_upc: str = (
-        "Select the target metadata tag ('UPC', 'BARCODE', 'EAN') where to write the UPC information to. Default: 'UPC'."
-    )
-    api_rate_limit_batch_size: str = (
-        "How many songs to download before pausing, so a long playlist does not ask TIDAL too much at once. 0 never pauses."
-    )
+    metadata_target_upc: str = "Select the target metadata tag ('UPC', 'BARCODE', 'EAN') where to write the UPC information to. Default: 'UPC'."
+    api_rate_limit_batch_size: str = "How many songs to download before pausing, so a long playlist does not ask TIDAL too much at once. 0 never pauses."
     api_rate_limit_delay_sec: str = "How long that pause lasts, in seconds. 0 never pauses."
     initial_key_format: str = "Format for Initial Key metadata tag: 'alphanumeric' (default) or 'classic'."
 
@@ -655,7 +647,7 @@ def cover_sidecar_format(data, key: str = "cover_file_format") -> str:
     """
     fmt = str(provider_setting(data, "apple" if key.startswith("apple_") else "tidal", key, "jpg") or "jpg")
     fmt = fmt.strip().lower()
-    if fmt in ("jpeg",):
+    if fmt == "jpeg":
         return "jpg"
     return fmt if fmt in ("jpg", "png", "raw") else "jpg"
 

@@ -137,12 +137,9 @@ def _run_scenario() -> int:
     # a five-row track shelf buried well down the column: it has to sit deeper
     # than the window's own slack (two screens, ~1800px) or the old aim landed
     # on it by luck and the shelf built anyway.
-    sections = []
-    for i in range(14):
-        sections.append(_cards_section(f"Shelf {i}", 8))
+    sections = [_cards_section(f"Shelf {i}", 8) for i in range(14)]
     sections.append(_tracks_section("Recommended new tracks", 5))
-    for i in range(14, 20):
-        sections.append(_cards_section(f"Shelf {i}", 8))
+    sections.extend(_cards_section(f"Shelf {i}", 8) for i in range(14, 20))
     sections.append(_tracks_section("More new tracks", 5))
     root.setProperty("browseSections", sections)
     settle(700)

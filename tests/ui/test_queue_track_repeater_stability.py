@@ -69,7 +69,7 @@ def test_the_ledger_model_is_a_count_not_the_array():
         f"plain property reference, so this guard can no longer read it: {line}"
     )
     name = m.group(1)
-    assert re.search(rf"^\s*readonly property int {name}\b", src, re.M), (
+    assert re.search(rf"^\s*readonly property int {name}\b", src, re.MULTILINE), (
         f"the ledger's model binds {name!r}, which is not declared "
         "`readonly property int`. A model that is not a count is an array "
         "model, and an array model rebuilds every delegate on every live tick."

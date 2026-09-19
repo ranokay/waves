@@ -43,9 +43,12 @@ _TEXT_POINT_JS = """
     }
 """
 
-_CARD_POINT = scene_js(_TEXT_POINT_JS + """
+_CARD_POINT = scene_js(
+    _TEXT_POINT_JS
+    + """
     return pointOfText("NewCo");
-""")
+"""
+)
 
 _SCROLL_TO_CARD = scene_js("""
     var hit = findFirst(root, function (o) {

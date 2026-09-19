@@ -172,7 +172,8 @@ def _run_scenario() -> int:
     bridge._track_lifecycle(qid, {"id": "2", "status": "skipped", "quality": "HI-RES", "owned": "claim"})
     settle(400)
 
-    got = str(q("""(function () {
+    got = str(
+        q("""(function () {
             var out = [];
             function walk(o) {
                 if (!o) return;
@@ -186,7 +187,8 @@ def _run_scenario() -> int:
             }
             walk(queueList.itemAtIndex(0));
             return out.join(' | ');
-        })()"""))
+        })()""")
+    )
     want = "LOSSLESS@full | IN LIBRARY:green | HI-RES@full | IN LIBRARY:gold | HI-RES@faded"
     if got != want:
         print(f"ledger read {got!r}, want {want!r}", file=sys.stderr)

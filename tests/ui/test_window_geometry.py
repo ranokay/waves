@@ -100,9 +100,9 @@ def test_fit_frame_no_screens_returns_none():
 def _assert_fully_inside(frame, screens):
     """Every fitted frame must sit wholly within some screen's available area."""
     x, y, w, h = frame
-    assert any(
-        sx <= x and y >= sy and x + w <= sx + sw and y + h <= sy + sh for sx, sy, sw, sh in screens
-    ), f"{frame} is not fully inside any of {screens}"
+    assert any(sx <= x and y >= sy and x + w <= sx + sw and y + h <= sy + sh for sx, sy, sw, sh in screens), (
+        f"{frame} is not fully inside any of {screens}"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -225,7 +225,8 @@ def _run_scenario() -> int:
     settle(400)
     # Every tier cell the expanded row renders, in order, with whether it is
     # showing faded (a promise) or full (a delivery).
-    ledger = str(q("""(function () {
+    ledger = str(
+        q("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -236,7 +237,8 @@ def _run_scenario() -> int:
                 }
                 walk(queueList.itemAtIndex(0));
                 return out.join(' | ');
-            })()"""))
+            })()""")
+    )
     # Track 1 landed (registry says LOSSLESS, full strength); track 9 has not
     # started (no registry row, so _merge_queue_tracks calls it pending) and
     # states the job's own HI-RES request, faded.

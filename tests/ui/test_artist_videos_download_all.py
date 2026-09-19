@@ -177,7 +177,7 @@ def test_an_artist_with_no_videos_settles_back_to_idle():
 def test_the_videos_header_carries_the_download_all_button():
     """The artist VIDEOS SectionHeader wires a trailing DownloadButton whose
     media id matches the backend's namespaced group id."""
-    head = re.search(r"id: artistVideosHead.*?\n                \}", QML, re.S)
+    head = re.search(r"id: artistVideosHead.*?\n                \}", QML, re.DOTALL)
     assert head, "artist VIDEOS SectionHeader not found"
     block = head.group(0)
     assert '"vids:" + root.artistData.id' in block
@@ -188,7 +188,7 @@ def test_the_header_trailing_slot_outranks_the_collapse_target():
     """The SectionHeader row must take z 1: without it the whole-header
     collapse MouseArea (secMa, declared after the row) eats the trailing
     button's clicks and every click collapses the section instead."""
-    sec = re.search(r"component SectionHeader: Item \{.*?\n    \}", QML, re.S)
+    sec = re.search(r"component SectionHeader: Item \{.*?\n    \}", QML, re.DOTALL)
     assert sec, "SectionHeader component not found"
     block = sec.group(0)
     assert "property Component trailing: null" in block

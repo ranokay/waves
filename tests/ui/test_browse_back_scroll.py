@@ -187,9 +187,11 @@ def _run_scenario() -> int:
     root.setProperty("browseSections", [])  # force the fresh-build (async) path
     bridge.browseLoaded.emit(_landing())
     if not pump(
-        lambda: q("browsePageKey") == ""
-        and not q("browseBuilding")
-        and q("browseLanding.contentHeight") > q("browseLanding.height") + 200
+        lambda: (
+            q("browsePageKey") == ""
+            and not q("browseBuilding")
+            and q("browseLanding.contentHeight") > q("browseLanding.height") + 200
+        )
     ):
         print("Browse landing never became scrollable", file=sys.stderr)
         return EXIT_PRECONDITION
@@ -214,8 +216,10 @@ def _run_scenario() -> int:
     q('openBrowseItem("playlist", "p1")')
     bridge.browsePageLoaded.emit(_playlist())
     if not pump(
-        lambda: q("browsePageKey") == "item:playlist:p1"
-        and (q("browseDrill.contentHeight") - q("browseDrill.height")) > saved
+        lambda: (
+            q("browsePageKey") == "item:playlist:p1"
+            and (q("browseDrill.contentHeight") - q("browseDrill.height")) > saved
+        )
     ):
         print("playlist page never grew taller than the saved position", file=sys.stderr)
         return EXIT_PRECONDITION

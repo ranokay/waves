@@ -350,7 +350,7 @@ class SqlPresenceIndex:
                 logger.debug("presence lookup failed", exc_info=True)
                 return default
             _remember(self._memo, key, hit, self._MEMO_MAX)
-        return hit if hit else default
+        return hit or default
 
     def __contains__(self, key) -> bool:
         return bool(self.get(key))
@@ -368,7 +368,7 @@ class SqlTrackIndex(SqlPresenceIndex):
                 logger.debug("track presence lookup failed", exc_info=True)
                 return default
             _remember(self._memo, key, hit, self._MEMO_MAX)
-        return hit if hit else default
+        return hit or default
 
 
 class SqlArtistRollup:
@@ -385,7 +385,7 @@ class SqlArtistRollup:
     def get(self, artist_key, default=None):
         if artist_key in self._memo:
             hit = self._memo[artist_key]
-            return hit if hit else default
+            return hit or default
         # The Various-Artists test belongs on the NORMALISED key, which is what
         # the whole-library pass this replaced did (matching.build_artist_rollup)
         # and what the raw-tag refusal in _album_keys cannot stand in for: that
@@ -400,7 +400,7 @@ class SqlArtistRollup:
             logger.debug("artist rollup lookup failed", exc_info=True)
             return default
         _remember(self._memo, artist_key, entry, self._MEMO_MAX)
-        return entry if entry else default
+        return entry or default
 
     def __contains__(self, artist_key) -> bool:
         return bool(self.get(artist_key))

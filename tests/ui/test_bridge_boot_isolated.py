@@ -98,9 +98,9 @@ def test_a_real_bridge_boots_from_isolated_settings(tmp_path, monkeypatch):
         # The library root resolves through the real master switch and source
         # prefs, and the launch sweep runs and publishes through the real path.
         assert bridge._library_root() == str(library)
-        assert _wait_for(
-            lambda: bridge.libraryScanStatus() == "ok"
-        ), f"the launch sweep never finished: {bridge.libraryScanStatus()}"
+        assert _wait_for(lambda: bridge.libraryScanStatus() == "ok"), (
+            f"the launch sweep never finished: {bridge.libraryScanStatus()}"
+        )
         assert bridge.libraryIndexReady() is True
     finally:
         if bridge is not None:

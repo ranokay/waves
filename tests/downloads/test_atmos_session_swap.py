@@ -178,7 +178,7 @@ def test_a_real_atmos_copy_settles_instead_of_re_fetching_forever():
         assert wants is True, "an Atmos-only track is fetched as Atmos either way"
         for target in ("HIGH", "LOSSLESS", "HI_RES_LOSSLESS"):
             assert _copy_is_current(rec_atmos, QUALITY_RANK[target], wants) is True, (
-                f"an owned Atmos copy re-fetches at {target} with the setting " f"{'on' if atmos_on else 'off'}"
+                f"an owned Atmos copy re-fetches at {target} with the setting {'on' if atmos_on else 'off'}"
             )
 
 

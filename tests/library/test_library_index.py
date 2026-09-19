@@ -2020,9 +2020,9 @@ def test_a_probe_failed_scan_still_sizes_the_poll_for_a_network_root(tmp_path, m
     spy = _PoolSpy()
     spy.install(monkeypatch)
     assert idx.poll_containers_changed(lib) is not None
-    assert spy.sizes and set(spy.sizes) == {
-        _NETWORK_WORKERS
-    }, f"the poll after a probe-failed scan must stay throttled (saw {spy.sizes})"
+    assert spy.sizes and set(spy.sizes) == {_NETWORK_WORKERS}, (
+        f"the poll after a probe-failed scan must stay throttled (saw {spy.sizes})"
+    )
     idx.close()
 
 

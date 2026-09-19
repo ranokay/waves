@@ -1056,7 +1056,7 @@ def test_select_old_updater_name_sort_stays_on_regular():
         "ARCH_MACOS_ARM64",
         "ARCH_MACOS_ARM64_LEGACY",
     ):
-        match = re.search(rf'^  {key}: "([^"]*)"$', workflow, re.M)
+        match = re.search(rf'^  {key}: "([^"]*)"$', workflow, re.MULTILINE)
         assert match, f"{key} is gone from the release workflow"
         names[key] = match.group(1)
 
@@ -1077,12 +1077,12 @@ def test_select_old_updater_name_sort_stays_on_regular():
         # updating, with CI green. So drive the real selector against the real
         # published names, both ways.
         assets = [{"name": n, "browser_download_url": n} for n in (regular_name, legacy_name)]
-        assert (
-            u._select_asset(assets, "macos", arch, want_legacy=True)[0] == legacy_name
-        ), f"{names[legacy]} carries no token _select_asset recognises: macOS 12-14 would get nothing"
-        assert (
-            u._select_asset(assets, "macos", arch, want_legacy=False)[0] == regular_name
-        ), f"{names[regular]} reads as a legacy asset: macOS 15+ would be downgraded"
+        assert u._select_asset(assets, "macos", arch, want_legacy=True)[0] == legacy_name, (
+            f"{names[legacy]} carries no token _select_asset recognises: macOS 12-14 would get nothing"
+        )
+        assert u._select_asset(assets, "macos", arch, want_legacy=False)[0] == regular_name, (
+            f"{names[regular]} reads as a legacy asset: macOS 15+ would be downgraded"
+        )
 
 
 def test_macos_wants_legacy_parses_versions(monkeypatch):

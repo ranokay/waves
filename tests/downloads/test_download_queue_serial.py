@@ -32,7 +32,7 @@ def _source() -> str:
 
 def test_dl_pool_is_serial():
     src = _source()
-    m = re.search(r"self\.dl_pool = QtCore\.QThreadPool\(\).*?setMaxThreadCount\(([^)]*)\)", src, re.S)
+    m = re.search(r"self\.dl_pool = QtCore\.QThreadPool\(\).*?setMaxThreadCount\(([^)]*)\)", src, re.DOTALL)
     assert m, "dl_pool must still be created with an explicit thread cap"
     assert m.group(1).strip() == "1", (
         f"dl_pool sized to {m.group(1).strip()!r}: the queue must stay serial "

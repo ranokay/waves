@@ -59,8 +59,7 @@ def test_subheadings_follow_canonical_order():
     for heading, subs in _sections():
         expected = [name for name in CANONICAL if name in subs]
         assert subs == expected, (
-            f"{heading!r} lists subheadings as {subs}; "
-            f"they must follow Added > Changed > Fixed > Removed ({expected})"
+            f"{heading!r} lists subheadings as {subs}; they must follow Added > Changed > Fixed > Removed ({expected})"
         )
 
 

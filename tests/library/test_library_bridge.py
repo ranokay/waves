@@ -908,7 +908,7 @@ def test_presence_never_reaches_the_download_engine():
                     "matching",
                 ], f"download.py imports the presence matcher at line {node.lineno}"
         elif isinstance(node, ast.ImportFrom):
-            imported = f"{node.module or ''}.{ '.'.join(a.name for a in node.names) }"
+            imported = f"{node.module or ''}.{'.'.join(a.name for a in node.names)}"
             assert "matching" not in imported, f"download.py imports the presence matcher at line {node.lineno}"
 
     # 3. And the decision it all turns on has exactly two callers, both in

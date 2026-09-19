@@ -400,11 +400,11 @@ def test_a_plan_an_earlier_run_left_behind_does_not_merge_with_the_switch_off():
 
 
 def test_the_playlist_header_carries_the_full_albums_button():
-    head = re.search(r"id: browseItemHeader.*?Download full albums.*?\n\s*\}", QML, re.S)
+    head = re.search(r"id: browseItemHeader.*?Download full albums.*?\n\s*\}", QML, re.DOTALL)
     assert head, "the browse item header's full-albums button was not found"
     block = head.group(0)
     assert '"albums:" + (browseItemHeader.hd.id || "")' in block
     assert "waves.downloadPlaylistAlbums(browseItemHeader.hd.id)" in block
-    assert re.search(
-        r'visible: !!browseItemHeader\.hd && browseItemHeader\.hd\.kind === "playlist"', block
-    ), "the button must hide on album and mix pages"
+    assert re.search(r'visible: !!browseItemHeader\.hd && browseItemHeader\.hd\.kind === "playlist"', block), (
+        "the button must hide on album and mix pages"
+    )

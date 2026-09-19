@@ -110,7 +110,8 @@ def _run_scenario() -> int:
 
     def index_agrees_with_the_model() -> bool:
         """Every qid in the model resolves to the row that actually holds it."""
-        return bool(q("""
+        return bool(
+            q("""
         (function() {
             var m = queueModel
             for (var i = 0; i < m.count; ++i) {
@@ -118,7 +119,8 @@ def _run_scenario() -> int:
             }
             return true
         })()
-        """))
+        """)
+        )
 
     bad = []
 

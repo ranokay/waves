@@ -4350,7 +4350,7 @@ class Download:
         file_name_relative, list_media_name, list_media_name_short, items, progress_stdout = download_context
 
         # Set up progress tracking
-        progress: Progress = self.progress_overall if self.progress_overall else self.progress
+        progress: Progress = self.progress_overall or self.progress
         progress_task: TaskID = progress.add_task(
             f"[green]List '{list_media_name_short}'", total=len(items), visible=progress_stdout
         )

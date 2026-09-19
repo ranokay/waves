@@ -378,7 +378,8 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
     settle(500)
 
     def ledger() -> str:
-        return str(q("""(function () {
+        return str(
+            q("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -389,10 +390,12 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
                 }
                 walk(queueList.itemAtIndex(0));
                 return out.join(' | ');
-            })()"""))
+            })()""")
+        )
 
     def tiers() -> str:
-        return str(q("""(function () {
+        return str(
+            q("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -402,7 +405,8 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
                 }
                 walk(queueList.itemAtIndex(0));
                 return out.join(' | ');
-            })()"""))
+            })()""")
+        )
 
     bad: list[str] = []
     got = ledger()

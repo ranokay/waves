@@ -156,9 +156,9 @@ def test_hover_prefetch_is_one_shared_dwell_that_warms_the_hero_and_asks_the_bac
     assert "hoverPrefetchTimer.interval = dwell > 0 ? dwell : 200" in body, "a caller may ask for a longer rest"
     timer = MAIN_QML.split("id: hoverPrefetchTimer", 1)[1].split("\n    }", 1)[0]
     assert "interval: 200" in timer
-    assert (
-        'root.warmArt("" + c.art, kind === "artist" ? 300 : 360, kind === "artist" ? 300 : 360)' in timer
-    ), "the item hero decodes at 360 (180px Art), the artist photo at 300 (150px)"
+    assert 'root.warmArt("" + c.art, kind === "artist" ? 300 : 360, kind === "artist" ? 300 : 360)' in timer, (
+        "the item hero decodes at 360 (180px Art), the artist photo at 300 (150px)"
+    )
     assert "waves.prefetchBrowseItem(" in timer
     assert "waves.prefetchArtist(" in timer, "an artist card's dwell builds its page too"
     keyfn = _body("    function _cardPrefetchKey(card) {")
@@ -190,9 +190,9 @@ def test_cards_and_rows_arm_the_prefetch_on_hover():
 
 def test_track_rows_prefetch_their_album_only_after_a_longer_rest():
     trow = _component("TrackRow")
-    assert (
-        'readonly property var prefetchCard: ({ kind: "album", id: trow.albumId, art: "" })' in trow
-    ), "a row's cover is the small size, warming it at the hero's would pin a pixmap nobody asks for"
+    assert 'readonly property var prefetchCard: ({ kind: "album", id: trow.albumId, art: "" })' in trow, (
+        "a row's cover is the small size, warming it at the hero's would pin a pixmap nobody asks for"
+    )
     assert "root.hoverPrefetch(trow.prefetchCard, 450)" in trow, "a row is where a pointer parks: longer dwell"
     assert "root.hoverPrefetchCancel(trow.prefetchCard)" in trow
     # A HoverHandler, not the row's MouseArea: the thumb, title and buttons
@@ -225,7 +225,7 @@ def test_the_warm_pool_reports_a_row_ready_only_once_its_pixmap_decoded():
     assert 'warmArtModel.append({ u: "" + u, w: w, h: h, ready: false })' in MAIN_QML
     # The same locator the cache-key guard uses (test_qml_art_cache_keys.py):
     # the pool block through the Item that wraps its Repeater.
-    match = re.search(r"ListModel\s*\{\s*id:\s*warmArtModel\s*\}(.{0,2600}?)\n    \}\n", MAIN_QML, re.S)
+    match = re.search(r"ListModel\s*\{\s*id:\s*warmArtModel\s*\}(.{0,2600}?)\n    \}\n", MAIN_QML, re.DOTALL)
     assert match, "could not find the warm pool Repeater under warmArtModel"
     pool = match.group(1)
     assert "status === Image.Ready" in pool
@@ -238,9 +238,9 @@ def test_the_warm_pool_reports_a_row_ready_only_once_its_pixmap_decoded():
 def test_the_disc_has_the_same_four_load_states_as_a_cover_box():
     pa = _component("PreviewArt")
     assert 'readonly property string artState: pa.url === "" ? "none"' in pa
-    assert (
-        '(paImg.status === Image.Error && paImg.retries >= 3) ? "failed"' in pa
-    ), "a disc mid-retry must read as loading, or the mark strobes red/green on the way to failed"
+    assert '(paImg.status === Image.Error && paImg.retries >= 3) ? "failed"' in pa, (
+        "a disc mid-retry must read as loading, or the mark strobes red/green on the way to failed"
+    )
     assert "property bool artWaited: false" in pa and "onUrlChanged: artWaited = false" in pa
     assert 'running: pa.artState === "loading" && pa.everShown' in pa, "the grace window starts when the disc shows"
     assert "interval: 250" in pa
@@ -266,9 +266,9 @@ def test_the_disc_shows_the_house_marks_on_a_still_plate():
 def test_the_disc_blinks_off_the_shared_clock_and_fades_on_the_wrap():
     assert "readonly property real termBlink: (marchTick % 20) < 10 ? 1 : 0" in MAIN_QML
     pa = _component("PreviewArt")
-    assert (
-        "opacity: paTerm.visible ? root.termBlink : 1" in pa
-    ), "the visible test goes first, so a settled disc never reads the 20Hz tick"
+    assert "opacity: paTerm.visible ? root.termBlink : 1" in pa, (
+        "the visible test goes first, so a settled disc never reads the 20Hz tick"
+    )
     # (The vinyl spin is a SequentialAnimation too, but only one disc buffers
     # at a time; a blink would run on every loading disc on the page.)
     mark = pa[pa.index("id: paTerm") : pa.index("id: coverWrap")]

@@ -412,7 +412,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     # download half straight into PREVIEW on every matched card.
     if b_held["boxW"] <= 0 or b_held["boxW"] != b_absent["boxW"]:
         bad.append(
-            f"browse card: the library verdict widened the control line " f"({b_held['boxW']} vs {b_absent['boxW']})"
+            f"browse card: the library verdict widened the control line ({b_held['boxW']} vs {b_absent['boxW']})"
         )
 
     # ---- the scan is not a one-shot -----------------------------------------

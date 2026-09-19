@@ -1325,7 +1325,7 @@ class LibraryIndex:
                 # for the generation prune instead of colliding.
                 cut = len(prev) + 1
                 self._conn.execute(
-                    "UPDATE OR IGNORE dirs SET path = ? || substr(path, ?)" " WHERE path = ? OR substr(path, 1, ?) = ?",
+                    "UPDATE OR IGNORE dirs SET path = ? || substr(path, ?) WHERE path = ? OR substr(path, 1, ?) = ?",
                     (root, cut, prev, cut, prev + os.sep),
                 )
                 self._conn.execute(

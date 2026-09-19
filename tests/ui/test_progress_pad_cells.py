@@ -65,9 +65,9 @@ def test_only_the_download_face_pads_its_edges():
     assert "readonly property int fillTotal: fillRows * fillCols" in dm, "the fill must be sized by the pad-free area"
     assert re.search(r"litCount:.*\* fillTotal\)", dm), "litCount must count over fillTotal, not the whole grid"
     assert "pulsing: !pad &&" in dm, "a pad must never carry the pulse"
-    assert (
-        src.count("padCols: 2; mirrorPads: true") == 1
-    ), "exactly one site (the download face) pads its edges, with design V's values"
+    assert src.count("padCols: 2; mirrorPads: true") == 1, (
+        "exactly one site (the download face) pads its edges, with design V's values"
+    )
     face = src[src.index('objectName: "dbMatrix"') :]
     face = face[: face.index("}\n")]
     assert "padCols: 2; mirrorPads: true" in face, "the pads belong on the download face's matrix"

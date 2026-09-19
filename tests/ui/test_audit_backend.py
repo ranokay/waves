@@ -267,9 +267,9 @@ def test_logout_bumps_lib_gen_and_clears_cache():
     assert (stub._lib_epoch, 0) != captured, "the epoch moved, so a stale in-flight load is dropped"
     assert stub._prefetch_key is None and stub._prefetch_claimed is False, "no prefetch survives the account"
     assert stub._prefetch_unrecorded == set(), "a hover-built page of the old account is never recorded for the new one"
-    assert (
-        stub._album_tracks_inflight == {} and stub._album_tracks_unrecorded == set()
-    ), "nor a hover-fetched album's rows"
+    assert stub._album_tracks_inflight == {} and stub._album_tracks_unrecorded == set(), (
+        "nor a hover-fetched album's rows"
+    )
     assert stub._item_fetch_ts == {}, "the next account's pages revalidate from scratch"
 
 

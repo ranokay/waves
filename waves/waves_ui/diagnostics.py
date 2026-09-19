@@ -879,8 +879,7 @@ def export_bundle(redact_content: bool = False) -> str:
         with open(out_path, "w", encoding="utf-8") as out:
             for title, body in sections:
                 out.write(f"\n======== {title} ========\n")
-                for line in body.splitlines():
-                    out.write(scrub(line, redact_content=redact_content) + "\n")
+                out.writelines(scrub(line, redact_content=redact_content) + "\n" for line in body.splitlines())
     except OSError:
         logger.exception("diagnostic export failed")
         return ""
