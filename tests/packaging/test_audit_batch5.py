@@ -492,7 +492,8 @@ def test_browse_retry_routes_by_page_key():
 def test_recycled_album_rows_reset_their_selection():
     # The handler carries the fold flag too (a recycled row must not fold a
     # stranger's panel away), so match the reset itself, not the whole line.
-    body = MAIN_QML.split("onAlbumIdChanged:", 1)[1].split("\n", 1)[0]
+    body = MAIN_QML.split("onAlbumIdChanged:", 1)[1]
+    body = body[: body.index("\n        }")]
     assert "sel = ({})" in body
 
 

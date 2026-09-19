@@ -656,8 +656,9 @@ def test_backend_ensure_skips_cookies_tier_and_holds_a_dead_sidecar(tmp_path, mo
 
 def test_queue_drawer_shows_held_and_throttled_presentations():
     qml = Path("waves/waves_ui/qml/Main.qml").read_text(encoding="utf-8")
-    assert 'if (qrow.st === "queued") return a + (model.reason ? model.reason : "Queued")' in qml
-    assert 'if (qrow.st === "running" && model.reason) return a + model.reason' in qml
+    flat = " ".join(qml.split())
+    assert 'if (qrow.st === "queued") return a + (model.reason ? model.reason : "Queued")' in flat
+    assert 'if (qrow.st === "running" && model.reason) return a + model.reason' in flat
 
 
 def test_held_poll_tick_is_sane():

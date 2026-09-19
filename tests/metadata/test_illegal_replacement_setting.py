@@ -18,6 +18,7 @@ have broken something:
 from __future__ import annotations
 
 import pathlib
+import re
 import threading
 from datetime import datetime
 from types import SimpleNamespace
@@ -220,5 +221,5 @@ class TestTheSettingsBoxRefusesIllegalCharacters:
 
         assert "readonly property bool canSave: page.dirty && !page.hasInvalidEdits()" in src
         assert "opacity: canSave ? 1 : 0.4" in src
-        assert "anchors.fill: parent; enabled: saveBtn.canSave" in src
+        assert re.search(r"MouseArea \{\s*\n\s*anchors\.fill: parent\n\s*enabled: saveBtn\.canSave", src)
         assert "cleanSanitized" not in src

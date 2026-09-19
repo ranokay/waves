@@ -33,6 +33,7 @@ entered it fails the scenario rather than passing on flag reads.
 from __future__ import annotations
 
 import json
+import re
 import sys
 
 import pytest
@@ -191,12 +192,13 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     for key in ("Return", "Enter", "Space"):
         handlers = qml.count(f"Keys.on{key}Pressed")
         assert handlers >= press_actions, f"only {handlers} {key} handlers for {press_actions} press actions"
+    flat = re.sub(r"\s+", " ", qml)
     for needle in (
         "if (!event.isAutoRepeat)",
         "event.accepted = true",
-        "Keys.onDownPressed: function(event) { if (db.chooserReachable())",
-        "Keys.onDeletePressed: function(event) {",
-        "Keys.onEscapePressed: function(event) {",
+        "Keys.onDownPressed: function (event) { if (db.chooserReachable())",
+        "Keys.onDeletePressed: function (event) {",
+        "Keys.onEscapePressed: function (event) {",
         "Accessible.checkable: true",
         "function cancel() {",
         # The Chooser's own rows (issue #284): each drawn option's key handlers
@@ -205,14 +207,14 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         "db.chooserPickTier(modelData.word)",
         "db.chooserPickAudio(modelData)",
         'db.chooserToggle("lyrics_ttml_file")',
-        "Accessible.onPressAction: function() { db.confirmChooser() }",
+        "Accessible.onPressAction: function () { db.confirmChooser() }",
         # The gate card's spoken name carries its chip (issue #284).
         'Accessible.name: gcard.title + (gcard.chip !== ""',
         # The queue's repeated actions name their own section (issue #284).
         '"Retry all " + root.queueSectionWord(secItem.section)',
         '"Clear " + root.queueSectionWord(secItem.section)',
     ):
-        assert needle in qml, f"the keyboard path is missing: {needle}"
+        assert re.sub(r"\s+", " ", needle) in flat, f"the keyboard path is missing: {needle}"
 
 
 def _buttons(q, marker: str, scope: str = "[root.contentItem]") -> list[dict]:

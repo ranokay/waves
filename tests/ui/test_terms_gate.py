@@ -81,7 +81,9 @@ def test_gate_cannot_be_escaped():
     # Full window, and every click behind it eaten: no close control, no
     # dismiss-on-click-outside.
     assert "anchors.fill: parent" in gate
-    assert "MouseArea { anchors.fill: parent; hoverEnabled: true }" in gate
+    assert re.search(r"MouseArea \{\s+anchors\.fill: parent\s+hoverEnabled: true\s+\}", gate), (
+        "the gate must carry a full-window click-eating MouseArea"
+    )
     # The only way past is the affirmative checkbox plus the button.
     assert "enabled: ackChk.checked" in gate
     assert "onClicked: if (ackChk.checked) {" in gate
@@ -109,7 +111,7 @@ def test_accepted_version_is_persisted_alongside_the_flag():
     src = QML_MAIN.read_text(encoding="utf-8")
     assert f'readonly property string termsVersion: "{TERMS_VERSION}"' in src
     assert f'readonly property string termsVersionStamp: "{TERMS_STAMP}"' in src
-    m = re.search(r"Settings \{\s*id: legalSettings;.*?\n    \}", src, re.DOTALL)
+    m = re.search(r"Settings \{\s*\n\s*id: legalSettings\b.*?\n    \}", src, re.DOTALL)
     assert m, "the legal Settings block must exist"
     block = m.group(0)
     assert "property bool termsAccepted: false" in block
@@ -134,7 +136,7 @@ def test_an_older_accepted_version_re_prompts():
     counting the day the terms become 1.1."""
     src = QML_MAIN.read_text(encoding="utf-8")
     m = re.search(
-        r"readonly property bool termsCurrentAccepted: legalSettings\.termsAccepted\s*\n\s*"
+        r"readonly property bool termsCurrentAccepted:\s*legalSettings\.termsAccepted\s*"
         r"&& legalSettings\.termsAcceptedVersion === termsVersion",
         src,
     )

@@ -212,7 +212,7 @@ def test_the_drawer_stop_button_reads_scanning():
     import re
 
     src = QML_MAIN.read_text()
-    stop = re.search(r'visible: ([^\n]*)\n\s*danger: true; label: "STOP"', src)
+    stop = re.search(r'visible: ([^\n]*)\n\s*danger: true\n\s*label: "STOP"', src)
     assert stop, "the drawer's STOP button"
     assert "waves.scanning" in stop.group(1) and "activeQueueCount > 0" in stop.group(1)
 

@@ -64,14 +64,14 @@ def test_only_the_download_face_pads_its_edges():
     assert "readonly property int fillTotal: fillRows * fillCols" in dm, "the fill must be sized by the pad-free area"
     assert re.search(r"litCount:.*\* fillTotal\)", dm), "litCount must count over fillTotal, not the whole grid"
     assert "pulsing: !pad &&" in dm, "a pad must never carry the pulse"
-    assert src.count("padCols: 2; mirrorPads: true") == 1, (
+    assert src.count("padCols: 2") == 1 and src.count("mirrorPads: true") == 1, (
         "exactly one site (the download face) pads its edges, with design V's values"
     )
     face = src[src.index('objectName: "dbMatrix"') :]
-    face = face[: face.index("}\n")]
-    assert "padCols: 2; mirrorPads: true" in face, "the pads belong on the download face's matrix"
+    face = face[: face.index("\n                }")]
+    assert "padCols: 2" in face and "mirrorPads: true" in face, "the pads belong on the download face's matrix"
     assert "padRows" not in face, "the download face pads no rows (design Q's pad rows were reverted)"
-    assert "edgeFadeW: 26; edgeFadeH: 8" in face, "the fade itself is unchanged (26 / 8)"
+    assert "edgeFadeW: 26" in face and "edgeFadeH: 8" in face, "the fade itself is unchanged (26 / 8)"
 
 
 # ---------------------------------------------------------------------------

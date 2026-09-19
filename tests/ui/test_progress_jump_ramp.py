@@ -38,7 +38,6 @@ Runs in a SUBPROCESS like the other Main.qml scenarios (shares
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
@@ -59,7 +58,9 @@ def test_a_forward_jump_fills_at_speed_and_a_tick_lands_at_once():
 
 def test_the_controls_read_the_ramped_value():
     src = QML_MAIN.read_text()
-    assert re.search(r"function dlPct\(id\).*h\.shownPct", src), "dlPct must hand controls the ramped shownPct"
+    a = src.index("function dlPct(id)")
+    body = src[a : src.index("function dlSt(id)", a)]
+    assert "h.shownPct" in body, "dlPct must hand controls the ramped shownPct"
     a = src.index("id: dlHolderComp")
     holder = src[a : src.index("function dlHolder(id)", a)]
     assert "Behavior on shownPct" in holder, "the holder lost its ramp"
