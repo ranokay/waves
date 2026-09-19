@@ -72,6 +72,16 @@ from support.paths import QML_DIR
 #                    So `model.`/`modelData.` there are NOT remote. It is still
 #                    scanned so its deliberate StyledText spots stay deliberate and
 #                    can't quietly start binding a TIDAL string.
+#   TrackRow.qml     the TrackRow cluster split out of Main.qml (#315 slice 5):
+#   PreviewArt.qml   TrackRow renders search/artist/library rows (remote titles,
+#   QualPick.qml     artists, albums), PreviewArt renders a track's cover and the
+#   QualPickRow.qml  player's words, QualPick/QualPickRow render the catalog's
+#   LibraryTag.qml   tier vocabulary, and LibraryTag/NewTag/PopMeter/
+#   NewTag.qml       TrackPresencePill/StandalonePair/ProviderBadge are local
+#   PopMeter.qml     chrome that ride the set for the same structural reason as
+#   TrackPresencePill.qml  the earlier split files: the PlainText rule scans
+#   StandalonePair.qml     every Text element they hold.
+#   ProviderBadge.qml
 TIDAL_DATA_FILES = {
     "Main.qml",
     "DownloadButton.qml",
@@ -92,6 +102,16 @@ TIDAL_DATA_FILES = {
     "SpecBtn.qml",
     "QualTag.qml",
     "DecryptText.qml",
+    "TrackRow.qml",
+    "PreviewArt.qml",
+    "QualPick.qml",
+    "QualPickRow.qml",
+    "LibraryTag.qml",
+    "NewTag.qml",
+    "PopMeter.qml",
+    "TrackPresencePill.qml",
+    "StandalonePair.qml",
+    "ProviderBadge.qml",
 }
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
 FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)

@@ -63,12 +63,19 @@ _NOISE_RE = re.compile(
     re.DOTALL,
 )
 
+# The QML tree these scans read: Main.qml plus the component files split out
+# of it (#315). A wearer or a component that moves out of Main.qml must not
+# silently drop out of a scan set, so every scan reads every file.
+_QML_FILES = sorted(QML_MAIN.parent.glob("*.qml"))
 
-def _clean() -> str:
-    """Main.qml with comments and string literals blanked (lengths kept), so a
+
+def _clean(text: str) -> str:
+    """QML with comments and string literals blanked (lengths kept), so a
     brace or a name inside either cannot throw the matching off."""
-    text = QML_MAIN.read_text(encoding="utf-8")
     return _NOISE_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
+
+
+_CLEAN = {path.name: _clean(path.read_text(encoding="utf-8")) for path in _QML_FILES}
 
 
 def _block_end(clean: str, brace: int) -> int:
@@ -87,31 +94,47 @@ def _spans(clean: str, pattern: str) -> list[tuple[int, int]]:
     return [(m.start(), _block_end(clean, m.end() - 1)) for m in re.finditer(pattern, clean)]
 
 
-def _wearers(clean: str) -> list[tuple[str, str]]:
-    """(wearer, instance source) for every NewTag placed in Main.qml."""
-    comps = {
-        m.group(1): (m.start(), _block_end(clean, m.end() - 1))
-        for m in re.finditer(r"\bcomponent\s+(\w+)\s*:\s*[\w.]+\s*\{", clean)
-    }
-    out = []
-    for start, end in _spans(clean, r"(?<![\w.])NewTag\s*\{"):
-        body = clean[start : end + 1]
-        if "browseItemHeader.hd" in body:
-            out.append(("album page header", body))
-            continue
-        inside = [(e - s, name) for name, (s, e) in comps.items() if s < start and end <= e]
-        out.append((min(inside)[1] if inside else "?", body))
+def _component(name: str) -> str:
+    """The component's own text: its file when it is split out of Main.qml,
+    else its inline block there."""
+    if f"{name}.qml" in _CLEAN:
+        return _CLEAN[f"{name}.qml"]
+    spans = _spans(_CLEAN["Main.qml"], rf"\bcomponent\s+{name}\s*:\s*[\w.]+\s*\{{")
+    assert len(spans) == 1, f"component {name} not found"
+    s, e = spans[0]
+    return _CLEAN["Main.qml"][s : e + 1]
+
+
+def _wearers() -> list[tuple[str, str]]:
+    """(wearer, instance source) for every NewTag placed in the QML tree."""
+    out: list[tuple[str, str]] = []
+    for fname, clean in _CLEAN.items():
+        comps = {
+            m.group(1): (m.start(), _block_end(clean, m.end() - 1))
+            for m in re.finditer(r"\bcomponent\s+(\w+)\s*:\s*[\w.]+\s*\{", clean)
+        }
+        for start, end in _spans(clean, r"(?<![\w.])NewTag\s*\{"):
+            body = clean[start : end + 1]
+            if "browseItemHeader.hd" in body:
+                out.append(("album page header", body))
+                continue
+            if fname != "Main.qml":
+                # A split-out component file is the component itself.
+                out.append((fname[: -len(".qml")], body))
+                continue
+            inside = [(e - s, name) for name, (s, e) in comps.items() if s < start and end <= e]
+            out.append((min(inside)[1] if inside else "?", body))
     return out
 
 
 def test_there_are_marks_to_check() -> None:
     """A parser that matched nothing would make every structural test pass."""
-    assert "component NewTag" in QML_MAIN.read_text(encoding="utf-8")
-    assert len(_wearers(_clean())) >= len(WEARERS)
+    assert "NewTag.qml" in _CLEAN or "component NewTag" in _CLEAN["Main.qml"]
+    assert len(_wearers()) >= len(WEARERS)
 
 
 def test_every_surface_that_shows_a_release_date_wears_the_mark() -> None:
-    got = sorted(name for name, _body in _wearers(_clean()))
+    got = sorted(name for name, _body in _wearers())
     assert got == WEARERS, (
         f"the NEW mark is placed on {got}, expected exactly one on each of {WEARERS}. "
         "A surface that shows a release date without it, or a second copy of it, "
@@ -120,12 +143,9 @@ def test_every_surface_that_shows_a_release_date_wears_the_mark() -> None:
 
 
 def test_both_card_styles_caption_through_the_one_that_wears_it() -> None:
-    clean = _clean()
     for card in ("ArtCard", "BrowseCard"):
-        spans = _spans(clean, rf"\bcomponent\s+{card}\s*:\s*[\w.]+\s*\{{")
-        assert len(spans) == 1, f"component {card} not found"
-        s, e = spans[0]
-        assert re.search(r"\bCardCaption\s*\{", clean[s:e]), (
+        body = _component(card)
+        assert re.search(r"\bCardCaption\s*\{", body), (
             f"{card} no longer captions through CardCaption, so it no longer wears the NEW mark"
         )
 
@@ -133,20 +153,23 @@ def test_both_card_styles_caption_through_the_one_that_wears_it() -> None:
 def test_no_surface_decides_newness_for_itself() -> None:
     """One rule: every wearer asks isNewRelease, and the cutoff it compares
     against is read nowhere else, so no surface can keep its own window."""
-    clean = _clean()
-    allowed = _spans(clean, r"\bfunction\s+(?:isNewRelease|refreshNewCutoff)\s*\([^)]*\)\s*\{")
-    allowed += [(m.start(), m.end()) for m in re.finditer(r"\bproperty\s+string\s+new(?:Cutoff|Horizon)\b", clean)]
-    assert len(allowed) == 4, allowed
+    allowed: dict[str, list[tuple[int, int]]] = {}
+    for fname, clean in _CLEAN.items():
+        spans = _spans(clean, r"\bfunction\s+(?:isNewRelease|refreshNewCutoff)\s*\([^)]*\)\s*\{")
+        spans += [(m.start(), m.end()) for m in re.finditer(r"\bproperty\s+string\s+new(?:Cutoff|Horizon)\b", clean)]
+        allowed[fname] = spans
+    assert sum(len(s) for s in allowed.values()) == 4, allowed
     strays = [
-        clean.count("\n", 0, m.start()) + 1
+        f"{fname}:{clean.count(chr(10), 0, m.start()) + 1}"
+        for fname, clean in _CLEAN.items()
         for m in re.finditer(r"\bnew(?:Cutoff|Horizon)\b", clean)
-        if not any(s <= m.start() <= e for s, e in allowed)
+        if not any(s <= m.start() <= e for s, e in allowed[fname])
     ]
-    assert not strays, f"the NEW cutoff is read outside isNewRelease at Main.qml lines {strays}"
+    assert not strays, f"the NEW cutoff is read outside isNewRelease at {strays}"
 
-    caption = _spans(clean, r"\bcomponent\s+CardCaption\s*:\s*[\w.]+\s*\{")[0]
-    for name, body in _wearers(clean):
-        rule = clean[caption[0] : caption[1]] if name == "CardCaption" else body
+    caption = _component("CardCaption")
+    for name, body in _wearers():
+        rule = caption if name == "CardCaption" else body
         assert "isNewRelease(" in rule, f"the {name} mark does not ask isNewRelease"
 
 
@@ -154,20 +177,17 @@ def test_the_dot_breathes_on_the_render_thread_and_only_when_seen() -> None:
     """Every marked row and card carries a pulsing dot, so the pulse must not
     tick on the GUI thread (this app's frames wait on it) and must stop when
     nothing can see it."""
-    clean = _clean()
-    spans = _spans(clean, r"\bcomponent\s+NewTag\s*:\s*[\w.]+\s*\{")
-    assert len(spans) == 1
-    body = clean[spans[0][0] : spans[0][1]]
+    body = _component("NewTag")
     assert "OpacityAnimator" in body, "the NEW dot no longer breathes on the render thread"
     for gui in ("NumberAnimation", "PropertyAnimation", "ColorAnimation"):
         assert gui not in body, f"the NEW dot animates with {gui}, which ticks on the GUI thread"
-    assert re.search(r"breathing\s*:\s*visible\s*&&\s*root\.onScreen\b", body), (
+    assert re.search(r"breathing\s*:\s*visible\s*&&\s*(?:root|host)\.onScreen\b", body), (
         "the NEW dot's breath is no longer gated on being visible and on screen"
     )
 
 
 def test_the_window_is_a_fortnight() -> None:
-    assert re.search(r"readonly\s+property\s+int\s+newDays\s*:\s*14\b", _clean())
+    assert re.search(r"readonly\s+property\s+int\s+newDays\s*:\s*14\b", _CLEAN["Main.qml"])
 
 
 def test_the_payload_builders_never_read_the_clock() -> None:

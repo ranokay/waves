@@ -39,6 +39,11 @@ def _body(start: str, end: str = "}") -> str:
 
 
 def _component(name: str) -> str:
+    """The component's own text: its file when it is split out of Main.qml
+    (#315), else its inline block there."""
+    path = QML_MAIN.parent / f"{name}.qml"
+    if path.exists():
+        return path.read_text()
     return _body(f"component {name}:", "component ")
 
 
@@ -220,12 +225,12 @@ def test_track_rows_prefetch_their_album_only_after_a_longer_rest():
     assert 'readonly property var prefetchCard: ({ kind: "album", id: trow.albumId, art: "" })' in _flat(trow), (
         "a row's cover is the small size, warming it at the hero's would pin a pixmap nobody asks for"
     )
-    assert "root.hoverPrefetch(trow.prefetchCard, 450)" in trow, "a row is where a pointer parks: longer dwell"
-    assert "root.hoverPrefetchCancel(trow.prefetchCard)" in trow
+    assert "host.hoverPrefetch(trow.prefetchCard, 450)" in trow, "a row is where a pointer parks: longer dwell"
+    assert "host.hoverPrefetchCancel(trow.prefetchCard)" in trow
     # A HoverHandler, not the row's MouseArea: the thumb, title and buttons
     # stacked on the row each take hover, so containsMouse would restart the
     # dwell at every internal edge.
-    before = trow.split("root.hoverPrefetch(trow.prefetchCard, 450)", 1)[0].splitlines()[-4:]
+    before = trow.split("host.hoverPrefetch(trow.prefetchCard, 450)", 1)[0].splitlines()[-4:]
     assert any("HoverHandler {" in ln for ln in before), before
     # A local file's row (the Library section, ADR 0007) has no catalog album
     # to warm: the gate keeps the prefetch to rows that name one.
@@ -284,7 +289,7 @@ def test_the_disc_shows_the_house_marks_on_a_still_plate():
     # The mask stays inside coverWrap: it is the circle.
     assert "id: paMask" in pa[wrap:], "paMask is the mask's sourceItem and belongs with the Image"
     term = pa[pa.index("id: paTerm") :]
-    assert 'color: "#04140a"' in term and 'pa.artState === "failed" ? root.red : root.accentDim' in term
+    assert 'color: "#04140a"' in term and 'pa.artState === "failed" ? red : accentDim' in term
     assert 'text: ">"' in term and 'text: "x"' in term
     assert 'opacity: ((pa.artState === "loading" && pa.artWaited) || pa.artState === "failed") ? 1 : 0' in term
     assert 'text: "≈"' in pa and 'visible: pa.artState === "none"' in pa, "a track with no cover says so"
@@ -293,7 +298,7 @@ def test_the_disc_shows_the_house_marks_on_a_still_plate():
 def test_the_disc_blinks_off_the_shared_clock_and_fades_on_the_wrap():
     assert "readonly property real termBlink: (marchTick % 20) < 10 ? 1 : 0" in MAIN_QML
     pa = _component("PreviewArt")
-    assert "opacity: paTerm.visible ? root.termBlink : 1" in pa, (
+    assert "opacity: paTerm.visible ? host.termBlink : 1" in pa, (
         "the visible test goes first, so a settled disc never reads the 20Hz tick"
     )
     # (The vinyl spin is a SequentialAnimation too, but only one disc buffers
@@ -308,4 +313,4 @@ def test_the_disc_blinks_off_the_shared_clock_and_fades_on_the_wrap():
     img = pa[pa.index("id: paImg") :]
     assert "visible: status === Image.Ready" in img
     assert "opacity:" not in img.split("layer.enabled", 1)[0], "no opacity animation on the layered Image"
-    assert "sourceSize.width: root.discDecode" in img
+    assert "sourceSize.width: host.discDecode" in img
