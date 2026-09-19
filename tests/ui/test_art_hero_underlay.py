@@ -116,7 +116,7 @@ def test_item_header_paints_as_a_skeleton_before_the_payload():
 
 
 def test_wire_hint_sits_under_the_skeleton():
-    hint = MAIN_QML.split("id: browseDrillHint", 1)[1].split("\n                    }", 1)[0]
+    hint = _body("id: browseDrillHint")
     assert "topPad: browseItemHeader.visible ? 40 : 96" in hint
 
 
