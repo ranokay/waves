@@ -5,8 +5,8 @@ import QtQuick
 // about the calendar, so it stays out of their shape. The dot, breathing
 // gently, keeps the word from reading as part of the date it usually
 // follows. It decides
-// nothing: callers bind visible to root.isNewRelease(). compact is the
-// card caption size. settled is the caller saying you already have it
+// nothing: callers bind visible to their host's isNewRelease(). compact is
+// the card caption size. settled is the caller saying you already have it
 // (downloaded, or a full copy in the library): the mark stays, the breath
 // stops, because the release is still new but no longer asking for you.
 // `host` is Main.qml's root object, bound at every instantiation and

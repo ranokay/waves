@@ -24,8 +24,12 @@ from waves.ownership import OwnershipStore
 from waves.waves_ui.updater import AppUpdater, UpdaterError
 
 BACKEND_SRC = (REPO_ROOT / "waves" / "waves_ui" / "backend.py").read_text()
-MAIN_QML = (REPO_ROOT / "waves" / "waves_ui" / "qml" / "Main.qml").read_text()
-QUEUE_STACK_QML = (REPO_ROOT / "waves" / "waves_ui" / "qml" / "QueueStack.qml").read_text()
+QML_DIR = REPO_ROOT / "waves" / "waves_ui" / "qml"
+MAIN_QML = (QML_DIR / "Main.qml").read_text()
+# The whole QML tree: the negative pins below must not go vacuous when the
+# surface they fence moves out of Main.qml (#315).
+ALL_QML = "\n".join(path.read_text(encoding="utf-8") for path in sorted(QML_DIR.glob("*.qml")))
+QUEUE_STACK_QML = (QML_DIR / "QueueStack.qml").read_text()
 BRIDGE_MD = (REPO_ROOT / "waves" / "waves_ui" / "BRIDGE.md").read_text()
 
 
@@ -146,7 +150,7 @@ def test_tree_swap_with_executable_still_succeeds(tmp_path):
 def test_dead_recently_added_pair_removed():
     assert "recentlyAdded" not in BACKEND_SRC
     assert "loadRecentlyAdded" not in BACKEND_SRC
-    assert "recentlyAdded" not in MAIN_QML
+    assert "recentlyAdded" not in ALL_QML
     assert "recentlyAddedLoaded" not in BRIDGE_MD
 
 
@@ -163,8 +167,9 @@ def test_video_preview_passes_padding():
 def test_artcard_runs_no_unrenderable_collection_rollups():
     """Both ArtCard download controls must opt out of the collection rollup:
     one is only visible with live state (which outranks the rollup), the other
-    only renders for non-collection kinds."""
-    assert "collectionCheck: ac.kind ===" not in MAIN_QML
+    only renders for non-collection kinds. ArtCard is its own file since #315
+    slice 5, so the negative pin reads the whole QML tree."""
+    assert "collectionCheck: ac.kind ===" not in ALL_QML
 
 
 # ---------------------------------------------------------------- finding 70

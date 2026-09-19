@@ -8,7 +8,9 @@ Ten minutes here saves an afternoon of reverse-engineering.
 ```
 ┌─────────────────────────────  Waves (GUI)  ─────────────────────────────┐
 │                                                                         │
-│  qml/Main.qml ── the main window (views, cards, player + widgets)       │
+│  qml/Main.qml ── the main window (views, routing, state; components     │
+│  qml/*.qml ── split out beside it: ArtCard, TrackRow, LibSourceGroup,   │
+│               DownloadButton, the drawers, the player surfaces)         │
 │  qml/SettingsPage.qml ── schema-driven settings editor                  │
 │        │                                    ▲                           │
 │        │ calls slots on `waves`             │ signals (queued,          │
@@ -162,8 +164,9 @@ resolving against dead code, and without the `waves` distribution installed
 the app treats the run as a dev environment and opens against the separate
 `Waves-dev` config folder, which looks like being signed out.
 
-The QML plain-text guard test fails if any dynamic `Text` in Main.qml can
-render rich text (remote strings must never inject markup).
+The QML plain-text guard test fails if any dynamic `Text` in Main.qml or the
+components split out of it can render rich text (remote strings must never
+inject markup).
 
 The launch water (the wave video behind the launch screen) shares the GUI
 thread with the interface, and the GUI thread waits for the interpreter lock

@@ -10,6 +10,7 @@ pattern as the scrim and plain-text guards.
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 from threading import Event, Lock
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from waves.waves_ui.backend import WavesBridge, _link_tiles_of
 
 MAIN_QML = (QML_DIR / "Main.qml").read_text(encoding="utf-8")
 SETTINGS_QML = (QML_DIR / "SettingsPage.qml").read_text(encoding="utf-8")
+ALBUM_BLOCK_QML = (QML_DIR / "AlbumBlock.qml").read_text(encoding="utf-8")
 
 
 class _Signal:
@@ -492,8 +494,10 @@ def test_browse_retry_routes_by_page_key():
 def test_recycled_album_rows_reset_their_selection():
     # The handler carries the fold flag too (a recycled row must not fold a
     # stranger's panel away), so match the reset itself, not the whole line.
-    body = MAIN_QML.split("onAlbumIdChanged:", 1)[1]
-    body = body[: body.index("\n        }")]
+    # AlbumBlock is its own file since #315 slice 5, so the close is matched
+    # at whatever indent that file uses.
+    body = ALBUM_BLOCK_QML.split("onAlbumIdChanged:", 1)[1]
+    body = re.split(r"\n\s*\}", body, maxsplit=1)[0]
     assert "sel = ({})" in body
 
 

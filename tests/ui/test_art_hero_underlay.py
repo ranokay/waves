@@ -17,6 +17,11 @@ MAIN_QML = QML_MAIN.read_text()
 # The cover box is its own file since #315 slice 3, so the Art pins read it
 # there; the file body is the component.
 ART_QML = (QML_MAIN.parent / "Art.qml").read_text()
+# Components whose pins below read them in their own files (split out of
+# Main.qml in #315 slice 5).
+ALBUM_BLOCK_QML = (QML_MAIN.parent / "AlbumBlock.qml").read_text()
+ART_CARD_QML = (QML_MAIN.parent / "ArtCard.qml").read_text()
+LIB_PLAYLIST_ROW_QML = (QML_MAIN.parent / "LibPlaylistRow.qml").read_text()
 
 
 def _body(start: str, end: str = "}") -> str:
@@ -80,10 +85,11 @@ def test_page_openers_forward_the_art_they_have():
     card = _body("    function openBrowseCard(card) {")
     assert 'openBrowseItem(kind, card.id, "", card.title || "", card.art || "")' in card
     assert 'openBrowseItem("album", card.album_id, card.id, card.album || "", card.art || "")' in card
-    # Rows that name a page pass their cover along too.
-    assert MAIN_QML.count('root.openAlbumPage(albumId, "", title, art)') == 2
+    # Rows that name a page pass their cover along too. The album row's two
+    # sites live in AlbumBlock.qml since #315 slice 5.
+    assert ALBUM_BLOCK_QML.count('host.openAlbumPage(albumId, "", title, art)') == 2
     assert MAIN_QML.count("root.openPlaylistPage(plId, title, art)") == 2
-    assert "root.openPlaylistPage(plRow.model.id, plRow.model.title, plRow.model.art)" in MAIN_QML
+    assert "host.openPlaylistPage(plRow.model.id, plRow.model.title, plRow.model.art)" in LIB_PLAYLIST_ROW_QML
 
 
 # ----- the Art stand-in layer -------------------------------------------------
@@ -211,12 +217,12 @@ def test_cards_and_rows_arm_the_prefetch_on_hover():
     # to the title does not cancel a dwell that never left the card. Its
     # artwork-only handler keeps the hover strip and must not prefetch.
     ac = _component("ArtCard")
-    assert "root.hoverPrefetch(ac.card)" in ac and "root.hoverPrefetchCancel(ac.card)" in ac
-    wrap = MAIN_QML.split("id: acWrapHover", 1)[1].split("}", 1)[0]
+    assert "host.hoverPrefetch(ac.card)" in ac and "host.hoverPrefetchCancel(ac.card)" in ac
+    wrap = ART_CARD_QML.split("id: acWrapHover", 1)[1].split("}", 1)[0]
     assert "hoverPrefetch" not in wrap, "prefetch belongs to the card-wide handler, not the artwork's"
     pl = _component("LibPlaylistRow")
-    assert "root.hoverPrefetch(plRow.prefetchCard)" in pl and "enabled: !plRow.isFolder" in pl
-    assert '({ kind: "album", id: ab.albumId, art: ab.art })' in _flat(MAIN_QML)
+    assert "host.hoverPrefetch(plRow.prefetchCard)" in pl and "enabled: !plRow.isFolder" in pl
+    assert '({ kind: "album", id: ab.albumId, art: ab.art })' in _flat(ALBUM_BLOCK_QML)
     assert '({ kind: "playlist", id: pb.plId, art: pb.art })' in _flat(MAIN_QML)
 
 
