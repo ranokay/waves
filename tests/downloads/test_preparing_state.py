@@ -19,7 +19,7 @@ import re
 from threading import Lock
 from types import SimpleNamespace
 
-from support.paths import QML_DIR, QML_MAIN, REPO_ROOT
+from support.paths import QML_DIR, REPO_ROOT
 
 from waves.waves_ui.backend import WavesBridge
 
@@ -103,15 +103,15 @@ def test_every_pre_queue_hand_off_uses_the_same_word():
 
 
 def test_the_buttons_draw_preparing_as_a_wait_not_a_download():
-    src = QML_MAIN.read_text()
     db = (QML_DIR / "DownloadButton.qml").read_text()
     di = (QML_DIR / "DownIcon.qml").read_text()
+    bc = (QML_DIR / "BrowseCard.qml").read_text()
     # Each of the three surfaces that shows a download state derives one flag,
     # so a state that is not yet queued can never fall through to the idle or
     # the running arm.
     assert 'st === "queued" || st === "preparing"' in db
     assert 'di.st === "queued" || di.st === "preparing"' in di
-    assert 'bc.dlSt === "queued" || bc.dlSt === "preparing"' in src
+    assert 'bc.dlSt === "queued" || bc.dlSt === "preparing"' in bc
     # The dot matrix stays pinned to a real download.
     assert re.search(r'active:\s*db\.st === "running"', db)
 
