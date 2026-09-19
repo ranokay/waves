@@ -165,6 +165,14 @@ Waves then knows it's Homebrew‑managed: the in‑app "Update & restart" button
 
 **Linux via AppImage:** download `waves_linux-x64.AppImage` (or `-arm64`) from the release, mark it executable (`chmod +x`), and run it directly, no unzip, no install step. The in‑app updater keeps it current in place.
 
+**Linux via Flatpak:** download `waves_linux-x64.flatpak` (or `-arm64`) from the release and install it:
+
+```bash
+flatpak install --user waves_linux-x64.flatpak
+```
+
+The bundle runs in a minimal sandbox (network, your home folder, GPU, audio) and never updates itself: the in‑app updater defers to `flatpak update`. A music library on a NAS or external drive needs a one‑time `flatpak override --filesystem=...`; see `packaging/flatpak/README.md`.
+
 Prefer to run from source?
 
 ```bash

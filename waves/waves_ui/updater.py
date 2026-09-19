@@ -189,6 +189,7 @@ _CHANNEL_HINTS = {
     "homebrew": "brew upgrade --cask waves",
     "scoop": "scoop update waves",
     "winget": "winget upgrade waves",
+    "flatpak": "flatpak update org.getwaves.Waves",
 }
 
 

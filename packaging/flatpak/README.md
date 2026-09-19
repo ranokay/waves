@@ -1,9 +1,8 @@
 # Flatpak bundle
 
 Builds an installable single-file Flatpak from the same Nuitka tree the Linux
-release legs ship. linux-x64 only for now: the arm64 runner cannot install the
-x86_64 freedesktop runtime, and a native arm64 bundle needs an arm64 runner
-with flatpak support.
+release legs ship, for x64 and arm64 (each runner uses its native freedesktop
+runtime; the smoke-launch runs on x64, as in the release workflow).
 
 ## Build locally
 

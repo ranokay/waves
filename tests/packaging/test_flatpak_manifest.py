@@ -68,12 +68,22 @@ def test_the_desktop_and_metainfo_agree_on_the_app_id():
 
 def test_ci_builds_and_smoke_launches_the_bundle():
     wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    steps = wf["jobs"]["linux-x64"]["steps"]
+    job = wf["jobs"]["linux"]
+    arches = {entry["OS_ARCH"] for entry in job["strategy"]["matrix"]["include"]}
+    assert arches == {"linux-x64", "linux-arm64"}
+    steps = job["steps"]
     runs = "\n".join(str(step.get("run", "")) for step in steps)
     assert "flatpak-builder" in runs
     assert "flatpak build-bundle" in runs
     assert "flatpak run" in runs
-    assert "flatpak install" in runs
+    # The smoke-launch installs the built bundle itself, not just a runtime,
+    # and stays x64-only (the ARM runners skip it, as in the release workflow).
+    assert 'flatpak install --user -y --noninteractive "dist/waves_${{ matrix.OS_ARCH }}.flatpak"' in runs
+    smoke = next(step for step in steps if step.get("name") == "Smoke-launch the installed bundle")
+    assert "linux-x64" in str(smoke["if"])
     uses = [str(step.get("uses", "")) for step in steps]
     assert any(u.startswith("actions/upload-artifact") for u in uses)
-    assert any(u.startswith("softprops/action-gh-release") for u in uses)
+    # Attach by upload only: creating the Release here would race the release
+    # workflow's draft (the v0.1.2 duplicate-release incident).
+    assert "gh release upload" in runs
+    assert not any(u.startswith("softprops/action-gh-release") for u in uses)
