@@ -20,32 +20,58 @@ QtObject {
     readonly property bool busy: lifeState === "downloading" || lifeState === "verifying" || lifeState === "installing"
     readonly property bool ready: stateKey === "managed" || stateKey === "path"
 
-    function refresh() { mgr.status = waves.ffmpegStatus() }
-    function install() { waves.installFfmpeg() }
-    function cancel() { waves.cancelFfmpeg() }
-    function remove() { mgr.updateAvailable = false; waves.removeFfmpeg() }
+    function refresh() {
+        mgr.status = waves.ffmpegStatus()
+    }
+    function install() {
+        waves.installFfmpeg()
+    }
+    function cancel() {
+        waves.cancelFfmpeg()
+    }
+    function remove() {
+        mgr.updateAvailable = false
+        waves.removeFfmpeg()
+    }
     function checkUpdates() {
-        if (mgr.busy || mgr.checking) return
-        mgr.checking = true; mgr.upToDate = false; waves.checkFfmpegUpdate()
+        if (mgr.busy || mgr.checking)
+            return
+        mgr.checking = true
+        mgr.upToDate = false
+        waves.checkFfmpegUpdate()
     }
 
-    property Timer upToDateTimer: Timer { interval: 4000; onTriggered: mgr.upToDate = false }
+    property Timer upToDateTimer: Timer {
+        interval: 4000
+        onTriggered: mgr.upToDate = false
+    }
 
     property Connections conn: Connections {
         target: waves
         function onFfmpegStateChanged(state, msg) {
-            mgr.lifeState = state; mgr.message = msg
-            if (state === "done" || state === "failed" || state === "cancelled") mgr.pct = 0
+            mgr.lifeState = state
+            mgr.message = msg
+            if (state === "done" || state === "failed" || state === "cancelled")
+                mgr.pct = 0
             // A completed install brings us to the latest build, so clear any
             // pending "Update" flag, otherwise the UI shows a perpetual update
             // and re-downloads the same build on the next check.
-            if (state === "done") mgr.updateAvailable = false
+            if (state === "done")
+                mgr.updateAvailable = false
         }
-        function onFfmpegProgress(p) { mgr.pct = p }
-        function onFfmpegStatusChanged() { mgr.refresh() }
+        function onFfmpegProgress(p) {
+            mgr.pct = p
+        }
+        function onFfmpegStatusChanged() {
+            mgr.refresh()
+        }
         function onFfmpegUpdateChecked(available, current, latest) {
-            mgr.checking = false; mgr.updateAvailable = available
-            if (!available) { mgr.upToDate = true; mgr.upToDateTimer.restart() }
+            mgr.checking = false
+            mgr.updateAvailable = available
+            if (!available) {
+                mgr.upToDate = true
+                mgr.upToDateTimer.restart()
+            }
         }
     }
 

@@ -13,12 +13,15 @@ Rectangle {
     property string mono: ""    // monospace family for the label
 
     // Waves palette (defaults mirror the app tokens; override if they diverge)
-    property color accent:     "#3dff6e"
+    property color accent: "#3dff6e"
     property color accentCont: "#06210f"
-    property color accentDim:  "#22a64a"
+    property color accentDim: "#22a64a"
 
-    implicitHeight: 30; radius: 8
-    color: accentCont; border.width: 1; border.color: accentDim
+    implicitHeight: 30
+    radius: 8
+    color: accentCont
+    border.width: 1
+    border.color: accentDim
     clip: true
 
     // Internal 20 Hz "breathe" clock for the next-to-fill cell (same fix as the
@@ -30,10 +33,12 @@ Rectangle {
     property real pulse: 0.85
     Timer {
         running: bar.visible && bar.pct < 100
-        interval: 50; repeat: true
+        interval: 50
+        repeat: true
         property real phase: 0
         onTriggered: {
-            phase = (phase + 0.05 / 1.04) % 1   // 1.04s breathe = 2 x 520ms
+            phase = (phase + 0.05 / 1.04) % 1
+            // 1.04s breathe = 2 x 520ms
             bar.pulse = 0.28 + 0.57 * (0.5 + 0.5 * Math.cos(2 * Math.PI * phase))
         }
     }
@@ -56,7 +61,10 @@ Rectangle {
         layer.enabled: true
         layer.effect: MultiEffect {
             maskEnabled: true
-            maskSource: ShaderEffectSource { sourceItem: ledMask; hideSource: false }
+            maskSource: ShaderEffectSource {
+                sourceItem: ledMask
+                hideSource: false
+            }
         }
         Repeater {
             model: ledGrid.total
@@ -70,7 +78,9 @@ Rectangle {
                 readonly property bool pulsing: fillIndex === ledGrid.lit && ledGrid.lit < ledGrid.total
                 x: col * (ledGrid.cellW + ledGrid.ggap)
                 y: rowTop * (ledGrid.cellH + ledGrid.ggap)
-                width: ledGrid.cellW; height: ledGrid.cellH; radius: 0   // sharp LED cells
+                width: ledGrid.cellW
+                height: ledGrid.cellH
+                radius: 0   // sharp LED cells
                 color: bar.accent
                 // Breathe off the bar's internal 20 Hz clock (bar.pulse) rather than
                 // a per-frame animation, so an in-flight ffmpeg/update download does
@@ -83,15 +93,22 @@ Rectangle {
         id: ledMask
         anchors.fill: parent
         visible: false
-        Rectangle { anchors.fill: parent; radius: bar.radius - 1; color: "#ffffff" }
+        Rectangle {
+            anchors.fill: parent
+            radius: bar.radius - 1
+            color: "#ffffff"
+        }
     }
     // Dark plate behind the label: the label is accent-on-accent once the
     // cells under it light up, so without a backing it washes out as the bar
     // fills. The plate hugs the text and rides above the masked grid.
     Rectangle {
         anchors.centerIn: parent
-        width: ledLabel.implicitWidth + 14; height: ledLabel.implicitHeight + 4
-        radius: 4; color: "#0a120c"; opacity: 0.78
+        width: ledLabel.implicitWidth + 14
+        height: ledLabel.implicitHeight + 4
+        radius: 4
+        color: "#0a120c"
+        opacity: 0.78
         visible: bar.label !== ""
     }
     Text {
@@ -99,7 +116,11 @@ Rectangle {
         anchors.centerIn: parent
         textFormat: Text.PlainText
         text: bar.label
-        color: bar.accent; font.family: bar.mono; font.pixelSize: 11; font.bold: true
-        style: Text.Outline; styleColor: "#a0060f09"
+        color: bar.accent
+        font.family: bar.mono
+        font.pixelSize: 11
+        font.bold: true
+        style: Text.Outline
+        styleColor: "#a0060f09"
     }
 }
