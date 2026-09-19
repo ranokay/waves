@@ -991,7 +991,7 @@ ApplicationWindow {
   // across launches the way the window frame is (0 is the never-saved
   // sentinel). 420 is the floor as well as the default: below it the quality
   // a row states and the title it states it for start fighting for the same
-  // pixels. Read through the clamp in the Drawer below, so shrinking the
+  // pixels. QueueDrawer reads it through its own clamp, so shrinking the
   // window pulls an over-wide drawer in rather than letting it hang off the
   // side, while what is STORED stays the width that was asked for.
   property real queueWidth: {

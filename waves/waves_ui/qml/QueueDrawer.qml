@@ -711,7 +711,7 @@ Drawer {
                 readonly property bool active: qrow.st === "running" || qrow.st === "queued"
                 name: "close"
                 size: 14
-                bold: active ? 8 : 0   // heavier while cancellable, matching the old font.bold: active
+                bold: active ? 8 : 0   // heavier while cancellable
                 color: cancMa.containsMouse ? red : (active ? textLo : textDim)
                 MouseArea {
                   id: cancMa

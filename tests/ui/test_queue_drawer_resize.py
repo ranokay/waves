@@ -115,9 +115,9 @@ def _run_scenario() -> int:
         QTimer.singleShot(ms, loop.quit)
         loop.exec()
 
-    # The grip, its glow and the width-save debounce live inside
-    # QueueDrawer.qml (#315 slice 4); evaluate their expressions in that
-    # file's own scope.
+    # The grip and its glow live inside QueueDrawer.qml (#315 slice 4):
+    # evaluate their expressions in that file's own scope. The width-save
+    # debounce stays on the root, so it keeps the root-scope evaluator.
     qd = scoped_q(q, "queueDrawer.background")
 
     q("root.width = 1200")
@@ -225,9 +225,9 @@ def _run_scenario() -> int:
     # 7. And remembered even when the quit lands inside the debounce, which is
     #    the ordinary gesture: widen the drawer, then close the app. The timer
     #    is stopped here so nothing but the close itself can do the saving.
-    qd("queueWidthSaveTimer.stop()")
+    q("queueWidthSaveTimer.stop()")
     q("root.queueWidth = 700")
-    qd("queueWidthSaveTimer.stop()")  # the change above restarted it
+    q("queueWidthSaveTimer.stop()")  # the change above restarted it
     q("root.close()")
     settle(150)
     flushed = int(q("waves.queueRestoreWidth()"))
