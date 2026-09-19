@@ -4,7 +4,6 @@ from collections.abc import Callable
 from tidalapi import Album, Mix, Playlist, Session, Track, UserPlaylist, Video
 from tidalapi.artist import Artist, Role
 from tidalapi.media import MediaMetadataTags, Quality
-from tidalapi.session import SearchTypes
 from tidalapi.user import LoggedInUser
 
 from waves.constants import FAVORITES, MediaType
@@ -25,10 +24,10 @@ def name_builder_artist(media: Track | Video | Album, delimiter: str = ", ") -> 
     Returns:
         str: A delimited string of artist names.
     """
-    return delimiter.join(artist.name for artist in media.artists)
+    return delimiter.join(artist.name or "" for artist in media.artists or [])
 
 
-def get_album_artist_objects(media: Track | Album) -> [Artist]:
+def get_album_artist_objects(media: Track | Album) -> list[Artist]:
     """The album's main-credit artists, in the album's own order.
 
     The one place the main-credit filter lives, so neither the names written to
@@ -38,28 +37,23 @@ def get_album_artist_objects(media: Track | Album) -> [Artist]:
     setting (the engine's tag writer applies it; see waves/download.py). Never
     pair them by index.
     """
-    artists_tmp: [Artist] = []
     # A playlist can carry a track whose album block never arrived, so the
     # album credit is simply unknown. Answer "no album artists" rather than
     # raising: the track still has its own artists and still deserves to land.
     album = media.album if isinstance(media, Track) else media
-    artists: [Artist] = (getattr(album, "artists", None) or []) if album is not None else []
+    artists: list[Artist] = (getattr(album, "artists", None) or []) if album is not None else []
 
-    for artist in artists:
-        # Albums from TIDAL's V2 home feed carry artists without a role/type
-        # field, so tidalapi leaves .roles as None: treat the missing
-        # information as a main credit rather than crashing on the lookup.
-        if artist.roles is None or Role.main in artist.roles:
-            artists_tmp.append(artist)
-
-    return artists_tmp
+    # Albums from TIDAL's V2 home feed carry artists without a role/type
+    # field, so tidalapi leaves .roles as None: treat the missing information
+    # as a main credit rather than crashing on the lookup.
+    return [artist for artist in artists if artist.roles is None or Role.main in artist.roles]
 
 
-def get_album_artists(media: Track | Album) -> [str]:
-    return [artist.name for artist in get_album_artist_objects(media)]
+def get_album_artists(media: Track | Album) -> list[str]:
+    return [artist.name or "" for artist in get_album_artist_objects(media)]
 
 
-def get_album_artist_ids(media: Track | Album) -> [str]:
+def get_album_artist_ids(media: Track | Album) -> list[str]:
     """TIDAL ids for the same album artists :func:`get_album_artists` names.
 
     Ids only, so an id-less stub artist is dropped rather than written as an
@@ -96,11 +90,11 @@ def name_builder_album_artist(media: Track | Album, first_only: bool = False, de
 
 
 def name_builder_title(media: Track | Video | Mix | Playlist | Album | Video) -> str:
-    result: str = (
-        media.title if isinstance(media, Mix) else media.full_name if hasattr(media, "full_name") else media.name
-    )
+    if isinstance(media, Mix):
+        return media.title
 
-    return result
+    full_name = getattr(media, "full_name", None)
+    return full_name if full_name is not None else media.name or ""
 
 
 def name_builder_item(media: Track | Video) -> str:
@@ -151,8 +145,8 @@ def url_ending_clean(url: str) -> str:
 
 
 def search_results_all(
-    session: Session, needle: str, types_media: SearchTypes = None, single_page: bool = False
-) -> dict[str, [SearchTypes]]:
+    session: Session, needle: str, types_media: list[object] | None = None, single_page: bool = False
+) -> dict[str, list]:
     """Search TIDAL, accumulating every page of results per type.
 
     ``single_page=True`` stops after the first page (300 per type): a caller
@@ -162,10 +156,11 @@ def search_results_all(
     """
     limit: int = 300
     offset: int = 0
-    result: dict[str, [SearchTypes]] = {}
+    result: dict[str, list] = {}
 
     while True:
-        tmp_result: dict[str, [SearchTypes]] = session.search(
+        # tidalapi's SearchResults TypedDict carries the same per-type buckets.
+        tmp_result: dict[str, list] = session.search(  # ty: ignore[invalid-assignment]
             query=needle, models=types_media, limit=limit, offset=offset
         )
 
@@ -198,12 +193,12 @@ def search_results_all(
 
 
 def items_results_all(
-    media_list: [Mix | Playlist | Album | Artist], videos_include: bool = True
-) -> [Track | Video | Album]:
-    result: [Track | Video | Album] = []
+    media: Mix | Playlist | Album | Artist, videos_include: bool = True
+) -> list[Track | Video | Album]:
+    result: list[Track | Video | Album] = []
 
-    if isinstance(media_list, Mix):
-        result = media_list.items()
+    if isinstance(media, Mix):
+        result = media.items()  # ty: ignore[invalid-assignment]  # mix items are Track|Video; the local carries the wider union
 
         if not videos_include:
             # A mix is the one collection whose items() hands back tracks and
@@ -213,35 +208,31 @@ def items_results_all(
             # mix folder, counted as real writes, whatever the setting said.
             result = [item for item in result if not isinstance(item, Video)]
     else:
-        func_get_items_media: [Callable] = []
+        func_get_items_media: list[Callable] = []
 
-        if isinstance(media_list, Playlist | Album):
+        if isinstance(media, Playlist | Album):
             if videos_include:
-                func_get_items_media.append(media_list.items)
+                func_get_items_media.append(media.items)
             else:
-                func_get_items_media.append(media_list.tracks)
+                func_get_items_media.append(media.tracks)
         else:
-            func_get_items_media.append(media_list.get_albums)
-            func_get_items_media.append(media_list.get_ep_singles)
+            func_get_items_media.append(media.get_albums)
+            func_get_items_media.append(media.get_ep_singles)
 
-        result = paginate_results(func_get_items_media)
-
-    return result
-
-
-def all_artist_album_ids(media_artist: Artist) -> [int | None]:
-    result: [int] = []
-    func_get_items_media: [Callable] = [media_artist.get_albums, media_artist.get_ep_singles]
-    albums: [Album] = paginate_results(func_get_items_media)
-
-    for album in albums:
-        result.append(album.id)
+        result = paginate_results(func_get_items_media)  # ty: ignore[invalid-assignment]  # the paginate family returns the wide union
 
     return result
 
 
-def paginate_results(func_get_items_media: [Callable]) -> [Track | Video | Album | Playlist | UserPlaylist]:
-    result: [Track | Video | Album] = []
+def all_artist_album_ids(media_artist: Artist) -> list[int | None]:
+    func_get_items_media: list[Callable] = [media_artist.get_albums, media_artist.get_ep_singles]
+    albums: list[Album] = paginate_results(func_get_items_media)  # ty: ignore[invalid-assignment]  # album/EP callables only return Albums
+
+    return [album.id for album in albums]
+
+
+def paginate_results(func_get_items_media: list[Callable]) -> list[Track | Video | Album | Playlist | UserPlaylist]:
+    result: list[Track | Video | Album | Playlist | UserPlaylist] = []
 
     for func_media in func_get_items_media:
         limit: int = 100
@@ -252,7 +243,7 @@ def paginate_results(func_get_items_media: [Callable]) -> [Track | Video | Album
             limit: int = 50
 
         while not done:
-            tmp_result: [Track | Video | Album | Playlist | UserPlaylist] = func_media(limit=limit, offset=offset)
+            tmp_result: list[Track | Video | Album | Playlist | UserPlaylist] = func_media(limit=limit, offset=offset)
 
             if bool(tmp_result):
                 result += tmp_result
@@ -304,7 +295,9 @@ def user_media_lists(session: Session) -> dict[str, list]:
     try:
         categories = session.mixes().categories or []
         if categories:
-            user_mixes = categories[0].items
+            # The parsed category's items are a list; some stub members type
+            # the same attribute as a method.
+            user_mixes = categories[0].items  # ty: ignore[invalid-assignment]
     except Exception:
         logger.exception("Could not load the user's mixes; keeping the playlists")
 
@@ -313,7 +306,7 @@ def user_media_lists(session: Session) -> dict[str, list]:
 
 def instantiate_media(
     session: Session,
-    media_type: type[MediaType.TRACK, MediaType.VIDEO, MediaType.ALBUM, MediaType.PLAYLIST, MediaType.MIX],
+    media_type: MediaType,
     id_media: str,
 ) -> Track | Video | Album | Playlist | Mix | Artist:
     if media_type == MediaType.TRACK:
@@ -336,13 +329,21 @@ def instantiate_media(
 
 def quality_audio_highest(media: Track | Album) -> Quality:
     quality: Quality
+    tags = media.media_metadata_tags
+    if tags is None:
+        # tidalapi leaves this None on tracks TIDAL flags allowStreaming=false.
+        # The TypeError is the "no answer" sentinel that backend's
+        # advertised_tier and _quality_rank catch; keep it deliberate.
+        raise TypeError("quality_audio_highest: media_metadata_tags is None")  # noqa: TRY003
 
-    if MediaMetadataTags.hi_res_lossless in media.media_metadata_tags:
+    if MediaMetadataTags.hi_res_lossless in tags:
         quality = Quality.hi_res_lossless
-    elif MediaMetadataTags.lossless in media.media_metadata_tags:
+    elif MediaMetadataTags.lossless in tags:
         quality = Quality.high_lossless
     else:
-        quality = media.audio_quality
+        # The stub types audio_quality as str | None; at runtime it is the
+        # wire's quality string, which the str-enum members compare equal to.
+        quality = media.audio_quality  # ty: ignore[invalid-assignment]
 
     return quality
 

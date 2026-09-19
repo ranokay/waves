@@ -104,7 +104,7 @@ class BaseConfig[TModel: (ModelSettings, ModelToken)]:
     cls_model: type[TModel]
     path_base: str = path_config_base()
 
-    def save(self, config_to_compare: str = None) -> None:
+    def save(self, config_to_compare: str | None = None) -> None:
         data_json = self.data.to_json()
 
         # If old and current config is equal, skip the write operation.
@@ -601,10 +601,10 @@ class _ApiAdapter(HTTPAdapter):
     which is exactly the gap this fills.
     """
 
-    def send(self, request, **kwargs):
+    def send(self, request, *args, **kwargs):
         if kwargs.get("timeout") is None:
             kwargs["timeout"] = REQUESTS_TIMEOUT_SEC
-        return super().send(request, **kwargs)
+        return super().send(request, *args, **kwargs)
 
 
 def harden_api_session(session: tidalapi.Session) -> None:
@@ -638,7 +638,7 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
     settings: Settings
     is_pkce: bool
 
-    def __init__(self, settings: Settings = None):
+    def __init__(self, settings: Settings | None = None):
         self.cls_model = ModelToken
         tidal_config: tidalapi.Config = tidalapi.Config(item_limit=10000)
         self.session = tidalapi.Session(tidal_config)
@@ -675,7 +675,7 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
             self.settings = settings
             self.settings_apply()
 
-    def settings_apply(self, settings: Settings = None) -> bool:
+    def settings_apply(self, settings: Settings | None = None) -> bool:
         if settings:
             self.settings = settings
 

@@ -402,7 +402,7 @@ class TidalProvider(Provider):
                 # pages later (endless scroll), tidalapi's own objects
                 # drop this information.
                 pl = modules[0].get("pagedList") or {}
-                cat._waves_pl = {
+                cat._waves_pl = {  # ty: ignore[invalid-assignment]  # Waves' stashed paging handle; the stub has no such attribute
                     "data": str(pl.get("dataApiPath") or ""),
                     "total": int(pl.get("totalNumberOfItems") or 0),
                     "n": len(pl.get("items") or []),
@@ -411,7 +411,7 @@ class TidalProvider(Provider):
                 categories.append(cat)
             except Exception:
                 logger.debug("Skipped an unparseable browse module", exc_info=True)
-        page.categories = categories
+        page.categories = categories  # ty: ignore[invalid-assignment]  # V2 categories, richer than the stub's media list
         return page
 
     def browse_home(self):
@@ -437,7 +437,7 @@ class TidalProvider(Provider):
                     categories.append(parser.parse_item(item))
                 except Exception:
                     logger.debug("Skipped an unparseable home module", exc_info=True)
-            page.categories = categories
+            page.categories = categories  # ty: ignore[invalid-assignment]  # V2 categories, richer than the stub's media list
             return page
 
     def browse_window(self, title: str, data_path: str, mod_type: str, offset: int, limit: int = 50) -> BrowseWindow:

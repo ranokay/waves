@@ -48,7 +48,7 @@ def metadata_project() -> ProjectInformation:
                 urls = meta_info.get_all("Project-URL")
                 # attempt to parse, else use hardcoded fallback
                 repo_url = next(
-                    (url.split(", ")[1] for url in urls if url.startswith("Repository")),
+                    (url.split(", ")[1] for url in urls or [] if url.startswith("Repository")),
                     "https://github.com/iamprivacy/Waves",
                 )
 

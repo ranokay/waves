@@ -875,14 +875,14 @@ def _format_durations(
     elif name == "album_duration_seconds" and isinstance(media, Album):
         return str(media.duration)
     elif name == "album_duration_minutes" and isinstance(media, Album):
-        m, s = divmod(media.duration, 60)
+        m, s = divmod(media.duration or 0, 60)
         return f"{m:01d}:{s:02d}"
 
     # Format playlist durations
     elif name == "playlist_duration_seconds" and isinstance(media, Album):
         return str(media.duration)
     elif name == "playlist_duration_minutes" and isinstance(media, Album):
-        m, s = divmod(media.duration, 60)
+        m, s = divmod(media.duration or 0, 60)
         return f"{m:01d}:{s:02d}"
 
     return None
@@ -967,7 +967,7 @@ def _format_metadata(
     if name == "video_quality" and isinstance(media, Video):
         return media.video_quality
     elif name == "track_quality" and isinstance(media, Track):
-        return ", ".join(tag for tag in media.media_metadata_tags if tag is not None)
+        return ", ".join(tag for tag in (media.media_metadata_tags or []) if tag is not None)
     elif name == "track_explicit" and isinstance(media, Track | Video):
         return FORMAT_TEMPLATE_EXPLICIT if media.explicit else ""
     elif name == "album_explicit":

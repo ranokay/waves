@@ -81,13 +81,15 @@ build-backend = "uv_build"
 module-root = ""
 
 [tool.ty]
-# ty (Astral's type checker, in beta) over the hand-written UI code; the
-# inherited engine is exempt (its own concern, and typing it is a separate
-# campaign). The point is catching slot/signal, call/return and assignment
-# mistakes in the bridge, not a full annotation campaign.
+# ty (Astral's type checker, in beta) over the shipped package (waves/); tests
+# and tools are outside the gate (the suite's fakes are deliberately dynamic,
+# and the runtime suite is what exercises them). The point is catching
+# call/return and assignment mistakes in shipped code, not a full annotation
+# campaign; the inherited engine's residue is handled by the path override
+# below.
 
 [tool.ty.src]
-include = ["waves/waves_ui"]
+include = ["waves"]
 
 [tool.ty.terminal]
 # Warnings stay visible (the burn-down ledger) but do not fail the gate, the
@@ -113,6 +115,20 @@ error-on-warning = false
 unresolved-attribute = "warn"
 invalid-argument-type = "warn"
 invalid-attribute-access = "warn"
+
+# The inherited TIDAL engine (upstream Tidaler code, kept close to upstream;
+# see the download.py entry in [tool.ruff.lint.per-file-ignores]) predates the
+# gate: its Optional-vs-declared attributes, string-vs-enum/path assignments,
+# m3u8 union and raise path need upstream-shaped fixes, so those diagnostics
+# stay visible as warnings for the #319 burn-down instead of failing today.
+# Hand-written modules are not covered by this override.
+[[tool.ty.overrides]]
+include = ["waves/download.py"]
+
+[tool.ty.overrides.rules]
+invalid-assignment = "warn"
+invalid-return-type = "warn"
+invalid-raise = "warn"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
