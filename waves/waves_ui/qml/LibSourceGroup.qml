@@ -139,7 +139,7 @@ ColumnLayout {
     var m = group.modelFor(cat)
     if (m) {
       if (group.isMedia(cat))
-        fillMedia(m, items)
+        host.fillMedia(m, items)
       else
         host.fill(m, items)
     }
@@ -148,9 +148,9 @@ ColumnLayout {
     var m = group.modelFor(cat)
     if (m) {
       if (group.isMedia(cat))
-        appendMedia(m, items)
+        host.appendMedia(m, items)
       else
-        appendPlain(m, items)
+        host.appendPlain(m, items)
     }
   }
   // Select a category and load it. "Home" is a self-contained,
