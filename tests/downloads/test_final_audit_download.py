@@ -345,9 +345,9 @@ def test_the_losing_twin_reports_a_skip_rather_than_failing_the_track(tmp_path):
     # And the trail says what happened. An expected step-aside logged as a
     # download left out of the library is a support bundle reporting a loss that
     # never happened, in the same words a real one uses.
-    assert not [
-        line for line in _lines(dl.fn_logger.error) if _OCCUPIED_BY_A_STRANGER in line
-    ], "the twin's own copy was reported as another writer's file"
+    assert not [line for line in _lines(dl.fn_logger.error) if _OCCUPIED_BY_A_STRANGER in line], (
+        "the twin's own copy was reported as another writer's file"
+    )
     assert any(_OCCUPIED_BY_ITS_OWN in line for line in _lines(dl.fn_logger.debug))
 
 
@@ -371,9 +371,9 @@ def test_a_foreign_occupant_at_the_move_still_fails_the_item(tmp_path):
     assert ok is False
     assert path == dst
     assert dst.read_bytes() == b"another writer got here first", "a stranger's file must be left exactly as it was"
-    assert any(
-        _OCCUPIED_BY_A_STRANGER in line for line in _lines(dl.fn_logger.error)
-    ), "a download really left out of the library has to say so, in its own words"
+    assert any(_OCCUPIED_BY_A_STRANGER in line for line in _lines(dl.fn_logger.error)), (
+        "a download really left out of the library has to say so, in its own words"
+    )
     assert not [line for line in _lines(dl.fn_logger.debug) if _OCCUPIED_BY_ITS_OWN in line]
 
 

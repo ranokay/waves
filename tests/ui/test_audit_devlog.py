@@ -117,9 +117,9 @@ def test_the_default_stays_off_in_every_packaged_build():
     assert _enabled_in({}) is False, f"a plain from-source run starts verbose: {guidance}"
     assert _enabled_in({"__compiled__": True}) is False, f"a Nuitka build starts verbose: {guidance}"
     assert _enabled_in({"__file__": "x", "frozen": True}) is False, f"a frozen build starts verbose: {guidance}"
-    assert (
-        _enabled_in({"__compiled__": True}, waves_debug="0") is False
-    ), f"a compiled build ignores WAVES_DEBUG=0: {guidance}"
+    assert _enabled_in({"__compiled__": True}, waves_debug="0") is False, (
+        f"a compiled build ignores WAVES_DEBUG=0: {guidance}"
+    )
 
 
 def test_a_developer_can_still_turn_it_on():

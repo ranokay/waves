@@ -61,7 +61,7 @@ _NOISE_RE = re.compile(
     r'|"(?:\\.|[^"\\])*"'  # double-quoted string
     r"|'(?:\\.|[^'\\])*'"  # single-quoted string
     r"|`(?:\\.|[^`\\])*`",  # template literal
-    re.S,
+    re.DOTALL,
 )
 
 
@@ -127,11 +127,12 @@ def test_every_cached_image_asks_for_the_same_pixels() -> None:
 
 
 def test_no_cached_image_splits_the_key_another_way() -> None:
-    offenders = []
-    for line, block in _cached_image_blocks():
-        for prop in KEY_SPLITTING_PROPS:
-            if re.search(rf"\b{prop}\s*:", block):
-                offenders.append(f"Main.qml:{line} sets {prop}")
+    offenders = [
+        f"Main.qml:{line} sets {prop}"
+        for line, block in _cached_image_blocks()
+        for prop in KEY_SPLITTING_PROPS
+        if re.search(rf"\b{prop}\s*:", block)
+    ]
     assert not offenders, (
         "these also change the pixmap-cache key or the request behind it, so the warm pool would "
         "stop covering the surface that sets one:\n  " + "\n  ".join(offenders)
@@ -141,7 +142,7 @@ def test_no_cached_image_splits_the_key_another_way() -> None:
 def test_the_warm_pool_image_is_one_of_them() -> None:
     """The pool entry itself, named so a reader lands on the right block."""
     text = QML.read_text(encoding="utf-8")
-    pool = re.search(r"ListModel\s*\{\s*id:\s*warmArtModel\s*\}(.{0,2600}?)\n    \}\n", text, re.S)
+    pool = re.search(r"ListModel\s*\{\s*id:\s*warmArtModel\s*\}(.{0,2600}?)\n    \}\n", text, re.DOTALL)
     assert pool, "could not find the warm pool Repeater under warmArtModel"
     body = pool.group(1)
     assert "source: model.u" in body, "the warm pool stopped binding its source to the model"

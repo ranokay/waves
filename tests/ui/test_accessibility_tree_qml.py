@@ -370,12 +370,16 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         if bool(q("root.settingsOpen")):
             problems.append("the Tab walk ran with the Settings page open")
         else:
-            opened_settings = bool(q(scene_js("""
+            opened_settings = bool(
+                q(
+                    scene_js("""
                 var tab = findFirst(root, function (o) { return o.label === "Settings" && o.clicked !== undefined; });
                 if (!tab) return false;
                 tab.clicked();
                 return true;
-            """)))
+            """)
+                )
+            )
             settle(300)
             if not opened_settings or not bool(q("root.settingsOpen")):
                 problems.append("the Settings tab did not open the Settings page")
@@ -403,12 +407,14 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
 
     # --- The Chooser (issue #284): its rows are named, tab-reachable controls,
     # and a keyboard user's picks reach the queue through the shared paths.
-    opened = q(scene_js("""
+    opened = q(
+        scene_js("""
         var b = findFirst(root, function (o) { return o.chooserKind !== undefined && ('' + o.mediaId) === 't1'; });
         if (!b) return false;
         b.openChooser();
         return true;
-    """))
+    """)
+    )
     if not opened:
         problems.append("the search result's download button could not open its Chooser")
     settle(250)
@@ -446,7 +452,8 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     # The pick/confirm paths the handlers call (the key handlers themselves are
     # pinned by the companion source test): choose a tier and an audio word and
     # flip a toggle, confirm, and read the parked click's ask.
-    q(scene_js("""
+    q(
+        scene_js("""
         var b = findFirst(root, function (o) { return o.chooserKind !== undefined && ('' + o.mediaId) === 't1'; });
         if (!b) return false;
         b.chooserPickTier("LOSSLESS");
@@ -454,7 +461,8 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         b.chooserToggle("cover_file");
         b.confirmChooser();
         return true;
-    """))
+    """)
+    )
     settle(250)
     parked = getattr(bridge, "_chooser_refetch_pins", {}).get(("track", "t1"))
     if parked is None:
@@ -526,7 +534,10 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     # activeFocusOnTab.
     q("queueDrawer.close()")
     settle(250)
-    hidden = list(json.loads(q(scene_js("""
+    hidden = list(
+        json.loads(
+            q(
+                scene_js("""
         var pop = findObject(root, "chooserPopover");
         var out = [];
         function walk(o) {
@@ -543,7 +554,10 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         }
         if (pop) walk(pop.contentItem);
         return JSON.stringify(out);
-    """))))
+    """)
+            )
+        )
+    )
     if hidden:
         problems.append(f"controls inside the closed Chooser keep a tab stop: {hidden}")
 
@@ -553,13 +567,17 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     # only exist after a first open). The guard keeps a surface that went
     # missing from passing the walk vacuously.
     settle(100)
-    built = json.loads(q(scene_js("""
+    built = json.loads(
+        q(
+            scene_js("""
         var pop = findObject(root, "chooserPopover");
         return JSON.stringify({ pop: pop !== null,
                                 drawer: queueDrawer.contentItem !== null,
                                 popOpen: pop ? pop.visible : false,
                                 drawerOpen: queueDrawer.visible });
-    """)))
+    """)
+        )
+    )
     if not built["pop"] or not built["drawer"] or built["popOpen"] or built["drawerOpen"]:
         problems.append(f"the closed surfaces are not ready for the Tab walk: {built}")
     else:

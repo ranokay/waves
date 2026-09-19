@@ -59,9 +59,11 @@ dev = [
   "pytest>=9.0.1,<10",
   "deptry>=0.25.1,<0.26",
   "pre-commit>=4.5.0,<5",
+  # Pinned so the pre-commit hooks (which run this environment's ruff) and CI
+  # lint with one version; Dependabot may bump it like any other dev tool.
+  "ruff==0.16.8",
   "pyupgrade>=3.21.2,<4",
   "pillow>=12.0.0,<13",
-  "black>=26.5.1,<27",
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
   # bump invalidates it (docs/dependency-updates.md).
   "nuitka==2.8.4",
@@ -144,6 +146,10 @@ select = [
   "PGH",
   # pyupgrade
   "UP",
+  # perflint
+  "PERF",
+  # refurb
+  "FURB",
   # ruff
   "RUF",
   # tryceratops
@@ -329,30 +335,3 @@ ignore = [
 # the first mount will not list, so it intentionally shells out to the system's
 # own mount and umount binaries (S603, fixed argv, no shell).
 "waves/waves_ui/smb_relist.py" = ["S603"]
-
-[tool.black]
-# https://github.com/psf/black
-# The target versions are the syntax FLOOR, not the support matrix: code must
-# parse on 3.12, so the formatter must not emit 3.13+/3.14-only syntax. Black 26
-# also warns and skips its AST safety check when a target is newer than the
-# interpreter running it (CI and the pre-commit hook run 3.13), so targeting
-# 3.14 would buy nothing and cost the check.
-target-version = ["py312", "py313"]
-line-length = 120
-color = true
-preview = true
-
-exclude = '''
-/(
-    \.git
-    | \.mypy_cache
-    | \.tox
-    | \.venv
-    | _build
-    | buck-out
-    | build
-    | dist
-    | env
-    | venv
-)/
-'''

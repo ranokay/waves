@@ -125,9 +125,9 @@ def test_logout_flips_the_flag_before_deleting_the_snapshot():
     stub = _LogoutStub()
     with patch.object(backend_mod.os, "remove", side_effect=lambda p: stub.events.append(("remove", p))):
         stub.logout()
-    assert stub.events.index(("logged_in", False)) < stub.events.index(
-        ("remove", stub._page_cache_path)
-    ), "a worker mid-save must already see logged_in False when the file goes"
+    assert stub.events.index(("logged_in", False)) < stub.events.index(("remove", stub._page_cache_path)), (
+        "a worker mid-save must already see logged_in False when the file goes"
+    )
 
 
 # Finding 42: capped-cache eviction is serialized (two workers evicting
@@ -378,9 +378,9 @@ def test_a_failed_probe_cleanup_still_reads_as_writable(tmp_path):
 
 
 def test_the_download_worker_follows_a_healed_base():
-    assert (
-        "dl.path_base = self.settings.data.download_base_path" in BACKEND_SRC
-    ), "after the gate passes, the job must adopt the (possibly healed) setting"
+    assert "dl.path_base = self.settings.data.download_base_path" in BACKEND_SRC, (
+        "after the gate passes, the job must adopt the (possibly healed) setting"
+    )
 
 
 # Finding 53: liveness is stamped for the path that was proven, and a landing

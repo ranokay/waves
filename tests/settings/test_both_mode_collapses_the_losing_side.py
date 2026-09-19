@@ -86,8 +86,8 @@ def _queue(albums, recs, mode, ranks=None):
     ranks = ranks or {}
     bridge = WavesBridge.__new__(WavesBridge)
     bridge._waves_prefs = {"explicit_mode": mode}
-    bridge._merge_recs_factory = lambda: (lambda album: recs[id(album)])
-    bridge._merge_rank_fn = lambda: (lambda obj: ranks.get(str(getattr(obj, "id", "")), 1))
+    bridge._merge_recs_factory = lambda: lambda album: recs[id(album)]
+    bridge._merge_rank_fn = lambda: lambda obj: ranks.get(str(getattr(obj, "id", "")), 1)
     # One release, so the split and the collapse are what is under test rather
     # than the edition keying.
     with patch("waves.waves_ui.backend._edition_base_key", lambda album: "one release"):

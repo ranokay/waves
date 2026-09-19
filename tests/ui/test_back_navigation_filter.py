@@ -124,9 +124,9 @@ def test_filter_is_installed_on_the_content_item_not_the_window():
     src = _APP_PY.read_text(encoding="utf-8")
     assert "root_objects[0].installEventFilter(bridge)" not in src
     assert "app.installEventFilter(bridge)" not in src
-    assert re.search(
-        r"contentItem\(\).*\n.*installEventFilter\(bridge\)", src
-    ), "the swipe filter belongs on the content item"
+    assert re.search(r"contentItem\(\).*\n.*installEventFilter\(bridge\)", src), (
+        "the swipe filter belongs on the content item"
+    )
 
 
 def test_search_select_all_rearms_on_window_activation():
@@ -138,9 +138,9 @@ def test_search_select_all_rearms_on_window_activation():
     QWindow signal the swallow does not touch."""
     main = QML_MAIN.read_text(encoding="utf-8")
     assert "onAppActiveChanged: if (appActive && activeFocus)" in main
-    assert (
-        main.count("searchField.selectAll()") >= 2
-    ), "the focus-transition select-all and the window-activation re-arm must both exist"
+    assert main.count("searchField.selectAll()") >= 2, (
+        "the focus-transition select-all and the window-activation re-arm must both exist"
+    )
 
 
 def test_side_buttons_are_a_root_tap_handler_accepting_only_those_two():
@@ -149,7 +149,7 @@ def test_side_buttons_are_a_root_tap_handler_accepting_only_those_two():
         r"Item \{\s*\n\s*anchors\.fill: parent\s*\n\s*z: 1000000\s*\n\s*TapHandler \{\s*\n"
         r"\s*acceptedButtons: Qt\.BackButton \| Qt\.ForwardButton\s*\n(?P<body>.*?)\n\s*\}\s*\n\s*\}",
         qml,
-        re.S,
+        re.DOTALL,
     )
     assert m, "the root back/forward handler is gone or changed shape"
     body = m.group("body")

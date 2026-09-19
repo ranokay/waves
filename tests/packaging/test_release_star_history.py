@@ -217,6 +217,6 @@ def test_a_nested_excluded_path_is_refused_even_on_a_large_tree(sandbox: Path):
         check=False,
     )
     assert proc.returncode != 0, (
-        "the guard passed a nested excluded path; it failed open:\n" f"{proc.stdout}\n{proc.stderr}"
+        f"the guard passed a nested excluded path; it failed open:\n{proc.stdout}\n{proc.stderr}"
     )
     assert "survived the exclude step" in proc.stderr

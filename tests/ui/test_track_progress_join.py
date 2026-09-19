@@ -131,9 +131,9 @@ def test_each_row_reads_its_own_percentage():
     _register(dl, progress, "2", "Symphony No. 9, Fourth Movement", 90.0)
     stub = _PollStub(dl, _running_rows("1", "2"), total=2)
     stub._poll_track_progress()
-    assert stub.queueTrackPct.emits == [
-        (7, {"1": 10.0, "2": 90.0})
-    ], "each row must read its own track, not whichever task registered last"
+    assert stub.queueTrackPct.emits == [(7, {"1": 10.0, "2": 90.0})], (
+        "each row must read its own track, not whichever task registered last"
+    )
 
 
 def test_the_album_rollup_is_not_inflated_by_the_mirrored_values():

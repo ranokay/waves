@@ -60,7 +60,7 @@ _NOISE_RE = re.compile(
     r'|"(?:\\.|[^"\\])*"'  # double-quoted string
     r"|'(?:\\.|[^'\\])*'"  # single-quoted string
     r"|`(?:\\.|[^`\\])*`",  # template literal
-    re.S,
+    re.DOTALL,
 )
 
 
@@ -125,9 +125,9 @@ def test_both_card_styles_caption_through_the_one_that_wears_it() -> None:
         spans = _spans(clean, rf"\bcomponent\s+{card}\s*:\s*[\w.]+\s*\{{")
         assert len(spans) == 1, f"component {card} not found"
         s, e = spans[0]
-        assert re.search(
-            r"\bCardCaption\s*\{", clean[s:e]
-        ), f"{card} no longer captions through CardCaption, so it no longer wears the NEW mark"
+        assert re.search(r"\bCardCaption\s*\{", clean[s:e]), (
+            f"{card} no longer captions through CardCaption, so it no longer wears the NEW mark"
+        )
 
 
 def test_no_surface_decides_newness_for_itself() -> None:
@@ -161,9 +161,9 @@ def test_the_dot_breathes_on_the_render_thread_and_only_when_seen() -> None:
     assert "OpacityAnimator" in body, "the NEW dot no longer breathes on the render thread"
     for gui in ("NumberAnimation", "PropertyAnimation", "ColorAnimation"):
         assert gui not in body, f"the NEW dot animates with {gui}, which ticks on the GUI thread"
-    assert re.search(
-        r"breathing\s*:\s*visible\s*&&\s*root\.onScreen\b", body
-    ), "the NEW dot's breath is no longer gated on being visible and on screen"
+    assert re.search(r"breathing\s*:\s*visible\s*&&\s*root\.onScreen\b", body), (
+        "the NEW dot's breath is no longer gated on being visible and on screen"
+    )
 
 
 def test_the_window_is_a_fortnight() -> None:

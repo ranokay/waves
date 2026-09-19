@@ -36,7 +36,9 @@ _ROW_JS = """
     }
 """
 
-_ROW_STATE = _ROW_JS + """
+_ROW_STATE = (
+    _ROW_JS
+    + """
     var row = rowFor(__QID__);
     if (!row) return "";
     var retry = findFirst(row, function (o) { return o.objectName === "queueRetryMark"; });
@@ -55,6 +57,7 @@ _ROW_STATE = _ROW_JS + """
                               cancel.mapToItem(null, cancel.width / 2, cancel.height / 2).y] : null
     });
 """
+)
 
 
 def _row_state(qid: int) -> str:

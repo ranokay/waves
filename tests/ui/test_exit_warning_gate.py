@@ -32,12 +32,12 @@ def _src() -> str:
 
 def test_onclosing_vetoes_only_when_it_should():
     src = _src()
-    m = re.search(r"onClosing: function \(close\) \{(.*?)\n    \}", src, re.S)
+    m = re.search(r"onClosing: function \(close\) \{(.*?)\n    \}", src, re.DOTALL)
     assert m, "onClosing must be the function form that receives the close event"
     body = m.group(1)
     assert "_winPersist()" in body, "the geometry flush must survive the rewrite"
     assert "close.accepted = false" in body
-    cond = re.search(r"if \((.*?)\) \{", body, re.S)
+    cond = re.search(r"if \((.*?)\) \{", body, re.DOTALL)
     assert cond, "the veto must be conditional"
     for clause in (
         "root.activeQueueCount > 0",
@@ -49,7 +49,7 @@ def test_onclosing_vetoes_only_when_it_should():
 
 def test_buttons_do_what_they_say():
     src = _src()
-    gate = re.search(r"id: exitGate\b.*?\n    \}\n", src, re.S)
+    gate = re.search(r"id: exitGate\b.*?\n    \}\n", src, re.DOTALL)
     assert gate, "the exit gate must exist in Main.qml"
     body = gate.group(0)
     # EXIT ANYWAY: confirm, then a real re-close. Exactly one close() call.
@@ -67,14 +67,14 @@ def test_mute_flag_lives_in_qsettings_not_waves_json():
     src = _src()
     # In the "setup" Settings block: waves.json is written wholesale, a new
     # key there would be pinned into every existing user's file.
-    setup = re.search(r'id: setupSettings; category: "setup"(.*?)\n    \}', src, re.S)
+    setup = re.search(r'id: setupSettings; category: "setup"(.*?)\n    \}', src, re.DOTALL)
     assert setup, "the setup Settings block must exist"
     assert "property bool exitWarnMuted: false" in setup.group(1)
 
 
 def test_count_copy_tracks_the_live_queue_badge():
     src = _src()
-    gate = re.search(r"id: exitGate\b.*?\n    \}\n", src, re.S)
+    gate = re.search(r"id: exitGate\b.*?\n    \}\n", src, re.DOTALL)
     body = gate.group(0)
     # The message counts the same number as the header badge (queued+running
     # from the bridge), singular and plural.
@@ -87,7 +87,7 @@ def test_gate_stacks_above_the_video_overlay():
     """The close veto opens this gate; with a video full-screen (z 999) a
     default-z gate paints underneath and the window looks un-closable."""
     src = _src()
-    m = re.search(r"id: exitGate\b.*?z: (\d+)", src, re.S)
+    m = re.search(r"id: exitGate\b.*?z: (\d+)", src, re.DOTALL)
     assert m and int(m.group(1)) > 999, "the exit gate must stack above the video overlay"
 
 
@@ -96,7 +96,7 @@ def test_copy_survives_the_last_download_finishing():
     keep it open rather than auto-close); the body must never read
     '0 downloads are still running.'"""
     src = _src()
-    gate = re.search(r"id: exitGate\b.*?\n    \}\n", src, re.S)
+    gate = re.search(r"id: exitGate\b.*?\n    \}\n", src, re.DOTALL)
     assert gate
     body = gate.group(0)
     assert "All downloads finished." in body

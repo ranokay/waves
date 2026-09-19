@@ -143,8 +143,7 @@ def _run_scenario() -> int:
 
     if not opened:
         print(
-            "the dwell never completed while the pointer rested on the thumbnail "
-            f"(hovered={q('root.peekThumbHover')})",
+            f"the dwell never completed while the pointer rested on the thumbnail (hovered={q('root.peekThumbHover')})",
             file=sys.stderr,
         )
         return EXIT_REGRESSED

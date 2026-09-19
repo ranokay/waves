@@ -30,6 +30,6 @@ def test_pyproject_version_matches_app_version():
 
 def test_app_version_is_a_plain_release_number():
     """X.Y.Z only: the tag CI builds is this string with a 'v' in front."""
-    assert re.fullmatch(
-        r"\d+\.\d+\.\d+", __version__
-    ), f"__version__ {__version__!r} is not a plain X.Y.Z release number"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", __version__), (
+        f"__version__ {__version__!r} is not a plain X.Y.Z release number"
+    )

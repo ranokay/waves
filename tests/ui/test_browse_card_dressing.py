@@ -52,8 +52,8 @@ def _stub(*, stamp=0, presence=None, on_presence=None):
     s = _Stub()
     s._library_stamp = stamp
     s._browse_gen = 7
-    s.libraryAlbumPresence = lambda *a, **k: (on_presence() if on_presence else None) or (
-        presence or {"present": False}
+    s.libraryAlbumPresence = lambda *a, **k: (
+        (on_presence() if on_presence else None) or (presence or {"present": False})
     )
     s.collectionOwnership = lambda _id: False
     return s

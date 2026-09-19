@@ -110,7 +110,9 @@ _SWITCH_FIND = """
   var sw = col ? findFirst(col, function (o) { return typeof o.toggle === "function"; }) : null;
 """
 
-_SCROLL_TO_APPLE_SWITCH = scene_js(_SWITCH_FIND + """
+_SCROLL_TO_APPLE_SWITCH = scene_js(
+    _SWITCH_FIND
+    + """
   if (!sw) return "none";
   var flick = findFirst(settingsPage, function (o) {
     return o.contentY !== undefined && o.contentHeight !== undefined && o.height > 0;
@@ -121,12 +123,16 @@ _SCROLL_TO_APPLE_SWITCH = scene_js(_SWITCH_FIND + """
     flick.contentY = Math.max(0, Math.min(y - flick.height / 2, maxY));
   }
   return "scrolled";
-""")
+"""
+)
 
-_APPLE_SWITCH = scene_js(_SWITCH_FIND + """
+_APPLE_SWITCH = scene_js(
+    _SWITCH_FIND
+    + """
   if (!sw) return null;
   return sw.mapToItem(null, sw.width / 2, sw.height / 2);
-""")
+"""
+)
 
 
 def _text_point(text: str) -> str:

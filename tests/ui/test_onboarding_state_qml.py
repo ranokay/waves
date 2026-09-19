@@ -302,7 +302,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
                 "the chip did not appear after Skip: "
                 f"answered={q('setupSettings.firstRunAnswered')} signedIn={q('root.signedIn')} "
                 f"dismissed={q('setupSettings.setupChipDismissed')} "
-                f"apple={q('String(root.appleLight.state || \'\')')}"
+                f"apple={q("String(root.appleLight.state || '')")}"
             )
         if q(_object_point("headerRow", "setupChip")) in ("", None):
             failures.append("the chip did not render on screen")

@@ -10794,7 +10794,7 @@ class WavesBridge(LibraryMixin, QObject):
                     # Which half is missing decides what the button shows: the
                     # surviving half's rec (stereo preferred, it names the
                     # tier), marked out-of-date (DOWNLOAD until both land).
-                    show = rec_st if rec_st else rec_at
+                    show = rec_st or rec_at
                     if show:
                         return {**show, "up_to_date": False}
                     return {"owned": False}
@@ -11375,22 +11375,22 @@ class WavesBridge(LibraryMixin, QObject):
                     }
                 )
         else:
-            for st in sorted(reg.values(), key=lambda r: (r.get("vol", 1), r.get("num", 0))):
-                rows.append(
-                    {
-                        "id": st.get("id", ""),
-                        "num": 0,
-                        "title": st.get("title", ""),
-                        "duration": st.get("duration", ""),
-                        "status": st.get("status", "pending"),
-                        "pct": float(st.get("pct", 0.0)),
-                        "quality": st.get("quality", ""),
-                        "expected": st.get("expected", ""),
-                        "owned": st.get("owned", ""),
-                        "reason": st.get("reason", ""),
-                        "quarantined": bool(st.get("quarantined", False)),
-                    }
-                )
+            rows.extend(
+                {
+                    "id": st.get("id", ""),
+                    "num": 0,
+                    "title": st.get("title", ""),
+                    "duration": st.get("duration", ""),
+                    "status": st.get("status", "pending"),
+                    "pct": float(st.get("pct", 0.0)),
+                    "quality": st.get("quality", ""),
+                    "expected": st.get("expected", ""),
+                    "owned": st.get("owned", ""),
+                    "reason": st.get("reason", ""),
+                    "quarantined": bool(st.get("quarantined", False)),
+                }
+                for st in sorted(reg.values(), key=lambda r: (r.get("vol", 1), r.get("num", 0)))
+            )
             for i, row in enumerate(rows, start=1):
                 row["num"] = i
         self.queueTracksLoaded.emit(int(qid), rows)
@@ -12498,7 +12498,7 @@ class WavesBridge(LibraryMixin, QObject):
             str(getattr(release, "year", "") or ""),
             int(getattr(media, "duration", 0) or 0),
         )
-        return claim if claim else False
+        return claim or False
 
     def _build_download(
         self,
@@ -17270,8 +17270,7 @@ class WavesBridge(LibraryMixin, QObject):
                         except Exception:
                             tracks = []
                         out.extend((track, full_album, True) for track in tracks)
-                    for track in page.get("tracks") or []:
-                        out.append((track, None, False))
+                    out.extend((track, None, False) for track in page.get("tracks") or [])
                     return out
             except Exception:
                 logger.debug("Standalone Apple resolve failed for %s", kind, exc_info=True)
@@ -20407,9 +20406,7 @@ class WavesBridge(LibraryMixin, QObject):
                     break
             # An empty resolve is meaningful (a conditional token that shows
             # nothing here); label the state instead of a blank cell.
-            groups[group].append(
-                {"token": "{" + tok + "}", "sample": sample if sample else "(empty here)", "desc": desc}
-            )
+            groups[group].append({"token": "{" + tok + "}", "sample": sample or "(empty here)", "desc": desc})
         result = [{"group": g, "tokens": groups[g]} for g in _TEMPLATE_TOKEN_GROUPS]
         self._tpl_tokens_cache = result
         return result

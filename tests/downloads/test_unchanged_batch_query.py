@@ -109,7 +109,7 @@ def test_a_changed_folder_is_still_rescanned_alone(tmp_path):
     idx.refresh(lib)
     reads.clear()
 
-    grown = sorted(tags)[0]
+    grown = min(tags)
     open(os.path.join(grown, "03.flac"), "w").close()
     os.utime(grown, (os.stat(grown).st_atime, os.stat(grown).st_mtime + 10))
 

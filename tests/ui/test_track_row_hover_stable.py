@@ -34,7 +34,9 @@ _TRACK_JS = """
     });
 """
 
-_GEOMETRY_BODY = _TRACK_JS + """
+_GEOMETRY_BODY = (
+    _TRACK_JS
+    + """
     if (!row) return "";
     var pair = findFirst(row, function (o) {
         if (o.compact !== true) return false;
@@ -61,6 +63,7 @@ _GEOMETRY_BODY = _TRACK_JS + """
         hovered: hoverArea ? !!hoverArea.containsMouse : false
     });
 """
+)
 
 _ROW_CENTER_BODY = _TRACK_JS + "    return row ? row.mapToItem(null, row.width / 2, row.height / 2) : null;"
 
@@ -157,9 +160,11 @@ def _run_scenario() -> int:
     failures = []
     if not after["hovered"]:
         failures.append("the pointer never engaged the row's own hover area")
-    for field in ("rowH", "rowW", "pairX", "pairY", "pairW", "dlX", "dlY", "dlW"):
-        if after[field] != before[field]:
-            failures.append(f"{field} moved under hover: {before[field]} -> {after[field]}")
+    failures.extend(
+        f"{field} moved under hover: {before[field]} -> {after[field]}"
+        for field in ("rowH", "rowW", "pairX", "pairY", "pairW", "dlX", "dlY", "dlW")
+        if after[field] != before[field]
+    )
     if not after["pairVisible"]:
         failures.append("the standalone pair is hidden")
     if not (after["lyrics"] and after["cover"]):

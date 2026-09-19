@@ -52,7 +52,7 @@ def _manifest(s_elements: str, n_urls: int, mime: str = "application/dash+xml") 
 
 def _tidalapi_url_count(repeats: list[int]) -> int:
     """The URL count tidalapi's DashInfo.get_urls would generate."""
-    return 2 + sum(r if r else 1 for r in repeats)
+    return 2 + sum(r or 1 for r in repeats)
 
 
 def test_short_track_single_s_is_overgenerated_by_one():

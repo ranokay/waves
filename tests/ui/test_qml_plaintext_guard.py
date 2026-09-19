@@ -522,10 +522,9 @@ def test_remotetext_instances_do_not_reenable_richtext():
                     f"{fname}:{line_no}: RemoteText overrides textFormat to "
                     f"{tf.strip()!r}: re-enables rich text (auto-<img>) on remote data"
                 )
-    assert (
-        not violations
-    ), "RemoteText instance(s) re-enabling rich text; drop the override or set " "Text.PlainText:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "RemoteText instance(s) re-enabling rich text; drop the override or set "
+        "Text.PlainText:\n" + "\n".join(violations)
     )
 
 
@@ -568,7 +567,7 @@ def test_dynamic_text_is_plaintext():
     # Vacuous-pass tripwire: Main.qml binds dozens of dynamic labels; if this
     # collapses the scanner silently broke and would never catch a regression.
     assert audited >= 30, (
-        f"only found {audited} dynamic Text/Label elements in Main.qml; the scanner " "is probably broken."
+        f"only found {audited} dynamic Text/Label elements in Main.qml; the scanner is probably broken."
     )
     assert not violations, (
         "Dynamic strings rendered on the rich-text-capable AutoText default: a "
@@ -633,9 +632,11 @@ def test_allowlist_still_points_at_elements():
         attached: list[str] = [slug for _ln, _t, _s, slug in _iter_audit_elements(src) if slug is not None]
         # Markers appearing anywhere in the file, attached or not.
         all_markers = DELIBERATE_MARKER.findall(src)
-        for slug in all_markers:
-            if (fname, slug) not in DELIBERATE_RICHTEXT:
-                problems.append(f"{fname}#{slug}: marker in source but not in DELIBERATE_RICHTEXT")
+        problems.extend(
+            f"{fname}#{slug}: marker in source but not in DELIBERATE_RICHTEXT"
+            for slug in all_markers
+            if (fname, slug) not in DELIBERATE_RICHTEXT
+        )
         if len(all_markers) != len(set(all_markers)):
             problems.append(f"{fname}: duplicate marker slug(s): each must be unique per file")
         orphans = set(all_markers) - set(attached)

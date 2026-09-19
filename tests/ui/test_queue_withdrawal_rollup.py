@@ -727,9 +727,9 @@ def test_cancelling_a_member_leaves_a_never_started_discography_queued():
 
     s._bump_artist_group("m1", None, "failed")
 
-    assert s.downloadState.emits == [
-        ("art1", "queued")
-    ], "nothing had started, so the rollup must keep the face that carries its cancel"
+    assert s.downloadState.emits == [("art1", "queued")], (
+        "nothing had started, so the rollup must keep the face that carries its cancel"
+    )
 
 
 def test_cancelling_a_member_leaves_a_never_started_folder_queued():

@@ -41,7 +41,7 @@ CANONICAL_CLAUSES = (
 
 def _gate_source() -> str:
     src = QML_MAIN.read_text(encoding="utf-8")
-    m = re.search(r"id: termsGate\b(.*?)\n    // =====", src, re.S)
+    m = re.search(r"id: termsGate\b(.*?)\n    // =====", src, re.DOTALL)
     assert m, "the terms gate must exist in Main.qml"
     return m.group(1)
 
@@ -49,7 +49,7 @@ def _gate_source() -> str:
 def _gate_body_text() -> str:
     """The gate's body string, QML concatenation collapsed."""
     gate = _gate_source()
-    m = re.search(r'text: ("Waves is a personal.*?TIDAL account\..*?)\n\s*\}', gate, re.S)
+    m = re.search(r'text: ("Waves is a personal.*?TIDAL account\..*?)\n\s*\}', gate, re.DOTALL)
     assert m, "the gate body text must be a plain concatenation of string literals"
     parts = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
     return "".join(parts).replace('\\"', '"').replace("\\n", "\n")
@@ -72,7 +72,7 @@ def test_gate_drops_the_retired_framing():
 
 def test_gate_body_stays_plain_text():
     gate = _gate_source()
-    m = re.search(r"id: termsBody\b(.*?)\n\s{20}\}", gate, re.S)
+    m = re.search(r"id: termsBody\b(.*?)\n\s{20}\}", gate, re.DOTALL)
     assert m and "textFormat: Text.PlainText" in m.group(1)
 
 
@@ -109,7 +109,7 @@ def test_accepted_version_is_persisted_alongside_the_flag():
     src = QML_MAIN.read_text(encoding="utf-8")
     assert f'readonly property string termsVersion: "{TERMS_VERSION}"' in src
     assert f'readonly property string termsVersionStamp: "{TERMS_STAMP}"' in src
-    m = re.search(r"Settings \{\s*id: legalSettings;.*?\n    \}", src, re.S)
+    m = re.search(r"Settings \{\s*id: legalSettings;.*?\n    \}", src, re.DOTALL)
     assert m, "the legal Settings block must exist"
     block = m.group(0)
     assert "property bool termsAccepted: false" in block
@@ -141,9 +141,9 @@ def test_an_older_accepted_version_re_prompts():
     assert m, "termsCurrentAccepted must AND the flag with a stored-version match"
     # Every gate that sequences around the terms must key on the same test, or
     # a revision re-prompt stacks with (or is masked by) its neighbours.
-    assert (
-        src.count("root.termsCurrentAccepted") >= 3
-    ), "the terms gate, the ffmpeg gate and the update opt-in card must all read termsCurrentAccepted"
+    assert src.count("root.termsCurrentAccepted") >= 3, (
+        "the terms gate, the ffmpeg gate and the update opt-in card must all read termsCurrentAccepted"
+    )
     for stale in ("&& legalSettings.termsAccepted\n", "&& !legalSettings.termsAccepted"):
         assert stale not in src, "a gate still reads the bare boolean and ignores the stored version"
 

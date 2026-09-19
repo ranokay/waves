@@ -117,7 +117,9 @@ _PILL_POINT_BODY = _PILL_JS + "    return pill ? pill.mapToItem(null, pill.width
 
 # Bring the pill's row inside the Settings viewport before clicking: the
 # providers card is taller than the window and the Apple band sits below it.
-_SCROLL_TO_PILL_BODY = _PILL_JS + """
+_SCROLL_TO_PILL_BODY = (
+    _PILL_JS
+    + """
     if (!pill) return "none";
     var flick = findFirst(settingsPage, function (o) {
         return o.contentY !== undefined && o.contentHeight !== undefined && o.height > 0;
@@ -127,6 +129,7 @@ _SCROLL_TO_PILL_BODY = _PILL_JS + """
     flick.contentY = Math.max(0, Math.min(y - 200, flick.contentHeight - flick.height));
     return "scrolled";
 """
+)
 
 # Every label the Settings page renders, so the check names the step labels
 # the live state says should be there.

@@ -483,11 +483,10 @@ class OwnershipStore:
         lock.
         """
         self._conn.execute(
-            "UPDATE downloads SET audio_type = 'atmos'"
-            " WHERE audio_type IS NULL AND upper(audio_mode) = 'DOLBY_ATMOS'"
+            "UPDATE downloads SET audio_type = 'atmos' WHERE audio_type IS NULL AND upper(audio_mode) = 'DOLBY_ATMOS'"
         )
         self._conn.execute(
-            "UPDATE downloads SET audio_type = 'stereo'" " WHERE audio_type IS NULL AND upper(audio_mode) = 'STEREO'"
+            "UPDATE downloads SET audio_type = 'stereo' WHERE audio_type IS NULL AND upper(audio_mode) = 'STEREO'"
         )
 
     def _backfill_integrity_skip_ids(self) -> None:

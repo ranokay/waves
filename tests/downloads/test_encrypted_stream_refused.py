@@ -67,9 +67,9 @@ def test_encrypted_track_writes_no_extra_file(downloader: Download, tmp_path: pa
 
     downloader._download_postprocess(True, path_file, [], media, _manifest(encrypted=True), None)
 
-    assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "song.flac"
-    ], "refusing an encrypted stream must not create any additional file"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["song.flac"], (
+        "refusing an encrypted stream must not create any additional file"
+    )
 
 
 def test_plain_track_still_succeeds(downloader: Download, tmp_path: pathlib.Path) -> None:

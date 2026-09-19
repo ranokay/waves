@@ -201,7 +201,9 @@ def _run_scenario() -> int:
         # merge falls back to the registry, which holds the running track).
         q(row + ".qtoggle()")
         settle(400)
-        titles = str(q("""(function () {
+        titles = str(
+            q(
+                """(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -211,7 +213,9 @@ def _run_scenario() -> int:
                 }
                 walk(ROW);
                 return out.join(' | ');
-            })()""".replace("ROW", row)))
+            })()""".replace("ROW", row)
+            )
+        )
         if "Opener" not in titles:
             bad.append(f"the expanded {kind} row does not list its running track (ledger: {titles!r})")
 
