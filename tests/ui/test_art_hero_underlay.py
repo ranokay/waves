@@ -15,13 +15,27 @@ from support.paths import QML_MAIN
 MAIN_QML = QML_MAIN.read_text()
 
 
-def _body(start: str, end: str = "\n    }") -> str:
-    assert start in MAIN_QML, start
-    return MAIN_QML.split(start, 1)[1].split(end, 1)[0]
+def _body(start: str, end: str = "}") -> str:
+    """The body of the block whose opening line carries `start` (matched
+    stripped): from just after that line to the next line that is exactly
+    `end` at the block's own indentation. qmlformat owns the indent width, so
+    the pins may not embed one."""
+    sig, close = start.strip(), end.strip()
+    lines = MAIN_QML.splitlines()
+    for i, line in enumerate(lines):
+        if not line.strip().startswith(sig):
+            continue
+        indent = len(line) - len(line.lstrip())
+        for j in range(i + 1, len(lines)):
+            candidate = lines[j]
+            if candidate.strip().startswith(close) and len(candidate) - len(candidate.lstrip()) == indent:
+                return "\n".join(lines[i + 1 : j])
+        raise AssertionError(f"no closing {end!r} after {start!r}")
+    raise AssertionError(start)
 
 
 def _component(name: str) -> str:
-    return _body(f"    component {name}:", "\n    component ")
+    return _body(f"component {name}:", "component ")
 
 
 def _flat(text: str) -> str:
@@ -102,7 +116,10 @@ def test_item_header_paints_as_a_skeleton_before_the_payload():
 
 
 def test_wire_hint_sits_under_the_skeleton():
-    hint = MAIN_QML.split("id: browseDrillHint", 1)[1].split("\n                    }", 1)[0]
+    # The id sits a property deeper than the instance's own close, so this one
+    # pins the close's indentation rather than using _body (which closes at the
+    # matched line's own indent).
+    hint = MAIN_QML.split("id: browseDrillHint", 1)[1].split("\n          }", 1)[0]
     assert "topPad: browseItemHeader.visible ? 40 : 96" in hint
 
 
@@ -160,7 +177,7 @@ def test_hover_prefetch_is_one_shared_dwell_that_warms_the_hero_and_asks_the_bac
     assert "if (!root.signedIn) return" in _flat(body)
     assert 'root.browsePageKey === "item:" + k' in body, "hovering the page you are on must not refetch it"
     assert "hoverPrefetchTimer.interval = dwell > 0 ? dwell : 200" in body, "a caller may ask for a longer rest"
-    timer = MAIN_QML.split("id: hoverPrefetchTimer", 1)[1].split("\n    }", 1)[0]
+    timer = MAIN_QML.split("id: hoverPrefetchTimer", 1)[1].split("\n  }", 1)[0]
     assert "interval: 200" in timer
     assert 'root.warmArt("" + c.art, kind === "artist" ? 300 : 360, kind === "artist" ? 300 : 360)' in timer, (
         "the item hero decodes at 360 (180px Art), the artist photo at 300 (150px)"
@@ -231,7 +248,7 @@ def test_the_warm_pool_reports_a_row_ready_only_once_its_pixmap_decoded():
     assert 'warmArtModel.append({ u: "" + u, w: w, h: h, ready: false })' in _flat(MAIN_QML)
     # The same locator the cache-key guard uses (test_qml_art_cache_keys.py):
     # the pool block through the Item that wraps its Repeater.
-    match = re.search(r"ListModel\s*\{\s*id:\s*warmArtModel\s*\}(.{0,2600}?)\n    \}\n", MAIN_QML, re.DOTALL)
+    match = re.search(r"ListModel\s*\{\s*id:\s*warmArtModel\s*\}(.{0,2600}?)\n  \}\n", MAIN_QML, re.DOTALL)
     assert match, "could not find the warm pool Repeater under warmArtModel"
     pool = match.group(1)
     assert "status === Image.Ready" in pool

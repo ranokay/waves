@@ -19,7 +19,7 @@ import re
 from threading import Lock
 from types import SimpleNamespace
 
-from support.paths import QML_MAIN, REPO_ROOT
+from support.paths import QML_DIR, QML_MAIN, REPO_ROOT
 
 from waves.waves_ui.backend import WavesBridge
 
@@ -104,21 +104,21 @@ def test_every_pre_queue_hand_off_uses_the_same_word():
 
 def test_the_buttons_draw_preparing_as_a_wait_not_a_download():
     src = QML_MAIN.read_text()
+    db = (QML_DIR / "DownloadButton.qml").read_text()
     # Each of the three surfaces that shows a download state derives one flag,
     # so a state that is not yet queued can never fall through to the idle or
     # the running arm.
-    assert 'st === "queued" || st === "preparing"' in src
+    assert 'st === "queued" || st === "preparing"' in db
     assert 'di.st === "queued" || di.st === "preparing"' in src
     assert 'bc.dlSt === "queued" || bc.dlSt === "preparing"' in src
     # The dot matrix stays pinned to a real download.
-    assert re.search(r'active:\s*db\.st === "running"', src)
+    assert re.search(r'active:\s*db\.st === "running"', db)
 
 
 def test_only_a_real_queue_row_can_be_cancelled():
     """The X keeps its space while preparing (so the label does not shift when
     the row lands) but is invisible and inert: there is nothing to cancel yet,
     and a press that silently does nothing is worse than no X at all."""
-    src = QML_MAIN.read_text()
-    body = src.split("component DownloadButton", 1)[1].split("component FolderTile", 1)[0]
+    body = (QML_DIR / "DownloadButton.qml").read_text()
     assert 'opacity: db.st === "queued" ? 1 : 0' in body
     assert 'enabled: db.st === "queued"' in body

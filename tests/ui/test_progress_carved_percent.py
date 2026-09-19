@@ -125,11 +125,14 @@ def test_ledger_and_scrub_matrices_do_not_carve():
     queue ledger's two-row bar, the preview scrubber, the compact running
     row) stay plain bars, and a word on fewer than five rows is ignored by
     the component itself; only the download face fades its edges."""
-    src = QML_MAIN.read_text()
+    db = (QML_DIR / "DownloadButton.qml").read_text()
     dm = (QML_DIR / "DotMatrix.qml").read_text()
     assert 'rows >= 5 && word !== ""' in dm, "DotMatrix must gate the word on five rows or more"
-    assert src.count("word: db.pct >= 0") == 1, "exactly one site (the download face) sets the word"
-    assert src.count("edgeFadeW: 26") == 1, "exactly one site (the download face) fades its edges"
+    # The download face lives in DownloadButton.qml since #315; the one-site
+    # rule spans the tree, so count both files.
+    both = db + QML_MAIN.read_text()
+    assert both.count("word: db.pct >= 0") == 1, "exactly one site (the download face) sets the word"
+    assert both.count("edgeFadeW: 26") == 1, "exactly one site (the download face) fades its edges"
 
 
 # ---------------------------------------------------------------------------

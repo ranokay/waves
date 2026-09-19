@@ -25,6 +25,7 @@ from waves.waves_ui.updater import AppUpdater, UpdaterError
 
 BACKEND_SRC = (REPO_ROOT / "waves" / "waves_ui" / "backend.py").read_text()
 MAIN_QML = (REPO_ROOT / "waves" / "waves_ui" / "qml" / "Main.qml").read_text()
+QUEUE_STACK_QML = (REPO_ROOT / "waves" / "waves_ui" / "qml" / "QueueStack.qml").read_text()
 BRIDGE_MD = (REPO_ROOT / "waves" / "waves_ui" / "BRIDGE.md").read_text()
 
 
@@ -170,5 +171,5 @@ def test_artcard_runs_no_unrenderable_collection_rollups():
 
 
 def test_queuestack_step_is_gated_on_visible():
-    line = next(ln for ln in MAIN_QML.splitlines() if "readonly property int step:" in ln)
+    line = next(ln for ln in QUEUE_STACK_QML.splitlines() if "readonly property int step:" in ln)
     assert "visible ?" in line, "step must not depend on marchTick while hidden"

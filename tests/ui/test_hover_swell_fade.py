@@ -101,13 +101,13 @@ def _run_scenario() -> int:
         loop.exec()
 
     settle(120)
-    # A real HoverSwell from Main.qml. Inline components only resolve through
-    # their containing type, hence the Main.HoverSwell reference and the
-    # directory import (which has to be relative: absolute paths are rejected).
+    # A real HoverSwell: its own component file since #315, resolved through
+    # the qml directory import (which has to be relative: absolute paths are
+    # rejected). This measures whatever the app actually ships, not a copy.
     try:
         swell = q(
             'Qt.createQmlObject(\'import QtQuick; import "."; '
-            'Main.HoverSwell { width: 40; height: 20 }\', this, "swellProbe")'
+            'HoverSwell { width: 40; height: 20 }\', this, "swellProbe")'
         )
     except RuntimeError as exc:
         print(f"could not instantiate HoverSwell: {exc}", file=sys.stderr)
