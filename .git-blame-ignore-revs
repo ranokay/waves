@@ -1,0 +1,5 @@
+# Reformat-only commits, ignored by blame: GitHub honours this file in its
+# blame view; locally, git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# style(ui): format the QML tree with qmlformat (#329)
+0e7f1d2f5689151eed174298317eb54848733343
