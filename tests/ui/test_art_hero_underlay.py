@@ -1,9 +1,10 @@
 """The item page hero paints the clicked card's cover the frame the page is
 keyed, and a hovered card has its page warmed before the click.
 
-Source-level pins on Main.qml for the plumbing a headless load cannot see
-fail: the art hint travelling beside the title hint, the Art stand-in layer
-gating the "art: GET" box, the skeleton header, and the hover prefetch wiring.
+Source-level pins on Main.qml and Art.qml (the cover box split out in #315
+slice 3) for the plumbing a headless load cannot see fail: the art hint
+travelling beside the title hint, the Art stand-in layer gating the
+"art: GET" box, the skeleton header, and the hover prefetch wiring.
 """
 
 from __future__ import annotations

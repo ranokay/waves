@@ -25,10 +25,11 @@ loaded from scratch.
 
 HOW THIS STAYS FIXED
 --------------------
-The rule is mechanical: every ``Image`` in Main.qml that opts into the pixmap
-cache (``cache: true``) must request its pixels the same way, so that one
-warmed entry serves all of them. A new art surface that crops differently, or
-a pool that stops cropping, fails here rather than silently halving the cache
+The rule is mechanical: every ``Image`` in the cover files (Main.qml and
+Art.qml, the cover box split out in #315) that opts into the pixmap cache
+(``cache: true``) must request its pixels the same way, so that one warmed
+entry serves all of them. A new art surface that crops differently, or a
+pool that stops cropping, fails here rather than silently halving the cache
 hit rate. The other key components (``sourceSize``, and the properties below
 that would split the key just as quietly) are pinned alongside it.
 

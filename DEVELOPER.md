@@ -8,7 +8,7 @@ Ten minutes here saves an afternoon of reverse-engineering.
 ```
 ┌─────────────────────────────  Waves (GUI)  ─────────────────────────────┐
 │                                                                         │
-│  qml/Main.qml ── the entire main window (views, cards, queue, player)   │
+│  qml/Main.qml ── the main window (views, cards, queue, player)          │
 │  qml/SettingsPage.qml ── schema-driven settings editor                  │
 │        │                                    ▲                           │
 │        │ calls slots on `waves`             │ signals (queued,          │

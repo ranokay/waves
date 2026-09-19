@@ -1,6 +1,9 @@
 import QtQuick
 
 // Explicit-content mark, in the app's mono data voice.
+// Split out of Main.qml (#315). The palette values are local copies of
+// Main.qml's static literals — the SettingsPage.qml convention; keep them
+// in step if the palette changes.
 Rectangle {
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.

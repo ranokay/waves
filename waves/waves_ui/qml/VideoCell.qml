@@ -1,7 +1,7 @@
 import QtQuick
 
-// One art-first video result cell: the 16:9 thumbnail with the title,
-// quality tag riding the title's end, artist and release date baseline-
+// One art-first video result cell: the 16:9 thumbnail carrying the quality
+// spec on its corner, then the title, artist and release date baseline-
 // aligned below, and the download button centred on the text block. The
 // search VIDEOS grid and the artist page's VIDEOS section are the same
 // cell at whatever width their grid hands it.
