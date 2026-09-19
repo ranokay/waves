@@ -22,6 +22,10 @@ run = "uv lock --check && uv run --locked --all-extras pre-commit run -a && uv r
 description = "qmllint the QML tree (errors fail; warnings are summarized)"
 run = "bash tools/lint_qml.sh"
 
+[tasks.format-qml]
+description = "Format the QML tree with qmlformat (style pinned by .qmlformat.ini; pass files to format just those)"
+run = "bash tools/format_qml.sh"
+
 [tasks.typecheck]
 description = "ty over the shipped package (waves/)"
 run = "uv run --locked --all-extras ty check"
