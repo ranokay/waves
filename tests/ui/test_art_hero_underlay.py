@@ -116,7 +116,10 @@ def test_item_header_paints_as_a_skeleton_before_the_payload():
 
 
 def test_wire_hint_sits_under_the_skeleton():
-    hint = _body("id: browseDrillHint")
+    # The id sits a property deeper than the instance's own close, so this one
+    # pins the close's indentation rather than using _body (which closes at the
+    # matched line's own indent).
+    hint = MAIN_QML.split("id: browseDrillHint", 1)[1].split("\n          }", 1)[0]
     assert "topPad: browseItemHeader.visible ? 40 : 96" in hint
 
 

@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.paths import QML_DIR
+from support.paths import QML_DIR, QML_MAIN
 from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, run_scenario
 
 
@@ -64,7 +64,10 @@ def test_only_the_download_face_pads_its_edges():
     assert "readonly property int fillTotal: fillRows * fillCols" in dm, "the fill must be sized by the pad-free area"
     assert re.search(r"litCount:.*\* fillTotal\)", dm), "litCount must count over fillTotal, not the whole grid"
     assert "pulsing: !pad &&" in dm, "a pad must never carry the pulse"
-    assert db.count("padCols: 2") == 1 and db.count("mirrorPads: true") == 1, (
+    # The download face lives in DownloadButton.qml since #315; the one-site
+    # rule spans the tree, so count both files.
+    both = db + QML_MAIN.read_text()
+    assert both.count("padCols: 2") == 1 and both.count("mirrorPads: true") == 1, (
         "exactly one site (the download face) pads its edges, with design V's values"
     )
     face = db[db.index('objectName: "dbMatrix"') :]

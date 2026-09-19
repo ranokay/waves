@@ -128,8 +128,11 @@ def test_ledger_and_scrub_matrices_do_not_carve():
     db = (QML_DIR / "DownloadButton.qml").read_text()
     dm = (QML_DIR / "DotMatrix.qml").read_text()
     assert 'rows >= 5 && word !== ""' in dm, "DotMatrix must gate the word on five rows or more"
-    assert db.count("word: db.pct >= 0") == 1, "exactly one site (the download face) sets the word"
-    assert db.count("edgeFadeW: 26") == 1, "exactly one site (the download face) fades its edges"
+    # The download face lives in DownloadButton.qml since #315; the one-site
+    # rule spans the tree, so count both files.
+    both = db + QML_MAIN.read_text()
+    assert both.count("word: db.pct >= 0") == 1, "exactly one site (the download face) sets the word"
+    assert both.count("edgeFadeW: 26") == 1, "exactly one site (the download face) fades its edges"
 
 
 # ---------------------------------------------------------------------------
