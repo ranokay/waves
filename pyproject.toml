@@ -67,7 +67,10 @@ dev = [
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
   # bump invalidates it (docs/dependency-updates.md).
   "nuitka==2.8.4",
-  "basedpyright>=1.40.1",
+  # Exact pin: ty is pre-1.0 and its diagnostics shift between releases;
+  # Dependabot may bump it like any other dev tool, and a bump re-baselines
+  # the rule exceptions below.
+  "ty==0.0.82",
 ]
 
 [build-system]
@@ -77,28 +80,39 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 
-[tool.basedpyright]
-# Hand-written UI code is typed; the inherited engine is exempt (its own
-# concern, and typing it is a separate campaign). Basic mode only: the point
-# is catching slot/signal, call/return and assignment mistakes in the bridge,
-# not a full annotation campaign.
-typeCheckingMode = "basic"
-include = ["waves/waves_ui"]
-pythonVersion = "3.12"
+[tool.ty]
+# ty (Astral's type checker, in beta) over the hand-written UI code; the
+# inherited engine is exempt (its own concern, and typing it is a separate
+# campaign). The point is catching slot/signal, call/return and assignment
+# mistakes in the bridge, not a full annotation campaign.
 
-# Downgraded, with reasons. All three stay visible as warnings; the gate
-# still fails on every other category. Burn-down is tracked in issue #319.
-# - reportAttributeAccessIssue: catalog/engine objects cross the provider seam
-#   as plain objects by design (the row-dict contract), so their members are
-#   intentionally opaque to the checker until the engine seam is protocolized.
-# - reportArgumentType: the same seam, plus PySide6/Qt stubs (property type
+[tool.ty.src]
+include = ["waves/waves_ui"]
+
+[tool.ty.terminal]
+# Warnings stay visible (the burn-down ledger) but do not fail the gate, the
+# same shape as the basedpyright warning level this replaces: errors exit
+# non-zero, warnings exit zero.
+error-on-warning = false
+
+# Downgraded, with reasons. All three stay visible as warnings, like ty's own
+# default-warn rules (redundant-condition, deprecated); error-level categories
+# fail the gate. Burn-down is tracked in issue #319, retargeted to ty.
+# - unresolved-attribute: catalog/engine objects cross the provider seam as
+#   plain objects by design (the row-dict contract), and the cooperative
+#   library mixin's methods resolve `self` to the mixin, so its Qt members
+#   read as unresolved. Covers the basedpyright reportAttributeAccessIssue
+#   and reportOptionalMemberAccess noise.
+# - invalid-argument-type: the same seam, plus PySide6/Qt stubs (property type
 #   strings like "QVariant", QByteArray buffers) and the urllib/tidalapi
-#   stubs' narrow parameter types.
-# - reportOptionalMemberAccess: dynamic per-job attributes on engine objects
-#   (`download.write_count`) that the checker sees as Optional.
-reportAttributeAccessIssue = "warning"
-reportArgumentType = "warning"
-reportOptionalMemberAccess = "warning"
+#   stubs' narrow parameter types. Covers reportArgumentType.
+# - invalid-attribute-access: PySide6 Signal descriptors accessed from the
+#   library mixin's methods; the descriptor's typed receiver is QObject and
+#   the mixin itself is not one (the WavesBridge subclass is).
+[tool.ty.rules]
+unresolved-attribute = "warn"
+invalid-argument-type = "warn"
+invalid-attribute-access = "warn"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

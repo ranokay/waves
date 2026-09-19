@@ -7,15 +7,20 @@ try:
 
     @dataclass
     class ProgressBars:
-        item: QtCore.Signal
-        item_name: QtCore.Signal
-        list_item: QtCore.Signal
-        list_name: QtCore.Signal
+        item: QtCore.SignalInstance
+        item_name: QtCore.SignalInstance
+        list_item: QtCore.SignalInstance
+        list_name: QtCore.SignalInstance
 
 except ModuleNotFoundError:
-
+    # Qt-less imports (the engine side): same shape so call sites type-check
+    # against either branch (the values are only emitted where Qt exists).
+    @dataclass
     class ProgressBars:
-        pass
+        item: object
+        item_name: object
+        list_item: object
+        list_name: object
 
 
 @dataclass

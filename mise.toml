@@ -23,8 +23,8 @@ description = "qmllint the QML tree (errors fail; warnings are summarized)"
 run = "bash tools/lint_qml.sh"
 
 [tasks.typecheck]
-description = "basedpyright (basic) over the hand-written UI code"
-run = "uv run --locked --all-extras basedpyright"
+description = "ty over the hand-written UI code"
+run = "uv run --locked --all-extras ty check"
 
 [tasks.test]
 description = "Run the whole suite (unit tests, incl. the QML guards)"
