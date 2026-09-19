@@ -347,7 +347,7 @@ class _CrumbDumpHandler(logging.Handler):
             lines = [f"---- breadcrumb trail (last {len(trail)} events) ----", *trail, "---- end trail ----"]
             for line in lines:
                 rec = logging.LogRecord("waves.crumbs", logging.WARNING, "", 0, line, None, None)
-                rec._crumb_dump = True  # type: ignore[attr-defined]
+                rec._crumb_dump = True
                 self._target.handle(rec)
 
 

@@ -145,8 +145,8 @@ lockfile is the environment and drift fails the run.
 - `mise run typecheck` — ty (Astral's type checker, pinned while in beta) over
   `waves/waves_ui`. The bridge's dynamic-seam categories (attribute access,
   argument types, mixin Signal descriptors) are warnings, with the reasons in
-  `pyproject.toml`; every other category fails, warnings do not. The burn-down
-  is tracked in issue #319.
+  `pyproject.toml`; error-level diagnostics fail the gate, warnings do not
+  (ty's own default-warn rules included). The burn-down is tracked in #319.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
 `uv pip uninstall tidaler`, then `mise run install` (or

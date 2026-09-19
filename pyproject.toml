@@ -67,8 +67,9 @@ dev = [
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
   # bump invalidates it (docs/dependency-updates.md).
   "nuitka==2.8.4",
-  # Exact pin: ty is pre-1.0 and its diagnostics shift between releases, so a
-  # bump re-baselines the rule exceptions below and is a deliberate change.
+  # Exact pin: ty is pre-1.0 and its diagnostics shift between releases;
+  # Dependabot may bump it like any other dev tool, and a bump re-baselines
+  # the rule exceptions below.
   "ty==0.0.82",
 ]
 
@@ -94,8 +95,9 @@ include = ["waves/waves_ui"]
 # non-zero, warnings exit zero.
 error-on-warning = false
 
-# Downgraded, with reasons. All three stay visible as warnings; every other
-# category fails. Burn-down is tracked in issue #319, retargeted to ty.
+# Downgraded, with reasons. All three stay visible as warnings, like ty's own
+# default-warn rules (redundant-condition, deprecated); error-level categories
+# fail the gate. Burn-down is tracked in issue #319, retargeted to ty.
 # - unresolved-attribute: catalog/engine objects cross the provider seam as
 #   plain objects by design (the row-dict contract), and the cooperative
 #   library mixin's methods resolve `self` to the mixin, so its Qt members
