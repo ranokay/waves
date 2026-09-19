@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
+from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario, scoped_q
 from support.qml_probe import scene_js
 
 _ROW_JS = """
@@ -81,6 +81,10 @@ def _run_scenario() -> int:
         return booted
     root, q, settle, bridge = booted
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def tap(point) -> None:
         """One real click at a scene point (plain MouseAreas, not gates)."""
         from PySide6.QtCore import QPoint, Qt
@@ -125,8 +129,8 @@ def _run_scenario() -> int:
     settle(900)
 
     failures = []
-    stereo_state = json.loads(str(q(_row_state(stereo)) or "{}"))
-    atmos_state = json.loads(str(q(_row_state(atmos)) or "{}"))
+    stereo_state = json.loads(str(qd(_row_state(stereo)) or "{}"))
+    atmos_state = json.loads(str(qd(_row_state(atmos)) or "{}"))
     if (stereo_state.get("tier"), stereo_state.get("status")) != ("LOSSLESS", "done"):
         failures.append(f"the finished stereo row reads {stereo_state}")
     if (atmos_state.get("tier"), atmos_state.get("status")) != ("ATMOS", "failed"):
@@ -149,9 +153,9 @@ def _run_scenario() -> int:
         tap(atmos_state["retryPoint"])
     if started != [atmos]:
         failures.append(f"the retry started {started}, wanted only the failed version {[atmos]}")
-    if q(_row_state(atmos)):
+    if qd(_row_state(atmos)):
         failures.append("the retried version stayed in the queue")
-    if json.loads(str(q(_row_state(stereo)) or "{}")).get("status") != "done":
+    if json.loads(str(qd(_row_state(stereo)) or "{}")).get("status") != "done":
         failures.append("retrying the Atmos version moved the finished stereo row")
 
     # The X on another queued row cancels just that row. Cancel removes the
@@ -159,14 +163,14 @@ def _run_scenario() -> int:
     third = bridge._enqueue("Dual Track Copy", "track", media_id="tidal:1", artist="Lab", audio_type="stereo")
     bridge._set_queue_status(third, "queued")
     settle(300)
-    third_state = json.loads(str(q(_row_state(third)) or "{}"))
+    third_state = json.loads(str(qd(_row_state(third)) or "{}"))
     if not third_state.get("cancelPoint"):
         failures.append(f"the queued row has no cancel control: {third_state}")
     else:
         tap(third_state["cancelPoint"])
-    if q(_row_state(third)):
+    if qd(_row_state(third)):
         failures.append("the cancel X did not remove its queued row")
-    if json.loads(str(q(_row_state(stereo)) or "{}")).get("status") != "done":
+    if json.loads(str(qd(_row_state(stereo)) or "{}")).get("status") != "done":
         failures.append("cancelling another row moved the finished stereo row")
 
     # After a restart the per-version answers stand, through the bridge's own

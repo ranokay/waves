@@ -32,6 +32,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 
@@ -136,6 +137,10 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def settle(ms: int) -> None:
         loop = QEventLoop()
         QTimer.singleShot(ms, loop.quit)
@@ -153,7 +158,7 @@ def _run_scenario() -> int:
     qid = bridge._enqueue("Album A", "album", media_id="m1", collection=True, tracks=3)
     bridge.queueChanged.emit(list(bridge._queue))
     settle(120)
-    if not bool(q("queueList.itemAtIndex(0) !== null")):
+    if not bool(qd("queueList.itemAtIndex(0) !== null")):
         print("no drawer row", file=sys.stderr)
         return EXIT_PRECONDITION
     bridge._merge_queue_tracks(
@@ -173,7 +178,7 @@ def _run_scenario() -> int:
     settle(400)
 
     got = str(
-        q("""(function () {
+        qd("""(function () {
             var out = [];
             function walk(o) {
                 if (!o) return;

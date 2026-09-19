@@ -59,6 +59,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 
@@ -114,6 +115,10 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def settle(ms: int) -> None:
         loop = QEventLoop()
         QTimer.singleShot(ms, loop.quit)
@@ -138,10 +143,10 @@ def _run_scenario() -> int:
 
     def pill_tier() -> str:
         """The tier the instantiated row actually renders."""
-        return str(q("(function(){ var it = queueList.itemAtIndex(0); return it ? '' + it.tier : '<no row>' })()"))
+        return str(qd("(function(){ var it = queueList.itemAtIndex(0); return it ? '' + it.tier : '<no row>' })()"))
 
     def pill_mix() -> int:
-        return int(q("(function(){ var it = queueList.itemAtIndex(0); return it ? it.tierMix.length : -1 })()"))
+        return int(qd("(function(){ var it = queueList.itemAtIndex(0); return it ? it.tierMix.length : -1 })()"))
 
     def deliver(track_id: int, tier: str, status: str = "done") -> None:
         """Report one track the way a real download does: through the bridge's
@@ -226,7 +231,7 @@ def _run_scenario() -> int:
     # Every tier cell the expanded row renders, in order, with whether it is
     # showing faded (a promise) or full (a delivery).
     ledger = str(
-        q("""(function () {
+        qd("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;

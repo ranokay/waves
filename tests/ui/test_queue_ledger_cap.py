@@ -42,6 +42,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 # Comfortably past the ceiling, and not a multiple of it, so an off-by-one in
@@ -101,6 +102,10 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def settle(ms: int) -> None:
         loop = QEventLoop()
         QTimer.singleShot(ms, loop.quit)
@@ -126,7 +131,7 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
     def rows_built() -> int:
         """How many ledger delegates actually EXIST, which is the cost."""
         return int(
-            q("""(function () {
+            qd("""(function () {
                 var n = 0;
                 function walk(o) {
                     if (!o) return;
@@ -141,7 +146,7 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
 
     def more_line() -> str:
         return str(
-            q("""(function () {
+            qd("""(function () {
                 var out = '';
                 function walk(o) {
                     if (!o) return;
@@ -168,7 +173,7 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
     # A collection far past the ceiling. Collapsed and unhovered first: the
     # cost of a row nobody opened must be zero, whatever its size.
     qid = seed(BIG, "playlist", "Enormous Mixtape")
-    if not bool(q("queueList.itemAtIndex(0) !== null")):
+    if not bool(qd("queueList.itemAtIndex(0) !== null")):
         print("no drawer row", file=sys.stderr)
         return EXIT_PRECONDITION
     built = rows_built()

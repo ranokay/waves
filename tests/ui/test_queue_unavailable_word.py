@@ -33,6 +33,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 # The reported album's shape once the fix is in: some tracks landed, one was
@@ -101,6 +102,10 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def settle(ms: int) -> None:
         loop = QEventLoop()
         QTimer.singleShot(ms, loop.quit)
@@ -134,7 +139,7 @@ def _run_scenario() -> int:
     settle(400)
 
     words = str(
-        q("""(function () {
+        qd("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -153,7 +158,7 @@ def _run_scenario() -> int:
     # 2. UNAVAILABLE must not wear the failure red: the two states call for
     #    different things from the reader, and only one of them can be retried.
     colors = str(
-        q("""(function () {
+        qd("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;

@@ -43,6 +43,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 
@@ -104,6 +105,10 @@ def _run_scenario() -> int:
         QTimer.singleShot(ms, loop.quit)
         loop.exec()
 
+    # The header's buttons live inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming their ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     q("root.width = 1200")
     q("root.height = 800")
     q("root.visible = true")
@@ -121,32 +126,32 @@ def _run_scenario() -> int:
     if int(q("queueModel.count")) != 0:
         print(f"the scenario started with {q('queueModel.count')} queued rows", file=sys.stderr)
         return EXIT_PRECONDITION
-    if bool(q("queuePauseBtn.visible")):
+    if bool(qd("queuePauseBtn.visible")):
         print("PAUSE is showing with an empty queue, so this proves nothing", file=sys.stderr)
         return EXIT_PRECONDITION
-    if not bool(q("queueCloseBtn.visible")):
+    if not bool(qd("queueCloseBtn.visible")):
         bad.append("the close button is hidden when the queue is empty, which is when it is needed most")
 
     # 4. Square, and the same height as the worded buttons it sits beside.
-    w = float(q("queueCloseBtn.width"))
-    h = float(q("queueCloseBtn.height"))
+    w = float(qd("queueCloseBtn.width"))
+    h = float(qd("queueCloseBtn.height"))
     if abs(w - h) > 0.51:
         bad.append(f"the close button is {w:.0f}x{h:.0f}, not square")
     if w < 24:
         bad.append(f"the close button collapsed to {w:.0f}px wide: the glyph has no room")
-    pause_h = float(q("queuePauseBtn.height"))
+    pause_h = float(qd("queuePauseBtn.height"))
     if abs(h - pause_h) > 0.51:
         bad.append(f"the close button stands {h:.0f}px against PAUSE's {pause_h:.0f}: the row is ragged")
 
     # 3. Last in the row, to the right of PAUSE (which is measured even hidden).
-    close_x = float(q("queueCloseBtn.mapToItem(null, 0, 0).x"))
-    pause_x = float(q("queuePauseBtn.mapToItem(null, 0, 0).x"))
+    close_x = float(qd("queueCloseBtn.mapToItem(null, 0, 0).x"))
+    pause_x = float(qd("queuePauseBtn.mapToItem(null, 0, 0).x"))
     if close_x <= pause_x:
         bad.append(f"the close button sits at x={close_x:.0f}, left of PAUSE at x={pause_x:.0f}")
 
     # 1. A real click on its own pixels shuts the drawer.
-    cx = int(q("queueCloseBtn.mapToItem(null, queueCloseBtn.width / 2, queueCloseBtn.height / 2).x"))
-    cy = int(q("queueCloseBtn.mapToItem(null, queueCloseBtn.width / 2, queueCloseBtn.height / 2).y"))
+    cx = int(qd("queueCloseBtn.mapToItem(null, queueCloseBtn.width / 2, queueCloseBtn.height / 2).x"))
+    cy = int(qd("queueCloseBtn.mapToItem(null, queueCloseBtn.width / 2, queueCloseBtn.height / 2).y"))
     was_paused = bool(q("waves.paused"))
     QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(cx, cy))
     settle(400)
@@ -172,13 +177,13 @@ def _run_scenario() -> int:
     if int(q("queueModel.count")) < 1:
         print("could not put a row in the queue model", file=sys.stderr)
         return EXIT_PRECONDITION
-    if not bool(q("queueCloseBtn.visible")):
+    if not bool(qd("queueCloseBtn.visible")):
         bad.append("the close button disappeared once the queue had a row in it")
-    if not bool(q("queuePauseBtn.visible")):
+    if not bool(qd("queuePauseBtn.visible")):
         print("PAUSE did not appear for a queued row", file=sys.stderr)
         return EXIT_PRECONDITION
-    close_x = float(q("queueCloseBtn.mapToItem(null, 0, 0).x"))
-    pause_right = float(q("queuePauseBtn.mapToItem(null, 0, 0).x + queuePauseBtn.width"))
+    close_x = float(qd("queueCloseBtn.mapToItem(null, 0, 0).x"))
+    pause_right = float(qd("queuePauseBtn.mapToItem(null, 0, 0).x + queuePauseBtn.width"))
     if close_x < pause_right:
         bad.append(f"the close button at x={close_x:.0f} overlaps PAUSE, which ends at {pause_right:.0f}")
 

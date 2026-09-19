@@ -209,9 +209,10 @@ def test_two_scans_in_flight_announce_once_each_way():
 
 def test_the_drawer_stop_button_reads_scanning():
     # The binding itself: STOP shows for active rows OR a scan in flight.
+    # The drawer left Main.qml in #315 slice 4; read both trees.
     import re
 
-    src = QML_MAIN.read_text()
+    src = QML_MAIN.read_text() + (QML_MAIN.parent / "QueueDrawer.qml").read_text()
     stop = re.search(r'visible: ([^\n]*)\n\s*danger: true\n\s*label: "STOP"', src)
     assert stop, "the drawer's STOP button"
     assert "waves.scanning" in stop.group(1) and "activeQueueCount > 0" in stop.group(1)

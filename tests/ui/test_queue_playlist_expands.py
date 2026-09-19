@@ -34,6 +34,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 
@@ -168,6 +169,10 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def settle(ms: int) -> None:
         loop = QEventLoop()
         QTimer.singleShot(ms, loop.quit)
@@ -190,19 +195,19 @@ def _run_scenario() -> int:
         bridge._track_lifecycle(qid, {"id": "1", "num": 1, "title": "Opener", "status": "running"})
         settle(60)
         row = f"(function(){{ var n = queueList.count; for (var i = 0; i < n; i++) {{ var it = queueList.itemAtIndex(i); if (it && it.model && it.model.qid === {qid}) return it }} return null }})()"
-        if not bool(q(row + " !== null")):
+        if not bool(qd(row + " !== null")):
             print(f"no drawer row for the {kind} job", file=sys.stderr)
             return EXIT_PRECONDITION
-        if not bool(q(row + ".expandable")):
+        if not bool(qd(row + ".expandable")):
             bad.append(f"the {kind} row is not expandable")
             continue
         # Expand through the row's own toggle: that is the click path, and it
         # asks the bridge for the ordered list (empty here: no object, so the
         # merge falls back to the registry, which holds the running track).
-        q(row + ".qtoggle()")
+        qd(row + ".qtoggle()")
         settle(400)
         titles = str(
-            q(
+            qd(
                 """(function () {
                 var out = [];
                 function walk(o) {

@@ -53,6 +53,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 
@@ -114,6 +115,11 @@ def _run_scenario() -> int:
         QTimer.singleShot(ms, loop.quit)
         loop.exec()
 
+    # The grip and its glow live inside QueueDrawer.qml (#315 slice 4):
+    # evaluate their expressions in that file's own scope. The width-save
+    # debounce stays on the root, so it keeps the root-scope evaluator.
+    qd = scoped_q(q, "queueDrawer.background")
+
     q("root.width = 1200")
     q("root.height = 800")
     q("root.visible = true")
@@ -131,14 +137,14 @@ def _run_scenario() -> int:
     bad: list[str] = []
 
     # 1. The handle is ON the border, not beside it, and runs the full height.
-    off_x = float(q("queueGrip.mapToItem(queueDrawer.background, 0, 0).x"))
-    off_y = float(q("queueGrip.mapToItem(queueDrawer.background, 0, 0).y"))
+    off_x = float(qd("queueGrip.mapToItem(queueDrawer.background, 0, 0).x"))
+    off_y = float(qd("queueGrip.mapToItem(queueDrawer.background, 0, 0).y"))
     if abs(off_x) > 0.01 or abs(off_y) > 0.01:
         bad.append(f"the handle sits at ({off_x:.1f}, {off_y:.1f}) from the drawer's corner, not on it")
-    if abs(float(q("queueGrip.height")) - float(q("queueDrawer.height"))) > 0.01:
+    if abs(float(qd("queueGrip.height")) - float(q("queueDrawer.height"))) > 0.01:
         bad.append("the handle does not span the drawer's full height")
     # Untouched, it adds nothing to the screen: the border is all there is.
-    if float(q("gripGlow.opacity")) > 0.01:
+    if float(qd("gripGlow.opacity")) > 0.01:
         bad.append("the edge glow is lit with the pointer nowhere near the edge")
 
     def drag_to(scene_x: int) -> None:
@@ -149,7 +155,7 @@ def _run_scenario() -> int:
     grab_x = int(q("queueDrawer.x")) + 6
     QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, QPoint(grab_x, 300))
     settle(40)
-    if not bool(q("gripMouse.pressed")):
+    if not bool(qd("gripMouse.pressed")):
         print("the handle never took the press", file=sys.stderr)
         return EXIT_PRECONDITION
     drag_to(grab_x - 200)
@@ -210,11 +216,11 @@ def _run_scenario() -> int:
     # Mid-collapse and settled: the light stays centred on the hand throughout.
     for ms in (120, 260, 500):
         settle(ms if ms == 120 else ms - 120)
-        centre = float(q("gripGlow.y + gripGlow.height / 2"))
+        centre = float(qd("gripGlow.y + gripGlow.height / 2"))
         if abs(centre - 700) > 25:
             bad.append(f"{ms}ms after letting go the glow sat at {centre:.0f}, not on the hand at 700")
-    if abs(float(q("gripGlow.height")) - 190) > 1:
-        bad.append(f"the glow did not settle back to its resting height: {float(q('gripGlow.height')):.0f}")
+    if abs(float(qd("gripGlow.height")) - 190) > 1:
+        bad.append(f"the glow did not settle back to its resting height: {float(qd('gripGlow.height')):.0f}")
 
     # 7. And remembered even when the quit lands inside the debounce, which is
     #    the ordinary gesture: widen the drawer, then close the app. The timer

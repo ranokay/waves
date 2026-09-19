@@ -262,7 +262,7 @@ def boot_main_qml(keep_settings: bool = False):
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
-        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
+        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine
         from PySide6.QtQuick import QQuickWindow
     except ImportError as exc:
         print(f"PySide6 unavailable: {exc}", file=sys.stderr)
@@ -297,13 +297,7 @@ def boot_main_qml(keep_settings: bool = False):
     if not isinstance(root, QQuickWindow):
         raise TypeError("Main.qml's root object is not a window")
 
-    def q(expr: str):
-        ctx = QQmlEngine.contextForObject(root)
-        e = QQmlExpression(ctx, root, expr)
-        r = e.evaluate()
-        if e.hasError():
-            raise RuntimeError(e.error().toString())
-        return r[0] if isinstance(r, tuple) else r
+    q = _evaluator(QQmlEngine.contextForObject(root), root)
 
     def settle(ms: int) -> None:
         loop = QEventLoop()
@@ -319,3 +313,34 @@ def boot_main_qml(keep_settings: bool = False):
     # The engine owns the tree; keep it referenced for the scenario's life.
     boot_main_qml.engine = engine  # type: ignore[attr-defined]
     return root, q, settle, bridge
+
+
+def _evaluator(context, scope):
+    """A QML-expression evaluator: evaluate, raise on error, unwrap tuples."""
+    from PySide6.QtQml import QQmlExpression
+
+    def q(expr: str):
+        e = QQmlExpression(context, scope, expr)
+        r = e.evaluate()
+        if e.hasError():
+            raise RuntimeError(e.error().toString())
+        return r[0] if isinstance(r, tuple) else r
+
+    return q
+
+
+def scoped_q(q, path: str):
+    """Evaluator for expressions naming a split-out component's internal ids.
+
+    Once a component leaves Main.qml (#315) its ids (``queueList``,
+    ``queueGrip``, ``logsText``, …) are no longer in the root's QML context,
+    so root-context expressions fail with a ReferenceError. Any object the
+    component file itself created carries that file's context — the drawer's
+    ``background`` is the stable handle — and expressions evaluated against
+    it resolve the component's ids exactly as the pre-move expressions did.
+    """
+
+    from PySide6.QtQml import QQmlEngine
+
+    scope = q(path)
+    return _evaluator(QQmlEngine.contextForObject(scope), scope)
