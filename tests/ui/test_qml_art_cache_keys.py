@@ -25,10 +25,11 @@ loaded from scratch.
 
 HOW THIS STAYS FIXED
 --------------------
-The rule is mechanical: every ``Image`` in Main.qml that opts into the pixmap
-cache (``cache: true``) must request its pixels the same way, so that one
-warmed entry serves all of them. A new art surface that crops differently, or
-a pool that stops cropping, fails here rather than silently halving the cache
+The rule is mechanical: every ``Image`` in the cover files (Main.qml and
+Art.qml, the cover box split out in #315) that opts into the pixmap cache
+(``cache: true``) must request its pixels the same way, so that one warmed
+entry serves all of them. A new art surface that crops differently, or a
+pool that stops cropping, fails here rather than silently halving the cache
 hit rate. The other key components (``sourceSize``, and the properties below
 that would split the key just as quietly) are pinned alongside it.
 
@@ -42,6 +43,12 @@ from __future__ import annotations
 import re
 
 from support.paths import QML_MAIN as QML
+
+# The cover surfaces live in Main.qml and Art.qml (the cover box split out in
+# #315): this guard must read both, or the app's most-used art surface stops
+# being scanned and its cache keys can drift from the pool's unnoticed.
+ART_QML = QML.parent / "Art.qml"
+COVER_FILES = (QML, ART_QML)
 
 # The one fill mode every cover surface uses. Covers are square and so are the
 # decode sizes asked for them, so cropping and stretching would paint the same
@@ -89,9 +96,14 @@ def _image_blocks(text: str) -> list[tuple[int, str]]:
     return blocks
 
 
-def _cached_image_blocks() -> list[tuple[int, str]]:
-    text = QML.read_text(encoding="utf-8")
-    return [(line, b) for line, b in _image_blocks(text) if re.search(r"\bcache\s*:\s*true\b", b)]
+def _cached_image_blocks() -> list[tuple[str, int, str]]:
+    """Every ``Image { ... }`` block that opts into the pixmap cache, in every
+    file that paints a cover: (file name, 1-based start line, block source)."""
+    blocks: list[tuple[str, int, str]] = []
+    for path in COVER_FILES:
+        text = path.read_text(encoding="utf-8")
+        blocks += [(path.name, line, b) for line, b in _image_blocks(text) if re.search(r"\bcache\s*:\s*true\b", b)]
+    return blocks
 
 
 def test_there_are_art_images_to_check() -> None:
@@ -102,10 +114,10 @@ def test_there_are_art_images_to_check() -> None:
 
 def test_every_cached_image_asks_for_the_same_pixels() -> None:
     """One warmed pixmap has to serve every surface that shows that cover."""
-    raw_lines = QML.read_text(encoding="utf-8").splitlines()
+    raw = {path.name: path.read_text(encoding="utf-8").splitlines() for path in COVER_FILES}
     wrong = []
-    for line, block in _cached_image_blocks():
-        span = raw_lines[line - 1 : line + block.count("\n")]
+    for fname, line, block in _cached_image_blocks():
+        span = raw[fname][line - 1 : line + block.count("\n")]
         joined = "\n".join(span)
         if (
             "assets/providers/" in joined
@@ -119,7 +131,7 @@ def test_every_cached_image_asks_for_the_same_pixels() -> None:
             continue
         found = re.search(r"\bfillMode\s*:\s*(Image\.\w+)", block)
         if not found or found.group(1) != ART_FILL_MODE:
-            wrong.append(f"Main.qml:{line} has fillMode {found.group(1) if found else '(unset, so Image.Stretch)'}")
+            wrong.append(f"{fname}:{line} has fillMode {found.group(1) if found else '(unset, so Image.Stretch)'}")
     assert not wrong, (
         "every cached Image must request its pixels the same way, or Qt stores it under its own "
         "pixmap-cache key and the warm pool cannot serve it:\n  " + "\n  ".join(wrong)
@@ -128,8 +140,8 @@ def test_every_cached_image_asks_for_the_same_pixels() -> None:
 
 def test_no_cached_image_splits_the_key_another_way() -> None:
     offenders = [
-        f"Main.qml:{line} sets {prop}"
-        for line, block in _cached_image_blocks()
+        f"{fname}:{line} sets {prop}"
+        for fname, line, block in _cached_image_blocks()
         for prop in KEY_SPLITTING_PROPS
         if re.search(rf"\b{prop}\s*:", block)
     ]

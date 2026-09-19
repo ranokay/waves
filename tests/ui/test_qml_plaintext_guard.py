@@ -47,6 +47,12 @@ from support.paths import QML_DIR
 #   DownloadButton.qml  the download control and its Chooser (split out of
 #                    Main.qml, #315 slice 2): `db.label` carries a remote artist
 #                    name and the provider tiles carry bridge descriptor names.
+#   Art.qml          the VideoCell closure (split out of Main.qml, #315 slice 3):
+#   PlayBadge.qml    Art renders every cover (titles/names ride its callers),
+#   BigVideoThumb.qml  BigVideoThumb/VideoCell render a video result's title,
+#   VideoCell.qml    artist, date and spec, ArtistLinks renders remote artist
+#   ArtistLinks.qml  names (and marks them), so all six ride the TIDAL set even
+#   ExplicitMark.qml where the element is local chrome today.
 #   BackToTop.qml    components split out of Main.qml (#315). They render local
 #   DotMatrix.qml    chrome only, so no remote marker matches today; they ride
 #   SnakeField.qml   the TIDAL set anyway so the STRUCTURAL PlainText rule
@@ -62,6 +68,12 @@ from support.paths import QML_DIR
 TIDAL_DATA_FILES = {
     "Main.qml",
     "DownloadButton.qml",
+    "Art.qml",
+    "PlayBadge.qml",
+    "BigVideoThumb.qml",
+    "VideoCell.qml",
+    "ArtistLinks.qml",
+    "ExplicitMark.qml",
     "BackToTop.qml",
     "DotMatrix.qml",
     "SnakeField.qml",
