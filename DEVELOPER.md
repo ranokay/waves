@@ -63,10 +63,11 @@ The pattern for anything slow, used by every slot in `backend.py`:
 
 ```python
 @Slot(str)
-def doThing(self, arg: str) -> None:      # called from QML
+def doThing(self, arg: str) -> None:  # called from QML
     def work():
-        result = something_blocking(arg)   # worker thread
-        self.thingLoaded.emit(result)      # Qt queues this to the GUI thread
+        result = something_blocking(arg)  # worker thread
+        self.thingLoaded.emit(result)  # Qt queues this to the GUI thread
+
     self.threadpool.start(Worker(work))
 ```
 
