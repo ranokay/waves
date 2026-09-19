@@ -32,7 +32,7 @@ def _bare(tmp_path, *, raises=None, returns=False, has_token=True):
     wt.token_from_storage = has_token
     # Dummy fixture values, not real credentials (bandit S106 false positive).
     wt.data = types.SimpleNamespace(
-        token_type="Bearer",  # noqa: S106 -- dummy fixture value, not a credential
+        token_type="Bearer",  # noqa: S106
         access_token="a",  # noqa: S106
         refresh_token="r",  # noqa: S106
         expiry_time=0,
