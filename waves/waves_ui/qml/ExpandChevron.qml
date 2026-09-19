@@ -25,22 +25,35 @@ Item {
     property color stroke: "#3dff6e"   // accent
     property color openBg: "#06210f"   // accent container (open tint)
     property color hoverBg: "#1d2128"  // surface3 (hover wash while collapsed)
-    implicitWidth: tile; implicitHeight: tile
+    implicitWidth: tile
+    implicitHeight: tile
 
     Rectangle {
         visible: chev.showTile
-        anchors.fill: parent; radius: parent.width * 0.3
+        anchors.fill: parent
+        radius: parent.width * 0.3
         color: chev.open ? chev.openBg : (chev.hovered ? chev.hoverBg : "transparent")
-        Behavior on color { ColorAnimation { duration: 220; easing.type: Easing.Bezier; easing.bezierCurve: [0.4, 0.0, 0.2, 1.0, 1.0, 1.0] } }
+        Behavior on color {
+            ColorAnimation {
+                duration: 220
+                easing.type: Easing.Bezier
+                easing.bezierCurve: [0.4, 0.0, 0.2, 1.0, 1.0, 1.0]
+            }
+        }
     }
     Shape {
         anchors.centerIn: parent
-        width: 19; height: 19
+        width: 19
+        height: 19
         antialiasing: true
         scale: chev.glyph / 19
         rotation: chev.open ? chev.openAngle : chev.closedAngle
         Behavior on rotation {
-            NumberAnimation { duration: 260; easing.type: Easing.Bezier; easing.bezierCurve: [0.4, 0.0, 0.2, 1.0, 1.0, 1.0] }
+            NumberAnimation {
+                duration: 260
+                easing.type: Easing.Bezier
+                easing.bezierCurve: [0.4, 0.0, 0.2, 1.0, 1.0, 1.0]
+            }
         }
         ShapePath {
             // Gate the stroke on effective visibility: a hidden QQuickShape's
@@ -49,11 +62,20 @@ Item {
             // My Music after the tier collapsed). Item.visible reads as the
             // EFFECTIVE value in QML, so this reliably blanks the orphan node.
             strokeColor: chev.visible ? chev.stroke : "transparent"
-            strokeWidth: 2.1; fillColor: "transparent"
-            capStyle: ShapePath.RoundCap; joinStyle: ShapePath.RoundJoin
-            startX: 4; startY: 7
-            PathLine { x: 9.5; y: 12.5 }
-            PathLine { x: 15; y: 7 }
+            strokeWidth: 2.1
+            fillColor: "transparent"
+            capStyle: ShapePath.RoundCap
+            joinStyle: ShapePath.RoundJoin
+            startX: 4
+            startY: 7
+            PathLine {
+                x: 9.5
+                y: 12.5
+            }
+            PathLine {
+                x: 15
+                y: 7
+            }
         }
     }
 }

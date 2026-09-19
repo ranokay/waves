@@ -29,10 +29,12 @@ Item {
     property real pulseLevel: 0.85
     Timer {
         running: dm.visible && dm.pulse && dm.pct < 100
-        interval: 50; repeat: true
+        interval: 50
+        repeat: true
         property real phase: 0
         onTriggered: {
-            phase = (phase + 0.05 / 1.04) % 1   // 1.04s breathe = 2 x 520ms
+            phase = (phase + 0.05 / 1.04) % 1
+            // 1.04s breathe = 2 x 520ms
             dm.pulseLevel = 0.28 + 0.57 * (0.5 + 0.5 * Math.cos(2 * Math.PI * phase))
         }
     }
@@ -51,7 +53,9 @@ Item {
             readonly property bool pulsing: dm.pulse && fillIndex === dm.litCount && dm.litCount < dm.total
             x: col * (dm.dot + dm.gap)
             y: rowTop * (dm.dot + dm.gap)
-            width: dm.dot; height: dm.dot; radius: 0   // sharp LED cells
+            width: dm.dot
+            height: dm.dot
+            radius: 0   // sharp LED cells
             color: dm.onColor
             opacity: pulsing ? dm.pulseLevel : (lit ? 1.0 : 0.16)
         }

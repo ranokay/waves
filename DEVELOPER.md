@@ -137,11 +137,16 @@ the live account group has no wrapper and never runs in CI. Every test and
 check task runs the command through `uv run --locked --all-extras`, so the
 lockfile is the environment and drift fails the run.
 
-`mise run check` also carries the two static gates:
+`mise run check` also carries the static gates:
 
 - `mise run lint-qml` — qmllint over `waves/waves_ui/qml`, also wired as a
   pre-commit hook for changed QML. Errors fail; the thousands of existing
   `[unqualified]` warnings are counted, not printed (they would bury errors).
+- `mise run format-qml` — qmlformat over `waves/waves_ui/qml`, styled by the
+  root `.qmlformat.ini` (the style is pinned there, not taken from Qt's
+  defaults). Also a pre-commit hook for changed QML: a commit that reformats
+  fails the hook, so re-stage the files and commit again. Pass file paths to
+  format just those.
 - `mise run typecheck` — ty (Astral's type checker, pinned while in beta) over
   the shipped package (`waves/`); tests and tools are outside the gate. The
   dynamic-seam categories (attribute access, argument types, mixin Signal

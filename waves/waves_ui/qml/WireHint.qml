@@ -55,37 +55,62 @@ Item {
     // appearance was therefore taking the prompt exit timing and every exit the
     // calm arrival one. A transition is picked by direction and cannot race.
     property real shown: 0
-    states: State { name: "up"; when: hint.active
-        PropertyChanges { target: hint; shown: 1 } }
+    states: State {
+        name: "up"
+        when: hint.active
+        PropertyChanges {
+            target: hint
+            shown: 1
+        }
+    }
     transitions: [
-        Transition { to: "up"
-            NumberAnimation { property: "shown"; duration: 260; easing.type: Easing.InOutSine } },
-        Transition { from: "up"
-            NumberAnimation { property: "shown"; duration: 190; easing.type: Easing.InOutSine } }
+        Transition {
+            to: "up"
+            NumberAnimation {
+                property: "shown"
+                duration: 260
+                easing.type: Easing.InOutSine
+            }
+        },
+        Transition {
+            from: "up"
+            NumberAnimation {
+                property: "shown"
+                duration: 190
+                easing.type: Easing.InOutSine
+            }
+        }
     ]
 
     // The stepped clock the swell derives its motion from. Restarted whenever
     // the hint appears, so each load begins at the top of the animation rather
     // than wherever the last one left off.
     property int tick: 0
-    onActiveChanged: if (active) tick = 0
+    onActiveChanged: if (active)
+        tick = 0
     Timer {
         running: hint.visible && hint.onScreen
-        interval: 50; repeat: true
+        interval: 50
+        repeat: true
         onTriggered: hint.tick = (hint.tick + 1) % 100000
     }
 
     Column {
         id: body
         y: hint.topPad
-        anchors.left: parent.left; anchors.right: parent.right
+        anchors.left: parent.left
+        anchors.right: parent.right
         opacity: hint.shown
         spacing: 20
 
         Text {
-            width: parent.width; horizontalAlignment: Text.AlignHCenter
-            textFormat: Text.PlainText; text: hint.phrase
-            color: hint.tint; font.pixelSize: 22; opacity: 0.88
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            textFormat: Text.PlainText
+            text: hint.phrase
+            color: hint.tint
+            font.pixelSize: 22
+            opacity: 0.88
         }
 
         Row {
@@ -107,11 +132,12 @@ Item {
                     readonly property real d: index - strip.head
                     // Sharp face, long wake: ahead of the head the light falls
                     // off fast, behind it a wake decays slowly.
-                    readonly property real lit: d > 0 ? Math.exp(-(d * d) / 2.4)
-                                                      : Math.exp(-(d * d) / 30.0)
+                    readonly property real lit: d > 0 ? Math.exp(-(d * d) / 2.4) : Math.exp(-(d * d) / 30.0)
                     // A shade larger than the download bars' 3px cells: this
                     // one carries a page, not a button.
-                    width: 4; height: 4; radius: 0   // sharp LED cells
+                    width: 4
+                    height: 4
+                    radius: 0   // sharp LED cells
                     color: hint.accent
                     opacity: 0.14 + 0.86 * lit
                 }

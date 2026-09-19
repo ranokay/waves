@@ -48,7 +48,9 @@ class TestCancelDiscardsInPlace:
         # The host still handles closed() for a programmatic close; the page
         # itself must not emit it, or CANCEL's old behavior creeps back in.
         body = _source()
-        body = body[body.index("signal closed()") + len("signal closed()") :]
+        m = re.search(r"signal closed(?:\(\))?\b", body)
+        assert m, "the closed signal declaration"
+        body = body[m.end() :]
 
         assert not re.search(r"\bclosed\(\)", body)
 

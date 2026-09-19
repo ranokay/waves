@@ -9,6 +9,8 @@ eight at four; SHOW ALL appears only past that count.
 
 from __future__ import annotations
 
+import re
+
 from support.paths import QML_MAIN
 
 MAIN = QML_MAIN.read_text(encoding="utf-8")
@@ -19,7 +21,7 @@ def _block(start: str, end: str) -> str:
 
 
 def test_the_video_grid_caps_at_whole_rows():
-    grid = _block("id: videoGrid", 'SearchSectionMore { section: "videos"')
+    grid = _block("id: videoGrid", 'section: "videos"')
     assert "readonly property int cap: cols * Math.ceil(5 / cols)" in grid
     assert (
         'root.searchRowVisible("videos", videosModel.count, index, group.isExpanded("videos"), videoGrid.cap)' in grid
@@ -27,8 +29,9 @@ def test_the_video_grid_caps_at_whole_rows():
 
 
 def test_show_all_for_videos_waits_for_the_rounded_count():
-    line = MAIN.split('SearchSectionMore { section: "videos"', 1)[1].split("\n", 1)[0]
-    assert "cap: videoGrid.cap" in line
+    m = re.search(r'SearchSectionMore \{\s*\n\s*section: "videos"\n(.*?)\n        \}', MAIN, re.DOTALL)
+    assert m, "the videos SHOW ALL instance moved"
+    assert "cap: videoGrid.cap" in m.group(1), "the videos SHOW ALL must use the grid-computed cap"
     more = _block("component SearchSectionMore: ShowAllLabel {", "\n    }")
     assert "property int cap: 5" in more and 'root.filterType === "all" && count > cap' in more
 

@@ -59,12 +59,18 @@ Item {
     property string word: ""
     property real wordReveal: 0
     readonly property var font3x5: ({
-        "0": ["111","101","101","101","111"], "1": ["010","110","010","010","111"],
-        "2": ["111","001","111","100","111"], "3": ["111","001","111","001","111"],
-        "4": ["101","101","111","001","001"], "5": ["111","100","111","001","111"],
-        "6": ["111","100","111","101","111"], "7": ["111","001","001","001","001"],
-        "8": ["111","101","111","101","111"], "9": ["111","101","111","001","111"],
-        "%": ["101","001","010","100","101"] })
+            "0": ["111", "101", "101", "101", "111"],
+            "1": ["010", "110", "010", "010", "111"],
+            "2": ["111", "001", "111", "100", "111"],
+            "3": ["111", "001", "111", "001", "111"],
+            "4": ["101", "101", "111", "001", "001"],
+            "5": ["111", "100", "111", "001", "111"],
+            "6": ["111", "100", "111", "101", "111"],
+            "7": ["111", "001", "001", "001", "001"],
+            "8": ["111", "101", "111", "101", "111"],
+            "9": ["111", "101", "111", "001", "111"],
+            "%": ["101", "001", "010", "100", "101"]
+        })
     // A glyph is five rows tall; in a taller grid it sits on the middle
     // five (the seven-row download face carries it on rows 1..5).
     readonly property bool wordOn: rows >= 5 && word !== "" && wordReveal > 0
@@ -81,14 +87,15 @@ Item {
     // the bar rather than a hole cut out of the button.
     property real wordPlate: 0.04
     function wordPlateAt(col, rowTop) {
-        return col >= wordZoneStart - 1 && col <= wordZoneStart + wordZoneW
-            && rowTop >= wordRowTop - 1 && rowTop <= wordRowTop + 5
+        return col >= wordZoneStart - 1 && col <= wordZoneStart + wordZoneW && rowTop >= wordRowTop - 1 && rowTop <= wordRowTop + 5
     }
     function wordOnAt(col, rowTop) {
         var z = col - wordZoneStart
-        if (z < 0 || z >= wordZoneW || z % 4 === 3) return false
+        if (z < 0 || z >= wordZoneW || z % 4 === 3)
+            return false
         var r = rowTop - wordRowTop
-        if (r < 0 || r > 4) return false
+        if (r < 0 || r > 4)
+            return false
         var g = font3x5[word.charAt(Math.floor(z / 4))]
         return g ? g[r].charAt(z % 4) === "1" : false
     }
@@ -127,19 +134,29 @@ Item {
     readonly property int fillRows: Math.max(1, rows - 2 * padRows)
     readonly property int fillTotal: fillRows * fillCols
     readonly property Gradient softTop: Gradient {
-        GradientStop { position: 0; color: Qt.alpha(dm.onColor, Math.max(0, dm.edgeSoft)) }
-        GradientStop { position: 1; color: dm.onColor }
+        GradientStop {
+            position: 0
+            color: Qt.alpha(dm.onColor, Math.max(0, dm.edgeSoft))
+        }
+        GradientStop {
+            position: 1
+            color: dm.onColor
+        }
     }
     readonly property Gradient softBottom: Gradient {
-        GradientStop { position: 0; color: dm.onColor }
-        GradientStop { position: 1; color: Qt.alpha(dm.onColor, Math.max(0, dm.edgeSoft)) }
+        GradientStop {
+            position: 0
+            color: dm.onColor
+        }
+        GradientStop {
+            position: 1
+            color: Qt.alpha(dm.onColor, Math.max(0, dm.edgeSoft))
+        }
     }
     readonly property real gridW: cols * (dot + gap) - gap
     function edgeVis(t) {
         t = Math.max(0, Math.min(1, t))
-        var d = t < 0.25 ? 1 - (t / 0.25) * 0.18
-              : t < 0.6 ? 0.82 - ((t - 0.25) / 0.35) * 0.54
-              : 0.28 - ((t - 0.6) / 0.4) * 0.28
+        var d = t < 0.25 ? 1 - (t / 0.25) * 0.18 : t < 0.6 ? 0.82 - ((t - 0.25) / 0.35) * 0.54 : 0.28 - ((t - 0.6) / 0.4) * 0.28
         return 1 - d
     }
     // The column count follows a SETTLED width, not the live one. Cols
@@ -167,11 +184,18 @@ Item {
     // shed them. Every width write of the creating turn still rides the
     // binding; the timer takes over from the next turn on.
     property real _settledWidth: width
-    Component.onCompleted: Qt.callLater(function() { if (dm) dm._settledWidth = dm.width })
+    Component.onCompleted: Qt.callLater(function () {
+        if (dm)
+            dm._settledWidth = dm.width
+    })
     onWidthChanged: dmSettle.restart()
     Timer {
-        id: dmSettle; interval: 300
-        onTriggered: if (dm.queueEdgeHeld) dmSettle.restart(); else dm._settledWidth = dm.width
+        id: dmSettle
+        interval: 300
+        onTriggered: if (dm.queueEdgeHeld)
+            dmSettle.restart()
+        else
+            dm._settledWidth = dm.width
     }
     readonly property int cols: {
         var c = Math.max(1, Math.floor((_settledWidth + gap) / (dot + gap)))
@@ -202,18 +226,21 @@ Item {
             // Per-dot pseudo-random phase offset for the finishing twinkle
             // (fract(sin(i)*const), the classic shader hash: cheap, stable,
             // uniform enough for eyes).
-            readonly property real twinkleR: { var r = Math.sin(index * 12.9898) * 43758.5453; return r - Math.floor(r) }
+            readonly property real twinkleR: {
+                var r = Math.sin(index * 12.9898) * 43758.5453
+                return r - Math.floor(r)
+            }
             x: col * (dm.dot + dm.gap)
             y: rowTop * (dm.dot + dm.gap)
-            width: dm.dot; height: dm.dot; radius: 0   // sharp LED cells
+            width: dm.dot
+            height: dm.dot
+            radius: 0   // sharp LED cells
             color: dm.onColor
             gradient: dm.edgeSoft < 0 ? null : rowTop === 0 ? dm.softTop : rowTop === dm.rows - 1 ? dm.softBottom : null
             // Breathe off the host's shared 20 Hz clock (`ledPulse`) rather than a
             // per-frame animation, so a running download doesn't repaint the
             // whole window every vsync. See Main.qml's ledPulse.
-            readonly property real barOpacity: (dm.finishing && lit)
-                   ? 0.62 + 0.38 * (0.5 + 0.5 * Math.cos(2 * Math.PI * (dm.shimmerPhase * 2 + twinkleR)))
-                   : pulsing ? dm.ledPulse : (lit ? 1.0 : 0.16)
+            readonly property real barOpacity: (dm.finishing && lit) ? 0.62 + 0.38 * (0.5 + 0.5 * Math.cos(2 * Math.PI * (dm.shimmerPhase * 2 + twinkleR))) : pulsing ? dm.ledPulse : (lit ? 1.0 : 0.16)
             // A cell of the word (a digit stroke) or of the plate behind
             // it: its own reveal is the shared one shifted by a per-cell
             // random delay (a second hash, so it does not line up with the
@@ -224,15 +251,14 @@ Item {
             readonly property bool wordCell: dm.wordOn && dm.wordOnAt(col, rowTop)
             readonly property bool plateCell: dm.wordOn && !wordCell && dm.wordPlateAt(col, rowTop)
             readonly property real wordTo: wordCell ? 1.0 : dm.wordPlate
-            readonly property real wordDelay: { var r = Math.sin(index * 78.233 + 1.7) * 43758.5453; return (r - Math.floor(r)) * 0.65 }
+            readonly property real wordDelay: {
+                var r = Math.sin(index * 78.233 + 1.7) * 43758.5453
+                return (r - Math.floor(r)) * 0.65
+            }
             readonly property real wordT: Math.max(0, Math.min(1, (dm.wordReveal - wordDelay) / 0.35))
             // Static per cell (its own position against the fade
             // lengths), so the fade costs nothing per tick.
-            readonly property real edgeMul:
-                (dm.edgeFadeW > 0 ? Math.min(dm.edgeVis((x + dm.dot / 2) / dm.edgeFadeW),
-                                             dm.edgeVis((dm.gridW - x - dm.dot / 2) / dm.edgeFadeW)) : 1)
-              * (dm.edgeFadeH > 0 ? Math.min(dm.edgeVis((y + dm.dot / 2) / dm.edgeFadeH),
-                                             dm.edgeVis((dm.implicitHeight - y - dm.dot / 2) / dm.edgeFadeH)) : 1)
+            readonly property real edgeMul: (dm.edgeFadeW > 0 ? Math.min(dm.edgeVis((x + dm.dot / 2) / dm.edgeFadeW), dm.edgeVis((dm.gridW - x - dm.dot / 2) / dm.edgeFadeW)) : 1) * (dm.edgeFadeH > 0 ? Math.min(dm.edgeVis((y + dm.dot / 2) / dm.edgeFadeH), dm.edgeVis((dm.implicitHeight - y - dm.dot / 2) / dm.edgeFadeH)) : 1)
             opacity: edgeMul * ((wordCell || plateCell) ? barOpacity + (wordTo - barOpacity) * wordT : barOpacity)
         }
     }

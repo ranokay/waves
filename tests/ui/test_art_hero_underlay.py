@@ -24,6 +24,12 @@ def _component(name: str) -> str:
     return _body(f"    component {name}:", "\n    component ")
 
 
+def _flat(text: str) -> str:
+    """Whitespace-insensitive view for pins whose construct qmlformat may
+    re-wrap (it decides line breaks and drops optional semicolons)."""
+    return re.sub(r"\s+", " ", text)
+
+
 # ----- the art hint travels with the title hint -------------------------------
 
 
@@ -142,7 +148,7 @@ def test_the_finished_page_never_waits_for_the_hint_to_fade():
     # (measured on HoverSwell in Main.qml), so every appearance ran at the exit
     # speed and every exit at the arrival one.
     assert "opacity: hint.shown" in wire
-    assert 'states: State { name: "up"; when: hint.active' in wire
+    assert 'states: State { name: "up" when: hint.active' in _flat(wire)
     assert "Behavior on shown" not in wire
 
 
@@ -151,7 +157,7 @@ def test_the_finished_page_never_waits_for_the_hint_to_fade():
 
 def test_hover_prefetch_is_one_shared_dwell_that_warms_the_hero_and_asks_the_backend():
     body = _body("    function hoverPrefetch(card, dwell) {")
-    assert "if (!root.signedIn) return" in body
+    assert "if (!root.signedIn) return" in _flat(body)
     assert 'root.browsePageKey === "item:" + k' in body, "hovering the page you are on must not refetch it"
     assert "hoverPrefetchTimer.interval = dwell > 0 ? dwell : 200" in body, "a caller may ask for a longer rest"
     timer = MAIN_QML.split("id: hoverPrefetchTimer", 1)[1].split("\n    }", 1)[0]
@@ -184,13 +190,13 @@ def test_cards_and_rows_arm_the_prefetch_on_hover():
     assert "hoverPrefetch" not in wrap, "prefetch belongs to the card-wide handler, not the artwork's"
     pl = _component("LibPlaylistRow")
     assert "root.hoverPrefetch(plRow.prefetchCard)" in pl and "enabled: !plRow.isFolder" in pl
-    assert '({ kind: "album", id: ab.albumId, art: ab.art })' in MAIN_QML
-    assert '({ kind: "playlist", id: pb.plId, art: pb.art })' in MAIN_QML
+    assert '({ kind: "album", id: ab.albumId, art: ab.art })' in _flat(MAIN_QML)
+    assert '({ kind: "playlist", id: pb.plId, art: pb.art })' in _flat(MAIN_QML)
 
 
 def test_track_rows_prefetch_their_album_only_after_a_longer_rest():
     trow = _component("TrackRow")
-    assert 'readonly property var prefetchCard: ({ kind: "album", id: trow.albumId, art: "" })' in trow, (
+    assert 'readonly property var prefetchCard: ({ kind: "album", id: trow.albumId, art: "" })' in _flat(trow), (
         "a row's cover is the small size, warming it at the hero's would pin a pixmap nobody asks for"
     )
     assert "root.hoverPrefetch(trow.prefetchCard, 450)" in trow, "a row is where a pointer parks: longer dwell"
@@ -222,7 +228,7 @@ def test_the_warm_pool_reports_a_row_ready_only_once_its_pixmap_decoded():
     # pool's own Image when its pixmap lands. The hover scenario waits on it
     # before clicking, so the click cannot race the pool's asynchronous decode
     # (issue #296); dropping the flag would leave that wait vacuous.
-    assert 'warmArtModel.append({ u: "" + u, w: w, h: h, ready: false })' in MAIN_QML
+    assert 'warmArtModel.append({ u: "" + u, w: w, h: h, ready: false })' in _flat(MAIN_QML)
     # The same locator the cache-key guard uses (test_qml_art_cache_keys.py):
     # the pool block through the Item that wraps its Repeater.
     match = re.search(r"ListModel\s*\{\s*id:\s*warmArtModel\s*\}(.{0,2600}?)\n    \}\n", MAIN_QML, re.DOTALL)
@@ -277,7 +283,7 @@ def test_the_disc_blinks_off_the_shared_clock_and_fades_on_the_wrap():
     # re-render every frame, times every disc on the page).
     wrap = pa[pa.index("id: coverWrap") :]
     assert 'opacity: pa.artState === "ready" ? 1 : 0' in wrap
-    assert "Behavior on opacity { enabled: pa.artWaited; NumberAnimation { duration: 220" in wrap
+    assert "Behavior on opacity { enabled: pa.artWaited NumberAnimation { duration: 220" in _flat(wrap)
     img = pa[pa.index("id: paImg") :]
     assert "visible: status === Image.Ready" in img
     assert "opacity:" not in img.split("layer.enabled", 1)[0], "no opacity animation on the layered Image"
