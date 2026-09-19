@@ -118,10 +118,10 @@ invalid-attribute-access = "warn"
 
 # The inherited TIDAL engine (upstream Tidaler code, kept close to upstream;
 # see the download.py entry in [tool.ruff.lint.per-file-ignores]) predates the
-# gate: its Optional-vs-declared attributes, m3u8 union and raise path need
-# upstream-shaped fixes, so those diagnostics stay visible as warnings for the
-# #319 burn-down instead of failing today. Hand-written modules are not
-# covered by this override.
+# gate: its Optional-vs-declared attributes, string-vs-enum/path assignments,
+# m3u8 union and raise path need upstream-shaped fixes, so those diagnostics
+# stay visible as warnings for the #319 burn-down instead of failing today.
+# Hand-written modules are not covered by this override.
 [[tool.ty.overrides]]
 include = ["waves/download.py"]
 

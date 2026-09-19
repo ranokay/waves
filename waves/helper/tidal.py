@@ -193,12 +193,12 @@ def search_results_all(
 
 
 def items_results_all(
-    media_list: list[Mix | Playlist | Album | Artist], videos_include: bool = True
+    media: Mix | Playlist | Album | Artist, videos_include: bool = True
 ) -> list[Track | Video | Album]:
     result: list[Track | Video | Album] = []
 
-    if isinstance(media_list, Mix):
-        result = media_list.items()  # ty: ignore[invalid-assignment]  # mix items are Track|Video; the local carries the wider union
+    if isinstance(media, Mix):
+        result = media.items()  # ty: ignore[invalid-assignment]  # mix items are Track|Video; the local carries the wider union
 
         if not videos_include:
             # A mix is the one collection whose items() hands back tracks and
@@ -210,14 +210,14 @@ def items_results_all(
     else:
         func_get_items_media: list[Callable] = []
 
-        if isinstance(media_list, Playlist | Album):
+        if isinstance(media, Playlist | Album):
             if videos_include:
-                func_get_items_media.append(media_list.items)
+                func_get_items_media.append(media.items)
             else:
-                func_get_items_media.append(media_list.tracks)
+                func_get_items_media.append(media.tracks)
         else:
-            func_get_items_media.append(media_list.get_albums)
-            func_get_items_media.append(media_list.get_ep_singles)
+            func_get_items_media.append(media.get_albums)
+            func_get_items_media.append(media.get_ep_singles)
 
         result = paginate_results(func_get_items_media)  # ty: ignore[invalid-assignment]  # the paginate family returns the wide union
 
@@ -329,15 +329,20 @@ def instantiate_media(
 
 def quality_audio_highest(media: Track | Album) -> Quality:
     quality: Quality
-    tags = media.media_metadata_tags or []
+    tags = media.media_metadata_tags
+    if tags is None:
+        # tidalapi leaves this None on tracks TIDAL flags allowStreaming=false.
+        # The TypeError is the "no answer" sentinel that backend's
+        # advertised_tier and _quality_rank catch; keep it deliberate.
+        raise TypeError("quality_audio_highest: media_metadata_tags is None")  # noqa: TRY003
 
     if MediaMetadataTags.hi_res_lossless in tags:
         quality = Quality.hi_res_lossless
     elif MediaMetadataTags.lossless in tags:
         quality = Quality.high_lossless
     else:
-        # The stub types audio_quality as str | None, but the wire value is
-        # the Quality vocabulary's own string (the enum subclasses str).
+        # The stub types audio_quality as str | None; at runtime it is the
+        # wire's quality string, which the str-enum members compare equal to.
         quality = media.audio_quality  # ty: ignore[invalid-assignment]
 
     return quality
