@@ -4210,7 +4210,7 @@ class WavesBridge(LibraryMixin, QObject):
         # The wrapper guest's account state (the full tier's sign-in), read
         # off its /me endpoint. Same cached-probe shape as the container:
         # GUI readers never block on the HTTP reach.
-        self._apple_wrapper_auth_cache: dict = {"at": 0.0, "result": None}
+        self._apple_wrapper_auth_cache: dict | None = {"at": 0.0, "result": None}
         self._apple_wrapper_auth_refresh_lock = Lock()
         self._apple_wrapper_login_inflight = False
         # Session supervision (spec §3): the lazy sidecar's
@@ -8584,6 +8584,7 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             t0 = devlog.clock()
+            payload: dict
             try:
                 payload = self._build_browse_item(kind, media_id, key)
             except Exception:
@@ -8667,6 +8668,7 @@ class WavesBridge(LibraryMixin, QObject):
             released = False
             try:
                 t0 = devlog.clock()
+                payload: dict
                 try:
                     payload = self._build_browse_item(kind, media_id, key, record=False)
                 except Exception:
@@ -14707,7 +14709,7 @@ class WavesBridge(LibraryMixin, QObject):
                 base_template=getattr(spec, "base_template", None) or None,
                 chooser_toggles=getattr(spec, "chooser_toggles", None),
             )
-        if (collection or merge_plan is not None) and not is_apple:
+        if dl is not None and (collection or merge_plan is not None) and not is_apple:
             self._job_tracks.setdefault(qid, {})
             self._job_dls[qid] = dl
             if not self._track_poll.isActive():
@@ -15551,8 +15553,12 @@ class WavesBridge(LibraryMixin, QObject):
             # playlist still points at https.
             whitelist = "file,crypto,data" if tmp_m3u is None else "file,crypto,data,https,tls,tcp"
             cmd += ["-protocol_whitelist", whitelist, "-i", m3u_path]
-        else:
+        elif src_url is not None:
             cmd += ["-i", src_url]
+        else:
+            # The caller resolves one of the two sources before calling: a
+            # single-file URL when there is no HLS playlist to localise.
+            raise RuntimeError("preview: no source to remux")  # noqa: TRY003
         if not whole:
             cmd += ["-t", str(_PREVIEW_TASTE_SECONDS)]  # the clip length == what plays
         cmd += ["-c", "copy", "-movflags", "+faststart", out_path]
@@ -18094,7 +18100,7 @@ class WavesBridge(LibraryMixin, QObject):
             # Exactly the fields the two restores below overwrite, so putting
             # them back is complete by construction.
             live_flags = {key: getattr(data, key, None) for key in self._ffmpeg_flag_prefs}
-            live_path = getattr(data, "path_binary_ffmpeg", None)
+            live_path = getattr(data, "path_binary_ffmpeg", "")
             self._restore_ffmpeg_flags()
             self._restore_ffmpeg_path()
             try:
@@ -18868,9 +18874,10 @@ class WavesBridge(LibraryMixin, QObject):
         if obj is None:
             return
         url = getattr(obj, "share_url", "") or ""
-        if not url and hasattr(obj, "get_url"):
+        get_url = getattr(obj, "get_url", None)
+        if not url and callable(get_url):
             try:
-                url = obj.get_url() or ""
+                url = get_url() or ""
             except Exception:
                 url = ""
         if url:
@@ -20135,7 +20142,7 @@ class WavesBridge(LibraryMixin, QObject):
                 f["depends_on_value"] = bool(d.downsample_enabled)
             return f
 
-        sections = [
+        sections: list[dict] = [
             {
                 # The two-axis layout's first axis (spec §9.2): ONE
                 # Providers section holding a distinctive card per provider

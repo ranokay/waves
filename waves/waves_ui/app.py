@@ -652,19 +652,19 @@ def waves_activate(tidal: Tidal | None = None) -> int:
     # HTTP disk cache for artwork (must be installed before the QML loads).
     art_cache = _ArtCacheFactory(os.path.join(os.path.dirname(bridge.settings.file_path), _ART_CACHE_DIR))
     engine.setNetworkAccessManagerFactory(art_cache)
-    app._waves_art_cache = art_cache  # type: ignore[attr-defined]  # keep alive
+    app._waves_art_cache = art_cache  # ty: ignore[invalid-assignment]  # keep alive
     engine.rootContext().setContextProperty("waves", bridge)
     # Monospace family for the QML layer (numeric readouts + ASCII art).
     engine.rootContext().setContextProperty("monoFont", _load_mono())
     # UI-label family for buttons/tabs (Console button spec).
     engine.rootContext().setContextProperty("uiFontFamily", _ui_font())
     # Keep a reference so it isn't garbage-collected.
-    app._waves_bridge = bridge  # type: ignore[attr-defined]
+    app._waves_bridge = bridge  # ty: ignore[invalid-assignment]
     # Paced incubation while the launch overlay is up (see the class): must be
     # installed before load so the window never installs its own controller.
     incubation = _BootPacedIncubation(app)
     engine.setIncubationController(incubation)
-    app._waves_incubation = incubation  # type: ignore[attr-defined]  # keep alive
+    app._waves_incubation = incubation  # ty: ignore[invalid-assignment]  # keep alive
     bridge.set_boot_reveal_hook(incubation.release_throttle)
     incubation.set_count_notifier(bridge.note_incubation_count)
     bridge.set_incubation_count_reader(incubation.count_reader())
@@ -696,7 +696,8 @@ def waves_activate(tidal: Tidal | None = None) -> int:
     # item under the pointer accepted: the swipe gesture, which nothing
     # else claims, and nothing at all while the scene is idle. The mouse
     # side buttons are read by a MouseArea at the top of the scene (Main.qml).
-    content = root_objects[0].contentItem() if hasattr(root_objects[0], "contentItem") else None
+    content_item = getattr(root_objects[0], "contentItem", None)
+    content = content_item() if callable(content_item) else None
     (content or root_objects[0]).installEventFilter(bridge)
 
     # Also set the icon on the actual top-level window, not just the application
