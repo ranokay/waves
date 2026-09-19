@@ -41,7 +41,7 @@ CANONICAL_CLAUSES = (
 
 def _gate_source() -> str:
     src = QML_MAIN.read_text(encoding="utf-8")
-    m = re.search(r"id: termsGate\b(.*?)\n    // =====", src, re.DOTALL)
+    m = re.search(r"id: termsGate\b(.*?)\n +// =====", src, re.DOTALL)
     assert m, "the terms gate must exist in Main.qml"
     return m.group(1)
 
@@ -72,7 +72,9 @@ def test_gate_drops_the_retired_framing():
 
 def test_gate_body_stays_plain_text():
     gate = _gate_source()
-    m = re.search(r"id: termsBody\b(.*?)\n\s{20}\}", gate, re.DOTALL)
+    # The Text element's own close, ten spaces in under qmlformat's pinned
+    # IndentWidth. The element's PlainText declaration must sit inside it.
+    m = re.search(r"id: termsBody\b(.*?)\n {10}\}", gate, re.DOTALL)
     assert m and "textFormat: Text.PlainText" in m.group(1)
 
 
@@ -111,7 +113,7 @@ def test_accepted_version_is_persisted_alongside_the_flag():
     src = QML_MAIN.read_text(encoding="utf-8")
     assert f'readonly property string termsVersion: "{TERMS_VERSION}"' in src
     assert f'readonly property string termsVersionStamp: "{TERMS_STAMP}"' in src
-    m = re.search(r"Settings \{\s*\n\s*id: legalSettings\b.*?\n    \}", src, re.DOTALL)
+    m = re.search(r"Settings \{\s*\n\s*id: legalSettings\b.*?\n  \}", src, re.DOTALL)
     assert m, "the legal Settings block must exist"
     block = m.group(0)
     assert "property bool termsAccepted: false" in block

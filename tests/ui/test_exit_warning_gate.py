@@ -32,7 +32,7 @@ def _src() -> str:
 
 def test_onclosing_vetoes_only_when_it_should():
     src = _src()
-    m = re.search(r"onClosing: function \(close\) \{(.*?)\n    \}", src, re.DOTALL)
+    m = re.search(r"onClosing: function \(close\) \{(.*?)\n  \}", src, re.DOTALL)
     assert m, "onClosing must be the function form that receives the close event"
     body = m.group(1)
     assert "_winPersist()" in body, "the geometry flush must survive the rewrite"
@@ -49,7 +49,7 @@ def test_onclosing_vetoes_only_when_it_should():
 
 def test_buttons_do_what_they_say():
     src = _src()
-    gate = re.search(r"id: exitGate\b.*?\n    \}\n", src, re.DOTALL)
+    gate = re.search(r"id: exitGate\b.*?\n  \}\n", src, re.DOTALL)
     assert gate, "the exit gate must exist in Main.qml"
     body = gate.group(0)
     # EXIT ANYWAY: confirm, then a real re-close. Exactly one close() call.
@@ -68,14 +68,14 @@ def test_mute_flag_lives_in_qsettings_not_waves_json():
     src = _src()
     # In the "setup" Settings block: waves.json is written wholesale, a new
     # key there would be pinned into every existing user's file.
-    setup = re.search(r'id: setupSettings\n\s*category: "setup"(.*?)\n    \}', src, re.DOTALL)
+    setup = re.search(r'id: setupSettings\n\s*category: "setup"(.*?)\n  \}', src, re.DOTALL)
     assert setup, "the setup Settings block must exist"
     assert "property bool exitWarnMuted: false" in setup.group(1)
 
 
 def test_count_copy_tracks_the_live_queue_badge():
     src = _src()
-    gate = re.search(r"id: exitGate\b.*?\n    \}\n", src, re.DOTALL)
+    gate = re.search(r"id: exitGate\b.*?\n  \}\n", src, re.DOTALL)
     body = gate.group(0)
     # The message counts the same number as the header badge (queued+running
     # from the bridge), singular and plural.
@@ -97,7 +97,7 @@ def test_copy_survives_the_last_download_finishing():
     keep it open rather than auto-close); the body must never read
     '0 downloads are still running.'"""
     src = _src()
-    gate = re.search(r"id: exitGate\b.*?\n    \}\n", src, re.DOTALL)
+    gate = re.search(r"id: exitGate\b.*?\n  \}\n", src, re.DOTALL)
     assert gate
     body = gate.group(0)
     assert "All downloads finished." in body

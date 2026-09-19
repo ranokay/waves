@@ -485,7 +485,7 @@ def test_browse_retry_routes_by_page_key():
     assert "function retryBrowsePage()" in MAIN_QML
     assert "root.retryBrowsePage()" in MAIN_QML
     assert "openBrowseLink(root.browsePageKey" not in MAIN_QML, "RETRY must not route pl:/item: keys to openBrowsePage"
-    body = MAIN_QML.split("function retryBrowsePage()", 1)[1].split("\n    }", 1)[0]
+    body = MAIN_QML.split("function retryBrowsePage()", 1)[1].split("\n  }", 1)[0]
     assert "openBrowsePlaylists" in body and "openBrowseItem" in body and "openBrowsePage" in body
 
 
