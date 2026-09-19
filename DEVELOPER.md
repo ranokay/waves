@@ -165,8 +165,8 @@ the app treats the run as a dev environment and opens against the separate
 `Waves-dev` config folder, which looks like being signed out.
 
 The QML plain-text guard test fails if any dynamic `Text` in Main.qml or the
-components split out of it can render rich text (remote strings must never
-inject markup).
+components split out of it in #315 can render rich text (remote strings must
+never inject markup).
 
 The launch water (the wave video behind the launch screen) shares the GUI
 thread with the interface, and the GUI thread waits for the interpreter lock

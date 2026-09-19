@@ -5,6 +5,9 @@ import QtQuick.Controls.Basic
 // instantiated, so a multi-thousand-item category renders instantly and
 // scrolls smoothly. Each instance sets its own `cat`, `model` and `delegate`.
 // It prefetches the next page as it scrolls and shows a footer while loading.
+// Its `host` is NOT Main.qml's root object (unlike the other split files): it
+// is the source group this pane belongs to, read for `category`,
+// `loadingMore` and `maybeLoadMore` (see the property's own comment).
 // Split out of Main.qml (#315 slice 5). The palette values are local
 // copies of Main.qml's static literals — the SettingsPage.qml convention;
 // keep them in step if the palette changes.

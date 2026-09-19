@@ -13,7 +13,8 @@ import QtQuick.Layouts
 // `host` is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load.
 // It reads through it:
-//   host.fill / host.fmtMs / host.hoverPrefetch / host.hoverPrefetchCancel /
+//   host.appendMedia / host.appendPlain / host.fill / host.fillMedia /
+//   host.fmtMs / host.hoverPrefetch / host.hoverPrefetchCancel /
 //   host.libSortLabels / host.libSortOptions / host.libraryCategory /
 //   host.libraryOpen / host.openLibrarySorted / host.openVideo /
 //   host.previewPosition / host.pvSt / host.stopPreview / host.togglePreview

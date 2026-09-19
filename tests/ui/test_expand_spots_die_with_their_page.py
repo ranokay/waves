@@ -19,20 +19,23 @@ from __future__ import annotations
 
 import re
 
-from support.paths import QML_MAIN
+from support.paths import QML_DIR, QML_MAIN
+
+# The whole QML tree: the expanded-set writers must not go unscanned when a
+# surface that writes it moves out of Main.qml (#315).
+ALL_QML = "\n".join(path.read_text(encoding="utf-8") for path in sorted(QML_DIR.glob("*.qml")))
 
 # The two writers the rule allows: the reset helper's own line, and the toggle
-# that adds or removes a single row.
-_ALLOWED = {"expandedAlbums = map || ({})", "root.expandedAlbums = e"}
+# that adds or removes a single row (AlbumBlock, its own file since #315).
+_ALLOWED = {"expandedAlbums = map || ({})", "host.expandedAlbums = e"}
 
 
 def _assignments(src: str) -> list[str]:
-    return [m.group(0).strip() for m in re.finditer(r"(?:root\.)?expandedAlbums\s*=\s*[^\n]+", src)]
+    return [m.group(0).strip() for m in re.finditer(r"(?<![\w.])(?:(?:root|host)\.)?expandedAlbums\s*=\s*[^\n]+", src)]
 
 
 def test_every_wholesale_write_of_the_expanded_set_goes_through_the_reset():
-    src = QML_MAIN.read_text(encoding="utf-8")
-    stray = [a for a in _assignments(src) if a not in _ALLOWED]
+    stray = [a for a in _assignments(ALL_QML) if a not in _ALLOWED]
     assert not stray, (
         "an expanded-album set is replaced without dropping the remembered scroll spots; "
         "call root.resetExpandedAlbums(map) instead: " + "; ".join(stray)
@@ -50,6 +53,7 @@ def test_the_reset_drops_the_spots_it_was_written_for():
 
 def test_the_spots_map_is_only_cleared_by_that_reset():
     """A second clear site would mean the pair can come apart again."""
-    src = QML_MAIN.read_text(encoding="utf-8")
-    clears = [m.group(0).strip() for m in re.finditer(r"(?:root\.)?expandReturnY\s*=\s*[^\n]+", src)]
+    clears = [
+        m.group(0).strip() for m in re.finditer(r"(?<![\w.])(?:(?:root|host)\.)?expandReturnY\s*=\s*[^\n]+", ALL_QML)
+    ]
     assert clears == ["expandReturnY = ({})"], f"the remembered spots are reset somewhere else too: {clears}"
