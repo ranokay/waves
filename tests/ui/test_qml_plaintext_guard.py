@@ -51,7 +51,9 @@ from support.paths import QML_DIR
 #                    scanned so its deliberate StyledText spots stay deliberate and
 #                    can't quietly start binding a TIDAL string.
 TIDAL_DATA_FILES = {"Main.qml"}
-LOCAL_ONLY_FILES = {"SettingsPage.qml"}
+# BackToTop.qml / DotMatrix.qml / SnakeField.qml (#315's extraction) draw local
+# chrome only: no TIDAL string reaches a Text there, so they join the local set.
+LOCAL_ONLY_FILES = {"SettingsPage.qml", "BackToTop.qml", "DotMatrix.qml", "SnakeField.qml"}
 FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)
 
 # Remote markers: substrings that, inside a `text:` binding *in a TIDAL_DATA_FILE*,
