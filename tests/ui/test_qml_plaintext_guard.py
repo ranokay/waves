@@ -44,18 +44,31 @@ from support.paths import QML_DIR
 #   Main.qml         renders TIDAL search/library/queue/artist results, so its
 #                    `model.`/`modelData.`/`artistData.`/`db.label` bindings are
 #                    attacker-controllable → remote.
+#   DownloadButton.qml  the download control and its Chooser (split out of
+#                    Main.qml, #315 slice 2): `db.label` carries a remote artist
+#                    name and the provider tiles carry bridge descriptor names.
 #   BackToTop.qml    components split out of Main.qml (#315). They render local
 #   DotMatrix.qml    chrome only, so no remote marker matches today; they ride
 #   SnakeField.qml   the TIDAL set anyway so the STRUCTURAL PlainText rule
-#                    (`test_dynamic_text_is_plaintext`) scans their Text elements,
-#                    and a future binding there cannot go unchecked.
+#   HoverSwell.qml   (`test_dynamic_text_is_plaintext`) scans their Text elements,
+#   QueueStack.qml   and a future binding there cannot go unchecked.
+#   RetryMark.qml
 #   SettingsPage.qml renders only LOCAL data: the app's own settings schema
 #                    (`modelData.label/.group/.desc/.help/.fields`, defined in our
 #                    Python, never from TIDAL) and our own ffmpeg/updater status.
 #                    So `model.`/`modelData.` there are NOT remote. It is still
 #                    scanned so its deliberate StyledText spots stay deliberate and
 #                    can't quietly start binding a TIDAL string.
-TIDAL_DATA_FILES = {"Main.qml", "BackToTop.qml", "DotMatrix.qml", "SnakeField.qml"}
+TIDAL_DATA_FILES = {
+    "Main.qml",
+    "DownloadButton.qml",
+    "BackToTop.qml",
+    "DotMatrix.qml",
+    "SnakeField.qml",
+    "HoverSwell.qml",
+    "QueueStack.qml",
+    "RetryMark.qml",
+}
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
 FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)
 
@@ -535,7 +548,7 @@ def test_remotetext_instances_do_not_reenable_richtext():
 
 def test_dynamic_text_is_plaintext():
     """STRUCTURAL guard (the real anti-regression rule). In Main.qml and the
-    components split out of it (#315: BackToTop/DotMatrix/SnakeField) EVERY
+    components split out of it (#315) EVERY
     Text/Label whose ``text:`` is a dynamic
     (non-literal) expression must render as PlainText, be a RemoteText, or be one of
     the audited intentional-StyledText spots. No remote-vs-local guessing: any

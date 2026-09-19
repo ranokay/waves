@@ -37,7 +37,7 @@ import re
 import sys
 
 import pytest
-from support.paths import QML_MAIN
+from support.paths import QML_DIR, QML_MAIN
 from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
@@ -186,7 +186,9 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     Return/Enter/Space handler, each accepts the event and ignores
     auto-repeat, and the two extra keys (Down opens the chooser, Escape
     clears the search box, Delete cancels a queued row) are present."""
-    qml = QML_MAIN.read_text(encoding="utf-8")
+    # The download control's keyboard paths live in its own file since #315;
+    # the pins span the whole primary-control surface, so read both.
+    qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "DownloadButton.qml").read_text(encoding="utf-8")
     press_actions = qml.count("Accessible.onPressAction")
     assert press_actions >= 5, "the primary controls lost their press actions"
     for key in ("Return", "Enter", "Space"):

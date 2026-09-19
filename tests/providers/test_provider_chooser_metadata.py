@@ -442,11 +442,12 @@ def test_the_chooser_qml_names_no_provider():
 
     from waves.waves_ui import backend as backend_module
 
-    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "Main.qml").read_text(encoding="utf-8")
+    # The Chooser lives in DownloadButton.qml (#315); the popover component is
+    # the last block in the file, so the region runs to the end.
+    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "DownloadButton.qml").read_text(encoding="utf-8")
     start = qml.find("id: chooserComp")
-    end = qml.find("// Playlist-folder tile", start + 1)
-    assert start != -1 and end != -1, "the guard found no chooser region to check"
-    region = qml[start:end]
+    assert start != -1, "the guard found no chooser region to check"
+    region = qml[start:]
     assert "PROVIDER" in region, "the guard is looking at the wrong region"
     for needle in ("tidal", "apple", "assets/providers", "chooserRowProvider"):
         assert needle.lower() not in region.lower(), f"the Chooser region still names a provider: {needle}"

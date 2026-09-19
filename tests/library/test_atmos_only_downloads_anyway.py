@@ -191,11 +191,16 @@ def test_the_exclusion_apparatus_is_fully_retired():
 
     assert "excluded_count" not in inspect.signature(backend._collection_incomplete_reason).parameters
     assert "excluded" not in inspect.getsource(backend.WavesBridge._download_merge_plan)
-    qml = (backend.pathlib.Path(backend.__file__).parent / "qml" / "Main.qml").read_text()
+    qml_dir = backend.pathlib.Path(backend.__file__).parent / "qml"
     # The exclusion apparatus stays retired, but "ATMOS ONLY" itself is back
     # with a new, spec-mandated meaning: the Chooser's audio-type control
-    # collapses to it on Atmos-only tracks (spec 5.1, 7.2). Pin that it
-    # appears exactly once, as that collapse label, and nowhere else.
+    # collapses to it on Atmos-only tracks (spec 5.1, 7.2). The Chooser lives
+    # in DownloadButton.qml (#315). Pin that it appears exactly once, as that
+    # collapse label, and nowhere else.
+    qml = (qml_dir / "DownloadButton.qml").read_text()
+    assert "ATMOS ONLY" not in (qml_dir / "Main.qml").read_text(), (
+        "ATMOS ONLY appears outside the Chooser collapse label"
+    )
     first = qml.find("ATMOS ONLY")
     assert first != -1, "the Chooser's ATMOS ONLY collapse label (spec 7.2) is missing"
     assert qml.find("ATMOS ONLY", first + 1) == -1, "ATMOS ONLY appears outside the Chooser collapse label"
