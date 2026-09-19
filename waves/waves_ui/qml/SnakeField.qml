@@ -8,8 +8,9 @@ import QtQuick
 // along the ring, so the card resizing mid-grow re-lays the path without
 // ever scattering segments. The clock only runs while the field is both
 // visible and armed, so a closed peek costs nothing.
-// Extracted from Main.qml unchanged in behaviour (issue #315). The palette values
-// are local copies of Main.qml's static literals, the convention SettingsPage.qml follows.
+// Split out of Main.qml (#315). The palette values are local copies of
+// Main.qml's static literals — the SettingsPage.qml convention; keep them in
+// step if the palette changes.
 Item {
     id: sf
     property bool running: false

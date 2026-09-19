@@ -3,10 +3,12 @@ import QtQuick
 // Old-school LED dot-matrix progress. Dots sit in a fixed grid and brighten
 // (faded → bright) in a bottom-up, left-to-right "stacking" order as pct
 // rises, each dot is a precise fraction of the whole.
-// Extracted from Main.qml unchanged in behaviour (issue #315). The palette values
-// are local copies of Main.qml's static literals, the convention SettingsPage.qml follows.
-// `ledPulse` / `shimmerPhase` stay host-bound (Main.qml's one shared 20 Hz pair),
-// and `queueEdgeHeld` lets a drawer-edge drag defer the column-count settle.
+// Split out of Main.qml (#315). The palette values are local copies of
+// Main.qml's static literals — the SettingsPage.qml convention; keep them in
+// step if the palette changes. `ledPulse` / `shimmerPhase` stay host-bound
+// (Main.qml's one shared 20 Hz pair), and `queueEdgeHeld` lets a drawer-edge
+// drag defer the column-count settle; all three are required, so a missed
+// binding fails at load instead of freezing the bar silently.
 Item {
     id: dm
     property real pct: 0
@@ -16,9 +18,11 @@ Item {
     property int maxCols: 0
     property bool pulse: true
     property color onColor: "#3dff6e"
-    property real ledPulse: 0.85
-    property real shimmerPhase: 0
-    property bool queueEdgeHeld: false
+    // Required, not defaulted: a missed host binding must fail at load rather
+    // than silently freeze the bar at a lone instance's static state.
+    required property real ledPulse
+    required property real shimmerPhase
+    required property bool queueEdgeHeld
     // "Finishing" twinkle (chosen in the shimmer lab): the bar sits at
     // 100% while the final steps run (merge, decrypt, FLAC extract,
     // tagging), so instead of freezing, every lit dot breathes on its
