@@ -103,6 +103,13 @@ from support.paths import QML_DIR
 #   ShelfWheelRedirect.qml
 #   TrackPreview.qml
 #   VideoThumb.qml
+#   SectionHeader.qml  the SearchProviderGroup closure split out of Main.qml
+#   ShowAllLabel.qml   (#315 slice 6): SearchProviderGroup renders the provider
+#   SearchSectionMore.qml  heads and every search section (remote names and
+#   SearchProviderGroup.qml  titles), PlaylistBlock and ArtistSearchCard render
+#   PlaylistBlock.qml  remote playlist/artist rows, and the rest (SectionHeader,
+#   ArtistSearchCard.qml  ShowAllLabel, SearchSectionMore) are local chrome that
+#                      ride the set for the same structural reason.
 TIDAL_DATA_FILES = {
     "Main.qml",
     "DownloadButton.qml",
@@ -154,6 +161,12 @@ TIDAL_DATA_FILES = {
     "ShelfWheelRedirect.qml",
     "TrackPreview.qml",
     "VideoThumb.qml",
+    "SectionHeader.qml",
+    "ShowAllLabel.qml",
+    "SearchSectionMore.qml",
+    "SearchProviderGroup.qml",
+    "PlaylistBlock.qml",
+    "ArtistSearchCard.qml",
 }
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
 FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)

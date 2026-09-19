@@ -16,11 +16,13 @@ import re
 from threading import Lock
 from types import SimpleNamespace
 
-from support.paths import QML_MAIN
+from support.paths import QML_DIR, QML_MAIN
 
 from waves.waves_ui.backend import _ARTIST_VIDEO_PAGE, _VIDEOS_GROUP_PREFIX, WavesBridge
 
 QML = QML_MAIN.read_text(encoding="utf-8")
+# SectionHeader moved to its own file in #315 slice 6; the pin follows it.
+SECTION_HEADER = (QML_DIR / "SectionHeader.qml").read_text(encoding="utf-8")
 
 
 class _Signal:
@@ -188,8 +190,8 @@ def test_the_header_trailing_slot_outranks_the_collapse_target():
     """The SectionHeader row must take z 1: without it the whole-header
     collapse MouseArea (secMa, declared after the row) eats the trailing
     button's clicks and every click collapses the section instead."""
-    sec = re.search(r"component SectionHeader: Item \{.*?\n    \}", QML, re.DOTALL)
-    assert sec, "SectionHeader component not found"
+    sec = re.search(r"^Item \{\n(.*)\n\}$", SECTION_HEADER, re.DOTALL | re.MULTILINE)
+    assert sec, "SectionHeader.qml root item not found"
     block = sec.group(0)
     assert "property Component trailing: null" in block
     assert re.search(r"RowLayout \{\s*\n\s*z: 1", block), "the header row must stack above secMa"
