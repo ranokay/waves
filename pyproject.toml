@@ -59,8 +59,8 @@ dev = [
   "pytest>=9.0.1,<10",
   "deptry>=0.25.1,<0.26",
   "pre-commit>=4.5.0,<5",
-  # Exact pin, kept equal to the ruff hooks' `uv run ruff` in pre-commit:
-  # one ruff version lints locally, in pre-commit and in CI.
+  # Pinned so the pre-commit hooks (which run this environment's ruff) and CI
+  # lint with one version; Dependabot may bump it like any other dev tool.
   "ruff==0.16.8",
   "pyupgrade>=3.21.2,<4",
   "pillow>=12.0.0,<13",

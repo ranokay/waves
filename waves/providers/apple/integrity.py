@@ -314,6 +314,10 @@ def _ffprobe_creation_date(path: Path, ffprobe_path: str) -> datetime.date | Non
     return None
 
 
+# The ffprobe tag spellings a creation date can hide under.
+_DATE_TAG_KEYS = ("creation_time", "creationdate", "encoded_date")
+
+
 def _creation_candidates(payload: dict) -> list[str]:
     """Every creation/encoded date string an ffprobe JSON payload carries."""
     import contextlib
@@ -322,17 +326,11 @@ def _creation_candidates(payload: dict) -> list[str]:
     with contextlib.suppress(Exception):
         tags = (payload.get("format") or {}).get("tags") or {}
         if isinstance(tags, dict):
-            candidates.extend(
-                str(tags[key]) for key in ("creation_time", "creationdate", "encoded_date") if tags.get(key)
-            )
+            candidates.extend(str(tags[key]) for key in _DATE_TAG_KEYS if tags.get(key))
         for stream in payload.get("streams") or []:
             tags = (stream or {}).get("tags") or {}
-            if isinstance(tags, dict) and any(
-                tags.get(key) for key in ("creation_time", "creationdate", "encoded_date")
-            ):
-                candidates.extend(
-                    str(tags[key]) for key in ("creation_time", "creationdate", "encoded_date") if tags.get(key)
-                )
+            if isinstance(tags, dict) and any(tags.get(key) for key in _DATE_TAG_KEYS):
+                candidates.extend(str(tags[key]) for key in _DATE_TAG_KEYS if tags.get(key))
     return candidates
 
 

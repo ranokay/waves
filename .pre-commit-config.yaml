@@ -32,7 +32,7 @@ repos:
         language: system
       - id: ruff-format
         name: ruff format
-        entry: uv run --locked --all-extras ruff format --check --force-exclude
+        entry: uv run --locked --all-extras ruff format --force-exclude
         types_or: [python, pyi]
         language: system
 
