@@ -25,7 +25,6 @@ from waves.waves_ui.updater import AppUpdater, UpdaterError
 
 BACKEND_SRC = (REPO_ROOT / "waves" / "waves_ui" / "backend.py").read_text()
 QML_DIR = REPO_ROOT / "waves" / "waves_ui" / "qml"
-MAIN_QML = (QML_DIR / "Main.qml").read_text()
 # The whole QML tree: the negative pins below must not go vacuous when the
 # surface they fence moves out of Main.qml (#315).
 ALL_QML = "\n".join(path.read_text(encoding="utf-8") for path in sorted(QML_DIR.glob("*.qml")))
