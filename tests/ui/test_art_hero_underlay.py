@@ -13,6 +13,9 @@ import re
 from support.paths import QML_MAIN
 
 MAIN_QML = QML_MAIN.read_text()
+# The cover box is its own file since #315 slice 3, so the Art pins read it
+# there; the file body is the component.
+ART_QML = (QML_MAIN.parent / "Art.qml").read_text()
 
 
 def _body(start: str, end: str = "}") -> str:
@@ -81,7 +84,7 @@ def test_page_openers_forward_the_art_they_have():
 
 
 def test_art_stand_in_layer_sits_beneath_and_silences_the_placeholder():
-    art = _component("Art")
+    art = ART_QML
     assert 'property string underUrl: ""' in art
     assert 'readonly property bool underReady: underUrl !== "" && underImg.status === Image.Ready' in art
     # Declared before the cover so it paints beneath it.
