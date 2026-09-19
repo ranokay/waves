@@ -22,6 +22,8 @@ ART_QML = (QML_MAIN.parent / "Art.qml").read_text()
 ALBUM_BLOCK_QML = (QML_MAIN.parent / "AlbumBlock.qml").read_text()
 ART_CARD_QML = (QML_MAIN.parent / "ArtCard.qml").read_text()
 LIB_PLAYLIST_ROW_QML = (QML_MAIN.parent / "LibPlaylistRow.qml").read_text()
+# Split out of Main.qml in #315 slice 6.
+PLAYLIST_BLOCK_QML = (QML_MAIN.parent / "PlaylistBlock.qml").read_text()
 
 
 def _body(start: str, end: str = "}") -> str:
@@ -88,7 +90,8 @@ def test_page_openers_forward_the_art_they_have():
     # Rows that name a page pass their cover along too. The album row's two
     # sites live in AlbumBlock.qml since #315 slice 5.
     assert ALBUM_BLOCK_QML.count('host.openAlbumPage(albumId, "", title, art)') == 2
-    assert MAIN_QML.count("root.openPlaylistPage(plId, title, art)") == 2
+    # The playlist row's two sites moved with PlaylistBlock.qml in #315 slice 6.
+    assert PLAYLIST_BLOCK_QML.count("host.openPlaylistPage(plId, title, art)") == 2
     assert "host.openPlaylistPage(plRow.model.id, plRow.model.title, plRow.model.art)" in LIB_PLAYLIST_ROW_QML
 
 
@@ -223,7 +226,7 @@ def test_cards_and_rows_arm_the_prefetch_on_hover():
     pl = _component("LibPlaylistRow")
     assert "host.hoverPrefetch(plRow.prefetchCard)" in pl and "enabled: !plRow.isFolder" in pl
     assert '({ kind: "album", id: ab.albumId, art: ab.art })' in _flat(ALBUM_BLOCK_QML)
-    assert '({ kind: "playlist", id: pb.plId, art: pb.art })' in _flat(MAIN_QML)
+    assert '({ kind: "playlist", id: pb.plId, art: pb.art })' in _flat(PLAYLIST_BLOCK_QML)
 
 
 def test_track_rows_prefetch_their_album_only_after_a_longer_rest():
