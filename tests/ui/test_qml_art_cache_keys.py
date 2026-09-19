@@ -44,11 +44,13 @@ import re
 
 from support.paths import QML_MAIN as QML
 
-# The cover surfaces live in Main.qml and Art.qml (the cover box split out in
-# #315): this guard must read both, or the app's most-used art surface stops
-# being scanned and its cache keys can drift from the pool's unnoticed.
+# The cover surfaces live in Main.qml, Art.qml (the cover box split out in
+# #315 slice 3) and PreviewArt.qml (the track disc, split out in slice 5):
+# this guard must read all of them, or the app's most-used art surfaces stop
+# being scanned and their cache keys can drift from the pool's unnoticed.
 ART_QML = QML.parent / "Art.qml"
-COVER_FILES = (QML, ART_QML)
+PREVIEW_ART_QML = QML.parent / "PreviewArt.qml"
+COVER_FILES = (QML, ART_QML, PREVIEW_ART_QML)
 
 # The one fill mode every cover surface uses. Covers are square and so are the
 # decode sizes asked for them, so cropping and stretching would paint the same

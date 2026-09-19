@@ -108,10 +108,7 @@ def test_running_face_is_a_full_width_bar_with_the_percent_carved_in_on_hover():
 
 
 def test_browse_card_button_reveals_the_percent_for_the_whole_card():
-    src = QML_MAIN.read_text()
-    a = src.index("component ArtCard:")
-    b = src.index("component ", a + 1)
-    art_card = src[a:b]
+    art_card = (QML_DIR / "ArtCard.qml").read_text()
     m = re.search(r"DownloadButton \{\s*id: acDl(.*?)\n\s*\}\n", art_card, re.DOTALL)
     assert m, "the ArtCard's live download button (id: acDl) moved"
     assert "wordHover: acWrapHover.hovered" in m.group(1), (

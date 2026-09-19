@@ -17,6 +17,11 @@ MAIN_QML = QML_MAIN.read_text()
 # The cover box is its own file since #315 slice 3, so the Art pins read it
 # there; the file body is the component.
 ART_QML = (QML_MAIN.parent / "Art.qml").read_text()
+# Components whose pins below read them in their own files (split out of
+# Main.qml in #315 slice 5).
+ALBUM_BLOCK_QML = (QML_MAIN.parent / "AlbumBlock.qml").read_text()
+ART_CARD_QML = (QML_MAIN.parent / "ArtCard.qml").read_text()
+LIB_PLAYLIST_ROW_QML = (QML_MAIN.parent / "LibPlaylistRow.qml").read_text()
 
 
 def _body(start: str, end: str = "}") -> str:
@@ -39,6 +44,11 @@ def _body(start: str, end: str = "}") -> str:
 
 
 def _component(name: str) -> str:
+    """The component's own text: its file when it is split out of Main.qml
+    (#315), else its inline block there."""
+    path = QML_MAIN.parent / f"{name}.qml"
+    if path.exists():
+        return path.read_text()
     return _body(f"component {name}:", "component ")
 
 
@@ -75,10 +85,11 @@ def test_page_openers_forward_the_art_they_have():
     card = _body("    function openBrowseCard(card) {")
     assert 'openBrowseItem(kind, card.id, "", card.title || "", card.art || "")' in card
     assert 'openBrowseItem("album", card.album_id, card.id, card.album || "", card.art || "")' in card
-    # Rows that name a page pass their cover along too.
-    assert MAIN_QML.count('root.openAlbumPage(albumId, "", title, art)') == 2
+    # Rows that name a page pass their cover along too. The album row's two
+    # sites live in AlbumBlock.qml since #315 slice 5.
+    assert ALBUM_BLOCK_QML.count('host.openAlbumPage(albumId, "", title, art)') == 2
     assert MAIN_QML.count("root.openPlaylistPage(plId, title, art)") == 2
-    assert "root.openPlaylistPage(plRow.model.id, plRow.model.title, plRow.model.art)" in MAIN_QML
+    assert "host.openPlaylistPage(plRow.model.id, plRow.model.title, plRow.model.art)" in LIB_PLAYLIST_ROW_QML
 
 
 # ----- the Art stand-in layer -------------------------------------------------
@@ -206,12 +217,12 @@ def test_cards_and_rows_arm_the_prefetch_on_hover():
     # to the title does not cancel a dwell that never left the card. Its
     # artwork-only handler keeps the hover strip and must not prefetch.
     ac = _component("ArtCard")
-    assert "root.hoverPrefetch(ac.card)" in ac and "root.hoverPrefetchCancel(ac.card)" in ac
-    wrap = MAIN_QML.split("id: acWrapHover", 1)[1].split("}", 1)[0]
+    assert "host.hoverPrefetch(ac.card)" in ac and "host.hoverPrefetchCancel(ac.card)" in ac
+    wrap = ART_CARD_QML.split("id: acWrapHover", 1)[1].split("}", 1)[0]
     assert "hoverPrefetch" not in wrap, "prefetch belongs to the card-wide handler, not the artwork's"
     pl = _component("LibPlaylistRow")
-    assert "root.hoverPrefetch(plRow.prefetchCard)" in pl and "enabled: !plRow.isFolder" in pl
-    assert '({ kind: "album", id: ab.albumId, art: ab.art })' in _flat(MAIN_QML)
+    assert "host.hoverPrefetch(plRow.prefetchCard)" in pl and "enabled: !plRow.isFolder" in pl
+    assert '({ kind: "album", id: ab.albumId, art: ab.art })' in _flat(ALBUM_BLOCK_QML)
     assert '({ kind: "playlist", id: pb.plId, art: pb.art })' in _flat(MAIN_QML)
 
 
@@ -220,12 +231,12 @@ def test_track_rows_prefetch_their_album_only_after_a_longer_rest():
     assert 'readonly property var prefetchCard: ({ kind: "album", id: trow.albumId, art: "" })' in _flat(trow), (
         "a row's cover is the small size, warming it at the hero's would pin a pixmap nobody asks for"
     )
-    assert "root.hoverPrefetch(trow.prefetchCard, 450)" in trow, "a row is where a pointer parks: longer dwell"
-    assert "root.hoverPrefetchCancel(trow.prefetchCard)" in trow
+    assert "host.hoverPrefetch(trow.prefetchCard, 450)" in trow, "a row is where a pointer parks: longer dwell"
+    assert "host.hoverPrefetchCancel(trow.prefetchCard)" in trow
     # A HoverHandler, not the row's MouseArea: the thumb, title and buttons
     # stacked on the row each take hover, so containsMouse would restart the
     # dwell at every internal edge.
-    before = trow.split("root.hoverPrefetch(trow.prefetchCard, 450)", 1)[0].splitlines()[-4:]
+    before = trow.split("host.hoverPrefetch(trow.prefetchCard, 450)", 1)[0].splitlines()[-4:]
     assert any("HoverHandler {" in ln for ln in before), before
     # A local file's row (the Library section, ADR 0007) has no catalog album
     # to warm: the gate keeps the prefetch to rows that name one.
@@ -284,7 +295,7 @@ def test_the_disc_shows_the_house_marks_on_a_still_plate():
     # The mask stays inside coverWrap: it is the circle.
     assert "id: paMask" in pa[wrap:], "paMask is the mask's sourceItem and belongs with the Image"
     term = pa[pa.index("id: paTerm") :]
-    assert 'color: "#04140a"' in term and 'pa.artState === "failed" ? root.red : root.accentDim' in term
+    assert 'color: "#04140a"' in term and 'pa.artState === "failed" ? red : accentDim' in term
     assert 'text: ">"' in term and 'text: "x"' in term
     assert 'opacity: ((pa.artState === "loading" && pa.artWaited) || pa.artState === "failed") ? 1 : 0' in term
     assert 'text: "≈"' in pa and 'visible: pa.artState === "none"' in pa, "a track with no cover says so"
@@ -293,7 +304,7 @@ def test_the_disc_shows_the_house_marks_on_a_still_plate():
 def test_the_disc_blinks_off_the_shared_clock_and_fades_on_the_wrap():
     assert "readonly property real termBlink: (marchTick % 20) < 10 ? 1 : 0" in MAIN_QML
     pa = _component("PreviewArt")
-    assert "opacity: paTerm.visible ? root.termBlink : 1" in pa, (
+    assert "opacity: paTerm.visible ? host.termBlink : 1" in pa, (
         "the visible test goes first, so a settled disc never reads the 20Hz tick"
     )
     # (The vinyl spin is a SequentialAnimation too, but only one disc buffers
@@ -308,4 +319,4 @@ def test_the_disc_blinks_off_the_shared_clock_and_fades_on_the_wrap():
     img = pa[pa.index("id: paImg") :]
     assert "visible: status === Image.Ready" in img
     assert "opacity:" not in img.split("layer.enabled", 1)[0], "no opacity animation on the layered Image"
-    assert "sourceSize.width: root.discDecode" in img
+    assert "sourceSize.width: host.discDecode" in img

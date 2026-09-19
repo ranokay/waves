@@ -72,6 +72,37 @@ from support.paths import QML_DIR
 #                    So `model.`/`modelData.` there are NOT remote. It is still
 #                    scanned so its deliberate StyledText spots stay deliberate and
 #                    can't quietly start binding a TIDAL string.
+#   TrackRow.qml     the TrackRow cluster split out of Main.qml (#315 slice 5):
+#   PreviewArt.qml   TrackRow renders search/artist/library rows (remote titles,
+#   QualPick.qml     artists, albums), PreviewArt renders a track's cover and the
+#   QualPickRow.qml  player's words, QualPick/QualPickRow render the catalog's
+#   LibraryTag.qml   tier vocabulary, and LibraryTag/NewTag/PopMeter/
+#   NewTag.qml       TrackPresencePill/StandalonePair/ProviderBadge are local
+#   PopMeter.qml     chrome that ride the set for the same structural reason as
+#   TrackPresencePill.qml  the earlier split files: the PlainText rule scans
+#   StandalonePair.qml     every Text element they hold.
+#   ProviderBadge.qml
+#   AlbumBlock.qml   the LibSourceGroup closure split out of Main.qml (#315
+#   AlbumPresencePill.qml  slice 5): AlbumBlock/TrackPreview render TIDAL
+#   ArtCard.qml      albums and tracks, ArtCard/LibPlaylistRow/ArtistBadges/
+#   ArtistBadges.qml CardCaption render catalog titles, artists, dates and
+#   CardCaption.qml  playlist names, LibSourceGroup renders the saved-shelf
+#   Check.qml        panes, and the rest (Check, DownIcon, FolderBadge,
+#   DownIcon.qml     FolderTile, LibChip, LibList, OdoDigit, PreviewBar, RiseIn,
+#   FolderBadge.qml  RollSwap, ShelfEdgeFades, ShelfWheelRedirect, VideoThumb)
+#   FolderTile.qml   are local chrome that ride the set for the same structural
+#   LibChip.qml      reason.
+#   LibList.qml
+#   LibPlaylistRow.qml
+#   LibSourceGroup.qml
+#   OdoDigit.qml
+#   PreviewBar.qml
+#   RiseIn.qml
+#   RollSwap.qml
+#   ShelfEdgeFades.qml
+#   ShelfWheelRedirect.qml
+#   TrackPreview.qml
+#   VideoThumb.qml
 TIDAL_DATA_FILES = {
     "Main.qml",
     "DownloadButton.qml",
@@ -92,6 +123,37 @@ TIDAL_DATA_FILES = {
     "SpecBtn.qml",
     "QualTag.qml",
     "DecryptText.qml",
+    "TrackRow.qml",
+    "PreviewArt.qml",
+    "QualPick.qml",
+    "QualPickRow.qml",
+    "LibraryTag.qml",
+    "NewTag.qml",
+    "PopMeter.qml",
+    "TrackPresencePill.qml",
+    "StandalonePair.qml",
+    "ProviderBadge.qml",
+    "AlbumBlock.qml",
+    "AlbumPresencePill.qml",
+    "ArtCard.qml",
+    "ArtistBadges.qml",
+    "CardCaption.qml",
+    "Check.qml",
+    "DownIcon.qml",
+    "FolderBadge.qml",
+    "FolderTile.qml",
+    "LibChip.qml",
+    "LibList.qml",
+    "LibPlaylistRow.qml",
+    "LibSourceGroup.qml",
+    "OdoDigit.qml",
+    "PreviewBar.qml",
+    "RiseIn.qml",
+    "RollSwap.qml",
+    "ShelfEdgeFades.qml",
+    "ShelfWheelRedirect.qml",
+    "TrackPreview.qml",
+    "VideoThumb.qml",
 }
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
 FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)

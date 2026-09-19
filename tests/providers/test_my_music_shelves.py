@@ -26,7 +26,11 @@ from waves.waves_ui import bridge_surfaces
 from waves.waves_ui.backend import WavesBridge
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MAIN_QML = REPO_ROOT / "waves" / "waves_ui" / "qml" / "Main.qml"
+QML_DIR = REPO_ROOT / "waves" / "waves_ui" / "qml"
+MAIN_QML = QML_DIR / "Main.qml"
+# The whole QML tree: the pane's words are bridge data, and the surfaces that
+# must not hardcode them may live in any split-out file (#315).
+ALL_QML = "\n".join(path.read_text(encoding="utf-8") for path in sorted(QML_DIR.glob("*.qml")))
 
 # TIDAL's strip, exactly as the pane has always rendered it.
 _TIDAL_CATEGORIES = ["home", "albums", "tracks", "artists", "playlists", "mixes", "videos"]
@@ -352,9 +356,8 @@ def test_two_sources_loading_their_shelves_in_one_turn_both_land():  # noqa: C90
 def test_the_sources_are_bridge_data_not_qml_copy():
     # The pane renders the bridge's list -- the group label, the strip's
     # categories and the empty state's words are all data -- so a provider's
-    # own name reaches the UI without a QML edit.
-    qml = MAIN_QML.read_text(encoding="utf-8")
-
-    assert "Saved from" not in qml
-    assert "waves.myMusicSources()" in qml
-    assert "waves.myMusicEmpty()" in qml
+    # own name reaches the UI without a QML edit. The negative pin scans the
+    # whole tree: the pane's surface lives in LibSourceGroup.qml since #315.
+    assert "Saved from" not in ALL_QML
+    assert "waves.myMusicSources()" in ALL_QML
+    assert "waves.myMusicEmpty()" in ALL_QML
