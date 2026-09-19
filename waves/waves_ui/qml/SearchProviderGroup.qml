@@ -21,8 +21,9 @@ import QtQuick.Layouts
 //   host.searchReveal / host.searchRowVisible / host.sectionVisible /
 //   host.submitSearch
 // `resultsPane` is the search results Flickable the artist strip's wheel
-// redirect drives. `index` is the Repeater's delegate index, which picks
-// this group's payload entry.
+// redirect drives. `index` is the Repeater's delegate index: the caller's
+// `groupData: root.searchGroups[index]` picks this group's payload entry with
+// it.
 // Split out of Main.qml (#315 slice 6). The palette values are local
 // copies of Main.qml's static literals — the SettingsPage.qml convention;
 // keep them in step if the palette changes.

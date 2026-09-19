@@ -33,16 +33,15 @@ def test_the_video_grid_caps_at_whole_rows():
 
 
 def test_show_all_for_videos_waits_for_the_rounded_count():
-    m = re.search(
-        r'SearchSectionMore \{\s*\n\s*host: group\.host\n\s*section: "videos"\n(.*?)\n\s*\}', GROUP, re.DOTALL
-    )
+    blocks = re.findall(r"SearchSectionMore \{(.*?)\n\s*\}", GROUP, re.DOTALL)
+    m = next((b for b in blocks if 'section: "videos"' in b), None)
     assert m, "the videos SHOW ALL instance moved"
-    assert "cap: videoGrid.cap" in m.group(1), "the videos SHOW ALL must use the grid-computed cap"
+    assert "cap: videoGrid.cap" in m, "the videos SHOW ALL must use the grid-computed cap"
     assert "property int cap: 5" in MORE and 'host.filterType === "all" && count > cap' in MORE
 
 
 def test_the_other_sections_keep_their_five():
-    fn = _block("function searchRowVisible(name, count, index, expanded, cap) {", "\n    }")
+    fn = _block("function searchRowVisible(name, count, index, expanded, cap) {", "\n  }")
     assert "index < (cap || 5)" in fn
     for name in ("albums", "tracks", "playlists", "mixes"):
         assert f'host.searchRowVisible("{name}", {name}Model.count, index, ' in GROUP

@@ -190,8 +190,8 @@ def test_the_header_trailing_slot_outranks_the_collapse_target():
     """The SectionHeader row must take z 1: without it the whole-header
     collapse MouseArea (secMa, declared after the row) eats the trailing
     button's clicks and every click collapses the section instead."""
-    sec = re.search(r"Item \{.*?\n\}", SECTION_HEADER, re.DOTALL)
-    assert sec, "SectionHeader component not found"
+    sec = re.search(r"^Item \{\n(.*)\n\}$", SECTION_HEADER, re.DOTALL | re.MULTILINE)
+    assert sec, "SectionHeader.qml root item not found"
     block = sec.group(0)
     assert "property Component trailing: null" in block
     assert re.search(r"RowLayout \{\s*\n\s*z: 1", block), "the header row must stack above secMa"
