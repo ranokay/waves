@@ -342,8 +342,8 @@ class Metadata:
     path_file: str | pathlib.Path
     title: str
     album: str
-    albumartist: [str]
-    artists: [str]
+    albumartist: list[str] | None
+    artists: list[str] | None
     copy_right: str
     tracknumber: int
     discnumber: int
@@ -355,7 +355,7 @@ class Metadata:
     lyrics: str
     lyrics_unsynced: str
     path_cover: str
-    cover_data: bytes
+    cover_data: bytes | None
     album_replay_gain: float
     album_peak_amplitude: float
     track_replay_gain: float
@@ -376,7 +376,7 @@ class Metadata:
         target_upc: dict[str, str],
         album: str = "",
         title: str = "",
-        artists: [str] = None,
+        artists: list[str] | None = None,
         copy_right: str = "",
         tracknumber: int = 0,
         discnumber: int = 0,
@@ -384,11 +384,11 @@ class Metadata:
         totaldisc: int = 0,
         composer: str = "",
         isrc: str = "",
-        albumartist: [str] = None,
+        albumartist: list[str] | None = None,
         date: str = "",
         lyrics: str = "",
         lyrics_unsynced: str = "",
-        cover_data: bytes = None,
+        cover_data: bytes | None = None,
         album_replay_gain: float = 1.0,
         album_peak_amplitude: float = 1.0,
         track_replay_gain: float = 1.0,
@@ -402,8 +402,8 @@ class Metadata:
         release_type: str = "",
         is_video: bool = False,
         item_id: str = "",
-        artist_ids: [str] = None,
-        album_artist_ids: [str] = None,
+        artist_ids: list[str] | None = None,
+        album_artist_ids: list[str] | None = None,
         legacy_ids: bool = True,
         audio_type: str | None = None,
         # Custom-template omit flags (issue #61): one per omittable tag
