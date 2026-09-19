@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.paths import QML_MAIN
+from support.paths import QML_DIR, QML_MAIN
 from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, run_scenario
 
 
@@ -59,8 +59,7 @@ def test_the_first_percent_lights_where_the_fade_has_let_go():
 
 def test_only_the_download_face_pads_its_edges():
     src = QML_MAIN.read_text()
-    a = src.index("component DotMatrix:")
-    dm = src[a : src.index("component ", a + 1)]
+    dm = (QML_DIR / "DotMatrix.qml").read_text()
     assert "property int padCols: 0" in dm and "property int padRows: 0" in dm, "DotMatrix lost its pad knobs"
     assert "readonly property int fillTotal: fillRows * fillCols" in dm, "the fill must be sized by the pad-free area"
     assert re.search(r"litCount:.*\* fillTotal\)", dm), "litCount must count over fillTotal, not the whole grid"

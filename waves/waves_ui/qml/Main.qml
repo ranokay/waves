@@ -660,195 +660,6 @@ ApplicationWindow {
             f.contentY = Math.min(target, Math.max(0, f.contentHeight - f.height))
         })
     }
-    // Scroll-edge dressing plus the "back to top" badge, one window-level
-    // instance serving whichever view is on screen. Three pieces:
-    //   1. LIP edge fades: a short dense darkening at the top and bottom of
-    //      the scroll viewport so rows fade in and out of frame instead of
-    //      being cut off hard at the chrome edge.
-    //   2. Rolodex roll: rows whose center enters the edge band tilt subtly
-    //      around their horizontal axis (real perspective), so the list reads
-    //      like a conveyor curling over a drum edge.
-    //   3. The INLINE crest pill: appears once the page has been scrolled
-    //      about a viewport down, riding the top edge; one click glides back.
-    component BackToTop: Item {
-        id: btt
-        property var flick: null
-        anchors.fill: parent
-        readonly property bool on: flick !== null && flick.visible
-                                   && flick.contentY > flick.height * 0.75
-        NumberAnimation { id: bttAnim; property: "contentY"; to: 0; duration: 450; easing.type: Easing.OutCubic }
-        // Viewport geometry in window coordinates. The leading terms in the
-        // sequence expressions are binding dependencies: mapToItem alone is
-        // not notifiable, so re-evaluate when the window or view resizes.
-        readonly property bool live: flick !== null && flick.visible
-        readonly property real fTop: live ? (btt.height, flick.height, flick.mapToItem(btt, 0, 0).y) : 0
-        readonly property real fX: live ? (btt.width, flick.width, flick.mapToItem(btt, 0, 0).x) : 0
-        readonly property real fW: live ? flick.width : 0
-        readonly property real fBottom: live ? fTop + flick.height : 0
-
-        // LIP edge fades
-        // Scroll-gated: a fade exists to soften rows being cut off by the
-        // viewport edge, so when nothing is cut off there must be no fade.
-        // At the very top of a page (contentY 0) the top fade is fully
-        // transparent, so heroes, artist art and the back bar are never
-        // dimmed for no reason; it ramps in over the first fadeH pixels of
-        // scroll. Mirrored at the bottom: the fade lifts as the end of the
-        // page arrives, and a page too short to scroll shows no fades at all.
-        readonly property real fadeH: 34
-        Rectangle {
-            x: btt.fX; y: btt.fTop; width: btt.fW; height: btt.fadeH
-            visible: btt.live && opacity > 0
-            opacity: btt.live ? Math.min(1, Math.max(0, btt.flick.contentY) / btt.fadeH) : 0
-            gradient: Gradient {
-                GradientStop { position: 0; color: "#0d0f12" }
-                GradientStop { position: 0.25; color: Qt.alpha("#0d0f12", 0.82) }
-                GradientStop { position: 0.6; color: Qt.alpha("#0d0f12", 0.28) }
-                GradientStop { position: 1; color: Qt.alpha("#0d0f12", 0) }
-            }
-        }
-        Rectangle {
-            x: btt.fX; y: btt.fBottom - btt.fadeH; width: btt.fW; height: btt.fadeH
-            visible: btt.live && opacity > 0
-            opacity: btt.live ? Math.min(1, Math.max(0,
-                         btt.flick.contentHeight - btt.flick.height - btt.flick.contentY) / btt.fadeH) : 0
-            rotation: 180
-            gradient: Gradient {
-                GradientStop { position: 0; color: "#0d0f12" }
-                GradientStop { position: 0.25; color: Qt.alpha("#0d0f12", 0.82) }
-                GradientStop { position: 0.6; color: Qt.alpha("#0d0f12", 0.28) }
-                GradientStop { position: 1; color: Qt.alpha("#0d0f12", 0) }
-            }
-        }
-
-        // rolodex roll
-        // Each row gets a Rotation bound to its own view (captured at creation,
-        // so rows on backgrounded pages keep working when the user returns).
-        readonly property real rollMax: 9
-        readonly property real rollBand: 56
-        // The tilt angle below reads row.mapToItem(fl), which is NOT reactive, so
-        // the binding only re-evaluates on its one live dependency: fl.contentY
-        // (a scroll). A tab switch or a filter change repositions rows without
-        // moving contentY, which would leave every angle frozen at its old value
-        // until the next scroll. Bumping rollTick on those events (see armRoll and
-        // onFlickChanged) is the dependency that forces a recompute on demand.
-        property int rollTick: 0
-        Component {
-            id: bttRollComp
-            Rotation {
-                property Item row
-                property Item fl
-                origin.x: row ? row.width / 2 : 0
-                origin.y: row ? row.height / 2 : 0
-                axis { x: 1; y: 0; z: 0 }
-                angle: {
-                    var _t = btt.rollTick  // re-eval on tab switch / filter / reflow, not only scroll
-                    if (!row || !fl) return 0
-                    // Only row-sized items may tilt. Anything taller (a shelf
-                    // section, an expanded album panel) projects far outside
-                    // the edge band when rotated and shears the whole page.
-                    if (row.height > 160) return 0
-                    var cy = fl.contentY   // binding dependency: re-evaluate on scroll
-                    var c = row.mapToItem(fl, 0, 0).y + row.height / 2
-                    if (c < btt.rollBand) return (1 - Math.max(0, c) / btt.rollBand) * btt.rollMax
-                    var vh = fl.height
-                    if (c > vh - btt.rollBand) return -Math.min(1, (c - (vh - btt.rollBand)) / btt.rollBand) * btt.rollMax
-                    return 0
-                }
-            }
-        }
-        function armRow(row, fl) {
-            // Rows with an existing transform are either already armed or own
-            // one of the app's few bespoke transforms; leave both alone.
-            if (row.transform.length > 0) return
-            row.transform = bttRollComp.createObject(row, { row: row, fl: fl })
-        }
-        function armRoll() {
-            var fl = flick
-            if (!fl || !fl.contentItem) return
-            var ci = fl.contentItem
-            for (var i = 0; i < ci.children.length; i++) {
-                var it = ci.children[i]
-                if (it.width < 100 || it.height < 25) continue
-                // List views parent delegates directly to contentItem; the
-                // column-based pages nest rows one level down in a page-sized
-                // content column, which must not tilt as a whole. In both
-                // cases only row-sized items are armed: shelf sections and
-                // grid cells stay flat (the angle binding also re-checks the
-                // cap live, for rows that grow after arming).
-                if (it.height <= 160) { armRow(it, fl); continue }
-                if (it.height < fl.height * 0.9) continue
-                for (var j = 0; j < it.children.length; j++) {
-                    var row = it.children[j]
-                    if (row.width > 100 && row.height > 24 && row.height <= 160) armRow(row, fl)
-                }
-            }
-            // Rows may have moved (a fresh arm, a reflow, a returning tab), so
-            // force every armed angle to recompute now, not on the next scroll.
-            rollTick++
-        }
-        // Bump synchronously too: on a tab switch the returning pane is already
-        // laid out, so its rows can re-tilt correctly in the same frame it
-        // appears (no stale-then-correct flash); armRoll then re-checks post-layout.
-        onFlickChanged: { btt.rollTick++; Qt.callLater(armRoll) }
-        Component.onCompleted: Qt.callLater(armRoll)
-        // Delegates recycle and result columns repopulate; contentHeight moves
-        // in both cases, so it doubles as the re-arm signal.
-        Connections {
-            target: btt.flick
-            function onContentHeightChanged() { Qt.callLater(btt.armRoll) }
-        }
-
-        // the INLINE crest pill
-        // The clipping band pins the pill's travel to the scroll viewport, so
-        // it slides up UNDER the chrome edge when hiding, the same way rows
-        // disappear when scrolled, instead of passing over the navbar.
-        Item {
-            x: btt.fX; y: btt.fTop; width: btt.fW; height: 40
-            clip: true
-            visible: btt.live
-        Rectangle {
-            anchors.horizontalCenter: parent.horizontalCenter
-            y: btt.on ? 6 : -30
-            width: bttRow.implicitWidth + 20; height: 24; radius: 12
-            color: "#e6060810"
-            border.color: bttMa.containsMouse ? root.accent : root.accentDim
-            opacity: btt.on ? (bttMa.containsMouse ? 1 : 0.6) : 0
-            visible: opacity > 0
-            Behavior on opacity { NumberAnimation { duration: 160 } }
-            Behavior on y { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
-            Row {
-                id: bttRow
-                anchors.centerIn: parent; spacing: 7
-                Text {
-                    id: bttCrest
-                    textFormat: Text.PlainText
-                    property int ph: 0
-                    text: ("_.-~^~-._.~^'~._").substring(bttCrest.ph) + ("_.-~^~-._.~^'~._").substring(0, bttCrest.ph)
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: root.accent; font.family: root.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: -1
-                    Timer { running: btt.on; interval: 120; repeat: true; onTriggered: bttCrest.ph = (bttCrest.ph + 1) % 16 }
-                }
-                Text {
-                    textFormat: Text.PlainText; text: "TOP"
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: root.textHi; font.pixelSize: 9; font.bold: true; font.letterSpacing: root.btnTrack
-                }
-            }
-            MouseArea {
-                id: bttMa
-                anchors.fill: parent
-                enabled: btt.on
-                hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    bttAnim.stop()
-                    bttAnim.target = btt.flick
-                    bttAnim.from = btt.flick.contentY
-                    bttAnim.start()
-                }
-            }
-        }
-        }
-    }
     // My Music is rendered as one group per bridge source (issue #259): each
     // group owns its category strip, its sort, its pagination flags and its
     // keep-alive models, so a second provider's shelves are its own and no
@@ -6243,6 +6054,7 @@ ApplicationWindow {
                         DotMatrix {
                             anchors.fill: parent
                             rows: 4; dot: 3; gap: 2; pct: tp.pct
+                            ledPulse: root.ledPulse; shimmerPhase: root.shimmerPhase; queueEdgeHeld: root.queueEdgeHeld
                         }
                         MouseArea {
                             anchors.fill: parent
@@ -6397,6 +6209,7 @@ ApplicationWindow {
                     anchors.left: parent.left; anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     rows: 4; dot: 3; gap: 2; pct: pbar.frac * 100
+                    ledPulse: root.ledPulse; shimmerPhase: root.shimmerPhase; queueEdgeHeld: root.queueEdgeHeld
                 }
                 MouseArea {
                     id: pbarScrub
@@ -7078,6 +6891,7 @@ ApplicationWindow {
                 // stable-width test guards).
                 DotMatrix {
                     objectName: "dbMatrix"
+                    ledPulse: root.ledPulse; shimmerPhase: root.shimmerPhase; queueEdgeHeld: root.queueEdgeHeld
                     anchors.left: parent.left; anchors.right: parent.right
                     // Centred to the DEVICE pixel, not the logical one: the
                     // grid is 27px in a 28px button, an offset of 0.5, which
@@ -9591,233 +9405,6 @@ ApplicationWindow {
         }
     }
 
-    // Old-school LED dot-matrix progress. Dots sit in a fixed grid and brighten
-    // (faded → bright) in a bottom-up, left-to-right "stacking" order as pct
-    // rises, each dot is a precise fraction of the whole.
-    component DotMatrix: Item {
-        id: dm
-        property real pct: 0
-        property int rows: 4
-        property real dot: 3
-        property real gap: 2
-        property int maxCols: 0
-        property bool pulse: true
-        property color onColor: root.accent
-        // "Finishing" twinkle (chosen in the shimmer lab): the bar sits at
-        // 100% while the final steps run (merge, decrypt, FLAC extract,
-        // tagging), so instead of freezing, every lit dot breathes on its
-        // own pseudo-random offset of the shared shimmerPhase clock. Only
-        // download surfaces set this; the player's scrub track is playback
-        // position, not work, and must stay static at 100%.
-        property bool finishing: false
-        // The percentage, carved INTO the bar on demand rather than printed
-        // beside it (progress pill lab, rounds 2 to 5, 2026-08-17): `word`
-        // ("37%") is spelled in a 3x5 dot font in the matrix's own cells,
-        // centred, always lit, on a PLATE (the glyph box plus a cell of
-        // margin) knocked back to near black whatever the bar under it is
-        // doing, so the number reads the same at every percentage. Taking the
-        // INVERSE of the bar under them instead (a hole where the bar is
-        // lit, a lit dot where it is not) would read at either end of a run
-        // and not at all while the fill edge crossed the digits: half the
-        // number dark, half bright, for that whole stretch.
-        // This polarity and not the other way up (dark digits on a lit
-        // plate), which the round 8 sheet settled: a 3x5 glyph is mostly
-        // stroke, so punched out of a plate it reads as a blob to be decoded
-        // from its counters, worst of all on "100%". Lit strokes are the
-        // polarity the font was drawn for.
-        // `wordReveal` 0..1 fades it in; every cell moves from its bar state
-        // to its digit state on its own pseudo-random delay (the "dissolve"),
-        // so the number condenses out of the bar and dissolves back into it,
-        // and a reveal that reverses mid-way plays back from wherever it is.
-        // The zone is the WORD's own width, centred: one, two or three digits
-        // all sit in the middle. A fixed four-glyph zone ("100%") with the
-        // word right-aligned in it would move nothing on 9 -> 10 and 99 ->
-        // 100, but would hang every ordinary reading off centre to the right
-        // for the sake of the one percent of a run that is 100.
-        // Needs five rows (a digit is five tall); with fewer, or no word, the
-        // matrix is the plain bar.
-        property string word: ""
-        property real wordReveal: 0
-        readonly property var font3x5: ({
-            "0": ["111","101","101","101","111"], "1": ["010","110","010","010","111"],
-            "2": ["111","001","111","100","111"], "3": ["111","001","111","001","111"],
-            "4": ["101","101","111","001","001"], "5": ["111","100","111","001","111"],
-            "6": ["111","100","111","101","111"], "7": ["111","001","001","001","001"],
-            "8": ["111","101","111","101","111"], "9": ["111","101","111","001","111"],
-            "%": ["101","001","010","100","101"] })
-        // A glyph is five rows tall; in a taller grid it sits on the middle
-        // five (the seven-row download face carries it on rows 1..5).
-        readonly property bool wordOn: rows >= 5 && word !== "" && wordReveal > 0
-        readonly property int wordZoneW: Math.max(0, word.length * 4 - 1)
-        // Rounded, not floored: a cell is 4px and the ideal start lands on a
-        // half cell whenever the leftover is odd, so rounding keeps the worst
-        // case to half a cell either way instead of a whole one.
-        readonly property int wordZoneStart: Math.round((cols - wordZoneW) / 2)
-        readonly property int wordRowTop: Math.floor((rows - 5) / 2)
-        // The plate the number sits on: the glyph box with a cell of margin
-        // all round (on the seven-row face that is the full height), held at
-        // this alpha, so no digit stroke ever touches a bar cell of its own
-        // brightness. Not 0: a whisper of the grid keeps it a plate laid over
-        // the bar rather than a hole cut out of the button.
-        property real wordPlate: 0.04
-        function wordPlateAt(col, rowTop) {
-            return col >= wordZoneStart - 1 && col <= wordZoneStart + wordZoneW
-                && rowTop >= wordRowTop - 1 && rowTop <= wordRowTop + 5
-        }
-        function wordOnAt(col, rowTop) {
-            var z = col - wordZoneStart
-            if (z < 0 || z >= wordZoneW || z % 4 === 3) return false
-            var r = rowTop - wordRowTop
-            if (r < 0 || r > 4) return false
-            var g = font3x5[word.charAt(Math.floor(z / 4))]
-            return g ? g[r].charAt(z % 4) === "1" : false
-        }
-        // Conveyor edge fade. Cells within edgeFadeW px of either end, or
-        // edgeFadeH px of the top / bottom, fade out on the SAME curve as
-        // ShelfEdgeFades and the LIP fades (darkness 1.0 @0, 0.82 @0.25,
-        // 0.28 @0.6, 0 @1 of the fade), so a bar that runs to its outline
-        // arrives and leaves like a shelf's cards at the shelf's end instead
-        // of stopping hard. 0 = no fade (the queue row, the scrubbers).
-        property real edgeFadeW: 0
-        property real edgeFadeH: 0
-        // Soft outer rows: each cell of the top row shades from `edgeSoft`
-        // alpha at its outer (top) edge to full at its inner edge, the
-        // bottom row mirrored, so the outermost blocks blend into whatever
-        // the bar sits on instead of stopping at a hard line (the queue
-        // row's bar, which has no outline to end at). -1 = off.
-        property real edgeSoft: -1
-        // Pad cells: the outermost padCols columns at either end and padRows
-        // rows top and bottom are decoration. They draw as field, but take no
-        // part in the fill (the fill runs over the inner fillCols x fillRows
-        // only), so the edge fade above spends itself on cells that carry no
-        // progress and the first real block lights a little further in,
-        // where the fade has mostly let go. Before this, the fade to zero
-        // hid the opening several percent of a run entirely (livetest
-        // report, 2026-08-17: a 56-track playlist at 9 tracks showed an
-        // empty bar). With mirrorPads a pad copies its nearest real
-        // neighbour's state rather than staying dark, so a full bar's ends
-        // still light and fade like the unpadded one; a pad never pulses.
-        // 0 / 0 = no pads (the queue row, the scrubbers). Keep the count
-        // small: the fill must still visibly start at the start of the bar
-        // (progress pill lab round 7, 2026-08-17).
-        property int padCols: 0
-        property int padRows: 0
-        property bool mirrorPads: false
-        readonly property int fillCols: Math.max(1, cols - 2 * padCols)
-        readonly property int fillRows: Math.max(1, rows - 2 * padRows)
-        readonly property int fillTotal: fillRows * fillCols
-        readonly property Gradient softTop: Gradient {
-            GradientStop { position: 0; color: Qt.alpha(dm.onColor, Math.max(0, dm.edgeSoft)) }
-            GradientStop { position: 1; color: dm.onColor }
-        }
-        readonly property Gradient softBottom: Gradient {
-            GradientStop { position: 0; color: dm.onColor }
-            GradientStop { position: 1; color: Qt.alpha(dm.onColor, Math.max(0, dm.edgeSoft)) }
-        }
-        readonly property real gridW: cols * (dot + gap) - gap
-        function edgeVis(t) {
-            t = Math.max(0, Math.min(1, t))
-            var d = t < 0.25 ? 1 - (t / 0.25) * 0.18
-                  : t < 0.6 ? 0.82 - ((t - 0.25) / 0.35) * 0.54
-                  : 0.28 - ((t - 0.6) / 0.4) * 0.28
-            return 1 - d
-        }
-        // The column count follows a SETTLED width, not the live one. Cols
-        // riding width directly meant a drawer-edge drag (which resizes per
-        // mouse move) changed `total` on every pixel, and the Repeater tore
-        // down and rebuilt every dot each time: thousands of object churns
-        // per drag, a GUI event backlog, and a pointer that stayed wedged
-        // for a beat after letting go. The bar tolerating a stale column
-        // count for a beat is invisible; the churn was not.
-        // 300ms, and never while the drawer edge is held: at 120ms the one
-        // remaining rebuild landed mid-way through the grip's 220ms release
-        // animation and visibly froze it (a plain click, changing nothing,
-        // was smooth). Letting the release animation finish first moves the
-        // same rebuild onto a static screen, where it cannot be seen.
-        // Declared with a binding for a correct first paint, then the
-        // imperative assignment below BREAKS that binding so a drag can no
-        // longer ride it; from then on only the timer writes. The break is
-        // deferred one event-loop turn past completion, NOT done in
-        // onCompleted: a matrix is completed mid-cascade, before the sizes
-        // around it have finished landing (the download button's Loader
-        // builds it while the button is still the queued face's width, and
-        // the button widens to the running width a binding or two later), so
-        // breaking on completion latched that pre-layout width and the bar
-        // opened with two columns too many for the settle interval, then
-        // shed them. Every width write of the creating turn still rides the
-        // binding; the timer takes over from the next turn on.
-        property real _settledWidth: width
-        Component.onCompleted: Qt.callLater(function() { if (dm) dm._settledWidth = dm.width })
-        onWidthChanged: dmSettle.restart()
-        Timer {
-            id: dmSettle; interval: 300
-            onTriggered: if (root.queueEdgeHeld) dmSettle.restart(); else dm._settledWidth = dm.width
-        }
-        readonly property int cols: {
-            var c = Math.max(1, Math.floor((_settledWidth + gap) / (dot + gap)))
-            return (maxCols > 0 && c > maxCols) ? maxCols : c
-        }
-        readonly property int total: rows * cols
-        readonly property int litCount: Math.round(Math.max(0, Math.min(100, pct)) / 100 * fillTotal)
-        implicitHeight: rows * dot + (rows - 1) * gap
-        Repeater {
-            model: dm.total
-            delegate: Rectangle {
-                required property int index
-                readonly property int col: index % dm.cols
-                readonly property int rowTop: Math.floor(index / dm.cols)
-                // column-major, bottom-up: fill one column from the bottom to the
-                // top, then start the next column, like rising bars.
-                // Position within the fill (pads excluded); a pad clamps to its
-                // nearest real cell, which is what it mirrors when asked to.
-                readonly property int fillCol: col - dm.padCols
-                readonly property int fillRow: rowTop - dm.padRows
-                readonly property bool pad: fillCol < 0 || fillCol >= dm.fillCols || fillRow < 0 || fillRow >= dm.fillRows
-                readonly property int nearCol: Math.max(0, Math.min(dm.fillCols - 1, fillCol))
-                readonly property int nearRow: Math.max(0, Math.min(dm.fillRows - 1, fillRow))
-                readonly property int fillIndex: nearCol * dm.fillRows + (dm.fillRows - 1 - nearRow)
-                readonly property bool lit: (!pad || dm.mirrorPads) && fillIndex < dm.litCount
-                // the single next block pulses while a download is in progress
-                readonly property bool pulsing: !pad && dm.pulse && fillIndex === dm.litCount && dm.litCount < dm.fillTotal
-                // Per-dot pseudo-random phase offset for the finishing twinkle
-                // (fract(sin(i)*const), the classic shader hash: cheap, stable,
-                // uniform enough for eyes).
-                readonly property real twinkleR: { var r = Math.sin(index * 12.9898) * 43758.5453; return r - Math.floor(r) }
-                x: col * (dm.dot + dm.gap)
-                y: rowTop * (dm.dot + dm.gap)
-                width: dm.dot; height: dm.dot; radius: 0   // sharp LED cells
-                color: dm.onColor
-                gradient: dm.edgeSoft < 0 ? null : rowTop === 0 ? dm.softTop : rowTop === dm.rows - 1 ? dm.softBottom : null
-                // Breathe off the shared 20 Hz clock (root.ledPulse) rather than a
-                // per-frame animation, so a running download doesn't repaint the
-                // whole window every vsync. See root.ledPulse.
-                readonly property real barOpacity: (dm.finishing && lit)
-                       ? 0.62 + 0.38 * (0.5 + 0.5 * Math.cos(2 * Math.PI * (root.shimmerPhase * 2 + twinkleR)))
-                       : pulsing ? root.ledPulse : (lit ? 1.0 : 0.16)
-                // A cell of the word (a digit stroke) or of the plate behind
-                // it: its own reveal is the shared one shifted by a per-cell
-                // random delay (a second hash, so it does not line up with the
-                // twinkle), and it lerps its bar state -> its carve state on
-                // it. A stroke goes fully lit whatever the bar under it is
-                // doing, the plate around it goes to near black, so the
-                // number reads identically at 4% and at 96%.
-                readonly property bool wordCell: dm.wordOn && dm.wordOnAt(col, rowTop)
-                readonly property bool plateCell: dm.wordOn && !wordCell && dm.wordPlateAt(col, rowTop)
-                readonly property real wordTo: wordCell ? 1.0 : dm.wordPlate
-                readonly property real wordDelay: { var r = Math.sin(index * 78.233 + 1.7) * 43758.5453; return (r - Math.floor(r)) * 0.65 }
-                readonly property real wordT: Math.max(0, Math.min(1, (dm.wordReveal - wordDelay) / 0.35))
-                // Static per cell (its own position against the fade
-                // lengths), so the fade costs nothing per tick.
-                readonly property real edgeMul:
-                    (dm.edgeFadeW > 0 ? Math.min(dm.edgeVis((x + dm.dot / 2) / dm.edgeFadeW),
-                                                 dm.edgeVis((dm.gridW - x - dm.dot / 2) / dm.edgeFadeW)) : 1)
-                  * (dm.edgeFadeH > 0 ? Math.min(dm.edgeVis((y + dm.dot / 2) / dm.edgeFadeH),
-                                                 dm.edgeVis((dm.implicitHeight - y - dm.dot / 2) / dm.edgeFadeH)) : 1)
-                opacity: edgeMul * ((wordCell || plateCell) ? barOpacity + (wordTo - barOpacity) * wordT : barOpacity)
-            }
-        }
-    }
-
     // A word that "decrypts" in: every glyph starts scrambled and locks left
     // to right. Carried over from the queue design lab for the ledger's
     // status cell; any target change while live replays the decode, so a
@@ -10430,133 +10017,6 @@ ApplicationWindow {
                             }
                         }
                     }
-                }
-            }
-        }
-    }
-
-    // A small snake circling the loading label, used as the waiting surface
-    // of the peek card. It laps a ring laid around the plate, eating the
-    // bites dropped on the path and growing a little with each one; only a
-    // wait long enough to fill most of the ring (minutes, i.e. genuinely bad
-    // internet) makes the run start over. The body is just (head, length)
-    // along the ring, so the card resizing mid-grow re-lays the path without
-    // ever scattering segments. The clock only runs while the field is both
-    // visible and armed, so a closed peek costs nothing.
-    component SnakeField: Item {
-        id: sf
-        property bool running: false
-        property real cell: 9
-        property real gap: 12
-        property real plateW: 0
-        property real plateH: 0
-        // Pixel top-left corners of the ring cells, walked clockwise.
-        property var ring: []
-        property int head: 0
-        property int len: 5
-        property int food: -1
-
-        function _buildRing() {
-            var w = plateW + gap * 2 + cell
-            var h = plateH + gap * 2 + cell
-            if (plateW <= 0 || plateH <= 0 || width < w + cell || height < h + cell) { ring = []; cv.requestPaint(); return }
-            var x0 = (width - w) / 2
-            var y0 = (height - h) / 2
-            var nx = Math.max(4, Math.round(w / cell))
-            var ny = Math.max(3, Math.round(h / cell))
-            var sx = w / nx
-            var sy = h / ny
-            var r = []
-            var i
-            for (i = 0; i < nx; i++) r.push({ x: x0 + i * sx, y: y0 })
-            for (i = 1; i < ny; i++) r.push({ x: x0 + (nx - 1) * sx, y: y0 + i * sy })
-            for (i = nx - 2; i >= 0; i--) r.push({ x: x0 + i * sx, y: y0 + (ny - 1) * sy })
-            for (i = ny - 2; i >= 1; i--) r.push({ x: x0, y: y0 + i * sy })
-            var wasEmpty = ring.length === 0
-            ring = r
-            // The card opens smaller than the ring needs and grows into it,
-            // so the run truly starts here, on the frame the ring first fits
-            // (a reset against the empty ring parked food at -1 for good).
-            if (wasEmpty && running) { reset(); return }
-            if (head >= r.length) head = head % r.length
-            if (len > r.length - 4) len = Math.max(3, r.length - 4)
-            if (food < 0 || food >= r.length) _placeFood()
-            cv.requestPaint()
-        }
-        function _occupied(idx) {
-            var n = ring.length
-            for (var i = 0; i < len; i++) if ((head - i + n * 2) % n === idx) return true
-            return false
-        }
-        function _placeFood() {
-            var n = ring.length
-            if (n === 0) { food = -1; return }
-            // Drop the bite somewhere ahead on the lap, never on the snake.
-            for (var t = 0; t < 30; t++) {
-                var idx = (head + 3 + Math.floor(Math.random() * Math.max(1, n - len - 4))) % n
-                if (!_occupied(idx)) { food = idx; return }
-            }
-            food = -1
-        }
-        function reset() {
-            len = 5
-            var n = ring.length
-            if (n === 0) { food = -1; cv.requestPaint(); return }
-            // Random start, so two peeks in a row are not the same run.
-            head = Math.floor(Math.random() * n)
-            // The first bite lands just ahead of the head (3 to 6 cells, well
-            // under a second away), so even a quick load shows the snake eat
-            // at least once. Clamped clear of the tail on a tiny ring.
-            var off = 3 + Math.floor(Math.random() * 4)
-            if (off > n - len - 1) off = Math.max(1, n - len - 1)
-            food = (head + off) % n
-            cv.requestPaint()
-        }
-        function step() {
-            var n = ring.length
-            if (n === 0) return
-            head = (head + 1) % n
-            if (head === food) {
-                len += 1
-                // Filling most of the lap takes minutes of eating: shed the
-                // weight and keep going rather than catching the tail.
-                if (len >= n - 4) len = 5
-                _placeFood()
-            }
-            cv.requestPaint()
-        }
-        onRunningChanged: if (running) { _buildRing(); reset() }
-        onWidthChanged: _buildRing()
-        onHeightChanged: _buildRing()
-        onPlateWChanged: _buildRing()
-        onPlateHChanged: _buildRing()
-        Timer {
-            running: sf.running && sf.visible
-            interval: 110; repeat: true
-            onTriggered: sf.step()
-        }
-        Canvas {
-            id: cv
-            anchors.fill: parent
-            onPaint: {
-                var c = getContext("2d")
-                c.reset()
-                var n = sf.ring.length
-                if (n === 0) return
-                var s = sf.cell
-                var pad = Math.max(1, Math.round(s * 0.18))
-                if (sf.food >= 0 && sf.food < n) {
-                    var f = sf.ring[sf.food]
-                    c.fillStyle = "" + root.goldDim
-                    c.fillRect(f.x + pad, f.y + pad, s - pad * 2, s - pad * 2)
-                }
-                for (var i = 0; i < sf.len; i++) {
-                    var seg = sf.ring[(sf.head - i + n * 2) % n]
-                    // Head brightest, fading down the tail: reads as motion
-                    // even in a still frame.
-                    var a = Math.max(0.14, 0.55 - i * 0.55 / Math.max(1, sf.len))
-                    c.fillStyle = "" + Qt.alpha(root.accent, a)
-                    c.fillRect(seg.x + pad, seg.y + pad, s - pad * 2, s - pad * 2)
                 }
             }
         }
@@ -11375,7 +10835,7 @@ ApplicationWindow {
                     id: bcDlRun
                     anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                     visible: bc.dlSt === "running"; spacing: 5
-                    DotMatrix { width: 34; rows: 2; dot: 4; gap: 2; pct: Math.max(0, bc.dlPct); finishing: bc.dlPct >= 99.9; anchors.verticalCenter: parent.verticalCenter }
+                    DotMatrix { width: 34; rows: 2; dot: 4; gap: 2; pct: Math.max(0, bc.dlPct); finishing: bc.dlPct >= 99.9; ledPulse: root.ledPulse; shimmerPhase: root.shimmerPhase; queueEdgeHeld: root.queueEdgeHeld; anchors.verticalCenter: parent.verticalCenter }
                     Text {
                         textFormat: Text.PlainText
                         text: bc.dlPct >= 0 ? Math.round(bc.dlPct) + "%" : "…"
@@ -17964,6 +17424,7 @@ ApplicationWindow {
                                     height: 15
                                     sourceComponent: DotMatrix {
                                     objectName: "queueRowMatrix"
+                                    ledPulse: root.ledPulse; shimmerPhase: root.shimmerPhase; queueEdgeHeld: root.queueEdgeHeld
                                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                                     rows: 4; dot: 3; gap: 1; maxCols: 0
                                     // The ends fade on the shelf edge fades'

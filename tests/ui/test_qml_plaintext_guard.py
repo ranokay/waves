@@ -44,13 +44,18 @@ from support.paths import QML_DIR
 #   Main.qml         renders TIDAL search/library/queue/artist results, so its
 #                    `model.`/`modelData.`/`artistData.`/`db.label` bindings are
 #                    attacker-controllable → remote.
+#   BackToTop.qml    components split out of Main.qml (#315). They render local
+#   DotMatrix.qml    chrome only, so no remote marker matches today; they ride
+#   SnakeField.qml   the TIDAL set anyway so the STRUCTURAL PlainText rule
+#                    (`test_dynamic_text_is_plaintext`) scans their Text elements,
+#                    and a future binding there cannot go unchecked.
 #   SettingsPage.qml renders only LOCAL data: the app's own settings schema
 #                    (`modelData.label/.group/.desc/.help/.fields`, defined in our
 #                    Python, never from TIDAL) and our own ffmpeg/updater status.
 #                    So `model.`/`modelData.` there are NOT remote. It is still
 #                    scanned so its deliberate StyledText spots stay deliberate and
 #                    can't quietly start binding a TIDAL string.
-TIDAL_DATA_FILES = {"Main.qml"}
+TIDAL_DATA_FILES = {"Main.qml", "BackToTop.qml", "DotMatrix.qml", "SnakeField.qml"}
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
 FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)
 
@@ -529,8 +534,9 @@ def test_remotetext_instances_do_not_reenable_richtext():
 
 
 def test_dynamic_text_is_plaintext():
-    """STRUCTURAL guard (the real anti-regression rule). In Main.qml (the surface
-    that renders TIDAL data) EVERY Text/Label whose ``text:`` is a dynamic
+    """STRUCTURAL guard (the real anti-regression rule). In Main.qml and the
+    components split out of it (#315: BackToTop/DotMatrix/SnakeField) EVERY
+    Text/Label whose ``text:`` is a dynamic
     (non-literal) expression must render as PlainText, be a RemoteText, or be one of
     the audited intentional-StyledText spots. No remote-vs-local guessing: any
     dynamic string, however it reaches ``text:`` (``model.x``, a bare component prop
@@ -567,7 +573,7 @@ def test_dynamic_text_is_plaintext():
     # Vacuous-pass tripwire: Main.qml binds dozens of dynamic labels; if this
     # collapses the scanner silently broke and would never catch a regression.
     assert audited >= 30, (
-        f"only found {audited} dynamic Text/Label elements in Main.qml; the scanner is probably broken."
+        f"only found {audited} dynamic Text/Label elements in the scanned files; the scanner is probably broken."
     )
     assert not violations, (
         "Dynamic strings rendered on the rich-text-capable AutoText default: a "
