@@ -41,6 +41,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 
@@ -200,6 +201,10 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def settle(ms: int) -> None:
         loop = QEventLoop()
         QTimer.singleShot(ms, loop.quit)
@@ -241,10 +246,10 @@ def _run_scenario() -> int:
     bridge.queueChanged.emit(list(bridge._queue))
     settle(120)
     row = "(function(){ var it = queueList.itemAtIndex(0); return it })()"
-    if not bool(q(row + " !== null")):
+    if not bool(qd(row + " !== null")):
         print("no drawer row", file=sys.stderr)
         return EXIT_PRECONDITION
-    tier = str(q(row + ".tier"))
+    tier = str(qd(row + ".tier"))
     if tier != "LOSSLESS":
         bad.append(f"a lossless-only album queued under HI-RES states {tier!r} on its pill, want LOSSLESS")
 
@@ -262,7 +267,7 @@ def _run_scenario() -> int:
 
     def ledger() -> str:
         return str(
-            q("""(function () {
+            qd("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -288,7 +293,7 @@ def _run_scenario() -> int:
     if bridge._target_tier() != "HIGH":
         print(f"the setting change did not take: target reads {bridge._target_tier()!r}", file=sys.stderr)
         return EXIT_PRECONDITION
-    tier = str(q(row + ".tier"))
+    tier = str(qd(row + ".tier"))
     if tier != "LOSSLESS":
         bad.append(f"after the setting changed the pill states {tier!r}, want the queued LOSSLESS")
     got = ledger()

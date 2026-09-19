@@ -31,6 +31,10 @@ import re
 
 from support.paths import QML_MAIN
 
+# The ledger moved into QueueDrawer.qml in #315 slice 4; the drawer file is
+# where both its Repeater and the queueTracks counts live.
+QUEUE_DRAWER_QML = QML_MAIN.parent / "QueueDrawer.qml"
+
 # The ledger row delegate is the only thing that carries this name, so it is
 # the anchor for finding the ledger's own Repeater without pinning a line
 # number or the name of the property the model happens to bind today.
@@ -42,21 +46,21 @@ def _ledger_model_line(src: str) -> str:
     head = src[: src.index(LEDGER_ROW_MARKER)]
     models = [line.strip() for line in head.splitlines() if re.match(r"^\s*model:", line)]
     assert models, (
-        "no model binding found above the ledger row delegate in Main.qml; if "
+        "no model binding found above the ledger row delegate in QueueDrawer.qml; if "
         "the queue track list moved, update this guard rather than deleting it"
     )
     return models[-1]
 
 
 def test_the_ledger_model_is_a_count_not_the_array():
-    src = QML_MAIN.read_text(encoding="utf-8")
+    src = QUEUE_DRAWER_QML.read_text(encoding="utf-8")
     line = _ledger_model_line(src)
 
     # Bound inline: it must count. Bound through a property: that property must
     # be declared an int, which a queueTracks array cannot satisfy.
-    if "root.queueTracks[" in line:
+    if "host.queueTracks[" in line:
         assert ".length" in line, (
-            "the queue track list binds root.queueTracks rows directly as its "
+            "the queue track list binds host.queueTracks rows directly as its "
             "model again; every live tick (queueTrackState/Pct) reassigns that "
             "array, and an array model rebuilds every delegate per tick, which "
             f"reads as the hover-peek sliver vibrating. Offending line: {line}"
@@ -78,14 +82,14 @@ def test_the_ledger_model_is_a_count_not_the_array():
 
 def test_every_count_taken_from_queue_tracks_uses_length():
     """Whatever feeds that int must count rows, not carry them."""
-    src = QML_MAIN.read_text(encoding="utf-8")
+    src = QUEUE_DRAWER_QML.read_text(encoding="utf-8")
     counts = [
         line.strip()
         for line in src.splitlines()
-        if re.match(r"^\s*(?:model:|readonly property int \w+:)", line) and "root.queueTracks[" in line
+        if re.match(r"^\s*(?:model:|readonly property int \w+:)", line) and "host.queueTracks[" in line
     ]
     assert counts, (
-        "nothing derives a count from root.queueTracks in Main.qml any more; "
+        "nothing derives a count from host.queueTracks in QueueDrawer.qml any more; "
         "if the queue track list moved, update this guard rather than deleting it"
     )
     for line in counts:

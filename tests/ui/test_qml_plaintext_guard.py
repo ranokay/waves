@@ -35,6 +35,7 @@ See ``ALGORITHM`` below for the exact detection rules.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from support.paths import QML_DIR
 
@@ -59,6 +60,12 @@ from support.paths import QML_DIR
 #   HoverSwell.qml   (`test_dynamic_text_is_plaintext`) scans their Text elements,
 #   QueueStack.qml   and a future binding there cannot go unchecked.
 #   RetryMark.qml
+#   QueueDrawer.qml  the drawer closure split out of Main.qml (#315 slice 4):
+#   LogsDrawer.qml   the queue rows render TIDAL titles/artists/status words,
+#   QualTag.qml      QualTag renders the catalog's tier words, DecryptText's
+#   DecryptText.qml  target is the ledger's status cell, and LogsDrawer/SpecBtn
+#                    are local chrome that ride the set for the same structural
+#                    reason.
 #   SettingsPage.qml renders only LOCAL data: the app's own settings schema
 #                    (`modelData.label/.group/.desc/.help/.fields`, defined in our
 #                    Python, never from TIDAL) and our own ffmpeg/updater status.
@@ -80,6 +87,11 @@ TIDAL_DATA_FILES = {
     "HoverSwell.qml",
     "QueueStack.qml",
     "RetryMark.qml",
+    "QueueDrawer.qml",
+    "LogsDrawer.qml",
+    "SpecBtn.qml",
+    "QualTag.qml",
+    "DecryptText.qml",
 }
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
 FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)
@@ -462,17 +474,28 @@ def _is_literal_only(text_value: str) -> bool:
 # was fail-OPEN there: binding remote data through one, or adding a new
 # `component FooText: Text`, would have sailed past CI. Derived components are
 # now held to exactly what RemoteText is held to, and found by pattern rather
-# than by name, so the next one is covered the day it is written.
+# than by name, so the next one is covered the day it is written. #315 later
+# moved DecryptText into its own file; a file whose root element is the Text
+# is the same component in a different shape, and both are matched below.
 _DERIVED_TEXT_COMPONENT = re.compile(r"(?m)^\s*component\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:Text|Label)\s*\{")
+
+# A Text/Label component that moved into its own file (#315) has no
+# `component X: Text` line left to match: its ROOT element is the Text, and
+# the file's stem is the component name. Same pin, same instance scan below.
+_ROOT_TEXT_COMPONENT = re.compile(r"(?m)^(Text|Label)\s*\{")
 
 
 def _derived_text_components() -> dict[str, tuple[str, int]]:
-    """Every `component X: Text` in the QML tree: name -> (file, brace index)."""
+    """Every `component X: Text` (or Text-rooted file) in the tree:
+    name -> (file, brace index)."""
     found: dict[str, tuple[str, int]] = {}
     for fname in FILES:
         src = (QML_DIR / fname).read_text(encoding="utf-8")
         for m in _DERIVED_TEXT_COMPONENT.finditer(src):
             found[m.group(1)] = (fname, m.end() - 1)
+        root = _ROOT_TEXT_COMPONENT.search(src)
+        if root:
+            found.setdefault(Path(fname).stem, (fname, root.end() - 1))
     return found
 
 

@@ -48,6 +48,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 # Easings that deliberately leave the 0..1 range: they overshoot the target (or
@@ -68,8 +69,12 @@ SPRINGY = (
 
 
 def _peek_behavior() -> str:
-    """The queue ledger's height Behavior block, found by the animation's id."""
-    src = QML_MAIN.read_text(encoding="utf-8")
+    """The queue ledger's height Behavior block, found by the animation's id.
+
+    The ledger (and the animation) moved into QueueDrawer.qml in #315 slice 4;
+    the drawer file is the only place holding the peek now.
+    """
+    src = (QML_MAIN.parent / "QueueDrawer.qml").read_text(encoding="utf-8")
     at = src.find("id: qtrackAnim")
     assert at != -1, "could not find the queue ledger's peek animation (id: qtrackAnim)"
     start = src.rfind("Behavior on implicitHeight", 0, at)
@@ -148,6 +153,10 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def settle(ms: int) -> None:
         loop = QEventLoop()
         QTimer.singleShot(ms, loop.quit)
@@ -177,28 +186,28 @@ def _run_scenario() -> int:
             " for (var i = 0; i < n; i++) { var it = queueList.itemAtIndex(i);"
             f" if (it && it.model && it.model.qid === {qid}) return it }} return null }})()"
         )
-        if not bool(q(row + " !== null")):
+        if not bool(qd(row + " !== null")):
             print(f"no drawer row for {name!r}", file=sys.stderr)
             return EXIT_PRECONDITION
-        got = bool(q(row + ".expandable"))
+        got = bool(qd(row + ".expandable"))
         if got != want:
             bad.append(f"{name!r} (tracks={tracks}): expandable is {got}, expected {want}")
             continue
         # A row that cannot expand must not pretend otherwise: clicking it is
         # inert. It still answers the pointer, though, or it reads as broken,
         # so the peek stays available to every collection row.
-        if not bool(q(row + ".peekable")):
+        if not bool(qd(row + ".peekable")):
             bad.append(f"{name!r} does not answer a hover at all")
         if not want:
-            q(row + ".qtoggle()")
-            if bool(q(row + ".qexp")) or bool(q(f"root.queueExpanded[{qid}] === true")):
+            qd(row + ".qtoggle()")
+            if bool(qd(row + ".qexp")) or bool(q(f"root.queueExpanded[{qid}] === true")):
                 bad.append(f"{name!r} expanded on click even though it has nothing to show")
             # And the hover really does open the sliver, with the line that
             # explains why there is nothing more behind it.
             # The scene point is computed in QML: the rows come back as bare
             # QObjects through QQmlExpression, with no Item API on them.
-            sx = float(q("(function(){ var c = " + row + "; return c.mapToItem(null, c.width / 2, 12).x })()"))
-            sy = float(q("(function(){ var c = " + row + "; return c.mapToItem(null, c.width / 2, 12).y })()"))
+            sx = float(qd("(function(){ var c = " + row + "; return c.mapToItem(null, c.width / 2, 12).x })()"))
+            sy = float(qd("(function(){ var c = " + row + "; return c.mapToItem(null, c.width / 2, 12).y })()"))
             pt = QPointF(sx, sy)
             ev = QMouseEvent(
                 QMouseEvent.Type.MouseMove,
@@ -210,9 +219,9 @@ def _run_scenario() -> int:
             )
             app.sendEvent(root, ev)
             settle(400)
-            if not bool(q(row + ".peeking")):
+            if not bool(qd(row + ".peeking")):
                 bad.append(f"{name!r} does not peek with the pointer on it")
-            note = q(
+            note = qd(
                 "(function(){ var c = " + row + "; var f = function(o){ if (!o) return null;"
                 " if (o.objectName === 'qSingleNote') return o;"
                 " var k = o.children || []; for (var i = 0; i < k.length; i++)"
@@ -226,7 +235,7 @@ def _run_scenario() -> int:
             # the frame the pointer left and the card then spent the whole
             # 220ms retract folding away an empty box, which reads as the row
             # swallowing its own content rather than as a peek closing.
-            clip = q(
+            clip = qd(
                 "(function(){ var c = " + row + "; var f = function(o){ if (!o) return null;"
                 " if (o.objectName === 'qLedgerClip') return o;"
                 " var k = o.children || []; for (var i = 0; i < k.length; i++)"

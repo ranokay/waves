@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import run_scenario
+from support.qml import run_scenario, scoped_q
 
 # The heaviest QML boot: excluded from the quick QML pass.
 pytestmark = pytest.mark.slow
@@ -132,6 +132,10 @@ def _scenario() -> int:
         QTimer.singleShot(timeout_ms, loop.quit)
         loop.exec()
 
+    # The log view and its follow-scroll live inside LogsDrawer.qml (#315
+    # slice 4); evaluate their expressions in that file's own scope.
+    qd = scoped_q(q, "logsDrawer.background")
+
     settle()
     q(PARK_LOGIN_QML)
     settle()
@@ -155,7 +159,7 @@ def _scenario() -> int:
     diagnostics.flush_disk_log()
     q("logsDrawer.logsRefresh()")
     settle(100)
-    stream_ok = "console-marker-error-1" in q("logsText.text")
+    stream_ok = "console-marker-error-1" in qd("logsText.text")
 
     # The level filter narrows to errors; INFO needs verbose on disk.
     diagnostics.set_verbose(True)
@@ -164,11 +168,11 @@ def _scenario() -> int:
     diagnostics.flush_disk_log()
     q("logsDrawer.logsRefresh()")
     settle(100)
-    both_ok = "console-marker-info-1" in q("logsText.text") and "console-marker-error-2" in q("logsText.text")
+    both_ok = "console-marker-info-1" in qd("logsText.text") and "console-marker-error-2" in qd("logsText.text")
     q("logsDrawer.logsMinLevel = 2")
     settle(100)
-    filter_ok = both_ok and "console-marker-error-2" in q("logsText.text")
-    filter_ok = filter_ok and "console-marker-info-1" not in q("logsText.text")
+    filter_ok = both_ok and "console-marker-error-2" in qd("logsText.text")
+    filter_ok = filter_ok and "console-marker-info-1" not in qd("logsText.text")
     q("logsDrawer.logsMinLevel = 0")
     settle(100)
 
@@ -206,8 +210,8 @@ def _scenario() -> int:
     diagnostics.flush_disk_log()
     q("logsDrawer.logsRefresh()")
     settle(200)
-    follow_ok = q("logsFlick.contentY") > 0
-    q("logsFlick.contentY = 0")
+    follow_ok = qd("logsFlick.contentY") > 0
+    qd("logsFlick.contentY = 0")
     settle(100)
     follow_ok = follow_ok and not q("logsDrawer.logsFollow")
     q("logsDrawer.logsFollow = true")

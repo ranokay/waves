@@ -47,6 +47,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 from tidalapi.media import Quality
 
@@ -348,6 +349,10 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def settle(ms: int) -> None:
         loop = QEventLoop()
         QTimer.singleShot(ms, loop.quit)
@@ -379,7 +384,7 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
 
     def ledger() -> str:
         return str(
-            q("""(function () {
+            qd("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;
@@ -395,7 +400,7 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
 
     def tiers() -> str:
         return str(
-            q("""(function () {
+            qd("""(function () {
                 var out = [];
                 function walk(o) {
                     if (!o) return;

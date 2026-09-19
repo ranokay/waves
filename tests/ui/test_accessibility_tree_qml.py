@@ -186,9 +186,10 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     Return/Enter/Space handler, each accepts the event and ignores
     auto-repeat, and the two extra keys (Down opens the chooser, Escape
     clears the search box, Delete cancels a queued row) are present."""
-    # The download control's keyboard paths live in its own file since #315;
-    # the pins span the whole primary-control surface, so read both.
+    # The download control and the queue drawer live in their own files since
+    # #315; the pins span the whole primary-control surface, so read all three.
     qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "DownloadButton.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "QueueDrawer.qml").read_text(encoding="utf-8")
     press_actions = qml.count("Accessible.onPressAction")
     assert press_actions >= 5, "the primary controls lost their press actions"
     for key in ("Return", "Enter", "Space"):
@@ -213,8 +214,8 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         # The gate card's spoken name carries its chip (issue #284).
         'Accessible.name: gcard.title + (gcard.chip !== ""',
         # The queue's repeated actions name their own section (issue #284).
-        '"Retry all " + root.queueSectionWord(secItem.section)',
-        '"Clear " + root.queueSectionWord(secItem.section)',
+        '"Retry all " + host.queueSectionWord(secItem.section)',
+        '"Clear " + host.queueSectionWord(secItem.section)',
     ):
         assert re.sub(r"\s+", " ", needle) in flat, f"the keyboard path is missing: {needle}"
 

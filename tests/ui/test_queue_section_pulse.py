@@ -30,6 +30,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    scoped_q,
 )
 
 
@@ -154,6 +155,10 @@ def _run_scenario(first_row: bool = False) -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
+    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # evaluate expressions naming its ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
     def settle(ms: int) -> None:
         loop = QEventLoop()
         QTimer.singleShot(ms, loop.quit)
@@ -216,11 +221,11 @@ def _run_scenario(first_row: bool = False) -> int:
     sections: list[str] = []
     for _ in range(20):
         settle(16)
-        sections = [x for x in str(q(_SECTIONS)).split(",") if x]
+        sections = [x for x in str(qd(_SECTIONS)).split(",") if x]
         if "completed" not in sections:
             continue
         for section in sections:
-            state = str(q(_pulse_of(section)))
+            state = str(qd(_pulse_of(section)))
             ident, _, running = state.partition("|")
             if ident == "__NONE__":
                 # NOT a precondition: a header with no pulse animation is the

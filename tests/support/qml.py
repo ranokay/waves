@@ -319,3 +319,29 @@ def boot_main_qml(keep_settings: bool = False):
     # The engine owns the tree; keep it referenced for the scenario's life.
     boot_main_qml.engine = engine  # type: ignore[attr-defined]
     return root, q, settle, bridge
+
+
+def scoped_q(q, path: str):
+    """Evaluator for expressions naming a split-out component's internal ids.
+
+    Once a component leaves Main.qml (#315) its ids (``queueList``,
+    ``queueGrip``, ``logsText``, …) are no longer in the root's QML context,
+    so root-context expressions fail with a ReferenceError. Any object the
+    component file itself created carries that file's context — the drawer's
+    ``background`` is the stable handle — and expressions evaluated against
+    it resolve the component's ids exactly as the pre-move expressions did.
+    """
+
+    from PySide6.QtQml import QQmlEngine, QQmlExpression
+
+    scope = q(path)
+    context = QQmlEngine.contextForObject(scope)
+
+    def inner(expr: str):
+        e = QQmlExpression(context, scope, expr)
+        r = e.evaluate()
+        if e.hasError():
+            raise RuntimeError(e.error().toString())
+        return r[0] if isinstance(r, tuple) else r
+
+    return inner
