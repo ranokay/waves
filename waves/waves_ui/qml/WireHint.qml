@@ -29,119 +29,119 @@ import QtQuick
 // shared ledPulse/marchTick clock). `onScreen` parks the clock when nobody can
 // see it, the same gate the decorative clocks use.
 Item {
-    id: hint
+  id: hint
 
-    property bool active: false
-    property color tint: "#a8acb4"        // root.textLo
-    property real topPad: 96
-    property bool onScreen: true
-    // The palette default mirrors the app token, like ExpandChevron and LedBar
-    // do, so the component stands alone in a lab without a root to read.
-    property color accent: "#3dff6e"
+  property bool active: false
+  property color tint: "#a8acb4"        // root.textLo
+  property real topPad: 96
+  property bool onScreen: true
+  // The palette default mirrors the app token, like ExpandChevron and LedBar
+  // do, so the component stands alone in a lab without a root to read.
+  property color accent: "#3dff6e"
 
-    // The copy, in one place.
-    readonly property string phrase: "Reading the wire…"
+  // The copy, in one place.
+  readonly property string phrase: "Reading the wire…"
 
-    implicitHeight: topPad + body.height
-    height: active ? implicitHeight : 0
-    visible: shown > 0
+  implicitHeight: topPad + body.height
+  height: active ? implicitHeight : 0
+  visible: shown > 0
 
-    // The cross-fade. Slightly slower in than out, so the hint arrives calmly
-    // and gets out of the finished page's way promptly.
-    // States, not a Behavior: a Behavior whose duration binding also reads the
-    // flag that drives it captures the OLD value when the flip triggers it,
-    // which swaps the two durations (measured on HoverSwell in Main.qml, where
-    // this same pattern ran 262ms in and 98ms out, exactly reversed). Every
-    // appearance was therefore taking the prompt exit timing and every exit the
-    // calm arrival one. A transition is picked by direction and cannot race.
-    property real shown: 0
-    states: State {
-        name: "up"
-        when: hint.active
-        PropertyChanges {
-            target: hint
-            shown: 1
-        }
+  // The cross-fade. Slightly slower in than out, so the hint arrives calmly
+  // and gets out of the finished page's way promptly.
+  // States, not a Behavior: a Behavior whose duration binding also reads the
+  // flag that drives it captures the OLD value when the flip triggers it,
+  // which swaps the two durations (measured on HoverSwell in Main.qml, where
+  // this same pattern ran 262ms in and 98ms out, exactly reversed). Every
+  // appearance was therefore taking the prompt exit timing and every exit the
+  // calm arrival one. A transition is picked by direction and cannot race.
+  property real shown: 0
+  states: State {
+    name: "up"
+    when: hint.active
+    PropertyChanges {
+      target: hint
+      shown: 1
     }
-    transitions: [
-        Transition {
-            to: "up"
-            NumberAnimation {
-                property: "shown"
-                duration: 260
-                easing.type: Easing.InOutSine
-            }
-        },
-        Transition {
-            from: "up"
-            NumberAnimation {
-                property: "shown"
-                duration: 190
-                easing.type: Easing.InOutSine
-            }
-        }
-    ]
+  }
+  transitions: [
+    Transition {
+      to: "up"
+      NumberAnimation {
+        property: "shown"
+        duration: 260
+        easing.type: Easing.InOutSine
+      }
+    },
+    Transition {
+      from: "up"
+      NumberAnimation {
+        property: "shown"
+        duration: 190
+        easing.type: Easing.InOutSine
+      }
+    }
+  ]
 
-    // The stepped clock the swell derives its motion from. Restarted whenever
-    // the hint appears, so each load begins at the top of the animation rather
-    // than wherever the last one left off.
-    property int tick: 0
-    onActiveChanged: if (active)
-        tick = 0
-    Timer {
-        running: hint.visible && hint.onScreen
-        interval: 50
-        repeat: true
-        onTriggered: hint.tick = (hint.tick + 1) % 100000
+  // The stepped clock the swell derives its motion from. Restarted whenever
+  // the hint appears, so each load begins at the top of the animation rather
+  // than wherever the last one left off.
+  property int tick: 0
+  onActiveChanged: if (active)
+    tick = 0
+  Timer {
+    running: hint.visible && hint.onScreen
+    interval: 50
+    repeat: true
+    onTriggered: hint.tick = (hint.tick + 1) % 100000
+  }
+
+  Column {
+    id: body
+    y: hint.topPad
+    anchors.left: parent.left
+    anchors.right: parent.right
+    opacity: hint.shown
+    spacing: 20
+
+    Text {
+      width: parent.width
+      horizontalAlignment: Text.AlignHCenter
+      textFormat: Text.PlainText
+      text: hint.phrase
+      color: hint.tint
+      font.pixelSize: 22
+      opacity: 0.88
     }
 
-    Column {
-        id: body
-        y: hint.topPad
-        anchors.left: parent.left
-        anchors.right: parent.right
-        opacity: hint.shown
-        spacing: 20
-
-        Text {
-            width: parent.width
-            horizontalAlignment: Text.AlignHCenter
-            textFormat: Text.PlainText
-            text: hint.phrase
-            color: hint.tint
-            font.pixelSize: 22
-            opacity: 0.88
+    Row {
+      id: strip
+      anchors.horizontalCenter: parent.horizontalCenter
+      spacing: 3
+      readonly property int cells: 30
+      // One pass every ~3.9s, entering left and leaving right (the head
+      // starts and ends off the strip, so the swell arrives and departs
+      // instead of blinking into existence at cell 0).
+      readonly property real head: {
+        var span = cells + 14
+        return (hint.tick % 78) / 78 * span - 7
+      }
+      Repeater {
+        model: strip.cells
+        delegate: Rectangle {
+          required property int index
+          readonly property real d: index - strip.head
+          // Sharp face, long wake: ahead of the head the light falls
+          // off fast, behind it a wake decays slowly.
+          readonly property real lit: d > 0 ? Math.exp(-(d * d) / 2.4) : Math.exp(-(d * d) / 30.0)
+          // A shade larger than the download bars' 3px cells: this
+          // one carries a page, not a button.
+          width: 4
+          height: 4
+          radius: 0   // sharp LED cells
+          color: hint.accent
+          opacity: 0.14 + 0.86 * lit
         }
-
-        Row {
-            id: strip
-            anchors.horizontalCenter: parent.horizontalCenter
-            spacing: 3
-            readonly property int cells: 30
-            // One pass every ~3.9s, entering left and leaving right (the head
-            // starts and ends off the strip, so the swell arrives and departs
-            // instead of blinking into existence at cell 0).
-            readonly property real head: {
-                var span = cells + 14
-                return (hint.tick % 78) / 78 * span - 7
-            }
-            Repeater {
-                model: strip.cells
-                delegate: Rectangle {
-                    required property int index
-                    readonly property real d: index - strip.head
-                    // Sharp face, long wake: ahead of the head the light falls
-                    // off fast, behind it a wake decays slowly.
-                    readonly property real lit: d > 0 ? Math.exp(-(d * d) / 2.4) : Math.exp(-(d * d) / 30.0)
-                    // A shade larger than the download bars' 3px cells: this
-                    // one carries a page, not a button.
-                    width: 4
-                    height: 4
-                    radius: 0   // sharp LED cells
-                    color: hint.accent
-                    opacity: 0.14 + 0.86 * lit
-                }
-            }
-        }
+      }
     }
+  }
 }

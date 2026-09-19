@@ -26,13 +26,13 @@ import QtQuick
 // remote marker omits `textFormat: Text.PlainText`. Reach for RemoteText for new
 // remote strings; the guard enforces it.
 Text {
-    // Defaults to PlainText so a remote string is never sniffed into rich text.
-    // QML can't make a property truly final, a caller *could* still write
-    // `RemoteText { textFormat: Text.StyledText }` and re-enable rich text, so
-    // this default is not a hard runtime guarantee. Enforcement lives in the guard
-    // test (tests/test_qml_plaintext_guard.py), which fails CI on a RemoteText that
-    // overrides textFormat to anything but PlainText. A deliberate, audited
-    // StyledText spot must use a bare Text with a guard allowlist entry, not this
-    // component.
-    textFormat: Text.PlainText
+  // Defaults to PlainText so a remote string is never sniffed into rich text.
+  // QML can't make a property truly final, a caller *could* still write
+  // `RemoteText { textFormat: Text.StyledText }` and re-enable rich text, so
+  // this default is not a hard runtime guarantee. Enforcement lives in the guard
+  // test (tests/test_qml_plaintext_guard.py), which fails CI on a RemoteText that
+  // overrides textFormat to anything but PlainText. A deliberate, audited
+  // StyledText spot must use a bare Text with a guard allowlist entry, not this
+  // component.
+  textFormat: Text.PlainText
 }
