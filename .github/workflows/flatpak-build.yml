@@ -1,0 +1,118 @@
+name: flatpak-build
+
+# Builds Flatpak bundles from the same Nuitka dist the Linux release legs ship
+# (x64 and arm64 runners, each with its native freedesktop runtime). A manual
+# dispatch produces the artifacts; a version tag also uploads them to that
+# Release. The in-app updater defers to Flatpak through its managed-channel
+# detection (FLATPAK_ID / .flatpak-info), so the bundle never self-updates;
+# the AppImage channel is unchanged.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ${{ matrix.runner }}
+    # Nuitka build + runtime install + bundle + smoke poll; a hung step must
+    # not sit on the runner until GitHub's 6-hour default.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            OS_ARCH: linux-x64
+          - runner: ubuntu-24.04-arm
+            OS_ARCH: linux-arm64
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up the environment
+        uses: ./.github/actions/setup-env
+
+      - name: Build the Linux dist (Nuitka)
+        run: mise run build
+
+      - name: Install flatpak tooling and the freedesktop runtime
+        # System-wide runtime install: flatpak-builder resolves runtimes from
+        # the default (system) installation, while the bundle itself is
+        # installed --user for the smoke-launch below. Each runner pulls its
+        # own architecture's runtime.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak flatpak-builder
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y --noninteractive flathub org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08
+
+      - name: Build the bundle
+        # --disable-rofiles-fuse: hosted runners have no FUSE for rofiles.
+        run: |
+          flatpak-builder --disable-rofiles-fuse --repo=flatpak-repo --force-clean \
+            build-dir packaging/flatpak/org.getwaves.Waves.yml
+          flatpak build-bundle flatpak-repo "dist/waves_${{ matrix.OS_ARCH }}.flatpak" org.getwaves.Waves
+
+      # A bundle that installs but never starts is the failure this catches:
+      # the same offscreen poll the release workflow's smoke-launch uses.
+      # x64 only, matching that workflow's convention for ARM runners.
+      - name: Smoke-launch the installed bundle
+        if: matrix.OS_ARCH == 'linux-x64'
+        run: |
+          set -u
+          flatpak install --user -y --noninteractive "dist/waves_${{ matrix.OS_ARCH }}.flatpak"
+          flatpak run --env=QT_QPA_PLATFORM=offscreen --env=QT_OPENGL=software org.getwaves.Waves &
+          APP_PID=$!
+          ok=0
+          for _ in $(seq 1 15); do
+            sleep 1
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              wait "$APP_PID"; rc=$?
+              if [ "$rc" -eq 0 ]; then ok=1; else
+                echo "::error::flatpak smoke-launch exited early with status $rc"; exit 1
+              fi
+              break
+            fi
+          done
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "flatpak smoke-launch: still running; healthy."
+            kill "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+            ok=1
+          fi
+          [ "$ok" -eq 1 ] || { echo "::error::flatpak smoke-launch never reached a healthy state"; exit 1; }
+
+      - name: Upload the bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: waves_${{ matrix.OS_ARCH }}.flatpak
+          path: dist/waves_${{ matrix.OS_ARCH }}.flatpak
+
+      # Upload, never create: the release workflow creates the (draft) Release
+      # before its matrix starts, and a find-or-create here could race it into
+      # duplicate or unsigned releases (the v0.1.2 incident). If the Release
+      # does not exist yet, the bundle stays a workflow artifact.
+      - name: Attach the bundle to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "dist/waves_${{ matrix.OS_ARCH }}.flatpak" --clobber
+          else
+            echo "::warning::release $TAG does not exist (yet); the bundle stays a workflow artifact"
+          fi
