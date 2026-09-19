@@ -1,0 +1,95 @@
+name: flatpak-build
+
+# Builds the Flatpak bundle from the same Nuitka dist the Linux release legs
+# ship. A manual dispatch produces the artifact; a version tag also attaches
+# the bundle to that Release. The in-app updater ignores .flatpak assets
+# (asset selection matches the platform's zip/AppImage names), so the AppImage
+# channel is unchanged. linux-x64 only: the arm64 runner cannot install the
+# x86_64 freedesktop runtime.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up the environment
+        uses: ./.github/actions/setup-env
+
+      - name: Build the Linux dist (Nuitka)
+        run: mise run build
+
+      - name: Install flatpak tooling and the freedesktop runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak flatpak-builder
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y --noninteractive flathub org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08
+
+      - name: Build the bundle
+        # --disable-rofiles-fuse: hosted runners have no FUSE for rofiles.
+        run: |
+          flatpak-builder --disable-rofiles-fuse --repo=flatpak-repo --force-clean \
+            build-dir packaging/flatpak/org.getwaves.Waves.yml
+          flatpak build-bundle flatpak-repo dist/waves_linux-x64.flatpak org.getwaves.Waves
+
+      # A bundle that installs but never starts is the failure this catches:
+      # the same offscreen poll the release workflow's smoke-launch uses.
+      - name: Smoke-launch the installed bundle
+        run: |
+          set -u
+          flatpak install --user -y --noninteractive dist/waves_linux-x64.flatpak
+          flatpak run --env=QT_QPA_PLATFORM=offscreen --env=QT_OPENGL=software org.getwaves.Waves &
+          APP_PID=$!
+          ok=0
+          for _ in $(seq 1 15); do
+            sleep 1
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              wait "$APP_PID"; rc=$?
+              if [ "$rc" -eq 0 ]; then ok=1; else
+                echo "::error::flatpak smoke-launch exited early with status $rc"; exit 1
+              fi
+              break
+            fi
+          done
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "flatpak smoke-launch: still running; healthy."
+            kill "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+            ok=1
+          fi
+          [ "$ok" -eq 1 ] || { echo "::error::flatpak smoke-launch never reached a healthy state"; exit 1; }
+
+      - name: Upload the bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: waves_linux-x64.flatpak
+          path: dist/waves_linux-x64.flatpak
+
+      - name: Attach the bundle to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          fail_on_unmatched_files: true
+          tag_name: ${{ github.ref_name }}
+          files: dist/waves_linux-x64.flatpak

@@ -1,0 +1,55 @@
+# Flatpak manifest for Waves (Linux x64; arm64 when a runner allows it).
+#
+# Packages the Nuitka dist built by tools/build_waves.sh -- run
+# `mise run build` (or the CI job) first, then flatpak-builder. See README.md
+# in this directory for the build command and the sandbox rationale.
+app-id: org.getwaves.Waves
+runtime: org.freedesktop.Platform
+runtime-version: "26.08"
+sdk: org.freedesktop.Sdk
+command: waves
+
+# Minimal sandbox for a music downloader. Deliberately no --filesystem=host:
+#  - network: every provider, the managed FFmpeg download and update checks.
+#  - home: the download/library folder is user-chosen anywhere under home, and
+#    the app writes to it. A narrower xdg-download/xdg-music pair would break
+#    every user whose library lives elsewhere; NAS/external paths need a
+#    `flatpak override --filesystem=...` and are documented in README.md.
+#  - dri: Qt Quick renders through the GPU.
+#  - pulseaudio: in-app previews and video playback.
+#  - wayland + fallback-x11 + ipc: a normal desktop window.
+# The Apple wrapper tier (Docker/Podman) cannot run in this sandbox; the
+# cookies tier and TIDAL are unaffected. The in-app updater already defers to
+# Flatpak (managed_channel), so the bundle never tries to replace itself.
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=home
+
+modules:
+  - name: waves
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/waves
+      - cp -a waves-dist/. /app/waves/
+      - install -Dm755 flatpak/waves.sh /app/bin/waves
+      - install -Dm644 flatpak/org.getwaves.Waves.desktop /app/share/applications/org.getwaves.Waves.desktop
+      - install -Dm644 flatpak/org.getwaves.Waves.metainfo.xml /app/share/metainfo/org.getwaves.Waves.metainfo.xml
+      - install -Dm644 ui/icon256.png /app/share/icons/hicolor/256x256/apps/org.getwaves.Waves.png
+    sources:
+      # The already-built Nuitka tree (tools/build_waves.sh -> dist/waves.dist).
+      - type: dir
+        path: ../../dist/waves.dist
+        dest: waves-dist
+      # The Flatpak glue files in this directory.
+      - type: dir
+        path: .
+        dest: flatpak
+      # The app icon from the package.
+      - type: dir
+        path: ../../waves/ui
+        dest: ui

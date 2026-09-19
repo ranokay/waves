@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Waves
+Comment=Save music from your own TIDAL account for offline listening
+Exec=waves
+Icon=org.getwaves.Waves
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupWMClass=Waves
