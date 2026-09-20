@@ -203,7 +203,7 @@ Rectangle {
           radius: 6
           color: "transparent"
           border.width: 2
-          border.color: "#3dff6e"
+          border.color: accent
           visible: parent.activeFocus
         }
       }
