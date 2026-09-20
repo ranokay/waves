@@ -3529,9 +3529,8 @@ ApplicationWindow {
   // neither an album nor an artist, goes nowhere.
   // browseCardOpenable is the one verdict the cards' affordance (cursor,
   // underline) and the click path below both read, so the two can never
-  // disagree: a track with an album but no artist opens its album while
-  // the old artist-only gate showed a dead cursor, and a video showed a
-  // live cursor over a dead click.
+  // disagree. A track offers its page when it names an album or an
+  // artist; anything else stays inert.
   function browseCardOpenable(card) {
     var kind = card.kind || ""
     if (kind === "artist" || kind === "playlist" || kind === "mix" || kind === "album")

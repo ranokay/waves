@@ -7,7 +7,7 @@ import QtQuick
 // `host` is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load.
 // It reads through it:
-//   host.browseCardDownload / host.dlSt / host.hoverPrefetch /
+//   host.browseCardDownload / host.browseCardOpenable / host.dlSt / host.hoverPrefetch /
 //   host.hoverPrefetchCancel / host.libStamp / host.openBrowseCard /
 //   host.openLibraryClaim / host.openRedownloadGate / host.ownAnswers /
 //   host.ownCardForget / host.ownCardRegister / host.ownGen / host.ownKeys /
@@ -169,6 +169,7 @@ Item {
     // the artwork opens the page, the buttons keep their clicks.
     MouseArea {
       anchors.fill: parent
+      hoverEnabled: true
       cursorShape: ac.openable ? Qt.PointingHandCursor : Qt.ArrowCursor
       onClicked: host.openBrowseCard(ac.card)
     }

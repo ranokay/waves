@@ -7,6 +7,9 @@ paths called `host.openBrowseCard` unconditionally, and the two read
 different gates: a track with an album but no artist opened its album page
 behind an `ArrowCursor` with no underline, while a video card (and any
 unknown kind) showed the pointing hand over a click that went nowhere.
+The artworks had the same drift one level down: both cards' art MouseAreas
+bound the verdict's cursor without `hoverEnabled`, so the hand never
+appeared over the art while the title beside it hovered.
 
 The verdict is one function now, `browseCardOpenable` beside
 `openBrowseCard` in Main.qml, and the click path consults it first: the
@@ -26,6 +29,7 @@ into the rest of the suite.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -98,6 +102,21 @@ def test_both_headline_styles_hover_their_link():
     assert "hoverEnabled: enabled" in after, "the art-style headline must keep hovering"
 
 
+def _flat(text: str) -> str:
+    """Whitespace-insensitive view for pins whose construct qmlformat may
+    re-wrap (it decides line breaks and drops optional semicolons)."""
+    return re.sub(r"\s+", " ", text)
+
+
+def test_the_page_surfaces_hover_their_cursor():
+    # Qt only applies a MouseArea's cursor on hover with hoverEnabled: the
+    # art and the title are the two surfaces that offer the page, so both
+    # carry the flag on both cards (the download/preview controls are a
+    # different promise and keep their own shape).
+    assert _flat(_BROWSE_CARD).count("hoverEnabled: true cursorShape: bc.openable") == 2
+    assert _flat(_ART_CARD).count("hoverEnabled: true cursorShape: ac.openable") == 2
+
+
 # ----- the live agreement ----------------------------------------------------
 
 _ITEMS_A = [
@@ -139,6 +158,77 @@ _ITEMS_B = [
     {"id": "ar1", "kind": "artist", "title": "Art One", "art": ""},
 ]
 
+# Stashes the artwork MouseArea of the card titled %s in _browseParked (the
+# same stash the boot-shield cursor scenario uses): the art is the child
+# carrying fxKind, which the title and the controls do not.
+_HOVER_PARK = """
+(function(title) {
+    var found = null
+    function artMa(item) {
+        if (!item) return null
+        var kids = item.children || []
+        for (var i = 0; i < kids.length; i++) {
+            var k = kids[i]
+            if (k && k.cursorShape !== undefined && k.hoverEnabled !== undefined
+                && k.parent && k.parent.fxKind !== undefined) return k
+        }
+        for (var j = 0; j < kids.length; j++) {
+            var deeper = artMa(kids[j])
+            if (deeper) return deeper
+        }
+        return null
+    }
+    function walk(item) {
+        if (!item || found) return
+        var kids = item.children || []
+        for (var i = 0; i < kids.length; i++) {
+            var k = kids[i]
+            if (k && k.openable !== undefined && k.card !== undefined
+                && ("" + (k.card.title || "")) === title) {
+                found = artMa(k)
+                return
+            }
+            walk(k)
+        }
+    }
+    walk(browseLanding)
+    _browseParked = found
+    return found !== null
+})("%s")
+"""
+
+# Stashes the console headline's own MouseArea in _browseParked: among the
+# header's direct areas it is the only enabled one (the collapse and label
+# areas stay disabled outside their modes).
+_HEADLINE_PARK = """
+(function(label) {
+    var found = null
+    function walk(item) {
+        if (!item || found) return
+        var kids = item.children || []
+        for (var i = 0; i < kids.length; i++) {
+            var k = kids[i]
+            if (k && k.openable !== undefined && k.label !== undefined && k.count !== undefined
+                && ("" + k.label).indexOf(label) === 0) {
+                var ck = k.children || []
+                for (var j = 0; j < ck.length; j++) {
+                    var c = ck[j]
+                    if (c && c.enabled && c.hoverEnabled !== undefined && c.cursorShape !== undefined) {
+                        found = c
+                        break
+                    }
+                }
+                return
+            }
+            walk(k)
+        }
+    }
+    walk(browseLanding)
+    _browseParked = found
+    return found !== null
+})("%s")
+"""
+
 # Title to the verdict the shared table gives it.
 _EXPECTED = {
     "Alb One": True,
@@ -166,8 +256,8 @@ def test_browse_cards_offer_exactly_the_pages_their_click_opens():
 
 def _run_scenario() -> int:
     try:
-        from PySide6.QtCore import QEventLoop, QTimer, QUrl
-        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, Qt, QTimer, QUrl
+        from PySide6.QtGui import QGuiApplication, QMouseEvent
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
@@ -221,6 +311,18 @@ def _run_scenario() -> int:
         print(msg, file=sys.stderr)
         return EXIT_REGRESSED
 
+    def hover(x: float, y: float) -> None:
+        ev = QMouseEvent(
+            QEvent.MouseMove,
+            QPointF(x, y),
+            root.mapToGlobal(QPoint(int(x), int(y))),
+            Qt.NoButton,
+            Qt.NoButton,
+            Qt.NoModifier,
+        )
+        app.sendEvent(root, ev)
+        app.processEvents()
+
     settle()
     # Freeze the boot machinery so the landing is driven purely by this
     # scenario: a cached-landing revalidate parks during the handover
@@ -241,6 +343,17 @@ def _run_scenario() -> int:
         settle(250)
         if _browse_emits:
             _quiet_from = _browse_emits[-1]
+    # The landing must actually show: at boot another surface owns the
+    # window and the whole shelf sits hidden, where no hover can land.
+    # Offline nothing is signed in, so this flips the surfaces without
+    # fetching (no emit can clobber the sections below).
+    q("openBrowse()")
+    settle(200)
+    # Take the first-run gates out of the way (the boot-shield scenario's
+    # own setup, plus the ffmpeg gate): a modal gate over the landing would
+    # eat every hover below.
+    q("setupMode = 'cards'; setupUrlOpened = false; providerPicker.visible = false")
+    q("ffmpegGate.visible = false")
 
     def show_sections():
         # A fresh object every time: re-setting an identical value may skip
@@ -281,6 +394,10 @@ def _run_scenario() -> int:
             print(f"expected the two card shelves, found {built}", file=sys.stderr)
             return False
         settle(900)
+        # Pin the pane to the top: a restored scroll can leave the probed
+        # card below the fold, where no hover lands.
+        q("browseLanding.contentY = 0")
+        settle(120)
         return True
 
     cards_probe = """
@@ -371,6 +488,59 @@ def _run_scenario() -> int:
                     if a["hover"] != a["enabled"]:
                         return fail(f"headline {h['label']!r}: hoverEnabled={a['hover']} with enabled={a['enabled']}")
 
+            # The hand itself, not just the flag: hover the headline and each
+            # page surface and read the window cursor. containsMouse first,
+            # so a dead probe reads as a broken harness, never as agreement.
+            if not bool(q(_HEADLINE_PARK % "CARDS A")):
+                print("no headline control found for 'CARDS A'", file=sys.stderr)
+                return EXIT_PRECONDITION
+            if not bool(q("_browseParked.visible")):
+                print("the CARDS A headline is hidden; the landing must show", file=sys.stderr)
+                return EXIT_PRECONDITION
+            hover(2, 2)
+            hover(
+                q("_browseParked.mapToItem(null, _browseParked.width/2, _browseParked.height/2).x"),
+                q("_browseParked.mapToItem(null, _browseParked.width/2, _browseParked.height/2).y"),
+            )
+            settle(60)
+            if not bool(q("_browseParked.containsMouse")):
+                print("hover probe is dead over the CARDS A headline", file=sys.stderr)
+                return EXIT_PRECONDITION
+            if root.cursor().shape() != Qt.PointingHandCursor:
+                return fail(f"hovering the headline: cursor {root.cursor().shape()}")
+            q("_browseParked = null")
+            for _title, _want_hand in (
+                ("Alb One", True),
+                ("Trk Album Only", True),
+                ("Trk Nowhere", False),
+                ("Vid One", False),
+            ):
+                if not bool(q(_HOVER_PARK % _title)):
+                    print(f"no artwork control found for {_title!r}", file=sys.stderr)
+                    return EXIT_PRECONDITION
+                if not bool(q("_browseParked.visible")):
+                    print(f"the {_title!r} artwork is hidden; the landing must show", file=sys.stderr)
+                    return EXIT_PRECONDITION
+                # Scroll the card into view: lower shelves are built (the
+                # buffer forces every delegate) but no hover lands outside
+                # the window. Coords are re-read after the scroll.
+                _cy = q("_browseParked.mapToItem(browseLanding, _browseParked.width/2, _browseParked.height/2).y")
+                q(f"browseLanding.contentY = Math.max(0, {_cy} - 300)")
+                settle(120)
+                hover(2, 2)
+                hover(
+                    q("_browseParked.mapToItem(null, _browseParked.width/2, _browseParked.height/2).x"),
+                    q("_browseParked.mapToItem(null, _browseParked.width/2, _browseParked.height/2).y"),
+                )
+                settle(60)
+                if not bool(q("_browseParked.containsMouse")):
+                    print(f"hover probe is dead over {_title!r}", file=sys.stderr)
+                    return EXIT_PRECONDITION
+                _want = Qt.PointingHandCursor if _want_hand else Qt.ArrowCursor
+                if root.cursor().shape() != _want:
+                    return fail(f"hovering {_title!r}: cursor {root.cursor().shape()}, wanted {_want}")
+            q("_browseParked = null")
+
     # The click half of the agreement, through the real path: the call and
     # the key read share one expression, so no worker turn can land between
     # them (offline the bridge answers nothing either way).
@@ -405,7 +575,7 @@ def _run_scenario() -> int:
         if q(expr) != want:
             return fail(f"{name}: landed on {q('browsePageKey')!r}, wanted {want!r}")
 
-    print(f"ok: {len(_EXPECTED)} cards agree in both styles, {len(legs)} click legs agree", flush=True)
+    print(f"ok: {len(_EXPECTED)} cards agree in both styles, 5 hovers agree, {len(legs)} click legs agree", flush=True)
     return EXIT_OK
 
 
