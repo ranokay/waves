@@ -114,7 +114,9 @@ from support.paths import QML_DIR
 #   BrowseCard.qml     BrowseSection/BrowseCard/BrowseTile render remote section
 #   BrowseTile.qml     titles, album/track names and genre labels; MosaicCell
 #   MosaicCell.qml     holds no Text of its own but rides the set for the same
-#                      structural reason as the other split files.
+#   LibraryVerdict.qml structural reason as the other split files; the shared
+#                      library verdict holds no Text of its own and rides for
+#                      the same reason.
 #   WelcomePicker.qml  the welcome closure:
 #   WelcomeBanner.qml  WelcomePicker renders provider names/status words and the
 #   PasteGlyph.qml     inline sign-in steps, WelcomeBanner renders the app's own
@@ -188,6 +190,7 @@ TIDAL_DATA_FILES = {
     "BrowseCard.qml",
     "BrowseTile.qml",
     "MosaicCell.qml",
+    "LibraryVerdict.qml",
     "WelcomePicker.qml",
     "WelcomeBanner.qml",
     "PasteGlyph.qml",

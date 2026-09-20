@@ -135,21 +135,20 @@ def test_the_cards_in_the_qml_compare_the_stamp_before_trusting_the_answer():
     needs a publish to land inside a delegate's incubation slice, which is
     not a thing a scenario can arrange.
 
-    Both card styles carry it: the art card on a shelf (ArtCard.qml) and the
-    console card in the list style (BrowseCard.qml)."""
+    One owner carries it (LibraryVerdict.qml); both card styles delegate to
+    it instead of re-reading the baked verdict themselves."""
     import re
 
     from support.paths import QML_DIR
 
-    sources = [
-        QML_MAIN.read_text(encoding="utf-8"),
-        (QML_DIR / "ArtCard.qml").read_text(encoding="utf-8"),
-        (QML_DIR / "BrowseCard.qml").read_text(encoding="utf-8"),
-    ]
-    uses = [u for src in sources for u in re.findall(r'\(!live && \("lib" in c\)[^)]*\)', src)]
-    assert len(uses) == 2, f"expected both card styles to read the baked verdict, found {len(uses)}"
-    for use in uses:
-        assert "c.libStamp === root.libStamp" in use or "c.libStamp === host.libStamp" in use, (
-            f"a card trusts a verdict it cannot date: {use}"
-        )
-    assert "root.libStamp = waves.libraryStamp()" in sources[0], "nothing refreshes the window's stamp on a publish"
+    verdict = (QML_DIR / "LibraryVerdict.qml").read_text(encoding="utf-8")
+    art = (QML_DIR / "ArtCard.qml").read_text(encoding="utf-8")
+    console = (QML_DIR / "BrowseCard.qml").read_text(encoding="utf-8")
+    main = QML_MAIN.read_text(encoding="utf-8")
+    uses = re.findall(r'\(!live && \("lib" in c\)[^)]*\)', verdict)
+    assert len(uses) == 1, f"expected the shared verdict to read the baked answer once, found {len(uses)}"
+    assert "c.libStamp === host.libStamp" in uses[0], f"the verdict trusts an answer it cannot date: {uses[0]}"
+    for name, src in (("ArtCard.qml", art), ("BrowseCard.qml", console)):
+        assert '(!live && ("lib" in c)' not in src, f"{name} re-reads the baked verdict instead of delegating"
+        assert "LibraryVerdict" in src, f"{name} no longer delegates to the shared verdict"
+    assert "root.libStamp = waves.libraryStamp()" in main, "nothing refreshes the window's stamp on a publish"

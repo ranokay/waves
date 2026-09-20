@@ -50,31 +50,22 @@ Item {
   HoverHandler {
     onHoveredChanged: hovered ? host.hoverPrefetch(ac.card) : host.hoverPrefetchCancel(ac.card)
   }
-  // The library verdict this card carries, resolved ONCE per card. The
-  // hover strip needs it to colour its download half and the pill needs
-  // it to say what is held, and asking twice would be two QML->Python
-  // calls per card on a shelf of them (the economy AlbumPresencePill's
-  // single-object property exists for). Albums only: a playlist or a mix
-  // has no album identity to ask about, and must never wear one's badge.
-  property var libPresence: null
-  property bool _libResolved: false
-  // The answer the payload carries (card.lib, resolved on the worker
-  // that built the page) serves the card's creation; only a later
-  // change (a library publish) asks the bridge. A card being created
-  // is inside an incubation slice, and a bridge call there waits its
-  // turn for the interpreter behind every busy worker: sampled live
-  // at launch, that wait was most of what the boot water dropped
-  // frames on. Keys are checked with `in`: a payload built before the
-  // dressing existed simply has no key and asks as before.
-  function resolveLibPresence(live) {
-    _libResolved = true
-    var c = ac.card
-    if (!(ac.kind === "album" && c && c.title)) {
-      libPresence = null
-      return
-    }
-    libPresence = (!live && ("lib" in c) && c.libStamp === host.libStamp) ? c.lib : waves.libraryAlbumPresence("" + (c.artist || ""), "" + c.title, "" + (c.year || ""), c.tracks || 0, c.duration_sec || 0)
+  // The library verdict this card carries lives in LibraryVerdict, the
+  // one owner both card styles share; the aliases below keep this card's
+  // public surface (what the strip, the pill and the scenarios read).
+  LibraryVerdict {
+    id: acVerdict
+    host: ac.host
+    card: ac.card
   }
+  readonly property var libPresence: acVerdict.presence
+  readonly property bool libPresent: acVerdict.present
+  readonly property bool libFull: acVerdict.full
+  readonly property bool libSure: acVerdict.sure
+  readonly property bool libAtmos: acVerdict.atmos
+  readonly property string libState: acVerdict.state
+  readonly property bool libClaim: acVerdict.claim
+  readonly property string libWord: acVerdict.word
   // The cross-session downloaded fact, the same rollup the full button
   // uses: every member track recorded by a real download and still up
   // to date. Session state (host.dlSt) only lives until quit; this is
@@ -116,28 +107,14 @@ Item {
     // a call per member was ~15 interpreter round-trips per card, and
     // under the launch-time scan each of them queued for its turn.
     // None at all while the card is created: the payload's own
-    // rollup (card.own) answers, see resolveLibPresence. And none per
+    // rollup (card.own) answers, see LibraryVerdict. And none per
     // card when a batch of answers lands: the root asks once for
     // every hit card (ownCardsBatch) and the card reads its answer.
     applyOwn((!live && ("own" in ac.card) && ac.card.ownGen === host.ownGen) ? ac.card.own : waves.collectionOwnership("" + (ac.card.id || "")))
   }
   Component.onDestruction: host.ownCardForget("" + (ac.card.id || ""))
-  onCardChanged: {
-    resolveLibPresence(false)
-    refreshOwned(false)
-  }
-  Component.onCompleted: {
-    if (!_libResolved)
-      resolveLibPresence(false)
-    refreshOwned(false)
-  }
-  Connections {
-    target: waves
-    enabled: ac.kind === "album"
-    function onLibraryPresenceChanged() {
-      ac.resolveLibPresence(true)
-    }
-  }
+  onCardChanged: refreshOwned(false)
+  Component.onCompleted: refreshOwned(false)
   Connections {
     target: waves
     enabled: ac.ownable
@@ -167,21 +144,9 @@ Item {
     interval: 50
     onTriggered: ac.refreshOwned(true)
   }
-  readonly property bool libPresent: !!(ac.libPresence && ac.libPresence.present === true)
-  readonly property bool libFull: !!(ac.libPresence && ac.libPresence.full === true)
   // Downloaded this session, recorded as downloaded, or a full copy on
   // disk: the NEW mark on the caption stops breathing.
   readonly property bool haveIt: ac.owned || ac.libFull || host.dlSt(ac.card.id || "") === "done"
-  readonly property bool libSure: !!(ac.libPresence && ac.libPresence.sure === true)
-  // The three states the strip's download half can wear, exactly the
-  // ones DownloadButton names: a proven complete copy, an unproven one,
-  // and a partial copy (which stays a plain live download, since
-  // completing an album is not a duplicate).
-  readonly property string libState: !ac.libPresent ? "" : !ac.libFull ? "partial" : ac.libSure ? "proven" : "maybe"
-  // A FULL claim gates its click the way the full button does: explain
-  // the match, name the folder, leave Download anyway one click away. A
-  // tag match must never be the end of the conversation.
-  readonly property bool libClaim: ac.libState === "proven" || ac.libState === "maybe"
   Art {
     id: acArt
     host: ac.host
@@ -293,7 +258,7 @@ Item {
     // so it can never move the art or the caption, and hidden
     // libraries never take this branch.
     Text {
-      visible: ac.libPresent && !!(ac.libPresence && ac.libPresence.has_atmos === true)
+      visible: ac.libPresent && ac.libAtmos
       textFormat: Text.PlainText
       text: "ATMOS TOO"
       x: 10
@@ -450,27 +415,10 @@ Item {
           readonly property color stInk: dlDone ? green : ac.libState === "proven" ? green : ac.libState === "maybe" ? gold : ac.libState === "partial" ? cyan : accent
           readonly property color stEdge: dlDone ? greenDim : ac.libState === "proven" ? greenDim : ac.libState === "maybe" ? goldDim : ac.libState === "partial" ? cyanDim : accentDim
           // Ninety pixels of half, so the full button's wording
-          // ("PARTIALLY IN LIBRARY") cannot ride here. These are the
-          // shortest forms that still say which of the three is true,
-          // and a partial copy spends them on the count itself, which
-          // is the thing worth knowing.
-          readonly property string stWord: {
-            if (acStrip.dlDone)
-              return "DOWNLOADED"
-            if (ac.libState === "proven")
-              return "IN LIBRARY"
-            if (ac.libState === "maybe")
-              return "MAYBE"
-            if (ac.libState === "partial") {
-              var p = ac.libPresence
-              var held = p.local_tracks || 0
-              var declared = p.local_declared || 0
-              var want = declared > held ? declared : (ac.card.tracks || 0)
-              if (want > held)
-                return held + " OF " + want
-            }
-            return "DOWNLOAD"
-          }
+          // ("PARTIALLY IN LIBRARY") cannot ride here. The words are the
+          // verdict's own shortest forms; a finished download wears
+          // DOWNLOADED ahead of any of them.
+          readonly property string stWord: acStrip.dlDone ? "DOWNLOADED" : ac.libWord
           // The strip is sized by its own words and nothing capped it
           // against the cover it rides on, so the long ones outgrew
           // the artwork, which clips, and lost their first and last
