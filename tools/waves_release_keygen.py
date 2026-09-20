@@ -3,7 +3,7 @@
 
 Run this once, offline, before the first signed release. It prints two things:
 
-  * ``UPDATE_PUBLIC_KEY = "..."``: paste into ``waves/desktop/signing.py`` so
+  * ``UPDATE_PUBLIC_KEY: str = "..."``: paste into ``waves/desktop/signing.py`` so
     every shipped binary can verify update manifests.
   * a PKCS#8 PEM private key: store verbatim as the GitHub Actions secret
     ``WAVES_SIGNING_KEY`` and never commit it. Anyone with this key can sign
@@ -22,7 +22,7 @@ from waves.desktop.signing import keygen
 def main() -> None:
     public_b64, private_pem = keygen()
     print("# --- 1. Embed this public key in waves/desktop/signing.py ---")
-    print(f'UPDATE_PUBLIC_KEY = "{public_b64}"')
+    print(f'UPDATE_PUBLIC_KEY: str = "{public_b64}"')
     print()
     print("# --- 2. Store the PEM below as the CI secret WAVES_SIGNING_KEY ---")
     print("#       (do NOT commit it; rotate by shipping a new public key)")

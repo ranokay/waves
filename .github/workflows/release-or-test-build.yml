@@ -98,7 +98,7 @@ jobs:
         run: |
           grep -Eq '^REPO = "[^"]+"' waves/desktop/updater.py \
             || { echo "::error::updater.REPO is empty; a published build could never auto-update. Set REPO before tagging a release."; exit 1; }
-          grep -Eq '^UPDATE_PUBLIC_KEY = "[^"]+"' waves/desktop/signing.py \
+          grep -Eq '^UPDATE_PUBLIC_KEY(: str)? = "[^"]+"' waves/desktop/signing.py \
             || { echo "::error::signing.UPDATE_PUBLIC_KEY is empty; shipped updates could not be signature-verified. Embed UPDATE_PUBLIC_KEY before tagging a release."; exit 1; }
           echo "Updater is configured; release build may proceed."
       # The version compiled INTO the binary must equal the release tag, or the
