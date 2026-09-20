@@ -1577,7 +1577,6 @@ class AppleProvider(Provider):
             or "DecryptionNotAvailable" in name
             or "formatnotavailable" in lowered
             or "decryptionnotavailable" in lowered
-            or "not found" in str(exc).lower()
             or "404" in text
         ):
             return Refusal(RefusalKind.UNAVAILABLE, "this item is not available on Apple Music")
