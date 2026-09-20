@@ -1,6 +1,8 @@
 import pathlib
 
-import mutagen
+import mutagen.flac
+import mutagen.mp3
+import mutagen.mp4
 from mutagen import flac, id3, mp4
 from mutagen.id3 import (
     APIC,
@@ -367,7 +369,7 @@ class Metadata:
     explicit: bool
     bpm: int
     initial_key: str
-    m: mutagen.mp4.MP4 | mutagen.mp4.MP4 | mutagen.flac.FLAC
+    m: mutagen.FileType
     release_type: str
 
     def __init__(
@@ -485,6 +487,8 @@ class Metadata:
             # default-format MP4Cover over PNG bytes).
             image_format = sniff_image_format(self.cover_data)
             mime = "image/png" if image_format == "png" else "image/jpeg"
+            if self.m.tags is None:
+                raise MetadataUnreadable(self.path_file)
             if isinstance(self.m, mutagen.flac.FLAC):
                 flac_cover = flac.Picture()
                 flac_cover.type = id3.PictureType.COVER_FRONT
@@ -565,6 +569,8 @@ class Metadata:
     def _set_flac_custom_tags(self):
         # Custom-template omit flags, split from set_flac so the
         # writer stays under the branch budget.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         if self.write_copyright:
             self.m.tags["COPYRIGHT"] = self.copy_right
         if self.write_composer:
@@ -579,6 +585,8 @@ class Metadata:
             self.m.tags["INITIALKEY"] = self.initial_key
 
     def set_flac(self):
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         self.m.tags["TITLE"] = self.title
         self.m.tags["ALBUM"] = self.album
         self.m.tags["ALBUMARTIST"] = self.albumartist
@@ -617,6 +625,8 @@ class Metadata:
     def _set_mp3_custom_tags(self):
         # Custom-template omit flags, split from set_mp3 so the
         # writer stays under the branch budget.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         if self.write_copyright:
             self.m.tags.add(TCOP(encoding=3, text=self.copy_right))
         if self.write_composer:
@@ -633,6 +643,8 @@ class Metadata:
     def set_mp3(self):
         # ID3 Frame (tags) overview: https://exiftool.org/TagNames/ID3.html / https://id3.org/id3v2.3.0
         # Mapping overview: https://docs.mp3tag.de/mapping/
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         self.m.tags.add(TIT2(encoding=3, text=self.title))
         self.m.tags.add(TALB(encoding=3, text=self.album))
         self.m.tags.add(TPE2(encoding=3, text=self.albumartist))  # TPE2 is the album artist
@@ -659,6 +671,8 @@ class Metadata:
         # Shared id-tag block (legacy + generic families plus the audio-type
         # Version): split from set_mp3 so the writer stays under the branch
         # budget, mirroring _set_mp4_artist_ids below.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         if self.item_id:
             self.m.tags.add(TXXX(encoding=3, desc=ITEM_ID_TAG, text=self.item_id))
         if self.namespaced_item_id:
@@ -677,6 +691,8 @@ class Metadata:
     def _set_mp4_custom_tags(self):
         # Custom-template omit flags, split from set_mp4 so the
         # writer stays under the branch budget.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         if self.write_copyright:
             self.m.tags["cprt"] = self.copy_right
         if self.write_composer:
@@ -691,6 +707,8 @@ class Metadata:
             self.m.tags["----:com.apple.iTunes:initialkey"] = self.initial_key.encode("utf-8")
 
     def set_mp4(self):
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         self.m.tags["\xa9nam"] = self.title
         self.m.tags["\xa9alb"] = self.album
         self.m.tags["aART"] = self.albumartist
@@ -725,6 +743,8 @@ class Metadata:
         # only the fields a video really has are written. "stik" is the
         # iTunes media-kind atom; 6 means music video, so players and
         # library managers file it under videos rather than songs.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         self.m.tags["\xa9nam"] = self.title
         self.m.tags["\xa9alb"] = self.album
         self.m.tags["aART"] = self.albumartist
@@ -742,6 +762,8 @@ class Metadata:
     def _set_mp4_artist_ids(self):
         # Shared by the album and the music-video branch: a freeform atom holds
         # BYTES, and a multi-artist credit is a list of them.
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         if self.artist_ids:
             self.m.tags[f"----:com.apple.iTunes:{ARTIST_ID_TAG}"] = [i.encode("utf-8") for i in self.artist_ids]
         if self.album_artist_ids:
@@ -775,6 +797,8 @@ class Metadata:
 
     def cleanup_tags(self):
         # Collect keys to delete first to avoid RuntimeError during iteration
+        if self.m.tags is None:
+            raise MetadataUnreadable(self.path_file)
         keys_to_delete = [key for key, value in self.m.tags.items() if self._is_empty_tag(value)]
         for key in keys_to_delete:
             del self.m.tags[key]

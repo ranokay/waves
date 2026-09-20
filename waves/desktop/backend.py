@@ -10999,8 +10999,8 @@ class WavesBridge(LibraryMixin, QObject):
                 if vst is None or vat is None:
                     return {"owned": False, "pending": True} if hit is None else {"owned": False}
             else:
-                rec_st = vst[1] if vst else None
-                rec_at = vat[1] if vat else None
+                rec_st = vst[1] if vst is not None else None
+                rec_at = vat[1] if vat is not None else None
                 # Owned only when every enabled Version survives on disk
                 # (the versioned queries already re-checked the disk on the
                 # worker; None means no surviving copy of that Version).
