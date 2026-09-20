@@ -6493,9 +6493,12 @@ ApplicationWindow {
                 // arm never fires on a later unrelated paste.
                 property bool submitPending: false
                 property bool submitArmed: false
-                onBegun: {
+                onBegun: function (isRestart) {
                   seqAtPaste = root._navSeq
-                  submitArmed = submitPending
+                  // A restart is a replaced decode, not the glyph's paste:
+                  // the arm must not transfer to text the user overwrote
+                  // mid-decode, or a fill-meant edit would search itself.
+                  submitArmed = submitPending && !isRestart
                   submitPending = false
                 }
                 onDecoded: function (text) {

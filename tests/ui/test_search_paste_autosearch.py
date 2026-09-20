@@ -5,8 +5,7 @@ WHAT THIS FENCES OFF
 The search bar's paste button also runs the search.
 The wiring is a one-shot arm on the decode pipeline: the glyph's click sets
 ``searchDecoder.submitPending`` right before ``paste()``, the decode that
-paste starts latches it (``submitArmed``), and ``onDecoded`` submits. Three
-behaviors must hold:
+paste starts latches it (``submitArmed``), and ``onDecoded`` submits. The behaviors that must hold:
 
 1. A glyph-armed paste auto-searches once the decrypt animation settles.
 2. A plain paste (Ctrl+V, no glyph) fills the field but does NOT search,
@@ -16,6 +15,9 @@ behaviors must hold:
 4. A glyph paste of three characters or fewer searches too. The decoder
    reads a paste off a >=4-char jump, which a short one cannot make,
    so the handler runs the decode itself rather than waiting for a guess.
+5. A bare paste replacing a running decode restarts it without the arm:
+   the armed term never submits, and the replacement fills without
+   searching.
 
 The scenario never touches the OS clipboard: a paste, to the decoder, is a
 multi-char text jump typing can't produce, so the test assigns the field's
@@ -59,7 +61,7 @@ def test_paste_glyph_auto_searches_and_plain_paste_does_not():
     )
 
 
-def _run_scenario() -> int:
+def _run_scenario() -> int:  # noqa: C901 (one straight scenario, six legs)
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
@@ -197,11 +199,34 @@ def _run_scenario() -> int:
     ok = armed_searched and plain_inert and url_searched and disarmed and stale_inert
     ok = ok and glyph_disarmed and empty_glyph_inert
     ok = ok and short_searched and short_left_no_arm
+
+    # 6. A bare Ctrl+V mid-decode restarts on the new text and drops the
+    #    glyph's arm: the armed decode never submits its term, and the
+    #    replacement (not a link, unarmed) fills without searching.
+    armed_term = "first armed term"
+    replacement = "replacement edit"
+    q("_searchSeq = -99")
+    q("searchField.clear(); searchDecoder.submitPending = true")
+    paste(armed_term)
+    settle(200)
+    if not bool(q("searchDecoder.decoding")):
+        print("the armed decode did not start: no decode window to paste inside", file=sys.stderr)
+        return EXIT_REGRESSED
+    paste(replacement)
+    settle(decode_ms)
+    restarted_inert = bool(q("_searchSeq === -99")) and q("searchField.text") == replacement
+    if not restarted_inert:
+        print(
+            f"a mid-decode paste did not restart clean: seq={q('_searchSeq')} text={q('searchField.text')!r}",
+            file=sys.stderr,
+        )
+    ok = ok and restarted_inert
     print(
         f"armed_searched={armed_searched} plain_inert={plain_inert} url_searched={url_searched} "
         f"disarmed={disarmed} stale_inert={stale_inert} "
         f"glyph_disarmed={glyph_disarmed} empty_glyph_inert={empty_glyph_inert} "
-        f"short_searched={short_searched} short_left_no_arm={short_left_no_arm}",
+        f"short_searched={short_searched} short_left_no_arm={short_left_no_arm} "
+        f"restarted_inert={restarted_inert}",
         flush=True,
     )
     return EXIT_OK if ok else EXIT_REGRESSED
