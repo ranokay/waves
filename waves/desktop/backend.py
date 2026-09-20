@@ -131,6 +131,7 @@ from waves.providers import (
     AppleProvider,
     AudioType,
     Capability,
+    DownloadAdapter,
     Provider,
     RefusalKind,
     StatusKind,
@@ -3180,6 +3181,188 @@ class _JobSpec:
         return self.object_id.partition(":")[2]
 
 
+class _AppleDownloads(DownloadAdapter):
+    """Apple's download ask surface, implemented by the bridge.
+
+    Apple's click entries, retry re-entries, standalone fetch and job runner
+    are bridge machinery -- they drive this bridge's queue, gates, settings
+    and settlement -- so the bridge implements them here and binds this
+    adapter onto the Apple provider where the providers are wired. Every
+    download path reaches Apple's through that binding, so none of them
+    names the provider or parses an id prefix.
+    """
+
+    def __init__(self, bridge: WavesBridge) -> None:
+        self._bridge = bridge
+
+    def serve_entry(
+        self, kind: str, media_id: str, *, chooser=False, chooser_ask=None, chooser_audio=None, chooser_toggles=None
+    ) -> bool:
+        bridge = self._bridge
+        if chooser:
+            bridge._download_apple_with_chooser(media_id, kind, chooser_ask, chooser_audio, chooser_toggles)
+            return True
+        if kind == "track":
+            bridge._download_apple_track(media_id)
+            return True
+        if kind in ("album", "playlist"):
+            bridge._download_apple_collection(kind, media_id)
+            return True
+        if kind == "mix":
+            # Apple serves no mixes, and the catalog tier has no story for
+            # one: the plain-click refusal (the Chooser's is the neutral one).
+            bridge._set_status("Apple mixes are not part of the cookies tier")
+            return True
+        # A kind Apple does not serve (a video id): the engine entry's own
+        # refusal stands, exactly as a click on it always behaved.
+        return False
+
+    def serve_retry(self, item: dict, obj) -> bool:
+        return self._bridge._download_apple(
+            item["type"],
+            obj,
+            obj if item["collection"] else None,
+            item["template"],
+            item["collection"],
+            item["media_id"],
+            # A retry is of THIS row: it keeps the tier and Version the row
+            # asked at, and its explicit is_retry marks the re-entry a retry
+            # (the skip-list bypass rides the queued spec, spec §6.4).
+            keep_ask=(
+                str(item.get("askQuality") or ""),
+                str(item.get("quality") or ""),
+                str(item.get("audioType") or "") or None,
+            ),
+            chooser_toggles=dict(item.get("askToggles") or {}),
+            is_retry=True,
+        )
+
+    def cached_row(self, kind: str, media_id: str) -> object | None:
+        provider = (getattr(self._bridge, "providers", None) or {}).get(CTX_APPLE)
+        if provider is None:
+            return None
+        raw = provider.cached(kind, media_id)
+        if raw is None:
+            return None
+        try:
+            return provider.row_for(kind, raw)
+        except Exception:
+            logger.debug("Could not rebuild the Apple row for a retry", exc_info=True)
+            return None
+
+    def refetch_retry(self, item: dict) -> bool:
+        """Apple's retry re-fetch: no TIDAL sign-in gate, no _objs (the
+        provider's own cache is the registry), with the provider's own words
+        for a collection that stopped partway."""
+        bridge = self._bridge
+        bucket, media_id, qid = item["type"], item["media_id"], item["qid"]
+        key = (bucket, media_id)
+        if key in bridge._refetch_inflight:
+            return True
+        bridge._refetch_inflight.add(key)
+        gen = bridge._browse_gen
+        bridge._set_status("Fetching item…")
+
+        def work() -> None:
+            obj = None
+            failure = ""
+            try:
+                provider = (getattr(bridge, "providers", None) or {}).get(CTX_APPLE)
+                if provider is not None:
+                    obj = provider.get_object(bucket, str(media_id).removeprefix(f"{CTX_APPLE}:"))
+            except AppleCollectionIncomplete as exc:
+                failure = str(exc)
+                logger.warning("Apple %s retry fetch stopped partway: %s", bucket, failure)
+            except Exception:
+                logger.exception("Could not re-fetch Apple %s %s for retry", bucket, media_id)
+            if gen != bridge._browse_gen:
+                bridge._refetch_inflight.discard(key)
+                return
+            if obj is None:
+                bridge._refetch_inflight.discard(key)
+                bridge._set_status(failure or "That item is no longer available")
+                return
+            bridge._queueRetryRefetched.emit(bucket, media_id, qid)
+
+        bridge.threadpool.start(Worker(work))
+        return True
+
+    def standalone(self, media_id: str, mode: str) -> int | None:
+        return self._bridge._standalone_apple(media_id, mode)
+
+    def job_runner(self, qid, spec, *, signals, job_abort, row_ask, name) -> Callable[[object], None]:
+        bridge = self._bridge
+
+        def run(obj) -> None:
+            # File-level Apple delivery on the job's own worker: the shared
+            # settlement the engine path runs is TIDAL-engine shaped (dl
+            # counters), so the runner settles its own row and returns. The
+            # hooks are built here, on the worker, as they always were.
+            runner.run_job_body(
+                bridge._apple_job_hooks(),
+                qid,
+                spec,
+                obj,
+                signals=signals,
+                job_abort=job_abort,
+                row_ask=row_ask,
+                name=name,
+            )
+
+        return run
+
+
+def _downloads_for(bridge, media_id: str) -> DownloadAdapter | None:
+    """The download adapter of the provider an id resolves to, or None when
+    the bridge's engine path serves the ask (TIDAL's shape).
+
+    The namespace reader is the shared one (a bare legacy id reads as TIDAL),
+    so nothing here names a provider or parses an id prefix; an unregistered
+    namespace resolves to no provider and therefore no adapter."""
+    providers = getattr(bridge, "providers", None) or {}
+    return getattr(providers.get(provider_of_id(media_id)), "downloads", None)
+
+
+def _refetch_retry(bridge, item: dict) -> None:
+    """Re-fetch a failed queue row's vanished object, then retry the row.
+
+    The row's provider adapter owns the re-fetch when it has one (its own
+    registry and gates); the engine's by-id re-fetch runs otherwise."""
+    adapter = _downloads_for(bridge, item["media_id"])
+    if adapter is not None and adapter.refetch_retry(item):
+        return
+    bridge._retry_queue_refetch(item)
+
+
+def _download_click(
+    bridge,
+    kind: str,
+    media_id: str,
+    *,
+    chooser: bool = False,
+    chooser_ask=None,
+    chooser_audio=None,
+    chooser_toggles=None,
+) -> bool:
+    """One download click: the id's own provider serves it through its
+    download adapter. True when it was served (a row queued, a refetch
+    started, or a refusal stated); False hands the click to the caller's own
+    engine body (the provider that inherits it)."""
+    adapter = _downloads_for(bridge, media_id)
+    if adapter is None:
+        return False
+    return bool(
+        adapter.serve_entry(
+            kind,
+            media_id,
+            chooser=chooser,
+            chooser_ask=chooser_ask,
+            chooser_audio=chooser_audio,
+            chooser_toggles=chooser_toggles,
+        )
+    )
+
+
 def _norm_track_title(name: str) -> str:
     """Normalised track title for cross-edition matching (feat./version/remaster
     qualifiers stripped, lowercased)."""
@@ -4056,6 +4239,11 @@ class WavesBridge(LibraryMixin, QObject):
             CTX_TIDAL: TidalProvider(self.tidal),
             CTX_APPLE: AppleProvider(),
         }
+        # Apple's download ask surface (clicks, retries, standalone fetches,
+        # job bodies) is this bridge's own machinery, attached to the seam
+        # here: every download path dispatches through the id's provider
+        # adapter, so none of them names a provider or parses an id prefix.
+        self.providers[CTX_APPLE].downloads = _AppleDownloads(self)
         # App-level flows a provider's card actions run where the provider's
         # own seam call is not enough, registered where the providers are
         # wired so the generic card dispatcher names no provider: TIDAL's
@@ -10052,8 +10240,7 @@ class WavesBridge(LibraryMixin, QObject):
         provider_id = self._chooser_provider_of(mid)
         ask = self._chooser_ask_for(provider_id, tier)
         audio = self._chooser_normalize_audio(audio_type, provider_id)
-        if provider_id == CTX_APPLE:
-            self._download_apple_with_chooser(mid, k, ask, audio, pins)
+        if _download_click(self, k, mid, chooser=True, chooser_ask=ask, chooser_audio=audio, chooser_toggles=pins):
             return
         # TIDAL kinds with per-click support; bulk sweeps keep Settings.
         templates = {
@@ -14634,19 +14821,6 @@ class WavesBridge(LibraryMixin, QObject):
         """Ownership verdict plus the record it was read from (runner policy)."""
         return runner.gate_track(self._apple_job_hooks(), provider, track_id, requested_rank, force, audio_type)
 
-    def _apple_job_body(self, qid, spec, obj, *, signals, job_abort, row_ask, name) -> None:
-        """An Apple job's worker body: probe, run, settle (runner policy)."""
-        runner.run_job_body(
-            self._apple_job_hooks(),
-            qid,
-            spec,
-            obj,
-            signals=signals,
-            job_abort=job_abort,
-            row_ask=row_ask,
-            name=name,
-        )
-
     def _pump_queue(self) -> None:
         """Start the next queued row's download if nothing is running.
 
@@ -14724,13 +14898,21 @@ class WavesBridge(LibraryMixin, QObject):
                 library_claim = _claim_with_job_album
             else:
                 library_claim = self._library_claim_media
-        # Apple jobs never build the TIDAL segment engine: the runner below
-        # drives the same signals with file-level deliveries, and building a
-        # Download here would touch the TIDAL session (absent when signed
-        # out, which Apple downloads must not require).
-        is_apple = spec.provider_id == CTX_APPLE
+        # What this row asked at, captured here: the held retries below (a dead
+        # mount, a folder failure) re-enter _download after the row has been
+        # withdrawn, and they are retries of THIS job, not fresh clicks.
+        row_ask = self._row_ask(qid)
+        # The provider's adapter decides how its jobs run before the engine is
+        # built: an adapter answers its own worker body, so the tidalapi-shaped
+        # engine (and the TIDAL session it composes) is never constructed for a
+        # provider whose deliveries need another pipeline.
+        provider = self.providers[spec.provider_id]
+        adapter = getattr(provider, "downloads", None)
+        job_runner = None
+        if adapter is not None:
+            job_runner = adapter.job_runner(qid, spec, signals=signals, job_abort=job_abort, row_ask=row_ask, name=name)
         dl = None
-        if not is_apple:
+        if job_runner is None:
             dl = self._build_download(
                 signals,
                 event_abort=job_abort,
@@ -14741,7 +14923,7 @@ class WavesBridge(LibraryMixin, QObject):
                 base_template=getattr(spec, "base_template", None) or None,
                 chooser_toggles=getattr(spec, "chooser_toggles", None),
             )
-        if dl is not None and (collection or merge_plan is not None) and not is_apple:
+        if dl is not None and (collection or merge_plan is not None):
             self._job_tracks.setdefault(qid, {})
             self._job_dls[qid] = dl
             if not self._track_poll.isActive():
@@ -14752,19 +14934,14 @@ class WavesBridge(LibraryMixin, QObject):
                 body()
             finally:
                 # The job's segment executor dies with the job, or its worker
-                # threads would pile up across queue rows. Apple jobs build no
-                # engine, so there is nothing to close for them.
+                # threads would pile up across queue rows. A provider-run job
+                # builds no engine, so there is nothing to close for it.
                 if dl is not None:
                     with contextlib.suppress(Exception):
                         dl.close_segment_pool()
                 # Whatever happened above, the slot is free: the next queued
                 # row starts from the GUI thread.
                 self._jobFinished.emit(qid)
-
-        # What this row asked at, captured here: the held retries below (a dead
-        # mount, a folder failure) re-enter _download after the row has been
-        # withdrawn, and they are retries of THIS job, not fresh clicks.
-        row_ask = self._row_ask(qid)
 
         def body() -> None:
             def stopped_before_it_started() -> None:
@@ -14811,19 +14988,11 @@ class WavesBridge(LibraryMixin, QObject):
                 devlog.done("download", f"FAILED {type_media} id={media_id}", 0.0)
                 return
             resolved[0] = obj
-            if is_apple:
-                # File-level Apple delivery on this same worker: the shared
-                # settlement below is TIDAL-engine shaped (dl counters), so
-                # the Apple runner settles its own rows and returns.
-                self._apple_job_body(
-                    qid,
-                    spec,
-                    obj,
-                    signals=signals,
-                    job_abort=job_abort,
-                    row_ask=row_ask,
-                    name=name,
-                )
+            if job_runner is not None:
+                # The provider's own pipeline on this same worker: the shared
+                # settlement below is TIDAL-engine shaped (dl counters), so its
+                # runner settles its own row and returns.
+                job_runner(obj)
                 return
             # Reachability probe of the download folder, here on the worker so
             # the click stays instant (a write probe against a stale network
@@ -16185,8 +16354,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadTrack(self, track_id: str) -> None:
-        if str(track_id).startswith(f"{CTX_APPLE}:"):
-            self._download_apple_track(str(track_id))
+        if _download_click(self, "track", str(track_id)):
             return
         obj = self._objs["track"].get(track_id)
         if obj is None:
@@ -16196,8 +16364,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadAlbum(self, album_id: str) -> None:
-        if str(album_id).startswith(f"{CTX_APPLE}:"):
-            self._download_apple_collection("album", str(album_id))
+        if _download_click(self, "album", str(album_id)):
             return
         obj = self._objs["album"].get(album_id)
         if obj is None:
@@ -16384,8 +16551,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadPlaylist(self, playlist_id: str) -> None:
-        if str(playlist_id).startswith(f"{CTX_APPLE}:"):
-            self._download_apple_collection("playlist", str(playlist_id))
+        if _download_click(self, "playlist", str(playlist_id)):
             return
         obj = self._objs["playlist"].get(playlist_id)
         if obj is None:
@@ -16691,6 +16857,8 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadVideo(self, video_id: str) -> None:
+        if _download_click(self, "video", str(video_id)):
+            return
         obj = self._objs["video"].get(video_id)
         if obj is None:
             self._refetch_for_download("video", video_id)
@@ -16699,8 +16867,7 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str)
     def downloadMix(self, mix_id: str) -> None:
-        if str(mix_id).startswith(f"{CTX_APPLE}:"):
-            self._set_status("Apple mixes are not part of the cookies tier")
+        if _download_click(self, "mix", str(mix_id)):
             return
         obj = self._objs["mix"].get(mix_id)
         if obj is None:
@@ -17216,10 +17383,15 @@ class WavesBridge(LibraryMixin, QObject):
 
         def work() -> None:
             try:
-                if media_id.startswith(f"{CTX_APPLE}:"):
-                    count = self._standalone_apple(media_id, mode)
-                else:
-                    count = self._standalone_tidal(media_id, mode)
+                # The id's provider serves the ask through its own fetch when
+                # it carries a download adapter (its rows and catalogs are its
+                # own); the engine's fetch runs otherwise.
+                adapter = _downloads_for(self, media_id)
+                count = (
+                    adapter.standalone(media_id, mode)
+                    if adapter is not None
+                    else self._standalone_tidal(media_id, mode)
+                )
             except Exception:
                 logger.exception("Standalone %s fetch failed for %s", mode, media_id)
                 self.downloadState.emit(media_id, "failed")
@@ -18673,7 +18845,7 @@ class WavesBridge(LibraryMixin, QObject):
                 # No object to download from (an old row from before the
                 # queue kept them, and the search buckets have moved on):
                 # the per-row path re-fetches it and retries on its own.
-                self._retry_queue_refetch(item)
+                _refetch_retry(self, item)
                 continue
             retries.append((item, obj))
         restarted: list[int] = []
@@ -18741,48 +18913,31 @@ class WavesBridge(LibraryMixin, QObject):
     def _row_object(self, item: dict):
         """The live object a queue row downloads from: the one the row kept
         (every row queued since the queue began keeping them), else the
-        search-scoped bucket, else nothing (the caller re-fetches). Apple rows
-        keep row dicts and fall back to the provider's cache, which never
-        needs the network on a hit."""
+        search-scoped bucket, else the row's provider cache through its
+        download adapter, else nothing (the caller re-fetches). A
+        provider-run row's cache never needs the network on a hit."""
         obj = self._job_objs.get(item["qid"])
         if obj is None:
             obj = self._objs.get(item["type"], {}).get(item["media_id"])
-        if obj is None and str(item.get("media_id") or "").startswith(f"{CTX_APPLE}:"):
-            provider = self.providers.get(CTX_APPLE)
-            raw = provider.cached(item["type"], item["media_id"]) if provider is not None else None
-            if raw is not None:
-                try:
-                    obj = provider.row_for(item["type"], raw)
-                except Exception:
-                    logger.debug("Could not rebuild the Apple row for a retry", exc_info=True)
-                    obj = None
+        if obj is None:
+            adapter = _downloads_for(self, item["media_id"])
+            if adapter is not None:
+                obj = adapter.cached_row(item["type"], item["media_id"])
         return obj
 
     def _start_retry(self, item: dict, obj) -> bool:
+        # The row's provider re-enters it at the row's own ask (a provider-run
+        # row names its own entry: a TIDAL _download would build an engine
+        # spec for a foreign id). The row's is_retry marks the re-entry a
+        # retry, so the queued spec carries that flag to the provider's own
+        # gate (Apple's skip-list bypass, spec §6.4). A refusal (False) leaves
+        # the row in place, the same as the engine re-entry's own False.
+        adapter = _downloads_for(self, item["media_id"])
+        if adapter is not None:
+            return bool(adapter.serve_retry(item, obj))
         # Preserve a failed 'best of both' merge as a merge on retry, its plan
         # is kept stashed (only dropped on success), so a retried album isn't
         # silently degraded to a plain download.
-        if str(item.get("media_id") or "").startswith(f"{CTX_APPLE}:"):
-            # Apple rows keep row dicts, never engine objects: re-enter the
-            # Apple entry at the row's own ask, bypassing the TIDAL _download
-            # below (which would build a TIDAL spec for an Apple id). The
-            # explicit is_retry marks this re-entry a retry, and the queued
-            # spec carries that flag to the skip-list gate (spec §6.4).
-            return self._download_apple(
-                item["type"],
-                obj,
-                obj if item["collection"] else None,
-                item["template"],
-                item["collection"],
-                item["media_id"],
-                keep_ask=(
-                    str(item.get("askQuality") or ""),
-                    str(item.get("quality") or ""),
-                    str(item.get("audioType") or "") or None,
-                ),
-                chooser_toggles=dict(item.get("askToggles") or {}),
-                is_retry=True,
-            )
         plan = self._merge_plans.get(item["media_id"]) if item["type"] == "album" else None
         return self._download(
             obj,
@@ -18815,7 +18970,7 @@ class WavesBridge(LibraryMixin, QObject):
             # fallback as the download entry points), then re-enter through
             # this slot: the row keeps its stored name/template/collection/
             # merge plan on the second pass.
-            self._retry_queue_refetch(item)
+            _refetch_retry(self, item)
             return
         # Started BEFORE the old row is dropped, so the retry is holding the
         # row's REDOWNLOAD force when the withdrawal release looks for it (a
@@ -18830,45 +18985,12 @@ class WavesBridge(LibraryMixin, QObject):
         self._emit_queue()
 
     def _retry_queue_refetch(self, item: dict) -> None:
-        """Re-fetch a failed queue row's vanished object, then retry the row.
+        """The engine's by-id re-fetch of a retried row's vanished object.
 
         The row stays in the queue, still failed, until the object is back and
         the retry re-enters ``retryQueueItem`` (via the GUI hop), so a failed
         re-fetch leaves RETRY available instead of consuming the row."""
         bucket, media_id, qid = item["type"], item["media_id"], item["qid"]
-        if str(media_id).startswith(f"{CTX_APPLE}:"):
-            # Apple refetch through the Apple provider: no TIDAL sign-in
-            # gate, no _objs (the provider's own cache is the registry).
-            key = (bucket, media_id)
-            if key in self._refetch_inflight:
-                return
-            self._refetch_inflight.add(key)
-            gen = self._browse_gen
-            self._set_status("Fetching item…")
-
-            def apple_work() -> None:
-                obj = None
-                failure = ""
-                try:
-                    provider = self.providers.get(CTX_APPLE)
-                    if provider is not None:
-                        obj = provider.get_object(bucket, str(media_id).removeprefix(f"{CTX_APPLE}:"))
-                except AppleCollectionIncomplete as exc:
-                    failure = str(exc)
-                    logger.warning("Apple %s retry fetch stopped partway: %s", bucket, failure)
-                except Exception:
-                    logger.exception("Could not re-fetch Apple %s %s for retry", bucket, media_id)
-                if gen != self._browse_gen:
-                    self._refetch_inflight.discard(key)
-                    return
-                if obj is None:
-                    self._refetch_inflight.discard(key)
-                    self._set_status(failure or "That item is no longer available")
-                    return
-                self._queueRetryRefetched.emit(bucket, media_id, qid)
-
-            self.threadpool.start(Worker(apple_work))
-            return
         key = (bucket, media_id)
         if key in self._refetch_inflight or not self._logged_in:
             return

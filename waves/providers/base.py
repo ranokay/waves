@@ -15,6 +15,7 @@ orthogonal to it.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NamedTuple
@@ -287,6 +288,95 @@ class StreamInfo:
     local_file: str = ""
 
 
+class DownloadAdapter:
+    """One provider's download ask surface, reached through the seam.
+
+    The bridge's download paths -- a click, a Chooser click, a queued row's
+    retry, the retry's object rebuild and refetch, a standalone lyrics/art
+    ask, and the job body itself -- dispatch through the adapter of the
+    provider an id resolves to, so none of them branches on a provider id or
+    an id prefix.
+
+    The adapter is the provider's own: a provider package implements one, or
+    the bridge implements it where the download machinery is bridge code
+    (Apple's entry, queueing and runner) and assigns it to the provider where
+    the providers are wired. A provider whose deliveries ride the bridge's
+    engine path (tidalapi-shaped) carries none.
+
+    Which neutral answer hands the ask back is per method: serve_entry,
+    refetch_retry and job_runner answer "not served" (False / None), so the
+    bridge's engine path runs, while serve_retry and standalone are only
+    called for this adapter's own provider's ids, so their False / None are
+    verdicts (refused / item gone) with no fall-through. An adapter overrides
+    only what it serves.
+    """
+
+    def serve_entry(
+        self, kind: str, media_id: str, *, chooser=False, chooser_ask=None, chooser_audio=None, chooser_toggles=None
+    ) -> bool:
+        """Serve a download click on one of this provider's ids.
+
+        ``chooser`` marks a click from the Chooser popover; its ``chooser_*``
+        pins (possibly empty: no tier, Settings' audio) apply to that click
+        only. True = the ask was served (a row queued, a refetch started, or
+        a refusal stated); False = the bridge's engine entry serves the click.
+        """
+        return False
+
+    def serve_retry(self, item: dict, obj) -> bool:
+        """Re-enter a failed queue row at the row's own ask (its RETRY).
+
+        ``item`` is the queue row; ``obj`` is whatever ``cached_row`` rebuilt
+        for it (an engine object, or a row dict for a provider whose rows are
+        dicts). Only called for this adapter's own provider's ids, so the
+        answer is the queued/refused verdict: False (a gate held, or the
+        provider's switch is off) leaves the row in its Stopped section with
+        its RETRY, exactly as the engine's own re-entry does.
+        """
+        return False
+
+    def cached_row(self, kind: str, media_id: str) -> object | None:
+        """A row the retry can rebuild for an id whose live object is gone:
+        the app's row dict, or None. The neutral answer is None."""
+        return None
+
+    def refetch_retry(self, item: dict) -> bool:
+        """Re-fetch a retried row's vanished object.
+
+        True = this adapter owns the re-fetch (the row stays in the queue and
+        the object's return re-enters the retry); False = the bridge's engine
+        re-fetch by id runs.
+        """
+        return False
+
+    def standalone(self, media_id: str, mode: str) -> int | None:
+        """Fetch lyrics/art alone for one id (mode "lyrics" or "art").
+
+        The saved track count, 0 when nothing was found, or None when the
+        item is gone. Only ever called with the adapter's own provider's ids,
+        so the neutral answer is None (no adapter may silently fall through
+        to another provider's fetch)."""
+        return None
+
+    def job_runner(self, qid, spec, *, signals, job_abort, row_ask, name) -> Callable[[object], None] | None:
+        """The worker body for one queued download, or None when the bridge's
+        engine path runs the job.
+
+        Consulted when the job starts, before the bridge builds its segment
+        engine: an adapter that answers a runner guarantees the tidalapi-
+        shaped engine (and the TIDAL session it composes) is never built for
+        its provider. The returned callable receives the dispatch-resolved
+        catalog object and runs on the job's own worker thread; it settles
+        its own queue row, exactly as the engine path settles its own.
+
+        ``spec`` is the bridge's queued-job description (read-only):
+        ``provider_id``, ``kind``, ``collection``, ``media_id``,
+        ``file_template``, ``base_template``, ``audio_type``, ``is_retry``,
+        ``chooser_toggles``, ``name``.
+        """
+        return None
+
+
 class Provider(ABC):
     """One music service Waves can search and save from (CONTEXT.md).
 
@@ -299,6 +389,14 @@ class Provider(ABC):
     id: str
     name: str
     capabilities: frozenset[Capability]
+
+    downloads: DownloadAdapter | None = None
+    """This provider's download ask surface (see :class:`DownloadAdapter`),
+    or None when the bridge's engine path serves its downloads. The bridge
+    dispatches every download path through the adapter of the provider an id
+    resolves to. A provider that serves its own downloads carries one from
+    construction; the bridge attaches Apple's (whose entry, queueing and
+    runner are bridge code) where the providers are wired."""
 
     # ----- chooser metadata (what a provider offers before an object exists)
 
