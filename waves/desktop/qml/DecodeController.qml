@@ -8,7 +8,9 @@ QtObject {
   required property var field          // the TextField it animates
   property var glyph: null             // optional PasteGlyph to fill in sync
   property bool decoding: false
-  signal begun
+  // Fresh decode or a restart's replacement: arming callers (the search
+  // box's one-shot glyph arm) latch only on a fresh one.
+  signal begun(bool isRestart)
   signal decoded(string text)
   property string _final: ""
   property int _locked: 0
@@ -19,9 +21,6 @@ QtObject {
   // paste lands straight in the field and bypasses the glyph's
   // cancel-first path), never the timer's own tick.
   property string _shown: ""
-  // True while a restart's begun() is on the stack, so arming callers can
-  // tell a replaced decode from a fresh one.
-  property bool _restarting: false
   readonly property int _maxTicks: 24   // ~24 * 26ms ~= 0.6s, any length
   readonly property string _glyphs: "ABCDEF0123456789/:.~#@$%&abcdefxyz"
   function _scr(n) {
@@ -54,17 +53,21 @@ QtObject {
     // Paste-like mirrors the idle rule: a growth typing cannot produce, or
     // a full replacement (a same-length link swap is still a paste; an
     // overwrite keystroke misfiring here is accepted as the rarer error).
-    // The timer's own ticks write _shown and never take this branch, and
-    // run()'s opening write lands before the timer starts.
+    // A shrink only stops: the remainder still embeds scramble, so
+    // restarting on it would bake. The timer's own ticks write _shown and
+    // never take this branch, and run()'s opening write lands before the
+    // timer starts.
     if (decoding && _timer.running && field.text !== _shown) {
       var t = field.text
       var prevLen = _shown.length
       cancel()
       var growth = t.length - prevLen
       if (growth >= 4 || (t.length === prevLen && t.length >= 4)) {
-        _restarting = true
-        run(t)
-        _restarting = false
+        run(t, true)
+        // A blank replacement starts no decode (run's early return): keep
+        // measuring from the field, or the next keystroke looks paste-like.
+        if (!decoding)
+          _prevLen = field.text.length
       } else {
         _prevLen = t.length
       }
@@ -74,7 +77,7 @@ QtObject {
       run(field.text)
     _prevLen = field.text.length
   }
-  function run(t) {
+  function run(t, isRestart) {
     if (!t)
       return
     t = ("" + t).replace(/\s+/g, " ").trim()
@@ -83,7 +86,7 @@ QtObject {
     _final = t
     _locked = 0
     decoding = true
-    begun()
+    begun(isRestart === true)
     _step = Math.max(1, Math.ceil(_final.length / _maxTicks))
     // cap the run length
     // Record the write before making it: the assignment notifies

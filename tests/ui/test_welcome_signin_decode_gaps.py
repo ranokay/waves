@@ -71,7 +71,7 @@ def test_welcome_signin_never_submits_a_stale_or_scrambled_link():
     )
 
 
-def _run_scenario() -> int:  # noqa: C901 (one straight scenario, two legs)
+def _run_scenario() -> int:  # noqa: C901 (one straight scenario, four legs)
     booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
