@@ -168,23 +168,24 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario, three legs)
     elif not bool(q(scene_js(_FIND_SWITCH + "return sw ? true : false;"))):
         problems.append("the Apple switch is not in the open Settings page")
     else:
-        switch_action = action_of(q(scene_js(_FIND_SWITCH + "return sw;")))
-        if switch_action is None or "Toggle" not in list(switch_action.actionNames()):
-            problems.append("the Apple switch advertises no toggle action")
 
         def checked() -> bool:
             return bool(q(scene_js(_FIND_SWITCH + "return sw.Accessible.checked === true;")))
 
-        start = checked()
-        switch_action.doAction("Toggle")
-        settle(250)
-        if checked() == start:
-            problems.append("the platform Toggle never flipped the Apple switch")
+        switch_action = action_of(q(scene_js(_FIND_SWITCH + "return sw;")))
+        if switch_action is None or "Toggle" not in list(switch_action.actionNames()):
+            problems.append("the Apple switch advertises no toggle action")
         else:
-            switch_action.doAction("Press")
+            start = checked()
+            switch_action.doAction("Toggle")
             settle(250)
-            if checked() != start:
-                problems.append("the platform Press never flipped the Apple switch back")
+            if checked() == start:
+                problems.append("the platform Toggle never flipped the Apple switch")
+            else:
+                switch_action.doAction("Press")
+                settle(250)
+                if checked() != start:
+                    problems.append("the platform Press never flipped the Apple switch back")
     q("settingsPage.closed()")
     settle(250)
 
