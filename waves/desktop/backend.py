@@ -3237,9 +3237,11 @@ class _AppleDownloads(DownloadAdapter):
             is_retry=True,
         )
 
-    def cached_row(self, kind: str, media_id: str):
+    def cached_row(self, kind: str, media_id: str) -> object | None:
         provider = (getattr(self._bridge, "providers", None) or {}).get(CTX_APPLE)
-        raw = provider.cached(kind, media_id) if provider is not None else None
+        if provider is None:
+            return None
+        raw = provider.cached(kind, media_id)
         if raw is None:
             return None
         try:
@@ -3288,7 +3290,7 @@ class _AppleDownloads(DownloadAdapter):
     def standalone(self, media_id: str, mode: str) -> int | None:
         return self._bridge._standalone_apple(media_id, mode)
 
-    def job_runner(self, qid, spec, *, signals, job_abort, row_ask, name):
+    def job_runner(self, qid, spec, *, signals, job_abort, row_ask, name) -> Callable[[object], None]:
         bridge = self._bridge
 
         def run(obj) -> None:
@@ -4238,10 +4240,10 @@ class WavesBridge(LibraryMixin, QObject):
             CTX_APPLE: AppleProvider(),
         }
         # Apple's download ask surface (clicks, retries, standalone fetches,
-        # job bodies) is this bridge's own machinery, offered to the seam
+        # job bodies) is this bridge's own machinery, attached to the seam
         # here: every download path dispatches through the id's provider
         # adapter, so none of them names a provider or parses an id prefix.
-        self.providers[CTX_APPLE].bind_downloads(_AppleDownloads(self))
+        self.providers[CTX_APPLE].downloads = _AppleDownloads(self)
         # App-level flows a provider's card actions run where the provider's
         # own seam call is not enough, registered where the providers are
         # wired so the generic card dispatcher names no provider: TIDAL's

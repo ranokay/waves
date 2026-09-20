@@ -19,6 +19,10 @@ _Avoid_: provider config, provider metadata
 The component that performs a provider's fetching and decryption, possibly a wrapped external tool; each provider plugs into Waves through one.
 _Avoid_: downloader, backend
 
+**Download adapter**:
+The surface a provider serves its download asks through: a click, a Chooser click, a retry, a standalone lyrics or art fetch, and a queued job's body. The bridge dispatches every download path through the adapter of the provider an id's namespace resolves to, so no path names a provider; a provider with no adapter keeps the TIDAL engine path.
+_Avoid_: provider hook, download hook
+
 **Chooser**:
 The per-download control where the user picks provider, audio quality, audio type, and lyrics/art options; its defaults come from Settings, and one click uses those defaults.
 _Avoid_: download dialog, picker

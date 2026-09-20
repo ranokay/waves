@@ -320,14 +320,16 @@ class DownloadAdapter:
     def serve_retry(self, item: dict, obj) -> bool:
         """Re-enter a failed queue row at the row's own ask (its RETRY).
 
-        Only called for this adapter's own provider's ids, so the answer is
-        the queued/refused verdict: False (a gate held, or the provider's
-        switch is off) leaves the row in its Stopped section with its RETRY,
-        exactly as the engine's own re-entry does.
+        ``item`` is the queue row; ``obj`` is whatever ``cached_row`` rebuilt
+        for it (an engine object, or a row dict for a provider whose rows are
+        dicts). Only called for this adapter's own provider's ids, so the
+        answer is the queued/refused verdict: False (a gate held, or the
+        provider's switch is off) leaves the row in its Stopped section with
+        its RETRY, exactly as the engine's own re-entry does.
         """
         return False
 
-    def cached_row(self, kind: str, media_id: str):
+    def cached_row(self, kind: str, media_id: str) -> object | None:
         """A row the retry can rebuild for an id whose live object is gone:
         the app's row dict, or None. The neutral answer is None."""
         return None
@@ -386,17 +388,9 @@ class Provider(ABC):
     """This provider's download ask surface (see :class:`DownloadAdapter`),
     or None when the bridge's engine path serves its downloads. The bridge
     dispatches every download path through the adapter of the provider an id
-    resolves to; a provider that serves its own downloads carries one from
-    construction, and the bridge binds Apple's (whose entry, queueing and
+    resolves to. A provider that serves its own downloads carries one from
+    construction; the bridge attaches Apple's (whose entry, queueing and
     runner are bridge code) where the providers are wired."""
-
-    def bind_downloads(self, downloads: DownloadAdapter | None) -> None:
-        """Attach this provider's download ask surface.
-
-        The bridge calls this where it wires the providers, for a provider
-        whose downloads it implements itself; a provider that serves its own
-        downloads needs no bind. See :class:`DownloadAdapter`."""
-        self.downloads = downloads
 
     # ----- chooser metadata (what a provider offers before an object exists)
 

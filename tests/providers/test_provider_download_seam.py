@@ -719,7 +719,7 @@ class _ThirdDownloads(DownloadAdapter):
         self.jobs: list = []
 
     def serve_entry(self, kind, media_id, *, chooser=False, chooser_ask=None, chooser_audio=None, chooser_toggles=None):
-        self.entries.append((kind, media_id, chooser))
+        self.entries.append((kind, media_id, chooser, chooser_ask, chooser_audio, chooser_toggles))
         return True
 
     def serve_retry(self, item, obj):
@@ -767,7 +767,7 @@ class TestTheThirdProviderAdapter:
         stub._objs = {"track": {}, "album": {}, "playlist": {}, "mix": {}, "video": {}}
         return provider, stub, downloads
 
-    def test_a_third_provider_serves_its_own_click(self, tmp_path):
+    def test_a_third_provider_serves_its_own_clicks(self, tmp_path):
         _provider, stub, downloads = self._bridge(tmp_path)
         obj = SimpleNamespace(id="third:t1", name="Song")
         stub._objs["track"] = {"third:t1": obj, "t1": obj}
@@ -775,15 +775,44 @@ class TestTheThirdProviderAdapter:
         engine_calls: list = []
         stub._download = lambda *a, **k: engine_calls.append(a) or True
 
-        WavesBridge.downloadTrack(stub, "third:t1")
+        for kind, slot in (
+            ("track", "downloadTrack"),
+            ("album", "downloadAlbum"),
+            ("playlist", "downloadPlaylist"),
+            ("mix", "downloadMix"),
+            ("video", "downloadVideo"),
+        ):
+            getattr(WavesBridge, slot)(stub, f"third:{kind}1")
 
-        assert downloads.entries == [("track", "third:t1", False)]
+        assert [(kind, media_id) for kind, media_id, *_ in downloads.entries] == [
+            ("track", "third:track1"),
+            ("album", "third:album1"),
+            ("playlist", "third:playlist1"),
+            ("mix", "third:mix1"),
+            ("video", "third:video1"),
+        ]
+        assert all(entry[2] is False for entry in downloads.entries)
         assert engine_calls == [], "a provider-run click must not reach the engine entry"
 
         # The engine entry still serves the ids whose provider has no adapter.
         WavesBridge.downloadTrack(stub, "t1")
         assert len(engine_calls) == 1 and engine_calls[0][1] == "track"
-        assert downloads.entries == [("track", "third:t1", False)]
+        assert len(downloads.entries) == 5
+
+    def test_a_third_provider_serves_a_chooser_click_with_its_pins(self, tmp_path):
+        _provider, stub, downloads = self._bridge(tmp_path)
+        for name in (
+            "_provider_meta",
+            "_chooser_provider_of",
+            "_chooser_ask_for",
+            "_chooser_toggle_pins",
+            "_chooser_normalize_audio",
+        ):
+            setattr(stub, name, getattr(WavesBridge, name).__get__(stub))
+
+        WavesBridge.downloadWithChooser(stub, "third:t1", "track", "HIGH", "stereo", {"lyrics_embed": True})
+
+        assert downloads.entries == [("track", "third:t1", True, None, "stereo", {"lyrics_embed": True})]
 
     def test_a_third_provider_drives_a_job_end_to_end(self, tmp_path):
         provider, stub, downloads = self._bridge(tmp_path)
