@@ -8,7 +8,7 @@ import QtQuick
 // `host` is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load.
 // It reads through it:
-//   host.browseCardDownload / host.cardSubtitle / host.dlPct / host.dlSt /
+//   host.browseCardDownload / host.dlPct / host.dlSt /
 //   host.fmtMs / host.hoverPrefetch / host.hoverPrefetchCancel /
 //   host.ledPulse / host.libStamp / host.marchTick / host.openBrowseCard /
 //   host.openLibraryClaim / host.previewPosition / host.pvSt /
@@ -38,7 +38,6 @@ Rectangle {
 
   property var card: ({})
   readonly property string kind: card.kind || ""
-  readonly property string subtitle: host.cardSubtitle(card)
   width: 156
   height: 236
   radius: 12

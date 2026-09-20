@@ -27,9 +27,9 @@ HOW THIS STAYS FIXED
 --------------------
 The rule is mechanical: every ``Image`` in the cover files (Main.qml and the
 component files split out of it in #315: Art.qml, PreviewArt.qml,
-SearchProviderGroup.qml, MosaicCell.qml) that opts into the pixmap cache
-(``cache: true``) must request its pixels the same way, so that one warmed
-entry serves all of them. A new art surface that crops differently, or a pool that stops
+SearchProviderGroup.qml, MosaicCell.qml, WelcomePicker.qml) that opts into
+the pixmap cache (``cache: true``) must request its pixels the same way, so
+that one warmed entry serves all of them. A new art surface that crops differently, or a pool that stops
 cropping, fails here rather than silently halving the cache hit rate. The
 other key components (``sourceSize``, and the properties below that would
 split the key just as quietly) are pinned alongside it.
@@ -49,16 +49,19 @@ from support.paths import QML_MAIN as QML
 # #315 slice 3), PreviewArt.qml (the track disc, split out in slice 5),
 # SearchProviderGroup.qml (the search-group closure, split out in slice 6 —
 # its cached provider mark is exempt below, but the file must stay in the
-# scan set so a cover added there cannot drift from the pool unnoticed) and
+# scan set so a cover added there cannot drift from the pool unnoticed),
 # MosaicCell.qml (the browse tile's crossfade pair, split out in slice 7 —
-# both Images cache): this guard must read all of them, or the app's
+# both Images cache) and WelcomePicker.qml (the welcome cards' provider
+# marks, split out in slice 8 — exempt as marks, scanned so a cover added
+# there is not missed): this guard must read all of them, or the app's
 # most-used art surfaces stop being scanned and their cache keys can drift
 # from the pool's unnoticed.
 ART_QML = QML.parent / "Art.qml"
 PREVIEW_ART_QML = QML.parent / "PreviewArt.qml"
 SEARCH_GROUP_QML = QML.parent / "SearchProviderGroup.qml"
 MOSAIC_CELL_QML = QML.parent / "MosaicCell.qml"
-COVER_FILES = (QML, ART_QML, PREVIEW_ART_QML, SEARCH_GROUP_QML, MOSAIC_CELL_QML)
+WELCOME_PICKER_QML = QML.parent / "WelcomePicker.qml"
+COVER_FILES = (QML, ART_QML, PREVIEW_ART_QML, SEARCH_GROUP_QML, MOSAIC_CELL_QML, WELCOME_PICKER_QML)
 
 # The one fill mode every cover surface uses. Covers are square and so are the
 # decode sizes asked for them, so cropping and stretching would paint the same
