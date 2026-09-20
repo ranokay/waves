@@ -163,7 +163,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario, four legs)
     if not bool(q(scene_js(_FIND_SKIP + "return skip ? skip.activeFocusOnTab === true : false;"))):
         problems.append("the welcome skip is not Tab-reachable (activeFocusOnTab)")
     else:
-        for key, words in ((Qt.Key_Return, "Return"), (Qt.Key_Space, "Space")):
+        for key, words in ((Qt.Key_Return, "Return"), (Qt.Key_Enter, "Enter"), (Qt.Key_Space, "Space")):
             q(
                 "setupSettings.firstRunAnswered = false; setupSettings.setupChipDismissed = false;"
                 " root.setupMode = 'cards'; root.setupUrlOpened = false"
