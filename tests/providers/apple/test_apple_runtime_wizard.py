@@ -272,6 +272,18 @@ def test_verify_cookies_rejects_export_without_token(tmp_path):
         verify_cookies_file(_cookies_file(tmp_path, with_token=False))
 
 
+def test_verify_cookies_ignores_a_token_on_a_lookalike_domain(tmp_path):
+    """The domain field decides: a media-user-token filed under a host that
+    merely ends in "apple.com" is not an Apple session."""
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\nevilapple.com\tTRUE\t/\tTRUE\t0\tmedia-user-token\tabc123\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no signed-in Apple session"):
+        verify_cookies_file(str(path))
+
+
 def test_verify_cookies_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         verify_cookies_file(str(tmp_path / "missing.txt"))

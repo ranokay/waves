@@ -34,6 +34,7 @@ from collections import Counter, deque, namedtuple
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Condition, Event, Lock, Thread, current_thread, local, main_thread
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from PySide6 import QtCore, QtGui
@@ -338,6 +339,22 @@ def _register_preview_gauge() -> None:
             return
         _preview_seg_registered = True
     diagnostics.register_pool("preview", _PreviewSegGauge())
+
+
+def _pasted_media_link(needle: str) -> bool:
+    """Whether the search field's text is a link into a provider's catalog.
+
+    Recognised by host, never by substring: a query that merely contains a
+    hostname ("my tidal.com playlist") stays a search. Scheme-less input is
+    parsed as https, because that is how a bare share link is pasted.
+    """
+    host = urlsplit(needle if "://" in needle else f"https://{needle}").hostname or ""
+    return (
+        host == "tidal.com"
+        or host.endswith(".tidal.com")
+        or host == "music.apple.com"
+        or host.endswith(".music.apple.com")
+    )
 
 
 def _url_media_ext(url: str) -> str:
@@ -5898,7 +5915,7 @@ class WavesBridge(LibraryMixin, QObject):
         if not enabled_ids:
             self._set_status("Sign in to search")
             return
-        if "tidal.com" in needle or "music.apple.com" in needle or needle.startswith("http"):
+        if needle.startswith("http") or _pasted_media_link(needle):
             self._open_url(needle)
             return
         # Bump the search generation so a slower earlier search can't overwrite a

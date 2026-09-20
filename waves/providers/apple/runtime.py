@@ -476,22 +476,27 @@ def verify_cookies_file(path: str) -> dict:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        if "media-user-token" in stripped and "apple.com" in stripped:
-            fields = [field.strip() for field in stripped.split("\t")]
-            if len(fields) >= 7:
-                # Netscape field 5 is the expiry epoch; 0 is a session
-                # cookie (no static expiry to check).
-                try:
-                    expires = int(fields[4] or 0)
-                except ValueError:
-                    expires = 0
-                if expires > 0 and expires < time.time():
-                    raise ValueError(
-                        "That cookies export's Apple session has expired. "
-                        "Export fresh cookies from a logged-in music.apple.com tab."
-                    )
-            has_token = True
-            break
+        fields = [field.strip() for field in stripped.split("\t")]
+        if len(fields) < 7 or fields[5] != "media-user-token":
+            continue
+        # The domain decides, not a substring: a token filed under a
+        # lookalike domain is not an Apple session.
+        cookie_domain = fields[0].lstrip(".")
+        if cookie_domain != "apple.com" and not cookie_domain.endswith(".apple.com"):
+            continue
+        # Netscape field 5 is the expiry epoch; 0 is a session cookie
+        # (no static expiry to check).
+        try:
+            expires = int(fields[4] or 0)
+        except ValueError:
+            expires = 0
+        if expires > 0 and expires < time.time():
+            raise ValueError(
+                "That cookies export's Apple session has expired. "
+                "Export fresh cookies from a logged-in music.apple.com tab."
+            )
+        has_token = True
+        break
     if not has_token:
         raise ValueError(
             "That cookies export has no signed-in Apple session (no media-user-token cookie). "
