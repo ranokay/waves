@@ -1365,6 +1365,9 @@ Rectangle {
               Accessible.onPressAction: function () {
                 db.chooserPickTier(modelData.word)
               }
+              Accessible.onToggleAction: function () {
+                db.chooserPickTier(modelData.word)
+              }
               Keys.onReturnPressed: function (event) {
                 if (!event.isAutoRepeat) {
                   event.accepted = true
@@ -1466,6 +1469,9 @@ Rectangle {
                 Accessible.onPressAction: function () {
                   db.chooserPickAudio(modelData)
                 }
+                Accessible.onToggleAction: function () {
+                  db.chooserPickAudio(modelData)
+                }
                 Keys.onReturnPressed: function (event) {
                   if (!event.isAutoRepeat) {
                     event.accepted = true
@@ -1531,6 +1537,9 @@ Rectangle {
               Accessible.onPressAction: function () {
                 db.chooserToggle("lyrics_embed")
               }
+              Accessible.onToggleAction: function () {
+                db.chooserToggle("lyrics_embed")
+              }
               Keys.onReturnPressed: function (event) {
                 if (!event.isAutoRepeat) {
                   event.accepted = true
@@ -1578,6 +1587,9 @@ Rectangle {
               Accessible.checkable: true
               Accessible.checked: db.chooserLyricsFile
               Accessible.onPressAction: function () {
+                db.chooserToggle("lyrics_file")
+              }
+              Accessible.onToggleAction: function () {
                 db.chooserToggle("lyrics_file")
               }
               Keys.onReturnPressed: function (event) {
@@ -1631,6 +1643,9 @@ Rectangle {
               Accessible.checkable: true
               Accessible.checked: db.chooserLyricsTtml
               Accessible.onPressAction: function () {
+                db.chooserToggle("lyrics_ttml_file")
+              }
+              Accessible.onToggleAction: function () {
                 db.chooserToggle("lyrics_ttml_file")
               }
               Keys.onReturnPressed: function (event) {
@@ -1697,6 +1712,9 @@ Rectangle {
               Accessible.onPressAction: function () {
                 db.chooserToggle("cover_file")
               }
+              Accessible.onToggleAction: function () {
+                db.chooserToggle("cover_file")
+              }
               Keys.onReturnPressed: function (event) {
                 if (!event.isAutoRepeat) {
                   event.accepted = true
@@ -1744,6 +1762,9 @@ Rectangle {
               Accessible.checkable: true
               Accessible.checked: db.chooserCoverEmbed
               Accessible.onPressAction: function () {
+                db.chooserToggle("cover_embed")
+              }
+              Accessible.onToggleAction: function () {
                 db.chooserToggle("cover_embed")
               }
               Keys.onReturnPressed: function (event) {

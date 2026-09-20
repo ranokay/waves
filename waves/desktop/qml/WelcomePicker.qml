@@ -164,6 +164,10 @@ Rectangle {
         color: textDim
         font.pixelSize: 12
         font.underline: true
+        // A reader's press answers the same skipped() the click calls.
+        Accessible.role: Accessible.Button
+        Accessible.name: "Not now"
+        Accessible.onPressAction: pickCard.skipped()
         MouseArea {
           anchors.fill: parent
           anchors.margins: -6
