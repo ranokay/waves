@@ -18,6 +18,10 @@ import "StatusLight.js" as StatusLight
 // It reads through it:
 //   host.cancelSetupSignIn / host.providerCards / host.setupMode /
 //   host.setupUrlOpened
+//   host.accent / host.gold / host.red / host.textDim  the status-light
+//     palette StatusLight.colorFor(host, state) reads for each step card's
+//     state light (read through host, not copied locally, because the
+//     helper takes a palette object)
 // Split out of Main.qml (#315 slice 8). The palette values are local
 // copies of Main.qml's static literals — the SettingsPage.qml convention;
 // keep them in step if the palette changes.

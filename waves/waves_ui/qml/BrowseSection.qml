@@ -235,7 +235,7 @@ Column {
     // launch (sampled live: the cards' bridge calls, each waiting its
     // turn behind the library scan), which the launch animation and
     // any later shelf scroll dropped frames on. The veil accounting
-    // (host._browseCardStart / host._browseBuildTick) keeps the landing
+    // (host._browseCardStart / host._browseCardTick) keeps the landing
     // covered until the cards are in, not just the shelves.
     delegate: Loader {
       id: acLd
