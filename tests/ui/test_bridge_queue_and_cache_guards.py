@@ -236,7 +236,7 @@ def test_logout_bumps_lib_gen_and_clears_cache():
     stub._artist_loading = {"1"}
     stub._page_cache_path = "/nonexistent/page_cache.json"
     # ...and the busy flag it clears for the workers its generation bump
-    # orphans (see test_logout_rollup_and_store_recovery).
+    # orphans (see test_signout_and_rollup_recovery).
     stub._set_busy = lambda on: None
     # ...and the hover prefetch of item pages.
     stub._prefetch_lock = Lock()
