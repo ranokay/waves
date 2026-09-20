@@ -11,8 +11,8 @@ the main executable, so its module markers are scanned as well as the
 bundle's files.
 
 It also checks the other direction: native modules the runtime loads by name
-must be present. PyCryptodome's cipher modules are the known case (issue
-#304): ``load_pycryptodome_raw_lib`` uses ctypes, so Nuitka's import
+must be present. PyCryptodome's cipher modules are the known case:
+``load_pycryptodome_raw_lib`` uses ctypes, so Nuitka's import
 following cannot see ``_raw_aes`` and a build without the explicit package
 include ships an empty ``Crypto/Cipher``; every Apple cookies-tier download
 then dies at the FairPlay AES step.
