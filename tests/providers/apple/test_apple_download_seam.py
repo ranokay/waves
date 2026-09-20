@@ -100,6 +100,33 @@ def test_classify_refusal_sorts_credentials_throttle_and_gone():
     assert other.kind is RefusalKind.FAILURE
 
 
+def test_classify_refusal_keeps_internal_not_found_a_failure():
+    # A module-load error reads "Not found '_raw_aes...'" — an
+    # internal failure, never a delisted track.
+    provider = AppleProvider(catalog=None)
+
+    internal = provider.classify_refusal(RuntimeError("Not found '_raw_aes.cpython-313-darwin.so'"))
+    assert internal.kind is RefusalKind.FAILURE
+    assert "not available on Apple Music" not in internal.message
+
+    class NotStreamable(Exception):
+        pass
+
+    class FormatNotAvailable(Exception):
+        pass
+
+    class DecryptionNotAvailable(Exception):
+        pass
+
+    for exc in (
+        RuntimeError("song HTTP 404"),
+        NotStreamable("no rendition"),
+        FormatNotAvailable("no format"),
+        DecryptionNotAvailable("no keys"),
+    ):
+        assert provider.classify_refusal(exc).kind is RefusalKind.UNAVAILABLE
+
+
 def test_resolve_stream_delivers_a_staged_file_and_releases_it(tmp_path, monkeypatch):
     import waves.providers.apple.engine as engine
 
