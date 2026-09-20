@@ -123,11 +123,10 @@ from support.paths import QML_DIR
 #                      for the same structural reason.
 #   WaveMark.qml       the last inline components split out of Main.qml (#315
 #   GateCard.qml       slice 9): LibLibrarySection renders the scanned library
-#   NavTab.qml         (its rows carry file names and provider labels) and
-#   NavCrumbTrail.qml  GateCard renders producer-supplied titles/descriptions;
-#   BrowseScroll.qml   the rest (WaveMark, NavTab, NavCrumbTrail, BrowseScroll)
-#   LibLibrarySection.qml  are local chrome that ride the set for the same
-#                      structural reason.
+#   NavTab.qml         (its rows carry file names and provider labels); the
+#   NavCrumbTrail.qml  rest (WaveMark, GateCard, NavTab, NavCrumbTrail,
+#   BrowseScroll.qml   BrowseScroll) are local chrome that ride the set for the
+#   LibLibrarySection.qml  same structural reason as the other split files.
 TIDAL_DATA_FILES = {
     "Main.qml",
     "DownloadButton.qml",

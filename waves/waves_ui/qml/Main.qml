@@ -213,13 +213,6 @@ ApplicationWindow {
   readonly property int btnPadH: 12             // label padding, left/right
   readonly property int btnPadV: 7              // label padding, top/bottom
   readonly property color accentSoft: "#9dffbe"   // CRT flash / phosphor highlight
-  // Nav-tab idle ("dimmed phosphor display"): a grey label on a faint green
-  // panel that warms to green as the tab powers on (see NavTab).
-  readonly property color navIdleBg: "#0b140f"
-  readonly property color navIdleBorder: "#1f3d2a"
-  readonly property color navIdleBorderHi: "#2c5c3e"
-  readonly property color navIdleText: "#8f949e"
-  readonly property color navIdleTextHi: "#bcc1c9"
 
   // View routing
   // Exactly one main surface shows at a time: Browse (default), search

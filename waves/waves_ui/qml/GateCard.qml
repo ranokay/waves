@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 
 // Tap-card option: title + description + optional mono chip, arrow right.
-// Used where a pop-up offers a choice; tapping the card takes the action,
+// Used where a gate offers a choice; tapping the card takes the action,
 // so there is no separate confirm button. highlight marks the recommended
 // (accent-tinted) option.
 // Split out of Main.qml (#315 slice 9). The palette values are local

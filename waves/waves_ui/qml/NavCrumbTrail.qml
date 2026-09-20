@@ -5,10 +5,10 @@ import QtQuick
 // is only this section's slice of it). Crumb click = navTo(crumbBase + ord).
 // Long trails fold the middle behind a "…" pill that expands in place
 // and morphs into "›‹" to fold back; navigating deeper auto-refolds.
-// Motion: slot widths glide 220ms OutCubic while new crumbs rise in
-// with the control bounce (the picked M3, gated on hoverMotion like
-// RiseIn). The trail reconciles against crumbLabels instead of being
-// rebuilt, so crumbs animate in and out rather than popping.
+// Motion: crumbs appear in place; the only motion is a quick fade on
+// removal (a width animation read as a wipe in livetesting). The trail
+// reconciles against crumbLabels instead of being rebuilt, so shared
+// prefix pills stay while dropped ones fade and new ones appear.
 // `host` is Main.qml's root object, bound at both instantiations (the
 // browse sub-page bar and the artist page's sticky bar) and required so
 // a missed binding fails at load.

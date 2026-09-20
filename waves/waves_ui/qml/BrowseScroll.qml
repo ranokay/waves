@@ -14,8 +14,9 @@ import QtQuick.Controls.Basic
 // Browse landing and the drilled page) and required so a missed binding
 // fails at load.
 // It reads through it:
-//   host.browseCanGrow / host.browseGrow / host.browseMoving /
-//   host.browsePage / host.browsePageKey
+//   host.browseCanGrow / host.browseGrow / host.browsePage /
+//   host.browsePageKey
+// It writes one flag back: host.browseMoving (the pane's moving state).
 // Split out of Main.qml (#315 slice 9).
 Flickable {
   id: bsp

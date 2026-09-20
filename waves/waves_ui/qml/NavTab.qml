@@ -54,8 +54,9 @@ Item {
     }
   }
 
-  // Colours for the CRT look. accent/accentCont/accentDim/accentSoft are
-  // shared app tokens; the dim phosphor-panel tones are local to this look.
+  // Colours for the CRT look. accent/accentCont/accentDim/accentSoft are the
+  // app's shared tokens (copied locally above); the dim phosphor-panel tones
+  // are local to this look.
   readonly property color navDimBg: "#0b140f"
   readonly property color navDimBorder: "#1f3d2a"
   readonly property color navDimHover: "#2c5c3e"

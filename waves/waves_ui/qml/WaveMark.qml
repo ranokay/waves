@@ -1,7 +1,7 @@
 import QtQuick
 
 // ASCII ocean-wave logo (the "Parallax Ocean" mark):
-// four depth layers of wave glyphs - foam specks, small ripples, rolling swell,
+// six depth layers of wave glyphs - foam specks, small ripples, rolling swell,
 // and a big foreground crest - all scrolling left at parallax speeds (back layers
 // slower) for moving-water depth, rather than flat parallel lines.
 // `host` is Main.qml's root object, bound at its single instantiation
