@@ -1,5 +1,6 @@
-"""The update hygiene stays wired: Dependabot targets develop and the release
-build carries Nuitka's build tree between runs.
+"""The update hygiene stays wired: Dependabot targets develop, the release
+build carries Nuitka's build tree between runs, and the contributor gate
+record matches the manual test workflow.
 
 Dependabot reads the PEP 621 metadata and uv.lock through the "pip" ecosystem;
 the ignored names are the pins that move by hand (docs/dependency-updates.md).
@@ -188,20 +189,6 @@ def test_the_build_includes_the_pycryptodome_native_modules():
     assert missing == [], f"the include list dropped: {missing}"
 
 
-def test_the_merge_gate_record_matches_the_manual_workflow():
-    """R-01: the test workflow is manual-only, so no document may promise
-    per-push CI. The merge stands on the local strict run recorded in the PR
-    body with the tested SHA; if the trigger ever grows beyond a manual
-    dispatch, the contributor record has to say so too, and this fails until
-    it does."""
-    wf = yaml.safe_load(MASTER_WORKFLOW.read_text())
-    assert set(wf[True]) == {"workflow_dispatch"}, wf[True]
-
-    text = CONTRIBUTING.read_text()
-    assert "manual-only" in text and "workflow_dispatch" in text
-    assert "runs across Python" not in text
-
-
 def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
     """A trim allowlist built for the signing surface alone
     would delete the native modules Apple downloads load by name
@@ -230,3 +217,24 @@ def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
     )
 
     assert all(native.exists() for native in natives)
+
+
+def test_the_merge_gate_record_matches_the_manual_workflow():
+    """R-01: the test workflow is manual-only, so the contributor record may
+    not promise per-push CI. The merge stands on the local strict run whose
+    short SHA the PR body carries; if the trigger ever grows beyond a manual
+    dispatch, the contributor record has to say so too, and this fails until
+    it does."""
+    wf = yaml.safe_load(MASTER_WORKFLOW.read_text())
+    # YAML 1.1 reads the `on:` key as boolean True (the wrapper-image pins
+    # test notes the same quirk); the trigger set must stay dispatch-only.
+    assert set(wf[True]) == {"workflow_dispatch"}, wf[True]
+
+    text = CONTRIBUTING.read_text()
+    assert "workflow_dispatch" in text
+    assert "manual-only" in text.lower().replace("manual only", "manual-only")
+    assert "PR body" in text and "short SHA" in text
+    # Tripwire for the exact removed promise (CONTRIBUTING.md:107 on
+    # develop): a reworded per-push claim would need a human read, but this
+    # sentence coming back fails here first.
+    assert "runs across Python" not in text
