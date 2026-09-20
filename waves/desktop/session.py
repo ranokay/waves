@@ -1,0 +1,136 @@
+"""Waves-owned TIDAL session config.
+
+Subclasses the engine's ``waves.config.Tidal`` so a correctness fix lands here
+instead of in the shared ``config.py`` method body. Keeping the override out of
+``config.py`` follows the engine/UI seam discipline: engine modules stay close
+to their inherited shape (a habit from the fork era's upstream merges, kept
+because it makes the engine easy to audit), and UI-owned behavior lives here.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+
+from waves.config import Tidal
+
+logger = logging.getLogger("waves.session")
+
+# The only two answers that mean "TIDAL looked at the saved sign-in and refused
+# it". Everything else (a dead network, a rate limit, a server fault, a hotel
+# captive portal) is TIDAL declining to answer at all, and an unanswered
+# question must never cost the user their sign-in.
+_SIGN_IN_REFUSED = frozenset({401, 403})
+
+
+def _answered_status(exc: BaseException) -> int | None:
+    """The HTTP status behind ``exc``, following the exception chain.
+
+    The status is often not on the exception that reaches us. tidalapi parses
+    the error body as JSON while it is *handling* the original ``HTTPError``, so
+    a proxy's HTML error page raises a second exception out of the handler; and
+    it translates a 429 into a ``TooManyRequests`` that carries no response at
+    all. Walking ``__cause__``/``__context__`` finds the status when TIDAL
+    answered with one, and returns None when it never really answered.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        status = getattr(getattr(current, "response", None), "status_code", None)
+        if isinstance(status, int):
+            return status
+        current = current.__cause__ or current.__context__
+    return None
+
+
+class WavesTidal(Tidal):
+    """A ``Tidal`` whose cached-credential login survives a bad network.
+
+    Upstream ``login_token`` deletes the saved sign-in on *any* exception, so a
+    black-holed network, a 429, a 502 or a captive portal at launch logs the
+    user out permanently: the OAuth refresh credential is gone and cannot be
+    recovered. This override deletes only when TIDAL positively refused the
+    sign-in, and keeps it in every other case.
+
+    The asymmetry is the whole argument. Keeping a sign-in that really is dead
+    costs nothing: the user signs in again and ``save()`` atomically replaces the
+    file. Deleting a live one cannot be undone.
+
+    The same asymmetry rules out ever deleting during a client probe. Fetching
+    Dolby Atmos swaps the client id and re-authenticates mid-download to prove
+    the swap took, and that goes through this very method. A refusal there is
+    the Atmos client being turned away, which says nothing about the user's own
+    sign-in, yet deleting the credential there strands a running queue while the
+    window still says signed in. It reaches this method through
+    ``_reauthenticate_current_client``, so the probe is marked there.
+    """
+
+    # False only for the span of a client-swap probe, where a refusal is about
+    # the client being tried, not about the saved sign-in.
+    _sign_in_at_stake: bool = True
+
+    def _reauthenticate_current_client(self) -> bool:
+        """Prove the client credentials that are set right now.
+
+        Same work as upstream; the difference is that a refusal cannot cost the
+        user their sign-in. An Atmos swap happens mid-run on a worker thread,
+        so a deletion there would be invisible until the next launch.
+        """
+        self._sign_in_at_stake = False
+        try:
+            return super()._reauthenticate_current_client()
+        finally:
+            self._sign_in_at_stake = True
+
+    def login_token(self, do_pkce: bool = True) -> bool:
+        result = False
+        self.is_pkce = do_pkce
+
+        if self.token_from_storage:
+            try:
+                result = self.session.load_oauth_session(
+                    self.data.token_type,
+                    self.data.access_token,
+                    self.data.refresh_token,
+                    self.data.expiry_time,
+                    is_pkce=do_pkce,
+                )
+            except Exception as exc:
+                result = False
+                status = _answered_status(exc)
+                if status in _SIGN_IN_REFUSED and not self._sign_in_at_stake:
+                    logger.info("A client probe was refused (%s); the saved sign-in is not the subject", status)
+                elif status in _SIGN_IN_REFUSED:
+                    logger.info("TIDAL refused the saved sign-in (%s); removing it", status)
+                    if os.path.exists(self.file_path):
+                        os.remove(self.file_path)
+                else:
+                    logger.warning(
+                        "Cached sign-in got no usable answer from TIDAL (status %s); keeping it",
+                        "none" if status is None else status,
+                    )
+
+        return result
+
+    def login_finalize(self) -> bool:
+        """Record that a completed sign-in is now saved.
+
+        The base method writes the credentials file but leaves the flag saying
+        one exists untouched: upstream sets that flag only in ``Tidal.__init__``,
+        which is a command-line assumption. There the process signs in once and
+        exits, and the next run re-reads the file on the way up. A window that
+        stays open does not get a next run.
+
+        ``login_token`` opens on that flag, so without this line every later
+        re-authentication in the same session answers False without attempting
+        anything. The one that matters is Dolby Atmos: switching to the Atmos
+        credentials re-authenticates, so on a first launch after install, or
+        after signing out and back in, every Atmos track in every download
+        would fail for the rest of the run until the app is quit. Needing a
+        restart to refresh is exactly what this app does not do.
+        """
+        result = super().login_finalize()
+        if result:
+            self.token_from_storage = True
+        return result

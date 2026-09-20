@@ -4,10 +4,10 @@ THREE BUGS FENCED OFF HERE
 -------------------------
 1. ``onBrowseLoaded`` called ``markNav``, which bumps ``_navSeq``. The Browse
    landing re-emits on every background revalidate (near enough every launch,
-   now that the landing embeds the home-feed rows), so a search issued right
+   since the landing embeds the home-feed rows), so a search issued right
    after launch had its results discarded by ``onSearchResults``' staleness
    guard: the status bar read "n results" while the pane still showed the
-   empty-state hint. Payload arrivals now go through ``markRender``, which
+   empty-state hint. Payload arrivals go through ``markRender``, which
    stamps the perf timer without touching the sequence.
 
 2. ``navBack`` marked the navigation and recorded a forward entry BEFORE its
@@ -66,8 +66,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -129,9 +129,9 @@ def _run_scenario() -> int:
     settle()
     noop_back = noop_back and q("_navLabel") == "search render"
 
-    # 3. BACK MUST NOT TRIM THE HISTORY IT JUST WALKED INTO. Landing on a
-    #    section root that also sits earlier in the trail used to collapse the
-    #    whole trail, so the next Back fell through to the level-up fallback.
+    # 3. BACK MUST NOT TRIM THE HISTORY IT JUST WALKED INTO. Collapsing the
+    #    whole trail when a section root also sits earlier in it makes the
+    #    next Back fall through to the level-up fallback.
     q("openSearch()")
     settle()
     q(

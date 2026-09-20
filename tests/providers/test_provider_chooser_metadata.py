@@ -16,10 +16,10 @@ from types import SimpleNamespace
 from support.provider_fakes import BareProvider
 
 from waves.constants import CTX_APPLE, CTX_TIDAL, QualityTier
+from waves.desktop.backend import WavesBridge
 from waves.providers import AudioType, Capability, QualityOption, StatusKind
 from waves.providers.apple import AppleProvider
 from waves.providers.tidal import TidalProvider
-from waves.waves_ui.backend import WavesBridge
 
 # The fields the bridge's chooser reads off a Provider. A stub stands in for
 # an instance wherever the provider's own methods are not under test.
@@ -258,8 +258,8 @@ def test_a_third_provider_without_the_capability_gets_no_toggle_gate():
 
 
 def test_chooser_supported_is_capability_driven_not_provider_identity():
-    """The split button belongs to the control, not to Apple (issue #235 /
-    TS-05): a TIDAL-only install gets it, an unsupported kind does not, and a
+    """The split button belongs to the control, not to Apple: a TIDAL-only
+    install gets it, an unsupported kind does not, and a
     provider whose metadata offers nothing per-click answers False instead of
     drawing a control that opens empty."""
     b = _bridge(apple_enabled=False)
@@ -283,7 +283,7 @@ def test_chooser_supported_is_capability_driven_not_provider_identity():
 
 
 def test_the_artist_download_verdict_is_capability_driven_not_provider_identity():
-    """Issue #288: the artist page's discography control renders from a
+    """The artist page's discography control renders from a
     provider capability, so no QML branch names a provider. Apple's catalog
     answers no artist sweep; TIDAL's does; a third provider declaring the
     capability gets the control and one without it never does."""
@@ -311,14 +311,14 @@ class _RaisingCapabilities:
 
 def test_a_failing_capability_probe_hides_the_control():
     """A probe that raises must hide the control, never fail open to a live
-    button (the same contract chooserSupported's guard keeps, issue #288)."""
+    button (the same contract chooserSupported's guard keeps)."""
     b = _bridge(providers={CTX_TIDAL: _metadata(TidalProvider), "apple": _RaisingCapabilities()})
 
     assert b.artistDownloadSupported("apple:artist-1") is False
 
 
 def test_provider_descriptor_answers_by_namespace_or_provider_id():
-    """Issue #278: every badge and group head renders the descriptor this
+    """Every badge and group head renders the descriptor this
     answers, so QML never parses an id prefix nor carries a provider asset
     path. A bare legacy id reads as TIDAL's, a provider id matches exactly
     (a head asking for its own provider), an id no registered provider claims
@@ -357,7 +357,7 @@ def test_provider_descriptor_answers_by_namespace_or_provider_id():
 
 
 def test_chooser_segment_tiles_come_from_the_enabled_providers_descriptors():
-    """The provider segment is bridge data (issue #235): a disabled provider
+    """The provider segment is bridge data: a disabled provider
     draws no tile, the row's own provider always does, and each tile carries
     the descriptor's own name and mark -- no provider name or asset path in
     QML, so a third provider renders with no QML edit."""
@@ -392,7 +392,7 @@ def test_chooser_segment_tiles_come_from_the_enabled_providers_descriptors():
 def test_the_chooser_carries_which_sections_apply_per_provider():
     """Each popover section is gated on provider metadata, not identity: the
     lyrics/art sections follow the capabilities and the TTML toggle follows
-    the provider's own engine fact (issue #235)."""
+    the provider's own engine fact."""
     b = _bridge()
     tidal = b.chooserDefaults("t1", "track")
     apple = b.chooserDefaults("apple:1", "track")
@@ -416,7 +416,7 @@ def test_the_chooser_carries_which_sections_apply_per_provider():
 def test_a_stereo_only_provider_clamps_the_stored_both_default():
     """A 'both' Settings default cannot survive for a provider with no Atmos
     words: the popover would open with no tile selected and send a word the
-    provider cannot fetch (issue #235)."""
+    provider cannot fetch."""
     stereo_only = SimpleNamespace(
         name="Qobuz",
         capabilities=frozenset({Capability.LYRICS}),
@@ -437,12 +437,12 @@ def test_the_chooser_qml_names_no_provider():
     """Acceptance for a third provider: the popover region carries no provider
     id, name or asset, so a provider registered with a descriptor and the
     right metadata renders its segment, audio words and section gates without
-    a QML edit (issue #235)."""
+    a QML edit."""
     import pathlib
 
-    from waves.waves_ui import backend as backend_module
+    from waves.desktop import backend as backend_module
 
-    # The Chooser lives in DownloadButton.qml (#315); the popover component is
+    # The Chooser lives in DownloadButton.qml; the popover component is
     # the last block in the file, so the region runs to the end.
     qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "DownloadButton.qml").read_text(encoding="utf-8")
     start = qml.find("id: chooserComp")

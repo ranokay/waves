@@ -12,8 +12,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 
 
 class _Album:
@@ -312,11 +312,10 @@ def _rumours():
 
 
 def test_the_clean_edition_survives_when_the_user_asked_for_clean():
-    """The page used to run a bare subset collapse under 'best of both', which
-    hides a clean cut inside its explicit twin. The sweep never does that: it
-    splits the two sides first and merges only within one. The page said the
-    user does not own this album while 'Download discography' would have
-    fetched exactly it."""
+    """The page must not run a bare subset collapse under 'best of both': that
+    hides a clean cut inside its explicit twin and says the user does not own
+    this album while 'Download discography' would fetch exactly it. The sweep
+    splits the two sides first and merges only within one."""
     clean, deluxe = _rumours()
     albums, _eps = _Stub(explicit_mode="clean")._hide_subset_editions([clean, deluxe], [])
     assert [a.id for a in albums] == ["c1"]

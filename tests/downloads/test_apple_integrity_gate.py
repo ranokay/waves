@@ -1,4 +1,4 @@
-"""Integrity gate: verify, retry, quarantine, skip-list (issue #30, spec §6)."""
+"""Integrity gate: verify, retry, quarantine, skip-list (spec §6)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
-from waves.helper.exceptions import DownloadIncomplete
+from waves.desktop.backend import WavesBridge
+from waves.errors import DownloadIncomplete
 from waves.providers.apple import runner
 from waves.providers.apple.integrity import (
     INTEGRITY_FAIL_MESSAGE,
@@ -25,7 +26,6 @@ from waves.providers.apple.integrity import (
     quarantine_dest,
     resolve_quarantine_dir,
 )
-from waves.waves_ui.backend import WavesBridge
 
 
 def _ffmpeg() -> str:
@@ -579,7 +579,7 @@ def test_integrity_budget_sharpens_for_outbreak_era():
 
 
 def test_library_scan_excludes_the_quarantine_folder(tmp_path):
-    from waves import library_index
+    from waves.library import index as library_index
 
     assert library_index._is_skipped_dir_name("Waves Quarantine") is True
     # A custom location is excluded by full path, never by basename: a common
@@ -594,7 +594,7 @@ def test_library_scan_excludes_the_quarantine_folder(tmp_path):
 
 
 def test_ownership_skiplist_is_per_version(tmp_path):
-    from waves.ownership import OwnershipStore
+    from waves.library.ownership import OwnershipStore
 
     store = OwnershipStore(str(tmp_path / "own.db"))
     try:
@@ -694,7 +694,7 @@ def test_named_alac_fixture_quarantines_through_a_real_store(tmp_path):
     keeps the rejected bytes, a skip-list mark, no ownership claim and
     nothing landed in the library.
     """
-    from waves.ownership import OwnershipStore
+    from waves.library.ownership import OwnershipStore
     from waves.providers.apple import engine as apple_engine
 
     if not apple_engine.ffprobe_for(_ffmpeg()):
@@ -1180,8 +1180,8 @@ def test_no_audio_probe_failure_counts_as_integrity(tmp_path, monkeypatch):
 
 def test_custom_quarantine_cached_rows_retire_on_rescan(tmp_path):
 
-    from waves import library_index
-    from waves.library_index import LibraryIndex
+    from waves.library import index as library_index
+    from waves.library.index import LibraryIndex
 
     lib = os.path.join(str(tmp_path), "lib")
     album = os.path.join(lib, "Aphex Twin", "[1992] SAW")
@@ -1456,8 +1456,8 @@ def test_quarantine_excluded_through_symlinked_root(tmp_path):
     """A scan reaching the library through a symlink still excludes a
     quarantine registered under the real root spelling (and only it)."""
 
-    from waves import library_index
-    from waves.library_index import LibraryIndex
+    from waves.library import index as library_index
+    from waves.library.index import LibraryIndex
 
     real = os.path.join(str(tmp_path), "real")
     album = os.path.join(real, "Aphex Twin", "[1992] SAW")

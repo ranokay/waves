@@ -69,8 +69,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -101,7 +101,7 @@ def _run_scenario() -> int:
         loop.exec()
 
     settle(120)
-    # A real HoverSwell: its own component file since #315, resolved through
+    # A real HoverSwell: its own component file, resolved through
     # the qml directory import (which has to be relative: absolute paths are
     # rejected). This measures whatever the app actually ships, not a copy.
     try:

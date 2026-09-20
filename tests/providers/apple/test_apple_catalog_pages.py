@@ -192,7 +192,7 @@ def _search_summary_catalog():
                                 },
                                 # Apple's search summary lists the artist's albums as
                                 # reference stubs: ids and hrefs, no attributes, no
-                                # views (captured live for issue #216). A page built
+                                # views (captured live). A page built
                                 # from these renders blank rows, so get_object must
                                 # treat them as incomplete and fetch canonically.
                                 "relationships": {
@@ -233,7 +233,7 @@ def _search_summary_catalog():
 def _full_artist_resource():
     """A canonical artist, in the shape Apple's own endpoint returns.
 
-    Captured live for issue #216: the relationships carry attributed
+    Captured live: the relationships carry attributed
     resources and the named views (top-songs among them) live on the
     resource, not on the relationship.
     """
@@ -295,9 +295,8 @@ def test_get_object_refetches_a_search_summary_artist_before_building_pages():
 
 
 def test_artist_view_stubs_are_not_data_and_never_mask_a_named_copy():
-    """A view of reference stubs is not a page (issue #216, second shape):
-    the artist must refetch, and a stub must not claim an id that a later
-    named copy of the same song carries."""
+    """A view of reference stubs is not a page: the artist must refetch, and a
+    stub must not claim an id that a later named copy of the same song carries."""
     stub = {"id": "song-9", "type": "songs"}
     stub_only = {
         "id": "artist-1",

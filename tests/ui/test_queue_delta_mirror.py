@@ -1,15 +1,14 @@
 """QML's queue model mirrors the bridge through the delta protocol.
 
-The bridge now reports queue changes as deltas (rows added, rows whose fields
+The bridge reports queue changes as deltas (rows added, rows whose fields
 moved, rows gone) and Main.qml applies them in place with an index, group
-counts and a linger list it maintains itself instead of walking the model
-(issue #30's lag half: every change used to reconcile every row). What can
-rot silently here is the BOOKKEEPING: an index entry pointing at the wrong
-row after a move, a group count drifting from the model, a row landing on
-the wrong side of a section boundary. So the real Main.qml is booted
+counts and a linger list it maintains itself instead of walking the model.
+What can rot silently here is the BOOKKEEPING: an index entry pointing at the
+wrong row after a move, a group count drifting from the model, a row landing
+on the wrong side of a section boundary. So the real Main.qml is booted
 offscreen and driven through the real bridge slots across every kind of
 change (adds, a run/finish, failures, STOP, RETRY ALL, clears, a promote),
-and after each step the model is audited against the bridge and against its
+and after each step the model is checked against the bridge and against its
 own mirrors, by walking it the slow way.
 
 Runs in a SUBPROCESS like the other Main.qml scenarios (shares
@@ -24,7 +23,7 @@ from pathlib import Path
 import pytest
 from support.qml import EXIT_OK, boot_main_qml, run_scenario
 
-# The audit: walk the whole model (the slow way, this is a test) and compare
+# The check: walk the whole model (the slow way, this is a test) and compare
 # every mirror the delta handlers maintain against what a walk finds.
 _AUDIT = """
 (function(){
@@ -147,7 +146,7 @@ def _scenario() -> int:
     settle(150)
     # The queue is past the settled-history cap now, so the one done row is
     # trimmed at the flush and Completed empties: the cap holding at scale is
-    # part of what this audit is for.
+    # part of what this check is for.
     problems += _audit(q, bridge, "bulk seed", {"failed": 700, "stopped": 700, "queued": 120, "completed": 0})
 
     # Every live row runs and fails, one by one: the blocked-account shape.

@@ -64,7 +64,7 @@ def test_requests_client_uses_shared_session():
 
 def test_backend_load_playlist_parses_via_pooled_session():
     """_load_playlist fetches over the probe pool and resolves absolute URIs."""
-    from waves.waves_ui import backend as backend_mod
+    from waves.desktop import backend as backend_mod
 
     cls = next(
         obj

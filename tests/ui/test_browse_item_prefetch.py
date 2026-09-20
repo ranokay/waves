@@ -24,8 +24,8 @@ from support.browse_fakes import (
     page as _page,
 )
 
-import waves.waves_ui.backend as backend
-from waves.waves_ui.backend import WavesBridge
+import waves.desktop.backend as backend
+from waves.desktop.backend import WavesBridge
 
 # The real one, captured before the autouse fixture below silences it, for
 # the pin that needs the crumb it writes.
@@ -362,28 +362,43 @@ def test_a_hover_leaves_no_info_crumb_and_a_claimed_hover_leaves_an_open(caplog,
     # on, minutes of browsing evicted the sign-in and the failing download
     # from the trail. The open that claims a prefetch IS an action, and
     # leaves the crumb an open leaves.
+    #
+    # The records are read from this test's own handler on "waves" rather
+    # than pytest's shared capture handler: that one is attached to every
+    # non-propagating logger at test start, so a suite that has already
+    # installed diagnostics (which turns "waves" propagation off) would
+    # deliver each record to it twice once the logger propagates again.
     import logging
 
     monkeypatch.setattr(backend.devlog, "done", _REAL_DEVLOG_DONE, raising=True)
-    # A bridge built earlier in the suite installs diagnostics, which turns
-    # "waves" propagation off; caplog reads through the root, so restore it.
-    monkeypatch.setattr(logging.getLogger("waves"), "propagate", True, raising=True)
-    b = _prefetch_bridge()
-    with caplog.at_level(logging.DEBUG, logger="waves"):
-        b.prefetchBrowseItem("playlist", "p1")
-        b.threadpool.workers[0].run()
-    info = [r.message for r in caplog.records if r.levelno >= logging.INFO]
-    assert info == [], info
-    assert any("prefetch" in r.message for r in caplog.records), "the verbose log still carries it"
+    waves_log = logging.getLogger("waves")
+    seen: list[logging.LogRecord] = []
 
-    caplog.clear()
-    b = _prefetch_bridge()
-    with caplog.at_level(logging.DEBUG, logger="waves"):
-        b.prefetchBrowseItem("playlist", "p1")
-        b.openBrowseItem("playlist", "p1")
-        b.threadpool.workers[0].run()
-    info = [r.message for r in caplog.records if r.levelno >= logging.INFO]
-    assert len(info) == 1 and "from hover" in info[0], info
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            seen.append(record)
+
+    capture = _Capture(level=logging.DEBUG)
+    waves_log.addHandler(capture)
+    try:
+        b = _prefetch_bridge()
+        with caplog.at_level(logging.DEBUG, logger="waves"):
+            b.prefetchBrowseItem("playlist", "p1")
+            b.threadpool.workers[0].run()
+        info = [r.message for r in seen if r.levelno >= logging.INFO]
+        assert info == [], info
+        assert any("prefetch" in r.message for r in seen), "the verbose log still carries it"
+
+        seen.clear()
+        b = _prefetch_bridge()
+        with caplog.at_level(logging.DEBUG, logger="waves"):
+            b.prefetchBrowseItem("playlist", "p1")
+            b.openBrowseItem("playlist", "p1")
+            b.threadpool.workers[0].run()
+        info = [r.message for r in seen if r.levelno >= logging.INFO]
+        assert len(info) == 1 and "from hover" in info[0], info
+    finally:
+        waves_log.removeHandler(capture)
 
 
 def test_an_escape_after_the_build_still_frees_the_hover_slot():

@@ -1,26 +1,24 @@
 """Each queue row follows its OWN track's progress, not a namesake's.
 
-THE BUG
--------
+WHAT THIS FENCES OFF
+--------------------
 The engine registers one progress task per downloading item, described as
-``[blue]Item '<display name>'`` with the name cut to 30 characters. The bridge
-mirrored that string onto each queue row and polled percentages with
-``{task.description: task.percentage}``.
+``[blue]Item '<display name>'`` with the name cut to 30 characters. Mirroring
+that string onto each queue row and polling percentages with
+``{task.description: task.percentage}`` is not unique: any release whose joined
+artist credit already runs 30 characters (classical credits, three-way
+features) truncates EVERY one of its tracks to the same string, and a dict
+keyed on it keeps only the task added last. So all in-flight rows show one
+sibling's percentage, ``_bump_group_progress`` sums those mirrored values into
+the album roll-up, and because that roll-up only ever rises, the inflated
+number sticks for the rest of the job: a 10-track album reading 28% while
+three tracks are at 5%, 5% and 95%.
 
-A description built from ``"<every artist>, ... - <title>"`` is not unique. Any
-release whose joined artist credit already runs 30 characters (classical
-credits, three-way features) truncates EVERY one of its tracks to the same
-string, and a dict keyed on it keeps only the task added last. So all in-flight
-rows showed one sibling's percentage, ``_bump_group_progress`` summed those
-mirrored values into the album roll-up, and because that roll-up only ever
-rises, the inflated number stuck for the rest of the job: a 10-track album
-reading 28% while three tracks were at 5%, 5% and 95%.
+Rich never removes a finished task either, so a completed track's 100% goes on
+owning the key for every later track that collides with it.
 
-Rich never removes a finished task either, so a completed track's 100% went on
-owning the key for every later track that collided with it.
-
-THE FIX: the engine hands the bridge the TaskID through a ``_note_progress_task``
-hook, filed under the queue row the item is being downloaded for, and the poller
+The engine hands the bridge the TaskID through a ``_note_progress_task`` hook,
+filed under the queue row the item is being downloaded for, and the poller
 reads each row through its own TaskID. Descriptions are for display.
 """
 
@@ -33,9 +31,9 @@ from unittest.mock import MagicMock, patch
 from tidalapi.media import Track
 
 from waves import download as download_mod
+from waves.desktop.backend import WavesBridge, _TrackedDownload
 from waves.download import Download
 from waves.progress import Progress
-from waves.waves_ui.backend import WavesBridge, _TrackedDownload
 
 # A credit that eats the whole 30-character budget on its own, so every track of
 # the release truncates to a single identical description. Real shape, not a

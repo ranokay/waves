@@ -2,13 +2,12 @@
 
 WHAT THIS FENCES OFF
 --------------------
-The queue design lab (scratchpad/queue_design_lab) showed a skipped track with
-the tier of the copy you already hold beside a coloured IN LIBRARY word, and
-its notes said the bridge did not put that on the wire yet: _emit_skip sent
-"status": "skipped", full stop. Shipped that way, the ledger drew IN LIBRARY
-with a blank tier cell.
+A skipped track with the tier of the copy you already hold belongs beside the
+coloured IN LIBRARY word, but _emit_skip sending "status": "skipped", full
+stop, leaves that tier off the wire. The ledger then draws IN LIBRARY with a
+blank tier cell.
 
-Now the skip event carries the owned copy's tier (from the ownership ledger's
+The skip event carries the owned copy's tier (from the ownership ledger's
 record, or the library scan's local class) plus HOW it was found, and the row:
 
 * keeps the tier in its column at full strength (it is what the file IS);
@@ -46,7 +45,7 @@ class _Signal:
 
 class _Stub:
     def __init__(self):
-        from waves.waves_ui import backend
+        from waves.desktop import backend
 
         self._job_tracks = {}
         # The ledger merge also overlays an expansion's predicted skips
@@ -112,8 +111,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -137,7 +136,7 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
-    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 

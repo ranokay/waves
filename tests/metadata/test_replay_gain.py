@@ -9,7 +9,7 @@ form ("-7.36 dB") while peak stays a bare linear amplitude.
 import pytest
 
 from waves.config import _migrate_settings
-from waves.metadata import _replay_gain_tags, _rg_missing
+from waves.metadata.tags import _replay_gain_tags, _rg_missing
 from waves.model.cfg import Settings
 
 pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")

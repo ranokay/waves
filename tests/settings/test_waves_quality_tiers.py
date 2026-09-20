@@ -1,4 +1,4 @@
-"""Issue #24: the Waves quality enum and per-provider quality settings.
+"""The Waves quality enum and per-provider quality settings.
 
 The four-rung ladder (LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS) is Waves' own
 vocabulary (``waves.constants.QualityTier``); tidalapi's ``Quality`` is engine
@@ -20,10 +20,10 @@ from tidalapi.media import Quality
 
 from waves.config import tidal_quality_for_tier
 from waves.constants import TIER_RANK, QualityTier, quality_rank, tier_from_word
+from waves.desktop.backend import WavesBridge, _enum_options
+from waves.library.ownership import quality_rank as ownership_quality_rank
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.cfg import Settings as _Model  # the migration subject
-from waves.ownership import quality_rank as ownership_quality_rank
-from waves.waves_ui.backend import WavesBridge, _enum_options
 
 pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
 
@@ -264,7 +264,7 @@ def test_the_tidal_choice_round_trips_tier_strings():
 
 def test_the_apple_choice_exists_with_honest_labels():
     # The shared ladder drives the options; Apple's labels name its own
-    # codecs with "Up to" ceilings (issue #59) and start at HIGH (Apple has
+    # codecs with "Up to" ceilings and start at HIGH (Apple has
     # no LOW rung), so LOW has no mapped label and falls back to the raw name.
     options = _enum_options("apple_quality_audio", QualityTier)
     assert [o["value"] for o in options] == ["LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS"]

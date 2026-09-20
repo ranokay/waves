@@ -16,9 +16,9 @@ from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
-import waves.waves_ui.backend as backend
+import waves.desktop.backend as backend
+from waves.desktop.backend import WavesBridge
 from waves.providers.apple import runner
-from waves.waves_ui.backend import WavesBridge
 
 # The QML slots stay bridge calls; the quarantine helpers move to the runner
 # and these tests drive them through the hooks the bridge would build.

@@ -4,11 +4,11 @@ WHAT THIS FENCES OFF
 --------------------
 The edge fades and the crest pill live in one window-level BackToTop, a
 sibling of the main column rather than a child of it, so the reveal fade
-that hides the interface during the launch sequence did not reach them.
-The landing is scrollable from its first frame, so the bottom fade sat at
-full strength across the opening water (and the top fade too, whenever the
-restored scroll position was off zero), a dark band over the wordmark
-frame (reported from livetesting).
+that hides the interface during the launch sequence does not reach them.
+The landing is scrollable from its first frame, so the bottom fade would
+sit at full strength across the opening water (and the top fade too,
+whenever the restored scroll position is off zero): a dark band over the
+wordmark frame.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -56,8 +56,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

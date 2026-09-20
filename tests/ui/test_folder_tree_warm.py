@@ -26,8 +26,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.helper.folders import FolderNode, FolderTree
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
+from waves.providers.tidal_folders import FolderNode, FolderTree
 
 
 class _Emit:
@@ -66,8 +66,8 @@ class _WarmStub:
         self._tracked_sessions = frozenset({"tidal"})
         self._tree_warm_waiting: list = []
         self._tree_warm_inflight: set = set()
-        # The pane's rows come through the source's own row vocabulary
-        # (issue #259); the stub answers the one key these tests read.
+        # The pane's rows come through the source's own row vocabulary;
+        # the stub answers the one key these tests read.
         self.providers = {
             "tidal": SimpleNamespace(id="tidal", row_for=lambda kind, item: {"kind": kind, "id": item.id})
         }
@@ -132,7 +132,7 @@ def test_only_one_sweep_is_started_for_a_burst_of_clicks():
 
 
 def test_two_sources_warm_their_own_trees():
-    """A warm is per source (issue #259): a second source's drill-in must not
+    """A warm is per source: a second source's drill-in must not
     join a sweep that never fetches its tree and then have its callback
     dropped."""
     stub = _WarmStub(_tree())

@@ -1,9 +1,9 @@
 """Reachability-gate liveness + held-download replay + makedirs retry.
 
-The 2026-07-13 diagnostics bundle showed the old gate misreading a busy SMB
-share as dead: the 4s write probe timed out behind saturated download I/O and
-every click bounced into the "isn't reachable" retry dialog (11 of 20 queue
-ids that session never started). These tests pin the new behavior:
+A busy SMB share must not read as dead: the 4s write probe can time out behind
+saturated download I/O, and a "dead" verdict there would bounce every click
+into the "isn't reachable" retry dialog instead of starting the download. These
+tests pin the gate's behaviour:
 
 * a recent real write to the base skips the probe entirely,
 * a probe timeout while downloads are running reads as busy, not dead,
@@ -25,8 +25,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from waves.desktop.backend import WavesBridge
 from waves.download import Download
-from waves.waves_ui.backend import WavesBridge
 
 
 class GateHost:
@@ -154,9 +154,9 @@ def test_probe_timeout_with_running_downloads_proceeds():
 
 def test_probe_timeout_with_idle_queue_waits_out_the_warmup_quietly():
     """A mounted-but-cold SMB share hangs its first access while the session
-    reconnects. That used to raise the unreachable dialog instantly; now the
-    download is held with NO dialog and the recovery watch takes over (the
-    dialog comes only if the warm-up deadline passes, see the recovery tests)."""
+    reconnects. The download is held with NO dialog and the recovery watch
+    takes over (the dialog comes only if the warm-up deadline passes, see the
+    recovery tests)."""
     host = GateHost()
     host._queue = [{"qid": 1, "status": "done"}]
     host._probe_download_base = _probe_stub(host, "timeout")

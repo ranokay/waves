@@ -6,10 +6,9 @@ WHAT THIS FENCES OFF
 sees tests carrying the `qml` marker. A scenario that boots Main.qml in a
 child interpreter without the marker therefore skips invisibly in a strict
 run, and the run reports a complete pass while a whole surface was never
-exercised (2026-09-16 audit TT-01/TT-08: one such test had a wrong
-expectation and three more were unmarked).
+exercised.
 
-The audit's marker rules: a test that spawns an interpreter or constructs Qt
+The marker rules: a test that spawns an interpreter or constructs Qt
 itself is `qml` (Qt) or `integration` (non-Qt), never unmarked, and the
 unmarked Qt nodes route their skips through the require-qml-aware helper.
 This guard checks the marker half by parsing the test sources; the runtime

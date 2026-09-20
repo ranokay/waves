@@ -1,4 +1,4 @@
-"""Realtime logs console (issue #68): tail helper plus the copy/tail slots.
+"""Realtime logs console: tail helper plus the copy/tail slots.
 
 The tail is bounded both ways (line count and bytes) so a runaway log file
 cannot stall the GUI thread that polls it; a missing log reads as "".
@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from waves.waves_ui import diagnostics
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop import diagnostics
+from waves.desktop.backend import WavesBridge
 
 
 def _write_log(tmp_path, lines: list[str]) -> None:
@@ -92,7 +92,7 @@ def test_copy_logs_copies_the_tail(monkeypatch):
         def clipboard():
             return _Clipboard()
 
-    import waves.waves_ui.backend as backend_mod
+    import waves.desktop.backend as backend_mod
 
     monkeypatch.setattr(backend_mod.QtGui, "QGuiApplication", _App)
     monkeypatch.setattr(diagnostics, "log_tail", lambda max_lines=500: "line-a\nline-b")
@@ -114,7 +114,7 @@ def test_copy_logs_reports_a_dead_clipboard(monkeypatch):
         def clipboard():
             raise RuntimeError("no app")
 
-    import waves.waves_ui.backend as backend_mod
+    import waves.desktop.backend as backend_mod
 
     monkeypatch.setattr(backend_mod.QtGui, "QGuiApplication", _App)
     stub = _slot_stub()

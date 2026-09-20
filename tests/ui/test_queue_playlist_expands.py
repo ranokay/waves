@@ -3,12 +3,12 @@
 WHAT THIS FENCES OFF
 --------------------
 The queue drawer's expandable row (click for the ordered per-track ledger,
-hover for the peek) was gated to ``model.type === "album"``. The per-track
-registry behind that ledger is kept for EVERY collection job, and a playlist
-row already reported "12/50 tracks", but the user could not open it: no
-chevron, no peek, no way to see which track was downloading.
+hover for the peek) must not be gated to ``model.type === "album"``. The
+per-track registry behind that ledger is kept for EVERY collection job, and a
+playlist row already reports "12/50 tracks", but the user cannot open it: no
+chevron, no peek, no way to see which track is downloading.
 
-Two things now hold:
+Two things hold:
 
 * the QML gates expansion on ``collection`` alone, so playlist and mix rows
   render the ledger, and
@@ -58,9 +58,9 @@ def _bridge_for_fetch(monkeypatch):
     from PySide6.QtGui import QGuiApplication
 
     QGuiApplication.instance() or QGuiApplication([])
-    from waves.waves_ui import backend as be
-    from waves.waves_ui import diagnostics
-    from waves.waves_ui.session import WavesTidal
+    from waves.desktop import backend as be
+    from waves.desktop import diagnostics
+    from waves.desktop.session import WavesTidal
 
     # This bridge lives in the pytest process, so it must not read the
     # developer's real waves.json: with verbose diagnostics on there, __init__
@@ -144,8 +144,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -169,7 +169,7 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
-    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 

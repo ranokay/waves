@@ -6,10 +6,11 @@ artist cannot say which of them it belongs to, an album by one can look
 "already in your library" because the other's folder holds a same-titled
 release, and a discography save can quietly deliver a stranger's music.
 
-The fix starts here: stamp the TIDAL artist ids beside the names, using the
+The ids are stamped beside the names, using the
 same custom-tag mechanism ``WAVES_TIDAL_ID`` has shipped with since v0.1.25.
-This is the record only; nothing reads it to place folders yet. It has to land
-first, because it can only ever describe files downloaded after it ships.
+This is the record only; nothing reads it to place folders yet. The tag can
+only ever describe files downloaded after it ships, so it has to be written
+from the start.
 
 Untagged stays "unknown", never "somebody else": every reader here proves an
 absent tag answers empty rather than guessing.
@@ -28,8 +29,8 @@ import pytest
 from tidalapi.artist import Role
 
 from waves.download import _artist_ids
-from waves.helper.tidal import get_album_artist_ids, get_album_artists
-from waves.metadata import (
+from waves.metadata.naming import get_album_artist_ids, get_album_artists
+from waves.metadata.tags import (
     ALBUM_ARTIST_ID_TAG,
     ARTIST_ID_TAG,
     ITEM_ID_TAG,
@@ -66,7 +67,7 @@ def _mp4_stub():
 def _write(stub, tmp_path, name, **kw):
     file = tmp_path / name
     file.write_bytes(b"x")
-    with patch("waves.metadata.mutagen.File", return_value=stub):
+    with patch("waves.metadata.tags.mutagen.File", return_value=stub):
         assert Metadata(path_file=file, target_upc=_UPC, **kw).save() is True
     return stub
 
@@ -158,7 +159,7 @@ def test_the_ids_read_back_in_written_order(tmp_path, stub, name):
         artist_ids=["4676988", "77"],
         album_artist_ids=["4676988"],
     )
-    with patch("waves.metadata.mutagen.File", return_value=written):
+    with patch("waves.metadata.tags.mutagen.File", return_value=written):
         assert read_custom_ids(tmp_path / name, ARTIST_ID_TAG) == ["4676988", "77"]
         assert read_custom_ids(tmp_path / name, ALBUM_ARTIST_ID_TAG) == ["4676988"]
 
@@ -169,7 +170,7 @@ def test_the_ids_read_back_in_written_order(tmp_path, stub, name):
 )
 def test_an_untagged_file_is_unknown_not_different(tmp_path, stub, name):
     written = _write(stub(), tmp_path, name, title="T", artists=["Marina"], albumartist=["Marina"])
-    with patch("waves.metadata.mutagen.File", return_value=written):
+    with patch("waves.metadata.tags.mutagen.File", return_value=written):
         assert read_custom_ids(tmp_path / name, ARTIST_ID_TAG) == []
         assert read_custom_ids(tmp_path / name, ALBUM_ARTIST_ID_TAG) == []
 
@@ -177,9 +178,9 @@ def test_an_untagged_file_is_unknown_not_different(tmp_path, stub, name):
 def test_an_unreadable_file_answers_empty(tmp_path):
     file = tmp_path / "broken.flac"
     file.write_bytes(b"not audio")
-    with patch("waves.metadata.mutagen.File", return_value=None):
+    with patch("waves.metadata.tags.mutagen.File", return_value=None):
         assert read_custom_ids(file, ARTIST_ID_TAG) == []
-    with patch("waves.metadata.mutagen.File", side_effect=OSError("gone")):
+    with patch("waves.metadata.tags.mutagen.File", side_effect=OSError("gone")):
         assert read_custom_ids(file, ARTIST_ID_TAG) == []
 
 
@@ -192,7 +193,7 @@ def test_an_unreadable_file_answers_empty(tmp_path):
 )
 def test_read_item_id_still_returns_a_single_id(tmp_path, stub, name):
     written = _write(stub(), tmp_path, name, title="T", artists=["A"], albumartist=["A"], item_id="12345")
-    with patch("waves.metadata.mutagen.File", return_value=written):
+    with patch("waves.metadata.tags.mutagen.File", return_value=written):
         assert read_item_id(tmp_path / name) == "12345"
 
 

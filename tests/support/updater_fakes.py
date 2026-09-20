@@ -1,4 +1,4 @@
-"""Updater stand-ins shared by the updater and audit test modules.
+"""Updater stand-ins shared by the updater test modules.
 
 ``make_manifest`` builds the signed-manifest body the updater consumes, and
 ``prep_updater`` wires an AppUpdater whose download writes the given payload
@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import hashlib
 
-from waves.waves_ui import updater as u
-from waves.waves_ui.updater import AppUpdater, Release
+from waves.desktop import updater as u
+from waves.desktop.updater import AppUpdater, Release
 
 ASSET = "Waves.bin"
 

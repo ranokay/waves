@@ -13,16 +13,16 @@ from types import SimpleNamespace
 from conftest import _InlinePool, _Signal
 from tidalapi.media import Track
 
-import waves.waves_ui.backend as backend
+import waves.desktop.backend as backend
 from waves.constants import CTX_TIDAL
+from waves.desktop.backend import WavesBridge
 from waves.providers import TidalProvider
-from waves.waves_ui.backend import WavesBridge
 
 
 class Cover:
     """A tidalapi-shaped media object whose image() honours EVERY size it is
     asked for, so a header that asked for 480 would actually get a 480 URL
-    (tidalapi rejects 480 for albums, which used to hide the bug there)."""
+    (tidalapi rejects 480 for albums)."""
 
     def __init__(self, kind, mid, tracks):
         self.kind = kind
@@ -76,9 +76,9 @@ def browse_bridge(obj, kind):
     b.browsePagePrefetched = _Signal()
     b.threadpool = _InlinePool()
     b.tidal = SimpleNamespace(session=SimpleNamespace())
-    # The catalog reads ride the provider (ticket #22); the real one over the
-    # offline session keeps the builders' reads (advertised tier, mix items)
-    # on their production shapes.
+    # The catalog reads ride the provider; the real one over the offline
+    # session keeps the builders' reads (advertised tier, mix items) on their
+    # production shapes.
     b.providers = {CTX_TIDAL: TidalProvider(b.tidal)}
     b.busy_log = []
     b.status_log = []

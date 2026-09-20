@@ -1,20 +1,20 @@
-"""Regression guard: crash.log must be scrubbed like every other log sink.
+"""crash.log must be scrubbed like every other log sink.
 
-THE BUG
--------
-``_install_crash_diagnostics._record`` logged the exception once through the
-logger (where ``_RedactingFilter`` scrubs it) and then wrote **the same
-traceback a second time** into a bare ``open()`` handle that has no filter,
-formatter or scrubber attached. The frame paths and, decisively, the
-exception's own message reached ``crash.log`` verbatim.
+WHAT THIS FENCES OFF
+--------------------
+``_install_crash_diagnostics._record`` logging the exception once through the
+logger (where ``_RedactingFilter`` scrubs it) and then writing **the same
+traceback a second time** into a bare ``open()`` handle, with no filter,
+formatter or scrubber attached, sends the frame paths and, decisively, the
+exception's own message into ``crash.log`` verbatim.
 
 That is the file ``.github/ISSUE_TEMPLATE/bug.yml`` tells users to paste into a
 public issue, while promising it contains "no personal data or account
-details". ``export_bundle`` does re-scrub crash.log, so the export was
-protected and the file itself was not, which is the file the template asks for.
+details". ``export_bundle`` re-scrubs crash.log, so the export is protected
+and the file itself is not, which is the file the template asks for.
 
-THE FIX formats the traceback, runs it through ``diagnostics.scrub`` (the same
-scrubber the logger's filter uses), and writes the scrubbed text.
+The scrubber formats the traceback, runs it through ``redaction.scrub`` (the
+same scrubber the logger's filter uses), and writes the scrubbed text.
 """
 
 from __future__ import annotations
@@ -25,7 +25,8 @@ import threading
 
 import pytest
 
-from waves.waves_ui import app as waves_app
+from waves import redaction
+from waves.desktop import app as waves_app
 
 
 @pytest.fixture
@@ -79,13 +80,8 @@ def test_crash_log_write_is_scrubbed_like_the_logger(crash_log):
 
 def test_a_registered_secret_never_reaches_crash_log(crash_log):
     """Runtime secrets registered with the redactor are scrubbed here too."""
-    # Register through the very module object app.py holds: another test file
-    # re-imports the diagnostics module under a fresh name, which would
-    # otherwise give us a different _redactor than the one _record scrubs with.
-    diagnostics = waves_app.diagnostics
-
     secret = "sk-live-9f3ac21be77d4410"  # noqa: S105
-    diagnostics.register_secret(secret, "‹secret›")
+    redaction.register_secret(secret, "‹secret›")
 
     sys.excepthook(*_raise_with(f"auth rejected value={secret}"))
 
@@ -95,7 +91,7 @@ def test_a_registered_secret_never_reaches_crash_log(crash_log):
 
 
 def test_worker_thread_exceptions_are_scrubbed_too(crash_log):
-    """The threading.excepthook path shares _record, so it shares the fix."""
+    """The threading.excepthook path shares _record, and so the scrub."""
     home = "/Users/testuser/Downloads/some album/01 track.flac"
 
     exc_type, exc, tb = _raise_with(f"failed on {home}")

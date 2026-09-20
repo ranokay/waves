@@ -4,10 +4,10 @@ The Settings page deliberately keeps its edit map populated after a save (so the
 controls go on showing the values that just landed, instead of reverting to the
 now-stale schema defaults), and it only clears on the next open. So every save
 after the first one in a single visit resubmits the library keys unchanged.
-applySettings used to test whether those keys were PRESENT, which turned every
-later save (of any setting at all) into another sweep of the user's library: on a
-cold network share that is a slow walk of the whole tree, and it restarted the
-card's scan readout for nothing.
+applySettings must test whether those keys really MOVED, not whether they are
+present: testing presence turns every later save (of any setting at all) into
+another sweep of the user's library. On a cold network share that is a slow walk
+of the whole tree, and it restarts the card's scan readout for nothing.
 
 Tested with the method-bound stub pattern (no display, no live bridge), the same
 shape test_quality_change_live.py uses.
@@ -18,7 +18,7 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Stub:

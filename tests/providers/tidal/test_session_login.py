@@ -1,6 +1,6 @@
-"""Regression tests for the cached-token launch login (``_try_token_login``).
+"""The cached-token launch login (``_try_token_login``).
 
-Hermetic and Qt-free in the ``tests/ui/test_audit_backend.py`` style: the real, unbound
+Hermetic and Qt-free in the ``tests/ui/test_bridge_queue_and_cache_guards.py`` style: the real, unbound
 ``WavesBridge`` method is bound onto a minimal stand-in whose collaborators are
 fakes. ``_try_token_login`` dispatches a ``Worker`` to ``self.threadpool``; the
 conftest ``_InlinePool`` runs it synchronously on the calling thread, and the
@@ -8,28 +8,26 @@ real ``Worker.run`` (which deliberately swallows and logs any exception so a
 background crash cannot abort Qt) is exercised as shipped, so a raise inside the
 worker behaves here exactly as it would in the app.
 
-Covered bug: a corrupt ``page_cache.json`` made ``_load_page_cache`` raise
-*before* the session-resolved latch was set, so ``sessionResolved`` never
-flipped and the launch overlay latched on "Signing in…" forever. The latch now
-lives in a ``finally`` and the page-cache warmup is guarded.
+A corrupt ``page_cache.json`` must not decide the login: if ``_load_page_cache``
+raises *before* the session-resolved latch is set, ``sessionResolved`` never
+flips and the launch overlay latches on "Signing in…" forever. The latch lives
+in a ``finally`` and the page-cache warmup is guarded.
 
-And the same bug once more on the OTHER login path. ``completeLogin`` ran its
-whole post-success block outside any ``finally``: the identical corrupt cache
-raised there too, so the busy spinner never cleared and the app went on showing
-signed out over credentials the exchange had already saved. Restarting signed in
-cleanly (the boot path above guards the same call), which made the hang look
-random.
+``completeLogin`` has the same exposure on the post-success path: its whole
+block must sit inside a ``finally``, or the identical corrupt cache raises there
+too, the busy spinner never clears, and the app shows signed out over
+credentials the exchange had already saved. The boot path above guards the same
+call, so restarting signed in cleanly would make the hang look random.
 
-Since the Provider seam contract (ticket #22) both slots ask the provider for
-the login work; the stand-ins answer through a recording fake and carry no
-TIDAL object at all.
+Both slots ask the provider for the login work; the stand-ins answer through a
+recording fake and carry no TIDAL object at all.
 """
 
 from __future__ import annotations
 
 from conftest import _InlinePool, _Signal
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _FakeLoginProvider:
@@ -85,7 +83,7 @@ def _run(stub: _LoginStub) -> None:
 
 
 def test_corrupt_page_cache_still_resolves_and_logs_in():
-    # The bug: _load_page_cache raising stranded the login overlay forever.
+    # _load_page_cache raising must not strand the login overlay forever.
     stub = _LoginStub(login_ok=True, page_cache_raises=True)
 
     _run(stub)

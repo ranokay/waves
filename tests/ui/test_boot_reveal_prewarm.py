@@ -21,7 +21,7 @@ its own timer.
 Two ways this could regress, both pinned here:
 
 1. warming wired to bootContentShown instead of its own dial, which would
-   also ungate input and hand issue #13 back (the interface must stay inert
+   also ungate input and drop the launch shield (the interface must stay inert
    and shielded while invisible);
 2. the warm starting with the zoom rather than before it, which would put
    the first frame back inside the animation it was moved out of.
@@ -65,7 +65,7 @@ def test_the_warm_runs_before_the_zoom_not_inside_it():
 
 
 def test_warming_is_not_the_reveal_dial():
-    # bootContentShown ungates input (issue #13). If warming rode it, the
+    # bootContentShown ungates input. If warming rode it, the
     # interface would be live under the launch screen again.
     src = QML_MAIN.read_text()
 
@@ -95,8 +95,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -145,7 +145,7 @@ def _run_scenario() -> int:
     rendered = warm_op > 0.001
     # ... and far below anything visible over the launch scrim.
     unseen = warm_op < 0.02
-    # Warming must not hand back issue #13: still inert, still shielded.
+    # Warming must leave the interface inert and shielded.
     inert = not bool(q("mainColumn.enabled")) and bool(q("bootShield.enabled"))
 
     # The reveal still owns the fade: warming cannot clamp or offset it.

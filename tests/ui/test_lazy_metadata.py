@@ -1,13 +1,13 @@
 """Importing ``waves`` must not pay for packaging metadata it may never use.
 
-``waves/__init__.py`` used to compute ``__name_display__``, ``__version__``
-and ``__config_dirname__`` at import time: two ``importlib.metadata.version``
-probes plus a ``pyproject.toml`` parse before the first window could appear,
-on every launch, even though most launches read none of them (the UI carries
-its own version literal in ``waves.waves_ui``). They are now computed on
-first attribute access (PEP 562) with the ``is_dev_env()`` verdict cached, so
-a full touch of all three costs at most ONE metadata probe, and a launch that
-touches none costs zero.
+``waves/__init__.py`` must not compute ``__name_display__``, ``__version__``
+and ``__config_dirname__`` at import time: that is two
+``importlib.metadata.version`` probes plus a ``pyproject.toml`` parse before
+the first window can appear, on every launch, even though most launches read
+none of them (the UI carries its own version literal in ``waves.desktop``).
+Computing them on first attribute access (PEP 562) with the ``is_dev_env()``
+verdict cached makes a full touch of all three cost at most ONE metadata
+probe, and a launch that touches none cost zero.
 
 The probe counting runs in a subprocess: the test process itself imported
 ``waves`` long ago, so only a fresh interpreter can observe import time.

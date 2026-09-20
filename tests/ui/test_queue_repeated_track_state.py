@@ -7,12 +7,11 @@ mix can list the same track more than once. The engine reports that track ONCE
 per event (its per-job registry is keyed by track id), so the drawer has to
 apply each state event to every ledger row carrying the id.
 
-The state handler used to stop at the first match, while its sibling that
-carries the percentage did not: the second copy of a repeated track moved its
-bar but never left QUEUED, and after the job finished it still read as if it
-had never been fetched. Harmless while the ledger was album-only (an album
-never lists an id twice); opening the ledger to playlists and mixes made it
-reachable.
+A state handler that stops at the first match, while its sibling that carries
+the percentage does not, moves the second copy of a repeated track's bar but
+leaves it QUEUED: after the job finishes it still reads as if it had never
+been fetched. Harmless while the ledger is album-only (an album never lists an
+id twice); opening the ledger to playlists and mixes makes it reachable.
 
 Proved on the real Main.qml (subprocess, like its siblings): a playlist whose
 running order repeats an id, one state event for that id, and both rows are
@@ -63,8 +62,8 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

@@ -1,7 +1,5 @@
 """A formatted media path can never escape the download folder.
 
-THE BUG
--------
 ``format_path_media`` substitutes each token blind. A token whose value
 sanitizes to ``""`` therefore leaves an **empty path component**, and both
 default templates open with ``{artist_name}``:
@@ -10,8 +8,8 @@ default templates open with ``{artist_name}``:
 
 ``Path(path_base) / file_name_relative`` DISCARDS ``path_base`` when the
 right-hand operand is absolute. On Windows ``PureWindowsPath`` keeps the drive,
-so the track landed at ``C:\\[2024] Album\\...``, outside the download folder,
-and the queue reported done. On macOS/Linux the write failed at the volume root
+so the track lands at ``C:\\[2024] Album\\...``, outside the download folder,
+and the queue reports done. On macOS/Linux the write fails at the volume root
 with ``OSError errno 30`` and no explanation.
 
 Artist names that empty out under pathvalidate's UNIVERSAL platform are real:
@@ -20,11 +18,9 @@ dots are stripped). ``!!!`` and ``M|A|R|R|S`` survive, so this is about the
 degenerate cases, not punctuation generally.
 
 ``_no_traversal`` fences ``..`` escaping the base and does not address this
-shape; there was no ``lstrip`` and no containment check anywhere.
-
-THE FIX drops empty components from the formatted relative path, which keeps it
-relative (and therefore inside the base) and also tidies the doubled separator
-an emptied mid-template token leaves behind.
+shape, so the formatter drops empty components from the relative path: that
+keeps it relative (and therefore inside the base) and also tidies the doubled
+separator an emptied mid-template token leaves behind.
 """
 
 from __future__ import annotations
@@ -35,8 +31,8 @@ from types import SimpleNamespace
 import pytest
 from tidalapi import Track
 
-from waves.helper.path import format_path_media
 from waves.model.cfg import Settings
+from waves.paths import format_path_media
 
 # Names that pathvalidate reduces to nothing.
 EMPTYING_NAMES = ["?", "??", "*", "<>", "|", '"', "..."]
@@ -95,7 +91,7 @@ def test_no_empty_components_survive_anywhere_in_the_path(artist_name):
 
 
 def test_an_ordinary_name_is_untouched():
-    """Control: normal formatting must be byte-identical to before the fix."""
+    """Control: normal formatting keeps every component it always did."""
     relative = format_path_media(Settings().format_track, _track("Aphex Twin"), 2, 0, 0)
 
     assert relative.startswith("Aphex Twin/")
@@ -104,8 +100,8 @@ def test_an_ordinary_name_is_untouched():
 
 
 def test_punctuation_heavy_names_that_do_survive_are_kept():
-    """Names that sanitize to something real keep it: the fix must not eat
-    them along with the degenerate cases."""
+    """Names that sanitize to something real keep it: the empty-component rule
+    must not eat them along with the degenerate cases."""
     for artist_name in ("!!!", "M|A|R|R|S"):
         relative = format_path_media(Settings().format_track, _track(artist_name), 2, 0, 0)
         assert relative.split("/")[0], f"{artist_name!r} emptied out unexpectedly"

@@ -47,16 +47,14 @@ def test_the_pulse_follows_the_count_that_rose() -> None:
 
 @pytest.mark.qml
 def test_the_first_row_into_an_empty_section_pulses_too() -> None:
-    """An audit read the arming as unable to serve the header a promotion
-    CREATES, on the grounds that the tick fires while no such header is
-    listening yet. It reaches it anyway, and the two properties this design
-    already has are why: the tick arms every header that exists at that
-    moment, the view hands one of those POOLED headers to the section that
-    just appeared, and the timer fires afterwards and asks what section it is
-    holding by then. Pinned here because it is not obvious from either half,
-    and because an arming added "to be safe" on header creation is the
-    tempting wrong answer (it also needs a staleness window, and that window
-    is what makes a recycled header replay an old pulse)."""
+    """The arming serves the header a promotion CREATES, even though the tick
+    fires while no such header is listening yet: the tick arms every header
+    that exists at that moment, the view hands one of those POOLED headers to
+    the section that just appeared, and the timer fires afterwards and asks
+    what section it is holding by then. Pinned here because it is not obvious
+    from either half, and because an arming added "to be safe" on header
+    creation is the tempting wrong answer (it also needs a staleness window,
+    and that window is what makes a recycled header replay an old pulse)."""
     run_scenario(
         __file__,
         "--run-first-row",
@@ -130,8 +128,8 @@ def _run_scenario(first_row: bool = False) -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -155,7 +153,7 @@ def _run_scenario(first_row: bool = False) -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
-    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 
@@ -228,8 +226,8 @@ def _run_scenario(first_row: bool = False) -> int:
             state = str(qd(_pulse_of(section)))
             ident, _, running = state.partition("|")
             if ident == "__NONE__":
-                # NOT a precondition: a header with no pulse animation is the
-                # regression this test exists to catch. Routing it to a skip
+                # NOT a precondition: a header with no pulse animation is
+                # a regression this test exists to catch. Routing it to a skip
                 # meant deleting the animation turned the guard green.
                 print(f"the {section!r} header has no pulse animation", file=sys.stderr)
                 return EXIT_REGRESSED

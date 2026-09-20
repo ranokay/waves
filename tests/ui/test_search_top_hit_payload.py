@@ -1,12 +1,12 @@
 """The search payload carries TIDAL's top hit, and never counts it.
 
-THE BUG WE ARE FENCING OFF
---------------------------
-TIDAL names one best match in every search reply (``topHit``); for a
-specific query it is reliably the thing asked for, new single or not.
-``search_results_all`` skipped it, so the UI could only pin a result by
-re-sorting lists, and "Relevance" had become a popularity sort that buried
-a brand-new single under older tracks sharing one word with the query.
+WHAT THIS FENCES OFF
+--------------------
+TIDAL names one best match in every search reply (``topHit``); for a specific
+query it is reliably the thing asked for, new single or not. Skipping it
+leaves the UI able to pin a result only by re-sorting lists, and "Relevance" a
+popularity sort that buries a brand-new single under older tracks sharing one
+word with the query.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -28,8 +28,8 @@ from tidalapi.artist import Artist
 from tidalapi.media import Track, Video
 from tidalapi.playlist import Playlist
 
-from waves.helper.tidal import search_results_all
-from waves.waves_ui import backend
+from waves.desktop import backend
+from waves.providers.tidal_client import search_results_all
 
 
 def _bridge():

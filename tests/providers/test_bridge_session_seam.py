@@ -1,14 +1,13 @@
-"""The Provider seam is the only road (ticket #22, the contract half).
+"""The Provider seam is the only road.
 
-With both migration batches routed, the old roads are deleted: the bridge no
-longer reaches the TIDAL session, helper, or download bodies directly. Login
-and logout, the account id, the credential facts the redactor registers, the
-session rebuild, the folder walk, the Browse/editorial reads, the id lookups,
+The bridge does not reach the TIDAL session, helper, or download bodies
+directly. Login and logout, the account id, the credential facts the redactor
+registers, the session rebuild, the folder walk, the Browse/editorial reads, the id lookups,
 the small track search, and the preview stream resolution all cross
 ``self.providers``; the engine keeps its own fenced session machinery.
 
-HOW THIS STAYS FIXED
---------------------
+HOW THE SEAM STAYS CLOSED
+-------------------------
 Two mechanisms. A static test parses backend.py and fails on any
 ``self.tidal.<...>`` reach outside the engine subclass (whose session work is
 the Atmos fence the spec pins to the engine), and on any helper catalog body
@@ -27,8 +26,8 @@ from types import SimpleNamespace
 import pytest
 from support.provider_fakes import BareProvider
 
-import waves.waves_ui.backend as backend
-from waves.waves_ui.backend import WavesBridge
+import waves.desktop.backend as backend
+from waves.desktop.backend import WavesBridge
 
 # --------------------------------------------------------------------------- #
 # the static contract: backend.py's reach inventory
@@ -62,12 +61,15 @@ def _self_tidal_reaches(source: str) -> list[tuple[int, str]]:
     return reaches
 
 
-def _helper_tidal_imports(source: str) -> set[str]:
+def _tidal_helper_imports(source: str) -> set[str]:
+    """Names the bridge imports from the TIDAL helper modules, wherever they live."""
+    modules = {"waves.metadata.naming", "waves.providers.tidal_client"}
     tree = ast.parse(source)
+    names: set[str] = set()
     for node in tree.body:
-        if isinstance(node, ast.ImportFrom) and node.module == "waves.helper.tidal":
-            return {alias.name for alias in node.names}
-    return set()
+        if isinstance(node, ast.ImportFrom) and node.module in modules:
+            names |= {alias.name for alias in node.names}
+    return names
 
 
 class TestTheStaticContract:
@@ -110,7 +112,7 @@ class TestTheStaticContract:
         # CATALOG body -- search, collections, media instantiation, the url
         # grammar, the folder walk -- rides the seam.
         source = BACKEND_PATH.read_text(encoding="utf-8")
-        assert _helper_tidal_imports(source) == {
+        assert _tidal_helper_imports(source) == {
             "name_builder_album_artist",
             "name_builder_artist",
             "name_builder_title",
@@ -451,7 +453,7 @@ class TestTheSessionLifecycle:
         identity. The guard ``tidal`` object proves the bridge never fell
         back to the concrete session either."""
         registered: list[tuple[str, str]] = []
-        monkeypatch.setattr(backend.diagnostics, "register_secret", lambda val, tag: registered.append((val, tag)))
+        monkeypatch.setattr(backend.redaction, "register_secret", lambda val, tag: registered.append((val, tag)))
         provider = _ThirdProvider()
         stub = _AuthStub(provider)
         stub.logged_in_calls = []
@@ -490,7 +492,7 @@ class TestTheRedactorRegistration:
 
     def test_session_secrets_come_from_the_provider(self, monkeypatch):
         registered: list[tuple[str, str]] = []
-        monkeypatch.setattr(backend.diagnostics, "register_secret", lambda val, tag: registered.append((val, tag)))
+        monkeypatch.setattr(backend.redaction, "register_secret", lambda val, tag: registered.append((val, tag)))
         stub, _ = self._stub(
             credential_facts={
                 "access_token": "tok",
@@ -512,7 +514,7 @@ class TestTheRedactorRegistration:
     def test_a_failed_credential_read_never_breaks_the_caller(self, monkeypatch):
         # The config layer calls this on every credential mint; a failing read
         # must never take a login or a quality switch down with it.
-        monkeypatch.setattr(backend.diagnostics, "register_secret", lambda val, tag: None)
+        monkeypatch.setattr(backend.redaction, "register_secret", lambda val, tag: None)
         stub, _ = self._stub(credential_facts=RuntimeError("no session"))
 
         WavesBridge._register_session_secrets.__get__(stub, type(stub))()  # must not raise

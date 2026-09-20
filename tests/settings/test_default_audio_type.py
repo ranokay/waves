@@ -1,4 +1,4 @@
-"""The Chooser one-click audio default (issue #66).
+"""The Chooser one-click audio default.
 
 Replaces the retired Download-Dolby-Atmos toggle one for one: "stereo", or
 "both" for stereo + Atmos side by side. Atmos-alone has no Settings spelling
@@ -14,8 +14,8 @@ import pytest
 
 from waves.config import _migrate_settings
 from waves.constants import DefaultAudio, default_audio_is_both
+from waves.desktop.backend import WavesBridge
 from waves.model.cfg import Settings as ModelSettings
-from waves.waves_ui.backend import WavesBridge
 
 pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
 

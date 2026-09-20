@@ -13,8 +13,8 @@ from types import SimpleNamespace
 
 from conftest import _InlinePool, _Signal
 
-from waves.library_index import LibraryIndex, cache_file_for_root
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
+from waves.library.index import LibraryIndex, cache_file_for_root
 
 _METHODS = (
     # Every emit the scan makes off the pool goes through this guard (a scan
@@ -50,8 +50,8 @@ _METHODS = (
     "libraryIndexReady",
     "libraryStamp",
     "_library_root",
-    # The Library section's file pages (ADR 0007, issue #222): the pane loads
-    # them from the scan's own index, so the glue tests drive the real slots.
+    # The Library section's file pages (ADR 0007): the pane loads them from
+    # the scan's own index, so the glue tests drive the real slots.
     "loadLibraryFiles",
     "loadMoreLibraryFiles",
     "_library_files_start",
@@ -181,7 +181,7 @@ def make_library_bridge(
     s._library_scan_status = "unset"
     s._library_scan_progress = {}
     s._library_scan_read_t0 = 0.0
-    # The Library section's file-page state (ADR 0007, issue #222).
+    # The Library section's file-page state (ADR 0007).
     s._library_files_gen = {}
     s._library_files_loading = {}
     s.libraryPresenceChanged = _Signal()
@@ -223,7 +223,7 @@ def fake_listing(monkeypatch, shape):
     the transform applied to the real entries; every other folder lists for
     real. A transform receives the real DirEntry list and returns the list the
     OS will be believed to have returned."""
-    import waves.library_index as li
+    import waves.library.index as li
 
     real = os.scandir
     targets = {os.path.abspath(d): fn for d, fn in shape.items()}

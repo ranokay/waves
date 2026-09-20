@@ -1,21 +1,20 @@
-"""Regression: an account switch must drop navForwardHistory too, not just navHistory.
+"""An account switch must drop navForwardHistory too, not just navHistory.
 
-THE BUG WE ARE FENCING OFF
---------------------------
-``onLoggedInChanged`` clears ``navHistory`` on an account switch because history
-snapshots hold page payloads (personalized rows) and artist ids from the
-previous account. When ``navForwardHistory`` was introduced (mouse forward
-side button navigation) it was left out of that reset: a snapshot pushed onto
-it by ``navBack()`` while on Account A survived a switch to Account B. Pressing
-the forward button afterward replayed Account A's page (or artist) as if it
-were Account B's data, exactly the cross-account leak the existing reset was
-written to prevent for the back stack.
+WHAT THIS FENCES OFF
+--------------------
+``onLoggedInChanged`` clears ``navHistory`` on an account switch because
+history snapshots hold page payloads (personalized rows) and artist ids from
+the previous account. Leaving ``navForwardHistory`` (mouse forward side button
+navigation) out of that reset lets a snapshot pushed onto it by ``navBack()``
+while on Account A survive a switch to Account B: pressing the forward button
+afterward replays Account A's page (or artist) as if it were Account B's
+data, exactly the cross-account leak the back-stack reset exists to prevent.
 
 HOW THIS STAYS FIXED
 --------------------
 ``onLoggedInChanged`` clears ``navForwardHistory`` alongside ``navHistory``.
 
-The same reset now also drops the armed Browse-category intent
+The same reset also drops the armed Browse-category intent
 (``catPendingDl`` / ``catPendingPv`` / ``catDlPrompt``), which leaked the same
 way: a DOWNLOAD ALL click whose resolve the logout threw away stayed armed and
 was consumed by the next resolve of that path on the NEW account. Tacked on at
@@ -86,8 +85,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -168,7 +167,7 @@ def _run_scenario() -> int:
         print(f"navForwardHistory still has {remaining} stale entr(y/ies) after account switch", file=sys.stderr)
         return EXIT_REGRESSED
 
-    # 4. Forward must now be inert, never resurrecting the old account's page.
+    # 4. Forward must be inert, never resurrecting the old account's page.
     before_key = q("browsePageKey")
     q("navForward()")
     after_key = q("browsePageKey")

@@ -3,11 +3,10 @@
 WHAT THIS FENCES OFF
 --------------------
 The interface hides during the launch sequence by opacity alone, and opacity
-does not gate input in Qt Quick. Every control on the Browse landing was
-therefore live while invisible: the cursor flipped to the pointing hand over
-buttons nobody could see, and a click on the opening water could land on a
-preview control and start full-volume audio with no player on screen
-(reported as issue #13, "Waves autoplayed on startup").
+does not gate input in Qt Quick. Without a gate, every control on the Browse
+landing stays live while invisible: the cursor flips to the pointing hand over
+buttons nobody can see, and a click on the opening water can land on a preview
+control and start full-volume audio with no player on screen.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -59,8 +58,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

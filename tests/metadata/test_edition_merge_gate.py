@@ -11,7 +11,7 @@ test_discography_video_source.py does.
 
 from types import SimpleNamespace
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 def _bind(stub, name):
@@ -52,9 +52,9 @@ def test_best_of_both_is_on_by_default():
 
 
 def test_the_merge_no_longer_depends_on_the_collapse_toggle():
-    # It used to require collapse_editions as well, which is labelled (and
-    # documented) as a discography setting and HID this control when off, so
-    # turning it off silently stopped every single-album merge.
+    # The merge must not require collapse_editions as well, which is labelled
+    # (and documented) as a discography setting and HIDES this control when
+    # off: turning it off would silently stop every single-album merge.
     stub = _AlbumStub({"collapse_editions": False})
     assert stub._merge_pref_on() is True
 

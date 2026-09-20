@@ -3,27 +3,26 @@
 WHAT THIS FENCES OFF
 --------------------
 Expanding a queued album runs a second pass that says which of its tracks you
-already hold, and the drawer paints those rows IN LIBRARY. That answer used to
-be one-way. The worker only handed the answer to the GUI thread when it found
-something:
+already hold, and the drawer paints those rows IN LIBRARY. A one-way answer
+breaks it: a worker that hands the answer to the GUI thread only when it
+found something
 
     if marks:
         self._queueOwnedFetched.emit(qid, marks)
 
-_apply_owned_marks is the ONLY writer of the kept marks, so an answer of "none
-of these, actually" never arrived and never replaced the previous one. Every
-later merge re-stamped the old marks, and the store is only emptied when the
-row leaves the queue.
+never delivers "none of these, actually". _apply_owned_marks is the ONLY
+writer of the kept marks, so the previous marks stand, every later merge
+re-stamps them, and the store is only emptied when the row leaves the queue.
 
-What that looked like to a person: expand a queued album, three songs say IN
+What that looks like to a person: expand a queued album, three songs say IN
 LIBRARY. Delete those files, or the drive holding them drops off, or switch the
 library scan off. Collapse and re-expand, which is the one gesture that asks the
-question again. The answer correctly comes back empty, the guard swallowed it,
-and the drawer painted the three stale marks straight back. Nothing but quitting
-the app cleared them, which is exactly the restart-to-refresh pattern this
-project forbids.
+question again. The answer correctly comes back empty, the guard swallows it,
+and the drawer paints the three stale marks straight back. Nothing but quitting
+the app clears them, exactly the restart-to-refresh pattern this project
+forbids.
 
-The answer now reaches the GUI thread on every SUCCESSFUL lookup, an empty one
+The answer reaches the GUI thread on every SUCCESSFUL lookup, an empty one
 included. A lookup that RAISED still says nothing: it knows nothing either way,
 so it leaves whatever is on screen alone. Both halves are pinned here.
 
@@ -99,7 +98,7 @@ def _bridge(track_ids=("t1", "t2"), other_track_ids=("u1",)):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6 import QtCore
 
-    from waves.waves_ui import backend as be
+    from waves.desktop import backend as be
 
     b = be.WavesBridge.__new__(be.WavesBridge)
     QtCore.QObject.__init__(b)
@@ -200,7 +199,7 @@ def test_re_expanding_takes_the_stale_mark_off_the_list_the_drawer_shows():
 
 def test_a_lookup_that_fell_over_leaves_the_marks_alone():
     """A failed lookup knows nothing either way, so it must not wipe marks that
-    may still be perfectly true. This is the distinction the fix keeps."""
+    may still be perfectly true."""
     b, rec = _bridge()
     b._job_owned[_QID] = {"t1": _mark()}
     rec.predict.answer = {"t1": _mark()}
@@ -271,7 +270,7 @@ def test_the_bridge_wires_the_owned_answer_into_the_marks_it_keeps():
     """The tests above connect the signal themselves, so this is where the real
     class's own wiring is held: without it the answer never reaches the GUI
     thread at all and no mark, fresh or stale, would ever be kept."""
-    from waves.waves_ui import backend as be
+    from waves.desktop import backend as be
 
     tree = ast.parse(textwrap.dedent(inspect.getsource(be.WavesBridge.__init__)))
 

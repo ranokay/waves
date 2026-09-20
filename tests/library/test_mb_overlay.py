@@ -20,8 +20,8 @@ tests/library/test_library_claim_gate.py: no Qt, no network, no files.
 
 from __future__ import annotations
 
-import waves.matching as matching
-from waves.waves_ui.bridge_library import LibraryMixin
+import waves.metadata.matching as matching
+from waves.desktop.bridge_library import LibraryMixin
 
 
 class _Stub:
@@ -162,7 +162,7 @@ def test_bulk_gate_never_reads_the_overlay():
     # method must appear in exactly one place: the presence slot.
     import inspect
 
-    import waves.waves_ui.bridge_library as bl
+    import waves.desktop.bridge_library as bl
 
     src = inspect.getsource(bl)
     assert src.count("self._mb_arbitrated(") == 1

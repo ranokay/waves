@@ -1,18 +1,17 @@
-"""Regression: the Search tab restores ONE artist, not two halves of two.
+"""The Search tab restores ONE artist, not two halves of two.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 An artist page is split-sourced. The header (photo, name, bio, DOWNLOAD
 DISCOGRAPHY) reads ``artistData``; the TOP TRACKS / ALBUMS / EPS & SINGLES /
 VIDEOS sections read four ListModels that only ``onArtistLoaded`` fills. Both
 are shared with every other tab that can open an artist page.
 
-Leaving the Search tab snapshots ``artistData`` and the Search press puts it
-back, but the snapshot never carried the sections. So: open artist A from a
-search result, go to My Tidal, open artist B from the Artists grid, press
-Search. The page came back as A's name, photo and bio over B's albums and top
-tracks, and the header's DOWNLOAD DISCOGRAPHY button would have downloaded A
-while every row on the page belonged to B.
+A Search-tab snapshot that carries ``artistData`` but not the sections restores
+two halves of two artists: open artist A from a search result, go to My Tidal,
+open artist B from the Artists grid, press Search. The page comes back as A's
+name, photo and bio over B's albums and top tracks, and the header's DOWNLOAD
+DISCOGRAPHY button downloads A while every row on the page belongs to B.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -130,8 +129,8 @@ def _run_scenario() -> int:
     try:
         from support.offline import PARK_LOGIN_QML, patch_offline
 
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

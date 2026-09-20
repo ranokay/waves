@@ -1,19 +1,19 @@
 """Building a page of search rows asks the bridge about presence ONCE per badge.
 
-THE COST THIS FENCES OFF
-------------------------
+WHAT THIS FENCES OFF
+--------------------
 libraryAlbumPresence is a QML -> Python crossing, measured at ~22us a call
-(the matcher itself is only ~4us of that; the rest is the boundary). The pill
-and the Download button each used to carry the album's identity as FOUR
-properties, so filling one in fired four change handlers and a fifth from
-Component.onCompleted, and each of those asked the same question again: 15
+(the matcher itself is only ~4us of that; the rest is the boundary). Carrying
+the album's identity as FOUR properties on the pill and the Download button
+fires four change handlers when one is filled in, plus a fifth from
+Component.onCompleted, and each of those asks the same question again: 15
 calls per album row, 750 for a 50-row page, about 16ms of GUI thread spent
 re-answering during a page build.
 
-The identity is now ONE object property, so it is one binding evaluation and
-one call. This pins the budget rather than the exact number, because the
-number legitimately moves when rows gain or lose a badge; what must not come
-back is the per-property fan-out.
+ONE object property is one binding evaluation and one call. This pins the
+budget rather than the exact number, because the number legitimately moves
+when rows gain or lose a badge; what must not come back is the per-property
+fan-out.
 
 The TRACK side pays the same crossing (libraryTrackPresence) with the same
 one-object-identity shape, so its budget is pinned here too, additively and
@@ -92,8 +92,8 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.matching import presence_key, track_key
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.backend import WavesBridge
+        from waves.metadata.matching import presence_key, track_key
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

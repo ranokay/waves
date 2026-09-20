@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from support.paths import REPO_ROOT
 
-_ICO = REPO_ROOT / "waves" / "ui" / "icon.ico"
+_ICO = REPO_ROOT / "waves" / "desktop" / "icons" / "icon.ico"
 _EXPECTED_SIZES = {16, 32, 48, 64, 128, 256}
 
 
@@ -33,8 +33,8 @@ def _ico_frames(path: Path) -> list[tuple[int, int]]:
 def test_icon_ico_has_full_size_ladder():
     """The committed icon.ico must carry every taskbar-relevant frame.
 
-    This is the exact regression that shipped in v0.1.7 (a 692-byte, single
-    16x16 file); a build from a tree that fails this test must not go out.
+    A 692-byte, single 16x16 file is not a usable Windows icon, so a build from
+    a tree that fails this test must not go out.
     """
     assert _ICO.is_file(), f"missing {_ICO}"
     sizes = {w for w, _ in _ico_frames(_ICO)}
@@ -55,7 +55,7 @@ def test_icon_usable_guard_rejects_degenerate_icons():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     _ = QGuiApplication.instance() or QGuiApplication([])
 
-    from waves.waves_ui.app import _icon_usable
+    from waves.desktop.app import _icon_usable
 
     good = QIcon(str(_ICO))
     assert _icon_usable(good) is True

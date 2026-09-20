@@ -1,4 +1,4 @@
-"""FLAC format matrix (issue #64): lossless stereo lands FLAC, the rest stays .m4a.
+"""FLAC format matrix: lossless stereo lands FLAC, the rest stays .m4a.
 
 Default (lossless-only) scope: TIDAL FLAC stays .flac, Apple ALAC converts to
 .flac (a lossless decode + FLAC encode, bit for bit identical -- the FLAC
@@ -20,9 +20,9 @@ from types import SimpleNamespace
 import pytest
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
+from waves.desktop.backend import WavesBridge
 from waves.providers.apple import runner
 from waves.providers.base import AudioType, StreamInfo
-from waves.waves_ui.backend import WavesBridge
 
 
 def _ffmpeg() -> str:
@@ -158,7 +158,7 @@ def test_tier_mapping_treats_flac_like_alac():
 
 
 def _tidal_dl(*, extract=True, scope_all=False, atmos_on=False):
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     dl = backend._TrackedDownload.__new__(backend._TrackedDownload)
 
@@ -200,7 +200,7 @@ def _stereo_media(codecs, extension, atmos=False):
 
 
 def test_tidal_flac_stays_flac_and_toggle_off_keeps_the_container():
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     dl = _tidal_dl(extract=True)
     info = backend._TrackedDownload._get_track_stream_info(dl, _stereo_media("FLAC", ".mp4"))
@@ -212,7 +212,7 @@ def test_tidal_flac_stays_flac_and_toggle_off_keeps_the_container():
 
 
 def test_tidal_lossy_converts_only_under_the_all_scope():
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     dl = _tidal_dl(extract=True, scope_all=False)
     info = backend._TrackedDownload._get_track_stream_info(dl, _stereo_media("mp4a.40.2", ".m4a"))
@@ -224,7 +224,7 @@ def test_tidal_lossy_converts_only_under_the_all_scope():
 
 
 def test_tidal_atmos_never_converts_even_under_the_all_scope():
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     _TRACK_STREAMS["atmos"] = SimpleNamespace(
         get_stream_manifest=lambda: SimpleNamespace(file_extension=".m4a", codecs="eac3")

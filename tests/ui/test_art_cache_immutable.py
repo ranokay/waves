@@ -4,7 +4,8 @@ The cover CDN sends ``Cache-Control: max-age=3600``; an hour after a cover
 is stored Qt's cache-first read deems it stale and revalidates it over the
 network (a 304 round trip per cover, ~100 ms each) before painting. The
 URLs are immutable, so the app's cache reports every held cover as fresh
-and the read is a disk hit, for covers stored before the fix as well.
+and the read is a disk hit for covers already on disk as much as for
+freshly written ones.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QDateTime, QUrl
 from PySide6.QtNetwork import QNetworkCacheMetaData, QNetworkDiskCache
 
-from waves.waves_ui.app import _ArtCacheFactory, _ImmutableArtCache
+from waves.desktop.app import _ArtCacheFactory, _ImmutableArtCache
 
 URL = "https://img.test/cover/320x320.jpg"
 

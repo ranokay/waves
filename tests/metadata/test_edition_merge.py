@@ -11,9 +11,7 @@ from types import SimpleNamespace
 import pytest
 from tidalapi.media import Quality
 
-from waves.download import Download
-from waves.providers import TidalProvider
-from waves.waves_ui.backend import (
+from waves.desktop.backend import (
     WavesBridge,
     _align_edition,
     _as_member_of,
@@ -24,6 +22,8 @@ from waves.waves_ui.backend import (
     _track_isrc,
     _TrackedDownload,
 )
+from waves.download import Download
+from waves.providers import TidalProvider
 
 
 class _Track:
@@ -368,7 +368,7 @@ def test_seed_merge_registry_keys_rows_by_identity_id():
     # loadQueueTracks fetches the IDENTITY album's track list and joins it to
     # this registry by id; source-id keys would miss, freezing rows at pending
     # and appending ghost rows (a 3-track album rendered as 5 rows).
-    from waves.waves_ui.backend import _seed_merge_registry
+    from waves.desktop.backend import _seed_merge_registry
 
     plan = [
         _PlanEntry(_Track("s-a", "A", 200), 1, 1, "d-a"),
@@ -399,10 +399,10 @@ class _RefusingDownload(_EngineShaped):
 
 
 def test_a_withheld_track_does_not_fail_the_merge():
-    # A delisted song is not a failure: the app did all it could and the rest of
-    # the album is on disk. Counting refusals turned one withheld track into a
-    # red album, and since the plan is only dropped on success every retry
-    # replayed it and failed the same way (issue #25, in the merge path).
+    # A delisted song is not a failure: the rest of the album is on disk, and
+    # the app could do no more about it. Counting refusals turns one withheld
+    # track into a red album, and since the plan is only dropped on success,
+    # every retry would replay it and fail the same way.
     bridge = WavesBridge.__new__(WavesBridge)
     bridge.settings = _FakeSettings()
     plan = [

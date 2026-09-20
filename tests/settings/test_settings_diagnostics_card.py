@@ -1,23 +1,21 @@
 """Exporting a diagnostic report must not rewrite the user's privacy prefs.
 
-THE BUG
--------
 The two diagnostics toggles apply live via ``setWavesPref`` but never set
 ``needsRefresh``, and ``refreshSchema()`` is the only thing that re-reads
 ``waves.settingsSchema()``. ``onActiveChanged`` clears ``editMap`` on every
 reopen but rebuilds ``groups`` only when ``needsRefresh`` is set, which only the
-Save button does. So after one close and reopen the card rendered the stale
-baked-in values, and the EXPORT REPORT handler pushed **those** booleans back
-through ``setWavesPref`` before calling ``exportDiagnostics()``, which reads the
-pref it had just clobbered.
+Save button does. So after one close and reopen the card would render the stale
+baked-in values, and the EXPORT REPORT handler must not push **those** booleans
+back through ``setWavesPref`` before calling ``exportDiagnostics()``, which reads
+the pref it just clobbered.
 
 The card's own copy invites exactly that sequence: "Turn on, reproduce the
-problem, then export." The user turned on verbose diagnostics and content
-redaction, reproduced their bug, came back, clicked Export, and silently got
-both switched off, the freeze watchdog and perf sampler stopped, and a bundle
-containing the searches and titles they had asked to hide.
+problem, then export." A user turns on verbose diagnostics and content
+redaction, reproduces their bug, comes back, clicks Export, and must not
+silently get both switched off, the freeze watchdog and perf sampler stopped,
+and a bundle containing the searches and titles they had asked to hide.
 
-THE FIX has two halves: the export handler no longer re-pushes the prefs (the
+The invariant has two halves: the export handler never re-pushes the prefs (the
 toggles already apply live, so the backend holds the truth), and each toggle
 marks ``needsRefresh`` so a reopen shows the real value instead of the stale
 one.

@@ -36,9 +36,9 @@ class AppleCredential(StrEnum):
     """Which credential an Apple fetch needed.
 
     A credential failure names the one it needed, so the recovery hold can
-    wait for that credential alone (AP-01: a wrapper-signed-in, cookies-broken
-    job read the wrapper probe as recovery and re-ran the identical failing
-    fetch forever).
+    wait for that credential alone: a wrapper-signed-in, cookies-broken
+    job that reads the wrapper probe as recovery would re-run the identical
+    failing fetch forever.
     """
 
     COOKIES = "cookies"
@@ -620,7 +620,7 @@ class AppleFetchSession:
         # rung (the same depth-and-rate map the delivery uses), a HI_RES ask
         # takes the best rendition the master holds. A 24-bit/48 kHz-only
         # master therefore satisfies a LOSSLESS ask instead of being refused
-        # into the lossy fallback (issue #239).
+        # into the lossy fallback.
         ceiling = QualityTier.LOSSLESS.value if str(max_tier) == QualityTier.LOSSLESS.value else None
         song_interface = AppleMusicSongInterface(
             base=base_interface,
@@ -702,7 +702,7 @@ def _choose_alac_playlist(playlists: list, max_tier: str | None) -> dict | None:
     (16-bit at any rate, or 24-bit at 44.1/48 kHz), a HI_RES ask the best the
     master holds. A master whose only lossless rendition is 24-bit/48 kHz
     therefore satisfies a LOSSLESS ask rather than being refused into the
-    lossy fallback (issue #239). None means nothing qualified, which gamdl
+    lossy fallback. None means nothing qualified, which gamdl
     surfaces as a format refusal; ``_fetch_song_staged`` turns that into
     AppleVariantUnavailable, classified unavailable upstream so the ceiling's
     fallback rules still apply.
@@ -860,8 +860,8 @@ def apple_tier_for_delivery(
     at 44.1/48 kHz or an unreadable rate and HI_RES_LOSSLESS only above
     48 kHz (88.2 and up) -- Apple's own class boundary, so the rung never
     overstates what the master carries, and 24/96 and 24/192 stay the one
-    rung whose numbers ride the label text, never rank (issue #239:
-    24/48 used to promote on depth alone). A rate without a depth never
+    rung whose numbers ride the label text, never rank (24/48 does not
+    promote on depth alone). A rate without a depth never
     promotes. Atmos E-AC-3 answers HIGH: the drawer words it ATMOS, never a
     rung. Unknown stays on the fallback, never invented.
     """

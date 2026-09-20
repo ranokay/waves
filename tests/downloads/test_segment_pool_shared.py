@@ -1,17 +1,17 @@
 """One segment executor per download job, sized to the connection pool.
 
-THE COST THIS FENCES OFF
-------------------------
-``_download_segments`` built a fresh ThreadPoolExecutor PER TRACK (executor
-churn: thread spawn and teardown for every track of every album), and with
-``downloads_concurrent_max`` items in flight the per-track clamp still
-allowed items x clamp threads against ``_HTTP_POOL_MAXSIZE`` pooled sockets
-(pool_block=True), so most of those threads only ever parked in the
-connection pool's queue. The engine now keeps ONE executor per Download
-(one instance = one queued job), built lazily at the same clamp, shared by
-every concurrent item, and shut down explicitly when the job ends
-(close_segment_pool, called from the bridge's job-finally). Segment work
-reports into SEGMENT_GAUGE so the verbose perf sampler sees saturation.
+The cost this fences off:
+
+``_download_segments`` must not build a fresh ThreadPoolExecutor PER TRACK
+(executor churn: thread spawn and teardown for every track of every album), and
+with ``downloads_concurrent_max`` items in flight a per-track clamp would still
+allow items x clamp threads against ``_HTTP_POOL_MAXSIZE`` pooled sockets
+(pool_block=True), so most of those threads only ever park in the connection
+pool's queue. The engine keeps ONE executor per Download (one instance = one
+queued job), built lazily at the same clamp, shared by every concurrent item,
+and shut down explicitly when the job ends (close_segment_pool, called from the
+bridge's job-finally). Segment work reports into SEGMENT_GAUGE so the verbose
+perf sampler sees saturation.
 """
 
 from __future__ import annotations

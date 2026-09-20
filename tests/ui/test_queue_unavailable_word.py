@@ -4,12 +4,12 @@ WHAT THIS FENCES OFF
 --------------------
 TIDAL delists tracks. The engine skips them (``allow_streaming`` false) and says
 so in the log, but it returns the same empty-handed ``(False, "")`` a broken
-download returns, and the GUI used to tally that as a failure. A commentary
-edition whose every track TIDAL had withdrawn came back as
-``RuntimeError: 15 of 15 tracks failed``: the album red, a RETRY button that
-could never succeed, and nothing on screen saying who had refused (issue #25).
+download returns. Tallying that as a failure turns an album whose every track
+TIDAL has withdrawn into ``RuntimeError: 15 of 15 tracks failed``: the album
+red, a RETRY button that can never succeed, and nothing on screen saying who
+refused.
 
-The word is the whole point of the fix, so it is asserted on the REAL delegate:
+The word is the whole point, so it is asserted on the REAL delegate:
 the bridge's own _track_lifecycle feeds the per-track registry, the expansion
 renders it, and the outcome column has to read UNAVAILABLE, distinct from both
 FAILED and the green COMPLETED beside it. Reading it as FAILED would put a retry
@@ -36,7 +36,7 @@ from support.qml import (
     scoped_q,
 )
 
-# The reported album's shape once the fix is in: some tracks landed, one was
+# An album of the shape fenced here: some tracks landed, one was
 # already owned, one genuinely broke, and three are gone from TIDAL.
 LEDGER = [
     ("1", "Truth Without Love", "done"),
@@ -77,8 +77,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -102,7 +102,7 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
-    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 

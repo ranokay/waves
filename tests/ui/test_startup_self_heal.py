@@ -1,18 +1,18 @@
 """Three things at the edges of starting up, and of landing a file.
 
 * ``settings.json`` holding valid JSON that is not an OBJECT ("[]", "null", a
-  bare string, a number) raised AttributeError out of the parse, past the arm
-  that exists to move a broken config aside and carry on. It was an uncaught
-  traceback at every launch, and only deleting the file by hand recovered the
-  app. Same file, same code path, for ``token.json``.
-* A track whose swap into the library had already succeeded was reported FAILED
-  when the throwaway source refused to unlink for a moment (a Windows scanner
-  holding it, the very lock the retry helpers exist for): the retry found the
-  destination occupied and gave up, so the row went red over a file that was
-  in place, and its lyrics and cover never followed.
-* And the legacy-config migration's breadcrumb was written before diagnostics
-  were installed, so the one line recording a FAILED migration reached neither
-  the ring, the disk log, nor an exported bundle.
+  bare string, a number) must not raise AttributeError out of the parse, past
+  the arm that moves a broken config aside and carries on: an uncaught
+  traceback at every launch, with only deleting the file by hand recovering
+  the app. Same file, same code path, for ``token.json``.
+* A track whose swap into the library has already succeeded must not be
+  reported FAILED because the throwaway source refused to unlink for a moment
+  (a Windows scanner holding it, the very lock the retry helpers exist for):
+  the retry finds the destination occupied and gives up, so the row goes red
+  over a file that is in place, and its lyrics and cover never follow.
+* And the legacy-config migration's breadcrumb must not be written before
+  diagnostics are installed, or the one line recording a FAILED migration
+  reaches neither the ring, the disk log, nor an exported bundle.
 """
 
 from __future__ import annotations
@@ -27,13 +27,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from waves.config import BaseConfig
+from waves.desktop import app as waves_app
 from waves.download import Download
 from waves.model.cfg import Settings as ModelSettings
-from waves.waves_ui import app as waves_app
 
 
 # --------------------------------------------------------------------------- #
-# F-18: a config that parses but is not an object.
+# A config that parses but is not an object.
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("body", ["[]", "null", '"a string"', "3", "[1, 2, 3]", "true"])
 def test_a_config_that_is_not_an_object_heals_instead_of_crashing(tmp_path, body, capsys):
@@ -76,7 +76,7 @@ def test_a_missing_config_is_not_a_broken_one(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# F-19: past the swap, the track has landed.
+# Past the swap, the track has landed.
 # --------------------------------------------------------------------------- #
 def _make_download(tmp_path: pathlib.Path) -> Download:
     dl = Download(
@@ -143,7 +143,7 @@ def test_the_source_is_still_taken_away_when_it_can_be(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# F-22: the migration breadcrumb has to be able to reach the ring.
+# The migration breadcrumb has to be able to reach the ring.
 # --------------------------------------------------------------------------- #
 def test_the_migration_breadcrumb_is_logged_after_diagnostics_are_installed():
     """Structural: the bridge is what installs the handlers, so the line has to
@@ -188,7 +188,7 @@ def _breadcrumbs(fn):
 
 
 def test_the_breadcrumb_says_what_happened_and_never_where(monkeypatch):
-    from waves.helper import path as path_helper
+    from waves import paths as path_helper
 
     # By level NUMBER: the diagnostics install renames WARNING to "WARN".
     for outcome, level, word in (
@@ -207,7 +207,7 @@ def test_the_breadcrumb_says_what_happened_and_never_where(monkeypatch):
 
 
 def test_no_breadcrumb_when_nothing_was_migrated(monkeypatch):
-    from waves.helper import path as path_helper
+    from waves import paths as path_helper
 
     monkeypatch.setattr(path_helper, "CONFIG_MIGRATION", "")
 

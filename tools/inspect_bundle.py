@@ -61,7 +61,7 @@ _EMBEDDED_MARKERS = (
 )
 # Native modules the bundle must carry: loaded by name at runtime (ctypes), so
 # a build or a trim can drop them silently (the #304 case). The names are the
-# modules the signing surface (waves_ui/signing.py) and the Apple HLS download
+# modules the signing surface (desktop/signing.py) and the Apple HLS download
 # path load; extensions differ per OS, so only the basename up to the first
 # dot is matched (_raw_aes.abi3.so, _raw_aes.pyd, ...), and only under a
 # Crypto/ directory.

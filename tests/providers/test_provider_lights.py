@@ -1,4 +1,4 @@
-"""The header's per-provider lights and Browse's availability (issue #223).
+"""The header's per-provider lights and Browse's availability.
 
 WHAT THIS FENCES OFF
 --------------------
@@ -23,8 +23,8 @@ from pathlib import Path
 
 from support.provider_fakes import StubProvider, stub_bridge
 
+from waves.desktop import backend
 from waves.providers import Capability, StatusKind
-from waves.waves_ui import backend
 
 
 def test_a_session_provider_reports_its_session_state():

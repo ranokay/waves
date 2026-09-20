@@ -75,8 +75,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -105,7 +105,7 @@ def _run_scenario() -> int:
         QTimer.singleShot(ms, loop.quit)
         loop.exec()
 
-    # The header's buttons live inside QueueDrawer.qml (#315 slice 4):
+    # The header's buttons live inside QueueDrawer.qml:
     # evaluate expressions naming their ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 

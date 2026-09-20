@@ -2,17 +2,15 @@
 
 WHAT THIS FENCES OFF
 --------------------
-dl_pool used to run downloads_concurrent_max queue items side by side, which
-read as the queue jumping around (livetest report): a 21-track album ground
-along (its tracks carry the 3-5s anti-hammer delay and shared the
-10-connection HTTP pool with every concurrent sibling) while single tracks
-queued after it zipped past. The queue's promise is order; parallelism lives
-inside a collection (the engine's per-collection track executor, still sized
-by downloads_concurrent_max, which it reads live from settings on each run).
+Parallelism belongs inside a collection (the engine's per-collection track
+executor, sized by downloads_concurrent_max, which it reads live from settings
+on each run), never to the queue: a 21-track album whose tracks carry the 3-5s
+anti-hammer delay and share the 10-connection HTTP pool must not be overtaken
+by single tracks queued after it. The queue's promise is order.
 
 So two things must hold:
 1. dl_pool is created with exactly one thread, regardless of the setting.
-2. Saving settings must NOT resize dl_pool back up (the old live-reapply).
+2. Saving settings must NOT resize dl_pool back up.
 """
 
 from __future__ import annotations
@@ -21,7 +19,7 @@ import inspect
 import re
 from pathlib import Path
 
-from waves.waves_ui import backend as backend_mod
+from waves.desktop import backend as backend_mod
 
 BACKEND_SRC = Path(inspect.getsourcefile(backend_mod))
 
@@ -44,8 +42,7 @@ def test_dl_pool_is_serial():
 def test_settings_save_never_resizes_the_pool():
     src = _source()
     assert src.count("dl_pool.setMaxThreadCount") == 1, (
-        "a second setMaxThreadCount call (the old settings-save live-reapply) "
-        "would widen the queue back out from under the serial design"
+        "a second setMaxThreadCount call would widen the queue back out from under the serial design"
     )
 
 

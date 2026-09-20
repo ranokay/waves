@@ -24,8 +24,8 @@ from types import SimpleNamespace
 import tidalapi
 
 from waves.constants import CTX_TIDAL
+from waves.desktop.backend import WavesBridge
 from waves.providers import TidalProvider
-from waves.waves_ui.backend import WavesBridge
 
 # ----- fixture: a small but shape-faithful home/feed/static payload ---------
 

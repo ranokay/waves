@@ -1,20 +1,16 @@
-"""Regression guard: the segment-download loop must terminate.
+"""The segment-download loop must terminate.
 
-THE BUG
--------
-``Download._download_segments`` used ``while not self.progress.tasks[p_task].finished:``
-and re-submitted every segment URL each pass, exiting only when the rich progress
-task's ``completed >= total``. Progress advances once per streamed chunk. A segment
-that returns HTTP 200 with an empty (0-byte) body yields no chunks, so it advances
-the bar zero times; the task never reaches ``total`` and the loop re-downloaded the
-whole track forever (an infinite spin, multiplying bandwidth and CPU). The single-
-file path carried the same risk when a HEAD content-length overstated the bytes
-actually streamed.
+``Download._download_segments`` cannot loop on the rich progress task's
+``finished`` flag: progress advances once per streamed chunk, so a segment that
+returns HTTP 200 with an empty (0-byte) body yields no chunks and never reaches
+``total``. Looping on that flag re-downloads the whole track forever (an
+infinite spin, multiplying bandwidth and CPU). The single-file path carries the
+same risk when a HEAD content-length overstates the bytes actually streamed.
 
-THE FIX runs the segment pass exactly once (segment-level retries already live
-inside ``_download_segment`` via requests ``Retry(total=5)``), derives success from
-the per-segment results, and snaps the progress bar to complete on success so the
-GUI still reads 100% despite the short estimate.
+The segment pass runs exactly once (segment-level retries already live inside
+``_download_segment`` via requests ``Retry(total=5)``), success is derived from
+the per-segment results, and the progress bar snaps to complete on success so
+the GUI still reads 100% despite the short estimate.
 """
 
 from __future__ import annotations
@@ -64,7 +60,7 @@ def test_empty_but_successful_segment_does_not_respin():
     run each URL exactly once instead of re-downloading forever."""
     urls = ["u1", "u2", "u3"]
     # A total the per-segment advances can never reach (the fakes advance 0), so
-    # the old `while not finished` would have spun here.
+    # a loop on the progress task's finished flag would spin here.
     b, p_task = _bridge(total=len(urls) + 5)
 
     calls: list[str] = []
@@ -136,9 +132,9 @@ def test_manifest_proven_spurious_tail_is_tolerated():
 
 
 def test_manifest_proven_required_tail_failure_is_real():
-    """THE 1e FIX: the manifest proved every URL is required audio
-    (n_tail_spurious=0), so a failed final segment is a REAL failure. Before
-    the fix this silently truncated the track and reported a clean success."""
+    """The manifest proved every URL is required audio (n_tail_spurious=0),
+    so a failed final segment is a REAL failure: anything less truncates the
+    track and reports a clean success."""
     urls = ["seg1", "seg2", "seg3"]
     b, p_task = _bridge(total=len(urls))
     calls: list[str] = []

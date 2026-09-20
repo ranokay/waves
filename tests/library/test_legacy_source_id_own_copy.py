@@ -2,9 +2,10 @@
 
 A "best of both" merge fetches a track from one edition (``member.id``, the
 SOURCE id) and files it under another edition's slot (``waves_identity_id``).
-Every build up to v0.1.21 stamped the SOURCE id into that file; today's build
-stamps the identity id. A library assembled by an older Waves is therefore full
-of merged tracks tagged with an id the current build no longer files them under.
+The SOURCE id is what an older Waves stamped into that file; the identity id is
+what the current build stamps. A library assembled by an older Waves is
+therefore full of merged tracks tagged with an id the current build does not
+file them under.
 
 With skipping off (overwrite mode, or a quality upgrade), the engine asks
 ``_is_own_copy`` whether the file at the destination is this item's own to

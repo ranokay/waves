@@ -7,7 +7,7 @@ so every one of its frames needs the GUI thread, and the GUI thread waits
 for the interpreter lock whenever any Python runs anywhere. A pool job
 dispatched between the bridge's construction and the reveal therefore
 competes with the picture for every frame it holds the lock. The library
-walk did exactly that (now a child process, waves.library_worker); a
+walk did exactly that (now a child process, waves.library.worker); a
 presence-index build did (now the sqlite cache itself); and every fix
 before this one was undone by the next feature that added a boot job.
 
@@ -128,7 +128,7 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -137,7 +137,7 @@ def _run_scenario() -> int:
     # the launch takes its library path (badge seed, scanner process).
     import json
 
-    from waves.helper.path import path_config_base
+    from waves.paths import path_config_base
 
     cfg = path_config_base()
     os.makedirs(cfg, exist_ok=True)
@@ -153,7 +153,7 @@ def _run_scenario() -> int:
     # What a real launch does between construction and the reveal: the library
     # sweep is dispatched with the sandbox's folder configured, the water
     # plays, the interface warms. The landing loads (Browse, and each My Music
-    # source's Home, issue #259) are session-gated and this launch is signed
+    # source's Home) are session-gated and this launch is signed
     # out, so the sweep is the job the launch actually masks -- and the one the
     # marker below waits for.
     # Closed on the sweep, not on a stopwatch (see _SWEEP above). The cap is
@@ -188,10 +188,9 @@ def _run_scenario() -> int:
             file=sys.stderr,
         )
         return EXIT_REGRESSED
-    # The deleted test_boot_library_scan_deferral.py used to be what pinned
-    # that the library sweep is dispatched AT ALL. Without this line, deleting
-    # the sweep would turn this guard green: a launch that runs nothing is a
-    # very quiet window and a missing feature.
+    # This line is what pins that the library sweep is dispatched AT ALL.
+    # Without it, deleting the sweep would turn this guard green: a launch
+    # that runs nothing is a very quiet window and a missing feature.
     if _SWEEP not in ran:
         print(
             f"the library sweep was never dispatched at launch ({ran}). This guard measures what the "

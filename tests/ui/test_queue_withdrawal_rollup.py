@@ -1,23 +1,21 @@
-"""Withdrawn queue rows settle their rollups, and stranded rollups self-heal
-(issue #32).
+"""Withdrawn queue rows settle their rollups, and stranded rollups self-heal.
 
-The defect: every path that credits a discography/folder rollup lives inside a
-download worker, and every path that WITHDRAWS a row (CLEAR ALL, the Queued
-section's CLEAR, a row's cancel or remove) only dropped the row and its spec.
-A queued member withdrawn that way could never enter the group's ``done`` set,
-so ``finished`` never came true, the group was never deleted, and every later
-tick re-emitted ``running`` under the artist id. The QML holder map is reset
-by value only, and after a clear the drawer's STOP (the one control that
-sweeps groups) is hidden with the queue empty, so the button was stuck for
-the session: "the progress bar remains and the discovery cannot be downloaded
-again" until a restart.
+Every path that credits a discography/folder rollup lives inside a download
+worker, and every path that WITHDRAWS a row (CLEAR ALL, the Queued section's
+CLEAR, a row's cancel or remove) only drops the row and its spec. A queued
+member withdrawn that way never enters the group's ``done`` set, so ``finished``
+never comes true, the group is never deleted, and every later tick re-emits
+``running`` under the artist id. The QML holder map is reset by value only, and
+after a clear the drawer's STOP (the one control that sweeps groups) is hidden
+with the queue empty, so the button stays stuck for the session: "the progress
+bar remains and the discovery cannot be downloaded again" until a restart.
 
-Fixes pinned here, layer by layer: the withdrawal slots credit never-started
-rows to their rollups; _reap_stranded_groups deletes any group with no live
-member row (two consecutive sightings, so a group mid-birth is never eaten);
-the bumps drop their emits when a STOP moved the scan generation under them;
-a stale batch enqueue is refused by its generation; and _download refuses an
-exact duplicate of a row already queued or running.
+The guards pinned here, layer by layer: the withdrawal slots credit
+never-started rows to their rollups; _reap_stranded_groups deletes any group
+with no live member row (two consecutive sightings, so a group mid-birth is
+never eaten); the bumps drop their emits when a STOP moved the scan generation
+under them; a stale batch enqueue is refused by its generation; and _download
+refuses an exact duplicate of a row already queued or running.
 
 Same hermetic pattern as the queue's other tests: the real unbound methods
 bound onto a minimal stub, no Qt app or network session.
@@ -33,8 +31,8 @@ from unittest.mock import patch
 import pytest
 from support.dispatch_stub import arm_dispatch, arm_queue
 
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 
 
 class _Sig:
@@ -427,7 +425,7 @@ def _download_stub(existing_status="queued", existing_quality="LOSSLESS"):
     s._ffmpeg_gate_holds = lambda media_id, retry: False
     s._queued_quality_value = lambda: "LOSSLESS"
     s._target_tier = lambda: "LOSSLESS"
-    # The per-item quality choice _download reads at queue time (issue #36):
+    # The per-item quality choice _download reads at queue time:
     # none on this carcass, so the ask is _queued_quality_value's.
     for name in ("_ask_quality_for", "_quality_override_key"):
         setattr(s, name, _bind(s, name))
@@ -451,7 +449,7 @@ def _download_stub(existing_status="queued", existing_quality="LOSSLESS"):
     s._merge_plans = {}
     s._pending_qids = deque()
     s._pump_queue = lambda: None
-    # The queue row's expected tier reads the provider (ticket #22).
+    # The queue row's expected tier reads the provider.
     s.providers = {"tidal": SimpleNamespace(advertised_tier=lambda obj: None)}
     s._download = _bind(s, "_download")
     return s
@@ -489,7 +487,7 @@ def test_a_terminal_row_never_blocks_a_fresh_ask():
 
 
 # --------------------------------------------------------------------------- #
-# Issue #31's session-long REDOWNLOAD mark: cleared by the job it forced
+# The session-long REDOWNLOAD mark: cleared by the job it forced
 # finishing, kept on failure so a retry stays forced.
 # --------------------------------------------------------------------------- #
 class _InlinePool:
@@ -541,7 +539,7 @@ def _body_stub(fail=False):
     s._job_quality = lambda qid: None
     s._build_download = lambda signals, **kw: s.dl
     s._enqueue = lambda *a, **kw: 41
-    # The per-item quality choice _download reads at queue time (issue #36):
+    # The per-item quality choice _download reads at queue time:
     # none on this carcass.
     s._ask_quality_for = lambda obj, type_media, media_id: ("LOSSLESS", "LOSSLESS")
     s._row_ask = lambda qid: None  # a held retry asks at what its row asked; no row ask here

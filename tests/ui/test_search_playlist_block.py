@@ -1,11 +1,12 @@
 """Search playlist rows behave like album rows.
 
-A playlist result used to be an inert card: only its DOWNLOAD PLAYLIST
-button did anything; the title was not a link and clicking the row was a
-no-op, while album rows both expand in place and link their title to a
-dedicated page. The PLAYLISTS section now uses PlaylistBlock (the playlist
-counterpart of AlbumBlock): clicking the row expands the track list inline,
-and clicking the title opens the playlist's page. This drives the real
+A playlist result must not be an inert card: a card where only its DOWNLOAD
+PLAYLIST button does anything, the title is not a link and clicking the row is
+a no-op, leaves playlist rows behind album rows, which both expand in place
+and link their title to a dedicated page. The PLAYLISTS section uses
+PlaylistBlock (the playlist counterpart of AlbumBlock): clicking the row
+expands the track list inline, and clicking the title opens the playlist's
+page. This drives the real
 Main.qml: click the row, feed it tracks, count the rendered rows, then
 click the title and assert the browse surface keys to the playlist page.
 """
@@ -79,15 +80,15 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
 
     # The bridge's cached sign-in check raced this scenario's clicks against
     # live TIDAL latency (the welcome gate swallowed whichever clicks it
-    # preceded, the full-suite-only failures this harness used to produce).
+    # preceded, the source of full-suite-only failures).
     # See tests/support/offline.py; the patch must precede the bridge.
     from support.offline import PARK_LOGIN_QML, patch_offline
 
@@ -168,8 +169,8 @@ def _run_scenario() -> int:
         Polled until STABLE (two identical consecutive reads), and re-captured
         immediately before every click: the search page builds sections
         asynchronously and the reveal animates, so a row's y from a moment
-        ago can be stale by the time a click lands (the cause of the
-        full-suite-only step-3 misses this harness used to produce), and a
+        ago can be stale by the time a click lands (the cause of
+        full-suite-only step-3 misses), and a
         row that merely EXISTS may still be sliding to its resting place.
         """
         prev = ""

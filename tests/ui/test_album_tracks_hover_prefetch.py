@@ -1,12 +1,12 @@
 """An album row's tracks are fetched on hover, so the expand opens on them.
 
-THE BUG WE ARE FENCING OFF
---------------------------
-Clicking an album row in search results expanded the panel first and
-fetched its tracks second, so the rows popped in visibly after the panel
-had already opened. The hover prefetch that warms playlist, mix and album
-PAGES did not cover the inline expand: that path has its own cache and its
-own fetch (loadAlbumTracks).
+WHAT THIS FENCES OFF
+--------------------
+Clicking an album row in search results must not expand the panel first and
+fetch its tracks second, which pops the rows in visibly after the panel has
+already opened. The hover prefetch that warms playlist, mix and album PAGES
+does not cover the inline expand: that path has its own cache and its own
+fetch (loadAlbumTracks).
 
 HOW THIS STAYS FIXED
 --------------------
@@ -23,7 +23,7 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.waves_ui import backend
+from waves.desktop import backend
 
 
 class _DeferredPool:

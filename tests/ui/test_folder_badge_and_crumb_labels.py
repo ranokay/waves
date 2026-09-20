@@ -105,8 +105,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -142,7 +142,7 @@ def _run_scenario() -> int:
         print(msg, file=sys.stderr)
         return EXIT_REGRESSED
 
-    # My Music renders one group per live source (issue #259): seed the
+    # My Music renders one group per live source: seed the
     # session the real sign-in would flip, then drive TIDAL's own group.
     make_tidal_my_music_source(root, q, settle, bridge)
     root.setProperty("libraryOpen", True)

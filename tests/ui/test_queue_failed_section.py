@@ -2,17 +2,17 @@
 
 WHAT THIS FENCES OFF
 --------------------
-Issue #18: failed downloads used to sit lost inside the Downloading group and
-"Clear finished" swept them away, so a failure was easy to miss and, once
-cleared, impossible to retry without restarting. The drawer now partitions
-rows into [Completed, Failed, Downloading, Queued], the Failed section header
+A failed download must not sit lost inside the Downloading group where
+"Clear finished" sweeps it away: that makes a failure easy to miss and, once
+cleared, impossible to retry without restarting. The drawer partitions rows
+into [Completed, Failed, Downloading, Queued], the Failed section header
 carries a RETRY ALL control driven by root.failedCount, and a retried row
 leaves the section the moment its status changes.
 
-Issue #27 added a Stopped section for the rows STOP ends (status
-``cancelled``), between Failed and Downloading, with its own RETRY ALL and
-CLEAR driven by root.stoppedCount: a stop is not an error, so it never shares
-Failed's red header, and a failure is never lost among stopped rows.
+A Stopped section holds the rows STOP ends (status ``cancelled``), between
+Failed and Downloading, with its own RETRY ALL and CLEAR driven by
+root.stoppedCount: a stop is not an error, so it never shares Failed's red
+header, and a failure is never lost among stopped rows.
 
 The scenario drives root.reconcileQueue() with hand-built rows (the same
 payload shape the bridge emits) and asserts on the model's uiGroup order and
@@ -66,8 +66,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

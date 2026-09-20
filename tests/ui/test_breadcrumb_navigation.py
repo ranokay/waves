@@ -13,7 +13,7 @@ trail. Four behaviours make that trail livable and must not regress:
 2. TRIM-ON-REVISIT: arriving at a SECTION ROOT (Search, My Music, Browse
    home, Settings) already in the history cuts the history back to just
    before it. Without this, flipping between two tabs stacks Search >
-   My Music > Search > ... twenty deep (reported from livetesting) and
+   My Music > Search > ... twenty deep, and
    every crumb and Back press replays the oscillation. Deep pages are NOT
    trimmed (test_folder_back_navigation covers why).
 3. The trim may only discard section roots. Anything real in the way (an
@@ -87,8 +87,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -174,8 +174,8 @@ def _run_scenario() -> int:
     )
 
     # 3. NAMED FROM THE FIRST FRAME: a keyed browse page's crumb must never
-    #    flash the "Browse" fallback and then swap in the real title (reported
-    #    from livetesting). Opening with the clicked card's title at hand names
+    #    flash the "Browse" fallback and then swap in the real title.
+    #    Opening with the clicked card's title at hand names
     #    the crumb immediately; a hint-less open HOLDS the crumb back until the
     #    payload arrives with the name.
     q("openAlbumPage('9001', '', 'First Album')")
@@ -227,11 +227,11 @@ def _run_scenario() -> int:
     settle()
     crossed = q("navOrigin") == "search" and not bool(q("browseOpen")) and q("navHistory.length") == 0
 
-    # 5. THE TRIM MAY ONLY EAT SECTION ROOTS. The report's repro: Browse
-    #    landing, open an artist, click Search, click Browse. The Browse press
-    #    lands on the landing, which is already crumb 0, and the trim used to
-    #    slice the history to nothing, taking the artist page and the search
-    #    with it (unreachable by Back, by Forward and from the trail).
+    # 5. THE TRIM MAY ONLY EAT SECTION ROOTS: Browse landing, open an artist,
+    #    click Search, click Browse. The Browse press lands on the landing,
+    #    which is already crumb 0, and slicing the history to nothing there
+    #    takes the artist page and the search with it (unreachable by Back,
+    #    by Forward and from the trail).
     q("openBrowse()")
     settle()
     q(

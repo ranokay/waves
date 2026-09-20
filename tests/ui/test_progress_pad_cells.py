@@ -5,19 +5,17 @@ WHAT THIS FENCES OFF
 The Browse card's running face runs its dot matrix to the button outline and
 fades the outer cells to zero (26px at the ends, 8px top and bottom), so the
 field sits in a soft frame. The bar fills column-major from the bottom left,
-which put the first several percent of every run entirely inside that dead
-zone: on a 56-track playlist at 9 tracks the pill read as an empty bar
-(livetest report, 2026-08-17). The fade was meant to soften the ends, not to
-mask the progress.
+which puts the first several percent of every run entirely inside that dead
+zone: on a 56-track playlist at 9 tracks the pill reads as an empty bar. The
+fade is meant to soften the ends, not to mask the progress.
 
-The fix keeps the fade and the geometry verbatim and makes the outermost
-cells PADS (progress pill lab round 7, design V): the two outer columns at
-either end draw as field but take no part in the fill, so the fade spends
-itself on cells that carry no progress and the first real block lights two
-columns in, where the fade is at 36% (the next at 60%). Rows are NOT padded
-and no more columns are: four pad columns plus pad rows (design Q) shipped and
-was reverted the same day because the fill visibly started several blocks in
-from the start of the bar. A pad mirrors its nearest real neighbour, so a full
+The fade and the geometry stay verbatim, with the outermost cells as PADS
+(design V): the two outer columns at either end draw as field but take no
+part in the fill, so the fade spends itself on cells that carry no progress
+and the first real block lights two columns in, where the fade is at 36% (the
+next at 60%). Rows are NOT padded and no more columns are: four pad columns
+plus pad rows pushes the fill several blocks in from the start of the bar. A
+pad mirrors its nearest real neighbour, so a full
 bar's ends still light and fade exactly as before, and a pad never carries the
 pulse.
 
@@ -64,7 +62,7 @@ def test_only_the_download_face_pads_its_edges():
     assert "readonly property int fillTotal: fillRows * fillCols" in dm, "the fill must be sized by the pad-free area"
     assert re.search(r"litCount:.*\* fillTotal\)", dm), "litCount must count over fillTotal, not the whole grid"
     assert "pulsing: !pad &&" in dm, "a pad must never carry the pulse"
-    # The download face lives in DownloadButton.qml since #315; the one-site
+    # The download face lives in DownloadButton.qml; the one-site
     # rule spans the tree, so count both files.
     both = db + QML_MAIN.read_text()
     assert both.count("padCols: 2") == 1 and both.count("mirrorPads: true") == 1, (
@@ -175,8 +173,8 @@ def _run_pad_scenario() -> int:
         failures.append(f"  at 1% the first lit real cell is at {real_lit[:1]}, expected column 2 (past two pads)")
     # Column 2 sits at 36% of the end fade; the bottom row (where the fill
     # starts) is at 13% of the top/bottom fade, so read the column's best
-    # cell: it must be past the dead zone (the shipped-before column 0 was
-    # at 0.04) and the fill must reach the bottom row (no pad rows).
+    # cell: it must be past the dead zone (the fade at column 0 is 0.04) and
+    # the fill must reach the bottom row (no pad rows).
     bottom = s["rows"] - 1
     if real_lit and max(by[k][4] for k in real_lit) < 0.3:
         failures.append(

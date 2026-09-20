@@ -1,15 +1,15 @@
 """Signing out ends the downloads first, on the session that started them.
 
 Every job is handed to the download pool at the moment it is queued, and the
-signed-in check sits at that moment, never inside the running job. So signing
-out used to leave the whole backlog running against the account being signed
-out of: it failed one item at a time, for as long as the queue was, which is
-exactly what someone switching to a second account is trying to escape
-(issue #30).
+signed-in check sits at that moment, never inside the running job. Signing
+out must therefore abort the queue itself, not wait for the account to reject
+items one at a time: a backlog left running fails one item at a time, for as
+long as the queue is, which is exactly what someone switching to a second
+account is trying to escape.
 
 The stop is the STOP button's own, so nothing is lost: the rows stay, marked
 stopped, and RETRY ALL picks them up on whichever account signs in next (the
-Stopped section, issue #27). What this pins is the order. The session object is
+Stopped section). What this pins is the order. The session object is
 destroyed a few lines later, so the aborts have to be set before it goes.
 """
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 def _bridge(tmp_path) -> MagicMock:

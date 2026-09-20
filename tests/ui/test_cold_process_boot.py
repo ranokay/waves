@@ -1,12 +1,12 @@
-"""A cold app launch boots, persists and rehydrates (issue #247, audit TT-03).
+"""A cold app launch boots, persists and rehydrates through the real entry point.
 
 WHAT THIS FENCES OFF
 --------------------
 Every other boot test builds the bridge in-process and, at best, reloads the
 QML over the same objects, so the state that only the real entry point touches
 -- the first-run defaults, the settings/migration load, the window-frame
-restore, the quit flush -- had no regression guard: a change that broke a true
-restart stayed green.
+restore, the quit flush -- is fenced here: a change that breaks a true restart
+cannot stay green.
 
 The child runs the packaged entry point (``waves.py``) offscreen against an
 isolated XDG config, asks it to quit after its boot (``WAVES_QUIT_AFTER_BOOT_MS``,

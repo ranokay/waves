@@ -1,14 +1,13 @@
 """An existing library keeps its folder and file names.
 
-0.1.17 stopped leaving a doubled space where an illegal character was
-stripped (issue #15), which changes the name a download computes. Anything
-already on disk must keep the name it has: the alternative is an album that
-looks missing, downloads again, and leaves the user owning two folders for
-one album.
+An illegal character in a name is stripped without leaving a doubled space,
+which changes the name a download computes. Anything already on disk must keep
+the name it has: the alternative is an album that looks missing, downloads
+again, and leaves the user owning two folders for one album.
 
-So the old spelling wins wherever it already exists, decided separately for
-the folder and the file, and the tidy spelling applies only where nothing is
-there yet.
+So an existing spelling wins wherever it already exists, decided separately
+for the folder and the file, and the tidy spelling applies only where nothing
+is there yet.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from unittest.mock import MagicMock
 
 from waves.download import Download
 
-_LEGACY_DIR = "The Better Life  Dead Love"  # doubled space, pre-0.1.17
+_LEGACY_DIR = "The Better Life  Dead Love"  # the raw-strip spelling: doubled space
 _TIDY_DIR = "The Better Life Dead Love"
 
 

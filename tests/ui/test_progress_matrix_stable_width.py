@@ -4,19 +4,19 @@ WHAT THIS FENCES OFF
 --------------------
 The download button draws ``[dot matrix][NN%]``: the matrix is anchored to the
 left edge of the percentage Text, so the Text's width IS the matrix's right
-edge. That Text was unbounded, so every digit the readout gained (…→ 5%, 9% →
-10%, 99% → 100%) narrowed the matrix beside it.
+edge. An unbounded Text narrows the matrix beside it with every digit the
+readout gains (…→ 5%, 9% → 10%, 99% → 100%).
 
 DotMatrix answers a width change by holding its old column count for 300ms (its
 ``_settledWidth``, which exists so dragging the queue drawer's edge doesn't
-rebuild every dot per mouse move). For those 300ms the matrix laid its last
-columns out past its own new width, so a download visibly LOST its last two
-columns of dots exactly as it reached 100%, then popped them back when the
-settle timer fired. Measured on a 25fps screen capture: the lit dot area fell
+rebuild every dot per mouse move). For those 300ms the matrix lays its last
+columns out past its own new width, so a download visibly LOSES its last two
+columns of dots exactly as it reaches 100%, then pops them back when the
+settle timer fires. Measured on a 25fps screen capture: the lit dot area falls
 from 4189px to 3901px for ten frames at the finish.
 
-The fix is to reserve the readout's widest value ("100%") so the matrix never
-resizes mid-run at all.
+Reserving the readout's widest value ("100%") keeps the matrix from resizing
+mid-run at all.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -36,11 +36,11 @@ THE START-UP TWIN (the Browse card scenario)
 --------------------------------------------
 On a Browse card the same button widens from its queued face to the full
 strip the moment the run starts, and its matrix is built by a Loader in that
-same cascade, while the button is still the narrow width. DotMatrix used to
-latch its settled width in Component.onCompleted, i.e. mid-cascade, so the
-bar opened two columns too wide for the settle interval and then shed them
-(a livetest report: "an extra set of blocks that quickly disappear"). The
-settle binding now rides through the creating turn. The card scenario reads
+same cascade, while the button is still the narrow width. A DotMatrix that
+latches its settled width in Component.onCompleted, i.e. mid-cascade, opens
+the bar two columns too wide for the settle interval and then sheds them
+("an extra set of blocks that quickly disappear"). The settle binding rides
+through the creating turn instead. The card scenario reads
 the matrix 60ms into the run, inside the settle, and requires its columns
 to fit from the first frame.
 
@@ -64,13 +64,12 @@ from support.qml import (
     seed_tidal_search,
 )
 
-# The steps that used to resize the bar: the first real percent (the "…"
-# placeholder is one character), the 9 -> 10 boundary, and the 99 -> 100 one
-# the capture caught.
+# The steps that resize the bar: the first real percent (the "…"
+# placeholder is one character), the 9 -> 10 boundary, and the 99 -> 100 one.
 _STEPS = (5, 9, 10, 42, 99, 100)
 
-# Read between steps, well inside DotMatrix's 300ms settle: waiting it out is
-# exactly what hid the bug from everyone who looked at a still.
+# Read between steps, well inside DotMatrix's 300ms settle: waiting it out
+# hides the defect from anyone reading a still.
 _STEP_SETTLE_MS = 60
 
 

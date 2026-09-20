@@ -1,24 +1,20 @@
-"""Regression guard: the collection-download loop must terminate.
+"""The collection-download loop must terminate.
 
-THE BUG
--------
-``Download._execute_collection_downloads`` used ``while not progress.finished:``
-and re-submitted every item in the collection on each pass. ``progress`` is the
-shared rich ``Progress`` bar, and ``rich.Progress.finished`` is
-``all(task.finished)`` over EVERY task on it, including the one task
-``_setup_progress`` adds per track. A track task is snapped complete only on
-success, so a single failed track left the whole item list being re-submitted
-forever: the album never finished, the queue row stayed "running", and with
-skip_existing off every sibling track was re-downloaded and rewritten on every
-pass, without bound. Only Cancel escaped.
+``Download._execute_collection_downloads`` cannot loop on the shared rich
+``Progress`` bar: ``rich.Progress.finished`` is ``all(task.finished)`` over
+EVERY task on it, including the one task ``_setup_progress`` adds per track. A
+track task is snapped complete only on success, so a single failed track leaves
+the whole item list being re-submitted forever: the album never finishes, the
+queue row stays "running", and with skip_existing off every sibling track is
+re-downloaded and rewritten on every pass, without bound. Only Cancel escapes.
 
 The spin is specific to the single-URL (BTS) branch, which is the default
 quality: multi-segment tracks advance their task even on failure, so they reach
 completed >= total regardless.
 
-THE FIX gates the loop on THIS collection's own progress task, which
+The loop is gated on THIS collection's own progress task, which
 ``_process_download_futures`` advances once per completed item, so the pass runs
-exactly once. This is the collection-level twin of the segment-level spin already
+exactly once. This is the collection-level twin of the segment-level spin
 fenced by ``test_download_segment_loop.py``.
 """
 
@@ -110,7 +106,7 @@ def test_a_fully_successful_collection_still_runs_once():
 
 
 def test_an_empty_collection_completes_its_task():
-    """The empty-list early return is untouched by the fix."""
+    """The empty-list early return still completes its task."""
     b, progress, progress_task = _bridge(0)
     b.item = MagicMock(side_effect=AssertionError("must not download anything"))
 

@@ -59,7 +59,7 @@ to move onto the rule is recorded under Consequences.
 ## Consequences
 
 - The Saved view reads the scan's per-file item id and exposes it on the
-  track row (#222): `waves/library_index.py` stores the value the download
+  track row (#222): `waves/library/index.py` stores the value the download
   gate wrote (generic tag first, the legacy TIDAL id as fallback), and the
   provider badge is that id's namespace, so the ownership store keeps its
   existing role.

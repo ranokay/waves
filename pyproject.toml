@@ -1,7 +1,7 @@
 [project]
 name = "waves"
 authors = [{ name = "iamprivacy" }]
-# Kept equal to waves.waves_ui.__version__, which is the version the app and
+# Kept equal to waves.desktop.__version__, which is the version the app and
 # the updater actually report; tests/packaging/test_package_version.py fails the build if
 # the two drift. Bump both in the same commit that cuts a release.
 version = "0.1.30"
@@ -44,7 +44,7 @@ documentation = "https://getwaves.dev"
 [project.optional-dependencies]
 # Exact pin. PySide6 6.10.0 through 6.11.1 ship macOS binding libraries built
 # for macOS 15 despite their macosx_13_0 wheel tag, so on macOS this version
-# really requires Sequoia (dyld kills the app on anything older, issue #14).
+# really requires Sequoia (dyld kills the app on anything older).
 # The release handles that with two macOS flavors: the regular build uses this
 # pin (floor 15.0), and CI's legacy macOS legs overlay pyside6==6.9.3 (the
 # newest release whose binaries honor their macOS 12 wheel tag) on top of the
@@ -99,7 +99,7 @@ error-on-warning = false
 
 # Downgraded, with reasons. All three stay visible as warnings, like ty's own
 # default-warn rules (redundant-condition, deprecated); error-level categories
-# fail the gate. Burn-down is tracked in issue #319, retargeted to ty.
+# fail the gate. Warnings are the burn-down ledger, not a pass.
 # - unresolved-attribute: catalog/engine objects cross the provider seam as
 #   plain objects by design (the row-dict contract), and the cooperative
 #   library mixin's methods resolve `self` to the mixin, so its Qt members
@@ -283,7 +283,7 @@ ignore = [
 # machine over each folder's probe result (unchanged / relist / transient error /
 # vanished / root offline); the branching is the point and the function was kept
 # whole so it reads (and was reviewed) as one flow, so exempt mccabe (C901).
-"waves/library_index.py" = ["C901"]
+"waves/library/index.py" = ["C901"]
 # Same subprocess-isolation + linear-scenario shape as the scroll guard.
 "tests/ui/test_gates_sit_above_drawers.py" = ["S603", "C901"]
 "tests/ui/test_qml_loads.py" = ["S603", "C901"]
@@ -327,28 +327,28 @@ ignore = [
 "tests/ui/test_offscreen_qt_is_usable.py" = ["S603"]
 # Runs the bundle size report for real, on a root wide enough to fill the pipe
 # buffer, through the shell it is written for (S603/S607, fixed argv).
-"tests/packaging/test_final_audit_updater.py" = ["S603", "S607"]
+"tests/packaging/test_updater_backup_keep.py" = ["S603", "S607"]
 # Drives the real release.sh (bash) and git against throwaway sandbox repos;
 # both are resolved from PATH on purpose (S603/S607, fixed argv).
 "tests/packaging/test_release_star_history.py" = ["S603", "S607"]
 # The Waves bridge has several inherently branchy but linear functions (the
 # settings-schema builder, the settings dispatcher and the search/discography
 # orchestration) that trip mccabe (C901) without being genuinely complex.
-"waves/waves_ui/backend.py" = ["C901"]
+"waves/desktop/backend.py" = ["C901"]
 # The ffmpeg manager's job is to download and run a static ffmpeg build, so it
 # intentionally shells out (S603/S607); install() is one linear sequence (C901);
 # and its raised errors carry deliberately descriptive messages (TRY003).
-"waves/waves_ui/ffmpeg_manager.py" = ["S603", "S607", "C901", "TRY003"]
-# Same shape for the managed Apple runtime (issue #31): it downloads and runs
+"waves/desktop/ffmpeg_manager.py" = ["S603", "S607", "C901", "TRY003"]
+# Same shape for the managed Apple runtime : it downloads and runs
 # the N_m3u8DL-RE binary and probes the container runtime (S603/S607), its
 # install is one linear sequence (C901), and its errors carry deliberately
 # descriptive messages (TRY003).
 "waves/providers/apple/runtime.py" = ["S603", "S607", "C901", "TRY003"]
-# Session supervision (issue #33): it starts/stops the wrapper sidecar via the
+# Session supervision : it starts/stops the wrapper sidecar via the
 # container runtime and probes its health endpoint (S603/S607), and its
 # helpers carry deliberately descriptive messages (TRY003).
 "waves/providers/apple/supervision.py" = ["S603", "S607", "TRY003"]
-# The Apple job runner owns the orchestration the bridge used to hold: the
+# The Apple job runner owns the orchestration: the
 # per-track delivery and the job settlement are deliberately linear sequences
 # (C901), and their raised messages are the queue row's own user-facing words
 # (TRY003), same rationale as the bridge itself.
@@ -356,7 +356,7 @@ ignore = [
 # The updater downloads and swaps a packaged build, so it intentionally shells
 # out (S603/S607) for the platform swap/relaunch; install()/_apply are linear
 # sequences (C901); and its errors carry deliberately descriptive messages (TRY003).
-"waves/waves_ui/updater.py" = ["S603", "S606", "S607", "C901", "TRY003"]
+"waves/desktop/updater.py" = ["S603", "S606", "S607", "C901", "TRY003"]
 # download.py is upstream Tidaler code (kept as-is apart from the keep_album flag);
 # its downsample/transcode raises carry deliberately descriptive messages (TRY003),
 # same rationale as ffmpeg_manager/updater above.
@@ -364,4 +364,4 @@ ignore = [
 # The untrusted-listing recovery mounts a share a second time to read the names
 # the first mount will not list, so it intentionally shells out to the system's
 # own mount and umount binaries (S603, fixed argv, no shell).
-"waves/waves_ui/smb_relist.py" = ["S603"]
+"waves/library/smb_relist.py" = ["S603"]

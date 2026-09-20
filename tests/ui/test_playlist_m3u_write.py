@@ -2,13 +2,14 @@
 
 Every track, cover and lyric reaches the library through _move_file, which
 stages a hidden temp sibling and swaps it into place, so an interrupted write
-can only ever leave a throwaway file behind. The m3u opened the real name in
-truncating mode instead: a crash, a full disk or a dropped share mid-write left
-the user with an emptied or half-written playlist where a complete one had been.
+can only ever leave a throwaway file behind. The m3u must stage the same way:
+opening the real name in truncating mode would leave a crash, a full disk or a
+dropped share mid-write with an emptied or half-written playlist where a
+complete one had been.
 
-Its name also skipped the illegal-character stand-ins that every other name in
-the library goes through, so a playlist called "?" lost its name entirely while
-an album called "?" kept one (issue #16).
+Its name also goes through the same illegal-character stand-ins as every other
+name in the library, so a playlist called "?" keeps a name just as an album
+called "?" does.
 """
 
 import contextlib
@@ -104,8 +105,8 @@ def _writes_failing():
 
 class TestTheM3uNameFollowsTheStandIns:
     def test_a_playlist_named_only_of_rejected_characters_keeps_a_name(self, tmp_path):
-        # The same shape as issue #16's album "?": with a stand-in configured,
-        # the name survives instead of emptying out to the bare prefix.
+        # The same shape as the album "?": with a stand-in configured, the
+        # name survives instead of emptying out to the bare prefix.
         dl = _make_download(tmp_path, illegal_map={"?": "？"})
         directory = _album_dir(tmp_path)
 

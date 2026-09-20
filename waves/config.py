@@ -9,8 +9,8 @@ import time
 from collections.abc import Callable
 from json import JSONDecodeError
 from pathlib import Path
-from threading import Event, Lock
-from typing import Any
+from threading import Lock
+from typing import Any, ClassVar
 
 import tidalapi
 from requests.adapters import HTTPAdapter, Retry
@@ -23,12 +23,28 @@ from waves.constants import (
     QualityTier,
     tier_from_word,
 )
-from waves.helper.decorator import SingletonMeta
-from waves.helper.path import path_config_base, path_file_settings, path_file_token
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.cfg import Token as ModelToken
+from waves.paths import path_config_base, path_file_settings, path_file_token
 
 logger = logging.getLogger("waves.config")
+
+
+class SingletonMeta(type):
+    """Process-wide singleton metaclass for the settings owners.
+
+    ``Settings`` and ``Tidal`` must resolve to one object for
+    the whole process, however many modules import them. The instance registry
+    is deliberately public: tests pop entries to simulate a fresh install.
+    """
+
+    _instances: ClassVar[dict] = {}
+
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super().__call__(*args, **kwargs)
+        return cls._instances[cls]
+
 
 # The Atmos session pins the shared session to this one tier: TIDAL serves
 # Atmos only through a fixed request tier, whatever the audio quality settings
@@ -914,11 +930,3 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
         """
         error_msg = str(error)
         return "401" in error_msg or "OAuth" in error_msg or "token" in error_msg.lower()
-
-
-class HandlingApp(metaclass=SingletonMeta):
-    event_abort: Event = Event()
-    event_run: Event = Event()
-
-    def __init__(self):
-        self.event_run.set()

@@ -1,19 +1,19 @@
 """An album named "." gets a folder, and only a name that is nothing but dots
 is touched.
 
-Kesha has an album whose title is a single period. Nothing in Waves removed it:
-it survived every sanitizer intact and then evaporated in the join that builds
+Kesha has an album whose title is a single period. Nothing in Waves removes it:
+it survives every sanitizer intact and then evaporates in the join that builds
 the destination, because "." is what every platform calls "this folder". The
-album had no folder at all and its tracks landed loose in the artist folder,
-mixed in with everything else that ever landed there (issue #29).
+album gets no folder at all and its tracks land loose in the artist folder,
+mixed in with everything else that ever landed there.
 
-``_no_traversal`` (helper.path) was written for exactly "." and "..", but it
+``_no_traversal`` (helper.path) covers exactly "." and "..", but it
 runs over ``Path.parent.parts`` and pathlib has already swallowed the "." by
 the time it looks. It still catches "..", which pathlib keeps. So the naming of
 a dots-only segment has to happen on the string, before any Path is built,
 which is where ``_drop_empty_segments`` sits.
 
-The reporter's rule, pinned below: ONLY a segment that is entirely "." (or
+The rule, pinned below: ONLY a segment that is entirely "." (or
 "..") is renamed. ". (Deluxe)", "Album." and "(...) ." keep whatever the
 ordinary sanitizer makes of them.
 """
@@ -27,7 +27,7 @@ from types import SimpleNamespace
 from tidalapi import Album, Track
 
 from waves.constants import DOT_SEGMENT_STANDIN
-from waves.helper.path import format_path_media, path_file_sanitize
+from waves.paths import format_path_media, path_file_sanitize
 
 _ARTIST = "Kesha"
 _TEMPLATE = "{album_artist}/{album_title}/{album_track_num}. {track_title}"
@@ -71,7 +71,7 @@ class TestTheAlbumGetsAFolder:
 
     def test_the_old_spelling_really_did_lose_the_folder(self):
         # Pins the mechanism rather than trusting the description of it: an
-        # unnamed "." collapses, which is what the fix above prevents.
+        # unnamed "." collapses, which is the hole the naming rule closes.
         assert (pathlib.Path("/base") / f"{_ARTIST}/./1. Song.flac").parent == pathlib.Path("/base") / _ARTIST
 
     def test_every_level_a_template_can_name_is_covered(self):
@@ -104,7 +104,7 @@ class TestTraversalStaysShut:
 
     def test_the_second_net_still_stands(self):
         # _no_traversal keeps catching a ".." that reaches path_file_sanitize by
-        # any other route; the fix above does not replace it.
+        # any other route; the naming rule does not replace it.
         sanitized = path_file_sanitize(pathlib.Path("/base") / _ARTIST / ".." / "1. Song.flac")
 
         assert ".." not in sanitized.parts

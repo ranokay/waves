@@ -12,11 +12,11 @@ from types import SimpleNamespace
 import pytest
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
-from waves.helper.exceptions import DownloadIncomplete
+from waves.desktop.backend import WavesBridge
+from waves.errors import DownloadIncomplete
 from waves.providers import AppleCollectionIncomplete
 from waves.providers.apple import runner
 from waves.providers.base import AudioType
-from waves.waves_ui.backend import WavesBridge
 
 
 def _ffmpeg() -> str:
@@ -651,8 +651,8 @@ def test_both_default_fetches_atmos_and_reports_it(tmp_path, monkeypatch):
 def test_the_atmos_row_is_not_skipped_by_the_stereo_file(tmp_path, monkeypatch):
     """A blank format_atmos aims both Versions at one name, so the stereo row
     runs first and its file sits at the Atmos row's destination. The Atmos
-    skip must ask the occupant's on-disk Version (AP-04): it fetches, lands as
-    the numbered copy beside the stereo file, and leaves that file alone."""
+    skip must ask the occupant's on-disk Version: it fetches, lands as the
+    numbered copy beside the stereo file, and leaves that file alone."""
     from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
@@ -1349,11 +1349,11 @@ def test_expired_session_stops_cleanly_when_the_wait_is_aborted(tmp_path, monkey
 
 @pytest.mark.ffmpeg
 def test_a_cookies_broken_job_ends_with_the_cookies_words_while_the_wrapper_is_signed_in(tmp_path, monkeypatch):
-    """AP-01: the fetch needs cookies, the wrapper guest is signed in, and the
-    export never changes. The old hold read the wrapper probe as recovery, so
-    the identical failing fetch re-ran forever; now the hold watches the
-    cookies export alone and past its bound the run ends with the cookies
-    setup words (the row is retryable once the export is replaced)."""
+    """The fetch needs cookies, the wrapper guest is signed in, and the export
+    never changes. Reading the wrapper probe as recovery would re-run the
+    identical failing fetch forever; the hold watches the cookies export alone,
+    and past its bound the run ends with the cookies setup words (the row is
+    retryable once the export is replaced)."""
     from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
 
     provider = _FakeProvider()
@@ -1464,10 +1464,10 @@ def test_a_wrapper_credential_recovers_when_the_guest_signs_back_in(tmp_path, mo
 @pytest.mark.ffmpeg
 def test_a_credential_that_keeps_reading_recovered_ends_at_setup(tmp_path, monkeypatch):
     """The wait's poll bound covers a credential that never changes; this caps
-    the other shape (R-15's "N immediate re-failures"): the probe keeps saying
-    the guest is back and the fetch keeps failing, so every hold reads as
-    recovery and the track would retry forever. After the hold cap the run
-    ends with the credential's setup words."""
+    the other shape, "N immediate re-failures": the probe keeps saying the
+    guest is back and the fetch keeps failing, so every hold reads as recovery
+    and the track would retry forever. After the hold cap the run ends with
+    the credential's setup words."""
     from waves.providers.apple.engine import AppleCredential, AppleCredentialsError
 
     provider = _FakeProvider()

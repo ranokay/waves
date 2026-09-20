@@ -1,11 +1,11 @@
-"""Issue #39: the search field sends the words it shows, and says when a
-search found nothing.
+"""The search field sends the words it shows, and says when a search found
+nothing.
 
 A pasted title with a line break reads as one line in the single-line field,
-but the break used to reach the bridge untouched. Pressing Enter now rewrites
-the field to the collapsed query and sends that; the paste decoder collapses
-the same way. A search that answers with nothing replaces the "begin" hint
-with "No results for ..." so it no longer looks like nothing happened.
+and the break must not reach the bridge: pressing Enter rewrites the field to
+the collapsed query and sends that, and the paste decoder collapses the same
+way. A search that answers with nothing replaces the "begin" hint with
+"No results for ..." so the page never looks untouched.
 
 Runs in a SUBPROCESS like the other Main.qml scenarios.
 """
@@ -55,8 +55,8 @@ def _run_scenario() -> int:
     try:
         from PySide6.QtCore import Slot
 
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

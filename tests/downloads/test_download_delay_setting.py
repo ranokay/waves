@@ -1,26 +1,21 @@
 """The "Download delay" setting actually reaches the engine.
 
-THE BUG
--------
 ``download_delay`` is a Waves setting: it appears in ``_FLAG_FIELDS``, on the
 Settings page under Downloads, and its two companion fields "Minimum/Maximum
-download delay (s)" were live. The flag itself was never read by anything in
-``waves/``.
+download delay (s)" are live. The engine takes it as a PARAMETER and relies on
+the caller to forward it, so a dispatch that passes nothing falls back to the
+engine's per-method default and the toggle goes inert:
 
-The engine takes it as a PARAMETER and relies on the caller to forward it.
-Waves forwarded nothing, so each dispatch fell back to a different default and
-the toggle was inert in both directions:
-
-  * a collection got ``items()``' default of True, so turning the delay OFF
-    still slept a random 3 to 5 seconds after every written track, roughly
-    27 seconds of pure sleep on a 20-track album;
-  * a single track got ``item()``' default of False, so turning the delay ON
-    never delayed anything;
-  * the "best of both" fan-out stands in for ``items()`` and forwarded nothing
-    either, so the setting was honored on a plain album and ignored on a merged
+  * a collection would get ``items()``' default of True, so turning the delay
+    OFF would still sleep a random 3 to 5 seconds after every written track,
+    roughly 27 seconds of pure sleep on a 20-track album;
+  * a single track would get ``item()``' default of False, so turning the delay
+    ON would never delay anything;
+  * the "best of both" fan-out stands in for ``items()``, so it must forward
+    the setting too, or it is honored on a plain album and ignored on a merged
     one.
 
-THE FIX forwards ``settings.data.download_delay`` at all three dispatch sites.
+All three dispatch sites forward ``settings.data.download_delay``.
 """
 
 from __future__ import annotations
@@ -31,9 +26,9 @@ from unittest.mock import patch
 
 from support.dispatch_stub import arm_dispatch
 
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 from waves.download import Download
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
 
 
 class _Signal:
@@ -116,8 +111,8 @@ class _Stub:
         # is all these tests are looking at.
         return False
 
-    # The per-item quality choice _download reads at queue time (issue #36):
-    # none here, so the ask is the setting's.
+    # The per-item quality choice _download reads at queue time: none here,
+    # so the ask is the setting's.
     def _ask_quality_for(self, obj, type_media, media_id):
         return ("LOSSLESS", "LOSSLESS")
 
@@ -250,9 +245,9 @@ def test_the_merge_fanout_forwards_the_delay_when_it_is_off():
 
 
 def test_every_engine_dispatch_forwards_the_delay():
-    """The audit guard. A new dispatch that forgets the argument silently gets
-    the engine's own default, which differs between item() and items(), so the
-    setting goes quietly inert again."""
+    """Every engine dispatch forwards the delay. One that forgets the argument
+    silently gets the engine's own default, which differs between item() and
+    items(), so the setting goes quietly inert on that path."""
     import inspect
     import re
 

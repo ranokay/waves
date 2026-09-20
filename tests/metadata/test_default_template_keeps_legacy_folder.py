@@ -35,13 +35,13 @@ from waves.download import Download
 from waves.model.cfg import Settings
 
 _ARTIST = "Bright Eyes"
-# A slash in the title. Removing it left a doubled space until 0.1.17 tidied it,
-# so a library from before then holds the doubled-space spelling (issue #15).
+# A slash in the title. Removing it leaves a doubled space (0.1.17 tidied it),
+# so a library from before then holds the doubled-space spelling.
 _ALBUM_TITLE = "The Better Life / Dead Love"
 _LEGACY_DIR = "[2011] The Better Life  Dead Love"
 _TIDY_DIR = "[2011] The Better Life Dead Love"
 _DEFAULT_ALBUM_TEMPLATE = Settings.format_album
-# The artist-token question, isolated from the provider segment (issue #65):
+# The artist-token question, isolated from the provider segment:
 # this template keeps the shipped shape minus the provider folder.
 _ALBUM_ARTIST_TEMPLATE = _DEFAULT_ALBUM_TEMPLATE.replace("{provider_name}/", "", 1).replace(
     "{artist_name}/", "{album_artist}/", 1
@@ -128,14 +128,14 @@ class TestTheShippedTemplateFindsTheOldFolder:
         # The premise, pinned so the tests below cannot quietly stop testing
         # anything: an album cannot answer {artist_name}, so the album-level
         # spelling is not a usable path on its own. The {provider_name}
-        # opening (issue #65) answers at every level; the artist segment
+        # opening answers at every level; the artist segment
         # behind it still needs the item probe.
         assert _DEFAULT_ALBUM_TEMPLATE.startswith("{provider_name}/{artist_name}/")
 
     def test_a_legacy_album_folder_keeps_receiving_downloads(self, tmp_path, monkeypatch):
         (tmp_path / _ARTIST / _LEGACY_DIR).mkdir(parents=True)
         # File evidence: the pre-split folder is one level shallower than the
-        # provider spelling, so (issue #16's rule) only a file already sitting
+        # provider spelling, so only a file already sitting
         # there counts, never the bare directory.
         (tmp_path / _ARTIST / _LEGACY_DIR / "01. Bright Eyes - One.flac").write_bytes(b"audio")
 
@@ -159,7 +159,7 @@ class TestTheShippedTemplateFindsTheOldFolder:
         )
 
     def test_an_artist_folder_alone_is_not_read_as_an_old_layout(self, tmp_path, monkeypatch):
-        # Issue #16: an ancestor exists as soon as anything by the artist was
+        # An ancestor exists as soon as anything by the artist was
         # ever saved, so it is no evidence of an older album spelling.
         (tmp_path / _ARTIST).mkdir()
 
@@ -255,7 +255,7 @@ class TestTheFolderTestReadsTheProbes:
         assert dl._keep_existing_collection_layout(tidy, legacy) == tidy
 
     def test_a_probe_folder_one_level_up_is_still_no_evidence(self, tmp_path):
-        # Issue #16 through the probes: a spelling that empties the album
+        # Through the probes: a spelling that empties the album
         # segment resolves to the artist folder, which exists as soon as
         # anything by that artist was saved.
         dl = _make_download(tmp_path, _DEFAULT_ALBUM_TEMPLATE)
@@ -285,7 +285,7 @@ class TestTheFolderTestReadsTheProbes:
 @pytest.mark.parametrize("template_name", ["format_album", "format_track"])
 def test_the_shipped_templates_open_with_provider_then_a_track_only_token(template_name):
     # The reason this defect reached the default settings at all. The
-    # {provider_name} opening (issue #65) answers at every level, but the
+    # {provider_name} opening answers at every level, but the
     # artist segment behind it is still a track-only token: if a future
     # default opened with an album-answerable token in second place instead,
     # the folder choice would no longer depend on the item probe.

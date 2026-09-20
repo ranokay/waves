@@ -19,7 +19,7 @@ else
   # bash 3.2 (macOS) has no mapfile; a read loop is the portable shape.
   while IFS= read -r f; do
     [ -n "$f" ] && FILES+=("$f")
-  done < <(find waves/waves_ui/qml -type f \( -name '*.qml' -o -name '*.js' \) | LC_ALL=C sort)
+  done < <(find waves/desktop/qml -type f \( -name '*.qml' -o -name '*.js' \) | LC_ALL=C sort)
 fi
 if [ "${#FILES[@]}" -eq 0 ]; then
   echo "qmllint: no QML files found" >&2

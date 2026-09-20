@@ -209,7 +209,7 @@ def _image_bytes(tmp_path, name: str, codec: str) -> bytes:
 
 
 def test_sniff_image_format_reads_magic_bytes():
-    from waves.metadata import sniff_image_format
+    from waves.metadata.tags import sniff_image_format
 
     assert sniff_image_format(PNG_MAGIC + b"rest") == "png"
     assert sniff_image_format(b"\xff\xd8\xff\xe0rest") == "jpg"
@@ -219,7 +219,7 @@ def test_sniff_image_format_reads_magic_bytes():
 
 @pytest.mark.ffmpeg
 def test_cover_sidecar_converts_to_the_selected_format(tmp_path):
-    from waves.metadata import sniff_image_format
+    from waves.metadata.tags import sniff_image_format
 
     jpeg = _image_bytes(tmp_path, "src.jpg", "mjpeg")
     png = _image_bytes(tmp_path, "src.png", "png")
@@ -273,7 +273,7 @@ def test_embedded_png_cover_keeps_its_true_format(tmp_path):
 def test_embed_cover_bytes_converts_png_for_the_tag(tmp_path):
     from types import SimpleNamespace
 
-    from waves.metadata import sniff_image_format
+    from waves.metadata.tags import sniff_image_format
     from waves.providers.apple import runner
 
     png = _image_bytes(tmp_path, "c.png", "png")

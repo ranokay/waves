@@ -4,7 +4,7 @@ THE COST THIS FENCES OFF
 ------------------------
 Tagging fetches the album cover per TRACK (metadata_write -> cover_data), so
 a 20-track album downloaded the identical JPEG 20 times over HTTPS. The
-engine now routes cover asks through ``cover_data_cached``, a per-Download
+engine routes cover asks through ``cover_data_cached``, a per-Download
 bounded LRU keyed by URL. Cover URLs are content-addressed (the requested
 size is part of the path) and the cache dies with the job (one Download
 instance = one queued item), so the always-on freshness rule holds: a cover

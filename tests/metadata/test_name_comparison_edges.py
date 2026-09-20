@@ -10,7 +10,7 @@ never reached the library.
 
 Names on disk are untouched by all of this: only the comparison is folded. What
 is written stays exactly what the template produced, or an existing library
-would be spelled one way and looked up another (which is issue #16's mechanism).
+would be spelled one way and looked up another, losing the folder.
 """
 
 import pathlib
@@ -22,7 +22,7 @@ import pytest
 from tidalapi.media import Track
 
 from waves.download import Download, StreamInfo
-from waves.helper.path import name_comparison_key, path_file_uniquify
+from waves.paths import name_comparison_key, path_file_uniquify
 
 
 def _case_insensitive(tmp_path: pathlib.Path) -> bool:

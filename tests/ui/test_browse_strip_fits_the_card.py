@@ -7,14 +7,14 @@ capped it against the card it rides on. The artwork clips, and the pill is
 centred, so a strip wider than the cover was cut off at BOTH ends: the pill
 lost its rounded corners and the words lost their first and last letters.
 
-It was never a corner case. Measured with the real UI font at the real 10px,
-on the ordinary 200px card the everyday DOWNLOAD and IN LIBRARY ran over by
-about 10px and DOWNLOADED by about 27, so every state but MAYBE and the
-partial count overflowed. Only the worst one was ever noticed.
+It is no corner case. With the real UI font at the real 10px, on the
+ordinary 200px card the everyday DOWNLOAD and IN LIBRARY run over by about
+10px and DOWNLOADED by about 27, so every state but MAYBE and the partial
+count overflows.
 
 The fence is the artwork itself: whatever the strip says, in whatever font the
 platform gives it, the pill must fit on the cover. That is the boundary that
-actually clips, and it holds the fix (the halves' padding gives way as the
+actually clips, and it holds the layout (the halves' padding gives way as the
 words grow) without restating its arithmetic, so a wider word, a wider font or
 a smaller card fails here rather than on someone's screen.
 
@@ -73,9 +73,9 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves import matching
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
+        from waves.metadata import matching
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

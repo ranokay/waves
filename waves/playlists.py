@@ -25,7 +25,7 @@ from waves.constants import (
     PLAYLIST_PREFIX,
     AudioExtensionsValid,
 )
-from waves.helper.path import (
+from waves.paths import (
     name_comparison_key,
     path_file_sanitize,
     sanitize_name_component,

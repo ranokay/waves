@@ -1,7 +1,7 @@
 # Windows and Linux enablement review
 
 - Status: review complete; Linux verified, Windows parked with the blocker
-  recorded (issue #205) and the recipe fix landed (issue #245), revalidation
+  recorded and the recipe exclusion landed, revalidation
   owed
 - Scope: what the Windows and Linux builds ship, how the platform-dependent
   code branches behave, and which claims are verified versus still open
@@ -54,7 +54,7 @@ and 3.13 plus the quality job). There is no Windows or macOS test leg.
 | Windows arm64, low-memory | `35019374456` | **failed**             | 3h11m; the C1002 heap failure persists on `lazy_extractors`; every other module compiled                                                                |
 
 Linux tests on develop are green in the same window (master run `34928309207`:
-quality, tox 3.12 and tox 3.13).
+quality, tests on Python 3.12, 3.13 and 3.14).
 
 Reading note: the workflow's `only` filter still creates every matrix job;
 legs the filter excludes finish "success" with every step skipped, so job
@@ -101,7 +101,7 @@ either leg cannot compile.
 Options assessed for the parked fix:
 
 - **Exclude `yt_dlp.extractor.lazy_extractors` with `--nofollow-import-to=…`
-  — adopted 2026-09-17 (issue #245).** yt-dlp catches the resulting
+  — adopted 2026-09-17.** yt-dlp catches the resulting
   `ImportError` and falls back to the eager extractor list. All 1,751
   extractors stay available (verified locally by blocking the import in the
   source tree, and again in a compiled Nuitka probe: all 1,751 classes);
@@ -122,7 +122,7 @@ Options assessed for the parked fix:
 Decision (2026-09-16): park Windows and record the blocker; Windows artifacts
 stay unpublished for now. The low-memory mode stays in place, because it is
 the prerequisite for any of the options and costs only build time, which the
-cache makes one-time. (2026-09-17: the exclusion above now ships in
+cache makes one-time. The exclusion above ships in
 `WAVES_NUITKA_FLAGS`, so no build compiles the module; the Windows legs still
 owe their own revalidation, see the VS 2026 note below.)
 
@@ -140,7 +140,7 @@ owe their own revalidation, see the VS 2026 note below.)
 5. **Windows bundle builds are blocked by the bundled engine's compile
    size.** yt-dlp's generated `lazy_extractors` module cannot be compiled by
    MSVC on hosted runners (stack overflow on x64, heap exhaustion on arm64),
-   even serially. The recipe now excludes that module (issue #245), so no
+   even serially. The recipe excludes that module, so no
    build compiles it; the Windows legs have not been re-run since, and Windows
    artifacts stay unpublished until they are. Windows arm64 runners migrate to
    Visual Studio 2026 on 2026-09-21, which may change the compiler's behavior;

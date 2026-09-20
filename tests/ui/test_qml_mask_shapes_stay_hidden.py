@@ -1,7 +1,7 @@
-"""Regression guard: an item used only as a mask SHAPE is never drawn.
+"""An item used only as a mask SHAPE is never drawn.
 
-THE BUG
--------
+WHAT THIS FENCES OFF
+--------------------
 Three places round off a layered effect by masking it with a plain white
 rounded rectangle: the track download button's LED fill (``diGridMask``), the
 preview ring (``paMask``) and the LED bar (``ledMask``). Each is handed to a
@@ -9,13 +9,11 @@ preview ring (``paMask``) and the LED bar (``ledMask``). Each is handed to a
 reads the item whether or not the scene draws it, so the mask itself must stay
 ``visible: false``.
 
-``diGridMask`` lost that line in 11ec500 (a boot-shield fix that flipped a
-neighbouring ``visible: false`` to ``visible: enabled`` as collateral). Since
-``enabled`` reads back the *effective* enabled state, which is true for every
-button a user can press, the white rectangle was painted edge to edge inside
-every enabled track download button: a white tile with a green arrow on it,
-instead of the dark themed chip beside it. It shipped that way in the re-cut
-v0.1.26 and was reported from a livetest.
+A mask gated on ``enabled`` instead paints: ``enabled`` reads back the
+*effective* enabled state, true for every button a user can press, so the
+white rectangle lands edge to edge inside every enabled track download button:
+a white tile with a green arrow on it, instead of the dark themed chip beside
+it.
 
 The rule is mechanical, which is what makes it worth pinning: a mask shape is
 geometry, not a thing on screen. If one ever does need to be drawn, it is not a

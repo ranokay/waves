@@ -1,11 +1,11 @@
-"""Unit tests for the album-presence matching core (waves.matching).
+"""Unit tests for the album-presence matching core (waves.metadata.matching).
 
 Pure-function tests: no network and no Qt runtime, imported straight from the
-headless brain rather than through the GUI bridge. These are the regression
-contract for the cross-catalog "do I already have this album?" check against
-the scanned local library. The whole design is biased against FALSE POSITIVES,
-so several cases assert a match is deliberately HIDDEN and would be a conscious
-change to loosen.
+headless brain rather than through the GUI bridge. These pin the contract for
+the cross-catalog "do I already have this album?" check against the scanned
+local library. The whole design is biased against FALSE POSITIVES, so several
+cases assert a match is deliberately HIDDEN and would be a conscious change to
+loosen.
 
 Two bars are under test and they are not the same. ``present`` lights the pill
 and is generous: being wrong there costs a badge. ``partial`` False is the claim
@@ -20,25 +20,25 @@ below: ``sure`` (identity, the badge's "?") and ``full`` (coverage, N OF M).
 
 import pytest
 
-from waves.matching import (
+from waves.metadata.matching import (
     canon as _canon,
 )
-from waves.matching import (
+from waves.metadata.matching import (
     decide_presence as _decide_presence,
 )
-from waves.matching import (
+from waves.metadata.matching import (
     disc_group as _disc_group,
 )
-from waves.matching import (
+from waves.metadata.matching import (
     edition_key as _edition_key,
 )
-from waves.matching import (
+from waves.metadata.matching import (
     presence_key as _presence_key,
 )
-from waves.matching import (
+from waves.metadata.matching import (
     same_edition as _same_edition,
 )
-from waves.matching import (
+from waves.metadata.matching import (
     strip_edition_quals_ext as _strip_edition_quals_ext,
 )
 
@@ -205,8 +205,9 @@ def test_different_albums_sharing_a_stripped_key_never_gate_each_other():
 
 
 def test_off_by_one_track_reads_partial():
-    # A copy short by exactly one track used to satisfy the gate (the bar was
-    # `>= tt - 1`), so an album missing its closer rendered as fully downloaded.
+    # A copy short by exactly one track must not satisfy the gate (the bar is
+    # `>= tt - 1`): an album missing its closer would render as fully
+    # downloaded.
     idx = _index(("Album", "Artist", "2019", 12, "rk"))
     r = _decide_presence("Album", "Artist", "2019", 13, idx)
     assert r["present"] and r["partial"] is True
@@ -247,8 +248,8 @@ def test_undated_local_folder_is_present_but_never_complete():
 
 
 # ---- the two independent axes: sure (identity) and full (coverage) ----------
-# ``partial`` conflated them once, and a 12-of-12 undated folder rendered as
-# "partially in library" (nothing partial about the copy, the match was merely
+# ``partial`` is not either axis on its own: a 12-of-12 undated folder is not
+# "partially in library" (nothing partial about the copy, the match is merely
 # unproven). ``sure`` answers "is this really the same album" (the badge's "?"),
 # ``full`` answers "does the copy hold every track" (N OF M); ``partial`` stays
 # the strict both-axes bar for the claim button and the bulk skip gate.
@@ -340,9 +341,10 @@ def test_kept_remaster_does_not_match_plain_album():
 # The scanner calls any directory that directly holds audio an album, so a
 # two-disc release indexes as two albums with half the tracks each and the pill
 # reads "9 OF 18" for a record the user owns in full. Adding the halves up is
-# the fix, and adding up the WRONG things is how a live Download button becomes
-# an inert one, so nothing is summed without an explicit disc marker in the
-# folder name. The refusals below matter more than the matches.
+# how the count is answered, and adding up the WRONG things is how a live
+# Download button becomes an inert one, so nothing is summed without an explicit
+# disc marker in the folder name. The refusals below matter more than the
+# matches.
 
 
 @pytest.mark.parametrize(
@@ -519,10 +521,10 @@ def _shaped(*entries):
 
 
 def test_a_copy_short_of_its_own_declared_count_is_not_complete():
-    # TIDAL's edition has 10 tracks and the folder holds 10 files, which used to
-    # be the whole test. But the files themselves say the release has 12, so two
-    # of what is on disk are something else (a bonus rip, a stray single) and
-    # the album is not all here. The button stays live.
+    # TIDAL's edition has 10 tracks and the folder holds 10 files, which
+    # cannot be the whole test: the files themselves say the release has 12, so
+    # two of what is on disk are something else (a bonus rip, a stray single)
+    # and the album is not all here. The button stays live.
     idx = _shaped(("Album", "A", "2019", 10, "/m/A/Album", {"declared": 12}))
     r = _decide_presence("Album", "A", "2019", 10, idx)
     assert r["present"] is True
@@ -530,9 +532,9 @@ def test_a_copy_short_of_its_own_declared_count_is_not_complete():
 
 
 def test_a_release_declaring_fewer_tracks_is_not_the_edition_on_screen():
-    # Title and year agree perfectly, so identity used to be proven. The local
-    # release says it holds 10 tracks and the one being viewed has 11: these are
-    # different releases, and the badge wears its "?" again.
+    # Title and year agree perfectly, so identity alone would be proven. The
+    # local release says it holds 10 tracks and the one being viewed has 11:
+    # these are different releases, and the badge wears its "?" again.
     idx = _shaped(("Album", "A", "2017", 10, "/m/A/Album", {"declared": 10}))
     r = _decide_presence("Album", "A", "2017", 11, idx)
     assert r["present"] is True
@@ -646,7 +648,7 @@ def test_a_joined_set_needs_every_disc_to_declare_its_count():
 def _tindex(*entries):
     """A track index from (title, artist, facts) triples, keyed like the bridge
     builds it."""
-    from waves.matching import track_key
+    from waves.metadata.matching import track_key
 
     idx: dict = {}
     for title, artist, facts in entries:
@@ -655,7 +657,7 @@ def _tindex(*entries):
 
 
 def test_track_present_on_exact_normalised_match():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Kill or Be Killed", "Muse", {"codec": "flac"}))
     got = decide_track_presence("Kill or Be Killed", "Muse", idx)
@@ -665,14 +667,14 @@ def test_track_present_on_exact_normalised_match():
 
 
 def test_track_curly_apostrophe_still_matches():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Don't Stop Me Now", "Queen", {}))
     assert decide_track_presence("Don’t Stop Me Now", "Queen", idx)["present"] is True
 
 
 def test_track_explicit_marker_folds_but_edition_does_not():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Song", "A", {}))
     # (Explicit) folds away, exactly as albums do.
@@ -683,14 +685,14 @@ def test_track_explicit_marker_folds_but_edition_does_not():
 
 
 def test_track_requires_the_artist_to_match():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Intro", "The xx", {}))
     assert decide_track_presence("Intro", "Alt-J", idx)["present"] is False
 
 
 def test_track_refuses_empty_and_various_artists():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Song", "Various Artists", {}), ("Song", "", {}))
     assert decide_track_presence("Song", "", idx)["present"] is False
@@ -698,13 +700,13 @@ def test_track_refuses_empty_and_various_artists():
 
 
 def test_track_empty_title_matches_nothing():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     assert decide_track_presence("", "A", _tindex(("", "A", {})))["present"] is False
 
 
 def test_track_best_quality_copy_wins():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(
         ("Song", "A", {"id": "/lib/lossy", "codec": "mp3", "bitrate": 128}),
@@ -716,7 +718,7 @@ def test_track_best_quality_copy_wins():
 
 
 def test_track_unbuilt_index_hides():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     assert decide_track_presence("Song", "A", {})["present"] is False
     assert decide_track_presence("Song", "A", None)["present"] is False
@@ -728,7 +730,7 @@ def test_non_numeric_quality_facts_cost_a_readout_not_a_crash():
     # in a quality field must degrade to an empty readout, never ValueError
     # inside a badge resolve (which the Worker wrapper would swallow, leaving
     # every badge silently blank).
-    from waves.matching import decide_presence, decide_track_presence
+    from waves.metadata.matching import decide_presence, decide_track_presence
 
     idx = _tindex(("Song", "A", {"codec": "mp3", "bitrate": "320kbps", "bits": "", "rate": None}))
     got = decide_track_presence("Song", "A", idx)
@@ -751,7 +753,7 @@ def test_non_numeric_quality_facts_cost_a_readout_not_a_crash():
 
 
 def test_track_inherits_its_folders_proof_when_the_caller_names_the_album():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Crawl", "Miss May I", {"codec": "flac", "album": "Shadows Inside", "album_year": "2017"}))
     assert decide_track_presence("Crawl", "Miss May I", idx, "Shadows Inside", "2017")["sure"] is True
@@ -761,7 +763,7 @@ def test_track_inherits_its_folders_proof_when_the_caller_names_the_album():
 def test_track_without_album_context_is_present_but_never_proven():
     # The two-argument callers (the bulk claim gate, any row that cannot name
     # its album) must keep the hedge: presence is still reported.
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Crawl", "Miss May I", {"codec": "flac", "album": "Shadows Inside", "album_year": "2017"}))
     got = decide_track_presence("Crawl", "Miss May I", idx)
@@ -770,7 +772,7 @@ def test_track_without_album_context_is_present_but_never_proven():
 
 
 def test_track_proof_refuses_a_disagreeing_year_or_edition():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Crawl", "Miss May I", {"codec": "flac", "album": "Shadows Inside", "album_year": "2017"}))
     assert decide_track_presence("Crawl", "Miss May I", idx, "Shadows Inside", "2011")["sure"] is False
@@ -790,7 +792,7 @@ def test_a_proven_copy_outranks_a_better_sounding_stranger():
     # pick the single (higher bitrate) and report the whole match unproven,
     # which is precisely backwards: the proven copy is the one the user means,
     # so identity picks the candidate and quality only breaks ties within it.
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(
         (
@@ -891,7 +893,7 @@ def test_cross_spelled_remaster_year_must_agree_end_to_end():
 
 
 def test_track_proof_crosses_the_same_spellings():
-    from waves.matching import decide_track_presence, track_key
+    from waves.metadata.matching import decide_track_presence, track_key
 
     # The holding folder says "Deluxe Edition", the caller's album says
     # "Deluxe": the track's identity is still proven by its folder.
@@ -933,7 +935,7 @@ def _didx(*entries):
 
 
 def test_runtime_proves_an_undated_match():
-    # No year on either side used to be a forever-gold pill; 12 tracks whose
+    # No year on either side cannot mean a forever-gold pill: 12 tracks whose
     # every second matches are that release.
     idx = _didx(("Album", "Artist", "", 12, "fp", 2400))
     r = _decide_presence("Album", "Artist", "", 12, idx, 2400)
@@ -984,8 +986,8 @@ def test_no_duration_from_caller_changes_nothing():
 
 def test_length_vouches_for_a_remaster_wearing_the_original_year():
     # Remasters are routinely tagged with the ORIGINAL release's year: 1985 on
-    # disk beside TIDAL's 2011 reissue. The year gate used to hide the match
-    # entirely; agreeing count + seconds now outrank the year and prove it.
+    # disk beside TIDAL's 2011 reissue. The year gate must not hide the match:
+    # agreeing count + seconds outrank the year and prove it.
     idx = _didx(("Album", "Artist", "1985", 12, "fp", 2400))
     r = _decide_presence("Album", "Artist", "2011", 12, idx, 2400)
     assert r["present"] is True and r["sure"] is True and r["local_album_id"] == "fp"
@@ -1054,7 +1056,7 @@ def test_punctuation_only_titles_never_cross_claim():
 
 
 def test_artist_rollup_sums_a_sets_discs_and_dedups_editions():
-    from waves.matching import build_artist_rollup
+    from waves.metadata.matching import build_artist_rollup
 
     # One folder per disc, one bucket per album: max() alone halved a double
     # album to 9, while a duplicate copy of one disc must still count once
@@ -1079,8 +1081,8 @@ def test_artist_rollup_sums_a_sets_discs_and_dedups_editions():
 def test_track_length_never_proves_on_its_own():
     # Seconds name a RECORDING, and every compilation, best-of and re-release
     # carries the same recording to the second, so matching length can never
-    # stand in for the album the caller asked about (issue #24).
-    from waves.matching import decide_track_presence
+    # stand in for the album the caller asked about.
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Song", "A", {"length": 200}))
     assert decide_track_presence("Song", "A", idx, duration=201)["present"] is True
@@ -1088,7 +1090,7 @@ def test_track_length_never_proves_on_its_own():
 
 
 def test_track_length_refutes_folder_proof():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     # The folder swears but the file is a minute short: a different recording.
     facts = {"length": 140, "album": "Album", "album_year": "2020"}
@@ -1100,7 +1102,7 @@ def test_track_length_refutes_folder_proof():
 
 
 def test_track_without_length_keeps_folder_proof():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Song", "A", {"album": "Album", "album_year": "2020"}))
     assert decide_track_presence("Song", "A", idx, "Album", "2020", 200)["sure"] is True
@@ -1108,7 +1110,7 @@ def test_track_without_length_keeps_folder_proof():
 
 
 def test_a_copy_filed_under_another_album_is_reported_but_never_proven():
-    """Issue #24: the compilation case, which is the common case.
+    """The compilation case, which is the common case.
 
     A studio album is on disk and the user opens a best-of that reuses its
     recordings. Every track matches on title, artist AND seconds, because it
@@ -1117,7 +1119,7 @@ def test_a_copy_filed_under_another_album_is_reported_but_never_proven():
     rides the proven axis: reporting it proven skipped those tracks out of the
     best-of, which then landed as a folder with holes and no word of it.
     """
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     true = {"id": "/lib/Avicii/True", "album": "True", "album_year": "2013", "codec": "flac", "length": 247}
     idx = _tindex(("Wake Me Up", "Avicii", true))
@@ -1151,7 +1153,7 @@ def test_disc_set_runtime_is_its_discs_summed():
 
 # ---- hardening: year parsing and count coercion -----------------------------
 def test_year_parses_from_anywhere_in_string():
-    from waves.matching import to_year_int
+    from waves.metadata.matching import to_year_int
 
     assert to_year_int("1999") == 1999
     assert to_year_int("1999-03-01") == 1999
@@ -1161,24 +1163,24 @@ def test_year_parses_from_anywhere_in_string():
 
 
 def test_two_digit_year_reads_none_and_never_rejects():
-    from waves.matching import to_year_int
+    from waves.metadata.matching import to_year_int
 
-    # "97" used to parse as the year 97, an int that actively rejected every
-    # candidate; an untrustworthy year must read as absent instead.
+    # "97" must not parse as the year 97, an int that actively rejects every
+    # candidate; an untrustworthy year reads as absent instead.
     assert to_year_int("97") is None
     idx = _index(("Album", "Artist", "97", 12, "rk"))
     assert _decide_presence("Album", "Artist", "1997", 12, idx)["present"] is True
 
 
 def test_five_digit_run_is_not_a_year():
-    from waves.matching import to_year_int
+    from waves.metadata.matching import to_year_int
 
     assert to_year_int("12019") is None
     assert to_year_int("20191") is None
 
 
 def test_year_zero_and_none_read_none():
-    from waves.matching import to_year_int
+    from waves.metadata.matching import to_year_int
 
     assert to_year_int(None) is None
     assert to_year_int("") is None
@@ -1210,8 +1212,8 @@ def test_glued_ampersand_and_plus_untouched():
 
 
 def test_edition_tail_with_ampersand_parses_after_fold():
-    # "(Deluxe & Bonus)" used to stay a literal tail (the tail splitter never
-    # split on "&"); folded to "and" it is filler and the tail parses.
+    # "(Deluxe & Bonus)" must not stay a literal tail (the tail splitter never
+    # splits on "&"); folded to "and" it is filler and the tail parses.
     assert _same_edition("Album (Deluxe & Bonus)", "Album (Deluxe and Bonus)")
     assert _same_edition("Album (Deluxe & Bonus)", "Album (Bonus Deluxe)")
 
@@ -1302,7 +1304,7 @@ def test_canon_leaves_kana_voicing_marks_alone():
 
 
 def test_various_artists_marker_survives_diacritic_fold():
-    from waves.matching import is_various_artists
+    from waves.metadata.matching import is_various_artists
 
     assert is_various_artists(_canon("ヴァリアス・アーティスト"))
 
@@ -1317,7 +1319,7 @@ def test_presence_matches_across_diacritic_spellings():
 
 # ---- artist-side folds: separators and the leading The ----------------------
 def test_norm_artist_takes_first_semicolon_segment():
-    from waves.matching import norm_artist
+    from waves.metadata.matching import norm_artist
 
     assert norm_artist("Artist; Guest") == "artist"
     assert norm_artist("Artist;Guest") == "artist"
@@ -1326,7 +1328,7 @@ def test_norm_artist_takes_first_semicolon_segment():
 
 
 def test_norm_artist_slash_splits_only_with_spaces():
-    from waves.matching import norm_artist
+    from waves.metadata.matching import norm_artist
 
     assert norm_artist("Artist / Guest") == "artist"
     assert norm_artist("AC/DC") == "ac/dc"
@@ -1334,13 +1336,13 @@ def test_norm_artist_slash_splits_only_with_spaces():
 
 
 def test_norm_artist_never_splits_on_comma():
-    from waves.matching import norm_artist
+    from waves.metadata.matching import norm_artist
 
     assert norm_artist("Earth, Wind & Fire") == "earth, wind and fire"
 
 
 def test_norm_artist_split_never_yields_an_empty_key():
-    from waves.matching import norm_artist
+    from waves.metadata.matching import norm_artist
 
     # An empty head keeps the original text whole: a degenerate credit must
     # never collapse into the empty artist, which would key on title alone.
@@ -1349,7 +1351,7 @@ def test_norm_artist_split_never_yields_an_empty_key():
 
 
 def test_the_prefix_folds_on_artists_only():
-    from waves.matching import norm_artist
+    from waves.metadata.matching import norm_artist
 
     assert norm_artist("The Beatles") == "beatles"
     assert _presence_key("Abbey Road", "The Beatles") == _presence_key("Abbey Road", "Beatles")
@@ -1358,7 +1360,7 @@ def test_the_prefix_folds_on_artists_only():
 
 
 def test_the_the_never_folds_to_empty():
-    from waves.matching import norm_artist
+    from waves.metadata.matching import norm_artist
 
     assert norm_artist("The The") == "the"
     assert norm_artist("The") == "the"
@@ -1372,7 +1374,7 @@ def test_collab_tagged_folder_matches_main_artist_album():
 
 # ---- featuring credits: stripped from the key, kept as gate evidence --------
 def test_track_key_strips_feat_from_artist_and_title():
-    from waves.matching import track_key
+    from waves.metadata.matching import track_key
 
     plain = track_key("Song", "A")
     assert track_key("Song (feat. B)", "A") == plain
@@ -1384,7 +1386,7 @@ def test_track_key_strips_feat_from_artist_and_title():
 
 
 def test_song_literally_named_feat_is_untouched():
-    from waves.matching import norm_artist, track_key
+    from waves.metadata.matching import norm_artist, track_key
 
     # The marker with no guest after it (or no artist before it) is a name,
     # not a credit.
@@ -1394,7 +1396,7 @@ def test_song_literally_named_feat_is_untouched():
 
 
 def test_feat_guests_reads_both_fields():
-    from waves.matching import feat_guests
+    from waves.metadata.matching import feat_guests
 
     assert feat_guests("Song (feat. B)", "A") == frozenset({"b"})
     assert feat_guests("Song", "A feat. B & C") == frozenset({"b", "c"})
@@ -1403,7 +1405,7 @@ def test_feat_guests_reads_both_fields():
 
 
 def test_feat_guest_mismatch_refuses_candidate():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     # feat. C on disk, feat. B on screen: different recordings sharing a name.
     idx = _tindex(("Song (feat. C)", "A", {"guests": ["c"]}))
@@ -1411,7 +1413,7 @@ def test_feat_guest_mismatch_refuses_candidate():
 
 
 def test_one_sided_feat_credit_matches():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     # The local tagger dropped the credit: still one recording.
     idx = _tindex(("Song", "A", {}))
@@ -1423,7 +1425,7 @@ def test_one_sided_feat_credit_matches():
 
 
 def test_overlapping_guest_lists_agree():
-    from waves.matching import decide_track_presence
+    from waves.metadata.matching import decide_track_presence
 
     idx = _tindex(("Song (feat. C)", "A", {"guests": ["c"]}))
     assert decide_track_presence("Song (feat. B, C)", "A", idx)["present"] is True
@@ -1431,7 +1433,7 @@ def test_overlapping_guest_lists_agree():
 
 # ---- disc vocabulary: spelled and Roman numbers, nested vol/part ------------
 def test_spelled_and_roman_disc_numbers_group():
-    from waves.matching import _disc_number
+    from waves.metadata.matching import _disc_number
 
     assert _disc_number("/m/A/Album/Disc Two") == 2
     assert _disc_number("/m/A/Album/CD II") == 2
@@ -1446,7 +1448,7 @@ def test_spelled_and_roman_disc_numbers_group():
 
 
 def test_glued_word_markers_are_not_discs():
-    from waves.matching import _disc_number, disc_group
+    from waves.metadata.matching import _disc_number, disc_group
 
     # The word forms demand a separator: "Disci" must not read as disc 1.
     assert _disc_number("/m/A/Album/Disci") is None
@@ -1553,7 +1555,7 @@ def test_undated_disc_with_disagreeing_shape_refused():
     assert _decide_presence("Album", "A", "2005", 20, idx)["local_tracks"] == 10
 
 
-# ---- audit pins: the gaps the recall-pass audit found -----------------------
+# ---- spelling and fold edges -------------------------------------------------
 def test_anniversary_ordinal_variants_gate_neither_direction():
     # The reverse of the bucket test above: a local ordinal against a plain
     # screen anniversary is present but never sure either.
@@ -1587,14 +1589,14 @@ def test_various_artists_folders_never_enter_the_index():
     # The raw-tag refusal at index build: "V / A" splits at the spaced slash
     # to an artist key of "v", past both VA detectors, so the bridge refuses
     # the row before any key is cut (pinned in test_library_bridge).
-    from waves.matching import is_various_artists, norm_artist
+    from waves.metadata.matching import is_various_artists, norm_artist
 
     assert is_various_artists("V / A")
     assert norm_artist("V / A") == "v"  # why the raw-tag check must come first
 
 
 def test_artist_rollup_never_mixes_disc_positions_across_editions():
-    from waves.matching import build_artist_rollup
+    from waves.metadata.matching import build_artist_rollup
 
     # An 18-track standard copy tagged disc 1/1 beside a two-disc Legacy
     # Edition (12+12) shares one bucket (the edition qualifier is peeled),

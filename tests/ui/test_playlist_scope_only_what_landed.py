@@ -8,18 +8,18 @@ that instead when it finds one (so a library never ends up with two files for
 one playlist). That is right for a folder this run filled, and wrong for every
 other folder on the disk.
 
-The scope was ``{p.parent for p in result_paths}``, and a result path is not
+The scope is ``{p.parent for p in result_paths}``, and a result path is not
 proof of a write. ``item()`` answers ``(True, <the file it found>)`` for a
 track already on disk, which is correct for the m3u's CONTENTS (re-downloading
 an album you already own still lists the whole album) but wrong for its scope.
 With skip-existing on, which is the default, re-downloading an owned album
-therefore handed the writer nothing but folders that pre-date this run, and it
-replaced a playlist file it had no business touching. The folder could pre-date
-Waves entirely.
+therefore hands the writer nothing but folders that pre-date this run, and it
+replaces a playlist file it has no business touching. The folder could
+pre-date Waves entirely.
 
-The feature is off by default (``playlist_create``), so this never became a
-field report; the docstring in the source claimed the scope was already bounded
-to folders the run filled, which is what let it stay hidden.
+The feature is off by default (``playlist_create``), so this stays out of
+field reports; a docstring claiming the scope is already bounded to folders
+the run filled is what keeps it hidden.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -89,7 +89,7 @@ def _owned_album(
 
 
 # --------------------------------------------------------------------------- #
-# The regression: a run that wrote nothing writes no playlist
+# A run that wrote nothing writes no playlist
 # --------------------------------------------------------------------------- #
 def test_a_run_that_skipped_every_track_leaves_the_playlist_alone(tmp_path):
     """Every track already on disk: item() reports each file it found, and not
@@ -106,7 +106,7 @@ def test_a_run_that_skipped_every_track_leaves_the_playlist_alone(tmp_path):
 def test_a_skip_only_run_does_not_retarget_the_legacy_playlist_name(tmp_path):
     """The legacy loop is the sharper edge: finding no ``.m3u8`` it goes looking
     for an older ``.m3u`` to replace instead, so a folder holding only the old
-    spelling was the one most exposed."""
+    spelling is the one most exposed."""
     folder, tracks, playlist = _owned_album(tmp_path, legacy=True)
     dl = _engine()
 
@@ -117,7 +117,7 @@ def test_a_skip_only_run_does_not_retarget_the_legacy_playlist_name(tmp_path):
 
 
 def test_the_playlist_is_still_written_where_a_track_did_land(tmp_path):
-    """The fix must not cost the feature: one landed file makes the folder the
+    """The scope rule must not cost the feature: one landed file makes the folder the
     writer's, and the playlist lists the whole album, the skipped tracks too."""
     folder, tracks, playlist = _owned_album(tmp_path)
     dl = _engine()

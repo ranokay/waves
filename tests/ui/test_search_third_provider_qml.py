@@ -1,11 +1,12 @@
-"""Issue #292: a third provider's search group renders with zero QML edits.
+"""A third provider's search group renders with zero QML edits.
 
 WHAT THIS FENCES OFF
 --------------------
-The search payload used to build TIDAL's ungrouped buckets plus one ``apple``
-block, and Main.qml held one fixed model set and section layout per provider.
-A provider registered with ``Capability.SEARCH`` could render badges (#278)
-but had nowhere to put its results.
+A search payload must be able to carry any provider's group: building TIDAL's
+ungrouped buckets plus one fixed ``apple`` block, with one model set and
+section layout per provider hardcoded in Main.qml, leaves a provider
+registered with ``Capability.SEARCH`` able to render badges but with nowhere
+to put its results.
 
 This is the paper test, on the real page: a third provider is registered on
 the live bridge (a descriptor, a session, SEARCH) and the results page grows
@@ -273,7 +274,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     settle(50)
 
     # Its own fold: collapsing the third group hides its rows, leaves the
-    # shipped two alone, and persists under its own provider-keyed pref.
+    # other two alone, and persists under its own provider-keyed pref.
     if not q(tidal + ".headVisible") or not q(apple + ".headVisible"):
         failures.append("the first two providers' groups are not on the page")
     q(fake + ".toggleCollapsed()")
@@ -291,7 +292,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     if not bridge._waves_prefs.get("search_provider_fake_collapsed"):
         failures.append("the third provider's fold did not reach its provider-keyed pref")
 
-    # The shipped two are unchanged: heads in order, rows and counts as ever.
+    # The other two are unchanged: heads in order, rows and counts as ever.
     if q(tidal + ".modelFor('albums').count") != 1 or q(apple + ".modelFor('albums').count") != 1:
         failures.append("the shipped providers' rows changed beside the third group")
 

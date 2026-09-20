@@ -9,7 +9,7 @@ unexpected. These tests drive it with stubbed playlists, no network.
 
 from types import SimpleNamespace
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 def _master(heights):

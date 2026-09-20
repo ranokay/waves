@@ -1,14 +1,12 @@
-"""T2: the account-switch journey, end to end, offline.
+"""The account-switch journey, end to end, offline.
 
 WHAT THIS FENCES OFF
 --------------------
-The audit's account gap: the suite proved sign-in reachability and the
-sign-out pill separately, but no test walked the journey a user actually
-takes --- choosing Apple on first run, reaching Settings, signing TIDAL in
-from the card's visible action, seeing that survive a relaunch, signing
-back out, and still having both providers reachable. Directly setting
-internal flags could not serve as this scenario; every step here is a real
-mouse click on a rendered control.
+This walks the journey a user actually takes: choosing Apple on first run,
+reaching Settings, signing TIDAL in from the card's visible action, seeing
+that survive a relaunch, signing back out, and still having both providers
+reachable. Every step is a real mouse click on a rendered control; directly
+setting internal flags would not exercise that path.
 
 Drives the REAL Main.qml in a subprocess (building the bridge installs
 process-global handlers), with the account service faked at the provider
@@ -231,8 +229,8 @@ def _run_journey(reverse: bool = False) -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"backend unavailable: {exc}", file=sys.stderr)
         return _EXIT_PRECONDITION
@@ -430,7 +428,7 @@ def _run_journey(reverse: bool = False) -> int:
             problems.append("the welcome surface stayed up after a completed sign-in")
         if bool(bridge.settings.data.apple_enabled):
             problems.append("the completed sign-in enabled Apple too")
-        # The success lands on Search with the field focused (issue #218),
+        # The success lands on Search with the field focused,
         # before any later navigation in this scenario.
         if q("root.navOrigin") != "search" or not bool(q("searchField.activeFocus")):
             problems.append("a completed sign-in did not land on Search with the field focused")
@@ -491,7 +489,7 @@ def _run_journey(reverse: bool = False) -> int:
         problems.append("the welcome surface latched on its sign-in steps")
     if not bool(q("root.signedIn")):
         problems.append("the window still reads signed out after a completed sign-in")
-    # The success lands on Search with the field focused (issue #218). The
+    # The success lands on Search with the field focused. The
     # reverse path asserted this right where its sign-in completed, before
     # it navigated back to Settings.
     if not reverse and (q("root.navOrigin") != "search" or not bool(q("searchField.activeFocus"))):

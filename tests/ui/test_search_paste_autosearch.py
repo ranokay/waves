@@ -75,8 +75,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -168,7 +168,7 @@ def _run_scenario() -> int:
     settle(decode_ms)
     empty_glyph_inert = bool(q("_searchSeq === -99"))
 
-    # 5. The REAL glyph handler with a SHORT term on the clipboard (issue #28).
+    # 5. The REAL glyph handler with a SHORT term on the clipboard.
     #    Three characters or fewer is not a jump typing could not produce, so
     #    the decoder's own heuristic starts nothing and the field's disarm drops
     #    the arm: the button pasted the term and then sat there. The handler has

@@ -1,22 +1,20 @@
-"""Regression: reopening an already-keyed browse page still records history.
+"""Reopening an already-keyed browse page still records history.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 ``browsePageKey`` survives leaving Browse via the nav tabs. ``openBrowseItem``
-treated a matching key as "already there" and returned before ``navPush()``,
-so reopening that page from ANOTHER surface (a playlist inside a My Music
-folder, a Home shelf card) switched to the cached page without recording
-where the user came from. Back then skipped the folder entirely and fell
-through to whatever sat under it in the history (Search, typically), which
-is exactly how it surfaced in livetesting issue #11's folder view.
+must not treat a matching key as "already there": skipping ``navPush()``
+switches to the cached page without recording where the user came from, so
+Back skips the folder entirely and falls through to whatever sits under it in
+the history (Search, typically).
 
 HOW THIS STAYS FIXED
 --------------------
-The guard now pushes a snapshot whenever Browse is not the active surface
+The guard pushes a snapshot whenever Browse is not the active surface
 (the cached page is still reused, nothing is re-fetched). This scenario boots
-the REAL Main.qml and walks the reported flow: open a playlist page, leave it
-via the My Music tab, drill into a playlist folder, reopen the same playlist,
-then assert one snapshot was pushed and that Back returns to the folder.
+the REAL Main.qml and walks the flow: open a playlist page, leave it via the
+My Music tab, drill into a playlist folder, reopen the same playlist, then
+assert one snapshot was pushed and that Back returns to the folder.
 
 Runs in a SUBPROCESS for the same reason as test_browse_back_scroll: building
 the bridge installs process-global handlers that must not leak into the rest
@@ -64,8 +62,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -97,7 +95,7 @@ def _run_scenario() -> int:
 
     settle()
     # 1. Open a playlist page, then leave it via the My Music nav tab: the
-    #    browse key stays behind, which is the bug's precondition.
+    #    browse key stays behind.
     q('openPlaylistPage("p1")')
     settle()
     q("openLibrary()")
@@ -107,7 +105,7 @@ def _run_scenario() -> int:
         return EXIT_PRECONDITION
 
     # 2. Playlists -> a folder -> the SAME playlist again. My Music renders
-    #    one group per live source (issue #259), so the scenario seeds the
+    #    one group per live source, so the scenario seeds the
     #    session and pins the group's visible category.
     make_tidal_my_music_source(root, q, settle, bridge)
     q('root.libGroupFor("tidal").category = "playlists"')

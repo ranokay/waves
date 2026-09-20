@@ -5,13 +5,13 @@ WHAT THIS FENCES OFF
 A Qt Quick Controls ``Drawer`` (the download queue) does not render inside the
 page: it is placed in the window's OVERLAY layer, which paints over ordinary
 content regardless of the z that content carries. exitGate and updateOptInGate
-are full-screen Rectangles that used to be parented to the page with z 1200,
-which reads like "on top" but is not: with the queue drawer open, the exit
-prompt was masked by the drawer's dim and the window looked un-closable.
+are full-screen Rectangles parented to the page with z 1200, which reads like
+"on top" but is not: with the queue drawer open, the exit prompt is masked by
+the drawer's dim and the window looks un-closable.
 
-The fix is ``parent: Overlay.overlay``, which moves the gate into the same
-layer so its z finally means something. That is easy to "tidy" back out, since
-the z alone looks sufficient, so this test pins the parent.
+``parent: Overlay.overlay`` moves the gate into the same layer so its z
+finally means something. That is easy to "tidy" back out, since the z alone
+looks sufficient, so this test pins the parent.
 
 Runs in a SUBPROCESS like the other Main.qml scenarios: building the bridge
 installs process-global handlers that must not leak into the suite.
@@ -80,8 +80,8 @@ def _run_scenario() -> int:
 
     app = QGuiApplication.instance() or QGuiApplication([])
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT

@@ -9,7 +9,7 @@ Two ways the drawer's quality readout goes quiet or goes wrong, both silent.
    first object appended to it. A field the reconcile forgets to name therefore
    does not exist on ANY row: `model.quality` reads undefined in the delegate,
    with no warning and no binding error, and the pill silently renders nothing.
-   That shipped: every row was carrying a tier the drawer could not see.
+   Every row then carries a tier the drawer cannot see.
 
 2. The field arriving and being outranked by a stale promise. The pill starts
    out saying what the job ASKED for, which is all there is to say until the
@@ -90,8 +90,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -115,7 +115,7 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
-    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 

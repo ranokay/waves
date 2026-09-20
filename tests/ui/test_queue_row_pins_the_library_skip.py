@@ -35,8 +35,8 @@ from unittest.mock import patch
 import pytest
 from support.dispatch_stub import arm_dispatch
 
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 
 
 class _Signal:
@@ -71,7 +71,7 @@ class _Stub:
     _target_quality_rank = WavesBridge._target_quality_rank
     _predict_skips = WavesBridge._predict_skips
     _download = WavesBridge._download
-    # The per-item quality choice _download reads at queue time (issue #36);
+    # The per-item quality choice _download reads at queue time;
     # this carcass holds none, so the ask is the setting's.
     _ask_quality_for = WavesBridge._ask_quality_for
     _quality_override_key = WavesBridge._quality_override_key
@@ -158,7 +158,7 @@ class _Live:
 
 def _read_once(value: bool):
     """Answers `value` once, then fails the test. Queueing a row is the one and
-    only read a job is allowed, so anything reading it again is the bug."""
+    only read a job is allowed, so anything reading it again is a failure."""
     calls: list[int] = []
 
     def pref() -> bool:
@@ -242,7 +242,7 @@ def test_the_setting_is_pinned_the_same_way_the_audio_quality_is():
     stub = _Stub(_Live(True))
     qid = _queue_album(stub)
     row = stub._queue_index[qid]
-    # The row pins the Waves tier string (issue #24).
+    # The row pins the Waves tier string.
     assert row["askQuality"] == "LOSSLESS"
     assert row["askLibrarySkip"] is True
 
@@ -318,7 +318,7 @@ def test_moving_the_setting_between_queueing_and_starting_changes_nothing(pinned
     assert (claim is not None) is pinned
 
 
-# ---- the invariant the bug broke ---------------------------------------------
+# ---- the invariant both readers must keep -----------------------------------
 
 
 @pytest.mark.parametrize("pinned", [True, False])
@@ -378,10 +378,10 @@ def test_a_row_that_has_started_running_answers_as_it_did_queued():
 
 
 def test_neither_reader_consults_the_live_setting():
-    """The audit guard. Both readers go through the row's pin; a new live read
+    """Both readers go through the row's pin; a new live read
     in either of them puts the drawer and the run back out of step."""
-    # The run's reader lives in _start_job now (the job body, built when the
-    # row's turn comes); the pin itself is still taken at _enqueue time.
+    # The run's reader lives in _start_job (the job body, built when the
+    # row's turn comes); the pin itself is taken at _enqueue time.
     for name in ("_predict_skips", "_start_job"):
         src = inspect.getsource(getattr(WavesBridge, name))
         assert "_job_library_skip(qid)" in src, f"{name} stopped reading the row's pin"

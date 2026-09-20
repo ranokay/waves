@@ -1,4 +1,4 @@
-"""Issue #219: the Apple setup path from the welcome card to the wizard step.
+"""The Apple setup path from the welcome card to the wizard step.
 
 WHAT THIS FENCES OFF
 --------------------

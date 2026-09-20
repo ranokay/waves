@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from waves.waves_ui.bridge_library import _is_local_fstype, _is_network_fstype, _is_remote_windows_device
+from waves.desktop.bridge_library import _is_local_fstype, _is_network_fstype, _is_remote_windows_device
 
 LOCAL = [
     "apfs",

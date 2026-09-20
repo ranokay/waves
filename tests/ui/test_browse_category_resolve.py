@@ -1,16 +1,16 @@
 """Browse category resolve: a failure must never be pinned for the session.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 ``resolvePlaylistCategory`` gathers every playlist in one editorial category so
-the DOWNLOAD ALL confirm can state a real count. Its ``except`` branch used to
-fall through into the normal path, writing its empty list into ``_category_pl``
-and clearing the status line. ``_category_pl`` has no TTL and is cleared only at
+the DOWNLOAD ALL confirm can state a real count. An ``except`` branch that
+falls through into the normal path writes its empty list into ``_category_pl``
+and clears the status line. ``_category_pl`` has no TTL and is cleared only at
 logout, and the fast path treats any non-None entry as authoritative, so a
-single network blip left that tile's DOWNLOAD ALL and PREVIEW as silent no-ops
-until the user signed out. The QML handler drops a zero count without a word
-(`if (count <= 0) return   // backend already set the status line`), so the
-click produced no dialog, no error and no status either.
+single network blip leaves that tile's DOWNLOAD ALL and PREVIEW as silent
+no-ops until the user signs out. The QML handler drops a zero count without a
+word (`if (count <= 0) return   // backend already set the status line`), so
+the click produces no dialog, no error and no status either.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Signal:

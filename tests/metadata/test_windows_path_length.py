@@ -7,7 +7,7 @@ and the download failed at the move after it had already finished.
 
 The numbers differ per platform (259 on Windows, 1023 elsewhere) but
 the code is one path, so the repro is built against the engine's own cap
-(waves.helper.path.PATH_LENGTH_MAX) rather than by probing pathvalidate:
+(waves.paths.PATH_LENGTH_MAX) rather than by probing pathvalidate:
 pathvalidate's posix ceiling (4096) is far above the engine's, so a folder
 probed "just inside" pathvalidate's limit already exceeds the engine's and
 correctly loses a folder component instead of just a file name, which says
@@ -20,7 +20,7 @@ import pytest
 from pathvalidate import sanitize_filepath
 from pathvalidate.error import ValidationError
 
-from waves.helper.path import PATH_LENGTH_MAX, _exceeds_path_cap, path_file_sanitize
+from waves.paths import PATH_LENGTH_MAX, _exceeds_path_cap, path_file_sanitize
 
 
 def _is_valid(path_file: pathlib.Path) -> bool:

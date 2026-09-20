@@ -1,8 +1,8 @@
-"""Regression guard: the warm cover-art pool must ask for covers the way the
-pages do, or it pins nothing.
+"""The warm cover-art pool must ask for covers the way the pages do, or it
+pins nothing.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 Qt's pixmap cache is keyed on more than the url. The key is
 ``(url, requestRegion, requestSize, frame, providerOptions)``, and
 ``providerOptions`` carries the flags ``QQuickImage`` raises for
@@ -14,19 +14,18 @@ and neither one keeps the other alive.
 Main.qml's warm pool (``warmArt`` / ``warmArtModel``) exists to hold a live
 ``Image`` for the last few hundred covers shown, because Qt keeps only about
 2 MB of decoded-but-unreferenced pixmaps (measured on Qt 6.11: 40 to 60
-thumbnails at search-row size, less than one page of results). The pool's
-``Image`` was left at the default ``fillMode``, ``Image.Stretch``, while every
-surface that actually paints a cover crops. So the pool fetched and decoded a
-second, differently keyed copy of every cover and pinned that, the copy the
-page had painted went unpinned, and a revisited page went back through the
-loading placeholder as if the pool were not there. Reported from a livetest:
-search, search something else, search the first thing again, and the covers
-loaded from scratch.
+thumbnails at search-row size, less than one page of results). A pool
+``Image`` left at the default ``fillMode``, ``Image.Stretch``, while every
+surface that actually paints a cover crops, fetches and decodes a second,
+differently keyed copy of every cover and pins that: the copy the page painted
+goes unpinned, and a revisited page goes back through the loading placeholder
+as if the pool were not there. Search, search something else, search the first
+thing again -- the covers load from scratch.
 
 HOW THIS STAYS FIXED
 --------------------
-The rule is mechanical: every ``Image`` in the cover files (Main.qml and the
-component files split out of it in #315: Art.qml, PreviewArt.qml,
+The rule is mechanical: every ``Image`` in the cover files (Main.qml and its
+component files: Art.qml, PreviewArt.qml,
 SearchProviderGroup.qml, MosaicCell.qml, WelcomePicker.qml) that opts into
 the pixmap cache (``cache: true``) must request its pixels the same way, so
 that one warmed entry serves all of them. A new art surface that crops differently, or a pool that stops
@@ -45,15 +44,14 @@ import re
 
 from support.paths import QML_MAIN as QML
 
-# The cover surfaces live in Main.qml, Art.qml (the cover box split out in
-# #315 slice 3), PreviewArt.qml (the track disc, split out in slice 5),
-# SearchProviderGroup.qml (the search-group closure, split out in slice 6 —
-# its cached provider mark is exempt below, but the file must stay in the
-# scan set so a cover added there cannot drift from the pool unnoticed),
-# MosaicCell.qml (the browse tile's crossfade pair, split out in slice 7 —
-# both Images cache) and WelcomePicker.qml (the welcome cards' provider
-# marks, split out in slice 8 — exempt as marks, scanned so a cover added
-# there is not missed): this guard must read all of them, or the app's
+# The cover surfaces live in Main.qml, Art.qml (the cover box),
+# PreviewArt.qml (the track disc), SearchProviderGroup.qml (the search-group
+# closure -- its cached provider mark is exempt below, but the file must stay
+# in the scan set so a cover added there cannot drift from the pool unnoticed),
+# MosaicCell.qml (the browse tile's crossfade pair -- both Images cache) and
+# WelcomePicker.qml (the welcome cards' provider marks -- exempt as marks,
+# scanned so a cover added there is not missed): this guard must read all of
+# them, or the app's
 # most-used art surfaces stop being scanned and their cache keys can drift
 # from the pool's unnoticed.
 ART_QML = QML.parent / "Art.qml"
@@ -140,7 +138,7 @@ def test_every_cached_image_asks_for_the_same_pixels() -> None:
         ):
             # Provider marks are not covers and keep their own aspect; the
             # welcome surface and the badges take their marks from the
-            # provider descriptors (issue #278).
+            # provider descriptors.
             continue
         found = re.search(r"\bfillMode\s*:\s*(Image\.\w+)", block)
         if not found or found.group(1) != ART_FILL_MODE:

@@ -31,9 +31,9 @@ from support.search_fakes import (
     wire_search as _wire,
 )
 
+from waves.desktop import backend
+from waves.desktop.backend import _SEARCH_DISK_MAX, _STALE_STAMP, WavesBridge, _search_same
 from waves.providers import Capability
-from waves.waves_ui import backend
-from waves.waves_ui.backend import _SEARCH_DISK_MAX, _STALE_STAMP, WavesBridge, _search_same
 
 
 def test_a_restored_search_paints_first_and_the_wire_corrects_it_in_place(monkeypatch):

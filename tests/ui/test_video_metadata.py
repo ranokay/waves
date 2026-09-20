@@ -1,12 +1,12 @@
 """Downloaded music videos carry real metadata.
 
-The tagging step used to return early for every ``Video``, so a downloaded
-video's only metadata was its filename: no title, no artist, no release
-year. Converted MP4s now get the music-video tag set (``set_mp4_video``):
-title, artists, release date, explicit rating, thumbnail cover and the
-iTunes media-kind atom (``stik`` = 6, music video) so players and library
-managers file them correctly. Raw ``.ts`` files (conversion off) stay
-untouched; MPEG-TS has no tag atoms mutagen can write.
+The tagging step must not return early for every ``Video``: a downloaded
+video's only metadata is then its filename, with no title, artist or release
+year. Converted MP4s get the music-video tag set (``set_mp4_video``): title,
+artists, release date, explicit rating, thumbnail cover and the iTunes
+media-kind atom (``stik`` = 6, music video) so players and library managers
+file them correctly. Raw ``.ts`` files (conversion off) stay untouched;
+MPEG-TS has no tag atoms mutagen can write.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import mutagen.mp4
 from tidalapi import Video
 
 from waves.download import Download
-from waves.metadata import Metadata
+from waves.metadata.tags import Metadata
 
 
 def _mp4_stub():
@@ -71,7 +71,7 @@ def test_video_tags_carry_title_artists_year_and_media_kind(tmp_path):
     fake = _mp4_stub()
     file = tmp_path / "v.mp4"
     file.write_bytes(b"x")
-    with patch("waves.metadata.mutagen.File", return_value=fake):
+    with patch("waves.metadata.tags.mutagen.File", return_value=fake):
         m = Metadata(
             path_file=file,
             target_upc={"MP4": "UPC"},
@@ -98,7 +98,7 @@ def test_video_tags_skip_the_album_structure_atoms(tmp_path):
     fake = _mp4_stub()
     file = tmp_path / "v.mp4"
     file.write_bytes(b"x")
-    with patch("waves.metadata.mutagen.File", return_value=fake):
+    with patch("waves.metadata.tags.mutagen.File", return_value=fake):
         Metadata(
             path_file=file,
             target_upc={"MP4": "UPC"},
@@ -115,7 +115,7 @@ def test_audio_tagging_is_unchanged_by_the_video_mode(tmp_path):
     fake = _mp4_stub()
     file = tmp_path / "t.m4a"
     file.write_bytes(b"x")
-    with patch("waves.metadata.mutagen.File", return_value=fake):
+    with patch("waves.metadata.tags.mutagen.File", return_value=fake):
         Metadata(
             path_file=file,
             target_upc={"MP4": "UPC"},
@@ -171,10 +171,10 @@ def test_metadata_write_video_maps_the_video_fields():
 def test_an_id_less_video_artist_writes_no_id_rather_than_the_next_artist_s():
     """The name and the id must name the same artist, or the tag lies.
 
-    A primary credit that carries a name but no id used to fall back to the
-    first credited artist that HAD one, so a video by the singer Marina could
-    be tagged with the id of the band Marina: the exact wrong-identity claim
-    this tag exists to prevent. No id at all is the honest answer.
+    A primary credit that carries a name but no id must not fall back to the
+    first credited artist that HAS one: a video by the singer Marina would be
+    tagged with the id of the band Marina, the exact wrong-identity claim this
+    tag exists to prevent. No id at all is the honest answer.
     """
     dl = _make_download()
     dl.settings.data.mark_explicit = False

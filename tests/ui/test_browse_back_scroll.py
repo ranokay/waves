@@ -1,9 +1,9 @@
-"""Regression: Back to Browse lands on your scroll position, never the top.
+"""Back to Browse lands on your scroll position, never the top.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 Going Back from a drilled page (a playlist, an album, any long listing) to the
-Browse landing jumped the page to the top instead of the spot the user left.
+Browse landing must land on the spot the user left, not at the top.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -67,8 +67,8 @@ def test_back_from_long_playlist_restores_browse_scroll():
 # ===========================================================================
 def _landing() -> dict:
     """Ten card shelves: a tall, scrollable Browse landing that rebuilds through
-    asynchronous Loaders (the async rebuild is what collapses contentHeight on
-    the way back and exposed the bug)."""
+    asynchronous Loaders (an async rebuild collapses contentHeight on
+    the way back)."""
 
     def card(i: int, j: int) -> dict:
         return {"id": f"a{i}_{j}", "kind": "album", "title": f"Album {i}.{j}", "artist": f"Artist {j}"}
@@ -127,8 +127,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

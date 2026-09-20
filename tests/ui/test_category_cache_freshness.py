@@ -1,25 +1,25 @@
 """A resolved Browse category must not be trusted for the life of the process.
 
-THE BUG WE ARE FENCING OFF
---------------------------
-``_category_pl`` had no TTL, no revalidation and no eviction, and was cleared
-only at logout. Waves is designed to run for weeks (see the always-on freshness
-rule), so this was reachable without anything going wrong:
+WHAT THIS FENCES OFF
+--------------------
+``_category_pl`` with no TTL, no revalidation and no eviction, cleared only at
+logout, goes stale for a process designed to run for weeks (see the always-on
+freshness rule):
 
-  Day 1: DOWNLOAD ALL on a category says "Download 24 playlists?", the user
-  cancels. Weeks later the category holds 30. The drilled grid re-fetches and
-  shows all 30, but the tile still reports 24 and downloadPlaylistCategory
-  queues exactly the day-1 objects, including any TIDAL has since removed.
+  DOWNLOAD ALL on a category says "Download 24 playlists?", the user cancels.
+  Weeks later the category holds 30: the drilled grid re-fetches and shows all
+  30, but the tile still reports 24 and downloadPlaylistCategory queues exactly
+  the old objects, including any TIDAL has since removed.
 
 Contrast openBrowsePage, which revalidates its cached page on every open.
 Serving stale-then-revalidating is wrong HERE specifically: the resolve emit
-runs whatever action the tile queued, so a late correction would arrive after
-the confirm dialog had already been answered against the old count.
+runs whatever action the tile queued, so a late correction arrives after the
+confirm dialog has already been answered against the old count.
 """
 
 from __future__ import annotations
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _CacheStub:

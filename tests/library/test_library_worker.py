@@ -2,8 +2,8 @@
 
 The scan must never hold the app's interpreter (the launch water dropped
 frames for every sweep, probed live 2026-09-01 and 2026-09-11), so it runs
-in a child process (waves.library_worker) that the bridge talks to over
-pipes (waves.waves_ui.library_proc). Pinned here:
+in a child process (waves.library.worker) that the bridge talks to over
+pipes (waves.desktop.library_proc). Pinned here:
   * the protocol, in-process over byte streams: a scan answers with a done
     event carrying the cache's verdicts, a probe with probe_done, a bad job
     with an error event that does not end the process, quit ends it, and
@@ -25,10 +25,10 @@ import sys
 
 import pytest
 
-from waves import library_worker
-from waves.library_index import SCAN_OK
-from waves.waves_ui import library_proc
-from waves.waves_ui.library_proc import LibraryWorker, WorkerFailed
+from waves.desktop import library_proc
+from waves.desktop.library_proc import LibraryWorker, WorkerFailed
+from waves.library import worker as library_worker
+from waves.library.index import SCAN_OK
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # One under the retire threshold, so a single success has to clear it.
@@ -89,7 +89,7 @@ def test_protocol_forwards_the_scanner_log(tmp_path):
 
 
 def _real_command() -> list[str]:
-    return [sys.executable, "-m", "waves.library_worker"]
+    return [sys.executable, "-m", "waves.library.worker"]
 
 
 def _worker(**kw) -> LibraryWorker:
@@ -161,10 +161,10 @@ def test_launcher_hands_back_a_job_when_the_child_dies(tmp_path):
 
 
 def test_default_command_frozen_and_source(monkeypatch):
-    from waves.waves_ui import updater
+    from waves.desktop import updater
 
     monkeypatch.setattr(updater, "is_frozen", lambda: False)
-    assert library_proc.default_command() == [sys.executable, "-m", "waves.library_worker"]
+    assert library_proc.default_command() == [sys.executable, "-m", "waves.library.worker"]
     monkeypatch.setattr(updater, "is_frozen", lambda: True)
     monkeypatch.setattr(updater, "_current_exe", lambda: "/Applications/Waves.app/Contents/MacOS/Waves")
     assert library_proc.default_command() == ["/Applications/Waves.app/Contents/MacOS/Waves", "--library-worker"]
@@ -277,7 +277,7 @@ def test_the_scan_gauges_report_the_work_the_child_did(tmp_path, monkeypatch):
     report showed the two busiest pools in the app as idle through every
     scan. The child sends its readings with the progress it already reports
     and they are mirrored here."""
-    from waves.library_index import READ_GAUGE, WALK_GAUGE
+    from waves.library.index import READ_GAUGE, WALK_GAUGE
 
     monkeypatch.chdir(_ROOT)
     root = tmp_path / "music"
@@ -302,7 +302,7 @@ def test_the_scan_gauges_report_the_work_the_child_did(tmp_path, monkeypatch):
 def test_a_mirrored_reading_is_ignored_when_it_is_not_three_integers():
     """The readings cross a pipe, so they are validated like any other
     message rather than trusted into the gauges."""
-    from waves.library_index import WALK_GAUGE
+    from waves.library.index import WALK_GAUGE
 
     before = (WALK_GAUGE.activeThreadCount(), WALK_GAUGE.maxThreadCount(), WALK_GAUGE.peak)
     for junk in (None, "walk", {"walk": "busy"}, {"walk": [1, 2]}, {"walk": ["a", "b", "c"]}):

@@ -42,15 +42,15 @@ from types import SimpleNamespace
 from tidalapi.media import AudioMode, Quality, Track
 
 from waves.config import ATMOS_REQUEST_QUALITY
-from waves.download import Download
-from waves.ownership import OwnershipStore, quality_rank
-from waves.waves_ui import backend
-from waves.waves_ui.backend import (
+from waves.desktop import backend
+from waves.desktop.backend import (
     WavesBridge,
     _collection_incomplete_reason,
     _delivers_atmos,
     _TrackedDownload,
 )
+from waves.download import Download
+from waves.library.ownership import OwnershipStore, quality_rank
 
 ATMOS = AudioMode.dolby_atmos.value
 ATMOS_TIER = str(getattr(ATMOS_REQUEST_QUALITY, "value", ATMOS_REQUEST_QUALITY))
@@ -219,8 +219,8 @@ def test_turning_atmos_off_still_upgrades_an_atmos_copy_to_stereo(tmp_path):
     Asked of a DUAL-MODE track, because that is the only shape the rationale
     describes. There has to BE a stereo stream for "would fetch a stereo
     LOSSLESS file" to mean anything, and an Atmos-only track has none (see the
-    test below). This case used to be written against an Atmos-only track and
-    passed for the wrong reason."""
+    test below). Written against an Atmos-only track this case would pass for
+    the wrong reason."""
     store = _store(tmp_path)
     store.record("101", _file(tmp_path, "song.m4a"), ATMOS_TIER, audio_mode=ATMOS)
     dl = _gate(store, target="LOSSLESS", atmos_on=False)
@@ -333,7 +333,7 @@ def test_an_atmos_copy_reads_as_out_of_date_once_atmos_is_switched_off(tmp_path)
 
 def test_an_atmos_album_card_reads_as_downloaded(tmp_path):
     """_rollup_verdict answers "no" for the whole card as soon as one member is
-    not up_to_date, so one Atmos track used to un-say a finished album."""
+    not up_to_date, so a single Atmos track must not un-say a finished album."""
     store = _store(tmp_path)
     store.record("101", _file(tmp_path, "01.m4a"), ATMOS_TIER, audio_mode=ATMOS)
     store.record("102", _file(tmp_path, "02.flac"), "LOSSLESS", audio_mode="STEREO")
@@ -385,12 +385,14 @@ def test_an_atmos_copy_reads_atmos_on_every_drawer_surface(tmp_path, monkeypatch
     """The gate's own skip mark, the drawer's prediction and a landed track's
     delivered event all pass through _delivered_word, so an Atmos copy reads
     ATMOS wherever it appears, and a stereo copy still reads its tier."""
-    assert backend._delivered_word("HIGH", ATMOS) == backend.ATMOS_WORD
-    assert backend._delivered_word("HIGH", "dolby_atmos") == backend.ATMOS_WORD
-    assert backend._delivered_word("HIGH", "STEREO") == "HIGH"
-    assert backend._delivered_word("HIGH", None) == "HIGH"
-    assert backend._delivered_word("HI_RES_LOSSLESS", None) == "HI-RES"
-    assert backend._delivered_word(None, None) == ""
+    assert backend._delivered_word("HIGH", audio_type="atmos") == backend.ATMOS_WORD
+    assert backend._delivered_word("HIGH", audio_mode=ATMOS) == backend.ATMOS_WORD
+    assert backend._delivered_word("HIGH", audio_mode="dolby_atmos") == backend.ATMOS_WORD
+    assert backend._delivered_word("HIGH", audio_type="stereo", audio_mode="DOLBY_ATMOS") == "HIGH"
+    assert backend._delivered_word("HIGH", audio_mode="STEREO") == "HIGH"
+    assert backend._delivered_word("HIGH", audio_mode=None) == "HIGH"
+    assert backend._delivered_word("HI_RES_LOSSLESS", audio_mode=None) == "HI-RES"
+    assert backend._delivered_word(None, audio_mode=None) == ""
     # ATMOS is a kind, not a rung: it sorts after the whole ladder in a MIXED
     # rollup rather than being dropped or filed among the tiers.
     reg = {"1": {"quality": "HI-RES"}, "2": {"quality": backend.ATMOS_WORD}, "3": {"quality": "LOSSLESS"}}

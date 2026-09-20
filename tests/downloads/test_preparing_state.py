@@ -3,14 +3,14 @@
 Three entry points answer a click before anything is queued: a metadata
 re-fetch (the object aged out of the browse registry), a playlist-folder-tree
 warm (``{folder_path}`` would resolve blind), and the best-of-both edition
-scan. All three used to publish "running" for the immediate button feedback,
-which drew the progress bar: a dot matrix at 0% for a download that had not
-started, torn down again a moment later when ``_download`` published "queued".
-Clicking download on a Browse playlist showed the bar flash and snap to the
-queued pill.
+scan. They publish "preparing", which the buttons draw exactly like queued; a
+"running" state would draw the progress bar instead: a dot matrix at 0% for a
+download that had not started, torn down again a moment later when
+``_download`` publishes "queued". Clicking download on a Browse playlist would
+flash the bar and snap to the queued pill.
 
-They publish "preparing" instead, which the buttons draw exactly like queued,
-so the hand-over to a real queue row is the cancel X arriving and nothing else.
+With "preparing" published, the hand-over to a real queue row is the cancel X
+arriving and nothing else.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 from support.paths import QML_DIR, REPO_ROOT
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Emit:
@@ -95,8 +95,8 @@ def test_a_playlist_waiting_on_the_folder_sweep_never_lights_the_progress_bar():
 
 
 def test_every_pre_queue_hand_off_uses_the_same_word():
-    """No entry point may go back to "running" for a click it has not queued."""
-    src = (REPO_ROOT / "waves" / "waves_ui" / "backend.py").read_text()
+    """No entry point may publish "running" for a click it has not queued."""
+    src = (REPO_ROOT / "waves" / "desktop" / "backend.py").read_text()
     # The pre-queue acknowledgements, each immediately before a return or
     # a worker dispatch. Any of them saying "running" is the progress-bar flash.
     assert src.count('"preparing")') == 5, "refetch, apple refetch, playlist warm, category warm, edition scan"

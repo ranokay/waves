@@ -1,18 +1,18 @@
 """The update toast never names a version the restart will not land.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 install() refuses to stage a second update over an already-armed helper, on
-purpose: the two would race the same backup folder (tests/ui/test_updater.py pins
-that refusal). What it does in that case is hand back the STAGED result, and it
-does so before it has looked at the release it was asked for.
+purpose: the two would race the same backup folder (tests/ui/test_updater.py
+pins that refusal). Handing back the STAGED result in that case, before it has
+looked at the release it was asked for, breaks the toast:
 
-So on Windows, with a swap staged yesterday and never restarted into: the toast
-offered today's newer release, the user pressed INSTALL, the toast said that
-newer version was installed, and the restart landed yesterday's. The Settings
-card was honest throughout (it pins the staged version into its own copy); the
-toast was not, because it renders its own idea of the version and had never
-been told the install went nowhere near it.
+With a swap staged and never restarted into, the toast offers a newer release,
+the user presses INSTALL, the toast says that newer version was installed, and
+the restart lands the staged one. The Settings card is honest throughout (it
+pins the staged version into its own copy); the toast is not, because it
+renders its own idea of the version and was never told the install went
+nowhere near it.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -74,8 +74,8 @@ def _run_scenario() -> int:
     try:
         from support.offline import patch_offline
 
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

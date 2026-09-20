@@ -1,4 +1,4 @@
-"""The spellings an artist folder may have on disk (waves/helper/path.py
+"""The spellings an artist folder may have on disk (waves/paths.py
 folder_name_candidates), for the library scan's probe by name.
 
 The probe stats each spelling in turn and stops at the first hit, so the
@@ -10,7 +10,7 @@ separator in it can never be one folder.
 
 from __future__ import annotations
 
-from waves.helper.path import folder_name_candidates
+from waves.paths import folder_name_candidates
 
 
 def test_a_plain_name_is_asked_once():

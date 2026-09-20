@@ -1,4 +1,4 @@
-"""Regression tests for BaseConfig.save atomic write (crash-safe config files).
+"""BaseConfig.save atomic write (crash-safe config files).
 
 BaseConfig.save wrote settings.json / token.json in place, so a crash mid-write
 truncated the file: a corrupt config, or a lost login on the next launch. It now

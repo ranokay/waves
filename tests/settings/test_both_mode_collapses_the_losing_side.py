@@ -7,14 +7,15 @@ explicit preference picks the side that gets planned. With BOTH asked for the
 losing side is still wanted, so it is downloaded whole instead of being thrown
 away.
 
-"Whole" used to mean "every edition of it". The kept side got the merge and, on
-a decline, the completeness collapse that leaves one fullest version. The losing
-side got neither. So someone who asked for both sides and whose artist has a
-standard and a deluxe pressing of the same record ended up with the clean
+"Whole" must not mean "every edition of it". The kept side gets the merge and,
+on a decline, the completeness collapse that leaves one fullest version. The
+losing side must get the same collapse, or someone who asked for both sides and
+whose artist has a standard and a deluxe pressing of the same record ends up
+with the clean
 standard AND the clean deluxe queued together: every song of the standard
 written to disk a second time, in a second folder, for nothing.
 
-The losing side now goes through the same completeness collapse. What is pinned
+The losing side goes through the same completeness collapse. What is pinned
 here:
 
 * "both" queues ONE clean edition, the fullest, next to whatever the explicit
@@ -31,8 +32,8 @@ here:
   redundant and drops it: the person who asked for both kinds gets only the
   explicit one;
 * an edition whose songs could not be read is never collapsed away;
-* the kept side's own collapse still runs when its merge declines, so the fix
-  added a collapse rather than moving one;
+* the kept side's own collapse still runs when its merge declines: the losing
+  side gains a collapse, the kept side's does not move;
 * the queue order matches the order the editions arrived in.
 """
 
@@ -40,7 +41,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from waves.waves_ui.backend import WavesBridge, _MergeRec
+from waves.desktop.backend import WavesBridge, _MergeRec
 
 
 class _Song:
@@ -90,7 +91,7 @@ def _queue(albums, recs, mode, ranks=None):
     bridge._merge_rank_fn = lambda: lambda obj: ranks.get(str(getattr(obj, "id", "")), 1)
     # One release, so the split and the collapse are what is under test rather
     # than the edition keying.
-    with patch("waves.waves_ui.backend._edition_base_key", lambda album: "one release"):
+    with patch("waves.desktop.backend._edition_base_key", lambda album: "one release"):
         return bridge._merge_editions(list(albums))
 
 

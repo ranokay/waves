@@ -39,12 +39,26 @@ Python never builds UI.
 Waves began as a fork of Tidaler and now maintains its own engine: the
 download engine modules at the top of the `waves` package descend from the
 upstream code (with many fixes of our own), and everything UI-specific lives
-in `waves/waves_ui/`. The engine/UI split is a hard seam: engine modules stay
-close to their inherited shape and UI-owned behavior lands in `waves_ui`
-subclasses and helpers, which keeps the engine easy to audit. User-facing
-state lives in its own `Waves` folder, independent of the package name
-(`~/.config/Waves` on Linux, `~/Library/Application Support/Waves` on macOS,
-`%APPDATA%\Waves` on Windows; see `__config_dirname__` in
+in `waves/desktop/`. The engine/UI split is a hard seam: engine modules stay
+close to their inherited shape and UI-owned behavior lands in
+`waves/desktop/` subclasses and helpers, which keeps the engine easy to audit.
+
+```
+waves/
+  config.py  constants.py  ids.py      # settings/session, shared primitives
+  paths.py  errors.py  redaction.py    # naming rules, error types, log scrubbing
+  download.py  progress.py  poolgauge.py  playlists.py  # the inherited engine
+  library/                             # scan, index, worker, ownership, share mounts
+  metadata/                            # tags, matching, MusicBrainz, lyrics, camelot
+  providers/                           # the Provider seam: base, tidal*, apple/
+  model/                               # persisted data models
+  desktop/                             # the Qt/QML layer, see desktop/README.md
+    icons/  fonts/  qml/
+```
+
+User-facing state lives in its own `Waves` folder, independent of the package
+name (`~/.config/Waves` on Linux, `~/Library/Application Support/Waves` on
+macOS, `%APPDATA%\Waves` on Windows; see `__config_dirname__` in
 `waves/__init__.py`).
 
 ## Threading model
@@ -95,7 +109,7 @@ Say you want a "share link" action on album cards:
 album_id)`, look the album up in `self._objs["album"]`, do the work on
    `self.threadpool` via `Worker`, emit a new signal with the result.
 2. **Signal**: declare it near the other signals with a comment saying what
-   it carries and when it fires (see `BRIDGE.md` in `waves/waves_ui/`).
+   it carries and when it fires (see `BRIDGE.md` in `waves/desktop/`).
 3. **QML**: add a `function onShareAlbum(...)` handler inside Main.qml's
    `Connections { target: waves }` block, and call `waves.shareAlbum(id)`
    from the card's control line.
@@ -142,10 +156,10 @@ lockfile is the environment and drift fails the run.
 
 `mise run check` also carries the static gates:
 
-- `mise run lint-qml` — qmllint over `waves/waves_ui/qml`, also wired as a
+- `mise run lint-qml` — qmllint over `waves/desktop/qml`, also wired as a
   pre-commit hook for changed QML. Errors fail; the thousands of existing
   `[unqualified]` warnings are counted, not printed (they would bury errors).
-- `mise run format-qml` — qmlformat over `waves/waves_ui/qml`, styled by the
+- `mise run format-qml` — qmlformat over `waves/desktop/qml`, styled by the
   root `.qmlformat.ini` (the style is pinned there, not taken from Qt's
   defaults). Also a pre-commit hook for changed QML: a commit that reformats
   fails the hook, so re-stage the files and commit again. Pass file paths to
@@ -156,7 +170,7 @@ lockfile is the environment and drift fails the run.
   descriptors) and the inherited engine's shape are warnings, with the reasons
   in `pyproject.toml`; error-level diagnostics elsewhere fail the gate,
   warnings do not (ty's own default-warn rules included). The burn-down is
-  tracked in #319.
+  tracked in the repository's tracker.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
 `uv pip uninstall tidaler`, then `mise run install` (or
@@ -166,7 +180,7 @@ the app treats the run as a dev environment and opens against the separate
 `Waves-dev` config folder, which looks like being signed out.
 
 The QML plain-text guard test fails if any dynamic `Text` in Main.qml or the
-components split out of it in #315 can render rich text (remote strings must
+components split out of it can render rich text (remote strings must
 never inject markup).
 
 The launch water (the wave video behind the launch screen) shares the GUI
@@ -179,12 +193,12 @@ reason), and `tools/launch_probe.py` measures a real launch with Qt's own
 render-loop log, no Python on the measured path, and prints a verdict:
 
 ```bash
-uv run python tools/launch_probe.py        # 12 s, gaps over 45 ms
+uv run --locked --all-extras python tools/launch_probe.py   # 12 s, gaps over 45 ms
 ```
 
 Run it twice (the first launch after a build is colder) before and after
 anything that touches the boot path. The library walk itself runs in a child
-process (`waves/library_worker.py`, started by `waves/waves_ui/library_proc.py`)
+process (`waves/library/worker.py`, started by `waves/desktop/library_proc.py`)
 for the same reason: off the GUI thread was never enough, off the interpreter
 is what the picture needs.
 
@@ -198,7 +212,7 @@ enough while the writer still knows the real path.
 
 ## More detail
 
-- `waves/waves_ui/README.md`: layout, key concepts, architecture notes.
-- `waves/waves_ui/BRIDGE.md`: reference for every bridge signal and slot
+- `waves/desktop/README.md`: layout, key concepts, architecture notes.
+- `waves/desktop/BRIDGE.md`: reference for every bridge signal and slot
   pattern.
 - `WavesBridge`'s class docstring in `backend.py`: the state model.

@@ -18,10 +18,10 @@ from types import SimpleNamespace
 
 from support.paths import QML_DIR, QML_MAIN
 
-from waves.waves_ui.backend import _ARTIST_VIDEO_PAGE, _VIDEOS_GROUP_PREFIX, WavesBridge
+from waves.desktop.backend import _ARTIST_VIDEO_PAGE, _VIDEOS_GROUP_PREFIX, WavesBridge
 
 QML = QML_MAIN.read_text(encoding="utf-8")
-# SectionHeader moved to its own file in #315 slice 6; the pin follows it.
+# SectionHeader lives in its own file; the pin follows it.
 SECTION_HEADER = (QML_DIR / "SectionHeader.qml").read_text(encoding="utf-8")
 
 

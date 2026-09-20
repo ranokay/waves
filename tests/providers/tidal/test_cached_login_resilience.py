@@ -1,4 +1,4 @@
-"""Regression tests for WavesTidal.login_token (cached-sign-in launch login).
+"""The cached-sign-in launch login (``WavesTidal.login_token``).
 
 The upstream ``Tidal.login_token`` deletes the saved sign-in on *any* exception,
 so a black-holed network at launch permanently logs the user out (the OAuth
@@ -24,7 +24,7 @@ import pytest
 import requests
 from tidalapi.exceptions import TooManyRequests
 
-from waves.waves_ui.session import WavesTidal
+from waves.desktop.session import WavesTidal
 
 
 def _bare(tmp_path, *, raises=None, returns=False, has_token=True):
@@ -161,13 +161,14 @@ def test_no_stored_sign_in_is_a_noop(tmp_path):
     assert token_file.exists(), "with nothing stored the file is never touched"
 
 
-# --- A client probe is not the user's sign-in (issue #30) -------------------
+# --- A client probe is not the user's sign-in -------------------------------
 #
 # Fetching Dolby Atmos swaps the client id and re-authenticates mid-download to
 # prove the swap took, and that goes through login_token. A refusal there is the
-# Atmos client being turned away; it says nothing about the saved sign-in, yet
-# it used to delete it from under a running queue, on a worker thread, while the
-# window still said signed in. The loss only showed at the next launch.
+# Atmos client being turned away; it says nothing about the saved sign-in, so it
+# must never delete it, least of all from under a running queue on a worker
+# thread with the window still saying signed in. Such a loss would only show at
+# the next launch.
 
 
 def _probe_capable(wt):

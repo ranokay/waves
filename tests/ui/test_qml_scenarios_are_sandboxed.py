@@ -10,10 +10,10 @@ its startup lines and tracebacks into the user's ``waves_dev.log``, and,
 if a library root is configured, starts a REAL scan of the user's music
 library from its constructor.
 
-Three scenarios were missing the sandbox, and it showed: a verbose log
-kept for a livetest was interleaved with test sessions, each one starting
-a library scan that bailed seconds later, and a test's own "live TIDAL API
-disabled in this test" traceback was written into it as an app ERROR.
+A scenario missing the sandbox shows it: a verbose log kept by a developer is
+interleaved with test sessions, each one starting a library scan that bails
+seconds later, and a test's own "live TIDAL API disabled in this test"
+traceback is written into it as an app ERROR.
 
 HOW THIS STAYS FIXED
 --------------------

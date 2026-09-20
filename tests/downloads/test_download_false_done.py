@@ -1,17 +1,15 @@
-"""Regression guard for the false-"done" download bug.
+"""A silent stream failure must not read as a green done.
 
-THE BUG
--------
-The download engine (``Download.item``) returns ``(False, path)`` WITHOUT raising
-when it cannot fetch a stream URL, e.g. an unentitled/free TIDAL account whose
-playback requests are rejected. The job worker used to discard that return and
-emit ``downloadState(id, "done")`` whenever no exception propagated, so the UI
-button flipped to a green DONE/check even though nothing was written.
+The download engine (``Download.item``) returns ``(False, path)`` WITHOUT
+raising when it cannot fetch a stream URL, e.g. an unentitled/free TIDAL
+account whose playback requests are rejected. A download state that only
+depends on exceptions propagating would flip the UI button to a green
+DONE/check even though nothing was written.
 
-THE FIX rests on ``_TrackedDownload`` tallying only tracks that actually wrote a
-file (``ok_count``) and re-emitting the per-track ``failed`` status, so the job
-worker can tell a silent failure from success. These tests pin that mechanism:
-a ``(False, ...)`` item must NOT count as a success and must report ``failed``.
+``_TrackedDownload`` tallies only tracks that actually wrote a file
+(``ok_count``) and re-emits the per-track ``failed`` status, so the job worker
+can tell a silent failure from success. These tests pin that mechanism: a
+``(False, ...)`` item must NOT count as a success and must report ``failed``.
 """
 
 from __future__ import annotations
@@ -21,9 +19,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from waves.desktop import backend
+from waves.desktop.backend import _TrackedDownload
 from waves.download import Download
-from waves.waves_ui import backend
-from waves.waves_ui.backend import _TrackedDownload
 
 
 def _make_tracked() -> tuple[_TrackedDownload, MagicMock]:
@@ -73,7 +71,7 @@ def test_written_track_counts_and_reports_done():
 
 
 def test_silent_failure_does_not_count_and_reports_failed():
-    """The bug trigger: engine returns (False, path) WITHOUT raising."""
+    """The silent-failure trigger: engine returns (False, path) WITHOUT raising."""
     dl, relay = _make_tracked()
     with patch.object(Download, "item", return_value=(False, "/tmp/song.flac")):
         ok, _ = dl.item(media=_media())

@@ -1,15 +1,13 @@
-"""Regression: late search results must not steal the active surface.
+"""Late search results must not steal the active surface.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 A search resolves over seconds (paginated fan-out), and a pasted TIDAL link
-adds a ~0.6s decode before even issuing. ``onSearchResults`` used to switch
-the whole app to the search page unconditionally when the payload landed, so
-clicking an artist or album name while a search was still in flight opened
-the page, then the late results yanked the user to the search surface: to
-them, the click "navigated to search and searched" instead of opening the
-page (reported from livetesting, hard to reproduce because it needs the
-timing).
+adds a ~0.6s decode before even issuing. Switching the whole app to the search
+page unconditionally when the payload lands yanks the user away: clicking an
+artist or album name while a search is still in flight opens the page, then
+the late results steal the surface, and to the user the click "navigated to
+search and searched" instead of opening the page.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -69,8 +67,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

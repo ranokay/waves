@@ -17,7 +17,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 
 from waves.constants import CTX_APPLE
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 _REASON = "Apple Music was disabled"
 

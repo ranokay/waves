@@ -22,7 +22,7 @@ import re
 import sys
 from pathlib import Path
 
-from waves.helper.path import path_file_numbered_candidate
+from waves.paths import path_file_numbered_candidate
 
 logger = logging.getLogger("waves.providers.apple.integrity")
 

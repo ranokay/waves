@@ -1,29 +1,18 @@
-"""A track TIDAL refuses to stream is skipped, not failed (issue #25).
+"""A track TIDAL refuses to stream is skipped, not failed.
 
-THE BUG
--------
-The engine refused any track whose ``allow_streaming`` flag was false, logged
-"This item is not available for listening anymore on TIDAL. Skipping", and
-returned ``(False, "")`` exactly like a download that broke. Two things were
-wrong with that. The flag is a FALSE NEGATIVE for our client: TIDAL serves
+Availability is decided where it is authoritative, at stream-fetch time. The
+``allow_streaming`` flag is a false negative for our client (TIDAL serves
 editions like "ALICIA (With Commentary)" with ``allowStreaming=false`` on every
-track, yet the account can still play most of them, so gating on the flag
-refused tracks that were downloadable. And the GUI tallied the refusal into
-``fail_count``, so a whole album came back as ``RuntimeError: 15 of 15 tracks
-failed``: a red album, a RETRY button, and no hint of who was refusing.
+track, yet the account can still play most of them), so a pre-gate on it would
+refuse downloadable tracks. The engine attempts the stream, and only the tracks
+TIDAL actually withholds (a 404 / "no stream", or a 401/403 whose body blames
+the asset, e.g. subStatus 4005) are refused. An auth 401 is NOT a refusal.
 
-THE FIX has two halves:
-
-1. Availability is decided where it is authoritative, at stream-fetch time. The
-   ``allow_streaming`` pre-gate on tracks is gone; the engine attempts the
-   stream and only the tracks TIDAL actually withholds (a 404 / "no stream", or
-   a 401/403 whose body blames the asset, e.g. subStatus 4005) are refused. An
-   auth 401 is NOT a refusal.
-2. A refusal is a third outcome. ``_note_unavailable`` marks the calling thread,
-   the tracked ``item()`` reads that mark and reports ``unavailable`` instead of
-   ``failed``, and the count rides beside the tallies rather than inside them:
-   it never fails the album around it, and never props up an album that produced
-   nothing either.
+A refusal is a third outcome. ``_note_unavailable`` marks the calling thread,
+the tracked ``item()`` reads that mark and reports ``unavailable`` instead of
+``failed``, and the count rides beside the tallies rather than inside them: it
+never fails the album around it, and never props up an album that produced
+nothing either.
 """
 
 from __future__ import annotations
@@ -38,9 +27,9 @@ from tidalapi.exceptions import StreamNotAvailable
 from tidalapi.media import Track
 
 from waves import download as download_mod
+from waves.desktop import backend
+from waves.desktop.backend import _TrackedDownload
 from waves.download import Download, _tidal_refuses_asset
-from waves.waves_ui import backend
-from waves.waves_ui.backend import _TrackedDownload
 
 
 def _make_tracked() -> tuple[_TrackedDownload, MagicMock]:
@@ -136,8 +125,8 @@ def test_a_bodyless_401_is_still_a_refusal():
 
 
 def test_the_flag_no_longer_gates_a_track():
-    # allow_streaming=false must NOT refuse the track up front anymore: those
-    # tracks are downloadable. keep_album skips the re-fetch that needs a live
+    # allow_streaming=false must NOT refuse the track up front: those tracks
+    # are downloadable. keep_album skips the re-fetch that needs a live
     # session, so the very track object passes straight through, unmarked.
     dl, _relay = _make_tracked()
     media = _track(allow_streaming=False)
@@ -183,7 +172,7 @@ def test_a_refused_collection_is_recorded_on_the_job():
     album.allow_streaming = False
     assert dl._validate_and_prepare_media(album, None, None) is None
     assert dl.list_unavailable is True
-    assert dl._take_unavailable() is False  # not a track's mark  # not a track's mark
+    assert dl._take_unavailable() is False  # not a track's mark
 
 
 # --- the GUI turns the mark into an outcome ----------------------------------
@@ -207,7 +196,7 @@ def test_refused_track_reports_unavailable_not_failed():
     assert ok is False
     assert _statuses(relay) == ["running", "unavailable"]
     assert dl.unavailable_count == 1
-    assert dl.fail_count == 0  # THE FIX: not a failure of ours
+    assert dl.fail_count == 0  # a refusal is not a failure of ours
     assert dl.ok_count == 0  # and not a success either
 
 

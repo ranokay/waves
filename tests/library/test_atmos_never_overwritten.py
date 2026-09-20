@@ -2,14 +2,13 @@
 
 TIDAL delivers Atmos as an MP4 (.m4a) at its 320k request tier, the very same
 extension stereo AAC uses, so the two resolve to one destination name. Three
-doors used to walk through it: the "Skip existing" setting turned off,
-REDOWNLOAD (which forces skipping off per track), and a quality upgrade (the
-same force). All three land in _claim_destination, so the protection is pinned
-there: a fetch whose audio mode differs from the file already holding a name
-treats that name as taken and steps aside to a numbered variant, in BOTH
-directions (a stereo fetch spares an Atmos file, an Atmos fetch spares a
-stereo one). Same mode keeps the historical answer, so a genuine upgrade
-still replaces its own copy in place.
+doors lead to it: the "Skip existing" setting turned off, REDOWNLOAD (which
+forces skipping off per track), and a quality upgrade (the same force). All
+three land in _claim_destination, so the protection is pinned there: a fetch
+whose audio mode differs from the file already holding a name treats that name
+as taken and steps aside to a numbered variant, in BOTH directions (a stereo
+fetch spares an Atmos file, an Atmos fetch spares a stereo one). Same mode
+keeps the in-place answer, so a genuine upgrade still replaces its own copy.
 
 The mode of the occupant is read off the disk (waves.download's
 _file_audio_mode_is_atmos), never out of a ledger, so a user's own Atmos file
@@ -22,8 +21,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from waves.desktop.backend import _TrackedDownload
 from waves.download import Download, _file_audio_mode_is_atmos
-from waves.waves_ui.backend import _TrackedDownload
 
 ATMOS_MARK = b"|atmos"
 
@@ -90,8 +89,8 @@ class TestTheModeGateInTheClaim:
     """_claim_destination with skipping off, the overwrite regime itself."""
 
     def test_a_stereo_fetch_steps_aside_from_an_atmos_occupant(self, tmp_path):
-        # Same track id, so the OLD rule said "its own to replace". The mode
-        # difference must win: this is the exact Atmos-loss door.
+        # Same track id, which alone would say "its own to replace"; the mode
+        # difference must win. This is the exact Atmos-loss door.
         dl = _make_download(tmp_path, skip_existing=False)
         base = tmp_path / "Song.m4a"
         _occupy(base, "123", atmos=True)
@@ -125,8 +124,8 @@ class TestTheModeGateInTheClaim:
         assert claimed == base
 
     def test_an_untagged_atmos_file_is_protected_too(self, tmp_path):
-        # No id at all used to mean "treat as mine". The mode is asked BEFORE
-        # the id, so a user's own untagged Atmos file survives a refresh.
+        # No id means "cannot say whose", so the mode is asked BEFORE the id; a
+        # user's own untagged Atmos file survives a refresh.
         dl = _make_download(tmp_path, skip_existing=False)
         base = tmp_path / "Song.m4a"
         base.write_bytes(b"somebody's untagged audio" + ATMOS_MARK)
@@ -150,8 +149,8 @@ class TestTheModeGateInTheClaim:
 class TestTheRedownloadDoor:
     """REDOWNLOAD and a quality upgrade force skipping off per thread through
     _TrackedDownload._force_download; the mode gate must hold inside it. This
-    also pins the thread-local override itself on the real _TrackedDownload,
-    which no test observed before (the old ones built a bare Download)."""
+    also pins the thread-local override itself on the real _TrackedDownload
+    rather than on a bare Download."""
 
     def test_the_override_is_per_thread_and_restored(self, tmp_path):
         dl = _make_download(tmp_path, skip_existing=True, cls=_TrackedDownload)
@@ -226,8 +225,8 @@ class TestTheOnDiskModeReader:
         path = tmp_path / "Song.m4a"
         path.write_bytes(b"stand-in")
 
-        # The sniff lives in the shared reader (waves.metadata.read_audio_mode);
+        # The sniff lives in the shared reader (waves.metadata.tags.read_audio_mode);
         # its container open is the module-level seam.
-        monkeypatch.setattr("waves.metadata._mp4_codec", lambda _path: codec)
+        monkeypatch.setattr("waves.metadata.tags._mp4_codec", lambda _path: codec)
 
         assert _file_audio_mode_is_atmos(path) is verdict

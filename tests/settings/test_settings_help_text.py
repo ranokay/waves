@@ -9,8 +9,8 @@ Only the em dash may be rewritten.
 
 from __future__ import annotations
 
+from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings
-from waves.waves_ui.backend import WavesBridge
 
 
 class _Stub:
@@ -37,7 +37,7 @@ def test_em_dash_becomes_plain_punctuation():
 
 
 def test_integrity_help_names_the_decodability_limit():
-    """Spec §6.5 / issue #238: verification proves a delivery decodes, not
+    """Spec §6.5: verification proves a delivery decodes, not
     that it is bit-perfect, and the integrity help must say so rather than
     imply a fidelity guarantee."""
     text = HelpSettings().apple_integrity_retries

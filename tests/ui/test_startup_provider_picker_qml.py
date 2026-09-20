@@ -42,8 +42,8 @@ def _scenario() -> int:  # noqa: C901 (one straight scenario)
 
     patch_offline()
     sandbox_qml_settings()
-    from waves.waves_ui.app import _load_mono
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.app import _load_mono
+    from waves.desktop.backend import WavesBridge
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -80,7 +80,7 @@ def _scenario() -> int:  # noqa: C901 (one straight scenario)
     # First run: the welcome owns the screen, the TIDAL panel stays hidden,
     # and no browser opened on its own. The cards come from the provider
     # descriptors; their marks render at the descriptor's tile width, not at
-    # source pixels (issue #84: RowLayout ignores width/height).
+    # source pixels (RowLayout ignores width/height).
     def _logo_widths() -> str:
         return scene_js(
             "var out = [];"

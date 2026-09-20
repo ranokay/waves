@@ -96,9 +96,9 @@ jobs:
       - name: Guard, a published release must be able to self-update
         if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
         run: |
-          grep -Eq '^REPO = "[^"]+"' waves/waves_ui/updater.py \
+          grep -Eq '^REPO = "[^"]+"' waves/desktop/updater.py \
             || { echo "::error::updater.REPO is empty; a published build could never auto-update. Set REPO before tagging a release."; exit 1; }
-          grep -Eq '^UPDATE_PUBLIC_KEY = "[^"]+"' waves/waves_ui/signing.py \
+          grep -Eq '^UPDATE_PUBLIC_KEY = "[^"]+"' waves/desktop/signing.py \
             || { echo "::error::signing.UPDATE_PUBLIC_KEY is empty; shipped updates could not be signature-verified. Embed UPDATE_PUBLIC_KEY before tagging a release."; exit 1; }
           echo "Updater is configured; release build may proceed."
       # The version compiled INTO the binary must equal the release tag, or the
@@ -112,9 +112,9 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
         run: |
           TAG_VERSION="${RELEASE_TAG#v}"
-          CODE_VERSION="$(grep -m1 '__version__' waves/waves_ui/__init__.py | tr -d ' "' | cut -d'=' -f2)"
+          CODE_VERSION="$(grep -m1 '__version__' waves/desktop/__init__.py | tr -d ' "' | cut -d'=' -f2)"
           if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
-            echo "::error::release tag '$RELEASE_TAG' (version '$TAG_VERSION') does not match waves/waves_ui/__init__.py __version__ '$CODE_VERSION'. Bump __version__ to match the tag before releasing."
+            echo "::error::release tag '$RELEASE_TAG' (version '$TAG_VERSION') does not match waves/desktop/__init__.py __version__ '$CODE_VERSION'. Bump __version__ to match the tag before releasing."
             exit 1
           fi
           echo "Version $CODE_VERSION matches release tag $RELEASE_TAG."
@@ -157,8 +157,8 @@ jobs:
 
   create-release:
     # Create the draft Release exactly once, before the build matrix starts.
-    # Each platform leg used to independently ask softprops/action-gh-release
-    # to "find or create" the Release by tag; running six of those at once is
+    # Each platform leg must not independently ask softprops/action-gh-release
+    # to "find or create" the Release by tag: running six of those at once is
     # a race, more than one leg can find nothing and create its own, splitting
     # the platform assets across duplicate drafts (observed on v0.1.2: two
     # drafts both tagged v0.1.2, assets scattered between them). Creating the
@@ -203,7 +203,7 @@ jobs:
           # (WAVES_MACOS_MIN in tools/build_waves.sh), so nothing here can ever prove a
           # bundle runs on that floor. The "Assert macOS version floor" step
           # below checks it statically instead: every shipped Mach-O must not
-          # demand anything newer (issue #14: PySide6 6.10 wheels smuggled in
+          # demand anything newer (PySide6 6.10 wheels smuggled in
           # macOS 15-only libraries, so older systems got a silent Dock bounce).
           - os: "macos-15-intel"
             TARGET: "macos-15-intel"
@@ -429,7 +429,7 @@ jobs:
       # value so an unsupported system shows a clear "requires macOS X" dialog
       # instead of a Dock bounce. A dependency bump that smuggles in
       # newer-floor binaries fails here instead of shipping a bundle whose
-      # plist lies (issue #14: PySide6 6.10 wheels are tagged macOS 13 but
+      # plist lies (PySide6 6.10 wheels are tagged macOS 13 but
       # contain macOS 15-only libraries).
       - name: Assert macOS version floor
         if: ${{ startsWith(matrix.OS_ARCH, 'macos-') && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) }}

@@ -1,4 +1,4 @@
-# Watch upstream wrapper-v2 for changes (issue #88).
+# Watch upstream wrapper-v2 for changes.
 #
 # Upstream moves independently of Waves: fixes we want, or breaking changes
 # we must adapt to (the wrapper API pin gamdl carries is one example).

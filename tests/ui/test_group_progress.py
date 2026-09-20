@@ -3,13 +3,13 @@
 jumping once per finished track, only ever moves forward, and stays within
 0..100.
 
-Same hermetic pattern as test_audit_backend.py: the real, unbound methods are
+Same hermetic pattern as test_bridge_queue_and_cache_guards.py: the real, unbound methods are
 bound onto a minimal stub so no Qt app or network session is needed.
 """
 
 from __future__ import annotations
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Signal:

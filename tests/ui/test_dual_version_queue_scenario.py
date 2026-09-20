@@ -81,7 +81,7 @@ def _run_scenario() -> int:
         return booted
     root, q, settle, bridge = booted
 
-    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 
@@ -175,7 +175,7 @@ def _run_scenario() -> int:
 
     # After a restart the per-version answers stand, through the bridge's own
     # badge slot and a fresh store over the same database.
-    from waves.ownership import OwnershipStore
+    from waves.library.ownership import OwnershipStore
 
     workdir = Path(tempfile.mkdtemp())
     try:

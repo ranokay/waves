@@ -1,9 +1,9 @@
 """Track-row hover stability: hover must never reflow the row.
 
-Hovering a track's download options used to shift the layout: the standalone
-LYRICS/COVER pair only existed while hovered, so its RowLayout slot opened and
-closed under the pointer. Hover may tint and overlay, but the row's inner
-geometry must not move.
+Hovering a track's download options must not shift the layout: a standalone
+LYRICS/COVER pair that exists only while hovered opens and closes its
+RowLayout slot under the pointer. Hover may tint and overlay, but the row's
+inner geometry must not move.
 
 Proved on the real Main.qml offscreen: a search track row is seeded, its
 geometry recorded, the pointer moved onto the row, and the row's own MouseArea

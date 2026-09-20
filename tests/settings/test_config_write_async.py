@@ -27,7 +27,7 @@ import threading
 import time
 from typing import ClassVar
 
-from waves.waves_ui.backend import WavesBridge, _SingleFlightWriter
+from waves.desktop.backend import WavesBridge, _SingleFlightWriter
 
 
 def test_a_submit_burst_runs_first_plus_newest():

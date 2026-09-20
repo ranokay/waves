@@ -1,10 +1,10 @@
 """My Music's saved-shelf sources: labels, categories and the empty state.
 
-Issue #221's source-label rule: the shelves a provider contributes are
+The source-label rule: the shelves a provider contributes are
 labelled by their source only when more than one provider contributes them.
-Issue #259 makes the pane render those sources generically: every source
+The pane renders those sources generically: every source
 carries its own shelf categories (capability-driven, ADR 0008), a lone source
-renders exactly as it did before -- no label -- and a second provider that
+renders with no label, and a second provider that
 declares FAVORITES contributes its own group from its descriptor and its live
 session alone.
 
@@ -21,15 +21,15 @@ from types import SimpleNamespace
 
 from support.provider_fakes import StubProvider, stub_bridge
 
+from waves.desktop import bridge_surfaces
+from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
-from waves.waves_ui import bridge_surfaces
-from waves.waves_ui.backend import WavesBridge
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-QML_DIR = REPO_ROOT / "waves" / "waves_ui" / "qml"
+QML_DIR = REPO_ROOT / "waves" / "desktop" / "qml"
 MAIN_QML = QML_DIR / "Main.qml"
 # The whole QML tree: the pane's words are bridge data, and the surfaces that
-# must not hardcode them may live in any split-out file (#315).
+# must not hardcode them may live in any split-out file.
 ALL_QML = "\n".join(path.read_text(encoding="utf-8") for path in sorted(QML_DIR.glob("*.qml")))
 
 # TIDAL's strip, exactly as the pane has always rendered it.
@@ -52,7 +52,7 @@ def _shelf_provider(provider_id, name, *, logged_in=True, capabilities=None):
 
 def test_a_lone_saved_shelf_source_carries_no_label():
     # One provider contributes: the pane's rows are that provider, so the
-    # label stays "" and the pane renders exactly as it did (issue #221).
+    # label stays "" and the pane renders unlabelled.
     sources = bridge_surfaces._saved_shelf_sources(stub_bridge({"tidal": _shelf_provider("tidal", "TIDAL")}))
 
     assert sources == [{"id": "tidal", "name": "TIDAL", "label": ""}]
@@ -143,7 +143,7 @@ def test_a_third_provider_adds_its_own_group_with_no_surface_edit():
 
 
 def test_the_signed_out_empty_state_names_the_provider_that_could_fill_it():
-    # The #220 state, now bridge data: TIDAL's own words, its own sign-in
+    # The signed-out state, bridge data: TIDAL's own words, its own sign-in
     # action, and the detail line listing exactly the shelves it would fill.
     tidal = StubProvider("tidal", "TIDAL", capabilities=frozenset(Capability), logged_in=False)
 
@@ -197,7 +197,7 @@ def test_no_favourites_provider_means_no_empty_state():
 
 
 def test_the_pane_count_agrees_with_the_favourites_the_badges_read():
-    """The pane's count is the count the badge path reads (issue #259, AC4).
+    """The pane's count is the count the badge path reads.
 
     Search's library-scoped views and the badges ask for the user's favourites
     through the bridge's own ``_favorite_ids`` (the provider's id sweep); the
@@ -267,7 +267,7 @@ class _Signal:
 
 
 def test_two_sources_loading_their_shelves_in_one_turn_both_land():  # noqa: C901 (one straight harness)
-    """One source's load must not cancel another's (issue #259).
+    """One source's load must not cancel another's.
 
     Opening My Music loads the primary source's shelf and every other source's
     in the same turn. A single global load generation meant the first load's
@@ -338,7 +338,7 @@ def test_two_sources_loading_their_shelves_in_one_turn_both_land():  # noqa: C90
 
     stub = _Bridge()
     stub.loadLibrary("tidal", "albums")
-    stub.loadLibrary("fake", "albums")  # the second load used to cancel the first
+    stub.loadLibrary("fake", "albums")  # a second load must not cancel the first
 
     # The second load's worker lands first, then the first's (the order that
     # exposed the drop).
@@ -357,7 +357,7 @@ def test_the_sources_are_bridge_data_not_qml_copy():
     # The pane renders the bridge's list -- the group label, the strip's
     # categories and the empty state's words are all data -- so a provider's
     # own name reaches the UI without a QML edit. The negative pin scans the
-    # whole tree: the pane's surface lives in LibSourceGroup.qml since #315.
+    # whole tree: the pane's surface may live in any split-out file.
     assert "Saved from" not in ALL_QML
     assert "waves.myMusicSources()" in ALL_QML
     assert "waves.myMusicEmpty()" in ALL_QML

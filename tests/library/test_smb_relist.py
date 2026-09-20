@@ -1,15 +1,13 @@
 """Recovering the folders an SMB mount refuses to list
-(waves/waves_ui/smb_relist.py, wired in bridge_library._library_recover_untrusted).
+(waves/library/smb_relist.py, wired in bridge_library._library_recover_untrusted).
 
-THE BUG THIS FENCES OFF
------------------------
 The macOS SMB client fills a directory cache with ten parallel queries. On the
 affected pairing all ten come back with the FIRST page and all ten are kept, so
 a folder holding 1345 subfolders lists as 10000 entries of 1000 distinct names,
 and the OS reports success. Every application on the machine is affected,
-Finder included. Waves believed it, so 304 artists were never indexed: every
-badge read "not in library" for music the user owned, and duplicates were
-downloaded on that answer.
+Finder included. Believing it leaves 304 artists unindexed: every badge reads
+"not in library" for music the user owns, and duplicates get downloaded on that
+answer.
 
 Mounting the same share a second time lists all of it, in about a second. The
 recovery here does that, reads the names, unmounts, and hands the names to the
@@ -20,7 +18,8 @@ Pinned here, in the order a reviewer should care about them:
 - The whole sequence end to end: a scan whose listing hid three artists, a
   fresh mount that names all six, and an index that afterwards holds all six.
 - The mount is read only, invisible, soft, and NEVER prompts for a password
-  (a background scan that pops a password sheet would be worse than the bug).
+  (a background scan that pops a password sheet would be worse than the failure
+  it recovers from).
 - A fresh listing is refused unless it is trustworthy: it must repeat no name
   (a second broken mount is not believed just because it is new) and must keep
   every folder the index already holds (a listing that LOST folders is not a
@@ -39,8 +38,8 @@ import pytest
 from support.library_fakes import ScandirStub, fake_listing
 from support.library_fakes import make_album_dir as _mk
 
-from waves.library_index import LibraryIndex
-from waves.waves_ui import smb_relist
+from waves.library import smb_relist
+from waves.library.index import LibraryIndex
 
 ARTISTS = ("Aphex", "Boards", "Clark", "Dopplereffekt", "Eno", "Fennesz")
 HIDDEN = ("Dopplereffekt", "Eno", "Fennesz")
@@ -409,7 +408,7 @@ def test_a_healthy_library_never_mounts_anything(tmp_path, monkeypatch):
 def test_the_bridge_recovers_straight_after_a_flagged_scan(tmp_path, monkeypatch):
     """The scan seam itself: bridge_library calls this before it builds the
     index, so a recovery lands in the very first publish."""
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     root, tags = _tagged_library(tmp_path)
     shown = set(ARTISTS[:3])
@@ -440,7 +439,7 @@ def test_the_bridge_recovers_straight_after_a_flagged_scan(tmp_path, monkeypatch
 def test_a_full_recovery_is_recorded_so_settings_stops_warning(tmp_path, monkeypatch):
     """The listing stays untrusted (the probe by name stays armed), but the
     library is complete, and Settings must say the one instead of the other."""
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     root, tags = _tagged_library(tmp_path)
     shown = set(ARTISTS[:3])
@@ -469,7 +468,7 @@ def test_a_full_recovery_is_recorded_so_settings_stops_warning(tmp_path, monkeyp
 def test_a_recovery_that_cannot_reach_everything_keeps_warning(tmp_path, monkeypatch):
     """The fresh mount names an artist the recovery then fails to index: the
     library IS short of a folder, and the note has to keep saying so."""
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     root, tags = _tagged_library(tmp_path)
     shown = set(ARTISTS[:3])
@@ -491,7 +490,7 @@ def test_a_recovery_that_cannot_reach_everything_keeps_warning(tmp_path, monkeyp
 
 
 def test_the_bridge_leaves_a_healthy_scan_alone(tmp_path, monkeypatch):
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     root, tags = _tagged_library(tmp_path)
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=lambda p: tags.get(os.path.dirname(p)))
@@ -512,7 +511,7 @@ def test_the_bridge_leaves_a_healthy_scan_alone(tmp_path, monkeypatch):
 
 def test_the_bridge_swallows_a_recovery_that_goes_wrong(tmp_path, monkeypatch):
     """Every failure here must land as "carry on exactly as before"."""
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     root, tags = _tagged_library(tmp_path)
     shown = set(ARTISTS[:3])

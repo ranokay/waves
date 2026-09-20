@@ -1,11 +1,11 @@
-"""Issue #259: a second saved-shelf source renders with zero QML edits.
+"""A second saved-shelf source renders with zero QML edits.
 
 WHAT THIS FENCES OFF
 --------------------
-My Music's shelves were TIDAL-shaped end to end: seven hardcoded category
-lists gated on the TIDAL session and refreshed through TIDAL-only loaders. A
-provider that later declared FAVORITES could contribute a descriptor and a
-session and still render nothing.
+My Music's shelves must render per source, not TIDAL-shaped end to end: seven
+hardcoded category lists gated on the TIDAL session and refreshed through
+TIDAL-only loaders leave a provider that declares FAVORITES with a descriptor
+and a session rendering nothing.
 
 This is the paper test, on the real pane: a second provider is registered on
 the live bridge (a descriptor, a session, FAVORITES) and the pane grows its
@@ -135,7 +135,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     _root, q, settle, bridge = booted
 
     # A live TIDAL session plus the fake: two sources, so both groups render
-    # and the labels are source-qualified (issue #221's rule).
+    # and the labels are source-qualified.
     bridge._logged_in = True
     bridge.providers["fake"] = _fake_provider()
     q("root.refreshProviderSurfaces()")

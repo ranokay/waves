@@ -38,11 +38,11 @@ from waves.constants import (
     tier_from_word,
     tier_word,
 )
-from waves.helper.exceptions import DownloadIncomplete
-from waves.lyrics import fetch_lrclib_lyrics, lyrics_sidecar_choices
-from waves.metadata import normalize_audio_type_tag, occupant_is_version, sniff_image_format
+from waves.errors import DownloadIncomplete
+from waves.library.ownership import copy_is_current, record_names_a_broken_copy
+from waves.metadata.lyrics import fetch_lrclib_lyrics, lyrics_sidecar_choices
+from waves.metadata.tags import normalize_audio_type_tag, occupant_is_version, sniff_image_format
 from waves.model.cfg import cover_sidecar_format, wants_both_default
-from waves.ownership import copy_is_current, record_names_a_broken_copy
 from waves.providers.apple import engine as apple_engine
 from waves.providers.apple.engine import (
     AppleCredential,
@@ -769,7 +769,7 @@ def quarantine_root(hooks: AppleJobHooks) -> pathlib.Path:
     root = resolve_quarantine_dir(base, custom or None)
     if custom:
         try:
-            from waves import library_index as _lib_index
+            from waves.library import index as _lib_index
 
             _lib_index.register_quarantine_dir(str(root))
         except Exception:
@@ -1023,7 +1023,7 @@ def lyrics_full(
             syllable_ttml = ""
         if syllable_ttml and word_on:
             try:
-                from waves.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
+                from waves.metadata.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
 
                 if ttml_timing_mode(syllable_ttml) == "word":
                     word_lrc = ttml_to_enhanced_lrc(syllable_ttml) or ""
@@ -1054,7 +1054,7 @@ def lyrics_full(
         plain = lrclib_plain
         if not plain and syllable_ttml:
             try:
-                from waves.ttml_lyrics import ttml_to_text
+                from waves.metadata.ttml_lyrics import ttml_to_text
 
                 plain = ttml_to_text(syllable_ttml) or ""
             except Exception:
@@ -1112,7 +1112,7 @@ def lyrics_full(
         return "", lrclib_plain, verbatim
     if syllable_ttml:
         try:
-            from waves.ttml_lyrics import ttml_to_text
+            from waves.metadata.ttml_lyrics import ttml_to_text
 
             plain = ttml_to_text(syllable_ttml) or ""
         except Exception:
@@ -1187,7 +1187,7 @@ def cover_bytes_pair(
 ) -> tuple[bytes | None, bytes | None]:
     """(embedded, separate-file) cover bytes for one track.
 
-    One owner of the two sizes (issue #236): the embedded fetch always
+    One owner of the two sizes: the embedded fetch always
     happens, and the separate file answers with the same bytes on "follow"
     (no second request) or a fetch at its own size -- exactly the rule the
     TIDAL engine applies to its own ``metadata_cover_file_dimension`` mirror.
@@ -1470,8 +1470,8 @@ def _credential_words(credential: AppleCredential) -> tuple[str, str]:
     """The (hold, terminal) wording for the credential a fetch needed.
 
     Both name the repair path the wizard owns, so a held or failed row is
-    actionable (AP-01: the hold used to name the wrong credential and the
-    retry re-ran the identical failing fetch).
+    actionable: the hold names the credential the fetch actually needed, and
+    the retry does not re-run an identical failing fetch.
     """
     if credential == AppleCredential.WRAPPER:
         return (
@@ -1962,7 +1962,7 @@ def deliver_track(
             break
     lyrics_synced, lyrics_unsynced, lyrics_ttml = lyrics_full(hooks, provider, row, facts, options=options)
     if wants_cover(hooks, collection, options=options):
-        # The separate cover file can carry its own size (issue #236); a
+        # The separate cover file can carry its own size; a
         # sidecar the toggles do not want never pays for a second fetch.
         cover_data, cover_file_data = cover_bytes_pair(
             hooks,
@@ -2323,7 +2323,7 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
                         # instead of failing the run (spec §3). Waiting on
                         # the other credential is how a wrapper-signed-in,
                         # cookies-broken job looped the identical failing
-                        # fetch forever (AP-01); the wait is bounded, and a
+                        # fetch forever; the wait is bounded, and a
                         # track held once too often for a credential that
                         # keeps reading recovered hands the row to setup
                         # instead of retrying forever. STOP lands promptly

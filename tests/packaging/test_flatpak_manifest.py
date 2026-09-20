@@ -50,7 +50,7 @@ def test_the_module_installs_the_glue_files_from_expected_sources():
         assert installed in commands, installed
     paths = {source["path"] for source in module["sources"]}
     # The dist is the tree tools/build_waves.sh produces.
-    assert paths == {"../../dist/waves.dist", ".", "../../waves/ui"}
+    assert paths == {"../../dist/waves.dist", ".", "../../waves/desktop/icons"}
 
 
 def test_the_desktop_and_metainfo_agree_on_the_app_id():

@@ -1,22 +1,22 @@
 """Mid-scan badge publishes are throttled; the rollup is derived off-GUI.
 
-THE COSTS THESE FENCE OFF
--------------------------
-R7: every committed flush of a running scan rebuilt BOTH presence indexes
-from a full table read (a cold scan of a big library commits every 200
-albums, so ~90 rebuilds whose own cost grows as the table fills). Mid-scan
-partial publishes are now rate-limited to one per _SCAN_PUBLISH_MIN_S; the
-FIRST commit still publishes immediately (badges light up as soon as
-anything is committed) and the scan's final publish is unconditional, so
-nothing committed is ever left unpublished.
+The costs these fence off:
 
-R9: the artist rollup (a full pass over the album index) was derived lazily
-inside the synchronous artistLibraryPresence slot, on the GUI thread, on the
-first ask after every republish. Every publish now precomputes it on the
-worker (_publish_index, one swap with the index itself) before
-libraryPresenceChanged fires; the slot keeps the lazy derive only as a race
-fallback, and takes it through _artist_rollup so a cache-backed index does
-not reach the whole-library pass.
+* Every committed flush of a running scan must not rebuild BOTH presence
+  indexes from a full table read (a cold scan of a big library commits every
+  200 albums, so ~90 rebuilds whose own cost grows as the table fills). Mid-scan
+  partial publishes are rate-limited to one per _SCAN_PUBLISH_MIN_S; the FIRST
+  commit still publishes immediately (badges light up as soon as anything is
+  committed) and the scan's final publish is unconditional, so nothing
+  committed is ever left unpublished.
+
+* The artist rollup (a full pass over the album index) must not be derived
+  lazily inside the synchronous artistLibraryPresence slot, on the GUI thread,
+  on the first ask after every republish. Every publish precomputes it on the
+  worker (_publish_index, one swap with the index itself) before
+  libraryPresenceChanged fires; the slot keeps the lazy derive only as a race
+  fallback, and takes it through _artist_rollup so a cache-backed index does
+  not reach the whole-library pass.
 
 The scan is driven through a fake lib whose refresh fires a burst of
 committed events, over a REAL LibraryIndex's rows (the fake delegates
@@ -34,7 +34,7 @@ from support.library_fakes import (
     make_library_bridge as _make,
 )
 
-from waves.waves_ui import bridge_library
+from waves.desktop import bridge_library
 
 
 class _BurstLib:

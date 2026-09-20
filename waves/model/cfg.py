@@ -24,7 +24,7 @@ class Settings:
     # writes the mirrors. A real install therefore reads the mirrors from then
     # on; editing a shared key by hand after the migration changes nothing.
     # They stay serialized so a pre-split settings.json keeps its meaning until
-    # that migration runs (audit LM-04).
+    # that migration runs.
     lyrics_embed: bool = False
     # Best-quality lyrics out of the box: sidecars on, so a track keeps its
     # finest timed source next to it -- .lrc on both providers, plus the
@@ -110,7 +110,7 @@ class Settings:
     download_folder_prompted: bool = False
     # Where each network volume the download folder has lived on came from:
     # {"/Volumes/Media": "smb://user@nas/Media"}, recorded while the share is
-    # healthy (statfs, see waves_ui/netmount.py). When macOS quietly ejects
+    # healthy (statfs, see library/netmount.py). When macOS quietly ejects
     # the share, this is what lets the app mount it back the way Finder
     # would, instead of watching a path that cannot return by itself. Origin
     # URLs are identity (host, maybe user): internal only, never shown in the

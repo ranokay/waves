@@ -1,4 +1,4 @@
-"""Provider-separated download paths (issue #65).
+"""Provider-separated download paths.
 
 The {provider_name} token renders the provider's library folder ("Tidal",
 "Apple Music") in both template engines, so the same song saved from both
@@ -18,8 +18,8 @@ from tidalapi import Album, Track
 
 from waves.config import _migrate_settings
 from waves.constants import provider_folder_name
-from waves.helper.path import format_path_media, format_str_media
 from waves.model.cfg import Settings
+from waves.paths import format_path_media, format_str_media
 from waves.providers.apple.files import format_apple_path
 
 pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
@@ -185,7 +185,7 @@ def test_marker_stops_a_second_rewrite():
 
 
 def test_token_is_listed_for_discovery():
-    from waves.waves_ui.backend import _TEMPLATE_TOKENS
+    from waves.desktop.backend import _TEMPLATE_TOKENS
 
     entries = {tok: desc for tok, _group, desc in _TEMPLATE_TOKENS}
     assert "provider_name" in entries

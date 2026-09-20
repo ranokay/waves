@@ -17,7 +17,7 @@ import pathlib
 
 from waves.constants import FILENAME_LENGTH_MAX
 from waves.download import _staging_path
-from waves.helper.path import (
+from waves.paths import (
     PATH_LENGTH_MAX,
     _path_length,
     _path_with_unique_suffix,
@@ -155,7 +155,7 @@ class TestTheWholePathFitsThePlatformCapToo:
         parent = _virtual_parent(PATH_LENGTH_MAX - 1 - len(name))
         path_file = parent / name
         assert _path_length(path_file) == PATH_LENGTH_MAX
-        # Raw insertion is what used to happen, and it lands three over the cap.
+        # Raw insertion lands three over the cap.
         assert _path_length(parent / ("s" * 15 + "_01.flac")) == PATH_LENGTH_MAX + len("_01")
 
         result = _path_with_unique_suffix(path_file, "_01")
@@ -165,7 +165,7 @@ class TestTheWholePathFitsThePlatformCapToo:
         assert len(result.stem) < len("s" * 15 + "_01"), "the stem gave up the three bytes"
 
     def test_a_short_parent_still_binds_on_the_filename_term(self):
-        # Regression anchor for the min(): with a short parent the 255-byte
+        # Short-parent anchor for the min(): with a short parent the 255-byte
         # name cap is what limits the stem, exactly as the tests above pin.
         path_file = pathlib.Path("/music") / ("s" * 250 + ".flac")
 
@@ -207,6 +207,6 @@ class TestTheWholePathFitsThePlatformCapToo:
         assert written.name == unique_variant_name(path_file, "_01")
         assert written.parent == parent
         assert _path_length(written) <= PATH_LENGTH_MAX
-        # The name both agree on is NOT the raw concatenation the scan used to
-        # probe with: that spelling is over the cap and matches nothing on disk.
+        # The name both agree on is NOT the raw concatenation, which is over
+        # the cap and matches nothing on disk.
         assert written.name != "s" * 80 + "_01.flac"

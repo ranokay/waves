@@ -67,7 +67,7 @@ class _Store:
 def _bridge(*, recs=None, claim=None, quality=Quality.hi_res_lossless, atmos=False):
     """A WavesBridge carcass with only what _predict_skips reads, and the real
     method bound onto it."""
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
     b._ownership = _Store(recs or {})
@@ -220,7 +220,7 @@ def test_an_ownership_lookup_failure_never_gates():
 def test_a_live_event_outranks_a_prediction():
     """The run reached the track and said something: that is fact, and the
     prediction must not paint over it."""
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
     b._job_tracks = {1: {"1": {"id": "1", "status": "running", "pct": 40.0, "quality": ""}}}
@@ -247,7 +247,7 @@ def test_a_live_event_outranks_a_prediction():
 
 
 def test_marks_landing_after_the_list_are_merged_into_it():
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
     b._job_tracks = {}
@@ -270,7 +270,7 @@ def test_a_prediction_never_reaches_the_collapsed_rows_rollup():
     """The row's word is the record of what the RUN delivered (including the
     tier of a copy it really skipped). A prediction is not a delivery and must
     leave it alone until the run speaks."""
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
     b._job_tracks = {}
@@ -285,7 +285,7 @@ def test_a_prediction_never_reaches_the_collapsed_rows_rollup():
 
 
 def test_the_stores_are_dropped_with_the_queue_row():
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
     b._queue = [{"qid": 2}]
@@ -324,8 +324,8 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -349,7 +349,7 @@ def _run_scenario() -> int:  # (one straight line of scene setup)
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
-    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 

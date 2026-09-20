@@ -2,12 +2,11 @@
 
 WHAT THIS FENCES OFF
 --------------------
-Issue #24: the app got heavier the longer a batch ran. Progress arrives per
-delivered segment, dozens a second per active download, and the handler used to
-walk the whole model looking for its qid. Nothing ever removed a finished row,
-so that walk grew all session and ran thousands of times a second on the GUI
-thread. It is now a qid -> row map, rebuilt in the pass that already recounts
-the groups.
+Walking the whole model to find a row's qid makes the app heavier the longer a
+batch runs: progress arrives per delivered segment, dozens a second per active
+download, and with nothing removing finished rows the walk grows all session
+and runs thousands of times a second on the GUI thread. The lookup is a
+qid -> row map, rebuilt in the pass that already recounts the groups.
 
 That trade is only safe if the map is never wrong, and the ways it could go
 wrong are all silent: the partition MOVES rows, promoteCompleted moves one to
@@ -69,8 +68,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

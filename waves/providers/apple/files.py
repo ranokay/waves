@@ -25,13 +25,13 @@ from waves.constants import (
     METADATA_LOOKUP_UPC,
     MetadataTargetUPC,
 )
-from waves.helper.path import (
+from waves.metadata.tags import Metadata, sniff_image_format
+from waves.paths import (
     _drop_empty_segments,
     calculate_number_padding,
     path_file_numbered_candidate,
     sanitize_name_component,
 )
-from waves.metadata import Metadata, sniff_image_format
 from waves.playlists import populate_playlists
 
 logger = logging.getLogger("waves.providers.apple.files")

@@ -5,13 +5,12 @@ WHAT THIS FENCES OFF
 The download button's progress readout is visible from the "running" frame,
 sitting in a slot reserved for its widest value ("100%"), and its first real
 progress tick can be seconds out: a collection lists its tracks and settles
-its library claims before the first segment lands. Until this fix the worker
-emitted ``downloadState(id, "running")`` alone, so the readout opened on the
-"…" placeholder in that slot, which read as blank space beside the bar (a
-livetest report on a Browse playlist card). A re-run of the same id also
-inherited the previous run's 100% until its own first tick.
+its library claims before the first segment lands. A running state emitted
+alone opens the readout on the "…" placeholder in that slot, which reads as
+blank space beside the bar, and a re-run of the same id inherits the previous
+run's 100% until its own first tick.
 
-The worker now emits ``downloadProgress(id, 0.0)`` immediately BEFORE
+The worker emits ``downloadProgress(id, 0.0)`` immediately BEFORE
 ``downloadState(id, "running")``, the order the folder and discography
 rollups already use, so the running frame reads 0%.
 
@@ -30,8 +29,8 @@ from unittest.mock import patch
 
 from support.dispatch_stub import arm_dispatch
 
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 
 
 class _Recorder:
@@ -84,8 +83,8 @@ class _Stub:
     def _download_gate(self) -> str:
         return "ok"
 
-    # The per-item quality choice _download reads at queue time (issue #36):
-    # none here, so the ask is the setting's.
+    # The per-item quality choice _download reads at queue time: none here,
+    # so the ask is the setting's.
     def _ask_quality_for(self, obj, type_media, media_id):
         return ("LOSSLESS", "LOSSLESS")
 
@@ -166,7 +165,7 @@ def test_running_and_zero_percent_are_about_the_same_id():
 
 
 def test_the_zero_comes_after_queued_and_before_done():
-    """The whole shape of a run, so the new emit cannot drift into the queued
+    """The whole shape of a run, so the zero emit cannot drift into the queued
     acknowledgement (the button would show 0% while still waiting) or past
     the finish."""
     log = _run()

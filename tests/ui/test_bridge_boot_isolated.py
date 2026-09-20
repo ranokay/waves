@@ -1,4 +1,4 @@
-"""A real bridge boots from isolated settings (issue #247, audit TT-02/TT-10).
+"""A real bridge boots from isolated settings with everything unmocked.
 
 WHAT THIS FENCES OFF
 --------------------
@@ -7,9 +7,8 @@ patched to a no-op and the library root and Browse fetch silenced
 (``support/qml.py``'s boot harness), so the composed launch the app actually
 performs -- the settings and prefs loaded from disk, the real cached-token
 login resolving on its worker, the launch library sweep, the provider
-registry -- had no test that starts it unmocked. This one does: the only
-thing faked is the environment (the XDG dirs), and every assertion is the
-boot's own outcome. A token-less isolated config resolves the session offline
+registry -- is started unmocked here: the only thing faked is the environment
+(the XDG dirs), and every assertion is the boot's own outcome. A token-less isolated config resolves the session offline
 by design (``login_resume`` finds no stored token), so nothing here touches
 the network; the library master switch decides whether a scan is dispatched,
 and here it is on with the download folder pointing inside the sandbox.
@@ -47,8 +46,8 @@ def _pop_singletons() -> None:
     test (the same dance tests/library/test_restart_upgrade_baseline.py does
     for Settings alone)."""
     from waves.config import Settings as LaunchSettings
-    from waves.helper.decorator import SingletonMeta
-    from waves.waves_ui.session import WavesTidal
+    from waves.config import SingletonMeta
+    from waves.desktop.session import WavesTidal
 
     SingletonMeta._instances.pop(LaunchSettings, None)
     SingletonMeta._instances.pop(WavesTidal, None)
@@ -74,7 +73,7 @@ def test_a_real_bridge_boots_from_isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     _pop_singletons()
     bridge: WavesBridge | None = None

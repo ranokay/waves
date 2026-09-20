@@ -16,7 +16,7 @@ import os
 
 import pytest
 
-import waves.helper.path as path_helper
+import waves.paths as path_helper
 from waves import __config_dirname__
 
 

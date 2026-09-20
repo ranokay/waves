@@ -13,7 +13,7 @@ Atmos straight away and is verified here too.
 
 Nothing here touches Qt, so it is pure and unit-testable; the Qt
 slots/signals that drive the Settings UI live in
-:mod:`waves.waves_ui.backend`.
+:mod:`waves.desktop.backend`.
 
 Config isolation: Waves owns its engine configuration surface entirely.
 This module never reads, inherits, or mutates a user-visible
@@ -85,7 +85,7 @@ NM3U8DLRE_RELEASES = {
     ("windows", "arm64"): f"{_NM3U8DLRE_BASE}/N_m3u8DL-RE_v0.6.0-beta_win-arm64_20260629.zip",
 }
 # SHA-256 of each pinned asset above, taken from the upstream release
-# binaries at pin time (2026-09-09) and reviewed into git here. The release
+# binaries at pin time and reviewed into git here. The release
 # publishes no checksum sidecars, so these inline pins ARE the
 # verification: the install refuses to proceed without a matching entry
 # (fail-closed), and a bump re-pins the table. Trust note (same limit as
@@ -673,7 +673,7 @@ class AppleRuntimeManager:
         return {"wrapper_image": WRAPPER_V2_IMAGE, "wrapper_libs": WRAPPER_LIBS_VERSION}
 
     def _install_is_stale(self) -> bool:
-        """Whether the managed binary predates the shipped pin (AP-06).
+        """Whether the managed binary predates the shipped pin.
 
         Compares the provenance the install recorded -- version, asset URL and
         verified checksum -- against the pinned release this build ships. A
@@ -698,7 +698,7 @@ class AppleRuntimeManager:
         ``path`` (the FFmpeg manager's precedence); only the copy this
         manager provisioned reports ``managed``. A managed copy whose
         recorded provenance differs from the shipped pin reports
-        ``runtime_stale`` (AP-06: a pin bump must not let an old binary
+        ``runtime_stale`` (a pin bump must not let an old binary
         look current forever); the state stays ``managed`` because the binary
         still works, and Install is the one-click way to replace it.
         """

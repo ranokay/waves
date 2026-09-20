@@ -1,4 +1,4 @@
-"""Session supervision + pacing (issue #33, spec §3)."""
+"""Session supervision + pacing (spec §3)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from waves.constants import CTX_APPLE
+from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings, Settings
 from waves.providers.apple.supervision import (
     HELD_POLL_SEC,
@@ -35,7 +36,6 @@ from waves.providers.apple.supervision import (
     throttle_delay,
     throttled_message,
 )
-from waves.waves_ui.backend import WavesBridge
 
 
 def _published_mappings(args: list) -> list:
@@ -423,7 +423,7 @@ def test_supervisor_starts_a_private_stopped_container_without_recreating(tmp_pa
 
 
 def test_supervisor_recreates_a_container_from_an_older_image(tmp_path):
-    """AP-07: a healthy container built before a pin bump keeps serving the
+    """A healthy container built before a pin bump keeps serving the
     old bytes; the next supervision pass removes it and recreates from the
     pinned image, session volume preserved."""
     seen: list = []
@@ -655,9 +655,9 @@ def test_backend_ensure_skips_cookies_tier_and_holds_a_dead_sidecar(tmp_path, mo
 
 
 def test_queue_drawer_shows_held_and_throttled_presentations():
-    # The drawer left Main.qml in #315 slice 4; the words live in its own file.
-    qml = Path("waves/waves_ui/qml/Main.qml").read_text(encoding="utf-8")
-    qml += Path("waves/waves_ui/qml/QueueDrawer.qml").read_text(encoding="utf-8")
+    # The drawer lives in its own file; the words live there.
+    qml = Path("waves/desktop/qml/Main.qml").read_text(encoding="utf-8")
+    qml += Path("waves/desktop/qml/QueueDrawer.qml").read_text(encoding="utf-8")
     flat = " ".join(qml.split())
     assert 'if (qrow.st === "queued") return a + (model.reason ? model.reason : "Queued")' in flat
     assert 'if (qrow.st === "running" && model.reason) return a + model.reason' in flat

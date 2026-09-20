@@ -1,8 +1,8 @@
 """Unreachable-folder recovery watch: the app notices a returned drive itself.
 
-A user with a network drive had to re-pick the folder via Browse every time
-the share dropped and came back: nothing re-checked reachability until the
-next click. Now a failed gate starts a watch (10s re-probe backbone, plus a
+Nothing re-checks reachability until the next click, so a user with a network
+drive has to re-pick the folder via Browse every time the share drops and
+comes back. A failed gate starts a watch (10s re-probe backbone, plus a
 /Volumes watcher on macOS) that resumes the held downloads and dismisses the
 gate dialog the moment the folder answers again.
 
@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 from support.paths import QML_DIR, QML_MAIN
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 MAIN_QML = QML_MAIN.read_text()
 SETTINGS_QML = (QML_DIR / "SettingsPage.qml").read_text()
@@ -236,7 +236,7 @@ def test_warmup_deadline_raises_the_dialog_once():
 
 
 def test_keepwarm_touches_only_network_volumes(monkeypatch):
-    import waves.waves_ui.backend as backend_mod
+    import waves.desktop.backend as backend_mod
 
     listed: list[str] = []
     monkeypatch.setattr(backend_mod.os, "listdir", listed.append)
@@ -261,7 +261,7 @@ def test_keepwarm_touches_only_network_volumes(monkeypatch):
 
 
 def test_keepwarm_collapses_while_a_touch_is_hung(monkeypatch):
-    import waves.waves_ui.backend as backend_mod
+    import waves.desktop.backend as backend_mod
 
     started: list = []
     monkeypatch.setattr(
@@ -279,6 +279,6 @@ def test_qml_gate_dialog_dismisses_on_recovery():
 
 
 def test_browse_button_never_fades():
-    """The Browse button used to drop to 40% once a path was set, reading as
-    disabled even though re-picking is always a legitimate action."""
+    """The Browse button stays at full strength once a path is set: dropping it
+    to 40% reads as disabled even though re-picking is always legitimate."""
     assert "needsValue" not in SETTINGS_QML

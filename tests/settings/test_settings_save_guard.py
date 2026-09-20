@@ -1,26 +1,24 @@
 """Every settings save must undo the transient ffmpeg injections first.
 
-THE BUG
--------
 ``Download`` force-disables ``video_convert_mp4`` and ``extract_flac`` **in
 memory** when ffmpeg is absent, and ``_resolve_ffmpeg`` injects the managed
 binary path into ``path_binary_ffmpeg``. ``Settings`` is a singleton and
 ``save()`` serialises the whole dataclass, so any bare ``settings.save()``
 writes those transient values to disk.
 
-``applySettings`` and ``setVideoQuality`` knew this and restored first. Three
-other save sites did not: ``keepDownloadFolder`` (answering the
+``applySettings`` and ``setVideoQuality`` restore first. Three
+other save sites do not: ``keepDownloadFolder`` (answering the
 download-folder nudge with "keep it"), ``muteCategoryDlConfirm`` (a plain
 "Don't ask again" click) and the download-folder auto-heal. Answering a nudge
-about folders therefore silently turned FLAC extraction and video conversion
+about folders would then silently turn FLAC extraction and video conversion
 off on disk, invisibly until the next launch (the settings page renders the
-pre-damage snapshot), and with ffmpeg present it also persisted a machine path
-containing the username into settings.json, the file the bug template asks
-users to paste publicly.
+pre-damage snapshot), and with ffmpeg present it would also persist a machine
+path containing the username into settings.json, the file the bug template
+asks users to paste publicly.
 
-THE FIX routes every save through ``_save_settings``, which restores both
+Every save routes through ``_save_settings``, which restores both
 before saving. This test fences the invariant at the helper AND at the slots
-that regressed, so a newly added save site is caught by the audit test below.
+that regressed, so a newly added save site is caught by the guard below.
 """
 
 from __future__ import annotations
@@ -33,8 +31,8 @@ from typing import ClassVar
 
 from conftest import _InlineWriter
 
+from waves.desktop.backend import WavesBridge
 from waves.model.cfg import Settings as CfgSettings
-from waves.waves_ui.backend import WavesBridge
 
 # The managed binary sits under the account's own Application Support folder, so
 # the path is identity-bearing. That is the whole reason it must never reach the
@@ -52,7 +50,7 @@ def _bind(stub, name):
 
 def _bridge():
     """A stub carrying the real save/restore methods over a real dataclass, in
-    the exact state the bug needs: ffmpeg missing (flags forced off in memory,
+    the exact state that triggers it: ffmpeg missing (flags forced off in memory,
     user's real preference remembered) and a managed path injected."""
     stub = _Stub()
 
@@ -153,12 +151,12 @@ def test_save_settings_restores_both_injections():
 
 
 def test_the_save_leaves_the_live_settings_alone():
-    """THE SECOND BUG. The restores used to run on the singleton itself, which
-    every in-flight Download holds and re-reads on every track, and nothing put
-    the values back: only _resolve_ffmpeg injects, and no save site calls it. So
-    a "Don't ask again" tick during an album download stripped the managed
+    """The restores must not run on the singleton itself, which
+    every in-flight Download holds and re-reads on every track: putting the
+    values back is the save's own job, and only _resolve_ffmpeg injects. So
+    a "Don't ask again" tick during an album download would strip the managed
     ffmpeg path for the rest of that album. From that track on the m4a duration
-    remux was skipped and a FLAC extraction ran with an empty executable.
+    remux is skipped and a FLAC extraction runs with an empty executable.
 
     What goes to disk is the user's real preference; what stays in memory is
     what the running download was built with. Both, not one or the other."""
@@ -202,7 +200,7 @@ def test_two_saves_at_once_cannot_strand_a_copy():
 
 
 def test_no_bare_settings_save_outside_the_guarded_helper():
-    """The audit guard: a newly added bare save silently re-opens this bug.
+    """A newly added bare save silently re-opens this bug.
 
     Exactly five call sites of ``self.settings.save()`` are allowed: inside
     ``_save_settings`` itself; inside ``applySettings``, which does the restores

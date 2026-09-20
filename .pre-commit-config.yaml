@@ -42,7 +42,7 @@ repos:
       - id: prettier
         # QML-dialect JS (".pragma library") is not parseable by prettier, and
         # the star-history charts are generated elsewhere (see above).
-        exclude: ^(waves/waves_ui/qml/.*\.js|assets/star-history/.*)$
+        exclude: ^(waves/desktop/qml/.*\.js|assets/star-history/.*)$
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -56,12 +56,12 @@ repos:
       - id: qmlformat
         name: qmlformat
         entry: bash tools/format_qml.sh
-        files: ^waves/waves_ui/qml/.*\.qml$
+        files: ^waves/desktop/qml/.*\.qml$
         language: system
       - id: qmllint
         name: qmllint
         entry: bash tools/lint_qml.sh
-        files: ^waves/waves_ui/qml/.*\.(qml|js)$
+        files: ^waves/desktop/qml/.*\.(qml|js)$
         language: system
 
   - repo: local

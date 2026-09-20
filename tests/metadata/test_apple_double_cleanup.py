@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from waves.download import Download
-from waves.helper.path import strip_apple_double
+from waves.paths import strip_apple_double
 
 
 @pytest.fixture

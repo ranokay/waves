@@ -3,17 +3,17 @@ the peek settles where it stops.
 
 WHAT THIS FENCES OFF
 --------------------
-Two things a livetest called out on the drawer, both on the same row.
+Two things the drawer must get right, both on the same row.
 
 1. A SINGLE still wore the expansion. The row's affordance was gated on
    ``model.collection`` alone, which is true for any album/playlist/mix job,
    so a one-track release got the caret, the pointing-hand cursor, a click
    target and a track fetch, all to reveal a list of one line the card's own
-   title already said. The expansion gate now also asks that the release is not
+   title already said. The expansion gate also asks that the release is not
    exactly one item. Exactly one: a ``tracks`` of 0 means the count was never
    known, and that row still needs its ledger.
 
-   The HOVER is separate, and a later livetest said so: a row that does nothing
+   The HOVER is separate: a row that does nothing
    whatsoever under the pointer reads as a broken row. So every collection row
    still peeks (``peekable``), and the single's sliver says it is a single,
    while only ``expandable`` rows carry the caret, the hand cursor, the track
@@ -24,9 +24,9 @@ Two things a livetest called out on the drawer, both on the same row.
    it back. On a peek that is driven by the POINTER rather than by a click,
    that reads as the card opening and then retracting on its own while the
    pointer sits still, and on the way out it aims the height below zero before
-   returning to it. Sweeping the pointer down a list of rows played the wobble
-   once per row, which is what got reported as glitchy. A hover response has to
-   settle where it stops, so the easing must not be one of the springy families.
+   returning to it. Sweeping the pointer down a list of rows plays the wobble
+   once per row. A hover response has to settle where it stops, so the easing
+   must not be one of the springy families.
 
 The first is proved on the real Main.qml in a subprocess, like its siblings in
 ``test_queue_playlist_expands.py``; the second on the QML source, because the
@@ -71,8 +71,8 @@ SPRINGY = (
 def _peek_behavior() -> str:
     """The queue ledger's height Behavior block, found by the animation's id.
 
-    The ledger (and the animation) moved into QueueDrawer.qml in #315 slice 4;
-    the drawer file is the only place holding the peek now.
+    The ledger (and the animation) live in QueueDrawer.qml;
+    the drawer file is the only place holding the peek.
     """
     src = (QML_MAIN.parent / "QueueDrawer.qml").read_text(encoding="utf-8")
     at = src.find("id: qtrackAnim")
@@ -128,8 +128,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -153,7 +153,7 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
-    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 

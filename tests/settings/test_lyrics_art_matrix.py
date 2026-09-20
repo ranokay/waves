@@ -1,12 +1,12 @@
-"""Lyrics & art matrix (issue #34, spec section 9.1)."""
+"""Lyrics & art matrix (spec section 9.1)."""
 
 import shutil
 import subprocess
 
 import pytest
 
-from waves.lyrics import lyrics_sidecar_choices
-from waves.ttml_lyrics import (
+from waves.metadata.lyrics import lyrics_sidecar_choices
+from waves.metadata.ttml_lyrics import (
     format_lrc_timestamp,
     parse_timestamp,
     ttml_timing_mode,
@@ -121,8 +121,8 @@ def test_apple_cover_url_clamps_to_5000():
 
 
 def test_apple_cover_file_size_is_read(monkeypatch):
-    """The Apple card's 'Separate cover file size' governs the sidecar fetch
-    (issue #236 / audit LM-01): the pair carries the embedded bytes for the
+    """The Apple card's 'Separate cover file size' governs the sidecar fetch:
+    the pair carries the embedded bytes for the
     embed and, for the sidecar, the same bytes on 'follow' (no second
     request) or a fetch at the chosen size, and a sidecar the toggles do not
     want never pays for one."""
@@ -189,12 +189,12 @@ def test_apple_cover_file_size_is_read(monkeypatch):
 
 @pytest.mark.ffmpeg
 def test_tidal_standalone_art_converts_to_the_selected_format(tmp_path):
-    """The standalone action never writes JPEG bytes into a .png (S08)."""
+    """The standalone action never writes JPEG bytes into a .png."""
     from types import SimpleNamespace
 
-    from waves.metadata import sniff_image_format
+    from waves.desktop.backend import WavesBridge
+    from waves.metadata.tags import sniff_image_format
     from waves.model.cfg import Settings
-    from waves.waves_ui.backend import WavesBridge
 
     jpeg = tmp_path / "src.jpg"
     subprocess.run(  # noqa: S603 (fixed argv: a local fixture, no user input)

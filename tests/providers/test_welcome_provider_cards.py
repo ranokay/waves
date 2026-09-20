@@ -1,4 +1,4 @@
-"""The welcome surface's provider cards carry copy and live status (#219).
+"""The welcome surface's provider cards carry copy and live status.
 
 WHAT THIS FENCES OFF
 --------------------
@@ -22,14 +22,14 @@ from pathlib import Path
 
 from support.provider_fakes import StubProvider, stub_bridge
 
+from waves.desktop import backend
 from waves.providers import Capability, StatusKind
 from waves.providers.apple.provider import AppleProvider
 from waves.providers.tidal import TidalProvider
-from waves.waves_ui import backend
 
 
 def test_both_providers_state_their_welcome_action():
-    # The onboarding spec (#213), Apple card: it says what it does (a one-time
+    # The Apple card says what it does (a one-time
     # setup, no Apple account needed for search), never "Sign in".
     tidal = TidalProvider.descriptor()
     apple = AppleProvider.descriptor()
@@ -69,7 +69,7 @@ def test_a_third_provider_contributes_its_action_and_status():
 def test_the_welcome_action_is_descriptor_data_not_qml_copy():
     # The welcome renders the bridge's card fields; the copy lives in the
     # descriptors, so a provider's own words reach the surface unedited. The
-    # welcome surface is WelcomePicker.qml since #315 slice 8, so read it
+    # welcome surface lives in WelcomePicker.qml, so read it
     # beside Main.qml: neither may grow a hardcoded provider action.
     qml_dir = Path(backend.__file__).resolve().parent / "qml"
     qml = (qml_dir / "Main.qml").read_text(encoding="utf-8") + (qml_dir / "WelcomePicker.qml").read_text(

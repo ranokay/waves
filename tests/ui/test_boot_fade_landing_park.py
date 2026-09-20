@@ -5,9 +5,8 @@ WHAT THIS FENCES OFF
 On a warm cache the Browse landing payload arrives ~1.5s into launch, in
 the middle of the boot wordmark's 900ms fade-up (bootIntro). Applying it
 there costs the fade its frames: even the asynchronous build's section
-shells drop a visible frame gap, and the fade stutters (reported from
-livetesting, confirmed with the launch probe). onBrowseLoaded now parks a
-first build that arrives while bootIntro is running, and bootIntro's
+shells drop a visible frame gap, and the fade stutters. onBrowseLoaded parks
+a first build that arrives while bootIntro is running, and bootIntro's
 onFinished applies it the moment the composed mark is still.
 
 HOW THIS STAYS FIXED
@@ -58,8 +57,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

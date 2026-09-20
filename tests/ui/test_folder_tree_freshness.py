@@ -1,21 +1,21 @@
 """The cached folder tree must stay authoritative, and stay paired with its sweep.
 
-TWO BUGS FENCED OFF HERE
------------------------
+WHAT THIS FENCES OFF
+--------------------
 1. A rate-limited sweep returns what it managed to walk (``tree.partial``).
-   That partial tree used to be cached as authoritative, which made the
-   unwalked folders (and every playlist inside them) vanish from My Tidal and
-   resolved ``{folder_path}`` to "" for them, so their downloads landed outside
-   their folder, silently, past skip_existing.
+   Caching a partial tree as authoritative makes the unwalked folders (and
+   every playlist inside them) vanish from My Tidal and resolves
+   ``{folder_path}`` to "" for them, so their downloads land outside their
+   folder, silently, past skip_existing.
 
 2. The playlists page interleaves folder rows with playlists BY INDEX
-   (``full[i - len(folder_rows)]``). ``len(folder_rows)`` was re-read from the
-   live tree on every page call while page 1 stayed cached, so any change in
-   the root-folder count between two page fetches shifted the window and
-   skipped a playlist with no error and no visible gap. The tree is now
-   returned alongside the listing it was swept with, and the mixes tab (which
-   has no use for the tree, and whose walk was the thing most likely to trip a
-   rate limit) no longer re-walks it at all.
+   (``full[i - len(folder_rows)]``). ``len(folder_rows)`` re-read from the live
+   tree on every page call while page 1 stays cached means any change in the
+   root-folder count between two page fetches shifts the window and skips a
+   playlist with no error and no visible gap. The tree is returned alongside
+   the listing it was swept with, and the mixes tab (which has no use for the
+   tree, and whose walk is the thing most likely to trip a rate limit) does not
+   re-walk it at all.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from waves.helper.folders import FolderNode, FolderTree
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
+from waves.providers.tidal_folders import FolderNode, FolderTree
 
 
 def _tree(names, partial=False):
@@ -41,8 +41,8 @@ def _tree(names, partial=False):
 def _bridge(monkeypatch, trees, sweeps=None):
     """Bridge whose folder walk hands back `trees` one per call.
 
-    The listing sweep and the folder walk both ride the Provider seam
-    (tickets #20/#22): the fake answers the bridge's ``user_collections()``
+    The listing sweep and the folder walk both ride the Provider seam:
+    the fake answers the bridge's ``user_collections()``
     and ``folder_tree()`` calls."""
     b = WavesBridge.__new__(WavesBridge)
     b._media_lists_cache = {}
@@ -63,8 +63,8 @@ def _bridge(monkeypatch, trees, sweeps=None):
         "tidal": SimpleNamespace(
             user_collections=fake_sweep,
             folder_tree=fake_walk,
-            # The pane's rows come through the source's own row vocabulary
-            # (issue #259); the stub answers with the one key these tests read.
+            # The pane's rows come through the source's own row vocabulary;
+            # the stub answers with the one key these tests read.
             row_for=lambda kind, item: {"id": getattr(item, "id", "")},
         )
     }

@@ -11,5 +11,5 @@ from pathlib import Path
 
 TESTS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TESTS_ROOT.parent
-QML_DIR = REPO_ROOT / "waves" / "waves_ui" / "qml"
+QML_DIR = REPO_ROOT / "waves" / "desktop" / "qml"
 QML_MAIN = QML_DIR / "Main.qml"

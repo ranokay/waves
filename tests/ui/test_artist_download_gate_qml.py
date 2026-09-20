@@ -1,9 +1,9 @@
-"""The artist surfaces offer a discography control only where one can run (#288).
+"""The artist surfaces offer a discography control only where one can run.
 
-An Apple artist page and an Apple artist *card* used to render the same
-DOWNLOAD DISCOGRAPHY / DOWNLOAD ARTIST controls as a TIDAL one, and the click
-could only refuse ("Not available for Apple Music yet", #242). The controls
-now render from the provider's own capability answer
+An Apple artist page and an Apple artist *card* must not render the same
+DOWNLOAD DISCOGRAPHY / DOWNLOAD ARTIST controls as a TIDAL one, where the
+click can only refuse ("Not available for Apple Music yet"). The controls
+render from the provider's own capability answer
 (``Capability.ARTIST_DOWNLOAD``), so this scenario drives all four surfaces:
 the TIDAL page and card keep their controls, the Apple page and card show none
 (the pages and cards themselves still render).
@@ -99,7 +99,7 @@ def _card(ident: str, name: str) -> dict:
 
 def _search_payload(*, apple: bool) -> dict:
     """A search payload whose artist section holds one card, in the Apple
-    group or the TIDAL one (issue #292's group shape)."""
+    group or the TIDAL one."""
     if apple:
         return {
             "groups": [

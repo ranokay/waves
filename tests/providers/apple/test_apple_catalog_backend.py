@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from waves.desktop.backend import WavesBridge
 from waves.providers.apple import AppleProvider
-from waves.waves_ui.backend import WavesBridge
 
 
 class _Signal:
@@ -65,7 +65,7 @@ def _album():
 def _summary_artist() -> dict:
     """Apple's search summary for artist-1: a named artist whose album
     relationship lists reference stubs (id/type/href, no attributes) and which
-    carries no views -- the captured live shape behind audit F-02 (issue #216).
+    carries no views -- the captured live shape.
     A fresh dict per call, so a caller may remember or mutate it freely."""
     return {
         "id": "artist-1",
@@ -239,8 +239,8 @@ def _collection_stub(kind, *songs):
 @pytest.mark.parametrize("kind", ["album", "playlist"])
 def test_apple_collection_preview_plays_for_a_signed_out_user(kind):
     """Apple previews need no session (spec §7.4): a signed-out TIDAL bridge
-    must not gate them, which used to return silently and leave the button
-    buffering forever (issue #217)."""
+    must not gate them, or the click returns silently and the button buffers
+    forever."""
     stub, media_id = _collection_stub(kind, _song())
 
     stub.previewMedia(kind, media_id)
@@ -278,7 +278,7 @@ def test_apple_artist_preview_plays_and_reports_a_missing_clip():
 
 
 def test_tidal_album_preview_stays_gated_on_the_session():
-    """The fix is Apple's; a signed-out TIDAL preview still does nothing."""
+    """The preview fix belongs to Apple; a signed-out TIDAL preview still does nothing."""
     stub = _preview_stub(album=_album(), song=_song())
 
     stub.previewMedia("album", "tidal:album-1")
@@ -289,7 +289,7 @@ def test_tidal_album_preview_stays_gated_on_the_session():
 def test_standalone_apple_artist_ignores_a_cached_summary():
     """The LYRICS/COVER standalone path must not build an artist page from a
     cached search summary: its album entries are reference stubs, so the
-    canonical artist is fetched instead (issue #216)."""
+    canonical artist is fetched instead."""
     summary = _summary_artist()
     canonical = {
         "id": "artist-1",
@@ -438,10 +438,10 @@ def _summary_artist_catalog():
 
 
 def test_apple_artist_payload_projects_named_rows_and_top_tracks():
-    """R-11's acceptance at the bridge's own seam (issue #247): the payload the
+    """The payload the
     artist page renders carries a named album row with art, a track count and
-    a date, plus the top-tracks section. The pre-fix bridge projected Apple's
-    attribute-less search summary into blank rows (audit F-02)."""
+    a date, plus the top-tracks section. An attribute-less search summary must
+    never project into blank rows."""
     catalog, calls = _summary_artist_catalog()
     provider = AppleProvider(catalog=catalog)
     provider.search("aphex")  # the summary copy a click would see
