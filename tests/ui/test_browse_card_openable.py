@@ -567,6 +567,17 @@ def _run_scenario() -> int:
             "",
         ),
         ("an unknown kind goes nowhere", "openBrowseCard(({kind: '', id: 'x', title: 'X'})); browsePageKey", ""),
+        # The artist fallback returns before the surface flip, like the
+        # artist branch: from a My Music shelf (library pane) the click must
+        # not flip to Browse first. Offline the bridge resolves nothing, so
+        # any flag churn is the bug.
+        (
+            "an artist-only track leaves the surfaces for the artist page",
+            "libraryOpen = true; openBrowseCard(({kind: 'track', id: 't-art', title: 'Trk Artist Only', "
+            "artist: 'A', artist_id: 'ar1', album: '', art: ''})); "
+            "[browseOpen, libraryOpen, artistOpen].join(',')",
+            "true,true,false",
+        ),
     ]
     for name, expr, want in legs:
         q("browseBack()")

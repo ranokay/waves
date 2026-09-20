@@ -3553,11 +3553,16 @@ ApplicationWindow {
       openBrowseItem(kind, card.id, "", card.title || "", card.art || "")
     } else if (kind === "track") {
       // A track card's art is its album's cover (smaller), still the right face.
-      // The guard above already settled that an album or an artist is named.
+      // The guard above already settled that an album or an artist is named,
+      // so the artist test is implied; the return is not: the artist page
+      // switches the surface itself, like the artist branch above, and must
+      // skip the browse-surface flip below.
       if (card.album_id)
         openBrowseItem("album", card.album_id, card.id, card.album || "", card.art || "")
-      else
+      else {
         waves.loadArtist(card.artist_id)
+        return
+      }
     } else
       return
     // This card is reused on My Music's Home shelves, which live in the
