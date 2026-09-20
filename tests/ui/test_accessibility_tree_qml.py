@@ -187,14 +187,17 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     auto-repeat, and the two extra keys (Down opens the chooser, Escape
     clears the search box, Delete cancels a queued row) are present."""
     # The download control, the queue drawer, the shared action button, the
-    # gate action and the paste-decode controller live in their own files
-    # since #315; the pins span the whole primary-control surface, so read all
-    # six.
+    # gate action, the paste-decode controller and the nav chrome live in
+    # their own files since #315; the pins span the whole primary-control
+    # surface, so read all nine.
     qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "DownloadButton.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "QueueDrawer.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "SpecBtn.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "GateAction.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "DecodeController.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "NavTab.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "NavCrumbTrail.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "GateCard.qml").read_text(encoding="utf-8")
     press_actions = qml.count("Accessible.onPressAction")
     assert press_actions >= 5, "the primary controls lost their press actions"
     for key in ("Return", "Enter", "Space"):
