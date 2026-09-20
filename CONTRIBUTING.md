@@ -104,8 +104,12 @@ mise run test
 mise run test-strict
 ```
 
-The same group runs across Python 3.12, 3.13 and 3.14 in CI
-(`master.yml`). To run another version locally, re-sync the venv onto it
+The merge stands on that local run: there is no per-push test gate —
+`master.yml` is manual-only (`workflow_dispatch`), so record the gate in
+the PR body with the tested short SHA (the strict result, run alone, plus
+`mise run check` and the two reviews).
+The manual workflow covers the same group across Python 3.12, 3.13 and
+3.14. To run another version locally, re-sync the venv onto it
 first (uv keeps the existing interpreter otherwise):
 `uv sync --locked --all-extras --python 3.14 && mise run test-strict`.
 
