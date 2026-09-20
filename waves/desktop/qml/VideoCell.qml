@@ -42,6 +42,10 @@ Column {
     vTitle: vcell.vcTitle
     vArtist: vcell.vcArtist
     vDuration: vcell.vcDuration
+    // One verdict per cell: the plate shows the button's own ownership
+    // answer, so the two can never disagree on the same record.
+    owned: vDl.owned
+    ownInLibrary: vDl.ownInLibrary
     // The resolution lives on the thumbnail, not beside the title:
     // a tag there ate most of the title on typical song names.
     spec: vcell.vcSpec !== "" ? vcell.vcSpec : host.qualSpec("VIDEO")

@@ -8,7 +8,7 @@ import QtQuick
 // crossing the grid never chain-fires previews.
 // 'host' is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load. The thumb reads through it:
-//   host.libraryOn / host.dlInLibrary  the owned-plate wording
+//   host.libraryOn  the owned-plate wording (with the cell's verdict)
 //   host.peekNow / host.peekThumbHover / host.peekCooldown  shared peek state
 //   host.peekOpen(anchor, id, title, artist, art) / host.peekClose() /
 //     host.peekHoverCheck()  the peek actions
@@ -52,28 +52,13 @@ Item {
   }
   // "You already downloaded this" rides the top-LEFT corner, across from
   // the resolution badge: same plate, same size, green (the on-disk
-  // owned colour). Videos never appear in the library scan (it only
-  // walks audio), so the one truthful signal here is Waves' own
-  // ownership record for this exact video id.
+  // owned colour). The cell owns the verdict: VideoCell binds these from
+  // its own DownloadButton, so the plate and the button can never reduce
+  // the same ownership record two ways. Videos never appear in the
+  // library scan (it only walks audio), so the button's libPresent is
+  // always false here and the wording is the record's own in_library.
   property bool owned: false
-  function _refreshOwned() {
-    var o = bvt.videoId !== "" ? waves.ownershipOf(bvt.videoId) : ({})
-    owned = o.owned === true
-  }
-  onVideoIdChanged: _refreshOwned()
-  Component.onCompleted: _refreshOwned()
-  Connections {
-    target: waves
-    // Empty id = broadcast (the quality setting changed).
-    function onOwnershipChanged(tid) {
-      if (tid === bvt.videoId || tid === "")
-        bvt._refreshOwned()
-    }
-    function onOwnershipChangedBatch(batch) {
-      if (bvt.videoId !== "" && batch.indexOf("," + bvt.videoId + ",") !== -1)
-        bvt._refreshOwned()
-    }
-  }
+  property bool ownInLibrary: false
   Rectangle {
     visible: bvt.owned
     anchors.left: parent.left
@@ -85,15 +70,15 @@ Item {
     implicitWidth: bvtOwn.implicitWidth + 10
     Text {
       id: bvtOwn
+      objectName: "bvtOwnText"
       anchors.centerIn: parent
       // The same wording rule as the cell's own DownloadButton done
-      // face (whose noun is "video"): one cell must never say
-      // DOWNLOADED on the art and VIDEO IN LIBRARY on the button
-      // for the same ownership record. A video is never in the
-      // scan (audio only), so its libPresent is always false and
-      // both faces reduce to libraryOn && dlInLibrary.
+      // face (whose noun is "video"): the cell binds this plate from
+      // that button's verdict, so one cell never says DOWNLOADED on
+      // the art and VIDEO IN LIBRARY on the button for the same
+      // ownership record.
       textFormat: Text.PlainText
-      text: host.libraryOn && host.dlInLibrary ? "IN LIBRARY" : "DOWNLOADED"
+      text: host.libraryOn && bvt.ownInLibrary ? "IN LIBRARY" : "DOWNLOADED"
       color: green
       font.family: mono
       font.pixelSize: 10
