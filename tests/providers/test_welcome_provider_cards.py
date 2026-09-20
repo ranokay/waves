@@ -68,8 +68,13 @@ def test_a_third_provider_contributes_its_action_and_status():
 
 def test_the_welcome_action_is_descriptor_data_not_qml_copy():
     # The welcome renders the bridge's card fields; the copy lives in the
-    # descriptors, so a provider's own words reach the surface unedited.
-    qml = (Path(backend.__file__).resolve().parent / "qml" / "Main.qml").read_text(encoding="utf-8")
+    # descriptors, so a provider's own words reach the surface unedited. The
+    # welcome surface is WelcomePicker.qml since #315 slice 8, so read it
+    # beside Main.qml: neither may grow a hardcoded provider action.
+    qml_dir = Path(backend.__file__).resolve().parent / "qml"
+    qml = (qml_dir / "Main.qml").read_text(encoding="utf-8") + (qml_dir / "WelcomePicker.qml").read_text(
+        encoding="utf-8"
+    )
 
     assert "Set up Apple Music" not in qml
     assert "modelData.action" in qml

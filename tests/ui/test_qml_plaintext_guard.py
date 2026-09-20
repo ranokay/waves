@@ -110,6 +110,17 @@ from support.paths import QML_DIR
 #   PlaylistBlock.qml  remote playlist/artist rows, and the rest (SectionHeader,
 #   ArtistSearchCard.qml  ShowAllLabel, SearchSectionMore) are local chrome that
 #                      ride the set for the same structural reason.
+#   BrowseSection.qml  the browse closure split out of Main.qml (#315 slice 7):
+#   BrowseCard.qml     BrowseSection/BrowseCard/BrowseTile render remote section
+#   BrowseTile.qml     titles, album/track names and genre labels; MosaicCell
+#   MosaicCell.qml     holds no Text of its own but rides the set for the same
+#                      structural reason as the other split files.
+#   WelcomePicker.qml  the welcome closure split out of Main.qml (#315 slice 8):
+#   WelcomeBanner.qml  WelcomePicker renders provider names/status words and the
+#   PasteGlyph.qml     inline sign-in steps, WelcomeBanner renders the app's own
+#   GateAction.qml     welcome chrome, and the rest (PasteGlyph, GateAction,
+#   DecodeController.qml  DecodeController) are local chrome that ride the set
+#                      for the same structural reason.
 TIDAL_DATA_FILES = {
     "Main.qml",
     "DownloadButton.qml",
@@ -167,6 +178,15 @@ TIDAL_DATA_FILES = {
     "SearchProviderGroup.qml",
     "PlaylistBlock.qml",
     "ArtistSearchCard.qml",
+    "BrowseSection.qml",
+    "BrowseCard.qml",
+    "BrowseTile.qml",
+    "MosaicCell.qml",
+    "WelcomePicker.qml",
+    "WelcomeBanner.qml",
+    "PasteGlyph.qml",
+    "GateAction.qml",
+    "DecodeController.qml",
 }
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
 FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)

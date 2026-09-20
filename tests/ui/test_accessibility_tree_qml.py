@@ -186,12 +186,15 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     Return/Enter/Space handler, each accepts the event and ignores
     auto-repeat, and the two extra keys (Down opens the chooser, Escape
     clears the search box, Delete cancels a queued row) are present."""
-    # The download control, the queue drawer and the shared action button
-    # live in their own files since #315; the pins span the whole
-    # primary-control surface, so read all four.
+    # The download control, the queue drawer, the shared action button, the
+    # gate action and the paste-decode controller live in their own files
+    # since #315; the pins span the whole primary-control surface, so read all
+    # six.
     qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "DownloadButton.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "QueueDrawer.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "SpecBtn.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "GateAction.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "DecodeController.qml").read_text(encoding="utf-8")
     press_actions = qml.count("Accessible.onPressAction")
     assert press_actions >= 5, "the primary controls lost their press actions"
     for key in ("Return", "Enter", "Space"):

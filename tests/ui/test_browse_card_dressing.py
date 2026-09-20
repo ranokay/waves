@@ -136,8 +136,8 @@ def test_the_cards_in_the_qml_compare_the_stamp_before_trusting_the_answer():
     not a thing a scenario can arrange.
 
     Both card styles carry it: the art card on a shelf (ArtCard.qml since
-    #315 slice 5) and the console card in the list style (BrowseCard, still
-    in Main.qml)."""
+    #315 slice 5) and the console card in the list style (BrowseCard.qml
+    since #315 slice 7)."""
     import re
 
     from support.paths import QML_DIR
@@ -145,6 +145,7 @@ def test_the_cards_in_the_qml_compare_the_stamp_before_trusting_the_answer():
     sources = [
         QML_MAIN.read_text(encoding="utf-8"),
         (QML_DIR / "ArtCard.qml").read_text(encoding="utf-8"),
+        (QML_DIR / "BrowseCard.qml").read_text(encoding="utf-8"),
     ]
     uses = [u for src in sources for u in re.findall(r'\(!live && \("lib" in c\)[^)]*\)', src)]
     assert len(uses) == 2, f"expected both card styles to read the baked verdict, found {len(uses)}"

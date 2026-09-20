@@ -211,10 +211,10 @@ def test_hover_prefetch_is_one_shared_dwell_that_warms_the_hero_and_asks_the_bac
 
 def test_cards_and_rows_arm_the_prefetch_on_hover():
     bc = _component("BrowseCard")
-    assert "root.hoverPrefetch(bc.card)" in bc and "root.hoverPrefetchCancel(bc.card)" in bc
+    assert "host.hoverPrefetch(bc.card)" in bc and "host.hoverPrefetchCancel(bc.card)" in bc
     # Its own HoverHandler, not the Art's fxHover (off when the tilt is off):
     # the handler opens within two lines of the arm call.
-    before = bc.split("root.hoverPrefetch(bc.card)", 1)[0].splitlines()[-3:]
+    before = bc.split("host.hoverPrefetch(bc.card)", 1)[0].splitlines()[-3:]
     assert any("HoverHandler {" in ln for ln in before), before
     # The art card arms from the WHOLE card, so crossing from the artwork down
     # to the title does not cancel a dwell that never left the card. Its
