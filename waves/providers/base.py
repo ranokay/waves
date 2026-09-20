@@ -295,14 +295,20 @@ class DownloadAdapter:
     retry, the retry's object rebuild and refetch, a standalone lyrics/art
     ask, and the job body itself -- dispatch through the adapter of the
     provider an id resolves to, so none of them branches on a provider id or
-    an id prefix. A provider whose deliveries ride the bridge's engine path
-    (tidalapi-shaped) carries none; the neutral answers below hand each ask
-    back to that path, and an adapter overrides only what it serves.
+    an id prefix.
 
     The adapter is the provider's own: a provider package implements one, or
     the bridge implements it where the download machinery is bridge code
-    (Apple's entry, queueing and runner) and binds it onto the provider where
-    the providers are wired.
+    (Apple's entry, queueing and runner) and assigns it to the provider where
+    the providers are wired. A provider whose deliveries ride the bridge's
+    engine path (tidalapi-shaped) carries none.
+
+    Which neutral answer hands the ask back is per method: serve_entry,
+    refetch_retry and job_runner answer "not served" (False / None), so the
+    bridge's engine path runs, while serve_retry and standalone are only
+    called for this adapter's own provider's ids, so their False / None are
+    verdicts (refused / item gone) with no fall-through. An adapter overrides
+    only what it serves.
     """
 
     def serve_entry(

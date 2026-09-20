@@ -20,7 +20,7 @@ The component that performs a provider's fetching and decryption, possibly a wra
 _Avoid_: downloader, backend
 
 **Download adapter**:
-The surface a provider serves its download asks through: a click, a Chooser click, a retry, a standalone lyrics or art fetch, and a queued job's body. The bridge dispatches every download path through the adapter of the provider an id's namespace resolves to, so no path names a provider; a provider with no adapter keeps the TIDAL engine path.
+A provider's own surface for serving download asks; providers without one use the shared engine path.
 _Avoid_: provider hook, download hook
 
 **Chooser**:
