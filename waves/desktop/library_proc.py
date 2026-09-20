@@ -218,9 +218,7 @@ class LibraryWorker:
                 continue
 
     def _relay_log(self, msg: dict) -> None:
-        level = logging.getLevelName(str(msg.get("level", "INFO")))
-        if not isinstance(level, int):
-            level = logging.INFO
+        level = logging.getLevelNamesMapping().get(str(msg.get("level", "INFO")).upper(), logging.INFO)
         name = str(msg.get("name") or "waves.library")
         if not name.startswith("waves"):
             name = "waves.library"

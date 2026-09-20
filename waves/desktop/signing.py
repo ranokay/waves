@@ -29,7 +29,9 @@ from Crypto.Signature import eddsa
 # value printed by ``tools/waves_release_keygen.py`` (and store the matching
 # private key as the CI secret ``WAVES_SIGNING_KEY``). Keep the two in lockstep:
 # a non-empty key here without a CI signing step makes every install refuse.
-UPDATE_PUBLIC_KEY = "cetggrhiqyMN5HsBCi/f2gJL75FVPOYGU/sd4dI5b+0="
+# Typed as plain ``str`` (not the inferred literal): release tooling blanks this
+# back out, so the updater's empty-key guard is live code, not a constant fold.
+UPDATE_PUBLIC_KEY: str = "cetggrhiqyMN5HsBCi/f2gJL75FVPOYGU/sd4dI5b+0="
 
 _RAW_PUBKEY_LEN = 32  # an Ed25519 public key is exactly 32 bytes
 
