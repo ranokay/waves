@@ -2,13 +2,9 @@
 
 WHAT THIS FENCES OFF
 --------------------
-BigVideoThumb's corner plate and the cell's DownloadButton reduced the same
-ownership record two ways: the plate read `owned` alone and worded itself
-from where downloads go now (`dlInLibrary`), while the button settles on
-`owned && up_to_date` and words itself from where THIS copy lives
-(`ownInLibrary`). The cell now owns one verdict: VideoCell binds the plate
-from its own button, so the plate shows the button's answer and words
-itself from the same record.
+One verdict per cell: VideoCell binds the plate from its own
+DownloadButton, so the plate shows the button's answer and words itself
+from the same record.
 
 Runs in a SUBPROCESS like the other Main.qml scenarios: building the bridge
 installs process-global handlers that must not leak into the suite.
