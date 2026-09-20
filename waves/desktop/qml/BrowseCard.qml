@@ -57,75 +57,22 @@ Rectangle {
   readonly property string pvSt: previewable ? host.pvSt(bc.kind, bc.card.id || "") : ""
   readonly property string dlSt: host.dlSt(bc.card.id || "")
   readonly property real dlPct: host.dlPct(bc.card.id || "")
-  // The library verdict this card carries, resolved ONCE per card, the
-  // same shape and the same economy as ArtCard's. The console style's
-  // card was the one browse card that printed DOWNLOAD over an album
-  // already on disk: it read live job state and nothing else. Albums
-  // only, since a playlist or a mix has no album identity to ask about
-  // and must never wear one's verdict.
-  property var libPresence: null
-  property bool _libResolved: false
-  // The payload's own answer (card.lib) serves the creation, a later
-  // publish asks live: see ArtCard.resolveLibPresence for why a bridge
-  // call inside an incubation slice is the launch water's enemy.
-  function resolveLibPresence(live) {
-    _libResolved = true
-    var c = bc.card
-    if (!(bc.kind === "album" && c && c.title)) {
-      libPresence = null
-      return
-    }
-    libPresence = (!live && ("lib" in c) && c.libStamp === host.libStamp) ? c.lib : waves.libraryAlbumPresence("" + (c.artist || ""), "" + c.title, "" + (c.year || ""), c.tracks || 0, c.duration_sec || 0)
+  // The library verdict this card carries lives in LibraryVerdict, the
+  // one owner both card styles share; the aliases below keep this card's
+  // public surface (what the control line and the scenarios read).
+  LibraryVerdict {
+    id: bcVerdict
+    host: bc.host
+    card: bc.card
   }
-  onCardChanged: resolveLibPresence(false)
-  // Only if the binding above has not already answered: an unconditional
-  // resolve here is a second QML->Python call per card on a shelf.
-  Component.onCompleted: if (!_libResolved)
-    resolveLibPresence(false)
-  Connections {
-    target: waves
-    // A shelf builds this card for every kind, so the ones that will
-    // never ask must not run a handler per card per committed batch
-    // of a running scan.
-    enabled: bc.kind === "album"
-    function onLibraryPresenceChanged() {
-      bc.resolveLibPresence(true)
-    }
-  }
-  readonly property bool libPresent: !!(bc.libPresence && bc.libPresence.present === true)
-  readonly property bool libFull: !!(bc.libPresence && bc.libPresence.full === true)
-  readonly property bool libSure: !!(bc.libPresence && bc.libPresence.sure === true)
-  // The Atmos micro-badge (§8.4): the album on disk holds Dolby Atmos Versions
-  // beside its canonical set.
-  readonly property bool libAtmos: !!(bc.libPresence && bc.libPresence.has_atmos === true)
-  // The three states the art card's strip already names: a proven
-  // complete copy, an unproven one, and a partial copy (which stays a
-  // plain live download, since completing an album is not a duplicate).
-  readonly property string libState: !bc.libPresent ? "" : !bc.libFull ? "partial" : bc.libSure ? "proven" : "maybe"
-  // A FULL claim gates its click the way every other surface does:
-  // explain the match, name the folder, leave Download anyway one click
-  // away. A tag match must never be the end of the conversation.
-  readonly property bool libClaim: bc.libState === "proven" || bc.libState === "maybe"
-  // The art card's words, for the art card's reason: this control line is
-  // roughly 90px of a 140px row shared with PREVIEW, so the full button's
-  // "PARTIALLY IN LIBRARY" could never ride here. These are the shortest
-  // forms that still say which of the three is true, and a partial copy
-  // spends them on the count, which is the thing worth knowing.
-  readonly property string libWord: {
-    if (bc.libState === "proven")
-      return "IN LIBRARY"
-    if (bc.libState === "maybe")
-      return "MAYBE"
-    if (bc.libState === "partial") {
-      var p = bc.libPresence
-      var held = p.local_tracks || 0
-      var declared = p.local_declared || 0
-      var want = declared > held ? declared : (bc.card.tracks || 0)
-      if (want > held)
-        return held + " OF " + want
-    }
-    return "DOWNLOAD"
-  }
+  readonly property var libPresence: bcVerdict.presence
+  readonly property bool libPresent: bcVerdict.present
+  readonly property bool libFull: bcVerdict.full
+  readonly property bool libSure: bcVerdict.sure
+  readonly property bool libAtmos: bcVerdict.atmos
+  readonly property string libState: bcVerdict.state
+  readonly property bool libClaim: bcVerdict.claim
+  readonly property string libWord: bcVerdict.word
   // The pill's tier colours, so the two things this card can say never
   // disagree about what a colour means: green proven, gold guess, cyan
   // partial, accent for a plain download.
