@@ -44,18 +44,30 @@ QtObject {
   }
   function noteTextChanged() {
     // An outside write landing while a decode is actually running (the
-    // timer is on, not a pinned hold) is a new paste: a keyboard paste
-    // neither clears first nor cancels, so without this the in-flight
+    // timer is on, not a pinned hold) retires the running term: a keyboard
+    // paste neither clears first nor cancels, so without this the in-flight
     // timer keeps the old term, rewrites the field back to it and submits
-    // it. Cancel and restart on the new text; the old term never submits.
+    // it. A paste-like jump restarts on the new text; anything smaller only
+    // stops the decode, so neither a stale term submits nor transient
+    // scramble bakes into a new one — the explicit submit paths (the
+    // sign-in COMPLETE action, search Enter) stay available for the edit.
+    // Paste-like mirrors the idle rule: a growth typing cannot produce, or
+    // a full replacement (a same-length link swap is still a paste; an
+    // overwrite keystroke misfiring here is accepted as the rarer error).
     // The timer's own ticks write _shown and never take this branch, and
     // run()'s opening write lands before the timer starts.
     if (decoding && _timer.running && field.text !== _shown) {
       var t = field.text
+      var prevLen = _shown.length
       cancel()
-      _restarting = true
-      run(t)
-      _restarting = false
+      var growth = t.length - prevLen
+      if (growth >= 4 || (t.length === prevLen && t.length >= 4)) {
+        _restarting = true
+        run(t)
+        _restarting = false
+      } else {
+        _prevLen = t.length
+      }
       return
     }
     if (!decoding && field.text.length - _prevLen >= 4)

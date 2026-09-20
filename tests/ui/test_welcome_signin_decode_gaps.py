@@ -42,6 +42,7 @@ LINK_B1 = "https://tidal.test/redirect-b1"
 LINK_B2 = "https://tidal.test/redirect-b2"
 LINK_C1 = "https://tidal.test/redirect-c1"
 LINK_C2 = "https://tidal.test/redirect-c2"
+LINK_D1 = "https://tidal.test/redirect-d1"
 
 _FIND = """
 function findFirst(item, pred) {
@@ -280,10 +281,40 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, two legs)
     if field_text() != LINK_C2:
         bad.append(f"the field settled on {field_text()!r}, wanted {LINK_C2!r} (the old decode rewrote it)")
 
+    # ---- leg 4: a keystroke mid-decode stops the decode, submits nothing
+    # A single-character edit is not paste-like: it must neither bake the
+    # transient scramble into a submitted term nor let the stale term win.
+    # The decode stops, the edit is preserved, and nothing auto-submits
+    # (the explicit COMPLETE action remains for the edit).
+    calls.clear()
+    q(js("var box = " + box_call + ";\nbox.pasteDecoder.run(" + repr(LINK_D1) + ");"))
+    settle(200)
+    if not decoder_running():
+        print("the decode did not start: no decode window to type inside", file=sys.stderr)
+        return EXIT_PRECONDITION
+    q(
+        js(
+            "var box = " + box_call + ";\n"
+            "var f = findFirst(box, function (o) { return o.objectName === 'signInField'; });\n"
+            "f.text = f.text + 'z';\n"
+        )
+    )
+    settle(150)
+    if decoder_running():
+        bad.append("a keystroke mid-decode kept the old decode running")
+    settle(1000)
+    if calls:
+        bad.append(f"a keystroke mid-decode submitted {calls!r} (stale or baked)")
+    if not field_text().endswith("z"):
+        bad.append(f"a keystroke mid-decode lost the edit (field {field_text()!r})")
+
     if bad:
         print("\n".join(bad), file=sys.stderr)
         return EXIT_REGRESSED
-    print(f"ok: mid-decode submits quiet, second paste wins ({LINK_A}, {LINK_B2}), keyboard paste restarts ({LINK_C2})")
+    print(
+        f"ok: mid-decode submits quiet, second paste wins ({LINK_A}, {LINK_B2}), "
+        f"keyboard paste restarts ({LINK_C2}), keystroke stops the decode"
+    )
     return EXIT_OK
 
 
