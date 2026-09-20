@@ -14,6 +14,14 @@ QtObject {
   property int _locked: 0
   property int _step: 1                 // chars revealed per tick, keeps the
   property int _prevLen: 0              // total decode ~fixed even for long URLs
+  // The last text the decoder itself wrote. A change that is not this, seen
+  // while a decode is actually running, is an outside write (a keyboard
+  // paste lands straight in the field and bypasses the glyph's
+  // cancel-first path), never the timer's own tick.
+  property string _shown: ""
+  // True while a restart's begun() is on the stack, so arming callers can
+  // tell a replaced decode from a fresh one.
+  property bool _restarting: false
   readonly property int _maxTicks: 24   // ~24 * 26ms ~= 0.6s, any length
   readonly property string _glyphs: "ABCDEF0123456789/:.~#@$%&abcdefxyz"
   function _scr(n) {
@@ -30,10 +38,26 @@ QtObject {
     _timer.stop()
     decoding = false
     _final = ""
+    _shown = ""
     _locked = 0
     _prevLen = 0
   }
   function noteTextChanged() {
+    // An outside write landing while a decode is actually running (the
+    // timer is on, not a pinned hold) is a new paste: a keyboard paste
+    // neither clears first nor cancels, so without this the in-flight
+    // timer keeps the old term, rewrites the field back to it and submits
+    // it. Cancel and restart on the new text; the old term never submits.
+    // The timer's own ticks write _shown and never take this branch, and
+    // run()'s opening write lands before the timer starts.
+    if (decoding && _timer.running && field.text !== _shown) {
+      var t = field.text
+      cancel()
+      _restarting = true
+      run(t)
+      _restarting = false
+      return
+    }
     if (!decoding && field.text.length - _prevLen >= 4)
       run(field.text)
     _prevLen = field.text.length
@@ -50,7 +74,10 @@ QtObject {
     begun()
     _step = Math.max(1, Math.ceil(_final.length / _maxTicks))
     // cap the run length
-    field.text = _scr(t.length)
+    // Record the write before making it: the assignment notifies
+    // noteTextChanged synchronously, which must read it as our own.
+    _shown = _scr(t.length)
+    field.text = _shown
     // start scrambled, no flash of the raw text
     field.forceActiveFocus()
     _timer.restart()
@@ -63,12 +90,14 @@ QtObject {
     onTriggered: {
       dc._locked += dc._step
       if (dc._locked >= dc._final.length) {
-        dc.field.text = dc._final
+        dc._shown = dc._final
+        dc.field.text = dc._shown
         dc.decoding = false
         stop()
         dc.decoded(dc._final)
       } else {
-        dc.field.text = dc._final.substring(0, dc._locked) + dc._scr(dc._final.length - dc._locked)
+        dc._shown = dc._final.substring(0, dc._locked) + dc._scr(dc._final.length - dc._locked)
+        dc.field.text = dc._shown
       }
     }
   }

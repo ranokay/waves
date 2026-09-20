@@ -6495,7 +6495,10 @@ ApplicationWindow {
                 property bool submitArmed: false
                 onBegun: {
                   seqAtPaste = root._navSeq
-                  submitArmed = submitPending
+                  // A restart is a replaced decode, not the glyph's paste:
+                  // the arm must not transfer to text the user overwrote
+                  // mid-decode, or a fill-meant edit would search itself.
+                  submitArmed = submitPending && !searchDecoder._restarting
                   submitPending = false
                 }
                 onDecoded: function (text) {
