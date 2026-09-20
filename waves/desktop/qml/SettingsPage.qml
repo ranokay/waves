@@ -3498,6 +3498,7 @@ Item {
                             Accessible.checkable: true
                             Accessible.checked: statusCol.switchOn
                             Accessible.onPressAction: swItem.toggle()
+                            Accessible.onToggleAction: swItem.toggle()
                             function toggle() {
                               page.setv(modelData.enabled_key, !statusCol.switchOn)
                             }
