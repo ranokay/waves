@@ -42,7 +42,10 @@ Item {
   readonly property real artSize: hero ? 280 : 200
   width: artSize
   height: hero ? artSize : artSize + 46
-  readonly property bool openable: ac.kind !== "track" || !!ac.card.artist_id
+  // Whether the art and title offer the card's page is Main.qml's
+  // browseCardOpenable verdict, the same one the click path reads, so the
+  // cursor and the click can never disagree.
+  readonly property bool openable: host.browseCardOpenable(ac.card)
   // Prefetch arms from the whole card, title and caption included, the
   // way BrowseCard's does. Its own handler: the artwork's acWrapHover
   // also drives the hover strip and the corner icon, which must stay

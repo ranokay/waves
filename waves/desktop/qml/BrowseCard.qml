@@ -43,8 +43,10 @@ Rectangle {
   color: surface
   border.color: border1
   // Only the artwork and the title open the card's page, the caption
-  // handles its own artist link, and dead space stays inert.
-  readonly property bool openable: bc.kind !== "track" || !!bc.card.artist_id
+  // handles its own artist link, and dead space stays inert. Whether they
+  // offer it is Main.qml's browseCardOpenable verdict, the same one the
+  // click path reads, so the cursor and the click can never disagree.
+  readonly property bool openable: host.browseCardOpenable(bc.card)
   // Resting anywhere on the card has its page ready before the click
   // (see hoverPrefetch). A handler of its own, not the Art's fxHover:
   // that one is off when the user turns the cover tilt off.
