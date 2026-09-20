@@ -222,12 +222,12 @@ def _run_scenario() -> int:
         bad.append("the card's sign-in action did not open the welcome page on its sign-in steps")
     if bool(q("root.setupUrlOpened")):
         bad.append("the card's sign-in action opened a browser on its own")
-    if not q(_visible("setupPane", "o.label === 'OPEN BROWSER LOGIN'")):
+    if not q(_visible("setupPane", "o.objectName === 'welcomeSignInOpen'")):
         bad.append("the inline sign-in steps expose no OPEN BROWSER LOGIN action")
 
     # 3. The explicit click starts the flow, and the paste field comes with
     #    it, with pixels to click.
-    open_point = q(_center("setupPane", "o.label === 'OPEN BROWSER LOGIN'"))
+    open_point = q(_center("setupPane", "o.objectName === 'welcomeSignInOpen'"))
     if open_point is None:
         print("the inline steps expose no OPEN BROWSER LOGIN action", file=sys.stderr)
         return _EXIT_PRECONDITION

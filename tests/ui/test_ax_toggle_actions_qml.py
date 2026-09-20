@@ -50,8 +50,12 @@ def test_every_checkable_role_answers_the_toggle_action():
 def test_the_welcome_skip_is_a_named_press_target():
     """The welcome's skip carries the name and press a reader needs."""
     flat = re.sub(r"\s+", " ", (QML_DIR / "WelcomePicker.qml").read_text(encoding="utf-8"))
+    assert 'objectName: "welcomeSkip"' in flat, "the welcome skip has no stable name"
     assert 'Accessible.name: "Not now"' in flat, "the welcome skip has no accessible name"
     assert "Accessible.onPressAction: pickCard.skipped()" in flat, "the welcome skip answers no press"
+    assert "activeFocusOnTab: visible" in flat, "the welcome skip is not Tab-reachable"
+    for key in ("Keys.onReturnPressed", "Keys.onEnterPressed", "Keys.onSpacePressed"):
+        assert key in flat, f"the welcome skip answers no {key}"
 
 
 TRACK = {
@@ -83,7 +87,7 @@ var sw = findFirst(root, function (o) {
 
 _FIND_SKIP = """
 var skip = findFirst(providerPicker, function (o) {
-    return ('' + o.text) === "Not now" && o.visible !== false && o.width > 0;
+    return o.objectName === "welcomeSkip" && o.visible !== false && o.width > 0;
 });
 """
 
@@ -98,13 +102,15 @@ def _run_scenario() -> int:
         return EXIT_REGRESSED
 
 
-def _scenario_body() -> int:  # noqa: C901 (one straight scenario, three legs)
+def _scenario_body() -> int:  # noqa: C901 (one straight scenario, four legs)
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QAccessible
+    from PySide6.QtTest import QTest
 
     booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
-    _root, q, settle, bridge = booted
+    root, q, settle, bridge = booted
     problems: list[str] = []
 
     def action_of(item):
@@ -146,6 +152,35 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario, three legs)
             settle(300)
             if not bool(q("setupSettings.firstRunAnswered === true")):
                 problems.append("pressing the welcome skip never skipped")
+    # --- The welcome skip: Tab-reachable and keyboard-operable. Re-answer
+    # the welcome first: the press leg above skipped it, and a hidden skip
+    # is no skip in the tree.
+    q(
+        "setupSettings.firstRunAnswered = false; setupSettings.setupChipDismissed = false;"
+        " root.setupMode = 'cards'; root.setupUrlOpened = false"
+    )
+    settle(250)
+    if not bool(q(scene_js(_FIND_SKIP + "return skip ? skip.activeFocusOnTab === true : false;"))):
+        problems.append("the welcome skip is not Tab-reachable (activeFocusOnTab)")
+    else:
+        for key, words in ((Qt.Key_Return, "Return"), (Qt.Key_Enter, "Enter"), (Qt.Key_Space, "Space")):
+            q(
+                "setupSettings.firstRunAnswered = false; setupSettings.setupChipDismissed = false;"
+                " root.setupMode = 'cards'; root.setupUrlOpened = false"
+            )
+            settle(250)
+            q(scene_js(_FIND_SKIP + "skip.forceActiveFocus(); return true;"))
+            settle(150)
+            if not bool(q(scene_js(_FIND_SKIP + "return skip.activeFocus === true;"))):
+                problems.append("the welcome skip never took keyboard focus")
+                break
+            root.requestActivate()
+            settle(100)
+            QTest.keyClick(root, key)
+            settle(300)
+            if not bool(q("setupSettings.firstRunAnswered === true")):
+                problems.append(f"the welcome skip's {words} key never skipped")
+                break
     q("setupSettings.firstRunAnswered = true")
     settle(200)
 

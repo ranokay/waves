@@ -225,7 +225,7 @@ def _run_apple_cta_scenario() -> int:
             failures.append("the Search TIDAL action did not open the sign-in steps")
         if not q(_visible("setupPane", "welcomeSignIn")):
             failures.append("the welcome surface showed no inline sign-in steps")
-        if not q(_text_visible("setupPane", "OPEN BROWSER LOGIN")):
+        if not q(_visible("setupPane", "welcomeSignInOpen")):
             failures.append("the sign-in steps exposed no browser-login action")
         if q("root.setupUrlOpened"):
             failures.append("the Search TIDAL action opened the browser on its own")
@@ -319,12 +319,12 @@ def _run_tidal_cta_scenario() -> int:
     tidal = bridge.providers["tidal"]
     tidal.login_begin = lambda: "https://tidal.test/authorize"
     tidal.login_complete = lambda url: str(url).startswith("https://tidal.test/")
-    if not _click(root, q, settle, _text_point("setupPane", "OPEN BROWSER LOGIN"), "root.setupUrlOpened === true"):
+    if not _click(root, q, settle, _point("setupPane", "welcomeSignInOpen"), "root.setupUrlOpened === true"):
         failures.append("the sign-in steps exposed no working browser-login action")
     else:
         if not q(_pin_paste("setupPane", "https://tidal.test/redirect")):
             failures.append("the sign-in surface exposed no paste field to drive")
-        elif not _click(root, q, settle, _text_point("setupPane", "COMPLETE SIGN-IN"), "root.signedIn === true"):
+        elif not _click(root, q, settle, _point("setupPane", "welcomeSignInComplete"), "root.signedIn === true"):
             failures.append("completing the paste did not sign the session in")
 
     # Signed in: every TIDAL action retires, and My Music's categories return.

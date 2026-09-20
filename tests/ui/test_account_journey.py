@@ -57,6 +57,15 @@ def _center(scope: str, label: str) -> str:
     )
 
 
+def _object_center(scope: str, name: str) -> str:
+    """Scene coordinates of the first visible item with this objectName."""
+    return scene_js(
+        f"  var hit = findFirst({scope}, function (o) {{ return o.objectName === {json.dumps(name)}; }});\n"
+        "  if (!hit || hit.visible !== true || hit.width <= 0 || hit.height <= 0) return null;\n"
+        "  return hit.mapToItem(null, hit.width / 2, hit.height / 2);\n"
+    )
+
+
 _SETTINGS_TAB = (
     "(function () {"
     "  var kids = headerRow.children;"
@@ -384,7 +393,7 @@ def _run_journey(reverse: bool = False) -> int:
         if bool(q("root.setupUrlOpened")):
             problems.append("choosing TIDAL opened the browser on its own")
         # The steps' explicit click is the only caller of beginLogin.
-        open_login = q(_center("providerPicker", "OPEN BROWSER LOGIN"))
+        open_login = q(_object_center("providerPicker", "welcomeSignInOpen"))
         if not points_to(open_login):
             problems.append("the inline sign-in steps expose no OPEN BROWSER LOGIN action")
         else:
@@ -420,7 +429,7 @@ def _run_journey(reverse: bool = False) -> int:
         # the faked account service accepts the https redirect.
         if not q(_pin_paste("providerPicker", "https://tidal.test/redirect")):
             problems.append("the sign-in steps expose no paste field to drive")
-        complete = q(_center("providerPicker", "COMPLETE SIGN-IN"))
+        complete = q(_object_center("providerPicker", "welcomeSignInComplete"))
         if not points_to(complete):
             problems.append("the sign-in steps expose no COMPLETE SIGN-IN action")
         else:
@@ -461,7 +470,7 @@ def _run_journey(reverse: bool = False) -> int:
             problems.append("the card's sign-in action did not open the welcome page on its sign-in steps")
         if bool(q("root.setupUrlOpened")):
             problems.append("the card's sign-in action opened the browser on its own")
-        open_login = q(_center("setupPane", "OPEN BROWSER LOGIN"))
+        open_login = q(_object_center("setupPane", "welcomeSignInOpen"))
         if not points_to(open_login):
             problems.append("the welcome page exposes no OPEN BROWSER LOGIN action")
         else:
@@ -479,7 +488,7 @@ def _run_journey(reverse: bool = False) -> int:
         # auto-complete; the visible COMPLETE action drives the step.
         if not q(_pin_paste(scope, "https://tidal.test/redirect")):
             problems.append("the sign-in surface exposes no paste field to drive")
-        complete = q(_center(scope, "COMPLETE SIGN-IN"))
+        complete = q(_object_center(scope, "welcomeSignInComplete"))
         if not points_to(complete):
             problems.append("the sign-in surface exposes no COMPLETE SIGN-IN action")
         else:
