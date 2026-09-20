@@ -18,8 +18,8 @@ smoke-launch step runs the trimmed bundle offscreen on every leg whose
 `OS_ARCH` does not end in `-arm64` — all four macOS legs and both x64 legs;
 only the Linux and Windows arm64 legs build without launching.
 
-Tests run in the manual `master` workflow on ubuntu-24.04 only (Python 3.12
-and 3.13 plus the quality job). There is no Windows or macOS test leg.
+Tests run in the manual `master` workflow on ubuntu-24.04 only (Python 3.12,
+3.13 and 3.14 plus the quality job). There is no Windows or macOS test leg.
 
 ## Code audit: platform branches and their intent
 

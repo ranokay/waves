@@ -21,6 +21,8 @@ from support.paths import REPO_ROOT
 
 DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-or-test-build.yml"
+MASTER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "master.yml"
+CONTRIBUTING = REPO_ROOT / "CONTRIBUTING.md"
 
 
 def _inspector_module():
@@ -184,6 +186,20 @@ def test_the_build_includes_the_pycryptodome_native_modules():
         name for name in sorted(needed) if not re.search(rf"--include-module=\S+\.{re.escape(name)}(\s|$)", command)
     ]
     assert missing == [], f"the include list dropped: {missing}"
+
+
+def test_the_merge_gate_record_matches_the_manual_workflow():
+    """R-01: the test workflow is manual-only, so no document may promise
+    per-push CI. The merge stands on the local strict run recorded in the PR
+    body with the tested SHA; if the trigger ever grows beyond a manual
+    dispatch, the contributor record has to say so too, and this fails until
+    it does."""
+    wf = yaml.safe_load(MASTER_WORKFLOW.read_text())
+    assert set(wf[True]) == {"workflow_dispatch"}, wf[True]
+
+    text = CONTRIBUTING.read_text()
+    assert "manual-only" in text and "workflow_dispatch" in text
+    assert "runs across Python" not in text
 
 
 def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
