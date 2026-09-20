@@ -238,9 +238,10 @@ Rectangle {
         id: redirectBox
         objectName: "signInPaste"
         // The decoder is a non-visual QtObject, so scenarios reach
-        // it through the box: they hold the decode animation
-        // (decoding = true) while driving the visible
-        // COMPLETE SIGN-IN action with the field's text.
+        // it through the box: they pin the decode animation
+        // (decoding = true) while setting the field's text, then
+        // release it before driving the visible COMPLETE SIGN-IN
+        // action, since a submit while decoding stays quiet.
         readonly property var pasteDecoder: loginDecoder
         Layout.fillWidth: true
         implicitHeight: 44
