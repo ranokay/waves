@@ -118,7 +118,7 @@ def _scenario() -> int:  # noqa: C901 (one straight scenario)
         problems.append("the welcome left the screen when TIDAL was chosen")
     if q("root.setupMode") != "tidal":
         problems.append("choosing TIDAL did not switch the welcome to its sign-in steps")
-    if not q(_visible("providerPicker", "o.label === 'OPEN BROWSER LOGIN'")):
+    if not q(_visible("providerPicker", "o.objectName === 'welcomeSignInOpen'")):
         problems.append("the inline sign-in steps expose no OPEN BROWSER LOGIN action")
     if q(_visible("providerPicker", "o.objectName === 'signInPaste'")):
         problems.append("the paste field showed before the browser login was opened")

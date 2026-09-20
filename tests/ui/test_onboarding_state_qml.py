@@ -292,7 +292,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
             failures.append("Escape closed the welcome instead of returning to the cards")
 
     # Skip: the welcome closes, the app is usable, no passive overlay, chip up.
-    if not click(_text_point("providerPicker", "Not now"), "setupSettings.firstRunAnswered === true"):
+    if not click(_object_point("providerPicker", "welcomeSkip"), "setupSettings.firstRunAnswered === true"):
         failures.append("the welcome exposes no Skip action")
     else:
         if q("providerPicker.visible"):
@@ -380,13 +380,13 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     else:
         if not click(_text_point("providerPicker", "CONTINUE WITH TIDAL"), "root.setupMode === 'tidal'"):
             failures.append("the TIDAL card did not reopen the inline sign-in steps")
-        elif not click(_text_point("providerPicker", "OPEN BROWSER LOGIN"), "root.setupUrlOpened === true"):
+        elif not click(_object_point("providerPicker", "welcomeSignInOpen"), "root.setupUrlOpened === true"):
             failures.append("OPEN BROWSER LOGIN did not start the sign-in flow")
         elif q(_object_point("providerPicker", "signInPaste")) in ("", None):
             failures.append("the sign-in steps expose no paste field")
         elif not q(_pin_paste("providerPicker", "https://tidal.test/redirect")):
             failures.append("the sign-in steps expose no paste field to drive")
-        elif not click(_text_point("providerPicker", "COMPLETE SIGN-IN"), "root.signedIn === true"):
+        elif not click(_object_point("providerPicker", "welcomeSignInComplete"), "root.signedIn === true"):
             failures.append("COMPLETE SIGN-IN did not complete the sign-in")
     if q("providerPicker.visible") or q("root.setupOpen"):
         failures.append("a sign-in surface survived a completed sign-in")

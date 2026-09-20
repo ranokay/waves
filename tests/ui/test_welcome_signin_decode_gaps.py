@@ -122,6 +122,14 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, two legs)
             )
         )
 
+    def emit_clicked_object(name: str) -> None:
+        q(
+            js(
+                f"var g = findFirst(providerPicker, function (o) {{ return o.objectName === {name!r}; }});\n"
+                + "if (!g) throw new Error('missing action');\ng.clicked();\n"
+            )
+        )
+
     def decoder_running() -> bool:
         return bool(q(js("var box = " + box_call + ";\nreturn box.pasteDecoder.decoding;")))
 
@@ -153,7 +161,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, two legs)
     if q("root.setupMode") != "tidal":
         print("the TIDAL card did not open the inline sign-in steps", file=sys.stderr)
         return EXIT_PRECONDITION
-    emit_clicked("OPEN BROWSER LOGIN")
+    emit_clicked_object("welcomeSignInOpen")
     if not pump_until(lambda: bool(q("root.setupUrlOpened"))):
         print("OPEN BROWSER LOGIN did not start the sign-in flow", file=sys.stderr)
         return EXIT_PRECONDITION
@@ -179,7 +187,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, two legs)
     baseline = status()
     # Both submit paths, driven the way the UI drives them: the action's
     # own signal and the field's accepted signal.
-    emit_clicked("COMPLETE SIGN-IN")
+    emit_clicked_object("welcomeSignInComplete")
     q(
         js(
             "var box = " + box_call + ";\n"

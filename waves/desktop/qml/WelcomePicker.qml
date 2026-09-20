@@ -158,6 +158,7 @@ Rectangle {
         }
       }
       Text {
+        objectName: "welcomeSkip"
         Layout.alignment: Qt.AlignHCenter
         textFormat: Text.PlainText
         text: "Not now"
@@ -165,14 +166,45 @@ Rectangle {
         font.pixelSize: 12
         font.underline: true
         // A reader's press answers the same skipped() the click calls.
+        // Tab-reachable like every other primary control: the same
+        // Return/Enter/Space acceptance GateAction carries, plus a focus
+        // ring (a Text draws none itself).
+        activeFocusOnTab: visible
         Accessible.role: Accessible.Button
         Accessible.name: "Not now"
         Accessible.onPressAction: pickCard.skipped()
+        Keys.onReturnPressed: function (event) {
+          if (!event.isAutoRepeat) {
+            event.accepted = true
+            pickCard.skipped()
+          }
+        }
+        Keys.onEnterPressed: function (event) {
+          if (!event.isAutoRepeat) {
+            event.accepted = true
+            pickCard.skipped()
+          }
+        }
+        Keys.onSpacePressed: function (event) {
+          if (!event.isAutoRepeat) {
+            event.accepted = true
+            pickCard.skipped()
+          }
+        }
         MouseArea {
           anchors.fill: parent
           anchors.margins: -6
           cursorShape: Qt.PointingHandCursor
           onClicked: pickCard.skipped()
+        }
+        Rectangle {
+          anchors.fill: parent
+          anchors.margins: -4
+          radius: 6
+          color: "transparent"
+          border.width: 2
+          border.color: "#3dff6e"
+          visible: parent.activeFocus
         }
       }
     }
@@ -209,6 +241,7 @@ Rectangle {
         }
       }
       GateAction {
+        objectName: "welcomeSignInOpen"
         label: host.setupUrlOpened ? "REOPEN BROWSER LOGIN" : "OPEN BROWSER LOGIN"
         onClicked: waves.beginLogin()
       }
@@ -304,6 +337,7 @@ Rectangle {
         }
       }
       GateAction {
+        objectName: "welcomeSignInComplete"
         visible: host.setupUrlOpened
         label: "COMPLETE SIGN-IN"
         // Same hold as the field's Enter: a click inside the decode
