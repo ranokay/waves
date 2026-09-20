@@ -330,6 +330,7 @@ def test_download_with_chooser_apple_routes_with_pins(monkeypatch):
         row_for=lambda kind, raw: {"title": "Apple Song", "artist": "Artist", "art": ""},
     )
     b.providers[CTX_APPLE] = provider
+    provider.downloads = backend._AppleDownloads(b)
     b._download_apple = fake_apple
     _bind(b, "_chooser_confirm_status")
     b.downloadWithChooser("apple:456", "track", "HI-RES", "both")
@@ -373,6 +374,7 @@ def test_download_with_chooser_apple_parks_pins_across_a_refetch():
     b = _bridge(apple_enabled=True)
     provider = _metadata(AppleProvider, cached=lambda kind, mid: None)
     b.providers[CTX_APPLE] = provider
+    provider.downloads = backend._AppleDownloads(b)
     refetched = []
     b._refetch_apple_for_download = lambda bucket, mid: refetched.append((bucket, mid))
     _bind(b, "_download_apple_with_chooser")

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
+from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
 from waves.errors import DownloadIncomplete
 from waves.providers import AppleCollectionIncomplete
@@ -740,6 +741,10 @@ def _entry_stub(base: Path, provider, cookies: Path | None):
     stub._download_gate = lambda: "ok"
     stub._ffmpeg_gate_holds = lambda *a: False
     stub._library_bulk_skip_on = lambda: False
+    # The provider's download surface: the bridge implements Apple's and binds
+    # it where the providers are wired, so a stub that drives the real entry
+    # points binds it too.
+    provider.downloads = backend._AppleDownloads(stub)
     if cookies is not None:
         provider.cookies_path = str(cookies)
     return stub
@@ -903,9 +908,8 @@ def test_incomplete_apple_collection_retry_refetch_reports_the_partial_failure(t
     stub._refetch_inflight = set()
     stub._browse_gen = 0
     stub._queueRetryRefetched = _Signal()
-    stub._retry_queue_refetch = WavesBridge._retry_queue_refetch.__get__(stub)
 
-    stub._retry_queue_refetch({"type": "playlist", "media_id": "apple:pl.1", "qid": 3})
+    backend._refetch_retry(stub, {"type": "playlist", "media_id": "apple:pl.1", "qid": 3})
 
     assert any("part of this playlist" in status for status in stub.statuses)
     assert ("playlist", "apple:pl.1") not in stub._refetch_inflight
@@ -1023,6 +1027,7 @@ def test_row_object_falls_back_to_the_provider_cache(tmp_path):
         _objs={"album": {}},
         providers={CTX_APPLE: provider},
     )
+    provider.downloads = backend._AppleDownloads(stub)
     stub._row_object = lambda item: WavesBridge._row_object(stub, item)
 
     row = stub._row_object({"qid": 9, "type": "album", "media_id": "apple:album-1"})

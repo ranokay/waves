@@ -18,11 +18,22 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from support.provider_fakes import BareProvider
 from tidalapi.media import AudioMode, Quality
 
+from waves.desktop.backend import WavesBridge
 from waves.download import Download
 from waves.model.downloader import TrackStreamInfo
-from waves.providers import AudioType, QualityTier, Refusal, RefusalKind, StreamInfo, TidalProvider
+from waves.providers import (
+    AudioType,
+    Capability,
+    DownloadAdapter,
+    QualityTier,
+    Refusal,
+    RefusalKind,
+    StreamInfo,
+    TidalProvider,
+)
 
 # ----------------------------------------------------------------- the fakes
 
@@ -516,7 +527,7 @@ class TestTrackFactsConsumption:
 class TestJobSpecDispatch:
     """A queued row names its object; the job resolves it through the provider."""
 
-    def _stub_bridge(self, provider, tmp_path, *, skip=False, claim_records=None):
+    def _stub_bridge(self, provider, tmp_path, *, skip=False, claim_records=None, provider_id="tidal"):
         from support.dispatch_stub import arm_dispatch
 
         class _Signal:
@@ -567,7 +578,7 @@ class TestJobSpecDispatch:
         stub.downloadState = _Signal()
         stub.downloadProgress = _Signal()
         stub.statuses = []
-        stub.providers = {"tidal": provider}
+        stub.providers = {provider_id: provider}
         stub._track_poll = SimpleNamespace(isActive=lambda: True, start=lambda *a: None)
         stub._set_queue_status = lambda qid, status, reason="": (
             stub._queue[0].__setitem__("status", status),
@@ -586,11 +597,20 @@ class TestJobSpecDispatch:
         arm_dispatch(stub)
         return stub
 
-    def _spec(self, *, collection=True, kind="album", object_id="tidal:m1", media_id="m1", audio_type=None):
+    def _spec(
+        self,
+        *,
+        collection=True,
+        kind="album",
+        object_id="tidal:m1",
+        media_id="m1",
+        audio_type=None,
+        provider_id="tidal",
+    ):
         from waves.desktop.backend import _JobSpec
 
         return _JobSpec(
-            provider_id="tidal",
+            provider_id=provider_id,
             kind=kind,
             object_id=object_id,
             name="Album",
@@ -678,3 +698,140 @@ class TestJobSpecDispatch:
 
         assert stub.dl.built_kwargs["pinned_quality"] == QualityTier.HI_RES_LOSSLESS
         assert stub.dl.built_kwargs["audio_type"] == "atmos"
+
+
+# ---------------------------------------------- the third provider's adapter
+
+
+class _ThirdDownloads(DownloadAdapter):
+    """A third provider's download surface: records every ask the bridge
+    routes, and runs queued jobs through its own pipeline -- no engine, no
+    TIDAL session (the fake stands in for a provider whose deliveries come
+    from somewhere else entirely)."""
+
+    def __init__(self, bridge):
+        self.bridge = bridge
+        self.entries: list = []
+        self.retries: list = []
+        self.rows: list = []
+        self.refetches: list = []
+        self.standalones: list = []
+        self.jobs: list = []
+
+    def serve_entry(self, kind, media_id, *, chooser=False, chooser_ask=None, chooser_audio=None, chooser_toggles=None):
+        self.entries.append((kind, media_id, chooser))
+        return True
+
+    def serve_retry(self, item, obj):
+        self.retries.append((item["media_id"], obj))
+        return True
+
+    def cached_row(self, kind, media_id):
+        self.rows.append((kind, media_id))
+        return {"id": media_id, "kind": kind}
+
+    def refetch_retry(self, item):
+        self.refetches.append(item["media_id"])
+        return True
+
+    def standalone(self, media_id, mode):
+        self.standalones.append((media_id, mode))
+        return 3
+
+    def job_runner(self, qid, spec, *, signals, job_abort, row_ask, name):
+        def run(obj):
+            self.jobs.append((qid, spec.kind, obj, name))
+            self.bridge._set_queue_status(qid, "done")
+            self.bridge.downloadState.emit(spec.media_id, "done")
+
+        return run
+
+
+class _ThirdProvider(BareProvider):
+    id = "third"
+    name = "Third"
+    capabilities = frozenset({Capability.DOWNLOAD})
+
+
+class TestTheThirdProviderAdapter:
+    """A third provider with Capability.DOWNLOAD drives every download road
+    through its own adapter, with no bridge edit: the id's namespace resolves
+    to the provider, and the provider's adapter serves the click, the retry,
+    the standalone fetch and the job body."""
+
+    def _bridge(self, tmp_path):
+        provider = _ThirdProvider()
+        stub = TestJobSpecDispatch()._stub_bridge(provider, tmp_path, provider_id="third")
+        downloads = _ThirdDownloads(stub)
+        provider.downloads = downloads
+        stub._objs = {"track": {}, "album": {}, "playlist": {}, "mix": {}, "video": {}}
+        return provider, stub, downloads
+
+    def test_a_third_provider_serves_its_own_click(self, tmp_path):
+        _provider, stub, downloads = self._bridge(tmp_path)
+        obj = SimpleNamespace(id="third:t1", name="Song")
+        stub._objs["track"] = {"third:t1": obj, "t1": obj}
+        stub.settings.data.format_track = "{title}"
+        engine_calls: list = []
+        stub._download = lambda *a, **k: engine_calls.append(a) or True
+
+        WavesBridge.downloadTrack(stub, "third:t1")
+
+        assert downloads.entries == [("track", "third:t1", False)]
+        assert engine_calls == [], "a provider-run click must not reach the engine entry"
+
+        # The engine entry still serves the ids whose provider has no adapter.
+        WavesBridge.downloadTrack(stub, "t1")
+        assert len(engine_calls) == 1 and engine_calls[0][1] == "track"
+        assert downloads.entries == [("track", "third:t1", False)]
+
+    def test_a_third_provider_drives_a_job_end_to_end(self, tmp_path):
+        provider, stub, downloads = self._bridge(tmp_path)
+        provider.get_object = lambda kind, raw_id: SimpleNamespace(kind=kind, raw_id=raw_id)
+        stub._build_download = lambda *a, **k: (_ for _ in ()).throw(AssertionError("the engine was built"))
+
+        spec = TestJobSpecDispatch()._spec(provider_id="third", object_id="third:m1", media_id="third:m1")
+        TestJobSpecDispatch()._drive(stub, spec)
+
+        assert downloads.jobs, "the provider's job body never ran"
+        qid, kind, obj, name = downloads.jobs[0]
+        assert (qid, kind, name) == (1, "album", "Album")
+        assert (obj.kind, obj.raw_id) == ("album", "m1"), "the job resolves through the spec's provider"
+        assert stub._queue[0]["status"] == "done"
+
+    def test_the_retry_roads_ask_the_rows_provider(self, tmp_path):
+        _provider, stub, downloads = self._bridge(tmp_path)
+        item = {
+            "qid": 1,
+            "type": "album",
+            "media_id": "third:m1",
+            "name": "Album",
+            "template": "T",
+            "collection": True,
+            "askQuality": "HIGH",
+            "quality": "HIGH",
+        }
+
+        assert WavesBridge._start_retry(stub, item, {"id": "third:m1"}) is True
+        assert downloads.retries == [("third:m1", {"id": "third:m1"})]
+
+        assert WavesBridge._row_object(stub, item) == {"id": "third:m1", "kind": "album"}
+        assert downloads.rows == [("album", "third:m1")]
+
+        from waves.desktop import backend
+
+        backend._refetch_retry(stub, item)
+        assert downloads.refetches == ["third:m1"]
+
+    def test_a_standalone_fetch_asks_the_providers_adapter(self, tmp_path):
+        from conftest import _InlinePool
+
+        _provider, stub, downloads = self._bridge(tmp_path)
+        stub.threadpool = _InlinePool()
+        stub._download_gate = lambda: "ok"
+        stub._set_status = stub.statuses.append
+
+        WavesBridge._standalone_fetch(stub, "third:m1", "lyrics")
+
+        assert downloads.standalones == [("third:m1", "lyrics")]
+        assert stub.statuses[-1] == "Saved lyrics for 3 tracks"

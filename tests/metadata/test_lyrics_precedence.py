@@ -329,6 +329,7 @@ def _standalone_bridge(tmp_path, *, psettings, lyrics=None, lyrics_error=False):
 
     from conftest import _InlinePool
 
+    from waves.desktop import backend
     from waves.desktop.backend import WavesBridge
 
     folder = tmp_path / "Artist"
@@ -359,6 +360,9 @@ def _standalone_bridge(tmp_path, *, psettings, lyrics=None, lyrics_error=False):
         _cover_convert_ffmpeg=lambda: "",
         _tag_write_flags=lambda: {},
     )
+    # The provider's download surface: the bridge implements Apple's and binds
+    # it where the providers are wired, so a standalone stub binds it too.
+    provider.downloads = backend._AppleDownloads(stub)
     if lyrics_error:
 
         def _raise(*args, **kwargs):

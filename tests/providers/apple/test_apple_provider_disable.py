@@ -17,6 +17,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 
 from waves.constants import CTX_APPLE
+from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
 
 _REASON = "Apple Music was disabled"
@@ -95,6 +96,9 @@ def _retry_stub(item: dict) -> SimpleNamespace:
     stub.removed = []
     stub._queue_item = WavesBridge._queue_item.__get__(stub, SimpleNamespace)
     stub._row_object = lambda it: object()
+    # The provider's download surface: the bridge implements Apple's and binds
+    # it where the providers are wired, so a retry stub binds it too.
+    stub.providers = {"apple": SimpleNamespace(downloads=backend._AppleDownloads(stub))}
     stub._download_apple = lambda *a, **k: False
     stub._remove_row = lambda qid, withdrawn=None: stub.removed.append(qid) or True
     stub._emit_queue = lambda: None
