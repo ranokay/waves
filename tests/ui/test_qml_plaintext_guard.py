@@ -121,6 +121,12 @@ from support.paths import QML_DIR
 #   GateAction.qml     welcome chrome, and the rest (PasteGlyph, GateAction,
 #   DecodeController.qml  DecodeController) are local chrome that ride the set
 #                      for the same structural reason.
+#   WaveMark.qml       the last inline components split out of Main.qml (#315
+#   GateCard.qml       slice 9): LibLibrarySection renders the scanned library
+#   NavTab.qml         (its rows carry file names and provider labels); the
+#   NavCrumbTrail.qml  rest (WaveMark, GateCard, NavTab, NavCrumbTrail,
+#   BrowseScroll.qml   BrowseScroll) are local chrome that ride the set for the
+#   LibLibrarySection.qml  same structural reason as the other split files.
 TIDAL_DATA_FILES = {
     "Main.qml",
     "DownloadButton.qml",
@@ -187,6 +193,12 @@ TIDAL_DATA_FILES = {
     "PasteGlyph.qml",
     "GateAction.qml",
     "DecodeController.qml",
+    "WaveMark.qml",
+    "GateCard.qml",
+    "NavTab.qml",
+    "NavCrumbTrail.qml",
+    "BrowseScroll.qml",
+    "LibLibrarySection.qml",
 }
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
 FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)

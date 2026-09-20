@@ -50,18 +50,18 @@ Lossless.
 
 ## Layout
 
-| Path                   | Purpose                                                                                                               |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `app.py`               | Application entry point; creates the QML engine and the bridge.                                                       |
-| `backend.py`           | `WavesBridge`, the single `QObject` exposed to QML; runs blocking work (login, search, downloads) off the UI thread.  |
-| `qml/Main.qml`         | The main window: search, results, artist pages, library; the queue/logs drawers and shared widgets are sibling files. |
-| `qml/SettingsPage.qml` | Settings editor (mirrors the engine's preferences).                                                                   |
-| `updater.py`           | In-app self-updater: fail-closed Ed25519 verification, staged swap, rollback.                                         |
-| `signing.py`           | The embedded release public key and manifest verification.                                                            |
-| `ffmpeg_manager.py`    | Downloads and updates a trusted static FFmpeg into the app data dir.                                                  |
-| `devlog.py`            | Optional developer timing log (enable with `WAVES_DEBUG`).                                                            |
-| `BRIDGE.md`            | Reference for every bridge signal and the slot/worker pattern.                                                        |
-| `fonts/`               | Bundled JetBrains Mono for consistent monospace + block-glyph rendering.                                              |
+| Path                   | Purpose                                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `app.py`               | Application entry point; creates the QML engine and the bridge.                                                      |
+| `backend.py`           | `WavesBridge`, the single `QObject` exposed to QML; runs blocking work (login, search, downloads) off the UI thread. |
+| `qml/Main.qml`         | The main window: search, results, artist pages, library; every shared component is a sibling file.                   |
+| `qml/SettingsPage.qml` | Settings editor (mirrors the engine's preferences).                                                                  |
+| `updater.py`           | In-app self-updater: fail-closed Ed25519 verification, staged swap, rollback.                                        |
+| `signing.py`           | The embedded release public key and manifest verification.                                                           |
+| `ffmpeg_manager.py`    | Downloads and updates a trusted static FFmpeg into the app data dir.                                                 |
+| `devlog.py`            | Optional developer timing log (enable with `WAVES_DEBUG`).                                                           |
+| `BRIDGE.md`            | Reference for every bridge signal and the slot/worker pattern.                                                       |
+| `fonts/`               | Bundled JetBrains Mono for consistent monospace + block-glyph rendering.                                             |
 
 ## Architecture
 

@@ -8,9 +8,10 @@ Ten minutes here saves an afternoon of reverse-engineering.
 ```
 ┌─────────────────────────────  Waves (GUI)  ─────────────────────────────┐
 │                                                                         │
-│  qml/Main.qml ── the main window (views, routing, state; components     │
-│  qml/*.qml ── split out beside it: ArtCard, TrackRow, LibSourceGroup,   │
-│               DownloadButton, the drawers, the player surfaces)         │
+│  qml/Main.qml ── the main window (views, routing, state, object tree)   │
+│  qml/*.qml ── every component, split out beside it: ArtCard, TrackRow,  │
+│               LibSourceGroup, DownloadButton, NavTab, the drawers, the  │
+│               player surfaces)                                          │
 │  qml/SettingsPage.qml ── schema-driven settings editor                  │
 │        │                                    ▲                           │
 │        │ calls slots on `waves`             │ signals (queued,          │
