@@ -76,6 +76,7 @@ Column {
     MouseArea {
       anchors.fill: parent
       enabled: bsec.headlinable
+      hoverEnabled: enabled
       cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
       onClicked: bsec.openListing()
     }

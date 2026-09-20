@@ -3525,8 +3525,23 @@ ApplicationWindow {
   // Where a card's art leads: artists to the artist page; albums, playlists
   // and mixes to their own synthesized page; tracks to their album's page
   // with the track highlighted (falling back to the artist page for the
-  // rare track without an album id).
+  // rare track without an album id). A video card, or a track naming
+  // neither an album nor an artist, goes nowhere.
+  // browseCardOpenable is the one verdict the cards' affordance (cursor,
+  // underline) and the click path below both read, so the two can never
+  // disagree. A track offers its page when it names an album or an
+  // artist; anything else stays inert.
+  function browseCardOpenable(card) {
+    var kind = card.kind || ""
+    if (kind === "artist" || kind === "playlist" || kind === "mix" || kind === "album")
+      return true
+    if (kind === "track")
+      return !!(card.album_id || card.artist_id)
+    return false
+  }
   function openBrowseCard(card) {
+    if (!browseCardOpenable(card))
+      return
     var kind = card.kind || ""
     // The artist page switches the active surface itself in onArtistLoaded,
     // so those branches return before the browse-surface flip below.
@@ -3538,11 +3553,14 @@ ApplicationWindow {
       openBrowseItem(kind, card.id, "", card.title || "", card.art || "")
     } else if (kind === "track") {
       // A track card's art is its album's cover (smaller), still the right face.
+      // The guard above already settled that an album or an artist is named,
+      // so the artist test is implied; the return is not: the artist page
+      // switches the surface itself, like the artist branch above, and must
+      // skip the browse-surface flip below.
       if (card.album_id)
         openBrowseItem("album", card.album_id, card.id, card.album || "", card.art || "")
       else {
-        if (card.artist_id)
-          waves.loadArtist(card.artist_id)
+        waves.loadArtist(card.artist_id)
         return
       }
     } else

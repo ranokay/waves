@@ -220,6 +220,7 @@ ignore = [
 "tests/ui/test_browse_back_scroll.py" = ["C901"]
 "tests/ui/test_browse_card_library_state.py" = ["C901"]
 "tests/ui/test_browse_card_line_fits.py" = ["C901"]
+"tests/ui/test_browse_card_openable.py" = ["C901"]
 "tests/ui/test_browse_console_wayfinding.py" = ["C901"]
 "tests/ui/test_browse_row_window.py" = ["C901"]
 "tests/ui/test_browse_strip_fits_the_card.py" = ["C901"]

@@ -8,7 +8,7 @@ import QtQuick
 // `host` is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load.
 // It reads through it:
-//   host.browseCardDownload / host.dlPct / host.dlSt /
+//   host.browseCardDownload / host.browseCardOpenable / host.dlPct / host.dlSt /
 //   host.fmtMs / host.hoverPrefetch / host.hoverPrefetchCancel /
 //   host.ledPulse / host.libStamp / host.marchTick / host.openBrowseCard /
 //   host.openLibraryClaim / host.previewPosition / host.pvSt /
@@ -43,8 +43,10 @@ Rectangle {
   color: surface
   border.color: border1
   // Only the artwork and the title open the card's page, the caption
-  // handles its own artist link, and dead space stays inert.
-  readonly property bool openable: bc.kind !== "track" || !!bc.card.artist_id
+  // handles its own artist link, and dead space stays inert. Whether they
+  // offer it is Main.qml's browseCardOpenable verdict, the same one the
+  // click path reads, so the cursor and the click can never disagree.
+  readonly property bool openable: host.browseCardOpenable(bc.card)
   // Resting anywhere on the card has its page ready before the click
   // (see hoverPrefetch). A handler of its own, not the Art's fxHover:
   // that one is off when the user turns the cover tilt off.
@@ -95,6 +97,7 @@ Rectangle {
       url: bc.card.art || ""
       MouseArea {
         anchors.fill: parent
+        hoverEnabled: true
         cursorShape: bc.openable ? Qt.PointingHandCursor : Qt.ArrowCursor
         onClicked: host.openBrowseCard(bc.card)
       }
