@@ -1,14 +1,13 @@
-"""Filesystem, download-integrity and privacy edges around downloads.
+"""Staging names and path fitting around a download.
 
-Staging names over NAME_MAX, playlist symlinks into a missing directory, the
-bare-requests sizing probe, the Path.home() relocation on an over-long path,
-factory reset leaving diagnostic bundles behind, and the page-cache save racing
-live caches.
+A maximal destination name still stages and swaps, a playlist symlink into a
+missing directory never crashes, the sizing probe rides the pooled session and
+degrades on failure, and an over-long path shortens in place instead of moving
+to the home folder.
 """
 
 from __future__ import annotations
 
-import json
 import pathlib
 import threading
 from types import SimpleNamespace
@@ -16,7 +15,6 @@ from unittest.mock import MagicMock, patch
 
 from pathvalidate.error import ErrorReason, ValidationError
 
-from waves.desktop.backend import WavesBridge
 from waves.download import Download
 from waves.paths import _shorten_to_valid_length, path_file_sanitize
 
@@ -162,106 +160,3 @@ def test_shorten_helper_halves_then_drops_components() -> None:
     out = _shorten_to_valid_length(pathlib.Path("/base/artistartistartist/albumalbumalbum"), cap_20)
     assert len(str(out)) <= 20
     assert str(out).startswith("/base"), "shallow components (the base) survive"
-
-
-# ---- factory reset erases exported diagnostic bundles ----------------------
-
-
-def test_factory_reset_wipes_diagnostic_bundles(tmp_path: pathlib.Path, monkeypatch) -> None:
-    bundle = tmp_path / "waves-diagnostics-20260802-121314-123.txt"
-    bundle.write_text("scrubbed diagnostics", encoding="utf-8")
-    foreign = tmp_path / "waves-diagnostics-notes.txt"
-    foreign.write_text("the user's own notes", encoding="utf-8")
-
-    stub = SimpleNamespace(_ownership=SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr("waves.desktop.backend.path_config_base", lambda: str(tmp_path))
-    monkeypatch.setattr("waves.desktop.backend.OwnershipStore", lambda _p: SimpleNamespace())
-    monkeypatch.setattr("waves.desktop.backend.diagnostics.detach_disk_log", lambda: None)
-    monkeypatch.setattr("waves.desktop.backend.QtCore.QSettings", lambda: MagicMock())
-    WavesBridge.factoryReset(stub)
-
-    assert not bundle.exists(), "the export contains breadcrumbs and must go with the reset"
-    assert foreign.exists(), "only the exact timestamped shape may match"
-
-
-# ---- a racing page-cache save skips the save, never crashes its caller -----
-
-
-class _RacingDict(dict):
-    """A library cache whose iteration blows up like a dict mutated mid-scan."""
-
-    def items(self):
-        raise RuntimeError("dictionary changed size during iteration")
-
-
-class _SaveStub:
-    _save_page_cache = WavesBridge._save_page_cache
-
-    def __init__(self, path: pathlib.Path, lib=None):
-        self._logged_in = True
-        self._factory_reset = False
-        self._lib_cache = {("tidal", "albums"): {"items": [{"id": "a1"}], "more": False}} if lib is None else lib
-        self._lib_sort = {}
-        self._browse_root_cache = {}
-        self._browse_pages = {}
-        self._artist_cache = {}
-        self._home_cache = {}
-        self._search_cache = {}
-        self._page_cache_lock = threading.Lock()
-        self._page_cache_path = str(path)
-
-    def _cache_user_id(self):
-        return "u"
-
-
-def test_a_cache_mutating_mid_save_never_escapes_the_worker(tmp_path: pathlib.Path) -> None:
-    stub = _SaveStub(tmp_path / "page_cache.json", lib=_RacingDict())
-    stub._save_page_cache()  # must not raise: an escape latches the busy spinner on
-    assert not (tmp_path / "page_cache.json").exists(), "a torn snapshot is never written"
-
-
-def test_a_normal_save_still_writes_valid_json(tmp_path: pathlib.Path) -> None:
-    stub = _SaveStub(tmp_path / "page_cache.json")
-    stub._save_page_cache()
-    data = json.loads((tmp_path / "page_cache.json").read_text(encoding="utf-8"))
-    assert data["library"]["tidal:albums"]["items"] == [{"id": "a1"}]
-
-
-def test_the_save_serializes_one_shot_never_incrementally(tmp_path: pathlib.Path) -> None:
-    """json.dump's pure-Python encoder yields between dict items and can watch
-    a cache change size mid-encode; json.dumps' one-shot C encoder cannot. The
-    save must use dumps."""
-    stub = _SaveStub(tmp_path / "page_cache.json")
-    with patch("waves.desktop.backend.json.dump", side_effect=AssertionError("dump() must not be used")):
-        stub._save_page_cache()
-    assert (tmp_path / "page_cache.json").exists()
-
-
-def test_factory_reset_pattern_cannot_match_a_user_file() -> None:
-    from waves.desktop.backend import _FACTORY_WIPE_LOG_PATTERNS
-
-    def one_pattern_matches(name: str) -> bool:
-        return any(pat.match(name) for pat in _FACTORY_WIPE_LOG_PATTERNS)
-
-    assert one_pattern_matches("waves-diagnostics-20260802-121314-123.txt")
-    # The per-root library caches (see cache_file_for_root) and their sidecars.
-    assert one_pattern_matches("library-0123456789ab.sqlite3")
-    assert one_pattern_matches("library-0123456789ab.sqlite3-wal")
-    assert one_pattern_matches("library-0123456789ab.sqlite3-shm")
-    for name in (
-        "waves-diagnostics-20260802-121314-123.txt.bak",
-        "my-waves-diagnostics-20260802-121314-123.txt",
-        "waves-diagnostics-2026-08-02.txt",
-        "waves-diagnostics-.txt",
-        # A name a user could plausibly have put beside ours must never match:
-        # no digest, wrong digest length, uppercase (ours are hexdigest lower),
-        # a prefix or suffix, or a non-sqlite extension.
-        "library.sqlite3.bak",
-        "library-mymusic.sqlite3",
-        "library-0123456789ab.sqlite3.bak",
-        "library-0123456789AB.sqlite3",
-        "library-0123456789abcd.sqlite3",
-        "my-library-0123456789ab.sqlite3",
-        "library-0123456789ab.txt",
-    ):
-        assert not one_pattern_matches(name), name

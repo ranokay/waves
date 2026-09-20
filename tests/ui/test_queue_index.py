@@ -57,7 +57,7 @@ def _stub():
     stub._redownload_overrides = set()
     stub._library_claim_overrides = set()
     # And the best-of-both plan stashed for the row, released the same way
-    # (test_late_skip_clear_and_merge_plans).
+    # (test_merge_plan_lifecycle).
     stub._merge_plans = {}
     # The held-download stash, which the withdrawal reads to tell a hold from a
     # give-up (all three marks above survive a hold) and which the clears drain

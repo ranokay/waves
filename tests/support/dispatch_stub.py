@@ -11,7 +11,7 @@ still sees every job run in order within the ``_download`` call it drove.
 from __future__ import annotations
 
 from collections import deque
-from threading import Lock
+from threading import Event, Lock
 from types import SimpleNamespace
 
 from waves.desktop.backend import WavesBridge
@@ -155,3 +155,69 @@ def arm_dispatch(stub) -> None:
     for name in ("_pump_queue", "_start_job", "_on_job_finished"):
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub, type(stub)))
     stub._jobFinished = SimpleNamespace(emit=stub._on_job_finished)
+
+
+def _queue_stub(statuses, *, running_qid=None):
+    """A bridge stand-in carrying one queue row per status, with the real
+    clear/remove/stop family bound.
+
+    ``statuses`` are the row statuses in qid order (qid ``n`` has media id
+    ``m<n>``) and ``running_qid`` names the job already in flight. The stub
+    also carries the per-row stores and the discography rollup those slots
+    sweep, so a test reads what a withdrawal aborted, released or emitted.
+    """
+    s = SimpleNamespace()
+    s._queue = [
+        {"qid": n, "media_id": f"m{n}", "status": st, "type": "album", "name": f"r{n}"}
+        for n, st in enumerate(statuses, 1)
+    ]
+    s._queue_lock = Lock()
+    s._queue_index = {it["qid"]: it for it in s._queue}
+    s._queue_emit_suspended = False
+    s._job_specs = {it["qid"]: object() for it in s._queue}
+    s._job_aborts = {}
+    s._pending_qids = deque(it["qid"] for it in s._queue)
+    s._event_run = Event()
+    s._paused = False
+    s.pausedChanged = _RecordingSignal()
+    s._scan_gen = 0
+    s._scans_in_flight = 0
+    s._scan_count_lock = Lock()
+    s.scanningChanged = _RecordingSignal()
+    s.downloadState = _RecordingSignal()
+    s.downloadProgress = _RecordingSignal()
+    s.folderRemaining = _RecordingSignal()
+    s.statuses = []
+    s._set_status = s.statuses.append
+    s._job_objs = {}
+    s._artist_groups = {
+        "art1": {"keys": {it["media_id"] for it in s._queue}, "done": set(), "failed": set(), "prog": {}}
+    }
+    s._artist_lock = Lock()
+    s._folder_groups = {}
+    s._folder_lock = Lock()
+    s._stranded_once = set()
+    arm_queue(s)
+    s._running_qid = running_qid
+    s._emit_queue = lambda: None
+    for n in (
+        "_reindex_queue",
+        "_queue_item",
+        "_remove_rows_where",
+        "_remove_row",
+        "_abort_if_in_flight",
+        "clearQueue",
+        "clearQueued",
+        "clearFailed",
+        "clearStopped",
+        "cancelQueueItem",
+        "removeQueueItem",
+        "stopAll",
+        "dismissDownloadFolderNudge",
+        "_bump_download_groups",
+        "_bump_artist_group",
+        "_bump_folder_group",
+        "_reap_stranded_groups",
+    ):
+        setattr(s, n, getattr(WavesBridge, n).__get__(s, type(s)))
+    return s

@@ -16,6 +16,7 @@ tmp_path install, and the Windows helpers are asserted as script text.
 from __future__ import annotations
 
 import errno
+import inspect
 import os
 import pathlib
 import shutil
@@ -26,6 +27,7 @@ import pytest
 from support.paths import REPO_ROOT
 
 from waves.desktop import updater as u
+from waves.desktop.backend import WavesBridge
 from waves.desktop.updater import AppUpdater, Release
 
 
@@ -155,6 +157,16 @@ def test_every_keep_the_app_performs_itself_names_the_folder(tmp_path, monkeypat
     assert up.kept_unprotected is False
     assert up.status()["kept_backup"] == "Waves.old"  # and a surface the card can read
     assert "/" not in up.kept_backup and str(tmp_path) not in up.kept_backup
+
+
+def test_the_restart_message_names_a_kept_backup():
+    """_apply_macos keeps the entire previous bundle whenever it held anything
+    foreign, and the only notice is a transient status line this message must
+    not overwrite."""
+    source = inspect.getsource(WavesBridge.installAppUpdate)
+
+    assert 'result.get("kept_backup"' in source, "the install result's notice is dropped on the floor"
+    assert "Restart to finish." in source
 
 
 def test_a_marked_backup_is_never_claimed_however_much_of_ours_it_holds(tmp_path):

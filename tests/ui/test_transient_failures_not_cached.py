@@ -107,7 +107,7 @@ class _DismissStub:
         self._release_abandoned_hold = WavesBridge._release_abandoned_hold.__get__(self, type(self))
         # Abandoning a held download settles its rollup now, or a discography
         # whose members were all held could never finish
-        # (test_late_skip_clear_and_merge_plans). These tests are about the buttons,
+        # (test_queue_clear_aborts_hold). These tests are about the buttons,
         # so record the credits and keep the groups empty.
         self.bumps: list = []
         self._bump_download_groups = lambda mid, pct, state: self.bumps.append((mid, pct, state))
