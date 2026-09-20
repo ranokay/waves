@@ -89,7 +89,9 @@ def _pin_paste(scope: str, text: str) -> str:
 
     The decoder is a non-visual QtObject reached through the box; pinning
     ``decoding`` stops a programmatic text set from auto-completing, so the
-    visible COMPLETE SIGN-IN action drives the step.
+    visible COMPLETE SIGN-IN action drives the step. The hold is released
+    before returning: a submit while decoding stays quiet by contract, so
+    the pinned flag must not survive into the driven click.
     """
     return scene_js(
         f"  var box = findFirst({scope}, function (o) {{ return o.objectName === 'signInPaste'; }});\n"
@@ -98,6 +100,7 @@ def _pin_paste(scope: str, text: str) -> str:
         "  var field = findFirst(box, function (o) { return o.objectName === 'signInField'; });\n"
         "  if (!field) return false;\n"
         f"  field.text = {json.dumps(text)};\n"
+        "  box.pasteDecoder.cancel();\n"
         "  return true;\n"
     )
 
