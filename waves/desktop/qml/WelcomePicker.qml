@@ -279,7 +279,12 @@ Rectangle {
             background: Rectangle {
               color: "transparent"
             }
-            onAccepted: waves.completeLogin(text)
+            // A submit inside the decode window would send the scrambled
+            // glyphs, never the link: the decode's own decoded() submits
+            // the settled link, so a press meanwhile is already answered
+            // and stays quiet instead of erroring spuriously.
+            onAccepted: if (!loginDecoder.decoding)
+              waves.completeLogin(text)
             onTextChanged: loginDecoder.noteTextChanged()
           }
           PasteGlyph {
@@ -287,6 +292,10 @@ Rectangle {
             Layout.alignment: Qt.AlignVCenter
             onClicked: {
               redirectField.forceActiveFocus()
+              // A decode in flight holds the OLD link and would rewrite
+              // the field back to it on its next tick: stop it before
+              // the clear, or a second paste signs in with the first.
+              loginDecoder.cancel()
               redirectField.clear()
               redirectField.paste()
             }
@@ -296,7 +305,12 @@ Rectangle {
       GateAction {
         visible: host.setupUrlOpened
         label: "COMPLETE SIGN-IN"
-        onClicked: waves.completeLogin(redirectField.text)
+        // Same hold as the field's Enter: a click inside the decode
+        // window would submit the scrambled glyphs (a spurious "that
+        // isn't the sign-in link" before the real submit lands), so it
+        // stays quiet and the decode's own submit carries the link.
+        onClicked: if (!loginDecoder.decoding)
+          waves.completeLogin(redirectField.text)
       }
       // The bridge's status line, shown inside the steps: the
       // status bar sits under the first-run gate's scrim, so this

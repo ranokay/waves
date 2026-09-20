@@ -73,7 +73,9 @@ _SETTINGS_TAB = (
 # welcome surface is on screen (the first-run gate or the page). The decoder
 # is a non-visual QtObject reached through the box, so pinning `decoding`
 # keeps a programmatic text set from auto-completing while the visible
-# COMPLETE SIGN-IN action drives the step.
+# COMPLETE SIGN-IN action drives the step. The hold is released before
+# returning: a submit while decoding stays quiet by contract, so the pinned
+# flag must not survive into the driven click.
 def _pin_paste(scope: str, text: str) -> str:
     return scene_js(
         f"  var b = findFirst({scope}, function (o) {{ return o.objectName === 'signInPaste'; }});\n"
@@ -82,6 +84,7 @@ def _pin_paste(scope: str, text: str) -> str:
         "  var f = findFirst(b, function (o) { return o.objectName === 'signInField'; });\n"
         "  if (!f) return false;\n"
         f"  f.text = {json.dumps(text)};\n"
+        "  b.pasteDecoder.cancel();\n"
         "  return true;\n"
     )
 
