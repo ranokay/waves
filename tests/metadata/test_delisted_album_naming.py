@@ -1,10 +1,10 @@
 """Naming a song whose album TIDAL will not hand over.
 
-Issue #35's fallback keeps a track downloadable when the album re-fetch 404s
+The album-404 fallback keeps a track downloadable when the album re-fetch 404s
 (the song still streams; only the album entry is gone). What it keeps is the
 album summary embedded in the track's own JSON: an id, a title, a cover, and
-nothing else. The tagger was taught to tolerate that; the path formatter was
-not, so the very songs the fallback rescued landed as
+nothing else. The tagger tolerates that; the path formatter must too, or the
+rescued songs land as
 
     Artist/[None] Album/1-{album_track_num}. Artist - Song.flac
 
@@ -19,8 +19,8 @@ from __future__ import annotations
 import pytest
 from tidalapi import Album, Artist, Track
 
-from waves.helper.path import format_path_media
 from waves.model.cfg import Settings
+from waves.paths import format_path_media
 
 TRACK_TEMPLATE = Settings().format_track
 
@@ -71,7 +71,7 @@ def test_a_rescued_track_is_not_named_after_the_missing_album_details():
 @pytest.mark.parametrize("token", ["{album_year}", "{album_track_num}", "{album_title}"])
 def test_no_template_token_survives_into_a_name(token):
     """The blanket catch in the formatter substitutes nothing when a token
-    raises, so a gap used to reach the filesystem verbatim."""
+    raises, so a gap must never reach the filesystem verbatim."""
     out = format_path_media(TRACK_TEMPLATE, _track(None), album_track_num_pad_min=2)
 
     assert token not in out

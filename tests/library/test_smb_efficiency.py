@@ -1,5 +1,5 @@
 """Network-mount efficiency behavior of the download write path and the
-ownership cache (the 2026-07-14 art/SMB audit fixes).
+ownership cache.
 
 Covered here:
   * _ensure_directory memoizes per instance, so the same album directory is
@@ -34,8 +34,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from waves.desktop.backend import WavesBridge
 from waves.download import Download
-from waves.waves_ui.backend import WavesBridge
 
 
 @pytest.fixture
@@ -211,7 +211,7 @@ def test_ownership_misses_still_refresh_during_downloads() -> None:
 def test_record_ownership_skips_realpath_without_symlink_mode() -> None:
     stub = _Stub(downloads_running=False, symlink_to_track=False)
     ev = {"id": 7, "path": "/library/Artist/Album/track.flac", "quality": {"tier": "LOSSLESS"}}
-    with patch("waves.waves_ui.backend.os.path.realpath") as realpath_mock:
+    with patch("waves.desktop.backend.os.path.realpath") as realpath_mock:
         stub._record_ownership(ev)
     realpath_mock.assert_not_called()
     recorded_path = stub._ownership.record.call_args[0][1]
@@ -221,7 +221,7 @@ def test_record_ownership_skips_realpath_without_symlink_mode() -> None:
 def test_record_ownership_resolves_realpath_in_symlink_mode() -> None:
     stub = _Stub(downloads_running=False, symlink_to_track=True)
     ev = {"id": 7, "path": "/library/link.flac", "quality": {"tier": "LOSSLESS"}}
-    with patch("waves.waves_ui.backend.os.path.realpath", return_value="/real/track.flac") as realpath_mock:
+    with patch("waves.desktop.backend.os.path.realpath", return_value="/real/track.flac") as realpath_mock:
         stub._record_ownership(ev)
     realpath_mock.assert_called_once_with("/library/link.flac")
     assert stub._ownership.record.call_args[0][1] == "/real/track.flac"

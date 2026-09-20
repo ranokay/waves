@@ -25,8 +25,8 @@ from types import SimpleNamespace
 
 from waves import config as waves_config
 from waves.config import BaseConfig
-from waves.ownership import OwnershipStore
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
+from waves.library.ownership import OwnershipStore
 
 
 class _Model:
@@ -238,12 +238,12 @@ def test_a_failed_install_lets_go_too():
 
 
 # --------------------------------------------------------------------------- #
-# gap-round G-09: the backend's own writer had the exact settings.json shape
+# The backend's own writer must stage settings.json through a name of its own.
 # --------------------------------------------------------------------------- #
 def test_backend_writer_stages_through_a_name_of_its_own(tmp_path, monkeypatch):
     import os
 
-    from waves.waves_ui.backend import _write_text_atomic
+    from waves.desktop.backend import _write_text_atomic
 
     staged: list[str] = []
     real_replace = os.replace
@@ -252,7 +252,7 @@ def test_backend_writer_stages_through_a_name_of_its_own(tmp_path, monkeypatch):
         staged.append(os.path.basename(src))
         return real_replace(src, dst)
 
-    monkeypatch.setattr("waves.waves_ui.backend.os.replace", replace)
+    monkeypatch.setattr("waves.desktop.backend.os.replace", replace)
     target = str(tmp_path / "waves.json")
 
     _write_text_atomic(target, "{}")

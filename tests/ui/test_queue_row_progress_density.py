@@ -2,14 +2,12 @@
 
 WHAT THIS FENCES OFF
 --------------------
-The queue drawer's per-row bar was two rows of 4px cells with 4px gaps in a
-12px slot while the download button's running face had moved to a dense grid
-(five rows of 3px cells, 1px gaps). The queue progress lab (2026-08-17, six
-densities side by side in the real drawer) picked FOUR rows of 3px cells with
-1px gaps: the same family as the button, 15px tall, so the running row grows
-three pixels for it. Two things can drift apart here: the matrix geometry and
-the slot the row keeps for it (the slot clips, so a slot shorter than the
-matrix silently cuts off its bottom row).
+The queue drawer's per-row bar is FOUR rows of 3px cells with 1px gaps in a
+15px slot, the same family as the download button's running face (five rows of
+3px cells, 1px gaps), so a running row grows three pixels. Two things can
+drift apart here: the matrix geometry and the slot the row keeps for it (the
+slot clips, so a slot shorter than the matrix silently cuts off its bottom
+row).
 
 HOW THIS STAYS FIXED
 --------------------
@@ -79,11 +77,11 @@ def test_a_queue_row_that_is_not_running_builds_no_bar():
     """Hiding the bar is not sparing it.
 
     The slot collapses to height 0 and opacity 0 when a row is not running, but
-    an invisible subtree is still BUILT, so every QUEUED row used to pay for the
+    an invisible subtree is still BUILT, so every QUEUED row pays for the
     full grid: 364 cells at the drawer's 420px floor and past a thousand with
-    the drawer dragged wide. A flick through a long queue dropped frames on rows
-    that show nothing. The download button's smaller matrix has sat behind a
-    Loader for exactly this reason; this one did not."""
+    the drawer dragged wide. A flick through a long queue then drops frames on
+    rows that show nothing. The download button's smaller matrix sits behind a
+    Loader for exactly this reason; this one must too."""
     run_scenario(
         Path(__file__),
         "--run-queue-row-idle-scenario",

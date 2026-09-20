@@ -1,4 +1,4 @@
-"""Provider badges on drill headers (issue #69), descriptor-driven (issue #278).
+"""Provider badges on drill headers, descriptor-driven.
 
 Album/song drill headers (browseItemHeader) and the artist header carry the
 official provider mark top-right of the artwork, rendered from the descriptor
@@ -29,9 +29,9 @@ def _scenario() -> int:
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
+    from waves.desktop.app import _load_mono
+    from waves.desktop.backend import WavesBridge
     from waves.providers.base import ProviderDescriptor
-    from waves.waves_ui.app import _load_mono
-    from waves.waves_ui.backend import WavesBridge
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -120,7 +120,7 @@ def _scenario() -> int:
     artist_hidden_ok = not q("artistProviderBadge.visible")
 
     # A third provider registered with a descriptor badges its own rows with
-    # no QML edit at all (issue #278's acceptance).
+    # no QML edit at all.
     bridge.providers["qobuz"] = SimpleNamespace(
         descriptor=lambda: ProviderDescriptor(
             id="qobuz",

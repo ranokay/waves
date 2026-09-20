@@ -8,7 +8,7 @@ Pure staticmethod, so no Qt or bridge construction is needed.
 
 from __future__ import annotations
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 probe = WavesBridge._probe_folder_verdict
 
@@ -52,7 +52,7 @@ def test_macos_remount_is_healed(tmp_path):
 
 
 def test_heal_works_in_both_suffix_directions(tmp_path):
-    # Stored path carries the suffix ("Music-1", now a stale marker) and the
+    # Stored path carries the suffix ("Music-1", a stale marker) and the
     # clean name is the live mount.
     volumes = tmp_path / "Volumes"
     (volumes / "Music" / "Library").mkdir(parents=True)

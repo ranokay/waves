@@ -1,4 +1,4 @@
-"""OpenCodeReview's project rules keep QML and Markdown in scope (issue #263).
+"""OpenCodeReview's project rules keep QML and Markdown in scope.
 
 WHAT THIS FENCES OFF
 --------------------
@@ -22,7 +22,7 @@ from support.paths import REPO_ROOT
 RULE_FILE = REPO_ROOT / ".opencodereview" / "rule.json"
 
 # The paths a review must resolve a house rule for.
-HOUSE_RULES = ("**/*.qml", "waves/**/*.py", "tests/**/*.py", "**/*.md", "waves/waves_ui/BRIDGE.md")
+HOUSE_RULES = ("**/*.qml", "waves/**/*.py", "tests/**/*.py", "**/*.md", "waves/desktop/BRIDGE.md")
 
 
 def _rules() -> dict:

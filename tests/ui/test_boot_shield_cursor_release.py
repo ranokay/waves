@@ -2,16 +2,15 @@
 
 WHAT THIS FENCES OFF
 --------------------
-The launch overlay's input shield (bootShield, issue #13) is a full-window
-MouseArea at z:100000. A MouseArea claims its cursorShape even while
-DISABLED (the same Qt behavior the library pill documents); only an
-invisible one claims nothing. The shield used to be gated by `enabled`
-alone, so any session where bootOverlay.done never flipped true (an
-interrupted boot zoom leaves exactly that: content shown, done false) kept
-the plain arrow cursor over every button in the app for the whole session,
-while clicks and hover passed through and made the app look otherwise
-healthy (reported from a real session, 2026-09-01). The shield is now
-visibility-gated too, so a stuck `done` cannot cost the pointing hand.
+The launch overlay's input shield (bootShield) is a full-window MouseArea at
+z:100000. A MouseArea claims its cursorShape even while DISABLED (the same Qt
+behavior the library pill documents); only an invisible one claims nothing.
+Gating the shield by `enabled` alone lets any session where bootOverlay.done
+never flips true (an interrupted boot zoom leaves exactly that: content shown,
+done false) keep the plain arrow cursor over every button in the app for the
+whole session, while clicks and hover pass through and make the app look
+otherwise healthy. The shield is visibility-gated too, so a stuck `done`
+cannot cost the pointing hand.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -21,10 +20,10 @@ Two behaviors, each asserted here:
    and the hover reaches the control (containsMouse), proving the probe
    mechanism is live rather than vacuously agreeing.
 2. During the boot proper (content not shown, overlay up) the shield still
-   eats hover: the same control's containsMouse stays false, so the
-   issue #13 shielding is kept. (The arrow cursor itself is no longer the
-   witness there: current Qt does not resolve cursors through the
-   opacity-hidden interface at all, shield or no shield.)
+   eats hover: the same control's containsMouse stays false, so the boot
+   shielding holds. (The arrow cursor is not the witness
+   there: current Qt does not resolve cursors through the opacity-hidden
+   interface at all, shield or no shield.)
 
 Runs in a SUBPROCESS for the same reason as test_boot_handover_gate:
 building the bridge installs process-global handlers that must not leak
@@ -65,8 +64,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -171,7 +170,7 @@ def _run_scenario() -> int:
         return EXIT_REGRESSED
 
     # 2. The boot proper: content not shown, overlay up, and the shield must
-    # still eat hover before it reaches the interface (issue #13, kept).
+    # still eat hover before it reaches the interface.
     q("bootContentShown = 0")
     settle(60)
     if not (bool(q("bootShield.visible")) and bool(q("bootShield.enabled"))):

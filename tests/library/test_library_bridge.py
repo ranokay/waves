@@ -23,9 +23,9 @@ from support.library_fakes import (
 )
 from support.paths import REPO_ROOT
 
-from waves.library_index import LibraryIndex, cache_file_for_root, root_comparison_key
-from waves.matching import presence_key as _presence_key
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
+from waves.library.index import LibraryIndex, cache_file_for_root, root_comparison_key
+from waves.metadata.matching import presence_key as _presence_key
 
 
 def test_builds_index_from_library_folder_and_answers(tmp_path):
@@ -288,7 +288,7 @@ def test_presence_carries_local_quality_for_the_badge(tmp_path):
 def test_local_quality_label_includes_the_sample_rate():
     # The rate marks hi-res on its own: a 16-bit/96 kHz file must not be
     # undersold as plain lossless, and above-CD copies show both facts.
-    from waves.matching import local_quality_label as _local_quality_label
+    from waves.metadata.matching import local_quality_label as _local_quality_label
 
     assert _local_quality_label("flac", 2900, 24, 96000) == "FLAC 24-BIT 96KHZ"
     assert _local_quality_label("flac", 1500, 16, 96000) == "FLAC 96KHZ"
@@ -304,7 +304,7 @@ def test_local_quality_label_covers_every_codec_family():
     # Every audio type a library can hold gets a proper label, not just the
     # popular ones: a user with WAV rips, Ogg Vorbis or a DSD collection must
     # see their format recognized, never a blank or a wrong badge.
-    from waves.matching import local_quality_label as _local_quality_label
+    from waves.metadata.matching import local_quality_label as _local_quality_label
 
     # Uncompressed / lossless containers, with hi-res facts when above CD.
     assert _local_quality_label("wav", 0, 24, 96000) == "WAV 24-BIT 96KHZ"
@@ -341,7 +341,7 @@ def test_local_quality_label_covers_every_codec_family():
 def test_local_quality_class_bands():
     # The coarse class drives the pill's at-a-glance color: gold hi-res, green
     # lossless, cyan healthy lossy, red small lossy, neutral when unknown.
-    from waves.matching import local_quality_class as _local_quality_class
+    from waves.metadata.matching import local_quality_class as _local_quality_class
 
     assert _local_quality_class("flac", 0, 24, 96000) == "hires"
     assert _local_quality_class("flac", 0, 16, 96000) == "hires"  # rate alone is hi-res
@@ -427,7 +427,7 @@ def test_the_seed_is_dispatched_ahead_of_the_scan(tmp_path):
 
 
 def test_a_slow_seed_cannot_overwrite_a_finished_scan(tmp_path):
-    # The seed now runs BESIDE the scan instead of before it, so a fast scan can
+    # The seed runs BESIDE the scan instead of before it, so a fast scan can
     # publish while the seed is still assembling an older picture of the same
     # folder. The last writer must not be the stale one.
     lib = str(tmp_path / "lib")
@@ -625,15 +625,16 @@ def test_seed_crash_cannot_wedge_the_building_flag(tmp_path):
 def test_a_long_download_batch_still_gets_its_badges(tmp_path, monkeypatch):
     """The per-track rebuild debounce has a ceiling.
 
-    THE BUG: every landed track restarted a 15s settle window, and any sustained
-    download lands tracks faster than that, so the deadline kept moving and the
-    rebuild never ran. Badges froze for the whole batch (on a discography, hours)
-    and the moment they matter most is exactly when they stopped.
+    Every landed track restarts a 15s settle window, and any sustained download
+    lands tracks faster than that, so a debounce without a ceiling keeps moving
+    its deadline and the rebuild never runs. Badges freeze for the whole batch
+    (on a discography, hours), and the moment they matter most is exactly when
+    they stop.
 
     Driven on a fake clock: tracks land every second forever, and the rebuild
     must still happen, roughly on the ceiling's cadence.
     """
-    from waves.waves_ui import bridge_library
+    from waves.desktop import bridge_library
 
     s = _make(tmp_path, library_source="download", download_base=str(tmp_path / "dl"))
     s._on_download_recorded = WavesBridge._on_download_recorded.__get__(s)
@@ -645,7 +646,7 @@ def test_a_long_download_batch_still_gets_its_badges(tmp_path, monkeypatch):
     monkeypatch.setattr(bridge_library.time, "monotonic", lambda: now["t"])
 
     # A single-shot QTimer stand-in: active until it is stopped, never fires on
-    # its own, which is exactly the situation the bug lived in.
+    # its own, which is exactly the case under test.
     class _Timer:
         def __init__(self):
             self.active = False
@@ -675,7 +676,7 @@ def test_a_short_download_batch_still_coalesces(tmp_path, monkeypatch):
     """And the ceiling does not break the debounce it guards: a burst shorter
     than the ceiling still collapses to nothing forced, leaving the ordinary
     settle timer to run one rebuild after the last track."""
-    from waves.waves_ui import bridge_library
+    from waves.desktop import bridge_library
 
     s = _make(tmp_path, library_source="download", download_base=str(tmp_path / "dl"))
     s._on_download_recorded = WavesBridge._on_download_recorded.__get__(s)
@@ -713,12 +714,12 @@ def test_a_short_download_batch_still_coalesces(tmp_path, monkeypatch):
 def test_the_watcher_sync_slot_never_touches_the_disk(tmp_path):
     """The GUI-thread half of the watcher realignment cannot block the window.
 
-    THE BUG: _sync_library_watch runs on the GUI thread and used to answer two
-    questions there: is this root on a local disk (QStorageInfo, which STATS THE
-    VOLUME) and which container folders exist (a sqlite read). On a dead network
-    mount that stat can hang for many seconds, and the window is frozen for all
-    of them. Both answers are now resolved on the pool by the scan that emits
-    _librarySyncWatch, and arrive as arguments.
+    _sync_library_watch runs on the GUI thread, so it must not answer two
+    questions there: is this root on a local disk (QStorageInfo, which STATS
+    THE VOLUME) and which container folders exist (a sqlite read). On a dead
+    network mount that stat can hang for many seconds, and the window is frozen
+    for all of them. Both answers are resolved on the pool by the scan that
+    emits _librarySyncWatch, and arrive as arguments.
 
     Pinned by booby-trapping both: a classifier and a database that raise if the
     slot so much as asks. It must still do its job from the arguments alone.
@@ -757,12 +758,12 @@ def test_two_threads_cannot_claim_the_same_scan(tmp_path):
     """Claiming the scan is mutually exclusive, so two scans never walk the same
     sqlite cache at once.
 
-    THE BUG: ``_rebuild_library_index`` is entered from the GUI thread (poll and
-    sweep timers, the watcher, Rescan) and from a pool thread (a finishing scan
+    ``_rebuild_library_index`` is entered from the GUI thread (poll and sweep
+    timers, the watcher, Rescan) and from a pool thread (a finishing scan
     dispatching its own trailing rebuild). "if not building: building = True" is
-    two bytecodes with a thread switch available in between, so both callers
-    could pass the check, and two concurrent scans over one cache were measured
-    publishing a 60-album index as 0 albums.
+    two bytecodes with a thread switch available in between, so both callers can
+    pass the check, and two concurrent scans over one cache can publish a
+    60-album index as 0 albums.
 
     Driven deterministically: the first caller is held INSIDE the critical
     section while a second caller runs at it. The second must block, then find
@@ -782,7 +783,7 @@ def test_two_threads_cannot_claim_the_same_scan(tmp_path):
 
     class _StallingLock:
         """Holds the FIRST acquirer inside the critical section until released,
-        so the window the bug lived in can be aimed at on purpose."""
+        so the race window can be aimed at on purpose."""
 
         def __enter__(self):
             real.acquire()
@@ -868,8 +869,8 @@ def test_presence_never_reaches_the_download_engine():
     override so a claim is never the end of the conversation.
 
     Pinned by IMPORT CLOSURE, not by grepping for a substring. The substring
-    version read download.py for the literal "waves.matching", which survives
-    `from waves import matching`, `import waves.matching as m`, an
+    version read download.py for the literal "waves.metadata.matching", which survives
+    `from waves.metadata import matching`, `import waves.metadata.matching as m`, an
     `importlib.import_module` call, and reaching the matcher through any third
     module. Importing the engine in a clean interpreter and looking at what
     landed in sys.modules survives all of those, because it asks what the code
@@ -882,7 +883,7 @@ def test_presence_never_reaches_the_download_engine():
     root = REPO_ROOT
 
     # 1. The whole transitive closure of the engine, however it is spelled.
-    probe = "import sys, waves.download; print('waves.matching' in sys.modules)"
+    probe = "import sys, waves.download; print('waves.metadata.matching' in sys.modules)"
     out = subprocess.run(
         [sys.executable, "-c", probe],
         cwd=str(root),
@@ -892,7 +893,7 @@ def test_presence_never_reaches_the_download_engine():
     )
     assert out.returncode == 0, f"could not import the download engine:\n{out.stderr}"
     assert out.stdout.strip() == "False", (
-        "waves.matching is now in the download engine's import closure. The engine "
+        "waves.metadata.matching is in the download engine's import closure. The engine "
         "must never consult the presence matcher, however indirectly."
     )
 
@@ -915,9 +916,9 @@ def test_presence_never_reaches_the_download_engine():
     #    bridge_library: the badge slot and the bulk claim helper. Not the
     #    engine, and not the rest of the bridge: backend reaches presence only
     #    through the bridge's claim helpers, whose answers are skip-or-nothing.
-    backend = (root / "waves" / "waves_ui" / "backend.py").read_text(encoding="utf-8")
+    backend = (root / "waves" / "desktop" / "backend.py").read_text(encoding="utf-8")
     assert "decide_presence" not in backend, "presence answers stay in bridge_library"
-    bridge = (root / "waves" / "waves_ui" / "bridge_library.py").read_text(encoding="utf-8")
+    bridge = (root / "waves" / "desktop" / "bridge_library.py").read_text(encoding="utf-8")
     assert bridge.count("decide_presence") == 2  # the badge slot + _library_claims_album
     assert bridge.count("decide_track_presence") == 2  # the pill slot + _library_claims_track
 
@@ -985,7 +986,7 @@ def test_bulk_claim_answers_full_albums_and_exact_tracks_only(tmp_path):
     # ...but its one track is, exactly, and nothing else.
     assert s._library_claims_track("A", "Song P", "Part", "2001") is True
     assert s._library_claims_track("A", "Some Other Song", "Part", "2001") is False
-    # The track claim is scoped to the release being fetched (issue #24). The
+    # The track claim is scoped to the release being fetched. The
     # same song filed under a different album is NOT a reason to leave it out
     # of the one the user asked for, and a caller that cannot name a release
     # gets no claim at all.
@@ -1175,8 +1176,8 @@ def test_va_credited_folders_never_enter_the_indexes(tmp_path):
         tagmap={d: {"album": "Summer Hits", "artist": "V / A", "date": "2000", "title": "Song", "codec": "flac"}},
     )
     s._rebuild_library_index()
-    # The cache-backed indexes read empty (no row carries a key), exactly as
-    # the dict builds used to be empty.
+    # The cache-backed indexes read empty (no row carries a key), matching the
+    # dict-presence build on the same library.
     assert not s._library_index
     assert not s._library_track_index
     assert s.libraryAlbumPresence("V / A", "Summer Hits", "2000", 1)["present"] is False
@@ -1283,7 +1284,7 @@ def test_a_read_that_failed_once_is_not_remembered_as_an_empty_library(tmp_path)
     kept. Keeping a FAILURE there (a cache locked by a writer, a share that
     blinked) turned one transient error into "you own nothing" for the whole
     life of that index: every badge dark until the next publish."""
-    from waves.waves_ui.bridge_library import SqlPresenceIndex
+    from waves.desktop.bridge_library import SqlPresenceIndex
 
     class _Flaky:
         def __init__(self):
@@ -1305,7 +1306,7 @@ def test_a_read_that_failed_once_is_not_remembered_as_an_empty_library(tmp_path)
 def test_a_settled_answer_is_still_only_resolved_once(tmp_path):
     """The other half: a real answer is kept, or every badge on the page pays
     for a table read that cannot change until the next publish."""
-    from waves.waves_ui.bridge_library import SqlPresenceIndex
+    from waves.desktop.bridge_library import SqlPresenceIndex
 
     class _Counting:
         def __init__(self):
@@ -1327,7 +1328,7 @@ def test_a_capped_memo_holds_its_cap_while_several_threads_fill_it():
     eviction is a read of the first key followed by a delete with two threads
     in it. Under the lock it cannot lose the cap or raise mid-iteration; the
     backend's own caches solve it the same way."""
-    from waves.waves_ui.bridge_library import _remember
+    from waves.desktop.bridge_library import _remember
 
     d: dict = {}
     errors: list[str] = []
@@ -1337,7 +1338,7 @@ def test_a_capped_memo_holds_its_cap_while_several_threads_fill_it():
             for i in range(4000):
                 _remember(d, (tag, i), i, 8)
                 assert len(d) <= 8
-        except Exception as exc:  # pragma: no cover - the regression this pins
+        except Exception as exc:  # pragma: no cover - an escape is the failure under test
             errors.append(repr(exc))
 
     threads = [threading.Thread(target=fill, args=(t,)) for t in range(4)]
@@ -1386,7 +1387,7 @@ def test_a_publish_sweeps_before_it_freezes(tmp_path, monkeypatch):
     under the water."""
     import gc as _gc
 
-    from waves.waves_ui import bridge_library as bl
+    from waves.desktop import bridge_library as bl
 
     calls: list[str] = []
     frozen = [0]

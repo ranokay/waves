@@ -1,13 +1,13 @@
 """The warm scan's unchanged-verdict pass costs one query, not one per album.
 
-THE COST THIS FENCES OFF
-------------------------
+The cost this fences off:
+
 ``refresh`` decides which candidate folders need a tag re-read by asking
-``_unchanged`` per candidate, and each ask was one sqlite round-trip with a
+``_unchanged`` per candidate, and each ask is one sqlite round-trip with a
 correlated subquery: 18k round-trips on a warm scan of a big library, all to
-re-derive rows a single query returns. The verdict pass now loads every
-album's row once (``_unchanged_rows``, a LEFT JOIN against a grouped track
-count) and evaluates the same predicate in Python (``_unchanged_verdict``).
+re-derive rows a single query returns. The verdict pass loads every album's row
+once (``_unchanged_rows``, a LEFT JOIN against a grouped track count) and
+evaluates the same predicate in Python (``_unchanged_verdict``).
 
 Pinned here: the per-candidate query shape never runs during a scan's verdict
 pass; the batch rows produce the same verdict as the per-path query for
@@ -21,7 +21,7 @@ import os
 
 import pytest
 
-from waves.library_index import LibraryIndex
+from waves.library.index import LibraryIndex
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +32,7 @@ def _unreadable_fixture_files_have_no_ids(monkeypatch):
     probe would call every empty fixture unreadable and re-read them all (see
     tests/library/test_library_item_id_scan.py for the reader's own rules).
     """
-    monkeypatch.setattr("waves.library_index._default_item_id", lambda path: "")
+    monkeypatch.setattr("waves.library.index._default_item_id", lambda path: "")
 
 
 def _mk(base, rel, files):

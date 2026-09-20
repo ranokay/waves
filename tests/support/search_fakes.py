@@ -16,9 +16,9 @@ from types import SimpleNamespace
 
 from conftest import _InlinePool, _Signal
 
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
 
 
 class SearchStub:
@@ -50,7 +50,7 @@ class SearchStub:
         self.artistMetaLoaded = _Signal()
         # The real bridge registers TIDAL's session and Apple's switch as its
         # search gates; a stub that only carries TIDAL wires the session one
-        # (an un-gated provider is taken at its word, issue #292).
+        # (an un-gated provider is taken at its word).
         self._provider_search_gates = {"tidal": lambda: bool(self._logged_in)}
 
     def _set_status(self, text):
@@ -99,7 +99,7 @@ def search_payloads(stub):
 
 
 def search_group(provider="tidal", album_ids=("al1",), pop=-1) -> dict:
-    """One provider's group, shaped like the bridge's own builder (#292)."""
+    """One provider's group, shaped like the bridge's own builder."""
     return {
         "provider": provider,
         "artists_layout": "strip" if provider == "tidal" else "flow",
@@ -128,8 +128,8 @@ def group_of(payload, provider="tidal") -> dict:
 
 
 #: Apple's search answers four result kinds; its group carries no video/mix
-#: buckets (issue #292). The QML scenario payloads below mirror the bridge's
-#: own builder, so a seeded page has the shape a real search produces.
+#: buckets. The QML scenario payloads below mirror the bridge's own builder,
+#: so a seeded page has the shape a real search produces.
 _APPLE_SECTIONS = ("artists", "albums", "tracks", "playlists")
 
 
@@ -146,7 +146,7 @@ def qml_search_payload(
     error="",
     layout=None,
 ) -> dict:
-    """A one-provider search payload for QML scenarios (issue #292).
+    """A one-provider search payload for QML scenarios.
 
     Row dicts go in untouched; only the buckets the provider's search answers
     are carried, exactly as the bridge composes them.
@@ -164,7 +164,7 @@ def qml_search_payload(
         "provider": provider,
         "artists_layout": layout or ("strip" if provider == "tidal" else "flow"),
         # A lone TIDAL group is the page's own shape and stays headless; any
-        # other provider's head says whose rows these are (issue #292).
+        # other provider's head says whose rows these are.
         "head_when_alone": provider != "tidal",
     }
     for name in names:
@@ -175,11 +175,10 @@ def qml_search_payload(
 
 
 def wire_search(monkeypatch, stub, album_ids=("al1",), pop=50):
-    """The catalog behind a search: a fake TIDAL provider serving the old
-    engine-object shape, plus the meter helpers. The search pipeline reads
-    the wire exclusively through the Provider seam (it no longer calls a
-    backend-module ``search_results_all``), so the fake lives on the stub's
-    providers dict, where the real TidalProvider would sit."""
+    """The catalog behind a search: a fake TIDAL provider serving the
+    engine-object shape, plus the meter helpers. The search pipeline reads the
+    wire exclusively through the Provider seam, so the fake lives on the
+    stub's providers dict, where the real TidalProvider would sit."""
     artist = SimpleNamespace(id="a1", name="Artist 1")
     monkeypatch.setattr(backend, "_image", lambda obj, dimension=320: "")
     monkeypatch.setattr(backend, "_artist_roles", lambda a: "")

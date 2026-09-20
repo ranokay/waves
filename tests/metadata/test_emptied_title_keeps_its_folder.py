@@ -4,10 +4,10 @@ XXXTENTACION's album is called "?", which every filesystem rejects outright:
 the whole title sanitizes to "", the empty path segment is dropped, and the
 album has no folder of its own. The stand-in setting cures that ("?" becomes
 "-"), but the layout guard that keeps an existing library from being
-restructured read the OLD spelling's folder, which in this shape is the artist
-folder one level up. An artist folder exists as soon as the first track lands,
-so the guard fired on every following track and the album's tracks scattered
-loose into the artist folder (issue #16).
+restructured must not read the OLD spelling's folder, which in this shape is
+the artist folder one level up. An artist folder exists as soon as the first
+track lands, so reading it would fire the guard on every following track and
+scatter the album's tracks loose into the artist folder.
 
 An ancestor existing is no evidence of anything. Only a file already sitting
 in the old place is, and only for itself: it stays where it is (nothing on
@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 from tidalapi import Album, Track
 
 from waves.download import Download
-from waves.helper.path import format_path_media
+from waves.paths import format_path_media
 
 _ARTIST = "XXXTENTACION"
 _TEMPLATE = "{album_artist}/{album_title}/{album_track_num}. {track_title}"
@@ -93,8 +93,8 @@ class TestTheTracksStayInTheAlbumFolder:
         assert dl._keep_existing_layout(standin, dropped, dropped) == standin
 
     def test_an_existing_artist_folder_does_not_swallow_the_album(self, tmp_path):
-        # Issue #16: from the second track on, the artist folder existed and
-        # the guard read it as "this library uses the old spelling".
+        # From the second track on, the artist folder exists; the guard must
+        # not read it as "this library uses the old spelling".
         dl = _make_download(tmp_path)
         standin, dropped = self._paths(tmp_path)
         (tmp_path / _ARTIST).mkdir()
@@ -112,7 +112,7 @@ class TestTheTracksStayInTheAlbumFolder:
         assert dl._keep_existing_layout(standin, dropped, dropped) == dropped
 
     def test_a_sibling_folder_under_an_older_spelling_still_wins(self, tmp_path):
-        # The guard's real job (issue #15) is untouched: a folder at the same
+        # The guard's real job is untouched: a folder at the same
         # level, spelled the old way, keeps receiving downloads.
         dl = _make_download(tmp_path)
         tidy = tmp_path / "The Better Life Dead Love" / "Song.flac"

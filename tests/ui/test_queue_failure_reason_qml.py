@@ -1,6 +1,6 @@
-"""The failed row's reason reaches the drawer, not just the bridge (issue #35).
+"""The failed row's reason reaches the drawer, not just the bridge.
 
-The bridge now stores WHY a download failed on the queue row ("6 of 501 tracks
+The bridge stores WHY a download failed on the queue row ("6 of 501 tracks
 failed"). That value is worth nothing unless the drawer can read it, and QML
 fails at exactly this silently: a ListModel fixes its roles from the first
 object appended, so a role missing from ``queueRowObject`` does not exist on

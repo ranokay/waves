@@ -11,8 +11,8 @@ the main executable, so its module markers are scanned as well as the
 bundle's files.
 
 It also checks the other direction: native modules the runtime loads by name
-must be present. PyCryptodome's cipher modules are the known case (issue
-#304): ``load_pycryptodome_raw_lib`` uses ctypes, so Nuitka's import
+must be present. PyCryptodome's cipher modules are the known case:
+``load_pycryptodome_raw_lib`` uses ctypes, so Nuitka's import
 following cannot see ``_raw_aes`` and a build without the explicit package
 include ships an empty ``Crypto/Cipher``; every Apple cookies-tier download
 then dies at the FairPlay AES step.
@@ -61,7 +61,7 @@ _EMBEDDED_MARKERS = (
 )
 # Native modules the bundle must carry: loaded by name at runtime (ctypes), so
 # a build or a trim can drop them silently (the #304 case). The names are the
-# modules the signing surface (waves_ui/signing.py) and the Apple HLS download
+# modules the signing surface (desktop/signing.py) and the Apple HLS download
 # path load; extensions differ per OS, so only the basename up to the first
 # dot is matched (_raw_aes.abi3.so, _raw_aes.pyd, ...), and only under a
 # Crypto/ directory.

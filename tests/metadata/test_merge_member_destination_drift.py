@@ -7,25 +7,23 @@ into one assembled album folder. A member (``waves_identity_id`` set) may skip
 only when the copy already on disk sits in THIS job's destination folder,
 otherwise the skip leaves a hole in the merged album while the job reports done.
 
-"THIS job's destination folder" was computed twice. The engine picks it with
-``_keep_existing_layout``, which writes into an older folder spelling whenever
-one already exists on disk (the pre-0.1.17 doubled-space name, or a name kept
-from before an illegal-character setting changed), and it guesses the file
-extension, which the Windows path cap can turn into a different parent folder.
-The bridge re-derived the folder from the template with none of that: one tidy
-spelling, a hardcoded ``.x`` where the extension goes. On a fresh library the
-two agreed; on a library with any legacy spelling they diverged, so
-``_owned_at_destination`` compared the ownership record against the wrong
-folder, returned False, and the ownership verdict (the whole upgrade the run
-was for) was thrown away. The album reported complete, every song was still the
-old copy, and the merge plan was gone so a retry could not recover it.
-
-The fix removes the second derivation: the bridge asks the engine
+The gate and the write must derive the folder the same way. The engine picks it
+with ``_keep_existing_layout``, which writes into an older folder spelling
+whenever one already exists on disk (the pre-0.1.17 doubled-space name, or a
+name kept from before an illegal-character setting changed), and it guesses the
+file extension, which the Windows path cap can turn into a different parent
+folder. Re-deriving the folder from the template with none of that (one tidy
+spelling, a hardcoded ``.x`` where the extension goes) diverges on any library
+with a legacy spelling: ``_owned_at_destination`` compares the ownership record
+against the wrong folder, returns False, and throws away the ownership verdict
+(the whole upgrade the run was for). The album then reports complete while
+every song is still the old copy, and the merge plan is gone so a retry cannot
+recover it. The bridge must therefore ask the engine
 (``Download._destination_path``) the same question the write asks, with the
 same placement (quality and list position) ``item()`` was called with.
 
-HOW THIS STAYS FIXED
---------------------
+HOW THE TWO STAY IN STEP
+------------------------
 Real ``tidalapi.Track``/``Album``, a real ``Download`` with a real temp library
 on disk, and the real ``_TrackedDownload`` gate as an unbound method. The
 legacy folder is really created on disk so ``_keep_existing_layout`` really
@@ -43,8 +41,8 @@ from unittest.mock import MagicMock
 
 from tidalapi import Album, Track
 
+from waves.desktop.backend import _as_member_of, _TrackedDownload
 from waves.download import Download
-from waves.waves_ui.backend import _as_member_of, _TrackedDownload
 
 _TITLE = "The Better Life : Dead Love"  # the colon is stripped on disk
 _LEGACY_DIR = "[2011] The Better Life  Dead Love"  # doubled space, pre-0.1.17
@@ -139,7 +137,7 @@ def test_a_fresh_library_writes_into_the_tidy_folder(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# The fix: the gate's folder and the engine's write folder are the same.
+# The gate's folder and the engine's write folder must be the same.
 # --------------------------------------------------------------------------- #
 def test_the_gate_resolves_the_same_folder_the_engine_writes_to(tmp_path):
     (tmp_path / "Bright Eyes" / _LEGACY_DIR).mkdir(parents=True)
@@ -151,8 +149,8 @@ def test_the_gate_resolves_the_same_folder_the_engine_writes_to(tmp_path):
 
 def test_a_member_owned_in_the_legacy_folder_is_gated_as_owned(tmp_path):
     """The record's file sits in the doubled-space folder the engine will write
-    into. Before the fix the gate looked at the tidy folder, missed it, and
-    threw the verdict away; now it forces the upgrade."""
+    into; the gate must resolve that folder, not the tidy one, or it misses the
+    file and throws the verdict away. Here it forces the upgrade."""
     legacy = tmp_path / "Bright Eyes" / _LEGACY_DIR
     legacy.mkdir(parents=True)
     on_disk = legacy / "1 Song.flac"
@@ -188,7 +186,7 @@ def test_a_member_owned_in_a_different_folder_is_still_not_skipped(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Finding 10: the destination is resolved with the real guessed extension, not
+# The destination is resolved with the real guessed extension, not
 # a hardcoded two-character ".x". At the Windows path cap the two lengths
 # truncate the name differently and can land in different parent folders. The
 # bridge asking the engine gets the real extension by construction; this pins

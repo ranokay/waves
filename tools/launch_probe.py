@@ -11,7 +11,7 @@ which is why this tool exists.)
 
 Manual only, never CI. Usage:
 
-    uv run python tools/launch_probe.py [seconds] [gap_ms]
+    uv run --locked --all-extras python tools/launch_probe.py [seconds] [gap_ms]
 
 Prints every gap over gap_ms (default 45, four missed frames at 120 Hz,
 three at 60) and a verdict line: the first frame is exempt (the window's
@@ -37,7 +37,7 @@ _STAMP = re.compile(
 _CHILD = """
 import ctypes, os, sys, threading
 sys.path.insert(0, %(root)r)
-from waves.waves_ui import diagnostics
+from waves.desktop import diagnostics
 diagnostics._install_qt_handler = lambda: None
 def _quit():
     # Qt's default handler writes stderr through C stdio, fully buffered
@@ -49,7 +49,7 @@ def _quit():
     sys.stderr.flush()
     os._exit(0)
 threading.Timer(%(seconds)f, _quit).start()
-from waves.waves_ui.app import waves_activate
+from waves.desktop.app import waves_activate
 waves_activate()
 """
 

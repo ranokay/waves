@@ -1,11 +1,10 @@
-"""The search row is live with Apple enabled and no TIDAL session (J2).
+"""The search row is live with Apple enabled and no TIDAL session.
 
-The picker promises "Search works with no account", but the row gated on
-``root.signedIn`` alone, so an Apple-only user could not type a query. The
-row now gates on "TIDAL signed in or Apple enabled", and the placeholder
-names both link types instead of TIDAL's alone. An Apple-only search that
-fails or finds nothing then says so in Apple's own group (issue #241 /
-UI-05, UI-06) instead of leaving a page that reads as an empty catalog.
+The picker promises "Search works with no account": the row gates on
+"TIDAL signed in or Apple enabled", and the placeholder names both link
+types instead of TIDAL's alone. An Apple-only search that fails or finds
+nothing says so in Apple's own group instead of leaving a page that reads
+as an empty catalog.
 """
 
 from __future__ import annotations
@@ -101,13 +100,13 @@ def _apple_answer(artists=None) -> dict:
 
 def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
     """(loading hint, in-group error + retry, empty state, no ghost head) for
-    an Apple-only signed-out user (issues #241 / UI-05, UI-06).
+    an Apple-only signed-out user.
 
     No account can answer in this sandbox, so the Apple catalog is stubbed;
     every step below still goes through the bridge's real search slot and the
     QML's real payload handler, so the states are the states a user gets. The
     stub answers rows, fails once for "flaky" (the fetch error Apple's own
-    exception carries), and finds nothing for "nothingmatches". Since #292 the
+    exception carries), and finds nothing for "nothingmatches". The
     group lives on the page's provider groups and is read through
     root.searchGroupFor('apple').
     """
@@ -214,7 +213,7 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
 
 
 def _payload(*, error: str) -> dict:
-    """A one-group Apple payload, shaped like the bridge's own (#292)."""
+    """A one-group Apple payload, shaped like the bridge's own."""
     return {
         "groups": [
             {
@@ -290,8 +289,8 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
         from support.offline import PARK_LOGIN_QML, patch_offline
 
         patch_offline()
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

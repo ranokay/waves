@@ -2,15 +2,15 @@
 
 TIDAL allows duplicate playlist entries. With several workers both occurrences
 run in one batch, both pass the skip checks before either lands, and then both
-claim a destination name. The claim held names against everybody, this item
-included, so the second occurrence stepped aside onto "Song_01.flac": two
-identical files, both tagged with the same item id. Nothing ever cleans the
-twin up (the app never deletes user files) and every later run skips both to
-the base name, so it sits there orphaned forever.
+claim a destination name. A claim held against everybody, this item included,
+makes the second occurrence step aside onto "Song_01.flac": two identical files,
+both tagged with the same item id. Nothing ever cleans the twin up (the app
+never deletes user files) and every later run skips both to the base name, so it
+sits there orphaned forever.
 
-A name is now held against the ITEM that holds it. An item never has to make
-way for itself; the post-stream existing-file check is what settles which of
-the two occurrences actually writes the file, which is what the engine's own
+A name is held against the ITEM that holds it. An item never has to make way
+for itself; the post-stream existing-file check is what settles which of the
+two occurrences actually writes the file, which is what the engine's own
 comment already said happened.
 """
 

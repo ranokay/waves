@@ -57,7 +57,7 @@ def test_generic_pull_failure_keeps_the_old_shape():
 
 
 def _wizard_steps(**over):
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     base = {
         "enabled": True,
@@ -88,7 +88,7 @@ def test_image_step_names_the_baked_libraries_not_an_apk():
 
 
 def test_refresh_setup_reprobes_and_rebuilds_the_wizard():
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     seen = []
     stub = SimpleNamespace()

@@ -1,4 +1,4 @@
-"""Per-provider lyrics/artwork + one tag template (issue #61).
+"""Per-provider lyrics/artwork + one tag template.
 
 Each provider keeps its own lyrics & artwork options inside its Providers
 card; the engine reads the track's provider mirrors with the shared keys
@@ -100,7 +100,7 @@ def _blank_flac(path):
 def test_metadata_writer_omits_only_switched_off_groups(tmp_path):
     from mutagen.flac import FLAC
 
-    from waves.metadata import Metadata
+    from waves.metadata.tags import Metadata
 
     src = tmp_path / "t.flac"
 
@@ -134,7 +134,7 @@ def test_metadata_writer_omits_only_switched_off_groups(tmp_path):
 def _schema():
     from support.settings_fakes import schema_stub as _schema_stub
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     return {s["id"]: s for s in WavesBridge.settingsSchema(_schema_stub())}
 
@@ -174,7 +174,7 @@ def test_bands_carry_the_mirrors_with_composites_and_gates():
 def test_metadata_section_holds_the_template_and_no_embed_toggles():
     from support.settings_fakes import schema_stub as _schema_stub
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     stub = _schema_stub()
     stub.settingsSchema = WavesBridge.settingsSchema.__get__(stub, type(stub))
@@ -222,8 +222,8 @@ def test_metadata_section_holds_the_template_and_no_embed_toggles():
 
 
 def test_chooser_defaults_read_the_row_provider_mirrors():
-    from waves.waves_ui import backend
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop import backend
+    from waves.desktop.backend import WavesBridge
 
     stub = SimpleNamespace()
     stub.settings = SimpleNamespace(
@@ -259,8 +259,8 @@ def test_chooser_defaults_read_the_row_provider_mirrors():
 
 
 def test_the_shared_lyrics_art_keys_are_migration_carriers_only():
-    """A hand edit at a shared key must not reach a real install (issue #236 /
-    audit LM-04): every provider reads its own mirror, and the shared key only
+    """A hand edit at a shared key must not reach a real install: every
+    provider reads its own mirror, and the shared key only
     answers a stub/legacy shape that has no mirror attribute."""
     data = Settings()
     data.lyrics_embed = True  # the pre-split spelling

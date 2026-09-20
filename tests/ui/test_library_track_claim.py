@@ -90,9 +90,9 @@ def _run_scenario() -> int:
     try:
         from PySide6.QtCore import Slot
 
-        from waves.matching import track_key
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
+        from waves.metadata.matching import track_key
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

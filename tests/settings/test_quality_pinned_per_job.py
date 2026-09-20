@@ -3,14 +3,14 @@
 WHAT THIS FENCES OFF
 --------------------
 Streams are asked for at the SHARED tidal session's audio quality, and saving
-a new audio quality writes it to that session at once (issue #9, so the choice
-takes effect without a restart). That also silently retargeted work the user
-had already started: a queue full of albums lined up at HI-RES began arriving
-at HIGH the moment the setting changed, mid-run, and the drawer re-stated
-every queued row to match.
+a new audio quality writes it to that session at once (so the choice
+takes effect without a restart). A change mid-run must not retarget work the
+user already started: a queue of albums lined up at HI-RES keeps asking
+HI-RES when Settings switches to HIGH, and the drawer keeps stating the tier
+each queued row was asked at.
 
-Now each row records the quality it was queued at (``askQuality``) and its job
-carries that quality as the seam resolve's own argument (R-13: the job's
+Each row records the quality it was queued at (``askQuality``) and its job
+carries that quality as the seam resolve's own argument (the job's
 request travels, shared state does not). ``Download._get_track_stream_info``
 -- the engine resolver the provider calls back -- writes the rung onto the
 session inside ``tidal.stream_lock``, the lock that already serialises every
@@ -18,8 +18,8 @@ stream fetch in the process, and puts back what it found. A change in Settings
 therefore applies to what is queued NEXT; what is queued or running keeps its
 quality, and the drawer keeps stating it (test_queue_expected_tier.py).
 
-HOW THIS STAYS FIXED
---------------------
+HOW THE PIN HOLDS
+-----------------
 Method-bound stubs, no display and no session, driving the REAL engine
 resolver with the job's request as the resolver's own arguments: the row
 records the setting at enqueue; the runner hands that quality to the download
@@ -44,8 +44,8 @@ from tidalapi.media import AudioMode, Quality
 
 from waves.config import ATMOS_REQUEST_QUALITY, tidal_quality_for_tier
 from waves.constants import QualityTier
+from waves.desktop import backend
 from waves.download import Download
-from waves.waves_ui import backend
 
 _ATMOS = AudioMode.dolby_atmos.value
 _DUAL = (_ATMOS, "STEREO")
@@ -104,7 +104,7 @@ class _RecordingTidal:
 
 class _Data:
     """Settings data whose audio-type default records every write, so a fetch
-    that touched the user's choice cannot pass silently (R-13)."""
+    that touched the user's choice cannot pass silently."""
 
     def __init__(self, default_audio_type="stereo"):
         self._default = default_audio_type
@@ -124,7 +124,7 @@ class _Data:
 
 def _engine(tidal, session, *, data=None, setting="stereo"):
     """The REAL engine resolver with only a session and settings beside it.
-    The job's request arrives as the resolver's arguments (R-13), so no
+    The job's request arrives as the resolver's arguments, so no
     ``_pinned_tier`` / ``_pinned_audio_type`` instance state is involved."""
     dl = Download.__new__(Download)
     dl.tidal = tidal
@@ -161,10 +161,10 @@ def test_a_job_without_a_pin_is_left_entirely_alone():
 
 
 def test_an_atmos_pinned_row_fetches_atmos_whatever_the_default_says():
-    """The R-13 acceptance's first leg, and TS-01's exact trigger: the stored
-    default is stereo (the shipped default) and the queued ask is Atmos. The
-    fetch used to read the setting, so the Atmos row fetched a stereo stream
-    into the Atmos template; the pinned request decides now."""
+    """The stored
+    default is stereo (the shipped default) and the queued ask is Atmos.
+    Reading the setting here would fetch a stereo stream into the Atmos
+    template; the pinned request decides instead."""
     session = _Session(Quality.high_lossless)
     tidal = _RecordingTidal()
     _dl, info = _fetch(session, tier=QualityTier.HI_RES_LOSSLESS, audio_type="atmos", modes=_DUAL, tidal=tidal)
@@ -186,7 +186,7 @@ def test_a_stereo_pinned_row_fetches_stereo_whatever_the_default_says():
 
 
 def test_a_fetch_never_writes_the_saved_default():
-    """TS-03's fix: the transient stereo hold is gone. Nothing on the fetch
+    """The transient stereo hold is gone: nothing on the fetch
     path writes the audio-type default, so no save can persist a job's
     transient choice and no crash can leave one on disk."""
     session = _Session(Quality.high_lossless)

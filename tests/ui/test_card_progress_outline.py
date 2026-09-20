@@ -3,15 +3,15 @@
 WHAT THIS FENCES OFF
 --------------------
 On an ArtCard the live download bar is a DownloadButton loaded ``bare`` inside
-a RollSwap, and the RollSwap's pill draws the outline. The bare button used to
-keep painting its own opaque fill (accentCont) over the exact same geometry,
-and Qt draws a Rectangle's border INSIDE its bounds, so that fill covered the
-pill's border ring: the bar on every Browse card lost its green edge and kept
-only a ragged sliver of it at the corners (v0.1.18 through v0.1.21).
+a RollSwap, and the RollSwap's pill draws the outline. A bare button that
+keeps painting its own opaque fill (accentCont) over the exact same geometry
+hides the pill's border ring: Qt draws a Rectangle's border INSIDE its bounds,
+so the bar on every Browse card loses its green edge and keeps only a ragged
+sliver of it at the corners.
 
-Now a bare button paints nothing and the pill takes the button's ``fill``
-through ``liveColor``: one rectangle draws fill and border, as the standalone
-button does.
+A bare button paints nothing and the pill takes the button's ``fill`` through
+``liveColor``: one rectangle draws fill and border, as the standalone button
+does.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -94,8 +94,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -183,10 +183,10 @@ def _run_scenario() -> int:
         return EXIT_PRECONDITION
     edge_px = img.pixelColor(int(ex) + 1, int(ey))
     # 3px in is pure fill: the outline is 1px and the matrix starts 6px inside
-    # the button (it ran 12px in until the progress pill lab of 2026-08-17).
+    # the button.
     mid_px = img.pixelColor(int(ex) + 3, int(ey))
     # The outline is accentDim (#22a64a): its green channel is far above the
-    # fill's (#06210f). Before the fix this pixel WAS the fill.
+    # fill's (#06210f). An edge pixel reading the fill means the outline is hidden.
     if edge_px.green() < 100:
         failures.append(f"the bar's edge pixel is {edge_px.name()}: fill, not outline")
     if edge_px.green() <= mid_px.green() + 60:

@@ -1,4 +1,4 @@
-"""Issue #223: per-provider header lights, Browse availability, no header sign-out.
+"""Per-provider header lights, Browse availability, no header sign-out.
 
 WHAT THIS FENCES OFF
 --------------------
@@ -9,7 +9,7 @@ WHAT THIS FENCES OFF
 
 2. Browse as a fixed tab. The destination exists while a configured provider
    declares Browse and is hidden when none does; signed out it keeps the
-   sign-in call to action (#220), signed in it is unchanged. A stub whose
+   sign-in call to action, signed in it is unchanged. A stub whose
    providers cannot fill Browse proves the hidden state through the bridge
    answer, not a QML branch.
 
@@ -182,7 +182,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
         failures.append("the header reads OFFLINE while Apple search is usable")
 
     # Browse, signed out: the destination exists with its sign-in call to
-    # action (issue #220's shape), not a blank pane.
+    # action, not a blank pane.
     if not q(_nav_visible("Browse")):
         failures.append("the Browse tab vanished while TIDAL can fill it")
     q("root.openBrowse()")

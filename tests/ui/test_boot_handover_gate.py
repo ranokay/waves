@@ -5,10 +5,10 @@ WHAT THIS FENCES OFF
 Browse landing shelves incubate through asynchronous Loaders, and the
 "open water" launch overlay exists precisely to hide that assembly: the
 wordmark holds over the water while the page builds behind it, so the
-interface appears finished. The overlay used to lift on a fixed schedule
-regardless, and a landing still building (a boot-time revalidation of a
-dozen shelves) was then watched dropping in shelf by shelf, as if the page
-were scrolling itself (reported from livetesting).
+interface appears finished. Lifting the overlay on a fixed schedule
+regardless would show a landing still building (a boot-time revalidation of
+a dozen shelves) dropping in shelf by shelf, as if the page were scrolling
+itself.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -58,8 +58,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -122,8 +122,8 @@ def _run_scenario() -> int:
     held = bool(q("bootOverlay.handoverHeld")) and not bool(q("bootOverlay.done"))
     # The version readout must still be up: draining it signals "handing over
     # now", so it belongs downstream of the gate, welded to the zoom that
-    # follows it. Holding with the version already emptied out left the launch
-    # screen sitting there mid-signal (reported from livetesting).
+    # follows it. Holding with the version already emptied out leaves the
+    # launch screen sitting there mid-signal.
     held = held and q("bootVer.shown") == 1
 
     # The veil clearing releases it, and the whole handover runs: the drain
@@ -174,10 +174,9 @@ def _run_scenario() -> int:
     )
 
     # The gate must also hold while the landing DATA is still in flight:
-    # signed in, no sections yet, no error. The original gate only covered the
-    # shelf assembly, so a login or first fetch slower than the opening frame
-    # revealed onto the bare "Reading the wire…" landing (reported from
-    # livetesting).
+    # signed in, no sections yet, no error. A gate that only covers the shelf
+    # assembly reveals a login or first fetch slower than the opening frame
+    # onto the bare "Reading the wire…" landing.
     q("bootHandover.stop()")
     q("bootBlk.stop()")
     q("bootZoom.stop()")

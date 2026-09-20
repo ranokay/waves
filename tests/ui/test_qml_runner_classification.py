@@ -82,13 +82,13 @@ def test_scenario_env_puts_the_repo_and_tests_root_on_pythonpath(tmp_path):
 
 @pytest.mark.qml
 def test_a_broken_app_import_fails_the_startup_scenario(tmp_path, monkeypatch):
-    """The audit's probe, as a regression test: injecting a RuntimeError while
-    importing waves.waves_ui.app must fail the scenario, never skip it."""
+    """Injecting a RuntimeError while
+    importing waves.desktop.app must fail the scenario, never skip it."""
     (tmp_path / "sitecustomize.py").write_text(
         "import sys, importlib.abc\n"
         "class _Blocker(importlib.abc.MetaPathFinder):\n"
         "    def find_spec(self, fullname, path=None, target=None):\n"
-        "        if fullname == 'waves.waves_ui.app':\n"
+        "        if fullname == 'waves.desktop.app':\n"
         "            raise RuntimeError('injected app import failure')\n"
         "        return None\n"
         "sys.meta_path.insert(0, _Blocker())\n"

@@ -13,9 +13,9 @@ copy below the quality a download targets is "force" (overwrite in place),
 equal-or-better is "skip", tier-less (a video) is always "skip". The rest of
 the file pins that comparison at every rank boundary, LOW (rank 0) included,
 both in the download gate (_ownership_decision) and in the answer the button
-reads (ownershipOf.up_to_date). LOW is the one that was pinned by nothing:
-a slip that treats rank 0 as "no tier" would make every LOW copy current
-forever, so a LOW library could never be upgraded.
+reads (ownershipOf.up_to_date). LOW is the boundary most easily missed:
+treating rank 0 as "no tier" would make every LOW copy current forever, so a
+LOW library could never be upgraded.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from waves.ownership import OwnershipStore
-from waves.waves_ui import backend
+from waves.desktop import backend
+from waves.library.ownership import OwnershipStore
 
 
 def _gate(force: bool) -> backend._TrackedDownload:
@@ -57,7 +57,7 @@ def test_register_redownload_marks_both_overrides():
 
 # --------------------------------------------------------------------------- #
 # The tier boundary itself: which owned copies are "current" and which force
-# an upgrade. Ranks follow waves.ownership.QUALITY_RANK (LOW 0, HIGH 1,
+# an upgrade. Ranks follow waves.library.ownership.QUALITY_RANK (LOW 0, HIGH 1,
 # LOSSLESS 2, HI_RES_LOSSLESS 3); -1 is a tier-less (video) record.
 # --------------------------------------------------------------------------- #
 def _upgrade_gate(rec: dict | None, target_rank: int) -> backend._TrackedDownload:
@@ -143,8 +143,8 @@ class _OwnBridge:
             "_announce_ownership",
             "_evict_own_cache_locked",
             "_target_quality_rank",
-            # The per-item quality choice's rank (issue #36): no choice on
-            # this carcass, so it answers with the setting's rank.
+            # The per-item quality choice's rank: no choice on this carcass,
+            # so it answers with the setting's rank.
             "_override_target_rank",
             "_quality_override_key",
         ):
@@ -180,14 +180,14 @@ def test_ownership_of_reports_a_low_copy_against_the_current_setting(tmp_path, t
 
 
 # --------------------------------------------------------------------------- #
-# gap-round G-13: a broken-formatter copy must never satisfy the gate. Old
-# builds wrote "[None]" where the release year belonged (any album TIDAL
-# lists no date for), and the pre-fix album-404 fallback left a literal
-# "{album_track_num}" token in file names. The fixed formatter can never
-# rebuild those spellings, so a record pointing at one would freeze the
-# garbage file as the owned copy and skip the corrected re-download forever.
-# The old file is left alone (the app never deletes user-visible files); the
-# fresh download lands at the corrected path and takes over the record.
+# A copy whose path spells a broken formatter output must never satisfy the
+# gate. Two such spellings exist on disk: "[None]" where the release year
+# belonged (any album TIDAL lists no date for), and a literal
+# "{album_track_num}" token left by an album-404 fallback. The formatter can
+# never rebuild them, so a record pointing at one would freeze the garbage
+# file as the owned copy and skip the corrected re-download forever. That file
+# is left alone (the app never deletes user-visible files); the fresh download
+# lands at the corrected path and takes over the record.
 # --------------------------------------------------------------------------- #
 def test_a_none_foldered_copy_never_satisfies_the_gate():
     rec = {"path": "/m/Artist/[None] Album/01 Song.flac", "quality_rank": 3}

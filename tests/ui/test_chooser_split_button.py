@@ -1,4 +1,4 @@
-"""Chooser split button + popover (issue #35, spec section 7.2).
+"""Chooser split button + popover (spec section 7.2).
 
 WHAT THIS FENCES OFF
 --------------------
@@ -30,9 +30,9 @@ from threading import Lock
 from types import SimpleNamespace
 
 from waves.constants import CTX_APPLE, CTX_TIDAL
+from waves.desktop import backend
 from waves.providers.apple import AppleProvider
 from waves.providers.tidal import TidalProvider
-from waves.waves_ui import backend
 
 
 def _metadata(cls, **over):
@@ -245,7 +245,7 @@ def test_save_chooser_defaults_stages_through_apply_settings():
     b.saveChooserDefaults({"provider": "apple", "tier": "LOW", "audioType": ""})
     assert "apple_quality_audio" not in staged
     # Quick toggles ride along under both spellings, staged onto the row's
-    # own provider mirrors (issue #61).
+    # own provider mirrors.
     staged.clear()
     b.saveChooserDefaults({"provider": "tidal", "tier": "", "audioType": "", "lyricsEmbed": True, "coverFile": False})
     assert staged["tidal_lyrics_embed"] is True and staged["tidal_cover_album_file"] is False
@@ -382,7 +382,7 @@ def test_download_with_chooser_apple_parks_pins_across_a_refetch():
 
 
 def test_download_with_chooser_refuses_an_apple_mix():
-    """R-28 / UI-03: the Apple mix/video branches answer with the same neutral
+    """The Apple mix/video branches answer with the same neutral
     refusal as the artist sweep -- the click queues nothing and promises
     nothing. (Apple search carries no mix or video rows today, so the branch
     is a guard, not a route.)"""

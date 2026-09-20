@@ -1,4 +1,4 @@
-"""The quality badge's tier menu (issue #36), on the real rows.
+"""The quality badge's tier menu, on the real rows.
 
 WHAT THIS FENCES OFF
 --------------------
@@ -174,9 +174,9 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui import backend
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop import backend
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -419,8 +419,8 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     settle()
 
     # A download asks at the choice and leaves it standing, so the badge goes
-    # on stating the tier the copy was fetched at (livetest report: it fell
-    # back to the catalog's word the moment the row was queued). The gates are
+    # on stating the tier the copy was fetched at, not the catalog's word once
+    # the row is queued. The gates are
     # stubbed open and the queue pump parked: nothing is fetched.
     backend._image = lambda obj, size: ""
     backend._quality_label = lambda obj, provider=None: "HI-RES"
@@ -453,9 +453,9 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     )
 
     # A button reading DOWNLOADED because THIS session fetched the item is
-    # handed back when a tier is chosen on it (livetest report: download a
-    # song, choose another tier, the button stayed DOWNLOADED with nothing to
-    # click). A track's choice hands back its own button only; an album's
+    # handed back when a tier is chosen on it (download a song, choose another
+    # tier: the button must not stay DOWNLOADED with nothing to click). A
+    # track's choice hands back its own button only; an album's
     # reaches its known tracks; a queued item is left exactly as it is.
     for mid in ("t1", "t2", "a1", "t4"):
         bridge.downloadState.emit(mid, "done")

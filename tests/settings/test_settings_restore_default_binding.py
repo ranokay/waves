@@ -1,21 +1,19 @@
 """Restore default must RE-BIND the field, never overwrite its text.
 
-THE BUG WE ARE FENCING OFF
---------------------------
-The per-field "Restore default" link assigned the box directly:
+Assigning the box directly:
 
     strField.text = modelData.default_value
     page.setv(modelData.key, modelData.default_value)
 
-An imperative write to a TextField's ``text`` destroys the
-``text: page.val(modelData)`` binding declared on it, and the SettingsPage is a
-permanent child of Main.qml whose Repeater delegates outlive a close/reopen
-(``refreshSchema`` only re-runs after an actual save). So Restore default
-followed by CANCEL left the box displaying the shipped default for the rest of
-the session while the persisted setting, and every download, still used the
-user's custom value. The link beside it still read "Restore default" (its own
-binding was alive and re-evaluated against the real value), and SAVE was greyed
-out, so the page showed a contradiction the user could not resolve.
+destroys the ``text: page.val(modelData)`` binding declared on it, and the
+SettingsPage is a permanent child of Main.qml whose Repeater delegates outlive a
+close/reopen (``refreshSchema`` only re-runs after an actual save). Restore
+default followed by CANCEL would then leave the box displaying the shipped
+default for the rest of the session while the persisted setting, and every
+download, still used the user's custom value. The link beside it would still
+read "Restore default" (its own binding is alive and re-evaluates against the
+real value), and SAVE is greyed out, so the page shows a contradiction the user
+cannot resolve.
 
 ``Qt.binding`` does both jobs: it shows the default immediately AND repairs a
 binding the user's own typing had already broken.

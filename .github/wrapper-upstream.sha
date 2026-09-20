@@ -1,4 +1,4 @@
-# Upstream wrapper-v2 SHA the live image was built from (issue #88).
+# Upstream wrapper-v2 SHA the live image was built from.
 #
 # The 0.2.3 image was built from this commit plus regenerated 3.6.0 lib
 # pins (see docs/wrapper-image.md); no source changes. When the scheduled

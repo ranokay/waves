@@ -14,8 +14,7 @@ import re
 from support.paths import QML_DIR, QML_MAIN
 
 MAIN = QML_MAIN.read_text(encoding="utf-8")
-# The sections and the grid moved to their own files in #315 slice 6; the pins
-# follow the code.
+# The sections and the grid live in their own files; the pins follow the code.
 GROUP = (QML_DIR / "SearchProviderGroup.qml").read_text(encoding="utf-8")
 MORE = (QML_DIR / "SearchSectionMore.qml").read_text(encoding="utf-8")
 

@@ -1,20 +1,20 @@
 """The ARTISTS SHOW ALL / SHOW LESS label needs artists to label.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 Every capped section on the search page hides its SHOW ALL toggle when the
 section is empty, because the strip, the grid and the header all gate on
-``sectionVisible(name, count)``. The ARTISTS toggle did not: it asked only
-whether the view was the mixed All one and whether the row was expanded or
-overflowing.
+``sectionVisible(name, count)``. An ARTISTS toggle that asks only whether the
+view is the mixed All one and whether the row is expanded or overflowing
+stands alone.
 
 The expanded flag is pref-backed
-(``tidal_search_sec_artists_expanded`` since issue #292's provider-keyed
-prefs), so it comes back true for anyone who has ever expanded the ARTISTS
+(``tidal_search_sec_artists_expanded``, keyed by provider), so it comes back
+true for anyone who has ever expanded the ARTISTS
 row. With a group that answered with no artists, the strip and the grid are
 correctly gone, and the toggle must be too: a lone SHOW LESS floating over an
-empty Search page. Clicking it wrote the pref false, so it vanished and did
-not come back, which is what made it look like a phantom.
+empty Search page. Clicking it writes the pref false, so it vanishes and does
+not come back, which is what makes it look like a phantom.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -73,14 +73,14 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
 
     bridge = WavesBridge(tidal=None)
-    # The state the bug needs, and the only state it needs: someone expanded
+    # The state this needs, and the only state it needs: someone expanded
     # the ARTISTS row in an earlier session. Written BEFORE the QML loads: the
     # group reads its pref once, when the payload creates it.
     bridge.setWavesPref("tidal_search_sec_artists_expanded", True)
@@ -113,7 +113,7 @@ def _run_scenario() -> int:
     settle(120)
     # The app opens on Browse, and the search page is hidden wholesale while it
     # is. Reading the label from there would report HIDDEN whatever the binding
-    # says, which is how the first draft of this test passed against the bug.
+    # says, so the read must happen on the search page itself.
     q("root.openSearch()")
     settle(250)
 

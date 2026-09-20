@@ -7,16 +7,17 @@ scan first: it asks the album's artist for every release bucket and keeps the
 ones that are other editions of the same album. That scan answers the caller
 with a list AND a "did I actually manage to look" flag.
 
-The flag used to start out True and could only ever be turned off inside the
-bucket loop, which never runs when the artist could not be fetched at all. The
-artist fetch swallows every failure (a dropped session, a rate limit) and hands
-back nothing, and an album carrying no artist id is never even asked. Both of
-those paths returned "one edition, scan complete", so the app told the user as
-a fact "Only one edition of this album; downloading it" and quietly fetched the
-plain album. On a release that really does have a richer deluxe sibling, best
-of both was lost and nothing on screen said so.
+The flag must not default to complete: a flag that starts True and is only
+turned off inside the bucket loop never flips when the artist could not be
+fetched at all. The artist fetch swallows every failure (a dropped session, a
+rate limit) and hands back nothing, and an album carrying no artist id is never
+even asked. Both of those paths would report "one edition, scan complete", so
+the app would tell the user as a fact "Only one edition of this album;
+downloading it" and quietly fetch the plain album. On a release that really
+does have a richer deluxe sibling, best of both would be lost and nothing on
+screen would say so.
 
-The scan now reports incomplete whenever it could not read the artist, and the
+The scan reports incomplete whenever it could not read the artist, and the
 click turns that into the honest "Could not scan editions, try again" the
 discography path already gives for a half-read scan.
 
@@ -30,12 +31,11 @@ WHAT IS PINNED HERE
   the album's merge key (and only those), naming the clicked album once even
   though the artist's own bucket hands it back too;
 * a failing bucket is still incomplete with whatever the working buckets did
-  find, whether it is the first bucket or the last one (pre-existing
-  behaviour, pinned here as well, and pinned at both ends: "I already found
-  something, so call it a finished scan" is the same lie in a smaller coat);
+  find, whether it is the first bucket or the last one (pinned here as well,
+  and at both ends: "I already found something, so call it a finished scan" is
+  the same lie in a smaller coat);
 * an artist that answered every bucket and simply has no other edition is
-  complete, so this fix cannot turn a genuinely single-edition album into a
-  false alarm;
+  complete, so a genuinely single-edition album cannot become a false alarm;
 * the user-visible consequence: with the artist unreadable, the click does NOT
   say "Only one edition of this album" and does NOT queue the album as a plain
   download, and with the artist readable it still says exactly that.
@@ -63,7 +63,7 @@ from types import SimpleNamespace
 import pytest
 from tidalapi.album import Album
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 ARTIST_ID = 7
 _ARTIST_CREDIT = SimpleNamespace(name="Halcyon Drift", id=ARTIST_ID)
@@ -202,9 +202,9 @@ def _bridge(session):
     bridge._objs_lock = Lock()
     bridge._objs_max = 32
     bridge.tidal = SimpleNamespace(session=session)
-    # The artist resolution rides the Provider seam (ticket #20): a real
-    # provider over the same fake session, so "the artist really was asked"
-    # stays observable (as the string spelling the seam passes through).
+    # The artist resolution rides the Provider seam: a real provider over the
+    # same fake session, so "the artist really was asked" stays observable (as
+    # the string spelling the seam passes through).
     bridge.providers = {"tidal": TidalProvider(bridge.tidal)}
     return bridge
 

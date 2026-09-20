@@ -1,4 +1,4 @@
-"""The repository's decision records and glossary stay complete (issue #224).
+"""The repository's decision records and glossary stay complete.
 
 WHAT THIS FENCES OFF
 --------------------
@@ -9,8 +9,9 @@ its decision, its reasoning or its consequences, or a glossary that lost one
 of the shared terms, fails here instead of surfacing in a later review.
 
 Three markers are mandatory for every record (Status/Decided headers plus
-Decision/Why/Consequences sections); the three #224 records are additionally
-held to the "Alternatives considered" section the onboarding spec asked for.
+Decision/Why/Consequences sections); the onboarding decision records are
+additionally held to the "Alternatives considered" section the onboarding spec
+asked for.
 """
 
 from __future__ import annotations

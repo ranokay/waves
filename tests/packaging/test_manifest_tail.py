@@ -1,21 +1,20 @@
-"""Regression guard: DASH tail-segment arithmetic (rework phase 1e).
+"""A DASH track must not lose its genuinely required last segment (rework phase 1e).
 
-THE BUG
--------
 tidalapi's ``DashInfo.get_urls`` counts segment URLs as ``2 + sum(r if r else 1)``
 over the MPD SegmentTimeline, but per the DASH spec an ``<S r="N">`` element
 describes ``N + 1`` segments, so the correct count is ``1 + sum(r + 1)`` (one
 init segment plus the media segments). The formulas differ by
 ``1 - (number of S elements with r > 0)``. On very short tracks (a single S
 with r=0) tidalapi emits one URL past the end of the audio; requesting it
-returns HTTP 500. The download loop historically tolerated ANY failed final
-segment of a multi-segment track to absorb that quirk, which silently
-truncated a real track whose genuinely required last segment failed (expired
-link, 500, dropped connection) and reported it as a clean success.
+returns HTTP 500. The download loop must not tolerate ANY failed final
+segment of a multi-segment track: that leniency silently
+truncates a real track whose genuinely required last segment failed (expired
+link, 500, dropped connection) and reports it as a clean success.
 
-THE FIX re-derives the correct count from the manifest
-(``waves_ui.manifest.overgenerated_tail_urls``) and only exempts a failed
-final segment when the manifest PROVES it is over-generated padding. When the
+The correct count comes from the manifest
+(``waves.providers.tidal_manifest.overgenerated_tail_urls``), and a failed
+final segment is exempt only when the manifest PROVES it is over-generated
+padding. When the
 manifest proves nothing (video m3u8, BTS, unparseable), the legacy leniency is
 kept so unproven cases cannot regress into false failures.
 """
@@ -25,7 +24,7 @@ from __future__ import annotations
 import base64
 from types import SimpleNamespace
 
-from waves.waves_ui.manifest import overgenerated_tail_urls
+from waves.providers.tidal_manifest import overgenerated_tail_urls
 
 _MPD_TEMPLATE = """<?xml version='1.0' encoding='UTF-8'?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT10S">

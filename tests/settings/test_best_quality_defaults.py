@@ -1,4 +1,4 @@
-"""Best quality out of the box (issue #59).
+"""Best quality out of the box.
 
 Fresh installs fetch the highest rung on both providers, keep the finest
 lyrics sidecars (.lrc everywhere, verbatim .ttml on Apple), and save
@@ -15,8 +15,8 @@ configs that never set the keys (see test_the_default_is_what_a_fresh_install_ge
 from __future__ import annotations
 
 from waves.constants import CoverDimensions
+from waves.desktop.backend import _ENUM_LABELS
 from waves.model.cfg import Settings
-from waves.waves_ui.backend import _ENUM_LABELS
 
 
 def test_fresh_install_defaults_to_the_highest_rung_on_both_providers():

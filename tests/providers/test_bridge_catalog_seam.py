@@ -1,15 +1,13 @@
-"""The bridge's catalog reads route through the Provider seam (ticket #20).
+"""The bridge's catalog reads route through the Provider seam.
 
-THE MIGRATION
--------------
-Batch 1 of the call-site migration: search, pasted-link resolution, the
+Search, pasted-link resolution, the
 album/artist/playlist page re-fetches, the My Tidal sweep and favorites
 windows, and the favorite-id sets read through ``self.providers`` instead of
 reaching the TIDAL session/helper directly. The row-dict schema is the
 contract; the payloads QML consumes are byte-identical.
 
-HOW THIS STAYS FIXED
---------------------
+HOW THE SEAM STAYS CLOSED
+-------------------------
 Every test here drives the real bridge method on a stub whose provider is a
 recording fake and whose ``tidal.session`` is a guard that fails the test on
 ANY touch: a catalog read that reaches past the seam cannot pass. The canned
@@ -26,10 +24,10 @@ from tidalapi.album import Album
 from tidalapi.artist import Artist
 
 from waves.constants import CTX_APPLE, CTX_TIDAL
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
 from waves.providers.apple import AppleCatalogUnavailable
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
 
 
 class _Signal:
@@ -60,7 +58,7 @@ class _FakeProvider:
 
     def __init__(self, **answers):
         self.calls: list[tuple] = []
-        # What the provider declares about its search surface (issue #292):
+        # What the provider declares about its search surface:
         # the neutral answer is every section in the flow layout, which the
         # per-test declarations override where they stand for TIDAL or Apple.
         self.search_sections = answers.pop(
@@ -123,13 +121,12 @@ def _stub_base(providers: dict) -> SimpleNamespace:
 
 
 _ALL_SECTIONS = ("artists", "albums", "tracks", "videos", "playlists", "mixes")
-# Apple's catalog answers four kinds; its group carries no video/mix buckets
-# (issue #292).
+# Apple's catalog answers four kinds; its group carries no video/mix buckets.
 _APPLE_SECTIONS = ("artists", "albums", "tracks", "playlists")
 
 
 def _group(provider, rows=None, *, top=None, error="", layout="flow", sections=_ALL_SECTIONS, alone_head=True) -> dict:
-    """One search group, shaped like the bridge's own builder (issue #292)."""
+    """One search group, shaped like the bridge's own builder."""
     source = rows or {}
     group = {"provider": provider, "artists_layout": layout, "head_when_alone": alone_head}
     for section in sections:
@@ -165,8 +162,8 @@ class _SearchStub:
         self.__dict__.update(base.__dict__)
         self.searchResults = _Signal()
         self.artistMetaLoaded = _Signal()
-        # The gates the real bridge registers where the providers are wired
-        # (issue #292): TIDAL's session, Apple's enable switch.
+        # The gates the real bridge registers where the providers are wired:
+        # TIDAL's session, Apple's enable switch.
         self._provider_search_gates = {
             "tidal": lambda: bool(self._logged_in),
             "apple": lambda: bool(
@@ -256,8 +253,8 @@ def test_a_cached_search_never_reaches_the_provider_twice():
 
 
 def test_a_lone_failed_provider_answers_its_own_group():
-    # A LONE enabled provider's failure answers its own group (issue #241 /
-    # UI-05, generalized in #292): no second provider can carry the words, so
+    # A LONE enabled provider's failure answers its own group: no second
+    # provider can carry the words, so
     # a blank page would be the only answer. The status repeats them, nothing
     # is cached, and busy is never latched. A BUILD failure is the other
     # "Search failed" road (tests/downloads/test_worker_latch_and_logout.py).
@@ -299,7 +296,7 @@ def test_a_partial_tidal_failure_answers_the_tidal_group():
 
 
 def test_search_enabled_reads_every_registered_provider_and_its_gate():
-    # The search row's generic gate (issue #292): a registered SEARCH provider
+    # The search row's generic gate: a registered SEARCH provider
     # with a gate that says on, or no gate at all, keeps it live; a provider
     # without SEARCH, or with a gate that says off, does not.
     bridge = SimpleNamespace(providers={}, _provider_search_gates={"tidal": lambda: False}, _logged_in=False)
@@ -324,7 +321,7 @@ def test_search_enabled_reads_every_registered_provider_and_its_gate():
 def test_search_group_carries_only_the_sections_its_provider_declares():
     # The declaration is consumed through the group builder: a provider that
     # names a subset carries exactly those buckets, and one that names nothing
-    # answers everything (every SEARCH provider before #292 did). A name the
+    # answers everything by default. A name the
     # page does not render contributes no bucket.
     provider = SimpleNamespace(
         search_sections=("artists", "albums", "songs"),
@@ -379,7 +376,7 @@ def test_search_fans_out_over_enabled_providers_and_emits_separate_groups():
     }
     apple = _FanoutProvider(barrier, apple_payload)
     # Apple's catalog answers no videos or mixes: its group carries just its
-    # own sections, whatever the reply's key set (issue #292).
+    # own sections, whatever the reply's key set.
     apple.search_sections = _APPLE_SECTIONS
     stub = _SearchStub(tidal)
     stub.providers["apple"] = apple
@@ -393,7 +390,7 @@ def test_search_fans_out_over_enabled_providers_and_emits_separate_groups():
         _payload(
             _group("tidal", {"albums": [{"id": "al1", "title": "A"}]}, layout="strip", alone_head=False),
             # A successful Apple fetch says so: the group's error word is
-            # empty (issue #241 / UI-05).
+            # empty.
             _group("apple", apple_payload, sections=_APPLE_SECTIONS, error=""),
         )
     ]
@@ -415,7 +412,7 @@ def test_search_with_apple_disabled_keeps_the_old_page_unchanged():
 
     assert apple.calls == []
     # Apple contributes no group at all while it is off: the page keeps the
-    # exact TIDAL-only structure (issue #292).
+    # exact TIDAL-only structure.
     assert stub.searchResults.emits == [
         _payload(_group("tidal", {"albums": [{"id": "al1", "title": "A"}]}, layout="strip", alone_head=False))
     ]
@@ -424,7 +421,7 @@ def test_search_with_apple_disabled_keeps_the_old_page_unchanged():
 def test_search_with_tidal_signed_out_and_apple_enabled_asks_only_apple():
     # J2: the picker's "Search works with no account" promise. The signed-out
     # TIDAL provider is never touched; the page carries exactly the Apple
-    # group (issue #292).
+    # group.
     tidal = _provider(search=AssertionError("TIDAL search ran without a session"))
     apple_payload = {
         "artists": [],
@@ -451,7 +448,7 @@ def test_search_with_tidal_signed_out_and_apple_enabled_asks_only_apple():
 
 
 def test_an_apple_only_failure_delivers_its_words_to_the_group():
-    """Issue #241 / UI-05: when Apple is the only provider and its fetch fails,
+    """When Apple is the only provider and its fetch fails,
     the honest words still reach the Apple group as a payload -- not a silent
     "Search failed" with a blank page -- so the group head can show them with
     a RETRY. Nothing is cached from a failure."""
@@ -476,7 +473,7 @@ def test_an_apple_only_failure_delivers_its_words_to_the_group():
 
 def test_a_two_provider_failure_stays_a_plain_search_failure():
     """The in-group error belongs to the one failure no second provider can
-    carry (issue #241 / UI-05): with TIDAL in the fan-out, both fetches failing
+    carry: with TIDAL in the fan-out, both fetches failing
     is a plain failure -- nothing is emitted, so a page that holds rows stays,
     and no single provider's words are put in the other's mouth."""
     tidal = _provider(search=RuntimeError("network died"))
@@ -543,7 +540,7 @@ def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
     assert stub._search_cache == {}
     group = next(g for g in stub.searchResults.emits[0]["groups"] if g["provider"] == CTX_APPLE)
     assert group["tracks"] == []
-    # The honest words ride the Apple group itself (issue #241 / UI-05), so the
+    # The honest words ride the Apple group itself, so the
     # group cannot paint "0 results" as if the catalog were empty.
     assert group["error"] == stub.statuses[-1]
 

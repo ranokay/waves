@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Capture(logging.Handler):

@@ -1,13 +1,13 @@
-"""The whole staging path is capped, not just its name (issue #17).
+"""The whole staging path is capped, not just its name.
 
 The sanitizer bounds a FINAL path against the platform cap (260 on Windows)
-and the staging name against the 255-byte component cap, but nobody budgeted
-the 42 characters of staging decoration against the whole-path cap. A final
-path that fit Windows' limit by less than that put every staging attempt past
-MAX_PATH, the OS answered "no such file or directory", every retry failed
-identically, and exactly the longest-named tracks of an album were lost (3 of
-13 on the reported album). Only the throwaway readable part of the staging
-name may shrink; the final name is never touched.
+and the staging name against the 255-byte component cap, so the 42 characters
+of staging decoration must fit inside the same budget. A final path that fits
+Windows' limit by less than that puts every staging attempt past
+MAX_PATH, the OS answers "no such file or directory", every retry fails
+identically, and exactly the longest-named tracks of an album are lost. Only
+the throwaway readable part of the staging name may shrink; the final name is
+never touched.
 """
 
 import os
@@ -15,12 +15,12 @@ import pathlib
 
 import pytest
 
-import waves.helper.path as path_module
-from waves.helper.path import STAGING_NAME_OVERHEAD
-from waves.helper.path import staging_path as _staging_path
+import waves.paths as path_module
+from waves.paths import STAGING_NAME_OVERHEAD
+from waves.paths import staging_path as _staging_path
 
 # The album from the report, respelled with POSIX separators so the length
-# arithmetic is the same on the test machine as on the reporter's Windows box.
+# arithmetic is the same on the test machine as on a real Windows box.
 ALBUM_DIR = pathlib.Path(
     "/Users/Admin/Desktop/Tidal Waves Download/3 Doors Down/"
     "The Better Life (Rarities Edition · Live At Cynthia Woods Mitchell Pavilion)"
@@ -64,9 +64,9 @@ class TestTheReportedAlbumStagesWithinTheWindowsCap:
 
     def test_a_parent_too_deep_for_any_readable_part_still_stages(self):
         # The readable part is long gone at this depth, so the uuid itself
-        # gives ground: it used to stay at its full 36 characters, which put
-        # every staging attempt past the cap the destination itself fit, the
-        # exact issue-#17 failure this budget exists to prevent. The shrunken
+        # gives ground: a full 36-character uuid would put
+        # every staging attempt past the cap the destination itself fits, the
+        # failure this budget exists to prevent. The shrunken
         # uuid still rules out a concurrent-staging collision.
         destination = pathlib.Path("/" + "a" * 240) / "Song.flac"
 

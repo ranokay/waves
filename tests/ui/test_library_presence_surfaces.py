@@ -2,12 +2,11 @@
 
 WHAT THIS FENCES OFF
 --------------------
-The library verdict landed one control at a time, and four surfaces were
-missed. Each of them read live job state (root.dlSt) and nothing else, so an
-album or a song already sitting on disk was offered as a plain DOWNLOAD while
-the badge two pixels away said the opposite. An audit of Main.qml found them;
-this pins them, because "this control also asks" is exactly the kind of wiring
-that a later refactor drops without a single test going red.
+Every surface must ask the library, not live job state alone. A control that
+reads only root.dlSt offers an album or a song already sitting on disk as a
+plain DOWNLOAD while the badge two pixels away says the opposite, and "this
+control also asks" is exactly the kind of wiring a later refactor drops
+without a single test going red.
 
 The four:
 
@@ -100,8 +99,8 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.matching import presence_key, track_key
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.backend import WavesBridge
+        from waves.metadata.matching import presence_key, track_key
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

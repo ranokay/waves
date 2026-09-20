@@ -1,11 +1,11 @@
 """The Atmos session swap must actually engage the Atmos client.
 
-The bug this pins: ``switch_to_atmos_session`` used to move only the plain
-client pair and then call ``login_token``, which loads the saved grant without
-contacting TIDAL while the access pass is still valid. So the swap was a silent
-no-op: the app kept requesting under the original PKCE client and TIDAL handed
-back the stereo fallback for Atmos-only tracks. The fix moves the PKCE pair too
-and forces a real refresh so the new client is exercised.
+``switch_to_atmos_session`` must move BOTH client pairs to the Atmos client and
+force a real refresh (``token_refresh``). Moving only the plain pair and then
+calling ``login_token`` loads the saved grant without contacting TIDAL while
+the access pass is still valid, so the swap is a silent no-op: the app keeps
+requesting under the original PKCE client and TIDAL hands back the stereo
+fallback for Atmos-only tracks.
 
 Hermetic and network-free: the real, unbound ``Tidal`` methods are bound onto a
 stand-in whose session/config are plain namespaces, so the credential motion and
@@ -74,14 +74,15 @@ def test_switch_moves_the_pkce_pair_and_forces_a_refresh():
     assert t.switch_to_atmos_session() is True
 
     cfg = t.session.config
-    # BOTH pairs move to the Atmos client (the PKCE pair is the regression).
+    # BOTH pairs move to the Atmos client (a partial swap moves the plain pair
+    # only).
     assert cfg.client_id == ATMOS_CLIENT_ID
     assert cfg.client_secret == ATMOS_CLIENT_SECRET
     assert cfg.client_id_pkce == ATMOS_CLIENT_ID
     assert cfg.client_secret_pkce == ATMOS_CLIENT_SECRET
     assert t.session.audio_quality == ATMOS_REQUEST_QUALITY
     assert t.is_atmos_session is True
-    # A real refresh happened, under the Atmos client (not the old no-op).
+    # A real refresh happened, under the Atmos client (not a loaded grant).
     assert t.session.refresh_calls == [ATMOS_CLIENT_ID]
 
 
@@ -90,10 +91,10 @@ def test_a_settings_save_mid_switch_cannot_take_the_atmos_tier_back():
     re-authenticates, which is two network round trips (tens of seconds while
     TIDAL throttles). Saving an audio-quality change in Settings is a GUI-
     thread call on the SAME shared session, gated only on the "we are in Atmos"
-    flag, and that flag used to go up only after the re-authentication: a save
-    landing in that window wrote the user's stereo tier over the Atmos request,
-    and the get_stream that followed asked at a tier the Atmos client never
-    requests."""
+    flag. The flag must be up for the whole switch, before the re-authentication
+    begins: a save landing in that window must see Atmos mode already on, or it
+    writes the user's stereo tier over the Atmos request, and the get_stream
+    that follows asks at a tier the Atmos client never requests."""
     t = _make()
     seen: list[bool] = []
 
@@ -113,8 +114,9 @@ def test_a_settings_save_mid_switch_cannot_take_the_atmos_tier_back():
 
 def test_a_settings_save_mid_restore_still_reaches_the_session():
     """The mirror image: while the flag is up a save is held off the session,
-    so leaving it up across the restore's re-authentication meant a quality
-    change saved during the restore reached the session nowhere at all."""
+    so the flag must come down before the restore's re-authentication, or a
+    quality change saved during the restore reaches the session nowhere at
+    all."""
     t = _make()
     t.switch_to_atmos_session()
 
@@ -168,7 +170,7 @@ def test_a_real_atmos_copy_settles_instead_of_re_fetching_forever():
     tier, or every save re-fetches the identical Atmos file. Pinned because the
     whole point of restoring delivery is undone if the copy never settles."""
     from waves.constants import TIER_RANK as QUALITY_RANK
-    from waves.waves_ui.backend import _copy_is_current, _delivers_atmos
+    from waves.desktop.backend import _copy_is_current, _delivers_atmos
 
     atmos_only = types.SimpleNamespace(audio_modes=["DOLBY_ATMOS"])
     rec_atmos = {"audio_mode": "DOLBY_ATMOS", "quality_tier": "LOW", "quality_rank": QUALITY_RANK["LOW"]}
@@ -183,9 +185,9 @@ def test_a_real_atmos_copy_settles_instead_of_re_fetching_forever():
 
 
 def test_rebuilding_the_session_recaptures_every_original_the_swap_restores():
-    """The post-sign-out session rebuild (now ``TidalProvider.reset_session``,
-    behind the seam) says it mirrors ``Tidal.__init__``. If it captures fewer
-    originals than the swap restores, a sign-out leaves the Atmos restore
+    """The post-sign-out session rebuild (``TidalProvider.reset_session``,
+    behind the seam) says it mirrors ``Tidal.__init__``. Capturing fewer
+    originals than the swap restores would leave a sign-out's Atmos restore
     reaching for a stale value. Pin the two sets against each other rather
     than a hand-written list, so adding a field to the constructor and
     forgetting the reset fails here."""

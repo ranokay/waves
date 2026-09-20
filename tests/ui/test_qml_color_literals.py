@@ -1,23 +1,19 @@
-"""Regression guard: QML colour literals must not be 9 characters long.
+"""QML colour literals must not be 9 characters long.
 
-THE BUG
--------
-Qt parses a 9-character hex colour as **#AARRGGBB**, not #RRGGBBAA. Ten modal
-scrims in Main.qml were written as ``#06070ecc`` / ``#06070ed6`` / ``#06070ef4``,
-meaning "dark navy #06070e at 80/84/96% alpha". Qt read them as **alpha 0x06
-(2.4%) over the blue rgb(7,14,204)**, so every modal gate in the app (download
-folder, category confirm, settings reset, factory reset, folder unreachable,
-FFmpeg, terms) and the login panel failed to dim the interface behind them.
+WHAT THIS FENCES OFF
+--------------------
+Qt parses a 9-character hex colour as **#AARRGGBB**, not #RRGGBBAA. Writing
+``#06070ecc`` / ``#06070ed6`` / ``#06070ef4`` for "dark navy #06070e at
+80/84/96% alpha" reads as **alpha 0x06 (2.4%) over the blue rgb(7,14,204)**,
+so every modal gate in the app (download folder, category confirm, settings
+reset, factory reset, folder unreachable, FFmpeg, terms) and the login panel
+fails to dim the interface behind it.
 
-The same file's other overlays get it right (``#d90d0f12`` → 85% alpha), so
-this was a byte-order slip in one family of literals, not a convention.
-
-THE FIX rewrote the ten literals as ``#cc06070e`` / ``#d606070e`` /
-``#f406070e``. This guard is mechanical: any 9-character hex literal is
-ambiguous to a reader and is exactly how the slip happened, so the rule is that
-colours are either 7 characters (opaque) or 9 with the alpha FIRST. We cannot
-tell intent from the literal alone, so instead we pin the property that broke:
-no literal may have an alpha byte under 10% unless it is deliberately listed.
+The rule is that colours are either 7 characters (opaque) or 9 with the alpha
+FIRST (``#cc06070e`` / ``#d606070e`` / ``#f406070e``). The guard is mechanical:
+any 9-character hex literal is ambiguous to a reader, and intent cannot be told
+from the literal alone, so it pins the property that breaks: no literal may
+have an alpha byte under 10% unless it is deliberately listed.
 """
 
 from __future__ import annotations
@@ -74,8 +70,8 @@ def test_the_modal_scrims_actually_dim():
     main = (QML_DIR / "Main.qml").read_text(encoding="utf-8")
 
     scrims = re.findall(r'"#([0-9a-fA-F]{2})06070e"', main)
-    # 12 historical modal scrims plus the first-run welcome gate, which kept
-    # the login panel's scrim recipe when the panel went (issue #218).
+    # 12 modal scrims plus the first-run welcome gate, which reuses the login
+    # panel's scrim recipe.
     assert len(scrims) == 13, f"expected the 13 modal scrims, found {len(scrims)}"
     for alpha_hex in scrims:
         alpha = int(alpha_hex, 16)

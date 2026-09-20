@@ -1,4 +1,4 @@
-"""Tests for the local music-library scanner (waves/library_index.py).
+"""Tests for the local music-library scanner (waves/library/index.py).
 
 Hermetic: a temp tree of empty files stands in for a library, and the tag reader
 is injected so no real audio is needed. The default extension predicate decides
@@ -15,8 +15,7 @@ import pytest
 from support.library_fakes import ScandirStub
 from support.paths import REPO_ROOT
 
-from waves import matching
-from waves.library_index import (
+from waves.library.index import (
     _EMPTY_STRIKE_GAP_S,
     _NETWORK_WORKERS,
     POLL_GAUGE,
@@ -31,6 +30,7 @@ from waves.library_index import (
     _read_album_tags,
     cache_file_for_root,
 )
+from waves.metadata import matching
 
 
 def _mk(base, rel, files):
@@ -52,7 +52,7 @@ def _unreadable_fixture_files_have_no_ids(monkeypatch):
     own rules live in tests/library/test_library_item_id_scan.py and
     tests/metadata.
     """
-    monkeypatch.setattr("waves.library_index._default_item_id", lambda path: "")
+    monkeypatch.setattr("waves.library.index._default_item_id", lambda path: "")
 
 
 def _reader(tagmap, counter=None):
@@ -278,7 +278,7 @@ def test_walk_lists_directories_concurrently(tmp_path, monkeypatch):
     # listing over ~49 folders is ~1s serially; concurrent finishes well under.
     import time as _time
 
-    import waves.library_index as li
+    import waves.library.index as li
 
     lib = _mk(tmp_path, "lib", [])
     tags = {}
@@ -329,7 +329,7 @@ def test_scan_status_unreadable_when_root_denies_listing(tmp_path, monkeypatch):
     # the TCC-gated network-volume case: os.walk would swallow the EPERM and
     # yield nothing, indistinguishable from empty. The probe must catch it, keep
     # the cache, and report SCAN_UNREADABLE so the UI can say "can't read".
-    import waves.library_index as li
+    import waves.library.index as li
 
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/A/Album", ["1.flac"])
@@ -392,7 +392,7 @@ def test_read_album_tags_none_for_unreadable(tmp_path):
 def _scandir_spy(monkeypatch):
     """Record the absolute path of every os.scandir the scanner performs, so a
     test can prove which folders were (and were not) listed."""
-    import waves.library_index as li
+    import waves.library.index as li
 
     calls: list[str] = []
     real = os.scandir
@@ -527,7 +527,7 @@ def test_transient_listing_failure_preserves_subtree(tmp_path, monkeypatch):
     # NOT be mistaken for an empty folder: doing so would orphan its albums and
     # the generation prune would delete them permanently. The subtree must survive
     # the failure and recover cleanly once the error clears.
-    import waves.library_index as li
+    import waves.library.index as li
 
     lib = _mk(tmp_path, "lib", [])
     artist = os.path.join(lib, "Artist")
@@ -564,7 +564,7 @@ def test_root_going_offline_midwalk_does_not_wipe_cache(tmp_path, monkeypatch):
     # If the root volume drops AFTER the readability probe passed but BEFORE the
     # walk stats it, the scan must leave the cache intact and report missing, not
     # let the generation prune wipe every badge (the offline-NAS invariant).
-    import waves.library_index as li
+    import waves.library.index as li
 
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/A/Album", ["1.flac"])
@@ -597,7 +597,7 @@ def test_non_utf8_folder_name_is_skipped_not_crash(tmp_path, monkeypatch):
     # A folder whose name is not valid UTF-8 cannot be stored in sqlite; it must be
     # skipped at discovery, never crash (and re-crash) the whole scan. macOS will
     # not create such a name, so inject a fake directory entry into the listing.
-    import waves.library_index as li
+    import waves.library.index as li
 
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/A/Album", ["1.flac"])
@@ -823,9 +823,7 @@ def test_force_full_still_reads_an_album_whose_track_count_changed(tmp_path):
     # The listing carries the file count, so a track added or removed in place
     # is caught by the cheap comparison, with no mtime involved: the folder's
     # mtime is pinned back to its indexed value after the file lands, exactly
-    # the mount that never bumps mtimes force_full exists to cover. (An
-    # earlier version of this test let _mk bump the real mtime, so it passed
-    # through the mtime check and pinned nothing.)
+    # the mount that never bumps mtimes force_full exists to cover.
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/A/Alb", ["1.flac"])
     tags = {d: {"album": "Alb", "artist": "A", "date": "2000"}}
@@ -891,11 +889,12 @@ def test_apple_double_sidecars_do_not_blind_the_scan(tmp_path):
 
 
 def test_folder_of_unrelated_tracks_cannot_claim_a_whole_album(tmp_path):
-    # A "Singles"/"Inbox" dump takes its identity from its first file but used to
-    # take its track count from the whole folder, so 30 unrelated songs whose
-    # first file was tagged "Discovery" indexed as a 30-track Discovery and
-    # satisfied every completeness test. A count of 0 is how the matcher is told
-    # this folder cannot answer "do I have all of it?".
+    # A "Singles"/"Inbox" dump takes its identity from its first file, but its
+    # track count must come from the album those files agree on, not the whole
+    # folder: 30 unrelated songs whose first file was tagged "Discovery" would
+    # otherwise index as a 30-track Discovery and satisfy every completeness
+    # test. A count of 0 is how the matcher is told this folder cannot answer
+    # "do I have all of it?".
     lib = _mk(tmp_path, "lib", [])
     names = [f"{i:02d}.flac" for i in range(1, 13)]
     _mk(tmp_path, "lib/Daft Punk/Singles", names)
@@ -1051,7 +1050,7 @@ def test_a_cache_from_before_the_shape_was_read_backfills_itself(tmp_path):
 def test_root_that_walks_to_nothing_keeps_the_cache_the_first_time(tmp_path):
     # A share that unmounts often leaves its mountpoint behind as an EMPTY local
     # directory: it probes perfectly readable, walks to nothing, and the prune
-    # used to take the whole index while reporting a successful scan.
+    # must not take the whole index while reporting a successful scan.
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/A/Album", ["1.flac"])
     idx = _index(tmp_path, {d: {"album": "Album", "artist": "A", "date": "2000"}})
@@ -1288,7 +1287,7 @@ def test_the_scan_pools_are_actually_registered():
     """The gauges exist and move (above), and the bridge hands all three to
     diagnostics at startup. Without this the rule is only half kept: a gauge
     nobody registered reports to nobody."""
-    backend = (REPO_ROOT / "waves" / "waves_ui" / "backend.py").read_text(encoding="utf-8")
+    backend = (REPO_ROOT / "waves" / "desktop" / "backend.py").read_text(encoding="utf-8")
     for name in ("libwalk", "libread", "libpoll"):
         assert f'diagnostics.register_pool("{name}"' in backend, f"the {name} pool is not registered"
 
@@ -1944,7 +1943,7 @@ class _PoolSpy:
         self.sizes: list[int] = []
 
     def install(self, monkeypatch):
-        import waves.library_index as mod
+        import waves.library.index as mod
 
         real = mod.ThreadPoolExecutor
         sizes = self.sizes
@@ -2110,9 +2109,9 @@ def _strip_keys(idx):
 def test_a_scan_keys_the_rows_an_older_cache_left_keyless(tmp_path):
     """The presence lookups cannot reach a row without a key, so a cache from
     before the key columns leaves every badge dark until something fills them.
-    That backfill lives in refresh(), which means it happens whether the scan
-    ran in the scanner process or in-process: it used to be called only by the
-    child, so a fallback scan reported success over a library that then had no
+    The backfill lives in refresh(), which means it happens whether the scan
+    ran in the scanner process or in-process: called only by the child, it would
+    leave a fallback scan reporting success over a library that then had no
     badges at all, for good."""
     lib = _mk(tmp_path, "lib", [])
     d1 = _mk(tmp_path, "lib/Lorna Shore/Pain Remains", ["01.flac"])
@@ -2157,7 +2156,7 @@ def test_the_sqlite_artist_rollup_refuses_various_artists_keys(tmp_path):
     walks past it and only normalises into a compilation afterwards. Both nets
     were deliberate. Without this one a compilation credit is rolled up as a
     real artist, badge and tally included."""
-    from waves.waves_ui.bridge_library import SqlArtistRollup
+    from waves.desktop.bridge_library import SqlArtistRollup
 
     lib = _mk(tmp_path, "lib", [])
     real = _mk(tmp_path, "lib/Lorna Shore/Pain Remains", ["01.flac"])

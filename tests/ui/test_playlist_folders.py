@@ -1,4 +1,4 @@
-"""Folder tree sweep + {folder_path} handling (waves/helper/folders.py).
+"""Folder tree sweep + {folder_path} handling (waves/providers/tidal_folders.py).
 
 The fakes mirror the tidalapi surface the sweep touches: paged
 favorites.playlist_folders(parent_folder_id=...) and Folder.items(). The
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from tidalapi.exceptions import TooManyRequests
 
-from waves.helper import folders as f
+from waves.providers import tidal_folders as f
 
 
 class FakePlaylist(SimpleNamespace):
@@ -158,7 +158,7 @@ def test_a_folder_named_like_a_template_token_is_not_expanded():
 
     from tidalapi import Track
 
-    from waves.helper.path import format_path_media
+    from waves.paths import format_path_media
 
     template = f.apply_folder_path("Playlists/{folder_path}fixed", "Best of {artist_name}")
     assert "{artist_name}" not in template
@@ -202,8 +202,8 @@ def test_apply_folder_path_hostile_value_cannot_escape():
 def test_apply_folder_path_leading_empty_does_not_go_absolute():
     """The token reference samples "Country/Bluegrass/", which invites putting
     the token first with a separator after it. For a playlist in no folder that
-    used to render "/{playlist_name}/x", and Path(base) / "/x" DROPS base: the
-    download would land at the filesystem root instead of the download folder.
+    renders "/{playlist_name}/x", and Path(base) / "/x" DROPS base: the
+    download lands at the filesystem root instead of the download folder.
     """
     template = "{folder_path}/{playlist_name}/x"
     assert f.apply_folder_path(template, "") == "{playlist_name}/x"

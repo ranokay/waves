@@ -1,4 +1,4 @@
-"""Regression guard for the broadcast-progress rate gate (WavesBridge).
+"""The broadcast-progress rate gate (WavesBridge).
 
 A single DASH-delivered track emits item() progress per segment with no upstream
 throttle. Each downloadProgress broadcast reaches every instantiated download
@@ -12,8 +12,8 @@ clock exercises the time branch without sleeping.
 
 from __future__ import annotations
 
-import waves.waves_ui.backend as backend
-from waves.waves_ui.backend import WavesBridge
+import waves.desktop.backend as backend
+from waves.desktop.backend import WavesBridge
 
 
 class _Stub:

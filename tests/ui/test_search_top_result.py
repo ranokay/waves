@@ -1,16 +1,16 @@
 """A specific search answers at the top of the results page.
 
-THE BUG WE ARE FENCING OFF
---------------------------
-Two things buried the one result a specific search ("this song by this
-artist") was after, even though TIDAL had ranked it first in its reply:
+WHAT THIS FENCES OFF
+--------------------
+Two things bury the one result a specific search ("this song by this artist")
+is after, even though TIDAL ranked it first in its reply:
 
-1. The "Relevance" sort re-sorted every section by POPULARITY. A single
-   released this week has a popularity of 0, so it sank under every older
-   track that shared a word with the query, and the user had to switch to
+1. A "Relevance" sort that re-sorts every section by POPULARITY. A single
+   released this week has a popularity of 0, so it sinks under every older
+   track sharing a word with the query, and the user must switch to
    "Release date" to find it.
-2. The mixed All view stacks its sections in a fixed order (artists, then
-   albums, then tracks), so even a perfect album or track match sat under
+2. The mixed All view stacking its sections in a fixed order (artists, then
+   albums, then tracks), so even a perfect album or track match sits under
    whichever artists TIDAL fuzzy-matched on one word of the query.
 
 HOW THIS STAYS FIXED
@@ -132,8 +132,8 @@ def _run_scenario() -> int:
         from support.offline import PARK_LOGIN_QML, patch_offline
 
         patch_offline()
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

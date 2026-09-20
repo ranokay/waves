@@ -11,11 +11,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from waves.constants import CTX_APPLE, CTX_TIDAL
+from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as ModelSettings
 from waves.providers.apple.provider import AppleProvider
 from waves.providers.tidal import TidalProvider
-from waves.waves_ui.backend import WavesBridge
 
 # The Apple status row's action pills, built by the same helper the schema
 # and the live status payload share: the management pills always, sign-out

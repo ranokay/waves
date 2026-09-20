@@ -33,7 +33,7 @@ def _identity_from_content(monkeypatch):
 
     The engine asks metadata.read_item_id, which reads the item id the download
     wrote into the file's tags (exercised against real tags in
-    test_issue15_atmos_and_duplicates). The stand-in downloads here write that
+    test_atmos_only_and_duplicate_names). The stand-in downloads here write that
     id as the file's whole content, so identity is read back from it. Anything
     else reads as untagged, which is what a pre-id library file is.
     """
@@ -193,14 +193,15 @@ class TestOverwriteModeStillKeepsBothTracks:
 
 
 class TestOverwriteModeKeepsTracksItAlreadyWrote:
-    """Issue #19: the album of six same-title tracks, downloaded three at a time.
+    """A landed name stays taken for the rest of the run.
 
     The claim only spans the window between picking a name and moving the file
     there, which is right for two tracks running side by side and blind to the
     rest of the run: with skipping off nothing looks at the disk either, so the
-    fourth track found the first track's name free again the moment that first
-    track landed, and replaced it. Six downloads, four files, and a different
-    four on every run (the reporter's two attempts kept a different pair).
+    fourth track finds the first track's name free again the moment that first
+    track landed, and replaces it. Six same-title tracks downloaded three at a
+    time would then leave four files, a different four on every run. The
+    landed-name ledger keeps the file that landed.
     """
 
     def test_six_same_name_tracks_land_as_six_files(self, tmp_path):
@@ -242,7 +243,7 @@ class TestOverwriteModeKeepsTracksItAlreadyWrote:
         }
 
     def test_downloading_the_album_a_second_time_keeps_six_files(self, tmp_path):
-        # The reporter's second attempt: the same album again, over the library
+        # A second run over the same album, over the library
         # the first run wrote. A fresh run holds no ledger, so the six files
         # have to answer for themselves.
         destination = tmp_path / "I Feel You.flac"
@@ -413,7 +414,7 @@ class TestTrackedDownloadForcesSkippingOffPerThread:
     def test_force_download_is_thread_local(self):
         # The link the tests above stand on: the upgrade context manager flips
         # skipping for the calling thread only.
-        from waves.waves_ui.backend import _TrackedDownload
+        from waves.desktop.backend import _TrackedDownload
 
         dl = _TrackedDownload.__new__(_TrackedDownload)
         dl._tls = threading.local()

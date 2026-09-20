@@ -4,9 +4,9 @@ The saga this pins down: the saved download folder lives on an SMB share,
 macOS silently ejects the volume (sleep, network blip), and every probe the
 app runs then checks a mount point that cannot come back by itself. Finder
 "fixes" it because navigating to the share IS a mount request. These tests
-prove the app now makes that same request: the share's origin is recorded
-while healthy, and a dead probe whose volume is gone triggers a remount and
-a second probe.
+prove the app makes that same request: the share's origin is recorded while
+healthy, and a dead probe whose volume is gone triggers a remount and a second
+probe.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from threading import Lock
 import pytest
 from support.dispatch_stub import arm_queue
 
-import waves.waves_ui.backend as backend_mod
-from waves.waves_ui import netmount
-from waves.waves_ui.backend import WavesBridge
+import waves.desktop.backend as backend_mod
+from waves.desktop.backend import WavesBridge
+from waves.library import netmount
 
 
 def _bridge(base_path="", origins=None):
@@ -75,7 +75,7 @@ def test_origin_recorded_on_proof_of_life(monkeypatch):
         backend_mod.netmount, "mount_origin", lambda p: (calls.append(p), ("smbfs", "//u@nas/Media"))[1]
     )
     secrets = []
-    monkeypatch.setattr(backend_mod.diagnostics, "register_secret", lambda v, tag="": secrets.append(v))
+    monkeypatch.setattr(backend_mod.redaction, "register_secret", lambda v, tag="": secrets.append(v))
     b = _bridge()
     b._remember_share_origin("/Volumes/Media/Music/Artist")
     assert calls == ["/Volumes/Media"]
@@ -90,7 +90,7 @@ def test_origin_statfs_runs_once_per_volume_per_session(monkeypatch):
     monkeypatch.setattr(
         backend_mod.netmount, "mount_origin", lambda p: (calls.append(p), ("smbfs", "//u@nas/Media"))[1]
     )
-    monkeypatch.setattr(backend_mod.diagnostics, "register_secret", lambda v, tag="": None)
+    monkeypatch.setattr(backend_mod.redaction, "register_secret", lambda v, tag="": None)
     b = _bridge()
     b._remember_share_origin("/Volumes/Media/Music")
     b._remember_share_origin("/Volumes/Media/Other")
@@ -134,7 +134,7 @@ def test_keepwarm_touch_records_the_origin_without_a_download(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(backend_mod.os, "listdir", lambda p: [])
     monkeypatch.setattr(backend_mod.netmount, "mount_origin", lambda p: ("smbfs", "//u@nas/Media"))
-    monkeypatch.setattr(backend_mod.diagnostics, "register_secret", lambda v, tag="": None)
+    monkeypatch.setattr(backend_mod.redaction, "register_secret", lambda v, tag="": None)
     monkeypatch.setattr(backend_mod, "Thread", _InlineThread)
     b = _bridge(base_path="/Volumes/Media/Music")
     b._keepwarm_inflight = False

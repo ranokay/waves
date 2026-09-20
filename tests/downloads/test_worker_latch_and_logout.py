@@ -1,19 +1,16 @@
 """Busy-latch discipline in the browse/search workers, and sign-out fences.
 
-Two families of holes, both found by the gap round of the 2026-08-29 audit:
+* loadArtist, search, _open_url and loadArtistLibrary must build their result
+  payloads INSIDE the try: the dict builders can choke on a partial tidalapi
+  object (the code's own _top_hit_dict guard concedes as much), Worker.run only
+  logs an escape, and nothing else clears busy or the status line. loadArtist
+  is worst: an artist id left in _artist_loading makes the dedup guard silently
+  refuse every later click on that artist for the whole session.
 
-* loadArtist, search, _open_url and loadArtistLibrary built their result
-  payloads OUTSIDE any try. The dict builders can choke on a partial tidalapi
-  object (the code's own _top_hit_dict guard concedes as much), Worker.run
-  only logs an escape, and nothing else cleared busy or the status line.
-  loadArtist was worst: the artist id stayed in _artist_loading, so the dedup
-  guard silently refused every later click on that artist for the whole
-  session.
-
-* logout never superseded the in-flight fetch workers. A search still running
-  when the user signed out emitted after "Signed out" and refilled the caches
-  logout had just cleared with objects bound to the dead session; the
-  album-tracks and playlist-tracks workers had no generation guard at all.
+* logout must supersede the in-flight fetch workers. A search still running
+  when the user signs out would emit after "Signed out" and refill the caches
+  logout just cleared with objects bound to the dead session; the album-tracks
+  and playlist-tracks workers need their own generation guard.
 """
 
 from __future__ import annotations
@@ -22,9 +19,9 @@ import inspect
 from threading import Lock
 from types import SimpleNamespace
 
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
 
 
 class _Signal:

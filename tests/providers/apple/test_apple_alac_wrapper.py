@@ -1,4 +1,4 @@
-"""ALAC delivery via wrapper-v2 (issue #32, spec §1, §4.3, §6)."""
+"""ALAC delivery via wrapper-v2 (spec §1, §4.3, §6)."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def test_tier_mapping_is_honest_and_detail_never_ranks():
     assert apple_tier_for_delivery("alac", 16, 44100) == QualityTier.LOSSLESS.value
     assert apple_tier_for_delivery("alac", 16, 48000) == QualityTier.LOSSLESS.value
     # 24-bit is Lossless class at 44.1/48 kHz and Hi-Res only above 48 kHz
-    # (Apple's own boundary, issue #239); an unreadable rate cannot promote.
+    # (Apple's own boundary); an unreadable rate cannot promote.
     assert apple_tier_for_delivery("alac", 24, 44100) == QualityTier.LOSSLESS.value
     assert apple_tier_for_delivery("alac", 24, 48000) == QualityTier.LOSSLESS.value
     assert apple_tier_for_delivery("alac", 24, None) == QualityTier.LOSSLESS.value
@@ -76,7 +76,7 @@ def test_wrapper_tier_advertises_lossless_rungs():
     assert provider.advertised_tier(_song_resource(traits=("hi-res-lossless",))) == QualityTier.HI_RES_LOSSLESS
     assert provider.advertised_tier(_song_resource(traits=("lossless",))) == QualityTier.LOSSLESS
     assert provider.advertised_tier(_song_resource(traits=())) == QualityTier.HIGH
-    # Per-track ceiling (issue #32): hi-res masters cap at HI_RES, lossless
+    # Per-track ceiling: hi-res masters cap at HI_RES, lossless
     # at LOSSLESS, AAC-only at HIGH; unknown stays unknown, never a guess.
     assert provider.advertised_ceiling(_song_resource(traits=("hi-res-lossless",))) == quality_rank(
         QualityTier.HI_RES_LOSSLESS
@@ -160,7 +160,7 @@ def test_alac_playlist_choice_honors_the_ceiling():
     hires = {"uri": "24-96.m3u8", "stream_info": {"audio": "audio-alac-stereo-96000-24", "average_bandwidth": 2800000}}
     hires192 = {"uri": "24-192.m3u8", "stream_info": {"audio": "audio-alac-stereo-192000-24"}}
 
-    # A LOSSLESS ask caps at the LOSSLESS rung (issue #239: 16-bit at any
+    # A LOSSLESS ask caps at the LOSSLESS rung (16-bit at any
     # rate, or 24-bit at 44.1/48 kHz) and prefers the best under it; HI_RES
     # takes the best rendition the master holds.
     assert engine._choose_alac_playlist([cd, cd48, hires, hires192], QualityTier.LOSSLESS.value) is cd48
@@ -438,8 +438,8 @@ def test_probe_bit_depth_prefers_bits_per_sample():
 
 
 def test_wrapper_url_resolve_prefers_override_then_persisted(tmp_path, monkeypatch):
+    from waves.desktop.backend import WavesBridge
     from waves.providers.apple.runtime import AppleRuntimeManager
-    from waves.waves_ui.backend import WavesBridge
 
     mgr = AppleRuntimeManager(tmp_path)
     persisted = mgr.ensure_port(0)

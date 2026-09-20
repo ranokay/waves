@@ -1,10 +1,10 @@
 """The TIDAL Provider: the seam's first implementation, by thin delegation.
 
 Every method hands the work to the body that has always done it --
-``waves.helper.tidal``'s catalog adapters, ``waves.config``'s session, and the
+``waves.providers.tidal_client``'s catalog adapters, ``waves.config``'s session, and the
 engine's own normalizers in ``waves.download``. The bridge routes every TIDAL
 session, catalog and editorial read through this module (the seam's contract
-half, ticket #22); the only tidal-object touches left in the bridge are the
+half); the only tidal-object touches left in the bridge are the
 engine hand-off and the config layer's credential-event wiring.
 
 Where the provider adds code at all, it is vocabulary translation between the
@@ -29,18 +29,7 @@ from tidalapi.mix import Mix
 from waves.config import ATMOS_REQUEST_QUALITY, Tidal, harden_api_session, session_quality_from_word
 from waves.constants import CTX_TIDAL, LIBRARY_PAGE, MediaType, QualityTier, quality_rank, tier_from_word
 from waves.download import _artist_ids, _tidal_refuses_asset, _waves_item_id
-from waves.helper.folders import walk_playlist_tree
-from waves.helper.tidal import (
-    get_album_artist_ids,
-    get_album_artists,
-    get_tidal_media_id,
-    get_tidal_media_type,
-    instantiate_media,
-    items_results_all,
-    quality_audio_highest,
-    search_results_all,
-    user_media_lists,
-)
+from waves.metadata.naming import get_album_artist_ids, get_album_artists
 from waves.providers.base import (
     AudioType,
     BrowseWindow,
@@ -54,7 +43,17 @@ from waves.providers.base import (
     StatusKind,
     StreamInfo,
 )
-from waves.waves_ui.manifest import overgenerated_tail_urls
+from waves.providers.tidal_client import (
+    get_tidal_media_id,
+    get_tidal_media_type,
+    instantiate_media,
+    items_results_all,
+    quality_audio_highest,
+    search_results_all,
+    user_media_lists,
+)
+from waves.providers.tidal_folders import walk_playlist_tree
+from waves.providers.tidal_manifest import overgenerated_tail_urls
 
 logger = logging.getLogger("waves.providers.tidal")
 
@@ -125,10 +124,10 @@ class TidalProvider(Provider):
     name = "TIDAL"
     capabilities = frozenset(Capability)
     # TIDAL's search reply can carry dozens of artists, so its group keeps the
-    # horizontal strip the page has always shown (issue #292).
+    # horizontal strip the page has always shown.
     search_artists_layout = "strip"
     # A TIDAL-only page is the search page itself: its group head exists to
-    # separate providers, so alone it stays off (issue #292).
+    # separate providers, so alone it stays off.
     search_head_when_alone = False
 
     # ----- chooser metadata
@@ -215,9 +214,9 @@ class TidalProvider(Provider):
 
     def login_begin(self) -> str:
         # A prior sign-out tears the session down (the engine's logout deletes
-        # it outright); rebuild one so a fresh PKCE login can start -- the
-        # self-heal the bridge's login slot used to carry, now where the
-        # session actually lives.
+        # it outright); rebuild one so a fresh PKCE login can start: the
+        # self-heal lives where the session does, not in the bridge's login
+        # slot.
         if getattr(self._tidal, "session", None) is None:
             self.reset_session()
         return self._tidal.session.pkce_login_url()

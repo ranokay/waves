@@ -2,11 +2,11 @@
 
 WHAT THIS FENCES OFF
 --------------------
-The RotatingFileHandler used to sit directly on the loggers, so any WARNING
-logged from the GUI thread wrote and flushed to disk inline. With the disk
-busy at launch (the library scan, the ownership stats) that write blocked the
-event loop 50-130ms (sampled live) and the launch animation stalled on it.
-Now the loggers hold a QueueHandler; a writer thread owns the file handler.
+A RotatingFileHandler sitting directly on the loggers writes and flushes to
+disk inline on any WARNING logged from the GUI thread. With the disk busy at
+launch (the library scan, the ownership stats) that write blocks the event
+loop 50-130ms and stalls the launch animation. The loggers hold a QueueHandler
+instead; a writer thread owns the file handler.
 Redaction still happens before anything is queued, and an export can wait
 (bounded) for the queue to land.
 """
@@ -22,14 +22,14 @@ from logging.handlers import QueueHandler, RotatingFileHandler
 
 def _fresh(monkeypatch, tmp_path):
     monkeypatch.delenv("WAVES_DEBUG", raising=False)
-    for name in ("waves.waves_ui.devlog", "waves.waves_ui.diagnostics"):
+    for name in ("waves.desktop.devlog", "waves.desktop.diagnostics"):
         sys.modules.pop(name, None)
     shared = (logging.getLogger("waves"), logging.getLogger())
     saved = {lg: (list(lg.handlers), lg.propagate, lg.level) for lg in shared}
     for lg in shared:
         for h in list(lg.handlers):
             lg.removeHandler(h)
-    diagnostics = importlib.import_module("waves.waves_ui.diagnostics")
+    diagnostics = importlib.import_module("waves.desktop.diagnostics")
     log_path = diagnostics.install(str(tmp_path))
     assert log_path is not None
     return diagnostics, log_path, shared, saved
@@ -45,7 +45,7 @@ def _restore(diagnostics, shared, saved):
             lg.addHandler(h)
         lg.propagate = propagate
         lg.setLevel(level)
-    sys.modules.pop("waves.waves_ui.diagnostics", None)
+    sys.modules.pop("waves.desktop.diagnostics", None)
 
 
 def test_loggers_hold_a_queue_not_the_file_and_the_line_still_lands_scrubbed(monkeypatch, tmp_path):

@@ -1,4 +1,4 @@
-"""Issue #39: a pasted title with a line break never reached TIDAL as typed.
+"""A pasted title with a line break never reaches TIDAL as typed.
 
 Two backend rules behind ``WavesBridge.search``:
 
@@ -26,8 +26,8 @@ from support.search_fakes import (
     search_payloads as _payloads,
 )
 
+from waves.desktop.backend import _STALE_STAMP
 from waves.providers import Capability
-from waves.waves_ui.backend import _STALE_STAMP
 
 
 def _provider(search):
@@ -48,9 +48,9 @@ def _boom(needle):
 
 def test_a_lone_raised_fetch_reports_its_own_words_not_zero_results():
     # A lone enabled provider's failure answers its own group with the
-    # provider's words (issue #241 / UI-05, generalized in #292), never a
-    # silent "Search failed" with a blank page; nothing is cached and busy is
-    # released. The page-count line still never says "N results".
+    # provider's words, never a silent "Search failed" with a blank page;
+    # nothing is cached and busy is released. The page-count line still never
+    # says "N results".
     stub = _Stub()
     stub.providers = {"tidal": _provider(_boom)}
     stub.search("needle")

@@ -1,14 +1,13 @@
-"""Regression: a NEW search always lands at the top of the results page.
+"""A NEW search always lands at the top of the results page.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 The search results page is one Flickable (``results``) with every section
 (ARTISTS, ALBUMS, TRACKS, ...) stacked inside, so it keeps a single scroll
-position. ``onSearchResults`` used to render a fresh payload without touching
-that position: search something, scroll down to the albums, search again, and
-the new results appeared at the OLD offset, as if each section "remembered"
-where you were. The horizontal ARTISTS strip kept its own sideways offset the
-same way.
+position. Rendering a fresh payload without touching that position leaves the
+new results at the OLD offset: search something, scroll down to the albums,
+search again, and it looks as if each section "remembered" where you were.
+The horizontal ARTISTS strip keeps its own sideways offset the same way.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -141,8 +140,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

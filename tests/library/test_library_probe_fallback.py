@@ -1,12 +1,10 @@
 """The bridge's probe by name behind a badge miss on an untrusted listing
 (bridge_library.py, the "Probe by name" section).
 
-THE BUG THIS FENCES OFF
------------------------
 A share whose directory paging repeats lists the same first page of artist
-folders over and over, so the scan never saw the artists past it and every
-badge and download gate answered "not in library" for albums the user owned.
-Duplicates were downloaded on that answer. The scan now flags such a listing
+folders over and over, so the scan never sees the artists past it and every
+badge and download gate answers "not in library" for albums the user owns.
+Duplicates get downloaded on that answer. The scan flags such a listing
 (test_library_listing_truncation.py), and here the bridge turns a MISS for an
 artist the index has never seen into a direct lookup by folder name, then
 republishes a NEW index object so every pill re-asks and every memo resets.
@@ -36,8 +34,8 @@ from support.library_fakes import (
     make_library_bridge as _make,
 )
 
-from waves.waves_ui import bridge_library
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop import bridge_library
+from waves.desktop.backend import WavesBridge
 
 for _m in (
     "_library_probe_candidates",
@@ -273,17 +271,19 @@ def _wide_library(tmp_path, monkeypatch, hidden=("C", "D", "E")):
 
 
 def test_a_page_of_misses_is_one_probe_and_every_artist_resolves(tmp_path, monkeypatch):
-    """THE SEARCH PAGE BUG. Every badge on a page misses at once. Asking one
-    name per worker meant all but one bounced off the cache lock, answered
-    nothing and were never retried, so a search showed no library marks while
-    the artist page (one name, one uncontended probe) showed them all."""
+    """A page of misses is one probe and every artist resolves.
+
+    Every badge on a page misses at once. Asking one name per worker makes all
+    but one bounce off the cache lock, answer nothing and never retry, so a
+    search shows no library marks while the artist page (one name, one
+    uncontended probe) shows them all."""
     s = _wide_library(tmp_path, monkeypatch)
     calls = _count_probes(s)
     for artist in ("C", "D", "E"):
         assert not s.artistLibraryPresence(artist)["present"]
     # Every name reached the disk: none was dropped for losing a race.
     assert sorted(name for call in calls for name in call) == ["C", "D", "E"]
-    # ...and every one of them now answers, which is what a search page shows.
+    # ...and every one of them answers, which is what a search page shows.
     for artist in ("C", "D", "E"):
         assert s.artistLibraryPresence(artist)["present"], artist
 

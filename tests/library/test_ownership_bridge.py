@@ -1,7 +1,7 @@
 """Tests for the ownership recording wiring in the bridge (backend.py).
 
 These import WavesBridge, so they collect only in the full runtime venv (PySide6
-present), like tests/ui/test_audit_backend.py. Two layers are covered:
+present), like tests/ui/test_bridge_queue_and_cache_guards.py. Two layers are covered:
 
   * the GUI-thread record sink (_track_lifecycle -> _record_ownership -> store)
     plus the ownershipOf query, exercised through a Qt-free _Stub that binds the
@@ -18,9 +18,9 @@ import os
 from threading import Event, Lock, local
 from types import SimpleNamespace
 
-import waves.waves_ui.backend as backend
-from waves.ownership import OwnershipStore
-from waves.waves_ui.backend import WavesBridge, _stream_quality
+import waves.desktop.backend as backend
+from waves.desktop.backend import WavesBridge, _stream_quality
+from waves.library.ownership import OwnershipStore
 
 
 class _Signal:
@@ -73,7 +73,7 @@ class _BridgeStub:
         self._base_ok = ("", 0.0)
         # The page's object cache: ownershipOf reads the track out of it (when
         # a page holds one) to cap the target at the release's ceiling exactly
-        # as the download gate does (issue #40). Empty unless a test fills it.
+        # as the download gate does. Empty unless a test fills it.
         self._objs: dict = {"track": {}}
         # _track_lifecycle also rolls the per-track registry up onto the job's
         # queue row (so a collapsed row can state its delivered tier). These
@@ -108,12 +108,12 @@ class _BridgeStub:
             "_announce_ownership",
             "_own_announce_flush",
             "_target_quality_rank",
-            # The per-item quality choice's rank (issue #36): none on this
-            # carcass, so up_to_date is judged against the setting.
+            # The per-item quality choice's rank: none on this carcass, so
+            # up_to_date is judged against the setting.
             "_override_target_rank",
             "_quality_override_key",
             "collectionMemberIds",
-            # The quality menu's IN LIBRARY mark (issue #36).
+            # The quality menu's IN LIBRARY mark.
             "ownedTierOf",
         ):
             setattr(self, name, getattr(WavesBridge, name).__get__(self, _BridgeStub))
@@ -219,7 +219,7 @@ def test_get_track_stream_info_no_stream_captures_nothing(monkeypatch):
 def test_get_track_stream_info_forwards_the_jobs_request(monkeypatch):
     """The override is the resolver the seam calls back, so the job's request
     (tier and Version) must reach the engine's fetch unchanged: that carry is
-    what makes a per-click ask independent of the saved defaults (R-13)."""
+    what makes a per-click ask independent of the saved defaults."""
     seen: list[tuple] = []
 
     def _engine_fetch(self, media, tier=None, audio_type=None):
@@ -525,12 +525,12 @@ def _catalog_track(tags, modes=("STEREO",)):
 
 
 def test_the_button_settles_at_the_release_ceiling_like_the_gate(tmp_path):
-    """Issue #40: a mixed playlist under a Max setting. The 16-bit tracks were
-    on disk from an earlier run, recorded before their run stamped a ceiling.
-    The download gate holds the track and skipped each one as the best that
-    exists, so a playlist run fetched nothing for them and a click on the row
-    finished in a millisecond, while this ceiling-blind answer kept offering an
-    upgrade: DOWNLOAD TRACK on every one of them, forever."""
+    """A mixed playlist under a Max setting. The 16-bit tracks were on disk
+    from an earlier run, recorded before their run stamped a ceiling. The
+    download gate holds the track and skips each one as the best that exists,
+    so a playlist run fetches nothing for them and a click on the row finishes
+    in a millisecond — but a ceiling-blind answer keeps offering an upgrade:
+    DOWNLOAD TRACK on every one of them, forever."""
     stub = _BridgeStub(tmp_path, tidal_quality_audio="HI_RES_LOSSLESS")
     f = _make_file(tmp_path)
     stub._ownership.record("42", str(f), "LOSSLESS")  # no requested or ceiling rank stamped
@@ -659,11 +659,11 @@ def test_collection_member_ids_unknown_collection_is_none(tmp_path):
 
 
 # ---- first answers are announced in batches ------------------------------------
-# A cold query's first answer used to emit ownershipChanged(tid) per id from the
-# pool; at launch that was ~1500 signals in two seconds, each running every
-# listening card's handler (see ownershipChangedBatch in backend.py). Now the
-# pool queues the id and arms ONE GUI-thread flush, which emits every queued id
-# as a single ",id1,id2,...," batch.
+# A cold query's first answer must not emit ownershipChanged(tid) per id from
+# the pool: at launch that is ~1500 signals in two seconds, each running every
+# listening card's handler (see ownershipChangedBatch in backend.py). The pool
+# queues the id and arms ONE GUI-thread flush, which emits every queued id as a
+# single ",id1,id2,...," batch.
 
 
 def test_first_answers_queue_for_one_batch_and_arm_the_flush_once(tmp_path):
@@ -776,9 +776,9 @@ def test_owned_tier_of_never_stats_on_the_calling_thread(tmp_path, monkeypatch):
 
 
 def test_owned_answer_names_its_folder_and_library_placement(tmp_path):
-    """Issue #38: the done face words itself by where THIS copy lives, and the
-    redownload gate names the folder. Without the library mixin (this stub)
-    the answer still lands, just never inside a library."""
+    """The done face words itself by where THIS copy lives, and the redownload
+    gate names the folder. Without the library mixin (this stub) the answer
+    still lands, just never inside a library."""
     stub = _BridgeStub(tmp_path)
     f = tmp_path / "old" / "A" / "01.flac"
     f.parent.mkdir(parents=True)
@@ -805,7 +805,7 @@ def _scoped_stub(tmp_path, library_root=""):
 
 
 def test_the_bridge_looks_only_in_the_download_and_library_folders(tmp_path):
-    """Issue #38: a copy left in an earlier download folder is not owned."""
+    """A copy left in an earlier download folder is not owned."""
     stub = _scoped_stub(tmp_path, library_root=str(tmp_path / "library"))
     assert stub._ownership_roots() == [str(tmp_path / "downloads"), str(tmp_path / "library")]
     for tid, folder in (("1", "old"), ("2", "downloads"), ("3", "library")):

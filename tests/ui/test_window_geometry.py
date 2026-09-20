@@ -1,4 +1,4 @@
-"""Tests for window-geometry persistence in the bridge (issue #6).
+"""Tests for window-geometry persistence in the bridge.
 
 Two layers are covered:
 
@@ -24,8 +24,8 @@ import types
 import pytest
 from conftest import _InlineWriter
 
-import waves.waves_ui.backend as backend
-from waves.waves_ui.backend import WavesBridge, _fit_frame
+import waves.desktop.backend as backend
+from waves.desktop.backend import WavesBridge, _fit_frame
 
 
 # The suite itself runs offscreen, so the headless-save guard would turn every
@@ -183,7 +183,7 @@ def test_geometry_is_stored_as_ints_not_strings(tmp_path):
 
 
 def test_maximized_state_persists(tmp_path):
-    """The maximized flag round-trips (issue #6 calls this out explicitly)."""
+    """The maximized flag round-trips."""
     _PrefsStub(tmp_path).windowSaveGeometry(0, 0, 1400, 900, True)
 
     assert _PrefsStub(tmp_path).windowRestoreGeometry()["maximized"] is True
@@ -247,7 +247,7 @@ def test_corrupt_saved_size_falls_back_to_empty(tmp_path):
 
 
 def test_restore_clamps_offscreen_frame_onto_a_live_screen(tmp_path):
-    """The core issue-#6 guarantee, exercised through the FULL restore path: a
+    """The off-screen clamp guarantee, exercised through the FULL restore path: a
     frame saved off every current screen (a monitor now gone) must come back
     on-screen. This runs windowRestoreGeometry -> _fit_geometry_to_screens (the
     clamp), so dropping that call in a refactor fails here even though the frame

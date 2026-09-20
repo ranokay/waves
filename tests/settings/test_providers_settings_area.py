@@ -1,19 +1,19 @@
-"""Issue #25: the two-axis Providers area and the Apple Music section shell.
+"""The two-axis Providers area and the Apple Music section shell.
 
 WHAT THIS FENCES OFF
 --------------------
-Settings gains a Providers area: a TIDAL section (its session and its quality
+Settings carries a Providers area: a TIDAL section (its session and its quality
 default) and an Apple Music section that is always visible behind an enable
 switch (default off) with a status light and setup-wizard + runtime-manage
-actions (issue #31 ships them live: Setup wizard, Update runtime,
+actions (Setup wizard, Update runtime,
 Remove runtime).
-The quality split itself (``tidal_quality_audio`` / ``apple_quality_audio``)
-and its migration landed with issue #24; this issue gives the split fields
-their sections: TIDAL's quality moves out of Downloads into the TIDAL
-section, ``apple_quality_audio`` renders in the Apple section for the first
-time, and the shared sections' help text says it governs both providers.
+The quality split (``tidal_quality_audio`` / ``apple_quality_audio``)
+gives the split fields
+their sections: TIDAL's quality lives in the TIDAL
+section, ``apple_quality_audio`` renders in the Apple section, and the shared
+sections' help text says it governs both providers.
 
-Issue #60 nests the two sections as cards inside ONE Providers section
+The two sections are cards inside ONE Providers section
 (each with its logo header and its fields); the field contents pinned below
 are unchanged, only the path to reach them gained a level.
 
@@ -34,9 +34,9 @@ from support.settings_fakes import (
 )
 from support.settings_fakes import schema_stub as _schema_stub
 
+from waves.desktop.backend import WavesBridge, _apple_status
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as ModelSettings
-from waves.waves_ui.backend import WavesBridge, _apple_status
 
 
 def _bind(stub, name):
@@ -57,7 +57,7 @@ def _keys(section):
 
 
 def _providers(sections=None):
-    """The provider cards nested in the one Providers section (issue #60),
+    """The provider cards nested in the one Providers section,
     keyed by card id."""
     sections = sections if sections is not None else _schema()
     providers = next(s for s in sections.values() if s["id"] == "providers")["providers"]
@@ -137,7 +137,7 @@ def test_the_apple_card_holds_the_switch_row_and_the_quality():
     assert status["enabled_key"] == "apple_enabled"
     assert "apple_enabled" not in apple
     # The status light sits at its not-set-up vocabulary, with the setup
-    # wizard + runtime-manage actions behind it (issue #31 ships them live).
+    # wizard + runtime-manage actions behind it.
     assert status["actions"] == APPLE_SETUP_PILLS
     # The in-place wizard card follows the status row: bridge-computed, not
     # a pref, rendered from the live setup mirror.
@@ -305,7 +305,7 @@ def _apply(stub, values):
 
 
 def test_saving_an_overlapping_quarantine_folder_warns_with_the_used_path(tmp_path):
-    """Issue #238 / LM-07: the resolver refuses a quarantine folder that
+    """The resolver refuses a quarantine folder that
     overlaps the download root, so the save says so instead of leaving the
     stored value and the folder really used silently different."""
     stub = _apply_stub()
@@ -337,7 +337,7 @@ def test_saving_an_overlapping_quarantine_folder_warns_with_the_used_path(tmp_pa
 
 def test_the_quarantine_card_names_the_folder_really_in_use(tmp_path):
     """The stored value stays visible, and the card's help says which folder
-    is used instead when the resolver overrides it (issue #238 / LM-07)."""
+    is used instead when the resolver overrides it."""
     stub = _schema_stub(apple_enabled=True)
     stub.settings = SimpleNamespace(data=ModelSettings())
     stub.settings.data.download_base_path = str(tmp_path / "lib")
@@ -469,7 +469,7 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     # holds a value.
     assert "onAppleStatusChanged" in qml
     assert '"apple_status"' in qml
-    # The in-place wizard card (issue #31) renders the live setup mirror and
+    # The in-place wizard card renders the live setup mirror and
     # calls back the named step actions.
     assert '"apple_setup"' in qml
     assert "appleSetupLive" in qml
@@ -480,7 +480,7 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     # The schema snapshots TIDAL's session, so login/logout must rebuild it.
     assert "onLoggedInChanged" in qml
     # The Apple switch is reachable without a pointer while its row is on
-    # screen, and drops out of the tab order with the page (issue #295).
+    # screen, and drops out of the tab order with the page.
     assert "activeFocusOnTab: visible" in qml
     assert "Accessible.role: Accessible.CheckBox" in qml
     assert "Keys.onPressed" in qml
@@ -504,14 +504,14 @@ def test_enabling_and_pre_setup_clicks_deep_link_into_the_wizard():
     src = QML_DIR / "Main.qml"
     qml = src.read_text(encoding="utf-8")
     # Enabling Apple Music and tapping an Apple download before setup
-    # completes both land in Settings at the Apple section (issue #31,
-    # spec section 7.1): the affordance stays live and opens the path.
+    # completes both land in Settings at the Apple section (spec section 7.1):
+    # the affordance stays live and opens the path.
     assert "onAppleSetupRequested" in qml
     assert "openAppleSetup" in qml
     assert '"providers_apple"' in qml
 
 
-# ---- issue #60: one Providers section, one card per provider -----------------
+# ---- one Providers section, one card per provider -----------------------------
 
 
 def test_provider_cards_hold_only_field_kinds_the_band_renders():
@@ -556,7 +556,7 @@ def test_the_page_renders_provider_bands_with_logos_and_deep_links():
     # One band per provider entry, each headed by the logo its descriptor
     # carries and its name, fields through the shared renderers. The page
     # holds no per-provider switch: a new provider's descriptor travels the
-    # same path (issue #214).
+    # same path.
     assert "card.modelData.providers" in qml
     assert "modelData.logo" in qml
     assert "modelData.logo_width" in qml
@@ -576,7 +576,7 @@ def test_the_page_renders_provider_bands_with_logos_and_deep_links():
     assert 'cardId === "providers_apple"' in qml
 
 
-# ---- the descriptor contract (issue #214) ----------------------------------------
+# ---- the descriptor contract ------------------------------------------------------
 
 
 def test_both_providers_expose_a_descriptor_with_their_card_identity():
@@ -671,7 +671,7 @@ def test_provider_action_dispatches_by_descriptor_key():
     stub.providerAction("newco", "newco_signin")
     stub.providerAction("newco", "newco_signout")
     stub.providerAction("newco", "newco_unknown_verb")
-    # No hidden browser flow: sign-in only requests the surface (issue #218).
+    # No hidden browser flow: sign-in only requests the surface.
     assert calls == ["signin:newco", "logout"]
 
 

@@ -1,21 +1,21 @@
-"""Version-aware skip and ownership (issue #231, audit R-12 / TS-02, AP-04).
+"""Version-aware skip and ownership.
 
 WHAT THIS FENCES OFF
 --------------------
 A dual download keeps one file per Version, and a blank ``format_atmos``
 aims both rows at one name (spec §5.4: collisions fall to the numbered-copy
-machinery). The pre-stream skip was id-only, so the second row saw the first
-row's file, judged it "already downloaded", fetched nothing and recorded no
-ownership: the Atmos half silently vanished.
+machinery). An id-only pre-stream skip lets the second row see the first
+row's file, judge it "already downloaded", fetch nothing and record no
+ownership: the Atmos half silently vanishes.
 
-The fix makes every occupant gate Version-aware (the same on-disk question
-the replace gate already asked): the pre-stream and post-stream skips
+Every occupant gate must ask the same Version-aware on-disk question the
+replace gate asks: the pre-stream and post-stream skips
 (``_existing_same_item_at(..., version=...)``), the "has this fetch already
-landed here" checks (``_already_landed_here``, whose id-only disk arm used
-to discard the fetched Atmos bytes), the symlink-target and playlist-move
-gates, and the Apple runner's own two skips. An untagged/unreadable
-occupant and an unpinned job keep the historical skip -- neither is
-evidence of a DIFFERENT Version.
+landed here" checks (``_already_landed_here``, whose id-only disk arm
+discards the fetched Atmos bytes), the symlink-target and playlist-move
+gates, and the Apple runner's own two skips. An untagged/unreadable occupant
+and an unpinned job keep the skip -- neither is evidence of a DIFFERENT
+Version.
 
 Coverage: this module drives the gates and one full
 ``_perform_actual_download`` run (the blank template's numbered copy);
@@ -70,7 +70,7 @@ def _occupant(tmp_path: pathlib.Path, name: str = "Song.m4a") -> pathlib.Path:
 def _modes(monkeypatch, mapping: dict):
     """Answer the Version question from a path -> "stereo"/"atmos"/None map.
 
-    The shared rule (waves.metadata.occupant_is_version) stays under test; its
+    The shared rule (waves.metadata.tags.occupant_is_version) stays under test; its
     reader is the seam (its own rules live in tests/metadata and
     tests/library/test_atmos_never_overwritten).
     """
@@ -78,7 +78,7 @@ def _modes(monkeypatch, mapping: dict):
     def probe(path_file):
         return mapping.get(pathlib.Path(path_file))
 
-    monkeypatch.setattr("waves.metadata.read_file_audio_type", probe)
+    monkeypatch.setattr("waves.metadata.tags.read_file_audio_type", probe)
 
 
 def test_a_stereo_occupant_does_not_answer_for_the_atmos_row(tmp_path, monkeypatch):
@@ -175,8 +175,8 @@ def test_the_atmos_row_lands_beside_the_stereo_file_end_to_end(tmp_path, monkeyp
     download must not stop at the stereo file the pre-stream gates let it
     through. With the blank template's one destination, the real
     _perform_actual_download must skip nothing, claim the numbered copy and
-    leave the stereo file alone. Fails on _already_landed_here's id-only disk
-    arm, which is where the fetched Atmos bytes used to be discarded."""
+    leave the stereo file alone. A failure here means _already_landed_here's
+    id-only disk arm discarded the fetched Atmos bytes."""
     from types import SimpleNamespace
 
     from waves.download import StreamInfo
@@ -184,7 +184,7 @@ def test_the_atmos_row_lands_beside_the_stereo_file_end_to_end(tmp_path, monkeyp
     occupant = tmp_path / "Song.m4a"
     occupant.write_bytes(b"stereo bytes")
     monkeypatch.setattr(
-        "waves.metadata.read_file_audio_type",
+        "waves.metadata.tags.read_file_audio_type",
         lambda path_file: "stereo" if pathlib.Path(path_file) == occupant else None,
     )
     monkeypatch.setattr(
@@ -247,7 +247,7 @@ def test_the_crossing_pin_reaches_the_engine_from_the_bridge():
     what makes the pre-stream gate Version-aware; the rung is the fetch's
     request, carried through the seam)."""
     from waves.constants import QualityTier
-    from waves.waves_ui.backend import _TrackedDownload
+    from waves.desktop.backend import _TrackedDownload
 
     dl = _TrackedDownload(
         tidal_obj=MagicMock(),

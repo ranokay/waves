@@ -7,7 +7,7 @@ from waves.model.cfg import Settings
 
 def test_new_settings_defaults_match_spec():
     data = Settings()
-    # Best quality out of the box (issue #59): sidecars on, embed opt-in.
+    # Best quality out of the box: sidecars on, embed opt-in.
     assert data.lyrics_embed is False
     assert data.lyrics_file is True
     assert data.lyrics_file_synced_only is False
@@ -20,7 +20,7 @@ def test_new_settings_defaults_match_spec():
 
 def test_word_timed_ttml_converts_to_enhanced_lrc():
     """Honest parser contract: syllable TTML converts to enhanced LRC."""
-    from waves.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
+    from waves.metadata.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
 
     syllable = """<tt xmlns:itunes="x" itunes:timing="Word"><body><div>
     <p begin="00:01.00"><span begin="00:01.00">Hi</span></p></div></body></tt>"""
@@ -203,7 +203,7 @@ def test_native_line_timed_fills_the_synced_slot(monkeypatch):
 def test_apple_standalone_lyrics_embeds_with_every_sidecar_off(tmp_path):
     from types import SimpleNamespace
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace()))
     stub.providers = {
@@ -232,7 +232,7 @@ def test_apple_standalone_lyrics_embeds_with_every_sidecar_off(tmp_path):
 def test_apple_standalone_lyrics_counts_nothing_without_a_saved_file(tmp_path):
     from types import SimpleNamespace
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     stub = SimpleNamespace(settings=SimpleNamespace(data=SimpleNamespace()))
     stub.providers = {
@@ -258,7 +258,7 @@ def test_apple_standalone_lyrics_counts_nothing_without_a_saved_file(tmp_path):
 def test_tidal_standalone_lyrics_embeds_with_every_sidecar_off(tmp_path):
     from types import SimpleNamespace
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     class _Download:
         def _retrieve_lyrics(self, track_obj):
@@ -286,7 +286,7 @@ def test_tidal_standalone_lyrics_embeds_with_every_sidecar_off(tmp_path):
 def test_tidal_standalone_lyrics_without_lyrics_is_not_served(tmp_path):
     from types import SimpleNamespace
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     class _Download:
         def _retrieve_lyrics(self, track_obj):
@@ -329,7 +329,7 @@ def _standalone_bridge(tmp_path, *, psettings, lyrics=None, lyrics_error=False):
 
     from conftest import _InlinePool
 
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     folder = tmp_path / "Artist"
     folder.mkdir(parents=True, exist_ok=True)

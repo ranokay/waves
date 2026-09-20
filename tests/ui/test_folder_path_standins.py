@@ -4,10 +4,10 @@
 survive, and the formatter deletes them), so it was the one library-bound name
 that never saw the illegal-character stand-ins. A folder called "?" therefore
 lost its level entirely and a folder called "Chill: Night" ignored the " · "
-the user chose for ":", while an album with the same name kept both (issue #16).
+the user chose for ":", while an album with the same name keeps both.
 """
 
-from waves.helper.folders import apply_folder_path, sanitize_folder_path
+from waves.providers.tidal_folders import apply_folder_path, sanitize_folder_path
 
 TEMPLATE = "Playlists/{folder_path}{playlist_name}"
 

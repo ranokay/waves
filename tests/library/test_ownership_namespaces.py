@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from waves.ownership import OwnershipStore
+from waves.library.ownership import OwnershipStore
 
 
 def _store(tmp_path):

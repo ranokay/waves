@@ -85,8 +85,8 @@ def _scenario() -> int:
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
-    from waves.waves_ui.app import _load_mono
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.app import _load_mono
+    from waves.desktop.backend import WavesBridge
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)

@@ -9,8 +9,8 @@ the list"), which is only the same thing as a row index while the track
 list IS the page. On the landing, a track shelf sits some thousands of
 pixels down a column of twenty sections, so the aim landed far past the
 end of a five-row shelf, no row ever became active, and the whole shelf
-rendered as empty row cards under its heading (reported from livetesting:
-"entirely blank sections on browse", "Recommended new tracks").
+rendered as empty row cards under its heading ("entirely blank sections on
+browse", "Recommended new tracks").
 
 HOW THIS STAYS FIXED
 --------------------
@@ -94,8 +94,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -146,8 +146,8 @@ def _run_scenario() -> int:
 
     # Every track-row shell, with where it sits in the column and whether it
     # built. JSON, not the object: a QML object comes back as an opaque
-    # QJSValue. Shells are identified by properties they had BEFORE the fix
-    # too, so this probe reads the same on either version.
+    # QJSValue. Shells are identified by properties present in both the shell
+    # and the built row, so this probe reads the same in either state.
     probe = """
     JSON.stringify((function() {
         var out = []
@@ -175,8 +175,8 @@ def _run_scenario() -> int:
         return EXIT_PRECONDITION
 
     # Scroll the buried shelf into view. This is the whole point: at the top of
-    # the landing the old aim happened to land on row 0 and the shelf built, so
-    # the bug only shows once the pane has scrolled past the shelf's own depth.
+    # the landing the aim happens to land on row 0 and the shelf builds, so the
+    # mis-aim only shows once the pane has scrolled past the shelf's own depth.
     shelf_top = min(s["y"] for s in shells)
     pane_h = float(q("browseLanding.height"))
     q(f"browseLanding.contentY = {max(0.0, shelf_top - 200)}")

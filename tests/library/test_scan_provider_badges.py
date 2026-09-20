@@ -19,11 +19,11 @@ import os
 import pytest
 from support.library_fakes import make_album_dir as _mk
 
-from waves import matching
-from waves.library_index import LibraryIndex, _default_audio_type
-from waves.ownership import OwnershipStore
-from waves.waves_ui.backend import WavesBridge
-from waves.waves_ui.bridge_library import _atmos_fragments, _atmos_parent
+from waves.desktop.backend import WavesBridge
+from waves.desktop.bridge_library import _atmos_fragments, _atmos_parent
+from waves.library.index import LibraryIndex, _default_audio_type
+from waves.library.ownership import OwnershipStore
+from waves.metadata import matching
 
 
 def _tags(**over):
@@ -42,7 +42,7 @@ def _unreadable_fixture_files_have_no_ids(monkeypatch):
     would retry forever. The real reader's own rules live in
     tests/library/test_library_item_id_scan.py and tests/metadata.
     """
-    monkeypatch.setattr("waves.library_index._default_item_id", lambda path: "")
+    monkeypatch.setattr("waves.library.index._default_item_id", lambda path: "")
 
 
 def _index(tmp_path, tagmap, audiomap=None):
@@ -154,16 +154,16 @@ def test_all_atmos_folder_promotes_everything_and_reports_no_too(tmp_path):
 
 
 def test_presence_facts_carry_atmos_presence_through_the_sql_path(tmp_path):
-    """Issue #237 / LM-06: the SQL presence path answers the Atmos fact too.
+    """The SQL presence path answers the Atmos fact too.
 
     ``decide_presence`` reads ``best["has_atmos"]`` for the ATMOS TOO badge;
-    the dict presence build carried it, the sqlite fact columns did not, so
-    the fact's availability rested on an invariant no code enforced. Every
-    presence fact now carries it, and the bridge really picks the SQL pair
-    when the cache holds no Atmos rows (its documented gate)."""
+    the dict presence build carries it and the sqlite fact columns must too, or
+    the badge's availability rests on an invariant no code enforces. Every
+    presence fact carries it, and the bridge picks the SQL pair when the cache
+    holds no Atmos rows (its documented gate)."""
     from types import SimpleNamespace
 
-    from waves.waves_ui.bridge_library import SqlPresenceIndex
+    from waves.desktop.bridge_library import SqlPresenceIndex
 
     def _sql_pair(lib):
         stub = SimpleNamespace()
@@ -449,7 +449,7 @@ def test_dropped_placeholder_level_folds_to_the_album(tmp_path):
 def test_sanitized_fragment_spellings_fold(monkeypatch):
     """The download pipeline rewrites what the platform rejects: the fold
     knows the on-disk spelling too."""
-    import waves.waves_ui.bridge_library as bridge
+    import waves.desktop.bridge_library as bridge
 
     monkeypatch.setattr(bridge, "sanitize_filename", lambda name, **kw: str(name).replace("?", "_"))
     frags = _atmos_fragments("Atmos?")
@@ -609,7 +609,7 @@ def test_tag_answers_before_the_container_shape(monkeypatch):
     """Recognition never depends on codec sniffing (§8.1): the tag is read
     first on every extension, exactly like the download gate. A FLAC can
     never hold Atmos by codec, but a file Waves tagged still answers tag."""
-    import waves.metadata as metadata
+    from waves.metadata import tags as metadata
 
     monkeypatch.setattr(metadata, "read_audio_type", lambda path: "atmos")
     assert _default_audio_type("/nonexistent/song.flac") == "atmos"
@@ -619,8 +619,8 @@ def test_tag_answers_before_the_container_shape(monkeypatch):
 
 def test_maybe_proof_and_arbiter_inputs_unchanged(tmp_path):
     # The verdict still carries both axes and the runtime witness MAYBE-proof
-    # and the MusicBrainz arbiter read: this change adds has_atmos alongside,
-    # never instead.
+    # and the MusicBrainz arbiter read: has_atmos rides alongside them, never
+    # instead.
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/Artist/Album", ["01.flac", "02.flac"])
     idx = _index(tmp_path, {d: dict(_tags(), length=200)})
@@ -771,7 +771,7 @@ def test_unknown_first_file_yields_to_classified_stereo(tmp_path):
     album = next(idx.iter_albums())
     assert album["title"] == "Album"
     # The stray dissents and loses to the overwhelming majority (a zero
-    # count was the bug: the unknown row set the question).
+    # count would let the unknown row set the question).
     assert album["tracks"] == 2
 
 

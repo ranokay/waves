@@ -1,4 +1,4 @@
-"""Issue #220: every empty state a provider could fill offers the one click.
+"""Every empty state a provider could fill offers the one click.
 
 WHAT THIS FENCES OFF
 --------------------
@@ -271,7 +271,7 @@ def _run_tidal_cta_scenario() -> int:
     if bool(q("root.signedIn")):
         return 78  # the scenario needs a signed-out profile
 
-    # The rename (issue #221): the nav tab reads My Music.
+    # The nav tab reads My Music.
     if not q(_visible_text("headerRow", "My Music")):
         failures.append("the nav tab does not read My Music")
 

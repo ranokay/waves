@@ -2,15 +2,16 @@
 
 WHAT THIS FENCES OFF
 --------------------
-Before a file lands, the drawer used to state the tier the SETTING asked for,
-per row and per track. TIDAL advertises every track's and release's ceiling
-(``media_metadata_tags`` / ``audio_quality``, read by ``_quality_label``, the
-same source as the quality pills on search results), so a lossless-only album
-queued under a HI-RES setting was promising HI-RES that its first delivery
-contradicted, and a playlist mixing hi-res and lossless-only tracks read
-HI-RES down the whole column until each track "changed" to LOSSLESS.
+The drawer states the tier the catalog's ceiling allows, per row and per
+track, not the tier the SETTING asked for. TIDAL advertises every track's and
+release's ceiling (``media_metadata_tags`` / ``audio_quality``, read by
+``_quality_label``, the same source as the quality pills on search results),
+so stating the setting's ask would promise a lossless-only album queued under
+a HI-RES setting a HI-RES first delivery it cannot make, and a playlist
+mixing hi-res and lossless-only tracks would read HI-RES down the whole column
+until each track "changed" to LOSSLESS.
 
-Now:
+The behavior:
 
 * every queue row carries ``expected`` (the release's advertised ceiling) and
   every ledger track carries its own, from the fetched list, the merge seed,
@@ -58,7 +59,7 @@ class _Stub:
     """Just enough bridge for the registry."""
 
     def __init__(self, target="HI-RES"):
-        from waves.waves_ui import backend
+        from waves.desktop import backend
 
         self._job_tracks = {}
         # The ledger merge also overlays an expansion's predicted skips
@@ -88,7 +89,7 @@ class _Stub:
 def test_a_setting_change_leaves_every_queued_row_alone():
     """The bridge has no retarget at all any more: a queued row's request is
     what it was queued at, and applySettings must not reach into the queue."""
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     assert not hasattr(backend.WavesBridge, "_retarget_unfinished_rows")
     src = inspect.getsource(backend.WavesBridge.applySettings)
@@ -115,7 +116,7 @@ def test_running_event_seeds_the_track_ceiling_and_a_later_one_keeps_it():
 
 
 def test_merge_carries_the_ceiling_from_the_fetch_and_from_the_registry():
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     class _B(_Stub):
         def __init__(self):
@@ -139,7 +140,7 @@ def test_merge_carries_the_ceiling_from_the_fetch_and_from_the_registry():
 
 
 def test_merge_seed_and_load_queue_tracks_read_the_catalog_ceiling(monkeypatch):
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     monkeypatch.setattr(backend, "_quality_label", lambda o, _p=None: getattr(o, "adv", ""))
     monkeypatch.setattr(backend, "name_builder_title", lambda t: getattr(t, "name", ""))
@@ -176,8 +177,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -201,7 +202,7 @@ def _run_scenario() -> int:
             raise RuntimeError(e.error().toString())
         return r[0] if isinstance(r, tuple) else r
 
-    # The queue ListView lives inside QueueDrawer.qml (#315 slice 4):
+    # The queue ListView lives inside QueueDrawer.qml:
     # evaluate expressions naming its ids in that file's own scope.
     qd = scoped_q(q, "queueDrawer.background")
 

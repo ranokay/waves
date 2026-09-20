@@ -6,8 +6,8 @@ context property has no such member, and the call throws a TypeError at the
 moment the user triggers it. Nothing catches that at import time, and a unit
 test that binds the unbound function onto a plain stub (which is how the
 bridge tests are written, see tests/conftest.py) passes either way, so a whole
-feature can ship inert with a green suite. That happened: prefetchArtist
-shipped without its decorator and every artist-card hover threw.
+feature can be inert with a green suite: the throw happens only when the user
+triggers the call.
 
 This is the gate for it. It reads the QML, collects every ``waves.NAME``
 reference, and asserts each one is a real member of the bridge's meta object.
@@ -19,7 +19,7 @@ import re
 
 from support.paths import QML_DIR
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 _REFERENCE = re.compile(r"\bwaves\.([A-Za-z_]\w*)")
 

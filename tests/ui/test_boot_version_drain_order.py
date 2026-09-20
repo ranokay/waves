@@ -7,9 +7,8 @@ The handover is read as one gesture: the version readout under the wordmark
 empties out (a bar fills, dims, then clears its cells), and only then does
 the wordmark zoom toward the viewer. The wait between them was a fixed
 700ms while the drain is a per-cell walk whose length follows the version
-string ("v0.1.11" takes 792ms), so the last cells were still emptying after
-the zoom had begun and the two beats were seen overlapping (reported from
-livetesting).
+string ("v0.1.11" takes 792ms): a fixed wait lets the last cells keep
+emptying after the zoom has begun, and the two beats read as overlapping.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -64,8 +63,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

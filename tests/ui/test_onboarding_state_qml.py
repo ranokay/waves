@@ -1,4 +1,4 @@
-"""#215/#218: first-run welcome, the inline TIDAL sign-in, Skip, the chip.
+"""First-run welcome, the inline TIDAL sign-in, Skip, the chip.
 
 WHAT THIS FENCES OFF
 --------------------
@@ -9,7 +9,7 @@ Settings -> Providers -> "Set up providers"; the legacy picker bit seeds the
 new answer exactly once and is cleared; and a second boot from the same
 store shows no welcome.
 
-The TIDAL path is inline on the same surface (issue #218): choosing it does
+The TIDAL path is inline on the same surface: choosing it does
 not answer the welcome and does not open a browser; Cancel and Escape both
 return to the provider cards with nothing kept; and a completed sign-in
 closes the surface, answers the first run and lands on Search with the
@@ -235,14 +235,14 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     # actions are rendered by the same generic delegate.
     if q(_text_point("providerPicker", "CONTINUE WITH TIDAL")) in ("", None):
         failures.append("the TIDAL card did not render from its descriptor")
-    # The Apple card's action is its descriptor's own words (issue #219): a
+    # The Apple card's action is its descriptor's own words: a
     # one-time setup, never a sign-in.
     if q(_text_point("providerPicker", "SET UP APPLE MUSIC")) in ("", None):
         failures.append("the Apple Music card did not render from its descriptor")
 
     # The TIDAL path: choosing it never answers the welcome, no browser opens
     # without the explicit click, and CANCEL returns to the cards with nothing
-    # kept (issue #218).
+    # kept.
     if not click(_text_point("providerPicker", "CONTINUE WITH TIDAL"), "root.setupMode === 'tidal'"):
         failures.append("the TIDAL card did not open the inline sign-in steps")
     else:
@@ -263,7 +263,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
         if q("setupSettings.firstRunAnswered"):
             failures.append("CANCEL answered the first run")
         # A URL that lands after CANCEL must not open a browser or latch the
-        # paste field (issue #218, review finding).
+        # paste field.
         q('waves.loginUrlReady("https://tidal.test/authorize")')
         settle(200)
         if q("root.setupUrlOpened"):
@@ -366,7 +366,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     # Finally the welcome -> TIDAL -> success journey, from the first-run
     # surface: the explicit OPEN BROWSER LOGIN, the paste and COMPLETE
     # SIGN-IN, then the surface closes itself and the app lands on Search
-    # with the field focused (issue #218's acceptance). The account service
+    # with the field focused. The account service
     # is faked at the provider boundary, as in the account journey.
     bridge._set_logged_in(False)
     q("setupSettings.firstRunAnswered = false")

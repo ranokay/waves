@@ -18,9 +18,9 @@ category, permanently.
 
 from __future__ import annotations
 
+from waves.desktop.backend import _FLAG_FIELDS, WavesBridge
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as CfgSettings
-from waves.waves_ui.backend import _FLAG_FIELDS, WavesBridge
 
 _KEY = "confirm_category_download"
 
@@ -83,8 +83,8 @@ def test_reset_all_settings_restores_it():
 
 
 def test_toggling_it_notifies_the_tile():
-    """The tile reads confirmCategoryDl, a notifying property. Only the dialog
-    used to change the flag (and emitted for itself); a settings write with no
+    """The tile reads confirmCategoryDl, a notifying property. The dialog
+    changes the flag itself; a settings write with no
     emit would not reach the tile until a relaunch."""
     import inspect
 

@@ -1,21 +1,21 @@
-"""Regression guard: user content that is logged must be marked as content.
+"""User content that is logged must be marked as content.
 
-THE BUG
--------
-``diagnostics.content()`` and the whole ``«…»`` content tier existed, were
-tested in isolation, and were promised in the README and in the in-app help
-("Also hide titles and searches"), but had **zero production call sites**. With
-nothing marked, ``_CONTENT_RE`` matched nothing, ``scrub_content`` was an
-identity function on every real line, and an export taken with
-``redact_content=True`` shipped the user's raw search terms and media names
-under a header reading ``content_redacted=True``.
+WHAT THIS FENCES OFF
+--------------------
+``redaction.content()`` and the whole ``«…»`` content tier exist, are tested
+in isolation, and are promised in the README and in the in-app help ("Also
+hide titles and searches"). With no production call sites, nothing is marked,
+``_CONTENT_RE`` matches nothing, ``scrub_content`` is an identity function on
+every real line, and an export taken with ``redact_content=True`` ships the
+user's raw search terms and media names under a header reading
+``content_redacted=True``.
 
 Search terms reach disk even with verbose off: ``devlog.done`` re-emits at
 WARNING when a search exceeds its budget, and ``_CrumbDumpHandler`` replays the
 whole INFO ring at WARNING on any ERROR.
 
-THE FIX marks the search needle and the engine's media-name log lines. These
-tests fence the call sites (the thing that was missing), not the redactor
+The marking covers the search needle and the engine's media-name log lines.
+These tests fence the call sites (the part easy to lose), not the redactor
 mechanism, which ``test_diagnostics_redactor.py`` already covers.
 """
 
@@ -26,14 +26,14 @@ import inspect
 import re
 from pathlib import Path
 
-from waves.waves_ui import diagnostics
+from waves import redaction
 
 # Modules whose logging carries user-chosen text. Per the project's diagnostics
 # convention, search terms and track, album or artist names are content.
-_MARKED_CALL = re.compile(r"(?:diagnostics\.content|log_content)\(")
+_MARKED_CALL = re.compile(r"(?:redaction\.content|log_content)\(")
 
 
-_MARKERS = {"log_content", "diagnostics.content", "content"}
+_MARKERS = {"log_content", "redaction.content", "content"}
 
 
 def _source_of(func) -> str:
@@ -73,7 +73,7 @@ def test_content_has_production_call_sites():
     """The whole content tier is dead code without callers. This is the guard
     that failed silently before: zero call sites tree-wide."""
     from waves import download
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     for module in (backend, download):
         source = inspect.getsource(module)
@@ -85,7 +85,7 @@ def test_content_has_production_call_sites():
 
 def test_the_search_needle_is_marked_wherever_it_is_logged():
     """Both search log lines carry the raw needle. Neither may pass it bare."""
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     source = inspect.getsource(backend.WavesBridge.search)
     logged_needles = [line for line in source.splitlines() if "needle=" in line]
@@ -107,11 +107,11 @@ def test_engine_media_name_logs_are_marked():
 
 def test_no_log_line_in_the_engine_builds_a_media_name_bare():
     """The named-fragment guard above only covers the two lines it names, and
-    the wrap kept getting forgotten on new ones (the music-video tagging
-    failures shipped unwrapped). This one covers every log call that builds a
-    media name, whichever line it lands on. The handler's redactor still
-    catches identity PII, but a track or artist name is content: only the
-    marker decides whether "also hide titles and searches" can hash it.
+    the wrap is easy to forget on a new one. This one covers every log call
+    that builds a media name, whichever line it lands on. The handler's
+    redactor still catches identity PII, but a track or artist name is
+    content: only the marker decides whether "also hide titles and searches"
+    can hash it.
     """
     from waves import download
 
@@ -129,13 +129,13 @@ def test_a_logged_search_term_is_hashed_in_a_redacted_export():
     """End to end on the marker contract: a real search log line, scrubbed the
     way the export scrubs it, must not contain the needle."""
     needle = "aphex twin selected ambient"
-    line = f"search done needle={diagnostics.content(needle)} n=137 dur=2.1s"
+    line = f"search done needle={redaction.content(needle)} n=137 dur=2.1s"
 
     # Default (identity-only) pass: content stays readable, as designed.
-    assert needle in diagnostics.scrub(line)
+    assert needle in redaction.scrub(line)
 
     # The export's content pass: the needle is gone, replaced by a stable hash.
-    redacted = diagnostics.scrub(line, redact_content=True)
+    redacted = redaction.scrub(line, redact_content=True)
     assert needle not in redacted
     assert "aphex" not in redacted.lower()
     assert re.search(r"«#[0-9a-f]{8}»", redacted), redacted
@@ -160,10 +160,10 @@ def _unmarked_paths(node, marked: bool = False) -> list[str]:
 
 
 def test_no_log_line_in_the_engine_builds_a_path_bare():
-    """The move/symlink/skip/convert log lines named full destination paths
-    with no marker, so an exported bundle with "also hide titles and searches"
-    checked still showed exactly which artists, albums and tracks were
-    downloaded, and the whole library layout (gap-round finding G-03)."""
+    """The move/symlink/skip/convert log lines must mark the destination path as
+    content, or an exported bundle with "also hide titles and searches" checked
+    still reveals exactly which artists, albums and tracks were downloaded, and
+    the whole library layout."""
     from waves import download
 
     tree = ast.parse(Path(download.__file__).read_text(encoding="utf-8"))

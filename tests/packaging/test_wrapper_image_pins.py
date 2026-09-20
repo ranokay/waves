@@ -1,4 +1,4 @@
-"""The wrapper-image pipeline stays pinned to the app (issue #76).
+"""The wrapper-image pipeline stays pinned to the app.
 
 The CI workflow publishes exactly the image the app pulls: its default tag
 must equal WRAPPER_V2_IMAGE, it must build linux/arm64 from upstream source
@@ -18,7 +18,7 @@ from support.paths import REPO_ROOT
 
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "wrapper-image.yml"
 RUNBOOK = REPO_ROOT / "docs" / "wrapper-image.md"
-# SPDX templates that must never ship as a notice (issue #210).
+# SPDX templates that must never ship as a notice.
 TEMPLATE_MARKERS = ("<year>", "<owner>")
 
 
@@ -47,7 +47,7 @@ def test_workflow_defaults_publish_exactly_the_pinned_image():
     inputs = wf[True]["workflow_dispatch"]["inputs"]  # YAML reads `on:` as boolean True
     tag = inputs["image_tag"]["default"]
     # The tag must equal the app pin; the registry path defaults to the
-    # publishing owner's namespace (issue #86), so forks need no edits.
+    # publishing owner's namespace, so forks need no edits.
     assert WRAPPER_V2_IMAGE.rsplit(":", 1)[1] == tag
     assert "ghcr.io/${{ github.repository_owner }}/waves-wrapper-v2" in WORKFLOW.read_text()
     assert inputs["wrapper_ref"]["default"]
@@ -61,7 +61,7 @@ def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
     # Private hosting authenticates through an optional masked header.
     assert "secrets.APK_AUTH_HEADER" in text
     assert "push: true" in text
-    # Pins regenerate deterministically from the blessed APK (issue #82)
+    # Pins regenerate deterministically from the blessed APK
     # instead of trusting upstream's file to track it; the strict
     # extraction then proves the staged tree matches.
     assert "--ignore-hash" in text
@@ -109,15 +109,15 @@ def test_the_publish_adds_notices_and_provenance_labels():
     assert copied == {f"tools/wrapper-image/{name}" for name in notices}
     # Every source the stage copies must exist AND be tracked: a notice the
     # workflow names but git does not carry fails the publish in this step,
-    # before the build (issue #208), and an untracked file in one working tree
+    # before the build, and an untracked file in one working tree
     # is exactly how that hid from the previous check.
     tracked = _tracked_wrapper_files()
     for src in copied:
         path = REPO_ROOT / src
         assert path.is_file(), f"the publish copies {src}, which is not on disk"
         assert src in tracked, f"the publish copies {src}, which git does not track"
-        # The text must be a real license, not an SPDX template: #210 shipped
-        # `Copyright (c) <year> <owner>` for a while because nothing read it.
+        # The text must be a real license, not an SPDX template, which once
+        # shipped `Copyright (c) <year> <owner>` because nothing read it.
         text = path.read_text()
         assert not any(marker in text for marker in TEMPLATE_MARKERS), f"{src} is still a license template"
     assert "COPY notices/NOTICE /licenses/NOTICE" in run

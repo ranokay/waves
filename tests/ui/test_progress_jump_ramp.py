@@ -5,9 +5,8 @@ WHAT THIS FENCES OFF
 --------------------
 Start (or resume) an album or playlist that is already partly saved: the
 owned tracks are skipped in one burst and the engine's progress leaps, say,
-0 to 40 in a beat. The Browse card's pill and the small icon button used to
-snap straight to that point (livetest report, 2026-08-17). The user asked for
-the bar to fill up to it quickly and then carry on as normal.
+0 to 40 in a beat. The Browse card's pill and the small icon button must fill
+up to that point quickly and then carry on as normal, not snap straight to it.
 
 The ramp lives in the one place every download control reads from: the media
 id's holder (root.dlHolder). ``pct`` is what the engine says; ``shownPct`` is
@@ -17,18 +16,17 @@ most. An ordinary tick (a fraction of a point) still lands at once, so a bar
 that is merely downloading is unchanged; a fall (a new run resetting the
 holder) and the first reading snap; hover motion off snaps everything.
 
-The first cut at this rode OutCubic over 8ms a point and was livetested as
-still "basically all fill at once": OutCubic spends half its travel in the
-first fifth of the duration, so the blocks it lights arrive in a burst
-whatever the total. The bar's blocks light in fill order, so an even cadence
-is the whole point, and linear is what gives it one.
+OutCubic over 8ms a point reads as "basically all fill at once": OutCubic
+spends half its travel in the first fifth of the duration, so the blocks it
+lights arrive in a burst whatever the total. The bar's blocks light in fill
+order, so an even cadence is the whole point, and linear is what gives it one.
 
 HOW THIS STAYS FIXED
 --------------------
 The real Main.qml is booted offscreen and a holder is driven straight: a
 small step reads through at once; a 0 -> 40 leap reads strictly between the
-two 200ms in, is still short of half way at that point (the burst the
-livetest caught would be past it), and reads exactly 40 once landed; a
+two 200ms in, is still short of half way at that point (the burst would be
+past it), and reads exactly 40 once landed; a
 retarget mid-ramp keeps moving to the new target without snapping; a fall
 snaps; and with hover motion off the same leap snaps.
 

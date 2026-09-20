@@ -1,4 +1,4 @@
-"""Issue #31: managed runtime + setup wizard (spec section 2, 9.2, 10).
+"""Managed runtime + setup wizard (spec section 2, 9.2, 10).
 
 WHAT THIS FENCES OFF
 --------------------
@@ -18,8 +18,8 @@ The wrapper login + 2FA itself stays human (spec ground rule 6): this
 slice ships the runtime provisioning, the cookies verification, the
 container detect/guide, the isolated config + free-port plumbing, the
 live light, the wrapper login/session plumbing and the wizard state the
-QML renders. The live wrapper session (health probe, idle stop) lands with
-session supervision (#33).
+QML renders. The live wrapper session (health probe, idle stop) is session
+supervision's.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ import pytest
 from support.paths import REPO_ROOT
 from support.settings_fakes import APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL
 
+from waves.desktop.backend import WavesBridge, _apple_status
 from waves.providers.apple.runtime import (
     APK_PINNED_VERSION,
     NM3U8DLRE_VERSION,
@@ -54,7 +55,6 @@ from waves.providers.apple.runtime import (
     wrapper_url,
 )
 from waves.providers.apple.supervision import wrapper_data_host_dir
-from waves.waves_ui.backend import WavesBridge, _apple_status
 
 
 @pytest.fixture(autouse=True)
@@ -270,6 +270,18 @@ def test_verify_cookies_accepts_signed_in_export(tmp_path):
 def test_verify_cookies_rejects_export_without_token(tmp_path):
     with pytest.raises(ValueError, match="media-user-token"):
         verify_cookies_file(_cookies_file(tmp_path, with_token=False))
+
+
+def test_verify_cookies_ignores_a_token_on_a_lookalike_domain(tmp_path):
+    """The domain field decides: a media-user-token filed under a host that
+    merely ends in "apple.com" is not an Apple session."""
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\nevilapple.com\tTRUE\t/\tTRUE\t0\tmedia-user-token\tabc123\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no signed-in Apple session"):
+        verify_cookies_file(str(path))
 
 
 def test_verify_cookies_missing_file(tmp_path):
@@ -926,7 +938,7 @@ def test_install_honours_a_preset_abort(tmp_path):
 
 
 def test_a_stale_managed_binary_reports_runtime_stale(tmp_path, monkeypatch):
-    """AP-06: an installed copy whose recorded provenance predates the shipped
+    """An installed copy whose recorded provenance predates the shipped
     pin must not read as current forever, and installing the new pin is the
     update. An unchanged pin reports current and re-downloads nothing."""
     from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
@@ -1153,7 +1165,7 @@ def test_live_flags_report_an_expired_session_and_recover(tmp_path, monkeypatch)
 
 
 def test_a_wrapper_sign_in_does_not_lift_a_cookies_marker(tmp_path, monkeypatch):
-    """AP-01's light half: the marker remembers which credential failed, so a
+    """The light's half of the rule: the marker remembers which credential failed, so a
     healthy wrapper probe cannot report a cookies-broken session healed (and
     the light keeps saying needs attention until the export is proven)."""
     from waves.providers.apple.engine import AppleCredential
@@ -1317,8 +1329,8 @@ def test_setup_state_carries_wizard_pins_and_high_port(tmp_path):
 
 
 def test_setup_state_surfaces_a_stale_managed_runtime(tmp_path, monkeypatch):
-    """The wizard read wires the stale flag through from the manager status
-    (AP-06): a managed copy whose provenance predates the shipped pin turns
+    """The wizard read wires the stale flag through from the manager status:
+    a managed copy whose provenance predates the shipped pin turns
     the runtime step to attention with the Install action, and a current one
     keeps the done step."""
     from waves.providers.apple.runtime import Nm3u8dlreRelease, _exe_name
@@ -1494,7 +1506,7 @@ def _steps(**over):
 
 
 def test_a_stale_managed_runtime_step_asks_for_an_update():
-    """AP-06's surface: the setup pass reads the stale managed copy as an
+    """The setup pass reads the stale managed copy as an
     attention step whose action is the Install that refreshes it; a current
     copy keeps the done step and Remove."""
     steps = _steps(runtime_state="managed", runtime_stale=True)
@@ -1712,7 +1724,7 @@ def test_pre_setup_download_click_routes_into_the_wizard(tmp_path):
     stub._apple_account_ready = WavesBridge._apple_account_ready.__get__(stub, SimpleNamespace)
     WavesBridge._download_apple(stub, "track", {}, None, "{artist_name}/{track_title}", False, "apple:song-1")
     # The no-account click names the cookies step: that tier (or the wrapper
-    # sign-in under it) is the missing piece the click routes to (issue #219).
+    # sign-in under it) is the missing piece the click routes to.
     assert "cookies" in seen
 
 
@@ -1824,7 +1836,7 @@ def test_wait_for_session_returns_false_on_stop(tmp_path):
 
 
 def test_a_cookies_hold_ignores_a_healthy_wrapper(tmp_path, monkeypatch):
-    """AP-01: the wrapper guest being signed in says nothing about the cookies
+    """The wrapper guest being signed in says nothing about the cookies
     a fetch needed, and reading it as recovery re-ran the identical failing
     fetch forever. The cookies hold watches the export alone, and past its
     bound it hands the row to setup with the cookies words."""
@@ -1933,7 +1945,7 @@ def test_the_landed_credential_reads_the_delivery():
 
 
 def test_an_unchanged_cookies_resave_does_not_lift_the_expiry_marker():
-    from waves.waves_ui.backend import _apple_cookies_resave_changed
+    from waves.desktop.backend import _apple_cookies_resave_changed
 
     assert _apple_cookies_resave_changed({}, "/old.txt") is False
     assert _apple_cookies_resave_changed({"apple_cookies_path": "/old.txt"}, "/old.txt") is False

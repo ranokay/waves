@@ -1,14 +1,12 @@
 """The boot-paced incubation controller can never leave incubation dead.
 
-THE FAILURE THIS FENCES OFF
----------------------------
-The first shipped _BootPacedIncubation started its pacing timer from the
-incubatingObjectCountChanged virtual, and overrode it with no parameters.
-The binding passes the new count positionally, so EVERY call raised
-TypeError, the timer never started, and, because the controller had
-replaced the window's for the whole session, no async Loader in the whole
-app could ever complete: the launch revealed a blank, dead landing
-(reported from livetesting, crash.log full of the TypeError).
+WHAT THIS FENCES OFF
+--------------------
+Starting the pacing timer from an overridden incubatingObjectCountChanged
+virtual, with no parameters, raises TypeError on EVERY call: the binding
+passes the new count positionally. The timer never starts, and because the
+controller replaces the window's for the whole session, no async Loader in
+the whole app can complete: the launch reveals a blank, dead landing.
 
 Two contracts, pinned with the method-bound stub pattern (no display):
 
@@ -22,7 +20,7 @@ Two contracts, pinned with the method-bound stub pattern (no display):
 
 from __future__ import annotations
 
-from waves.waves_ui.app import _BootPacedIncubation
+from waves.desktop.app import _BootPacedIncubation
 
 
 class _Timer:
@@ -49,9 +47,9 @@ def _stub(handback=None):
 
 def test_the_count_virtual_is_not_overridden():
     """Qt calls incubatingObjectCountChanged on every incubation start and
-    finish, and a Python override made Shiboken take the interpreter for
-    each call: one wait per card behind the launch workers, inside the frame
-    (sampled 2026-09-12). With no override the wrapper caches the miss and
+    finish, and a Python override makes Shiboken take the interpreter for
+    each call: one wait per card behind the launch workers, inside the frame.
+    With no override the wrapper caches the miss and
     never crosses again; the count is polled through count_reader instead."""
     assert "incubatingObjectCountChanged" not in _BootPacedIncubation.__dict__
 

@@ -1,22 +1,21 @@
 """An Atmos-only track downloads whatever the Atmos setting says.
 
-THE RULE (decided 2026-08-18)
------------------------------
+THE RULE
+--------
 TIDAL lists the Dolby Atmos version of a song as its own track id with no
 stereo stream behind it. "Download Dolby Atmos" means "prefer stereo where
 there is a choice"; for an Atmos-only track there is no choice, so honoring the
-setting by skipping it put a permanent hole in every discography that carried a
-spatial-only single, and a hole is worse than a song you cannot play today.
+setting by skipping it would put a permanent hole in every discography that
+carried a spatial-only single, and a hole is worse than a song you cannot play
+today.
 
 So the engine downloads it either way, through the Atmos session, because the
-normal session has nothing to offer for it. The whole exclusion apparatus that
-skip built (the pre-path bail-out, the _note_excluded hook, excluded_count,
-the "excluded" track status) is retired with it, and this file pins both
-halves: the download happens, and the apparatus is gone, so it cannot
-half-return and report albums finished over files never fetched. ("ATMOS ONLY"
-as a word is back since the Chooser, where spec 7.2 mandates it as the
-audio-type collapse label on Atmos-only tracks; the retired thing is the
-exclusion reporting, and the last test below pins exactly that boundary.)
+normal session has nothing to offer for it. The exclusion apparatus -- the
+pre-path bail-out, the _note_excluded hook, excluded_count, the "excluded"
+track status -- stays retired, so it cannot half-return and report albums
+finished over files never fetched. "ATMOS ONLY" is a live word, but only as the
+Chooser's audio-type collapse label on Atmos-only tracks (spec 7.2); the last
+test below pins exactly that boundary.
 
 WHAT IS REAL
 ------------
@@ -35,10 +34,10 @@ from types import SimpleNamespace
 from tidalapi.media import AudioMode, Quality, Track
 
 from waves.config import ATMOS_REQUEST_QUALITY
+from waves.desktop import backend
+from waves.desktop.backend import _delivers_atmos, _TrackedDownload
 from waves.download import Download
-from waves.ownership import OwnershipStore, quality_rank
-from waves.waves_ui import backend
-from waves.waves_ui.backend import _delivers_atmos, _TrackedDownload
+from waves.library.ownership import OwnershipStore, quality_rank
 
 ATMOS = AudioMode.dolby_atmos.value
 ATMOS_TIER = str(getattr(ATMOS_REQUEST_QUALITY, "value", ATMOS_REQUEST_QUALITY))
@@ -57,7 +56,7 @@ def _session_reached(media, atmos_on: bool, pin: str | None = None) -> str:
     """Drive the REAL Download._get_track_stream_info and report which session
     it reached for. Only the session and the stream are stand-ins; the branch
     under observation is the engine's own. ``pin`` is the job's Version (the
-    resolver's own argument, R-13)."""
+    resolver's own argument)."""
     reached: list[str] = []
     stream = SimpleNamespace(get_stream_manifest=lambda: SimpleNamespace(file_extension=".m4a", codecs="EAC3"))
     dl = Download.__new__(Download)
@@ -109,10 +108,10 @@ def test_the_bridge_mirror_agrees_with_the_engine_on_every_shape():
 
 
 def test_the_row_mirror_agrees_with_the_engine_on_every_pinned_shape():
-    """_wants_atmos mirrors the pinned-Version half of the engine's condition
-    (R-13): the ownership gate and the delivered snapshot rank a pinned row's
-    copy on the scale the fetch would really deliver on, so the two must agree
-    for every pin, default and mode list -- including the stereo pin on an
+    """_wants_atmos mirrors the pinned-Version half of the engine's condition:
+    the ownership gate and the delivered snapshot rank a pinned row's copy on
+    the scale the fetch would really deliver on, so the two must agree for
+    every pin, default and mode list -- including the stereo pin on an
     Atmos-only track (which item() skips, and where the engine's nothing-else
     clause would still take the Atmos session)."""
     for pin in (None, "stereo", "atmos"):
@@ -145,10 +144,9 @@ def _own(store, tmp_path, tid):
 
 def test_an_owned_atmos_only_copy_skips_at_any_target_and_either_setting(tmp_path):
     """The re-fetch would take the Atmos session (nothing else to take) and
-    deliver exactly what is already on disk, so the copy is current. This is
-    what the retired exclusion mirror used to patch in by hand for the
-    setting-off half; the mirror of the engine's own condition now answers
-    both halves."""
+    deliver exactly what is already on disk, so the copy is current. The
+    mirror of the engine's own condition answers both halves of the setting,
+    with no special case for the setting-off one."""
     store = OwnershipStore(str(tmp_path / "own.db"))
     _own(store, tmp_path, "101")
     for atmos_on in (True, False):
@@ -160,7 +158,7 @@ def test_an_owned_atmos_only_copy_skips_at_any_target_and_either_setting(tmp_pat
 
 def test_a_dual_mode_copy_still_upgrades_when_stereo_can_do_better(tmp_path):
     """The setting off + a stereo stream on offer + owned below target is a
-    real upgrade, and the new clause must not have swallowed it."""
+    real upgrade, and the nothing-else clause must not swallow it."""
     store = OwnershipStore(str(tmp_path / "own.db"))
     _own(store, tmp_path, "202")
     dl = _gate(store, target=Quality.hi_res_lossless.value, atmos_on=False)
@@ -192,11 +190,10 @@ def test_the_exclusion_apparatus_is_fully_retired():
     assert "excluded_count" not in inspect.signature(backend._collection_incomplete_reason).parameters
     assert "excluded" not in inspect.getsource(backend.WavesBridge._download_merge_plan)
     qml_dir = backend.pathlib.Path(backend.__file__).parent / "qml"
-    # The exclusion apparatus stays retired, but "ATMOS ONLY" itself is back
-    # with a new, spec-mandated meaning: the Chooser's audio-type control
-    # collapses to it on Atmos-only tracks (spec 5.1, 7.2). The Chooser lives
-    # in DownloadButton.qml (#315). Pin that it appears exactly once, as that
-    # collapse label, and nowhere else.
+    # The exclusion apparatus stays retired; "ATMOS ONLY" survives only as the
+    # Chooser's audio-type collapse label on Atmos-only tracks (spec 5.1, 7.2).
+    # The Chooser lives in DownloadButton.qml. Pin that it appears exactly
+    # once, as that label, and nowhere else.
     qml = (qml_dir / "DownloadButton.qml").read_text()
     assert "ATMOS ONLY" not in (qml_dir / "Main.qml").read_text(), (
         "ATMOS ONLY appears outside the Chooser collapse label"

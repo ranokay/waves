@@ -1,22 +1,22 @@
 """The launch library sweep runs in the scanner process, from construction.
 
-It used to be deferred until the boot reveal because its walk held this
-process's interpreter and the boot water dropped frames for it. The walk
-now runs in a child process (waves.library_worker) that shares nothing with
-the GUI thread, so the sweep starts at construction again, which is what
-the launch sequence exists to mask. Pinned: the job goes to the worker with
-the cache and root, the outcome lands on the index object, a worker that
-cannot be used hands the job back to the in-process scan, and the reveal no
-longer carries a release.
+Deferring the sweep until the boot reveal would hold this process's
+interpreter with its walk and drop frames from the boot water. The walk runs
+in a child process (waves.library.worker) that shares nothing with the GUI
+thread, so the sweep starts at construction, which is what the launch
+sequence exists to mask. Pinned: the job goes to the worker with the cache
+and root, the outcome lands on the index object, a worker that cannot be
+used hands the job back to the in-process scan, and the reveal is not what
+releases the sweep.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from waves.waves_ui import backend as backend_mod
-from waves.waves_ui.bridge_library import _IN_PROCESS, LibraryMixin
-from waves.waves_ui.library_proc import LibraryWorker, WorkerFailed
+from waves.desktop import backend as backend_mod
+from waves.desktop.bridge_library import _IN_PROCESS, LibraryMixin
+from waves.desktop.library_proc import LibraryWorker, WorkerFailed
 
 
 class _Lib:
@@ -120,7 +120,7 @@ def test_the_real_index_hands_its_file_to_the_worker(tmp_path):
     # The scanner process opens the cache by path; a bare in-memory index
     # (or a path that is not a string, as a doubled decorator once made it)
     # must keep the job in-process rather than crash the scan.
-    from waves.library_index import LibraryIndex
+    from waves.library.index import LibraryIndex
 
     lib = LibraryIndex(str(tmp_path / "cache.sqlite3"))
     try:

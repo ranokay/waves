@@ -1,11 +1,10 @@
-"""The accessibility tree of the primary controls (issue #240 / audit UI-08).
+"""The accessibility tree of the primary controls.
 
-The app's controls are custom MouseAreas over rectangles, so before this the
-tab order was whatever Qt derived from the text fields: the download button,
-the header nav, the queue button and every dialog action were invisible to a
-screen reader and unreachable without a pointer. The scenario walks the live
-tree and asserts the metadata and focus reachability that make them usable
-keyboard-only:
+The app's controls are custom MouseAreas over rectangles, so the tab order Qt
+derives from the text fields alone leaves the download button, the header nav,
+the queue button and every dialog action invisible to a screen reader and
+unreachable without a pointer. The scenario walks the live tree and asserts
+the metadata and focus reachability that make them usable keyboard-only:
 
 - each NavTab and the QUEUE button carry a role, a non-empty name and
   ``activeFocusOnTab``;
@@ -17,12 +16,12 @@ keyboard-only:
 - the search field is named;
 - the Chooser's rows are named, uniquely, as pickers/checkboxes/buttons, its
   picks and toggle reach the parked ask through the shared paths, and a closed
-  popover leaves no tab stop inside it (issue #284);
+  popover leaves no tab stop inside it;
 - a real Tab walk (QtTest key delivery) never lands on a control that is not
   on screen: thousands of controls inside closed surfaces (mostly Qt's own
   TextField/ComboBox defaults in the hidden Settings page) keep
   ``activeFocusOnTab`` flags, but Qt's chain filters on effective visibility,
-  and the walk proves it (issue #295).
+  and the walk proves it.
 
 The companion source test pins the activation handlers (Return/Enter/Space,
 Escape, Delete), which the scenario does not drive; the Tab walk below uses
@@ -47,7 +46,7 @@ _ROLE_CHECKBOX = 44
 _ROLE_RADIO = 45
 
 # The Chooser popover's own rows: every named, tab-reachable item inside it,
-# with the state a reader announces (issue #284).
+# with the state a reader announces.
 _CHOOSER_ROWS_BODY = """
     var pop = findObject(root, "chooserPopover");
     if (!pop || !pop.visible) return JSON.stringify({open: false, rows: []});
@@ -74,7 +73,7 @@ _CHOOSER_ROWS_BODY = """
     return JSON.stringify({ open: true, rows: out });
 """
 
-# One stop of a real Tab walk (issue #295): the stop's tree path (for cycle
+# One stop of a real Tab walk: the stop's tree path (for cycle
 # detection), what it is, and the effective flags Qt's chain filters on. A
 # stop inside a closed surface (the Settings page, the Chooser popover, the
 # queue drawer) is a failure, whatever its flags say.
@@ -188,7 +187,7 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     clears the search box, Delete cancels a queued row) are present."""
     # The download control, the queue drawer, the shared action button, the
     # gate action, the paste-decode controller and the nav chrome live in
-    # their own files since #315; the pins span the whole primary-control
+    # their own files; the pins span the whole primary-control
     # surface, so read all nine.
     qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "DownloadButton.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "QueueDrawer.qml").read_text(encoding="utf-8")
@@ -212,16 +211,16 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         "Keys.onEscapePressed: function (event) {",
         "Accessible.checkable: true",
         "function cancel() {",
-        # The Chooser's own rows (issue #284): each drawn option's key handlers
+        # The Chooser's own rows: each drawn option's key handlers
         # call the one pick/toggle path the pointer and the reader use, and the
         # confirm carries its press action like every other action.
         "db.chooserPickTier(modelData.word)",
         "db.chooserPickAudio(modelData)",
         'db.chooserToggle("lyrics_ttml_file")',
         "Accessible.onPressAction: function () { db.confirmChooser() }",
-        # The gate card's spoken name carries its chip (issue #284).
+        # The gate card's spoken name carries its chip.
         'Accessible.name: gcard.title + (gcard.chip !== ""',
-        # The queue's repeated actions name their own section (issue #284).
+        # The queue's repeated actions name their own section.
         '"Retry all " + host.queueSectionWord(secItem.section)',
         '"Clear " + host.queueSectionWord(secItem.section)',
     ):
@@ -277,7 +276,7 @@ def _show_search_results(q, settle, bridge) -> None:
 
 
 def _tab_cycle(q, settle, root, *, limit: int = 500) -> tuple[list[dict], bool]:
-    """Real Tab presses from the current focus (issue #295).
+    """Real Tab presses from the current focus.
 
     Returns every stop and whether the chain came back to its first stop.
     A stop whose ``path`` is None is one the walk could not locate in the tree
@@ -303,7 +302,7 @@ def _tab_cycle(q, settle, root, *, limit: int = 500) -> tuple[list[dict], bool]:
 
 # The closed surfaces a stop must never belong to: all three are closed at
 # every walk in the scenario, so any stop inside one is a failure even when
-# its own `visible` read is true (the #284 popup case).
+# its own `visible` read is true (the closed-popup case).
 _CLOSED_SURFACES = ("inSettings", "inChooser", "inDrawer")
 
 
@@ -352,10 +351,10 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         "the search result's download button",
     )
 
-    # --- The real Tab chain (issue #295). Flag reads (this scenario's and
-    # #284's) find thousands of hidden tab stops: every TextField/ComboBox
-    # default inside the closed Settings page keeps `activeFocusOnTab`, and
-    # the Chooser's rows did before #284. Qt's chain filters on effective
+    # --- The real Tab chain. Flag reads find thousands of hidden tab stops:
+    # every TextField/ComboBox default inside the closed Settings page keeps
+    # `activeFocusOnTab`, and the Chooser's rows keep theirs behind the closed
+    # popover. Qt's chain filters on effective
     # visibility and enabled, so a keyboard user never reaches them. One full
     # cycle of real Tab presses proves it: every stop must be a control that
     # is on screen, and none of the closed surfaces may own a stop.
@@ -418,7 +417,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
                             f"Tab reaches a control that is not on screen after closing Settings: {closed_stops[:3]}"
                         )
 
-    # --- The Chooser (issue #284): its rows are named, tab-reachable controls,
+    # --- The Chooser: its rows are named, tab-reachable controls,
     # and a keyboard user's picks reach the queue through the shared paths.
     opened = q(
         scene_js("""
@@ -516,8 +515,8 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         minimum=2,
     )
 
-    # Repeated CLEAR / RETRY ALL controls must name their own section
-    # (issue #284's second item). Two sections are on screen, so the names have
+    # Repeated CLEAR / RETRY ALL controls must name their own section.
+    # Two sections are on screen, so the names have
     # to differ; the view pools headers, so identical (name) pairs from the
     # same section dedupe before the uniqueness read.
     q(
@@ -542,9 +541,8 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     if retries != ["Retry all Failed downloads"]:
         problems.append(f"the queue's RETRY ALL control does not name its section: {drawer_names}")
 
-    # No tab stop may sit behind a closed popup (issue #284's third item, for
-    # the Chooser): after confirming, nothing in the popover keeps
-    # activeFocusOnTab.
+    # No tab stop may sit behind a closed popup: after confirming, nothing in
+    # the popover keeps activeFocusOnTab.
     q("queueDrawer.close()")
     settle(250)
     hidden = list(
@@ -576,8 +574,8 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
 
     # The drawer and the popover have now been built and closed; a real Tab
     # walk from here must not land inside either, whatever their rows' flags
-    # say (issue #295's closed-surface invariant for the popup surfaces that
-    # only exist after a first open). The guard keeps a surface that went
+    # say. The invariant covers the popup surfaces that only exist after a
+    # first open; the guard keeps a surface that went
     # missing from passing the walk vacuously.
     settle(100)
     built = json.loads(

@@ -1,22 +1,20 @@
 """STOP sticks even when it lands while the folder is being probed.
 
-THE BUG WE ARE FENCING OFF
---------------------------
 A job checks its abort gate once, as its worker picks it up, and then runs the
 reachability probe of the download folder. That probe is the slow part of
 starting a job: against a stale network mount (an SMB share this app's users
 live on) it costs seconds, remounts, and probes again. Nothing looked at the
 abort gate afterwards.
 
-So STOP pressed in that window marked the row cancelled, cleared the button
-and said "Downloads stopped", and then the job came out of the probe and set
-the very same row back to running: the button re-lit at 0% and the status line
-read "Downloading ..." again, for as long as it took to enumerate the whole
-collection (much longer under rate limiting). Only then did the job notice the
-abort and fall back to Stopped. To the user, STOP simply did not stick.
+So STOP pressed in that window marks the row cancelled, clears the button and
+says "Downloads stopped", and then the job comes out of the probe and sets the
+very same row back to running: the button re-lights at 0% and the status line
+reads "Downloading ..." again, for as long as it takes to enumerate the whole
+collection (much longer under rate limiting). Only then does the job notice the
+abort and fall back to Stopped. To the user, STOP simply does not stick.
 
-The job now looks at the gate again on the way out of the probe and settles
-exactly as it does when the abort was already set on the way in.
+The job looks at the gate again on the way out of the probe and settles exactly
+as it does when the abort was already set on the way in.
 """
 
 from __future__ import annotations
@@ -27,8 +25,8 @@ from unittest.mock import patch
 
 from support.dispatch_stub import arm_dispatch
 
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge, _JobSpec
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge, _JobSpec
 
 
 class _Signal:

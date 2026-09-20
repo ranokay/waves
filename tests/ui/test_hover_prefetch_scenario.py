@@ -87,8 +87,8 @@ def _run_scenario() -> int:
     seeded.setValue("setup/updatePromptAnswered", True)
     seeded.sync()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -154,7 +154,7 @@ def _run_scenario() -> int:
         pump(lambda: False, ms)
 
     # WAVES_SCENARIO_GRABS=<dir> saves a window grab at the moments worth
-    # eyeballing (a livetest aid, never part of the assertion).
+    # eyeballing (a debugging aid, never part of the assertion).
     grab_dir = os.environ.get("WAVES_SCENARIO_GRABS", "")
 
     def grab(name: str) -> None:

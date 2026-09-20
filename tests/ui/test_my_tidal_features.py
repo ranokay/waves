@@ -13,9 +13,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from waves.constants import CoverDimensions, cover_file_dimension
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 from waves.download import Download
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
 
 # ----- download-folder gate ------------------------------------------------
 
@@ -141,9 +141,9 @@ def test_reveal_download_path_opens_nearest_existing(tmp_path, monkeypatch):
 
 
 # ----- My Tidal sort -> tidalapi order enums -------------------------------
-# The enum mapping itself moved into TidalProvider with the favorites reads
-# (ticket #20); its verdicts are pinned in tests/providers/test_provider_seam.py. Here:
-# the bridge's default-sort policy, still date-desc, now delivered through
+# The enum mapping lives in TidalProvider with the favorites reads;
+# its verdicts are pinned in tests/providers/test_provider_seam.py. Here:
+# the bridge's default-sort policy, still date-desc, as delivered through
 # the seam.
 
 try:

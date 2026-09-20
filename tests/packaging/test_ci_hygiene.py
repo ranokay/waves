@@ -133,7 +133,7 @@ def test_windows_builds_ask_nuitka_for_low_memory():
 
 
 def test_the_build_excludes_yt_dlps_lazy_extractor_table():
-    """Every host must exclude yt-dlp's lazy extractor table (issue #245): its
+    """Every host must exclude yt-dlp's lazy extractor table: its
     generated C dominated the cold build (the measured numbers live in
     docs/platform-enablement-review.md) and it is the one module the Windows
     runners cannot compile at all. Waves only ever hands yt-dlp direct stream
@@ -154,7 +154,7 @@ def test_the_build_includes_the_pycryptodome_native_modules():
     --include-package pulls only the Python submodules, so every needed native
     module must be included explicitly or the bundle ships an empty
     Crypto/Cipher and Apple downloads die at the first native load
-    ("Crypto.Cipher._raw_aes", then "Crypto.Hash._SHA1", issue #304). Like the
+    ("Crypto.Cipher._raw_aes", then "Crypto.Hash._SHA1"). Like the
     extractor exclusion, the includes must survive an environment-provided
     WAVES_NUITKA_FLAGS value. The list is resolved against the host's pinned
     PyCryptodome: every flag must name a module this platform installs (so a
@@ -187,10 +187,10 @@ def test_the_build_includes_the_pycryptodome_native_modules():
 
 
 def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
-    """The trim's first Crypto allowlist, built for the signing surface alone,
-    deleted the native modules Apple downloads load by name and broke them
-    twice in a row ('_raw_aes', then '_SHA1', issue #304). Crypto natives are
-    no longer trimmed: run the real script on a fake bundle and assert they
+    """A trim allowlist built for the signing surface alone
+    would delete the native modules Apple downloads load by name
+    ('_raw_aes', then '_SHA1'). Crypto natives are
+    not trimmed: run the real script on a fake bundle and assert they
     survive."""
     bundle = tmp_path / "waves.app"
     libdir = bundle / "Contents" / "MacOS"

@@ -2,10 +2,9 @@
 
 The bridge tests are Qt-free: they bind the real, unbound ``WavesBridge`` methods
 onto a minimal stand-in and drive them with fakes instead of a live QObject, a
-QThreadPool, or an event loop. Two of those fakes were copy-pasted into ~10 test
-files, and had already drifted into two spellings of the same ``_Signal`` and
-several near-identical ``_InlinePool`` copies. They live here now as the single
-source of truth; import them with ``from conftest import _Signal, _InlinePool``.
+QThreadPool, or an event loop. ``_Signal`` and ``_InlinePool`` live here as the
+single source of truth; import them with
+``from conftest import _Signal, _InlinePool``.
 
 Deliberately NOT centralized:
   * ``_Stub`` stays per-file. It is not one fake but many: each test's stand-in
@@ -141,8 +140,8 @@ def _skip_marked(items, marker: str, reason: str) -> None:
 
 # Node ids of tests that carry the qml or integration marker, so the
 # session-end check can tell an expected Qt skip from an unmarked test that
-# quietly skipped the whole GUI surface (audit TT-08: a scenario without the
-# marker is invisible to --require-qml and stays a silent skip).
+# quietly skipped the whole GUI surface (a scenario without the marker is
+# invisible to --require-qml and stays a silent skip).
 _MARKED_FOR_QT: set[str] = set()
 _UNMARKED_QT_SKIPS: list[str] = []
 

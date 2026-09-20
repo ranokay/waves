@@ -1,7 +1,6 @@
 """Settings remembers its shape: sections collapsed by default, state kept.
 
-The page used to hardcode Downloads open and forget everything else between
-launches. Now every section starts collapsed on a first visit, the user's
+Every section starts collapsed on a first visit, the user's
 opens/closes persist in the settings_open_sections pref (a JSON object of
 id -> bool), and deep links (update notice, folder gate, lyrics link) open
 their target section themselves. The QML half (exact scroll restore through
@@ -16,7 +15,7 @@ import json
 from support.settings_fakes import prefs_stub as _prefs_stub
 from support.settings_fakes import schema_stub as _schema_stub
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Stub:

@@ -1,10 +1,9 @@
 """Stripping an illegal character must not leave its spaces behind.
 
 ``pathvalidate`` deletes characters a filesystem rejects but keeps whatever
-surrounded them, so an album called ``The Better Life / Dead Love`` landed in
+surrounded them, so an album called ``The Better Life / Dead Love`` lands in
 a folder named ``The Better Life  Dead Love``, with a double space where the
-slash had been (issue #15). Token values now collapse runs of whitespace and
-trim their edges.
+slash was. Token values collapse runs of whitespace and trim their edges.
 
 The self-dressing tokens are the delicate part: ``{video_year_optional}``
 renders "[2026] " and relies on that trailing space to separate itself from
@@ -20,7 +19,7 @@ from types import SimpleNamespace
 from tidalapi import Album, Track, Video
 
 from waves.constants import FORMAT_TEMPLATE_EXPLICIT
-from waves.helper.path import format_path_media
+from waves.paths import format_path_media
 
 _SLASHED = "The Better Life / Dead Love"
 

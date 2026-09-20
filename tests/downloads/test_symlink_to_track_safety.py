@@ -2,11 +2,11 @@
 
 With "symlink to track" on, a playlist download lands in the playlist folder and
 is then moved into the artist/album track folder, leaving a symlink behind. That
-second move used to be the one place in the engine that ignored every protection
-the main path grew for issue #15: it overwrote unconditionally, made no in-flight
-name claim, and decided "already there" by filename alone. So a different track
-whose name collides could be overwritten, or, worse, the freshly downloaded audio
-was unlinked and replaced with a symlink pointing at a stranger's file.
+second move must carry every protection the main path carries: reserve the name
+it is about to take, decide "already there" by track id rather than filename
+alone, and never overwrite. Deciding by filename alone could overwrite a
+different track whose name collides or, worse, unlink the freshly downloaded
+audio and replace it with a symlink pointing at a stranger's file.
 """
 
 import pathlib
@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 from tidalapi.media import Track
 
 from waves.download import Download
-from waves.helper.path import check_file_exists
+from waves.paths import check_file_exists
 
 TRACK_DIR_RELATIVE = "Tracks/Song"
 
@@ -70,9 +70,9 @@ def _ids_by_payload(payloads: dict[bytes, str]):
 class TestSymlinkMoveDoesNotEatACollidingTrack:
     def test_a_stranger_in_the_track_folder_does_not_swallow_the_download(self, tmp_path):
         # The track folder already holds a DIFFERENT track under the same
-        # sanitized name. Deciding by filename alone made the engine call the
-        # download "already there", delete the audio it had just written and
-        # point the playlist entry at the stranger.
+        # sanitized name. Deciding by filename alone would call the download
+        # "already there", delete the audio it had just written and point the
+        # playlist entry at the stranger.
         dl = _make_download(tmp_path)
         occupant = _plant(tmp_path / "Tracks" / "Song.flac", b"id-999")
         source = _plant(tmp_path / "Playlists" / "Party" / "Song.flac", b"id-111")
@@ -90,9 +90,8 @@ class TestSymlinkMoveDoesNotEatACollidingTrack:
         assert source.read_bytes() == b"id-111", "the playlist entry has to point at its own track"
 
     def test_the_same_track_already_in_place_still_gets_its_symlink(self, tmp_path):
-        # The historical, wanted behavior: this very track is already in the
-        # track folder, so the playlist copy becomes a symlink to it and no
-        # second copy is made.
+        # This very track is already in the track folder, so the playlist copy
+        # becomes a symlink to it and no second copy is made.
         dl = _make_download(tmp_path)
         occupant = _plant(tmp_path / "Tracks" / "Song.flac", b"id-111")
         source = _plant(tmp_path / "Playlists" / "Party" / "Song.flac", b"id-111")
@@ -108,9 +107,9 @@ class TestSymlinkMoveDoesNotEatACollidingTrack:
         assert source.is_symlink()
 
     def test_two_colliding_tracks_symlinked_side_by_side_both_land(self, tmp_path):
-        # Both threads read the destination as free, then moved onto it: the
-        # second move overwrote the first track's audio, and the first playlist
-        # entry silently became a pointer to the second track.
+        # Both threads may read the destination as free, then move onto it: the
+        # second move would overwrite the first track's audio, and the first
+        # playlist entry would silently become a pointer to the second track.
         dl = _make_download(tmp_path)
         sources = {
             111: _plant(tmp_path / "Playlists" / "Party" / "Song.flac", b"id-111"),
@@ -119,7 +118,7 @@ class TestSymlinkMoveDoesNotEatACollidingTrack:
         payload_ids = {b"id-111": "111", b"id-222": "222"}
 
         # Hold both threads in the window between "is the destination free?"
-        # and the move, which is the window the bug lived in.
+        # and the move.
         barrier = threading.Barrier(2, timeout=10)
 
         def _check_synced(path_file, extension_ignore=False) -> bool:
@@ -156,9 +155,9 @@ class TestSymlinkMoveDoesNotEatACollidingTrack:
 
 class TestSkipLogicAgreesWithTheMove:
     def test_a_stranger_in_the_track_folder_does_not_skip_the_download(self, tmp_path):
-        # The skip gate and the move have to answer the same question. The gate
-        # decided by filename alone, so a colliding stranger made the track look
-        # downloaded: nothing was fetched and the playlist pointed at the stranger.
+        # The skip gate and the move have to answer the same question. Deciding
+        # by filename alone would make a colliding stranger look downloaded:
+        # nothing fetched and the playlist pointing at the stranger.
         dl = _make_download(tmp_path)
         dl.settings.data.symlink_to_track = True
         dl.settings.data.album_track_num_pad_min = 2

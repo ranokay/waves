@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import types
 
-from waves.waves_ui.backend import _TrackedDownload
+from waves.desktop.backend import _TrackedDownload
 
 
 def _media(identity: str | None = None):
@@ -105,16 +105,16 @@ def test_a_claim_lookup_failure_never_gates():
     assert dl._claim_verdict(m) is None
 
 
-# --- What the gate is asked about (issue #24) ---------------------------------
+# --- What the gate is asked about ---------------------------------------------
 # The claim is only ever "you already have this track filed under the release I
 # am fetching". Which release that is has to reach the matcher, or the question
 # degrades into "you own this song somewhere", which is true of every best-of
-# and was skipping tracks out of albums the user had asked for.
+# and would skip tracks out of albums the user had asked for.
 
 
 def _adapter(media, album=None):
     """_library_claim_media on a stub that records the question it asks."""
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.backend import WavesBridge
 
     asked: list[tuple] = []
     stub = types.SimpleNamespace(_library_track_claim=lambda *a: asked.append(a) and None)

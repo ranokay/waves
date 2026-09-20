@@ -1,18 +1,17 @@
-"""Regression: playlist rows select per ROW, and a new search forgets them.
+"""Playlist rows select per ROW, and a new search forgets them.
 
-TWO BUGS WE ARE FENCING OFF
----------------------------
-1. PlaylistBlock kept its selection in a map keyed by TRACK ID. A playlist
+WHAT THIS FENCES OFF
+--------------------
+1. PlaylistBlock keeps its selection in a map keyed by ROW INDEX. A playlist
    may legitimately list the same track twice (a DJ mix, a "best of" that
-   repeats a hook, a user playlist someone added to twice), and those rows
-   then shared one key: ticking either checkbox ticked both, ``allSelected``
-   could never become true, and "Select all" could therefore never clear.
-   Selection is keyed by row index now, so duplicate rows are independent.
-2. ``onSearchResults`` cleared the album expand state and its track cache but
-   not the playlist ones, so a playlist expanded in one search rendered
-   already-expanded in the NEXT search, showing the previous fetch's rows with
-   no refetch to correct them (playlists mutate: the always-on freshness rule
-   forbids a cache that only a restart can clear).
+   repeats a hook, a user playlist someone added to twice): sharing one key
+   between those rows would make ticking either checkbox tick both,
+   ``allSelected`` never true, and "Select all" unable to clear.
+2. ``onSearchResults`` must clear the playlist expand state and its track
+   cache along with the album ones. A playlist expanded in one search then
+   renders already-expanded in the NEXT search, showing the previous fetch's
+   rows with no refetch to correct them (playlists mutate: the always-on
+   freshness rule forbids a cache that only a restart can clear).
 
 This drives the REAL Main.qml: renders a search, expands the playlist, feeds
 it a track list containing the same track twice, exercises Select all, then
@@ -142,8 +141,8 @@ def _run_scenario() -> int:  # (one exit per failed step, on purpose)
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

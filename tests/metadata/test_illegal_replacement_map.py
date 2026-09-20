@@ -2,7 +2,7 @@
 
 A single stand-in for every rejected character reads badly on the ones that
 carry meaning: a colon is a subtitle, and "Rarities Edition- Live" is not what
-the title said (issue #16). The map names a stand-in per character, so ":" can
+the title said. The map names a stand-in per character, so ":" can
 become " · " while "?" becomes "-" and "/" is simply removed.
 
 Pinned here: the map is laundered at the point of use exactly like the general
@@ -22,18 +22,18 @@ from unittest.mock import MagicMock
 from support.paths import REPO_ROOT
 from tidalapi import Album, Track
 
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 from waves.download import Download
-from waves.helper.path import (
+from waves.model.cfg import HelpSettings
+from waves.model.cfg import Settings as CfgSettings
+from waves.paths import (
     ILLEGAL_FILENAME_CHARS,
     format_path_media,
     safe_filename_replacement_map,
 )
-from waves.model.cfg import HelpSettings
-from waves.model.cfg import Settings as CfgSettings
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
 
-_UI = REPO_ROOT / "waves" / "waves_ui"
+_UI = REPO_ROOT / "waves" / "desktop"
 
 _SUBTITLED = "The Better Life (Rarities Edition: Live At Red Rocks)"
 _MIDDOT = "The Better Life (Rarities Edition · Live At Red Rocks)"

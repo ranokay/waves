@@ -1,17 +1,17 @@
 """The badge slots answer repeat asks from a memo, not by re-matching.
 
-THE COST THIS FENCES OFF
-------------------------
+The cost this fences off:
+
 libraryAlbumPresence / libraryTrackPresence are synchronous GUI-thread slots.
 Every libraryPresenceChanged republish makes ALL visible pills re-ask, and
-scrolling re-asks per row, always against the same published index object,
-so the matcher re-derived identical verdicts over and over inside frames.
-Each slot now memoizes verdicts keyed by its arguments, valid only for the
-index object they were computed against: the memo resets exactly when the
-index is swapped (the same moment libraryPresenceChanged fires), so the
-always-on freshness rule holds, and it is FIFO-bounded. The MusicBrainz
-overlay stays OUTSIDE the album memo, so an arbitration answer landing
-without an index swap still overlays on the next ask.
+scrolling re-asks per row, always against the same published index object, so
+the matcher would re-derive identical verdicts over and over inside frames.
+Each slot memoizes verdicts keyed by its arguments, valid only for the index
+object they were computed against: the memo resets exactly when the index is
+swapped (the same moment libraryPresenceChanged fires), so the always-on
+freshness rule holds, and it is FIFO-bounded. The MusicBrainz overlay stays
+OUTSIDE the album memo, so an arbitration answer landing without an index swap
+still overlays on the next ask.
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ from support.library_fakes import (
     make_library_bridge as _make,
 )
 
-import waves.matching as matching
-from waves.waves_ui import bridge_library
+import waves.metadata.matching as matching
+from waves.desktop import bridge_library
 
 
 def _bridge(tmp_path):

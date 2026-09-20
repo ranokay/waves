@@ -89,8 +89,8 @@ class AppleProvider(Provider):
     name = "Apple Music"
     # No Capability.ARTIST_DOWNLOAD: an artist discography sweep is the one
     # verb this catalog cannot answer (`downloadArtist` refuses it with the
-    # present-tense words), so the artist page renders no control for it
-    # (issue #288). Album/playlist/track downloads are all here.
+    # present-tense words), so the artist page renders no control for it.
+    # Album/playlist/track downloads are all here.
     capabilities = frozenset(
         {
             Capability.SEARCH,
@@ -104,7 +104,7 @@ class AppleProvider(Provider):
     )
     # Apple's catalog answers artists, albums, tracks and playlists; it has no
     # videos or mixes, so its search group carries no such buckets and the
-    # page's videos/mixes filters never show its head (issue #292).
+    # page's videos/mixes filters never show its head.
     search_sections = ("artists", "albums", "tracks", "playlists")
 
     # ----- chooser metadata
@@ -143,8 +143,8 @@ class AppleProvider(Provider):
                 "Turn on Apple Music catalog search here. A cookies export unlocks AAC 256 and Atmos "
                 "downloads at once with no runtime; the managed runtime plus wrapper sign-in unlock the full tier."
             ),
-            # The onboarding spec (#213): the first tier needs no Apple
-            # account, so the card offers a setup, never a sign-in.
+            # The first tier needs no Apple account, so the card offers a
+            # setup, never a sign-in.
             welcome_action="Set up Apple Music",
             settings_fields=(
                 "provider_apple_status",
@@ -736,9 +736,8 @@ class AppleProvider(Provider):
 
         Complete means attributed relationship entries, or a named view row.
         An Apple search summary lists an artist's albums as reference stubs
-        (id/type/href, no attributes) with no views; accepting those left
-        every artist page with blank album rows and no top tracks (issue
-        #216).
+        (id/type/href, no attributes) with no views; accepting those leaves
+        every artist page with blank album rows and no top tracks.
         """
         relationships = item.get("relationships") or {}
         for rel in relationships.values():
@@ -1361,7 +1360,7 @@ class AppleProvider(Provider):
         if not ttml:
             return "", ""
         try:
-            from waves.ttml_lyrics import ttml_timing_mode, ttml_to_lrc, ttml_to_text
+            from waves.metadata.ttml_lyrics import ttml_timing_mode, ttml_to_lrc, ttml_to_text
         except Exception:
             return "", ""
         mode = ttml_timing_mode(ttml)
@@ -1474,7 +1473,7 @@ class AppleProvider(Provider):
         if not ttml:
             return ""
         try:
-            from waves.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
+            from waves.metadata.ttml_lyrics import ttml_timing_mode, ttml_to_enhanced_lrc
         except Exception:
             return ""
         if ttml_timing_mode(ttml) != "word":

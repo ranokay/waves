@@ -2,12 +2,12 @@
 
 The chart image and the README block that shows it are produced ON the public
 repo by star-history.yml and exist nowhere in the private tree. release.sh
-publishes a verbatim snapshot of that tree, so every release deleted both, and
-the published README carried an empty "Star History" section until the
-workflow's next 06:00 UTC run. Every release reopened that window.
+publishes a verbatim snapshot of that tree, so a release that does not copy
+both off the public tip before publishing deletes them, and the published
+README carries an empty "Star History" section until the workflow's next
+06:00 UTC run. Every release reopens that window.
 
-release.sh now copies both off the public tip before publishing. Refreshing the
-chart is still the workflow's job; the release simply stops undoing it.
+Refreshing the chart is still the workflow's job; the release must not undo it.
 
 The scenario builds a throwaway repo with a fake "public" remote and runs the
 real release.sh in RELEASE_DRY_RUN mode, which stops after building the tree,
@@ -193,9 +193,9 @@ def test_a_nested_excluded_path_is_refused_even_on_a_large_tree(sandbox: Path):
     of an excluded file that is not at the top level: the `git rm` above it
     takes rooted pathspecs, so `docs/RELEASING.md` sails straight past it.
 
-    The tree is padded on purpose. The guard used to pipe `git ls-tree` into
-    `grep -q`, and once the listing outgrows the pipe buffer git dies of
-    SIGPIPE, which `set -o pipefail` turns into a non-zero pipeline, which the
+    The fixture is padded on purpose: a listing that outgrows a pipe buffer
+    can kill a piped `git ls-tree` / `grep` with SIGPIPE, which
+    `set -o pipefail` turns into a non-zero pipeline, which the
     `if` reads as "not found". A guard that fails open needs a fixture big
     enough to make it fail; four paths can never catch this.
     """

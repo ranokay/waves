@@ -1,4 +1,4 @@
-"""A per-item quality choice (issue #36) reaches the job it was made for, and
+"""A per-item quality choice reaches the job it was made for, and
 only that job.
 
 WHAT THIS FENCES OFF
@@ -11,12 +11,11 @@ gate) asks at that tier without carrying it. The row's two quality fields
 (``askQuality``, the value the job pins; ``quality``, the word the drawer
 states) come from the choice instead of the setting. A download does NOT
 spend the choice: it stands on its item until that item is given another
-tier, so the badge keeps stating the tier the copy on disk was asked at
-(livetest report: a song downloaded at a chosen LOSSLESS had its badge fall
-straight back to the catalog's HI-RES). A track without a choice of its own
-inherits its album's.
+tier, so the badge keeps stating the tier the copy on disk was asked at,
+rather than falling back to the catalog's word. A track without a choice of
+its own inherits its album's.
 
-HOW THIS STAYS FIXED
+HOW THE CHOICE HOLDS
 --------------------
 Method-bound stubs, no display and no session: the store accepts exactly the
 four tiers and DEFAULT; ``_ask_quality_for`` answers own / inherited / none;
@@ -36,8 +35,8 @@ import pytest
 from tidalapi.media import Quality
 
 from waves.constants import CTX_TIDAL
-from waves.ownership import quality_rank
-from waves.waves_ui import backend
+from waves.desktop import backend
+from waves.library.ownership import quality_rank
 
 
 class _Emit:

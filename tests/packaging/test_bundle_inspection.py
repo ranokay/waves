@@ -1,4 +1,4 @@
-"""The bundle inspector that enforces spec §10.1 (audit item 23 / S12).
+"""The bundle inspector that enforces spec §10.1.
 
 The tool classifies a built bundle: Apple-derived engine material must never
 be there, open-source clients ship (ADR 0004) and are reported, and on macOS
@@ -189,7 +189,7 @@ def test_a_missing_codesign_fails_closed(tmp_path):
 def test_a_missing_pycryptodome_native_module_fails_the_inspection(tmp_path):
     """The runtime loads these by name through ctypes, so a build or a trim can
     drop them silently and the Apple download path then dies at the first
-    native load (issue #304)."""
+    native load."""
     bundle = _bundle(tmp_path, (), with_natives=False)
 
     report = inspect_bundle_tool.inspect_bundle(bundle, verify_signature=False)

@@ -13,8 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from waves.desktop.backend import WavesBridge
 from waves.providers.apple import runner
-from waves.waves_ui.backend import WavesBridge
 
 
 def _stub(**data_overrides) -> SimpleNamespace:

@@ -1,21 +1,22 @@
 """The queue tells QML what changed, and builds one job at a time.
 
-WHAT THIS FENCES OFF (issue #30's lag half)
--------------------------------------------
-Two designs that each cost O(queue) for O(1) of news, measured with the
-stress harness (scratchpad/queue_stress) before the change:
+WHAT THIS FENCES OFF
+--------------------
+Two costs that scale with the whole queue for O(1) of news, measured with the
+stress harness (scratchpad/queue_stress):
 
-* Every row mutation emitted the WHOLE queue (queueChanged), and QML
-  reconciled every row against the copy: 19 ms per change at 9,000 rows, and
-  a worker thread emitting snapshots faster than the window absorbed them
-  left a full copy of the queue in every queued signal (13 GB of growth
-  while a blocked account failed 2,000 queued albums). Now a mutation marks
-  its qids dirty and one GUI-thread flush emits three delta signals carrying
-  only the rows concerned; queueChanged remains for the rare full resync.
+* Every row mutation must not emit the WHOLE queue (queueChanged) with QML
+  reconciling every row against the copy: that costs 19 ms per change at
+  9,000 rows, and a worker thread emitting snapshots faster than the window
+  absorbs them leaves a full copy of the queue in every queued signal (13 GB
+  of growth while a blocked account failed 2,000 queued albums). A mutation
+  marks its qids dirty and one GUI-thread flush emits three delta signals
+  carrying only the rows concerned; queueChanged remains for the rare full
+  resync.
 
-* Every queued row was born holding its whole job: a Download object, a rich
-  Progress, a relay QObject and a pooled Worker (about 19 KB apiece), with
-  the 500 ms track poll walking all of them. Now a queued row waits as a
+* A queued row must not be born holding its whole job: a Download object, a
+  rich Progress, a relay QObject and a pooled Worker (about 19 KB apiece),
+  with the 500 ms track poll walking all of them. A queued row waits as a
   _JobSpec and _pump_queue builds the job when the pool is free, in queue
   order: one Worker alive at a time however long the backlog.
 """
@@ -28,8 +29,8 @@ from unittest.mock import patch
 
 from support.dispatch_stub import arm_dispatch, arm_queue
 
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 
 
 def _plain_relay():
@@ -65,7 +66,7 @@ def _delta_stub():
     stub._queue_emit_suspended = False
     stub._target_tier = lambda: "LOSSLESS"
     stub._queued_quality_value = lambda: "LOSSLESS"
-    # The per-item quality choice _download reads at queue time (issue #36);
+    # The per-item quality choice _download reads at queue time;
     # none here, so every ask is the setting's.
     _bind(stub, "_ask_quality_for", "_quality_override_key", "_row_ask")
     stub._library_bulk_skip_on = lambda: True

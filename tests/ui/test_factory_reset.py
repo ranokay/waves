@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import os
 
-from waves.waves_ui import backend as backend_mod
-from waves.waves_ui.backend import _FIRST_RUN_OVERRIDES, WavesBridge
+from waves.desktop import backend as backend_mod
+from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge
 
 
 class _Stub:

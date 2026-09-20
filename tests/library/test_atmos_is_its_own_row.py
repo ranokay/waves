@@ -34,8 +34,8 @@ from types import SimpleNamespace
 from tidalapi.album import Album
 from tidalapi.media import AudioMode, Quality, Track
 
+from waves.desktop import backend
 from waves.providers import TidalProvider
-from waves.waves_ui import backend
 
 # The quality read rides the provider now; over a bare stand-in the advertised
 # tier answers None and the label falls back to the object's audio_quality,

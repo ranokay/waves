@@ -9,7 +9,7 @@ import zipfile
 
 import pytest
 
-from waves.waves_ui import ffmpeg_manager as fm
+from waves.desktop import ffmpeg_manager as fm
 
 
 # --------------------------------------------------------------------------- #
@@ -455,7 +455,7 @@ def test_remove(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# gap-round G-10: two instances share <config>/bin, so staging is per-install
+# Two instances share <config>/bin, so staging is per-install
 # --------------------------------------------------------------------------- #
 def test_install_stages_through_a_name_of_its_own(tmp_path, monkeypatch):
     rel, session = _install_fixture(tmp_path, monkeypatch)

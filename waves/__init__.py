@@ -117,8 +117,8 @@ def name_package() -> str:
 
 
 # is_dev_env() cache: the verdict cannot change within a process, and the
-# importlib.metadata probe behind it costs real import-time work (it used to
-# run twice before the first window appeared).
+# importlib.metadata probe behind it costs real import-time work; caching keeps
+# it to one probe before the first window appears.
 _is_dev_env: bool | None = None
 
 

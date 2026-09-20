@@ -26,7 +26,7 @@ import mutagen.mp3
 import mutagen.mp4
 import pytest
 
-from waves.metadata import (
+from waves.metadata.tags import (
     ALBUM_ARTIST_ID_TAG,
     ARTIST_ID_TAG,
     GENERIC_ALBUM_ARTIST_ID_TAG,
@@ -73,7 +73,7 @@ def _mp4_stub():
 def _write(stub, tmp_path, name, **kw):
     file = tmp_path / name
     file.write_bytes(b"x")
-    with patch("waves.metadata.mutagen.File", return_value=stub):
+    with patch("waves.metadata.tags.mutagen.File", return_value=stub):
         assert Metadata(path_file=file, target_upc=_UPC, **kw).save() is True
     return stub
 
@@ -228,19 +228,19 @@ def test_a_namespaced_id_never_doubles_its_prefix(tmp_path):
 
 
 def test_the_tri_state_reader_tells_an_unreadable_file_from_an_untagged_one(tmp_path):
-    """The library scan's own reader (ADR 0007, issue #222): "" is the settled
+    """The library scan's own reader (ADR 0007): "" is the settled
     "no Waves id" and None is "could not open the file at all", so a transient
     failure on a NAS retries instead of hardening into an untagged row. The
     gate-facing reader keeps answering "" for both."""
     untagged = _flac_stub()
     untagged.tags = {}
-    with patch("waves.metadata.mutagen.File", return_value=untagged):
+    with patch("waves.metadata.tags.mutagen.File", return_value=untagged):
         assert read_item_id_or_none(tmp_path / "t.flac") == ""
         assert read_item_id(tmp_path / "t.flac") == ""
-    with patch("waves.metadata.mutagen.File", side_effect=OSError("transient")):
+    with patch("waves.metadata.tags.mutagen.File", side_effect=OSError("transient")):
         assert read_item_id_or_none(tmp_path / "t.flac") is None
         assert read_item_id(tmp_path / "t.flac") == ""
-    with patch("waves.metadata.mutagen.File", return_value=None):
+    with patch("waves.metadata.tags.mutagen.File", return_value=None):
         # A container with no tag block reads as no id, not as a failure: only
         # a FAILED read retries, or an unrecognised file would re-read forever.
         assert read_item_id_or_none(tmp_path / "t.flac") == ""
@@ -255,7 +255,7 @@ def test_a_legacy_only_file_is_still_recognized(tmp_path, stub, name):
     answers through them, unchanged."""
     written = _tagged(tmp_path, name, stub())
     _drop_generic_item(written)
-    with patch("waves.metadata.mutagen.File", return_value=written):
+    with patch("waves.metadata.tags.mutagen.File", return_value=written):
         assert read_item_id(tmp_path / name) == _ITEM
 
 
@@ -268,7 +268,7 @@ def test_a_generic_only_file_reads_the_same_bare_id(tmp_path, stub, name):
     namespace is read back off: the comparison spelling never moved."""
     written = _tagged(tmp_path, name, stub())
     _drop_legacy_item(written)
-    with patch("waves.metadata.mutagen.File", return_value=written):
+    with patch("waves.metadata.tags.mutagen.File", return_value=written):
         assert read_item_id(tmp_path / name) == _ITEM
 
 
@@ -279,7 +279,7 @@ def test_a_generic_only_file_reads_the_same_bare_id(tmp_path, stub, name):
 def test_the_generic_tag_is_read_first(tmp_path, stub, name):
     written = _tagged(tmp_path, name, stub())
     _set_generic_item(written, "tidal:999")
-    with patch("waves.metadata.mutagen.File", return_value=written):
+    with patch("waves.metadata.tags.mutagen.File", return_value=written):
         assert read_item_id(tmp_path / name) == "999"
 
 
@@ -292,7 +292,7 @@ def test_a_foreign_provider_never_reads_as_a_bare_tidal_id(tmp_path, stub, name)
     skipped or replaced as this provider's own copy: its namespace stays on."""
     written = _tagged(tmp_path, name, stub())
     _set_generic_item(written, "apple:123")
-    with patch("waves.metadata.mutagen.File", return_value=written):
+    with patch("waves.metadata.tags.mutagen.File", return_value=written):
         answer = read_item_id(tmp_path / name)
     assert answer == "apple:123"
     assert answer != _ITEM

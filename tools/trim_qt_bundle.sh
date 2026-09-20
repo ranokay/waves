@@ -162,7 +162,7 @@ rm -f "$LIBDIR/PySide6/qt-plugins/multimedia/libdarwinmediaplugin.dylib" \
 # _ed25519/_SHA512/_keccak, and the Apple HLS download path needs the AES
 # family plus _SHA1 (the first trim allowlist, built for signing alone, broke
 # downloads twice in a row -- "Cannot load native module
-# 'Crypto.Cipher._raw_aes'", then 'Crypto.Hash._SHA1', issue #304). The full
+# 'Crypto.Cipher._raw_aes'", then 'Crypto.Hash._SHA1'). The full
 # native set is ~2.6 MB of a 237 MB bundle; correctness wins over that. The
 # build includes every module explicitly (`WAVES_CRYPTO_NATIVE` in
 # tools/build_waves.sh) and tools/inspect_bundle.py fails a bundle that dropped

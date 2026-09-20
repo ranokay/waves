@@ -10,9 +10,9 @@ value.
 
 from __future__ import annotations
 
+from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge, _shipped_default
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as CfgSettings
-from waves.waves_ui.backend import _FIRST_RUN_OVERRIDES, WavesBridge, _shipped_default
 
 # Every string field the page lets you customize, and whether restoring a
 # shipped default makes sense for it.
@@ -93,7 +93,7 @@ def test_fields_with_no_useful_default_do_not_offer_one():
 
 
 def test_help_entries_name_a_settings_field():
-    """No dead help strings (issue #236 / audit LM-08): every HelpSettings
+    """No dead help strings: every HelpSettings
     entry names a field the schema actually carries, so the page can never
     offer help for a key no setting can ask about."""
     from dataclasses import fields

@@ -1,16 +1,16 @@
 """Waves only ever looks for a downloaded copy in two places: the download
-folder and the library folder (waves/ownership.py set_roots).
+folder and the library folder (waves/library/ownership.py set_roots).
 
-A copy recorded anywhere else, typically under an earlier download folder
-(issue #38), must not read as owned, must never be statted, and must never
-stop a download. Pure standard library, like tests/test_ownership_store.py.
+A copy recorded anywhere else, typically under an earlier download folder,
+must not read as owned, must never be statted, and must never stop a download.
+Pure standard library, like tests/test_ownership_store.py.
 """
 
 from __future__ import annotations
 
 import os
 
-from waves.ownership import OwnershipStore, path_under
+from waves.library.ownership import OwnershipStore, path_under
 
 
 def _file(path):
@@ -108,7 +108,7 @@ def test_path_under_is_a_folder_boundary_not_a_prefix(tmp_path):
 
 def test_path_under_accepts_a_volume_root():
     """A library at the top of a drive ("N:\\" on Windows, "/" here) already
-    ends in its separator; appending another one used to match nothing."""
+    ends in its separator; the matcher must not add a second one."""
     top = os.path.abspath(os.sep)
     assert path_under(os.path.join(top, "Music", "a.flac"), top)
 

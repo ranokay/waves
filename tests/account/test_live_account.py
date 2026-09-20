@@ -2,7 +2,7 @@
 
 Run explicitly:
 
-    WAVES_ACCOUNT_TESTS=1 .venv/bin/python -m pytest -q tests/account
+    WAVES_ACCOUNT_TESTS=1 uv run --locked --all-extras pytest -q -m account tests
 
 Without the gate every account test is skipped at collection. With it, the
 module's ``real_profile`` fixture points the config path at the app's real
@@ -45,7 +45,7 @@ def real_profile():
     other module runs.
     """
     from waves import config
-    from waves.helper.decorator import SingletonMeta
+    from waves.config import SingletonMeta
 
     with pytest.MonkeyPatch.context() as mp:
         if ORIGINAL_XDG_CONFIG_HOME:
@@ -64,7 +64,7 @@ def _cookies_path(profile) -> str:
 
 
 def _apple_provider(profile):
-    from waves.helper.path import path_config_base
+    from waves.paths import path_config_base
     from waves.providers.apple.provider import AppleProvider
     from waves.providers.apple.runtime import AppleRuntimeManager
 
@@ -154,7 +154,7 @@ def test_wrapper_tier_fetches_alac_live(real_profile):
     runtime or the image is unavailable.
     """
     from waves.constants import QualityTier
-    from waves.helper.path import path_config_base
+    from waves.paths import path_config_base
     from waves.providers.apple.runtime import WRAPPER_V2_IMAGE, AppleRuntimeManager, wrapper_url
     from waves.providers.apple.supervision import SidecarSupervisor, wrapper_data_host_dir
 
@@ -193,12 +193,12 @@ def test_tidal_session_resumes_and_searches_live(real_profile):
     a browser; it is recorded as manual evidence in the run notes. This test
     proves the resumable session half once a sign-in exists.
     """
-    from waves.helper.path import path_file_token
+    from waves.paths import path_file_token
 
     if not Path(path_file_token()).is_file():
         pytest.skip("no TIDAL token in the real profile; sign in through the app first")
+    from waves.desktop.session import WavesTidal
     from waves.providers.tidal import TidalProvider
-    from waves.waves_ui.session import WavesTidal
 
     provider = TidalProvider(WavesTidal(real_profile))
     if not provider.login_resume():

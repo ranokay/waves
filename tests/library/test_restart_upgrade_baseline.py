@@ -1,4 +1,4 @@
-"""Restart and upgrade from the audit's baseline.
+"""Restart and upgrade from a released baseline.
 
 One install's data survives an in-place upgrade and a second start: a settings
 file in the pre-provider shape (the pre-split quality carrier, the retired
@@ -12,8 +12,8 @@ back on the default, and the test asserts that reset explicitly.
 
 The settings side drives the app's own ``Settings`` startup class (read, the
 run-once migrations, the write-back) against a baseline file; the baseline
-schema below is the exact CREATE TABLE at the audit's baseline commit, and
-the current store migrates it with its forward-compatible ALTERs.
+schema below is the exact CREATE TABLE of the baseline release, and the
+current store migrates it with its forward-compatible ALTERs.
 """
 
 from __future__ import annotations
@@ -25,10 +25,10 @@ import pytest
 
 from waves import config
 from waves.config import Settings as LaunchSettings
+from waves.config import SingletonMeta
 from waves.constants import QualityTier
-from waves.helper.decorator import SingletonMeta
+from waves.library.ownership import OwnershipStore
 from waves.model.cfg import Settings as ModelSettings
-from waves.ownership import OwnershipStore
 
 pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
 
@@ -92,7 +92,7 @@ def test_baseline_settings_survive_the_upgrade_and_a_second_start(tmp_path, monk
     assert first.download_base_path == "/music/waves"
     assert first.format_album == "Custom/{album_artist}/{album_title}"
     assert first.skip_existing is True
-    assert first.metadata_replay_gain is True  # the old default flipped on once
+    assert first.metadata_replay_gain is True  # the one-time migration flips the old default on
     # The one deliberate reset: 900 s is an albums-era value, not a pause.
     assert first.api_rate_limit_delay_sec == ModelSettings().api_rate_limit_delay_sec
     # The shared lyrics/artwork toggles were copied into both provider mirrors.

@@ -36,7 +36,7 @@ from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from waves.waves_ui.backend import (
+from waves.desktop.backend import (
     WavesBridge,
     _align_edition,
     _build_merge_plan,
@@ -190,11 +190,11 @@ def test_a_pair_that_disputes_both_ways_leaves_a_clean_preference_nothing():
     assert kept == [] and dropped == [a, b]
 
 
-# ---- the merge the twin used to block --------------------------------------------
+# ---- the merge a clean twin must not block ---------------------------------------
 def test_two_explicit_editions_still_merge_with_a_clean_twin_in_the_group():
-    """The bug this fixes. All three key alike; the clean twin aligned with
-    neither explicit edition, the superset guard fired, and the merge those two
-    could clearly do was lost."""
+    """All three key alike; the clean twin aligns with neither explicit
+    edition, so the superset guard fires and the merge those two could clearly
+    do is lost."""
     std = _Album("std [Explicit]", "1")
     deluxe = _Album("deluxe [Explicit]", "2")
     clean = _Album("std [Clean]", "3")
@@ -407,7 +407,7 @@ class _DiscoStub:
 def _disco(mode):
     std, deluxe, clean, recs = _twin_group()
     stub = _DiscoStub(mode, recs)
-    with patch("waves.waves_ui.backend._edition_base_key", lambda a: "one-group"):
+    with patch("waves.desktop.backend._edition_base_key", lambda a: "one-group"):
         plain, plans = stub._merge_editions([std, deluxe, clean])
     return std, deluxe, clean, plain, plans
 

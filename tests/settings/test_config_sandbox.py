@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 
-from waves.helper.path import path_config_base, path_file_settings
+from waves.paths import path_config_base, path_file_settings
 
 
 def _real_config_homes() -> list[str]:

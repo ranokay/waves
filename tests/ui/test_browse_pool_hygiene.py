@@ -1,19 +1,20 @@
 """Thread hygiene in the browse region: pools that report, caches that lock.
 
-The gap round of the 2026-08-29 audit filed five findings here, all of the
-same family: work that crosses threads without the discipline its siblings
-already keep.
+Five hazards, all of the same family -- work that crosses threads without the
+discipline its siblings already keep:
 
-* The per-search popularity fan-out and the merged-album track fan-out were
-  invisible to the verbose perf sampler (the project's first diagnostics
-  contract: every new pool registers).
-* The popularity cache was inserted into, and trimmed, with no lock while an
-  older search's pool could still be inserting.
-* The sign-out and paste-a-link paths cleared the shared object buckets
-  lock-free while search took the lock for the identical clear.
-* Expanding a hover-prefetched album ran an ownership commit on the GUI thread.
-* Two tile-art crawls could pass the same check-then-set and the last one to
-  finish dropped the other's samples from the disk cache.
+* The per-search popularity fan-out and the merged-album track fan-out must
+  register with the verbose perf sampler (the project's first diagnostics
+  contract: every new pool registers), or they are invisible to it.
+* The popularity cache must not be inserted into, and trimmed, with no lock
+  while an older search's pool can still be inserting.
+* The sign-out and paste-a-link paths must take the object lock when they
+  clear the shared object buckets, the same as search does for the identical
+  clear.
+* Expanding a hover-prefetched album must not run an ownership commit on the
+  GUI thread.
+* Two tile-art crawls must not pass the same check-then-set; the last to
+  finish would drop the other's samples from the disk cache.
 """
 
 from __future__ import annotations
@@ -23,9 +24,9 @@ from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
 
 BACKEND_SRC = Path(backend.__file__).read_text(encoding="utf-8")
 
@@ -106,7 +107,7 @@ class _WatchedDict(dict):
 
 
 # --------------------------------------------------------------------------- #
-# G-15 / G-16: the search's popularity fan-out
+# The search's popularity fan-out
 # --------------------------------------------------------------------------- #
 class _SearchStub:
     search = WavesBridge.search
@@ -177,7 +178,7 @@ class _SearchStub:
 def _run_search(monkeypatch, n_artists: int):
     stub = _SearchStub()
     artists = [SimpleNamespace(id=f"a{i}", name=f"Artist {i}") for i in range(n_artists)]
-    # The search fetch rides the Provider seam (ticket #20).
+    # The search fetch rides the Provider seam.
     stub.providers = {
         "tidal": SimpleNamespace(
             capabilities=frozenset({Capability.SEARCH}), search=lambda needle: {"artists": artists}
@@ -219,13 +220,13 @@ def test_the_popularity_cache_is_only_ever_written_under_the_lock(monkeypatch):
 
 
 def test_the_pop_cache_trim_no_longer_walks_the_dict_unlocked():
-    """The finding's exact shape: an unlocked next(iter(...)) eviction beside a
+    """An unlocked next(iter(...)) eviction beside a
     concurrent insert. Only _remember_capped may evict this cache."""
     assert "del self._artist_pop_cache[next(iter(" not in BACKEND_SRC
 
 
 # --------------------------------------------------------------------------- #
-# G-17: every clear of the shared object buckets takes the object lock
+# every clear of the shared object buckets takes the object lock
 # --------------------------------------------------------------------------- #
 def test_no_bucket_clear_is_left_outside_the_object_lock():
     lines = BACKEND_SRC.splitlines()
@@ -267,7 +268,7 @@ def test_the_pasted_link_clears_the_buckets_under_the_lock():
 
 
 # --------------------------------------------------------------------------- #
-# G-18: the membership commit leaves the GUI thread
+# the membership commit leaves the GUI thread
 # --------------------------------------------------------------------------- #
 class _AlbumExpandStub:
     loadAlbumTracks = WavesBridge.loadAlbumTracks
@@ -303,7 +304,7 @@ def test_expanding_a_hovered_album_defers_the_ownership_commit():
 
 
 # --------------------------------------------------------------------------- #
-# G-19: one tile-art crawl at a time
+# one tile-art crawl at a time
 # --------------------------------------------------------------------------- #
 class _TileArtStub:
     _sample_links_art = WavesBridge._sample_links_art
@@ -346,8 +347,8 @@ def test_a_second_tile_art_crawl_never_starts_beside_the_first():
     stub._sample_links_art(links, 0)
     assert len(stub.threadpool.started) == 1, "two crawls would race their disk snapshots"
 
-    # Claim and release both happen under the lock, so the check-then-set the
-    # finding named cannot interleave.
+    # Claim and release both happen under the lock, so the check-then-set cannot
+    # interleave.
     assert stub.set_while_unlocked == 0
     stub.threadpool.started[0].fn()
     assert stub._tile_art_running is False

@@ -14,18 +14,18 @@ destination folder. Two things have to agree for that check to ever fire:
 * the gate (``_owned_at_destination`` / ``_destination_dir``) recomputes the
   destination folder for the same member and compares the two parents.
 
-Since cf29d1f the gate asks the engine's own ``_destination_path``, so today
-they agree. Nothing pinned it: a scratch mutation that dropped the sanitize
-half of the destination decision survived the whole suite, because every
-existing fixture used a folder name the sanitizer leaves alone. With the
+The gate asks the engine's own ``_destination_path``, so the two agree. Nothing
+pinned it: a mutation that drops the sanitize half of the destination decision
+survives the whole suite, because every
+existing fixture uses a folder name the sanitizer leaves alone. With the
 sanitizer out of the gate's half, a record for a folder the sanitizer really
 rewrites (a 300-character album title under the default ``[{album_year}]
 {album_title}`` folder shape) compares against the untruncated spelling, the
 verdict is thrown away, and the merge re-fetches (or the upgrade is lost) for
 every song in that album, forever.
 
-HOW THIS STAYS FIXED
---------------------
+HOW THE TWO AGREE
+-----------------
 The "path the write produced" is NOT taken from the engine (that would be a
 tautology under the very mutation this guards against): it is rebuilt from
 the write's own recipe, ``format_path_media`` then ``path_file_sanitize``, and
@@ -44,9 +44,9 @@ from types import SimpleNamespace
 import pytest
 from tidalapi import Album, Track
 
+from waves.desktop.backend import _as_member_of, _TrackedDownload
 from waves.download import Download
-from waves.helper.path import format_path_media, path_file_sanitize
-from waves.waves_ui.backend import _as_member_of, _TrackedDownload
+from waves.paths import format_path_media, path_file_sanitize
 
 _ARTIST = "Bright Eyes"
 # 300 characters: over the 255-byte component cap on its own, and the default

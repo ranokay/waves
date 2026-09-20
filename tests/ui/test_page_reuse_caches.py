@@ -14,7 +14,7 @@ from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 # ----- playlists/mixes sweep cache ------------------------------------------
 
@@ -30,13 +30,12 @@ def _sweep_bridge(monkeypatch, calls):
         calls.append("sweep")
         return {"playlists": [], "mixes": ["m1", "m2"]}
 
-    # The sweep and the folder walk ride the Provider seam (tickets #20/#22).
+    # The sweep and the folder walk ride the Provider seam.
     b.providers = {
         "tidal": SimpleNamespace(
             user_collections=fake_sweep,
             folder_tree=lambda root_folders=None: SimpleNamespace(nodes=[], playlist_paths={}, partial=False),
-            # The pane's rows come through the source's own row vocabulary
-            # (issue #259).
+            # The pane's rows come through the source's own row vocabulary.
             row_for=lambda kind, item: {"id": item},
         )
     }
@@ -134,7 +133,7 @@ def _fav_bridge(ids_per_call):
         calls.append(kind)
         return {o.id for o in ids_per_call}
 
-    # The id pagination rides the Provider seam (ticket #20).
+    # The id pagination rides the Provider seam.
     b.providers = {"tidal": SimpleNamespace(favorite_ids=fake_ids)}
     return b, calls
 
@@ -201,7 +200,7 @@ def _cache_bridge(tmp_path):
     b._page_cache_lock = Lock()
     b.tidal = MagicMock()
     b.tidal.session.user.id = "42"
-    # The snapshot's user stamp reads the provider (ticket #22).
+    # The snapshot's user stamp reads the provider.
     b.providers = {"tidal": SimpleNamespace(account_id=lambda: "42")}
     return b
 

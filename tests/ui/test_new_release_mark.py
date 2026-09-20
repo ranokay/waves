@@ -63,8 +63,8 @@ _NOISE_RE = re.compile(
     re.DOTALL,
 )
 
-# The QML tree these scans read: Main.qml plus the component files split out
-# of it (#315). A wearer or a component that moves out of Main.qml must not
+# The QML tree these scans read: Main.qml plus every component file. A wearer
+# or a component that moves out of Main.qml must not
 # silently drop out of a scan set, so every scan reads every file.
 _QML_FILES = sorted(QML_MAIN.parent.glob("*.qml"))
 
@@ -193,7 +193,7 @@ def test_the_window_is_a_fortnight() -> None:
 def test_the_payload_builders_never_read_the_clock() -> None:
     """The verdict is never stored: nothing that builds or dresses a payload
     may ask what day it is. A payload outlives the day it was built on."""
-    from waves.waves_ui import backend
+    from waves.desktop import backend
 
     for name in ("_album_dict", "_track_dict", "_browse_card", "_dress_card", "_build_browse_item"):
         src = inspect.getsource(getattr(backend.WavesBridge, name))
@@ -215,7 +215,7 @@ def test_an_album_page_header_carries_the_date_its_rows_show(monkeypatch) -> Non
         page as _page,
     )
 
-    import waves.waves_ui.backend as backend
+    import waves.desktop.backend as backend
 
     for fn, stub in (("clock", lambda: 0.0), ("done", lambda *a, **k: None), ("event", lambda *a, **k: None)):
         monkeypatch.setattr(backend.devlog, fn, stub, raising=True)
@@ -372,8 +372,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

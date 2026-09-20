@@ -1,4 +1,4 @@
-"""Dual-download: Atmos alongside stereo (issue #29).
+"""Dual-download: Atmos alongside stereo.
 
 One click queues both Versions where a real choice exists; each lands as its
 own file (stereo beside the Atmos subfolder), with per-version ownership,
@@ -13,12 +13,12 @@ from types import SimpleNamespace
 from tidalapi.media import AudioMode, Quality, Track
 
 from waves.constants import quality_rank
-from waves.ownership import OwnershipStore, normalize_audio_type
-from waves.waves_ui import backend
-from waves.waves_ui.backend import (
+from waves.desktop import backend
+from waves.desktop.backend import (
     _copy_is_current,
     atmos_file_template,
 )
+from waves.library.ownership import OwnershipStore, normalize_audio_type
 
 ATMOS = AudioMode.dolby_atmos.value
 
@@ -83,7 +83,7 @@ def test_per_version_gates_close_the_second_path_gap(tmp_path):
     """Below-target stereo plus an Atmos-wanting job settles per version:
     the stereo half upgrades (force), the Atmos half fetches (None, not
     owned), and an owned Atmos half skips — instead of forcing forever."""
-    from waves.waves_ui.backend import _TrackedDownload
+    from waves.desktop.backend import _TrackedDownload
 
     store = OwnershipStore(str(tmp_path / "own.db"))
     store.record("101", _file(tmp_path, "stereo.m4a"), "HIGH", audio_mode="STEREO")
@@ -205,8 +205,7 @@ def test_dual_button_need_is_cache_only_and_default_gated():
 
 
 def test_copy_is_current_atmos_clause_generalized(tmp_path):
-    # An owned Atmos copy is current for an Atmos-wanting job (existing
-    # clause, generalized per version).
+    # An owned Atmos copy is current for an Atmos-wanting job.
     rec = {"quality_tier": "HIGH", "quality_rank": quality_rank("HIGH"), "audio_mode": ATMOS, "audio_type": "atmos"}
     assert _copy_is_current(rec, quality_rank("HI_RES_LOSSLESS"), True) is True
     # ... but a stereo copy below target still upgrades.
@@ -223,7 +222,7 @@ def test_copy_is_current_atmos_clause_generalized(tmp_path):
 
 
 def test_untagged_files_read_no_audio_type(tmp_path):
-    from waves.metadata import read_audio_type
+    from waves.metadata.tags import read_audio_type
 
     p = tmp_path / "plain.txt"
     p.write_text("not audio")
@@ -237,7 +236,7 @@ def test_file_mode_reader_prefers_the_tag_over_the_codec(tmp_path, monkeypatch):
 
     from waves.constants import METADATA_LOOKUP_UPC, MetadataTargetUPC
     from waves.download import _file_audio_mode_is_atmos
-    from waves.metadata import Metadata
+    from waves.metadata.tags import Metadata
 
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
@@ -263,11 +262,13 @@ def test_file_mode_reader_prefers_the_tag_over_the_codec(tmp_path, monkeypatch):
     assert meta.save()
 
     # The container sniff is the shared reader's module-level seam.
-    monkeypatch.setattr("waves.metadata._mp4_codec", lambda _path: "mp4a.40.2")  # stereo codec, contradicting the tag
+    monkeypatch.setattr(
+        "waves.metadata.tags._mp4_codec", lambda _path: "mp4a.40.2"
+    )  # stereo codec, contradicting the tag
     assert _file_audio_mode_is_atmos(target) is True
 
     # And an untagged file still falls back to the codec.
     plain = tmp_path / "plain.m4a"
     plain.write_bytes(b"stand-in")
-    monkeypatch.setattr("waves.metadata._mp4_codec", lambda _path: "ec-3")
+    monkeypatch.setattr("waves.metadata.tags._mp4_codec", lambda _path: "ec-3")
     assert _file_audio_mode_is_atmos(plain) is True

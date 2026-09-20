@@ -2,10 +2,10 @@
 
 The stream bytes landing is not the work landing: extraction, tagging (with
 its lyrics and cover fetches) and the move to the destination all still run
-while the track's pct sits at 100, which used to read as a DOWNLOADING word
-stuck fully lit. The drawer now hands that word off to FINISHING, filled by
-``fpct``: a second progress axis fed from the engine's finalize-step
-boundaries (``Download._note_stage``, overridden by ``_TrackedDownload``).
+while the track's pct sits at 100, so the word must leave DOWNLOADING rather
+than sit fully lit. The drawer hands it off to FINISHING, filled by ``fpct``:
+a second progress axis fed from the engine's finalize-step boundaries
+(``Download._note_stage``, overridden by ``_TrackedDownload``).
 
 These tests pin the plumbing end to end of the Python side:
   * the tracked download emits the fraction under the row's key (the identity
@@ -24,9 +24,9 @@ from unittest.mock import MagicMock, patch
 
 from tidalapi.media import Track
 
+from waves.desktop import backend
 from waves.download import Download
 from waves.providers import StreamInfo
-from waves.waves_ui import backend
 
 
 def _tracked(relay):
@@ -160,10 +160,10 @@ def _finalize_fracs(tmp_path, *, extract=False, suffix=".flac", is_bts=True):
 
 
 def test_finishing_opens_empty_when_the_ffmpeg_steps_are_skipped(tmp_path):
-    """The reported livetest bug: fixed milestones opened the word two-thirds
-    full because the skipped ffmpeg steps' shares were awarded anyway. With
-    nothing but tagging and the move to run, every fraction before tagging
-    must be zero, and the two real steps carry the whole word."""
+    """A skipped ffmpeg step must not award its share: fixed milestones open
+    the word two-thirds full. With nothing but tagging and the move to run,
+    every fraction before tagging must be zero, and the two real steps carry
+    the whole word."""
     fracs = _finalize_fracs(tmp_path)
     assert fracs[0] == 0.0
     tag, move = fracs[-2], fracs[-1]

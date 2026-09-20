@@ -1,10 +1,11 @@
 """A video card's release date must never run under its download button.
 
-The card's meta column already reserves the download button's width, but the
-artist/date row inside it anchored the date to the right edge of an
-unbounded ArtistLinks row: a long credit line (several artists) pushed the
-dot and the date past the column and under the button. The fix reserves the
-date's (short, fixed) width first and clips the artist list to what remains.
+The card's meta column reserves the download button's width, but the
+artist/date row inside it anchoring the date to the right edge of an
+unbounded ArtistLinks row lets a long credit line (several artists) push the
+dot and the date past the column and under the button. Reserving the date's
+(short, fixed) width first and clipping the artist list to what remains keeps
+them clear.
 This drives the real Main.qml: build a video result with a long credit line
 and assert the date text stays clear of the download button.
 """
@@ -65,8 +66,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:  # pragma: no cover - environment guard
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

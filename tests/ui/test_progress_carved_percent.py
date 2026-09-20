@@ -3,39 +3,31 @@ percentage is carved into the bar on hover.
 
 WHAT THIS FENCES OFF
 --------------------
-Progress pill lab, rounds 2 to 5 (2026-08-17). The running face of
-DownloadButton (the SAME face on every download button: track rows, album
-and playlist pages, artist pages, the Browse cards' pill) used to be a
-four-row dot matrix stopping 12px in from either end, with a "NN%" readout
-to its right in a slot reserved for "100%": a two-character hole beside a
-short number for most of a run, and a bar that sat a pixel low on retina
-displays (centred to a logical pixel; 19px in 28px is a 4.5px offset).
+The running face of DownloadButton (the SAME face on every download button:
+track rows, album and playlist pages, artist pages, the Browse cards' pill) is
+a dense grid filling the button: SEVEN rows of 3px cells with 1px gaps, 1px
+inside the outline at every edge, centred to the DEVICE pixel, with no readout
+beside it, and its outer cells fading toward every edge on the shelf edge
+fades' curve (26px at the ends, 8px top and bottom: DotMatrix.edgeFadeW /
+edgeFadeH) so the field sits in a soft frame inside the outline. The percentage
+is spelled in the matrix's own cells (a 3x5 dot font on the middle five rows),
+always lit, on a PLATE knocked back to near black, and only while the button
+(or, on a Browse card, the card) is hovered: each cell dissolves from its bar
+state to its carve state on its own random delay, driven by one eased value,
+so a leave mid-way reverses from wherever it is.
 
-Now the matrix is a dense grid filling the button (round 6: SEVEN rows of
-3px cells with 1px gaps, 1px inside the outline at every edge), centred to
-the DEVICE pixel, with no readout beside it, and its outer cells fade toward
-every edge on the shelf edge fades' curve (26px at the ends, 8px top and
-bottom: DotMatrix.edgeFadeW / edgeFadeH) so the field sits in a soft frame
-inside the outline. The percentage is spelled in the matrix's own cells (a
-3x5 dot font on the middle five rows), always lit, on a PLATE knocked back
-to near black, and only while the button (or, on a Browse card, the card) is
-hovered: each cell dissolves from its bar state to its carve state on its
-own random delay, driven by one eased value, so a leave mid-way reverses
-from wherever it is.
+Two rules keep the number readable at every value:
 
-Two things about the number were livetested and changed on 2026-08-17:
-
-  * it was the INVERSE of the bar under it (a hole over a lit cell, a lit
-    dot over an unlit one), which read at either end of a run but not at all
-    while the fill edge crossed the digits. A stroke is now always 1.0 and
-    the plate around it always 0.04, whatever the bar is doing. This
-    polarity and not the other way up: a 3x5 glyph is mostly stroke, so dark
-    digits on a lit plate read as a blob to be decoded from their counters
-    (progress pill lab round 8);
-  * the zone was a FIXED four glyphs with the word right-aligned in it, so
-    that 9 -> 10 and 99 -> 100 moved nothing. That hung every ordinary
-    reading two to four columns right of centre. The zone is now the word's
-    own width, centred, for one, two or three digits alike.
+  * the stroke is always 1.0 and the plate around it always 0.04, whatever
+    the bar is doing. The carve must not invert the bar under it (a hole over
+    a lit cell, a lit dot over an unlit one), which reads at either end of a
+    run but not while the fill edge crosses the digits. A 3x5 glyph is mostly
+    stroke, so dark digits on a lit plate read as a blob to be decoded from
+    their counters;
+  * the zone is the word's own width, centred, for one, two or three digits
+    alike. A FIXED four-glyph zone with the word right-aligned in it moves
+    nothing from 9 -> 10 and 99 -> 100, hanging every ordinary reading two to
+    four columns right of centre.
 
 HOW THIS STAYS FIXED
 --------------------
@@ -125,7 +117,7 @@ def test_ledger_and_scrub_matrices_do_not_carve():
     db = (QML_DIR / "DownloadButton.qml").read_text()
     dm = (QML_DIR / "DotMatrix.qml").read_text()
     assert 'rows >= 5 && word !== ""' in dm, "DotMatrix must gate the word on five rows or more"
-    # The download face lives in DownloadButton.qml since #315; the one-site
+    # The download face lives in DownloadButton.qml; the one-site
     # rule spans the tree, so count both files.
     both = db + QML_MAIN.read_text()
     assert both.count("word: db.pct >= 0") == 1, "exactly one site (the download face) sets the word"

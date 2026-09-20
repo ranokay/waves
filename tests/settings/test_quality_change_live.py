@@ -1,11 +1,11 @@
-"""Issue #9: a saved audio-quality change must reach the tidal session live.
+"""A saved audio-quality change must reach the tidal session live.
 
 Streams are requested at the SESSION's audio quality (the Waves UI never
-passes a per-download quality), and historically that was only written at
-startup, so a settings change kept downloading at the old quality until the
+passes a per-download quality), and that is only written at
+startup, so a settings change would keep downloading at the old quality until the
 app was restarted. applySettings must re-apply settings to the tidal session
 whenever the audio quality changes -- through the provider's ``apply_quality``
-(the seam, ticket #22), which writes the tier it maps the Waves rung to and
+(the seam), which writes the tier it maps the Waves rung to and
 then runs the same settings_apply body.
 
 Tested with the method-bound stub pattern (no display, no live bridge).
@@ -16,7 +16,7 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Stub:
@@ -47,14 +47,14 @@ def _apply_stub():
     stub._ffmpeg_source_label = lambda: "system"
     stub._waves_pref_bool = lambda key: False
     stub.ownershipChanged = _signal()
-    stub.targetTierChanged = _signal()  # the DEFAULT mark in a badge's quality menu (issue #36)
+    stub.targetTierChanged = _signal()  # the DEFAULT mark in a badge's quality menu
     stub.editionMergeChanged = _signal()
     stub.ffmpegStatusChanged = _signal()
     stub.skipExistingChanged = _signal()
     stub.dl_pool = SimpleNamespace(setMaxThreadCount=lambda n: None)
     stub._logged_in = False
     stub._set_status = lambda text: None
-    # The quality re-apply rides the provider (ticket #22). The fake records
+    # The quality re-apply rides the provider. The fake records
     # the (tier, audio type) it was asked for, then does what the real
     # provider's apply_quality does: write the mapped tier and run
     # settings_apply against the stub's own settings object.

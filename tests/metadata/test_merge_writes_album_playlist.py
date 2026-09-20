@@ -8,14 +8,12 @@ downloaded album. The engine keeps that promise at the end of ``items()``: it
 collects the landed paths in track order and hands them to
 ``playlist_populate``. The bridge's best-of-both merge stands in for
 ``items()`` over an explicit track list, fanned out through ``item()`` on its
-own pool, and it stopped after the pool: every track landed, the queue row read
-done, and no ``_<Album>.m3u8`` was ever written. The same album downloaded with
-the merge preference off got its playlist. No retry ever produced the file,
-because a retry only re-ran the same fan-out.
+own pool, and it must not stop after the pool: every track lands, the queue row
+reads done, and a ``_<Album>.m3u8`` must still be written, the same as an album
+downloaded with the merge preference off. No retry would produce the file,
+because a retry only re-runs the same fan-out.
 
-THE FIX
--------
-The step ``items()`` ends with is now an engine method,
+The step ``items()`` ends with is an engine method,
 ``Download._playlist_for_collection`` (the setting gate, the name, the
 sort-by-number decision and the ``playlist_populate`` call), fed by
 ``Download._landed_paths`` (the submission-order path collection that
@@ -23,8 +21,8 @@ sort-by-number decision and the ``playlist_populate`` call), fed by
 fan-out calls both. One decision, so the two paths cannot drift on what the
 file is called, what it lists or in which order.
 
-HOW THIS STAYS FIXED
---------------------
+HOW THE TWO PATHS STAY IN STEP
+------------------------------
 A real ``Download`` (its network-touching ``__init__`` skipped) with the REAL
 ``playlist_populate``, a real temp album folder, and the REAL
 ``WavesBridge._download_merge_plan`` as an unbound method. ``item()`` is the
@@ -47,10 +45,10 @@ import pytest
 from tidalapi import Album
 
 from waves.constants import PLAYLIST_EXTENSION, PLAYLIST_PREFIX
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 from waves.download import Download
-from waves.helper.path import format_path_media
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
+from waves.paths import format_path_media
 
 _ALBUM_TITLE = "Album X (Deluxe)"
 _M3U8 = f"{PLAYLIST_PREFIX}{_ALBUM_TITLE}{PLAYLIST_EXTENSION}"
@@ -160,7 +158,7 @@ class _RecordedPopulate:
 
 
 # --------------------------------------------------------------------------- #
-# The fix: the merged album's folder holds the playlist file.
+# The merged album's folder holds the playlist file.
 # --------------------------------------------------------------------------- #
 def test_a_merged_album_gets_its_playlist_file(tmp_path):
     dl = _WritingDownload(tmp_path, _Settings())

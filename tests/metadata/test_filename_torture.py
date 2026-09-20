@@ -1,6 +1,6 @@
 """A nasty-name battery over the four functions every library name funnels through.
 
-Issues #15 and #16 both came out of one name shape nobody had tried, so this
+One untried name shape is enough to lose a folder, so this
 module asserts INVARIANTS rather than specific spellings: whatever the four
 funnel functions decide to call a thing, the result has to stay under the
 download folder, be openable on a real filesystem, and never quietly become
@@ -29,7 +29,7 @@ from tidalapi import Album, Track
 
 from waves.constants import FILENAME_LENGTH_MAX
 from waves.download import Download
-from waves.helper.path import (
+from waves.paths import (
     file_unique_suffix,
     format_path_media,
     name_comparison_key,
@@ -177,8 +177,8 @@ class TestEveryNastyNameProducesAUsablePath:
 class TestNastyNamesAtEveryLevel:
     @pytest.mark.parametrize("name", NASTY_NAMES)
     def test_the_same_nasty_name_as_artist_album_and_track(self, tmp_path, name):
-        # Issue #16 was an ALBUM name, not a track title, and the artist folder
-        # is the level a lost segment falls back onto.
+        # A lost segment is an ALBUM name problem as much as a track title
+        # one, and the artist folder is the level it falls back onto.
         destination = _destination(tmp_path, name, album=name, artist=name)
 
         assert destination.is_relative_to(tmp_path)
@@ -272,8 +272,8 @@ class TestTheLayoutGuardOnNastyNames:
     @pytest.mark.parametrize("title", NASTY_NAMES)
     def test_an_older_spelling_never_moves_the_file_out_of_the_album(self, tmp_path, title):
         # _keep_existing_layout may prefer an older spelling, but only one at
-        # the same depth: issue #16 was exactly an "older" candidate that had
-        # lost a folder and pointed at the artist directory instead.
+        # the same depth: an "older" candidate that has
+        # lost a folder points at the artist directory instead.
         dl = _make_download(tmp_path)
         preferred = _destination(tmp_path, title)
         older = path_file_sanitize(

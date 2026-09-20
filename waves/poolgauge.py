@@ -12,7 +12,7 @@ instead, which is what saturation actually means there, and reads zero
 between jobs. One module-level gauge per pool kind, registered once at
 startup in backend.py beside the QThreadPools.
 
-Grew out of the scanner's private gauge (waves/library_index.py), promoted
+Grew out of the scanner's private gauge (waves/library/index.py), promoted
 here so the engine can use it without importing the scanner, and the scanner
 without importing the engine. Deliberately Qt-free: the download engine
 imports this and must stay importable without PySide6.

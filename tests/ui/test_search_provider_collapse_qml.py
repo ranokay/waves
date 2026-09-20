@@ -3,7 +3,7 @@
 Each provider header (TIDAL / APPLE MUSIC, and any later provider) collapses
 its whole result group; the fold defaults to expanded, persists per session
 and across restarts via waves prefs, per provider. Filter chips keep filtering
-rows independently of the fold. Since #292 the groups render through one
+rows independently of the fold. The groups render through one
 shared component (SearchProviderGroup), so this scenario reads them through
 root.searchGroupFor(provider).
 """
@@ -100,8 +100,8 @@ def _scenario() -> int:
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
-    from waves.waves_ui.app import _load_mono
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.app import _load_mono
+    from waves.desktop.backend import WavesBridge
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)

@@ -8,26 +8,26 @@ push the other: the preview control is anchored to the left edge, the download
 box to the right. When their words together outgrow 140px they do not reflow,
 they simply draw through each other, and nothing in the layout complains.
 
-That is what happened. The download box reserves its widest state so its width
-never jitters, and its widest state was the queued one: the QueueStack glyph
-plus "QUEUED ALBUM" came to 101px. The preview control is 63px. 101 + 63 is
-164, so the box began 25px inside the preview control and stayed there, on
-every previewable card, whether or not anything was queued. It read worst
-while actually queued, when both halves were drawing text on top of each other.
+That is the hazard. The download box reserves its widest state so its width
+never jitters, and its widest state is the queued one: the QueueStack glyph
+plus "QUEUED ALBUM" come to 101px. The preview control is 63px. 101 + 63 is
+164, so the box begins 25px inside the preview control and stays there, on
+every previewable card, whether or not anything is queued. It reads worst
+while actually queued, when both halves draw text on top of each other.
 
-The fix is the one the art card's strip already makes (see acStrip's padFull /
-padMin / availW and tests/ui/test_browse_strip_fits_the_card.py): the words give
-way rather than overrun. The queued label drops the media noun the full button
-carries, because the card is already the noun, and the preview control stands
-its word down when what is left of the line will not hold it, keeping the
-glyph, which always fits.
+This follows the art card's strip (see acStrip's padFull /
+padMin / availW and tests/ui/test_browse_strip_fits_the_card.py): the words
+give way rather than overrun. The queued label drops the media noun the full
+button carries, because the card is already the noun, and the preview control
+stands its word down when what is left of the line will not hold it, keeping
+the glyph, which always fits.
 
 The fence is the LINE, not those numbers: whatever either half says, in
 whatever font the platform gives it, the preview control must end before the
 download box begins and the box must end inside the line. That is the boundary
-that actually collides, and it holds the fix without restating its arithmetic,
-so a longer word, a new state or a wider font is caught here rather than on a
-user's screen.
+that actually collides, and it holds the layout without restating its
+arithmetic, so a longer word, a new state or a wider font is caught here
+rather than on a user's screen.
 
 Runs in a SUBPROCESS like the other Main.qml scenarios: building the bridge
 installs process-global handlers that must not leak into the suite.
@@ -115,7 +115,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT

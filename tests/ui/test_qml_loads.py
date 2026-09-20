@@ -92,7 +92,7 @@ def _run_scenario() -> int:
     app.setOrganizationName("Waves")
     app.setOrganizationDomain("waves")
     try:
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return _EXIT_NO_QT

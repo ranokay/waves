@@ -1,17 +1,16 @@
-"""Regression for issue #12: playlists were capped at 200 tracks.
+"""A playlist's tracks page to the end, not a hard-coded 200.
 
-The playlist browse path paged obj.items() with a hard-coded two-page loop
-(offsets 0 and 100), so any playlist longer than 200 tracks was silently
-truncated in the track list even though the header count was right. The
-paging now lives in backend._all_playlist_items and loops until the endpoint
-returns a short page.
+The playlist browse path must page obj.items() until the endpoint returns a
+short page; a hard-coded two-page loop (offsets 0 and 100) silently truncates
+the track list of any playlist longer than 200 tracks, even though the header
+count is right. The paging lives in backend._all_playlist_items.
 """
 
 from __future__ import annotations
 
 from tidalapi.media import Track
 
-from waves.waves_ui.backend import _all_playlist_items
+from waves.desktop.backend import _all_playlist_items
 
 
 def _make_track(i: int) -> Track:
@@ -95,9 +94,9 @@ def test_a_playlist_that_ends_exactly_on_the_ceiling_is_complete():
 
 
 def test_a_stop_between_pages_ends_the_paging():
-    # A scan's stop_check runs before every page: STOP mid-scan used to leave
-    # the remaining pages still being requested (nothing was queued, but the
-    # wire kept going).
+    # A scan's stop_check runs before every page: a STOP mid-scan must not
+    # leave the remaining pages still being requested (nothing was queued, but
+    # the wire kept going).
     class _Stop(Exception):
         pass
 

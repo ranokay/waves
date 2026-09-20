@@ -1,27 +1,27 @@
 """Network work must not run on the GUI thread, nor under a held lock.
 
-THE BUGS
---------
-1. ``previewArtist`` and ``downloadArtist`` called ``_get_artist`` in the
-   **slot body**. A QML-to-slot call is a synchronous call on the GUI thread,
-   and on an ``_objs`` miss ``_get_artist`` issues ``session.artist(...)``,
-   which reaches tidalapi's request layer. tidalapi passes no ``timeout``
-   anywhere and its session is a bare ``requests.Session``, so the window froze
-   for the length of that request. Every sibling (``previewMedia``,
-   ``_refetch_for_download``, ``loadArtist``) resolves inside ``work()``. The
-   codebase already knew the hazard: ``_try_token_login``'s docstring records a
-   synchronous login on the GUI thread hanging the app at launch.
+WHAT THIS FENCES OFF
+--------------------
+1. ``previewArtist`` and ``downloadArtist`` must resolve the artist inside
+   ``work()``, never in the **slot body**. A QML-to-slot call is a synchronous
+   call on the GUI thread, and on an ``_objs`` miss ``_get_artist`` issues
+   ``session.artist(...)``, which reaches tidalapi's request layer. tidalapi
+   passes no ``timeout`` anywhere and its session is a bare
+   ``requests.Session``, so the window freezes for the length of that request.
+   Every sibling (``previewMedia``, ``_refetch_for_download``, ``loadArtist``)
+   resolves inside ``work()``; ``_try_token_login``'s docstring records the
+   same hazard hanging the app at launch.
 
    Misses are ordinary, not exotic: every fresh search clears all ``_objs``
    buckets, and a cache-hit re-search re-emits the payload without repopulating
    them, so any artist card shown from a cached search has no live object.
 
-2. ``_browse_fetch`` held the process-wide, non-reentrant ``_browse_lock``
-   across that same untimed request. Only tidalapi's shared page parser needs
-   serializing; the request does not. A wedged peer therefore blocked every
-   other acquirer, including ``_refetch_for_download``, and because all
-   acquirers sit on the shared UI pool, a few blocked workers saturate it and
-   take search and artist pages down with Browse.
+2. ``_browse_fetch`` must not hold the process-wide, non-reentrant
+   ``_browse_lock`` across that same untimed request. Only tidalapi's shared
+   page parser needs serializing; the request does not. A wedged peer would
+   otherwise block every other acquirer, including ``_refetch_for_download``,
+   and because all acquirers sit on the shared UI pool, a few blocked workers
+   saturate it and take search and artist pages down with Browse.
 
 These are structural guards: they assert *where* the call sits, because the
 failure is a freeze, which a functional test cannot observe without hanging.
@@ -33,7 +33,7 @@ import ast
 import inspect
 import textwrap
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 def _slot_ast(name: str) -> ast.FunctionDef:
@@ -112,9 +112,9 @@ def test_no_slot_resolves_media_objects_on_the_gui_thread():
 def test_browse_fetch_does_not_hold_the_lock_across_the_request():
     """The HTTP request must be issued before the lock is taken.
 
-    The read-and-parse moved behind the Provider seam (ticket #22), so the
-    discipline moved with it: TidalProvider.browse_page owns the lock now,
-    and the finding's shape is pinned there -- the request issued outside,
+    The read-and-parse live behind the Provider seam, so the
+    discipline lives there too: TidalProvider.browse_page owns the lock,
+    and its shape is pinned there -- the request issued outside,
     the parse (the reason the lock exists; tidalapi's shared parser is not
     thread-safe) inside."""
     import inspect

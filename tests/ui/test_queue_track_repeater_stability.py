@@ -1,15 +1,15 @@
-"""Guard: the queue drawer's per-track Repeater must not rebuild on live ticks.
+"""The queue drawer's per-track Repeater must not rebuild on live ticks.
 
-THE BUG WE ARE FENCING OFF
---------------------------
+WHAT THIS FENCES OFF
+--------------------
 While an album downloads, the backend streams per-track updates twice a
 second (``queueTrackState`` on lifecycle changes, ``queueTrackPct`` from the
 500ms progress poll), and each one reassigns ``root.queueTracks`` wholesale
-with fresh array instances. The drawer's expanded/peeked track list used to
-bind that array directly as its Repeater model, so EVERY tick tore down and
-rebuilt every row delegate. Each rebuild needs a layout-settle frame, which
-read as the hover-peek sliver visibly vibrating under the pointer (and burned
-CPU rebuilding rows whose text barely changed).
+with fresh array instances. Binding that array directly as the expanded/peeked
+track list's Repeater model tears down and rebuilds every row delegate on
+EVERY tick. Each rebuild needs a layout-settle frame, which reads as the
+hover-peek sliver visibly vibrating under the pointer (and burns CPU
+rebuilding rows whose text barely changed).
 
 HOW THIS STAYS FIXED
 --------------------
@@ -31,8 +31,8 @@ import re
 
 from support.paths import QML_MAIN
 
-# The ledger moved into QueueDrawer.qml in #315 slice 4; the drawer file is
-# where both its Repeater and the queueTracks counts live.
+# The ledger lives in QueueDrawer.qml, where both its Repeater and the
+# queueTracks counts live.
 QUEUE_DRAWER_QML = QML_MAIN.parent / "QueueDrawer.qml"
 
 # The ledger row delegate is the only thing that carries this name, so it is

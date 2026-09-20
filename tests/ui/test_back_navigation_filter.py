@@ -1,22 +1,22 @@
 """Back navigation input: the macOS swipe filter and the side-button MouseArea.
 
-The bridge's event filter handles ONE thing now, the discrete macOS
+The bridge's event filter handles ONE thing, the discrete macOS
 three-finger swipe (NativeGesture), and it is installed on the window's
 content item, never on the window or the application. A Python event filter
 is a crossing into the interpreter for every event its target receives; on
-the window that was one per frame (the render loop's update request), each
-waiting for the interpreter behind the launch workers, sampled 2026-09-11 as
-the largest single GUI-thread cost while the landing built under the boot
-water. The content item receives only what no item under the pointer
-accepted, which is the swipe and nothing else while the scene is idle.
+the window that is one per frame (the render loop's update request), each
+waiting for the interpreter behind the launch workers -- the largest single
+GUI-thread cost while the landing builds under the boot water. The content
+item receives only what no item under the pointer accepted, which is the
+swipe and nothing else while the scene is idle.
 
-The mouse back and forward side buttons moved to a MouseArea at the top of
+The mouse back and forward side buttons live in a MouseArea at the top of
 the scene (Main.qml), pinned here by text: it accepts exactly those two
 buttons, so every other press, wheel and hover passes through to the page.
 
-The window's activate and deactivate events are no longer swallowed: the
-per-item walk they trigger cost ~0.3-0.5 s only while an application-wide
-filter made every hop cross into Python, which no filter does any more.
+The window's activate and deactivate events are not swallowed: the
+per-item walk they trigger costs ~0.3-0.5 s while an application-wide
+filter makes every hop cross into Python.
 """
 
 from __future__ import annotations
@@ -27,11 +27,11 @@ from conftest import _Signal
 from PySide6.QtCore import QEvent, Qt
 from support.paths import QML_MAIN, REPO_ROOT
 
-from waves.waves_ui import backend as backend_mod
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop import backend as backend_mod
+from waves.desktop.backend import WavesBridge
 
 _MAIN_QML = QML_MAIN
-_APP_PY = REPO_ROOT / "waves" / "waves_ui" / "app.py"
+_APP_PY = REPO_ROOT / "waves" / "desktop" / "app.py"
 
 
 class _MouseEvent:
@@ -103,7 +103,7 @@ def test_swipe_the_other_way_is_not_back(monkeypatch):
 
 
 def test_mouse_buttons_and_window_events_pass_through_the_filter(monkeypatch):
-    """The filter no longer reads any of these: the side buttons are the
+    """The filter does not read any of these: the side buttons are the
     MouseArea's (below), and activation events are left to Qt."""
     monkeypatch.setattr(backend_mod, "_IS_MACOS", True)
     stub = _Stub()
@@ -131,11 +131,11 @@ def test_filter_is_installed_on_the_content_item_not_the_window():
 
 
 def test_search_select_all_rearms_on_window_activation():
-    """The swallow's known cost: without WindowActivate/Deactivate the scene
+    """Without WindowActivate/Deactivate the scene
     keeps its focus item across an app switch, so the click that brings Waves
     back never replays the activeFocus transition that selects the search
-    term (reported from livetesting: the term sat unselected until a click
-    away and back). The field must also ride the window's active flag, a
+    term, and the term sits unselected until a click away and back. The field
+    must also ride the window's active flag, a
     QWindow signal the swallow does not touch."""
     main = QML_MAIN.read_text(encoding="utf-8")
     assert "onAppActiveChanged: if (appActive && activeFocus)" in main

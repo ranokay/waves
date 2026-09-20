@@ -24,8 +24,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from waves.waves_ui import backend
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop import backend
+from waves.desktop.backend import WavesBridge
 
 UTC = dt.UTC
 

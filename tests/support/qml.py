@@ -58,7 +58,7 @@ def seed_tidal_search(q, bridge, *, artists=(), albums=(), tracks=(), videos=(),
 
     Scenarios that drive a row widget (a progress bar, a hover, a row layout)
     need a live results page, not a real search: this emits the one-provider
-    payload a TIDAL search produces (issue #292's group shape) and opens the
+    payload a TIDAL search produces (the bridge's own group shape) and opens the
     sections the caller asks for. The caller owns ``openSearch()`` and any
     page state around it.
     """
@@ -169,7 +169,7 @@ def require_qt() -> None:
 def make_tidal_my_music_source(root, q, settle, bridge) -> None:
     """Seed a signed-in TIDAL session so My Music renders its source group.
 
-    The pane's groups come from the bridge's live sources (issue #259): a
+    The pane's groups come from the bridge's live sources: a scenario that
     scenario that drives one flips the session flag the real sign-in would
     flip and re-reads the provider surfaces the same way the app does, then
     works through ``root.libGroupFor("tidal")``.
@@ -254,10 +254,10 @@ def boot_main_qml(keep_settings: bool = False):
     Those three patches are why no scenario exercises the *composed* launch
     (real login racing the overlay, the launch sweep, the Browse fetch): with
     them real, the boot overlay and the welcome gate would eat the synthetic
-    clicks a scenario drives (the audit's TT-10, quoted in issue #247). The
-    composed launch is covered where it can be asserted honestly instead: the
-    real entry point twice in ``tests/ui/test_cold_process_boot.py`` and the
-    real bridge from isolated settings in ``tests/ui/test_bridge_boot_isolated.py``.
+    clicks a scenario drives. The composed launch is covered where it can be
+    asserted honestly instead: the real entry point twice in
+    ``tests/ui/test_cold_process_boot.py`` and the real bridge from isolated
+    settings in ``tests/ui/test_bridge_boot_isolated.py``.
     """
     try:
         from PySide6.QtCore import QEventLoop, QTimer, QUrl
@@ -275,8 +275,8 @@ def boot_main_qml(keep_settings: bool = False):
     app = QGuiApplication.instance() or QGuiApplication([])
     if not keep_settings:
         sandbox_qml_settings()
-    from waves.waves_ui.app import _load_mono
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop.app import _load_mono
+    from waves.desktop.backend import WavesBridge
 
     # Neither a library scan nor a Browse fetch is what these scenarios are
     # about, and both reach outside the sandbox.
@@ -332,12 +332,12 @@ def _evaluator(context, scope):
 def scoped_q(q, path: str):
     """Evaluator for expressions naming a split-out component's internal ids.
 
-    Once a component leaves Main.qml (#315) its ids (``queueList``,
+    Once a component is split out of Main.qml, its ids (``queueList``,
     ``queueGrip``, ``logsText``, …) are no longer in the root's QML context,
     so root-context expressions fail with a ReferenceError. Any object the
     component file itself created carries that file's context — the drawer's
     ``background`` is the stable handle — and expressions evaluated against
-    it resolve the component's ids exactly as the pre-move expressions did.
+    it resolve the component's ids exactly as a root-context expression would.
     """
 
     from PySide6.QtQml import QQmlEngine

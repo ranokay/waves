@@ -3,7 +3,7 @@ from enum import StrEnum
 
 CTX_TIDAL: str = "tidal"
 CTX_APPLE: str = "apple"
-# Library folder segment per provider (issue #65): the {provider_name}
+# Library folder segment per provider: the {provider_name}
 # template token renders these, so the same song saved from both providers
 # coexists instead of colliding. Unknown ids render "" (the segment drops
 # away), so contexts that predate the token keep their old paths.
@@ -29,7 +29,7 @@ FILENAME_SANITIZE_PLACEHOLDER: str = "_"
 # What a path segment that is nothing but "." or ".." is written as. Neither
 # survives being a folder name: "." is what every platform calls "this folder",
 # so the segment evaporates in the join that builds the destination and the
-# album's tracks land loose in the artist folder (issue #29), and ".." walks up
+# album's tracks land loose in the artist folder, and ".." walks up
 # out of the download folder. Fullwidth full stop for the same reason "?" takes
 # "？": the folder still reads as the release's own name.
 DOT_SEGMENT_STANDIN: str = "．"
@@ -182,7 +182,7 @@ class QualityVideo(StrEnum):
 
 
 class DefaultAudio(StrEnum):
-    """The Chooser one-click audio default (issue #66): stereo, or both
+    """The Chooser one-click audio default: stereo, or both
     Versions side by side. Atmos-alone has no Settings spelling; it stays a
     per-click choice only."""
 
@@ -204,7 +204,7 @@ def default_audio_is_both(value: object) -> bool:
 
 
 # TIDAL's audioModes spelling for a Dolby Atmos delivery, as a literal so this
-# shared decision needs no engine import (waves.ownership spells the same word).
+# shared decision needs no engine import (waves.library.ownership spells the same word).
 ATMOS_MODE: str = "DOLBY_ATMOS"
 
 
@@ -262,7 +262,7 @@ def cover_file_dimension(embedded: CoverDimensions, pref: str) -> CoverDimension
     "follow" (or any unknown word) uses the embedded size; otherwise a
     ``CoverDimensions`` member name. One rule for every provider: TIDAL's
     engine and the Apple runner both ask here, so a saved cover size cannot
-    apply to one provider's card and be ignored by the other (issue #236).
+    apply to one provider's card and be ignored by the other.
     """
     if pref == "follow":
         return embedded
@@ -270,20 +270,6 @@ def cover_file_dimension(embedded: CoverDimensions, pref: str) -> CoverDimension
         return CoverDimensions[pref]
     except KeyError:
         return embedded
-
-
-class TidalLists(StrEnum):
-    Playlists = "Playlists"
-    Favorites = "Favorites"
-    Mixes = "Mixes"
-
-
-class QueueDownloadStatus(StrEnum):
-    Waiting = "⏳️"
-    Downloading = "▶️"
-    Finished = "✅"
-    Failed = "❌"
-    Skipped = "↪️"
 
 
 FAVORITES: dict[str, dict[str, str]] = {

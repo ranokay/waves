@@ -1,8 +1,8 @@
 """Recommended stand-ins: offered on the settings page, never imposed.
 
-The per-character table (issue #16) shipped empty, so every rejected character
-was simply removed: "Mercury: Act 1" lost its colon, and XXXTENTACION's album
-"?" sanitized away to nothing at all and lost its folder entirely.
+The per-character table starts empty, so every rejected character is simply
+removed: "Mercury: Act 1" loses its colon, and XXXTENTACION's album
+"?" sanitizes away to nothing at all and loses its folder entirely.
 ``DEFAULT_ILLEGAL_MAP`` is what the table should hold.
 
 It cannot just become the dataclass default, though. An existing library's
@@ -29,17 +29,17 @@ from support.paths import REPO_ROOT
 from tidalapi import Album, Track
 
 from waves.constants import DEFAULT_ILLEGAL_MAP
-from waves.helper.path import (
+from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge
+from waves.model.cfg import HelpSettings
+from waves.model.cfg import Settings as CfgSettings
+from waves.paths import (
     ILLEGAL_FILENAME_CHARS,
     format_path_media,
     safe_filename_replacement,
     safe_filename_replacement_map,
 )
-from waves.model.cfg import HelpSettings
-from waves.model.cfg import Settings as CfgSettings
-from waves.waves_ui.backend import _FIRST_RUN_OVERRIDES, WavesBridge
 
-_UI = REPO_ROOT / "waves" / "waves_ui"
+_UI = REPO_ROOT / "waves" / "desktop"
 _SETTINGS_QML = (_UI / "qml" / "SettingsPage.qml").read_text(encoding="utf-8")
 
 
@@ -149,8 +149,8 @@ class TestWhatTheRecommendedTableSpells:
         assert self._album("What's Going On?") == "What's Going On？"
 
     def test_an_album_named_only_punctuation_still_has_a_name(self):
-        # The issue #16 complaint: "?" sanitized to "", the segment was dropped,
-        # and the album never got a folder of its own.
+        # The shape the recommended table answers: "?" would sanitize to "",
+        # the segment would be dropped, and the album would lose its folder.
         assert self._album("?") == "？"
 
     def test_the_unnamed_characters_still_follow_the_general_stand_in(self):

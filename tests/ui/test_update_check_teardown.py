@@ -2,14 +2,12 @@
 
 shutdown() drains the pools with bounded waits, so a check parked in a
 network read can return after the bridge's C++ object is destroyed; its
-plain ``appUpdateChecked.emit`` then raised RuntimeError ("Signal source
-has been deleted") and was logged as a background-worker crash (three
-occurrences in the 2026-07-13 debug export, and reproducible by quitting
-a headless harness during the startup check). The fix routes worker-side
-emits through ``_emit_from_worker``, which resolves the signal by name and
+plain ``appUpdateChecked.emit`` then raises RuntimeError ("Signal source
+has been deleted") and is logged as a background-worker crash. Worker-side
+emits go through ``_emit_from_worker``, which resolves the signal by name and
 swallows only that teardown RuntimeError.
 
-Qt-free, per the test_audit_backend.py pattern: the real bridge methods are
+Qt-free, per the test_bridge_queue_and_cache_guards.py pattern: the real bridge methods are
 bound onto a bare stub, the pool runs inline, and signal stand-ins either
 record emits or raise like a deleted QObject would.
 """
@@ -18,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _RecordingSignal:
@@ -84,7 +82,7 @@ def test_check_failure_still_reports_no_update():
 
 
 def test_late_result_after_teardown_is_dropped_quietly():
-    # The regression: the worker returns after the bridge is gone. The emit
+    # The failure pinned: the worker returns after the bridge is gone. The emit
     # attempt must be swallowed, not escape as a worker crash.
     sig = _DeletedSignal()
     stub = _Stub(_Updater(result=(False, "0.1.0", "0.1.0")), sig)

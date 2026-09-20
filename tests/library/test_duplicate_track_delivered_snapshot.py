@@ -1,9 +1,8 @@
 """A collection may list the same track twice, and both copies run at once.
 
 TIDAL allows a playlist to carry one track at two positions. With two or more
-workers both occurrences are in flight together, and the delivered-quality
-snapshot each one captures in _get_track_stream_info used to be filed under the
-bare track id: one slot for two items.
+workers both occurrences are in flight together, so a delivered-quality
+snapshot keyed only by track id would be one slot for two items.
 
 Worker A writes its file and only claims its snapshot in item()'s epilogue,
 after the deliberate inter-download delay. In that window worker B's
@@ -13,7 +12,7 @@ nothing, its done event carries no quality, and _record_ownership writes no
 row: the track that really landed never enters the ledger, so it never reads
 owned and every later run fetches the stream again just to skip it again.
 
-The snapshot is now keyed by the worker thread as well as the track id.
+The snapshot is keyed by the worker thread as well as the track id.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from types import SimpleNamespace
 from tidalapi.media import Track
 
 from waves import download as download_mod
-from waves.waves_ui.backend import _TrackedDownload
+from waves.desktop.backend import _TrackedDownload
 
 
 def _track(tid="101"):

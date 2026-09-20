@@ -1,6 +1,6 @@
-"""The download pipeline routed through the Provider seam (issue #21).
+"""The download pipeline routed through the Provider seam.
 
-Batch 2 of the call-site migration: ``Download`` is composed with a Provider,
+``Download`` is composed with a Provider,
 stream resolution arrives as a neutral StreamInfo, the tag writer reads its
 attribute facts from ``track_facts``, refusals classify through the provider,
 and a queued job names its object as (provider_id, kind, namespaced id)
@@ -29,7 +29,7 @@ from waves.providers import AudioType, QualityTier, Refusal, RefusalKind, Stream
 
 def _dash_manifest(n_urls: int, repeats: int = 1) -> SimpleNamespace:
     """A stand-in TIDAL DASH manifest whose timeline proves ``n_urls`` carries
-    ``tail`` over-generated URLs (the real arithmetic in waves_ui/manifest.py
+    ``tail`` over-generated URLs (the real arithmetic in providers/tidal_manifest.py
     runs on it: required = 1 init + (r+1) per S element)."""
     xml = (
         "<MPD><Period><AdaptationSet><Representation>"
@@ -246,7 +246,7 @@ class TestEngineStreamRouting:
         assert info is not None and info.urls == ["https://seg/1"]
 
     def test_the_jobs_request_crosses_the_seam(self, tmp_path):
-        # R-13: the job's pinned rung and Version are the resolve's arguments
+        # The job's pinned rung and Version are the resolve's arguments
         # (one immutable ask), never state the provider has to guess. A legacy
         # job that pinned neither keeps the None/None shape.
         provider = _StubProvider(StreamInfo(urls=["https://seg/1"], file_extension=".flac", codecs="flac"))
@@ -434,13 +434,13 @@ class TestTrackFactsConsumption:
         # speaks that spelling): the tag writer strips the seam's prefix.
         import mutagen.flac
 
-        from waves.metadata import ALBUM_ARTIST_ID_TAG, ARTIST_ID_TAG, ITEM_ID_TAG, Metadata
+        from waves.metadata.tags import ALBUM_ARTIST_ID_TAG, ARTIST_ID_TAG, ITEM_ID_TAG, Metadata
 
         stub = mutagen.flac.FLAC.__new__(mutagen.flac.FLAC)
         stub.tags = None
         stub.metadata_blocks = []
         stub.save = lambda *a, **k: True
-        monkeypatch.setattr("waves.metadata.mutagen.File", lambda _path: stub)
+        monkeypatch.setattr("waves.metadata.tags.mutagen.File", lambda _path: stub)
 
         m = Metadata(
             path_file=tmp_path / "s.flac",
@@ -456,7 +456,7 @@ class TestTrackFactsConsumption:
         assert stub.tags[ALBUM_ARTIST_ID_TAG] == ["7"]
 
     def test_a_bare_id_passes_through_the_strip_unchanged(self):
-        from waves.metadata import _legacy_id
+        from waves.metadata.tags import _legacy_id
 
         assert _legacy_id("42") == "42"
         assert _legacy_id("") == ""
@@ -587,7 +587,7 @@ class TestJobSpecDispatch:
         return stub
 
     def _spec(self, *, collection=True, kind="album", object_id="tidal:m1", media_id="m1", audio_type=None):
-        from waves.waves_ui.backend import _JobSpec
+        from waves.desktop.backend import _JobSpec
 
         return _JobSpec(
             provider_id="tidal",
@@ -604,7 +604,7 @@ class TestJobSpecDispatch:
     def _drive(self, stub, spec):
         from unittest.mock import patch
 
-        from waves.waves_ui import backend
+        from waves.desktop import backend
 
         with patch.object(backend, "_ProgressSignals", lambda *a, **k: object()):
             backend.WavesBridge._start_job(stub, 1, spec)
@@ -665,7 +665,7 @@ class TestJobSpecDispatch:
         assert records == [album]
 
     def test_the_built_download_carries_the_rows_request(self, tmp_path):
-        """The runner hands the download the row's own rung and Version (R-13),
+        """The runner hands the download the row's own rung and Version,
         never a live Settings read: that carry is what makes a per-click ask
         independent of the saved defaults. The source guard in
         tests/settings/test_quality_pinned_per_job.py pairs with this."""

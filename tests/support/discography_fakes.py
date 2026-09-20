@@ -12,10 +12,10 @@ from types import SimpleNamespace
 
 from conftest import _Signal
 
+from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as CfgSettings
 from waves.providers import Capability
-from waves.waves_ui.backend import WavesBridge
 
 
 class _Stub:
@@ -75,8 +75,8 @@ class DiscoStub:
     artistDownloadSupported = WavesBridge.artistDownloadSupported
 
     def __init__(self, artist, video_download: bool):
-        # The capability the sweep's gate reads (issue #288): these stubs
-        # stand in for a TIDAL artist, so the sweep runs.
+        # The capability the sweep's gate reads: these stubs stand in for a
+        # TIDAL artist, so the sweep runs.
         self.providers = {"tidal": SimpleNamespace(capabilities=frozenset(Capability))}
         self._dl = object()
         # Stereo default on purpose: the sweep's Atmos filter runs

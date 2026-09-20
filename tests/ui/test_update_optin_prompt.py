@@ -23,7 +23,7 @@ import re
 
 from support.paths import QML_MAIN
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Stub:

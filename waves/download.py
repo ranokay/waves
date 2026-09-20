@@ -59,9 +59,22 @@ from waves.constants import (
     tier_from_word,
     wants_atmos_delivery,
 )
-from waves.helper.camelot import format_initial_key
-from waves.helper.exceptions import MediaMissing
-from waves.helper.path import (
+from waves.errors import MediaMissing
+from waves.metadata.camelot import format_initial_key
+from waves.metadata.lyrics import fetch_lrclib_lyrics, lyrics_file_choice
+from waves.metadata.naming import name_builder_item, name_builder_title
+from waves.metadata.tags import (
+    Metadata,
+    MetadataUnreadable,
+    normalize_audio_type_tag,
+    occupant_is_version,
+    read_file_audio_type,
+    read_item_id,
+)
+from waves.model.cfg import metadata_tag_write, provider_setting
+from waves.model.downloader import DownloadSegmentResult, TrackStreamInfo
+from waves.model.gui_data import ProgressBars
+from waves.paths import (
     check_file_exists,
     format_path_media,
     name_comparison_key,
@@ -73,32 +86,15 @@ from waves.helper.path import (
     unique_variant_name,
     url_to_filename,
 )
-from waves.helper.path import (
+from waves.paths import (
     staging_path as _staging_path,
 )
-from waves.helper.tidal import (
-    instantiate_media,
-    items_results_all,
-    name_builder_item,
-    name_builder_title,
-)
-from waves.lyrics import fetch_lrclib_lyrics, lyrics_file_choice
-from waves.metadata import (
-    Metadata,
-    MetadataUnreadable,
-    normalize_audio_type_tag,
-    occupant_is_version,
-    read_file_audio_type,
-    read_item_id,
-)
-from waves.model.cfg import metadata_tag_write, provider_setting
-from waves.model.downloader import DownloadSegmentResult, TrackStreamInfo
-from waves.model.gui_data import ProgressBars
 from waves.playlists import populate_playlists
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress, TaskID
 from waves.providers.base import AudioType, Provider, Refusal, RefusalKind, StreamInfo
-from waves.waves_ui.diagnostics import content as log_content
+from waves.providers.tidal_client import instantiate_media, items_results_all
+from waves.redaction import content as log_content
 
 # Child of "waves", so it inherits the app's handlers and its INFO records join
 # the always-on breadcrumb ring crash reports are stitched from.
@@ -165,8 +161,8 @@ def _is_truncated_leftover(path_file: pathlib.Path) -> bool:
     drop leaves between creating a file and writing it: no finished download is
     ever empty. check_file_exists already reads it as nothing, so the skip gate
     downloads the track again, but the move read the same file as an occupant
-    and refused to land on it. Every retry and every later run answered the same
-    way, so one empty leftover kept that track out of the library for good.
+    and refused to land on it. Every retry and every later run would answer the
+    same way, keeping that track out of the library for good.
     Finishing the interrupted write is not overwriting anybody's data, and the
     size is measured here, immediately before the swap, never carried in from an
     earlier check.
@@ -287,7 +283,7 @@ def _waves_owned_ids(media) -> set[str]:
 def _file_audio_mode_is_atmos(path_file: pathlib.Path) -> bool | None:
     """Whether the audio file at this path is a Dolby Atmos copy.
 
-    The shared reader (waves.metadata.read_file_audio_type) answers which Version
+    The shared reader (waves.metadata.tags.read_file_audio_type) answers which Version
     the file is: tag first, codec second (§5.3), so a file Waves wrote can
     never be misread because its container shares an extension, and an
     untagged library falls back to the codec sniff. Only an MP4 container can
@@ -561,9 +557,9 @@ class Download:
         # instance = one queued item, so this resets naturally per album).
         # On a network mount every makedirs(exist_ok=True) of an existing
         # directory still costs real round-trips (mkdir->EEXIST plus a stat),
-        # and the moves used to re-ensure the same album directory for the
-        # audio, lyrics and cover of every track: dozens of pointless network
-        # calls per album. See _ensure_directory.
+        # and without this set the moves would re-ensure the same album
+        # directory for the audio, lyrics and cover of every track: dozens of
+        # pointless network calls per album. See _ensure_directory.
         self._dirs_ensured: set[str] = set()
 
         # Cover art fetched once per job, not once per track: cover URLs are
@@ -582,8 +578,8 @@ class Download:
         # its unique name and moving the file there. Nothing is on disk for that
         # stretch (metadata, the lyrics fetch and the cover all run first), so
         # without this two colliding same-name tracks both pick the same free
-        # name and one silently overwrites or loses the other (issue #15
-        # follow-up). One instance serves all of a queued item's concurrent
+        # name and one silently overwrites or loses the other. One instance
+        # serves all of a queued item's concurrent
         # track workers (`items` fans `self.item` across the pool), and the GUI
         # runs one queued item at a time, so instance scope covers every
         # in-process collision.
@@ -603,10 +599,8 @@ class Download:
         # name and moving the file there, which is the whole answer while the
         # disk is consulted: once the file lands it answers for itself. With
         # skipping off nothing consults the disk, so a landed file was invisible
-        # and the next track of the same name simply took it (issue #19: six
-        # same-title tracks downloaded three at a time left four files, a
-        # different four each run). This ledger is what a landed file would have
-        # said, and it is never released.
+        # and the next track of the same name simply took it. This ledger is
+        # what a landed file would have said, and it is never released.
         self._names_written: dict[str, str] = {}
         self._names_reserved_lock: Lock = Lock()
 
@@ -630,9 +624,9 @@ class Download:
         self._pace_lock: Lock = Lock()
         # Open except while a pause is being taken. A pause is a promise to
         # TIDAL, not a rest for one worker: the collection fan-out runs several
-        # at once, so while one slept the others kept asking and the request
-        # rate barely dipped (the setting looked inert at anything but one
-        # concurrent download, which is the complaint it was wired for).
+        # at once, so one worker sleeping while the others keep asking barely
+        # dips the request rate, and the setting reads as inert at anything
+        # but one concurrent download.
         self._pace_gate: Event = Event()
         self._pace_gate.set()
         # How many pauses are in force, and when the last of them is due to be
@@ -653,7 +647,7 @@ class Download:
         self._pace_until: float = 0.0
 
         # One pooled, keep-alive HTTP session shared by every segment download.
-        # The old code built a fresh requests.Session() per segment, which forced
+        # A fresh requests.Session() per segment would force
         # a full TLS handshake for each one. A HiRes album is served as dozens of
         # segments per track and fanned across up to
         # downloads_simultaneous_per_track_max x downloads_concurrent_max threads,
@@ -892,7 +886,7 @@ class Download:
                 # On very short tracks (< 8 seconds or so) the *last* URL of a MULTI-segment
                 # track is a spurious tail (HTTP Error 500) that isn't needed; the file won't
                 # be corrupt. That is tidalapi's segment-count arithmetic over-generating one
-                # URL past the end of the audio (see waves_ui/manifest.py), so when the
+                # URL past the end of the audio (see providers/tidal_manifest.py), so when the
                 # manifest was parseable, n_tail_spurious says exactly whether the final URL
                 # is padding (> 0) or required audio (0): a required final segment failing is
                 # a REAL failure (a silently truncated file), not a tolerable quirk. Only when
@@ -1022,7 +1016,7 @@ class Download:
             return False, path_file
 
         # How many trailing URLs the manifest arithmetic proves are
-        # over-generated padding (tracks only; see waves_ui/manifest.py).
+        # over-generated padding (tracks only; see providers/tidal_manifest.py).
         # None means unproven (video m3u8, BTS, or an unparseable manifest)
         # and preserves the legacy last-segment leniency downstream.
         n_tail_spurious: int | None = stream_info.tail_spurious if stream_info is not None else None
@@ -1231,7 +1225,7 @@ class Download:
         elif getattr(self.settings.data, "extract_flac", False) and getattr(
             self.settings.data, "extract_flac_all", False
         ):
-            # FLAC scope "all" (issue #64): every stereo track lands FLAC,
+            # FLAC scope "all": every stereo track lands FLAC,
             # lossless by stream copy, lossy by re-encode (decided post-fetch).
             # getattr-read like the lossless branch below stays silent on
             # settings stubs that predate the split (the gate-only doubles).
@@ -1338,9 +1332,9 @@ class Download:
         # where there is a choice", not "leave a hole in the album": a song you
         # cannot play today beats one you never got. _get_track_stream_info
         # takes the Atmos session for it because there is nothing else to take.
-        # It used to be skipped here, before any path work, and answered
-        # ok=True with an empty path, which is what put a permanent gap in every
-        # discography that carried a spatial-only single.
+        # Skipping it here, before any path work, would answer
+        # ok=True with an empty path, putting a permanent gap in every
+        # discography that carries a spatial-only single.
 
         # Check for stop signal
         if self.event_abort.is_set() or (event_stop and event_stop.is_set()):
@@ -1423,12 +1417,12 @@ class Download:
             # The service no longer carries this item, so the re-fetch above
             # 404s. That is a refusal, not a failure of ours, and it has to be
             # recorded as one HERE: this gate runs before any stream is
-            # fetched, so _get_stream_info's identical rule (issue #25) never
-            # gets the chance. Counting it as a plain failure is what made one
-            # delisted entry fail a whole 500-track playlist, permanently: the
-            # shortfall reappeared on every retry and the row could never
-            # settle green (issue #35). The words are the provider's own
-            # (audit TS-09): the engine never names a service for another.
+            # fetched, so _get_stream_info's identical rule never
+            # gets the chance. Counting it as a plain failure fails a whole
+            # 500-track playlist over one delisted entry: the shortfall
+            # reappears on every retry and the row never settles green. The
+            # words are the provider's own: the engine never names a service
+            # for another.
             self._note_unavailable_item(media)
             try:
                 verdict = self.provider.classify_refusal(exc)
@@ -1489,7 +1483,7 @@ class Download:
             # "ALICIA (With Commentary)" with allowStreaming=false on every
             # track, yet the official apps and our own account still play
             # most of them, and the ones it truly withholds answer the
-            # playback request with a 401 (issue #25). So availability is
+            # playback request with a 401. So availability is
             # decided where it is authoritative, when the stream is actually
             # fetched (_get_stream_info), and a real refusal becomes the
             # UNAVAILABLE outcome there. Gating on the flag here refused
@@ -1541,9 +1535,9 @@ class Download:
         a long list is the only thing that produces one: every item costs a
         lookup plus a playback request, so a 500-track playlist asks some 1500
         questions in a row where an album asks 30. The two settings that say
-        so were shipped as Advanced fields and read by nothing at all, so a
-        user meeting rate limits could turn them and change nothing
-        (issue #35).
+        so are Advanced fields; reading them here is what makes them do
+        anything, or a user meeting rate limits could turn them and change
+        nothing.
 
         The pause belongs to the item, taken by the worker that picked it up:
         a thread pool has no batch boundary of its own, and this is the moment
@@ -1747,7 +1741,7 @@ class Download:
 
     def _provider_folder(self) -> str:
         """This download's provider folder segment for the {provider_name}
-        token (issue #65). Unknown providers render "" so the segment drops
+        token. Unknown providers render "" so the segment drops
         away (the pre-token layout), which is also what settings stubs
         without a provider read as.
         """
@@ -1775,7 +1769,7 @@ class Download:
         by the time an item is formatted the folder is literal text and the
         old name could no longer be recovered. Only folders exist at this
         level, so there is no file to fall back on; a spelling that dropped
-        the folder outright (issue #16) points at an ancestor, which exists
+        the folder outright points at an ancestor, which exists
         whether or not anything was ever downloaded, and is therefore no
         evidence of an older layout.
 
@@ -1786,15 +1780,15 @@ class Download:
         which only a track can answer: the spelling still carries it as
         literal text, the folder tested therefore contains a literal
         "{artist_name}" segment, never exists, and every library looked new.
-        A pre-0.1.17 album then got a second, tidy-spelled folder beside the
-        one it was already in. Without probes (an empty collection, or a
+        A pre-0.1.17 album would then get a second, tidy-spelled folder beside
+        the one it was already in. Without probes (an empty collection, or a
         caller that has no item yet) the spellings are tested as they are,
         which is the older behaviour.
 
-        A shallower spelling (the pre-provider-split layout, issue #65) can
+        A shallower spelling (the pre-provider-split layout) can
         only win on file evidence: its probe is the item-relative path, so a
         track file already sitting there counts, while a bare ancestor
-        directory never does (issue #16's rule).
+        directory never does.
         """
         spellings: list[str] = [tidied, *older]
         sources: list[str] = probes if probes and len(probes) == len(spellings) else spellings
@@ -1842,8 +1836,8 @@ class Download:
         illegal characters (XXXTENTACION's album "?") empties out, its path
         segment is dropped, and the old destination is the ARTIST folder, one
         level above the preferred one. An ancestor almost always exists, so its
-        existence is no evidence at all, and taking it scattered the album's
-        tracks loose into the artist folder (issue #16). There, only a file
+        existence is no evidence at all, and taking it scatters the album's
+        tracks loose into the artist folder. There, only a file
         already sitting in the old place counts, and only for itself.
         """
         candidates = [path for path in older if path != tidied]
@@ -1891,11 +1885,10 @@ class Download:
     ) -> pathlib.Path | None:
         """WHERE this item already lives at this destination, or None.
 
-        skip_existing used to be filename-keyed, so distinct tracks whose
-        sanitized names collide (an album carrying several mixes with one
-        title) were silently skipped after the first one downloaded (issue
-        #15). Downloads tag each file with the TIDAL item id (read_item_id);
-        when the name is taken, the ids decide:
+        A filename-keyed skip_existing would silently skip distinct tracks
+        whose sanitized names collide (an album carrying several mixes with one
+        title) after the first one downloads. Downloads tag each file with the
+        TIDAL item id (read_item_id); when the name is taken, the ids decide:
 
         - untagged occupant (a pre-id library, or a raw .ts video): identity
           unknown, keep the historical skip so re-downloading an old library
@@ -1911,7 +1904,7 @@ class Download:
           track the caller downloads (the final move uniquifies it).
 
         ``version`` is the Version gate on top of the id question
-        (waves.metadata.occupant_is_version): an occupant in the OTHER Version
+        (waves.metadata.tags.occupant_is_version): an occupant in the OTHER Version
         is never this item's copy HERE, so a dual download's second row fetches
         its own file even when the first row's file sits at the same name.
 
@@ -2132,7 +2125,7 @@ class Download:
 
         # The occupant must be this fetch's own Version too: a dual download
         # with a blank template finds the OTHER Version's file at this name,
-        # and those bytes are not this fetch's landing (issue #231). The
+        # and those bytes are not this fetch's landing. The
         # ledger arm above needs no gate: one run is one Version.
         if not occupant_is_version(path_media_dst, version):
             return None
@@ -2379,7 +2372,7 @@ class Download:
             build(True),
             build(False),
         ]
-        # The provider split (issue #65) is a new spelling era: a library
+        # The provider split is a new spelling era: a library
         # built under the pre-split template keeps its folders, newest first,
         # so a folder that exists in both spellings keeps the provider one.
         # The split-off spelling is the template minus its leading provider
@@ -2462,8 +2455,8 @@ class Download:
                 ).absolute()
                 path_media_track_dir = pathlib.Path(path_file_sanitize(path_media_track_dir, adapt=True))
                 # Identity, not just the name: a DIFFERENT track whose name
-                # collides used to make this one look downloaded, so nothing was
-                # fetched and the playlist entry ended up pointing at the
+                # collides would make this one look downloaded, so nothing
+                # gets fetched and the playlist entry ends up pointing at the
                 # stranger. The move below (media_move_and_symlink) asks the very
                 # same question, and the two have to agree.
                 file_exists_track_dir: bool = (
@@ -2710,7 +2703,7 @@ class Download:
             # the 404 / "no stream" answer for an asset that is genuinely gone,
             # or a 401/403 whose body says the asset itself is withheld (e.g.
             # subStatus 4005 "Asset is not ready for playback"). A refusal, not
-            # a failure, so mark it UNAVAILABLE (issue #25). Anything else (a
+            # a failure, so mark it UNAVAILABLE. Anything else (a
             # dead session, a 5xx, a network error) keeps the "something went
             # wrong" path.
             self._note_unavailable(media)
@@ -2730,7 +2723,7 @@ class Download:
         restates the engine's error in the provider's vocabulary and the caller
         already computed that verdict); the engine supplies only a neutral
         fallback for a provider that says nothing, so a third provider never
-        reads TIDAL's words (audit TS-09).
+        reads TIDAL's words.
         """
         message = str(getattr(verdict, "message", "") or "").strip()
         return message or fallback
@@ -2822,7 +2815,7 @@ class Download:
             and not want_atmos
             and file_extension != AudioExtensions.FLAC
         ):
-            # FLAC scope "all" (issue #64): lossy stereo is re-encoded to
+            # FLAC scope "all": lossy stereo is re-encoded to
             # FLAC post-fetch. Atmos never converts (it stays .m4a), and a
             # track already serving native FLAC needs no flag.
             file_extension = AudioExtensions.FLAC
@@ -2984,7 +2977,7 @@ class Download:
             # Extract FLAC from MP4 container using ffmpeg
             if isinstance(media, Track) and self.settings.data.extract_flac and stream_info.requires_flac_extraction:
                 # Lossless arrives as FLAC-in-MP4 (stream copy); scope "all"
-                # re-encodes lossy sources instead (issue #64).
+                # re-encodes lossy sources instead.
                 transcode = str(stream_info.codecs or "").upper() != Codec.FLAC
                 tmp_path_file = self._extract_flac(tmp_path_file, transcode=transcode)
 
@@ -3028,8 +3021,8 @@ class Download:
             media_id: str = _waves_item_id(media)
             path_media_dst = pathlib.Path(path_file_sanitize(path_media_dst, adapt=True))
             # Which Version this fetch brings, resolved once: the stream's own
-            # word first, else the job's pin (an empty delivered word used to
-            # read stereo here while the skip gate fell back to the pin).
+            # word first, else the job's pin (an empty delivered word would
+            # read stereo here while the skip gate falls back to the pin).
             fetch_version = self._fetch_version(stream_info)
             path_media_own: pathlib.Path | None = self._already_landed_here(path_media_dst, media, fetch_version)
 
@@ -3068,8 +3061,8 @@ class Download:
                     return True, path_media_own
 
                 # Nothing is lost here, but the download has nowhere to land and
-                # must say so: the old code took the last occupied candidate and
-                # the move then refused it as somebody else's file.
+                # must say so: taking the last occupied candidate just gets it
+                # refused by the move as somebody else's file.
                 self.fn_logger.error(
                     f"No free name left for '{log_content(path_media_dst.name)}': "
                     f"the name and all {UNIQUIFY_THRESHOLD} of its numbered copies are taken."
@@ -3173,9 +3166,9 @@ class Download:
     ) -> tuple[pathlib.Path | None, str, pathlib.Path | None] | None:
         """Tag the downloaded temp file and hand back the sidecars it produced.
 
-        The sidecars are NOT moved here. They used to be, which put a cover.jpg
+        The sidecars are NOT moved here. Moving them here would put a cover.jpg
         and a .lrc into the library before the audio they belong to, so a move
-        that then failed left them orphaned there, and nothing removes them
+        that then fails leaves them orphaned there, and nothing removes them
         afterwards (the app never deletes a user-visible file). The caller moves
         them once the audio has landed.
 
@@ -3232,12 +3225,12 @@ class Download:
         return tmp_path_lyrics, lyrics_suffix, tmp_path_cover
 
     def _provider_id(self) -> str:
-        """This download's provider id for per-provider options (issue #61).
+        """This download's provider id for per-provider options.
 
         The pipeline is composed with a Provider (TIDAL by default); its
         lyrics/artwork options live under that provider's mirrors, keyed by the
         provider's own id, so a third provider reaches its own mirrors with no
-        allow-list edit (audit TS-09). No provider at all reads TIDAL, the
+        allow-list edit. No provider at all reads TIDAL, the
         historical default; an unrecognized word falls back to the shared keys
         inside ``provider_setting``, never to another provider's mirror.
         """
@@ -3382,8 +3375,8 @@ class Download:
             # _perform_actual_download): is the destination really THIS item,
             # claim the name before anything else can pick it, and overwrite
             # only when the user turned skip-existing off. Deciding by filename
-            # alone used to hand a colliding stranger's file to this track: the
-            # audio just downloaded was unlinked and the playlist entry pointed
+            # alone would hand a colliding stranger's file to this track: the
+            # audio just downloaded is unlinked and the playlist entry points
             # at somebody else's track.
             overwrite: bool = not self.skip_existing
             name_reserved: str | None = None
@@ -3708,7 +3701,7 @@ class Download:
             if path_destination.exists():
                 if not overwrite and not _is_truncated_leftover(path_destination):
                     # Nothing raised, so the retry wrapper has nothing to log: say it here or
-                    # a finished download disappears without a word (issue #15 follow-up).
+                    # a finished download disappears without a word.
                     # Guessing a new name instead would strand the lyrics and cover already
                     # written for this one.
                     #
@@ -3811,11 +3804,11 @@ class Download:
             # Past the swap, the track has landed and nothing may unmake that.
             # A source that will not go away this instant (a Windows scanner
             # holding the temp for a moment, the exact lock the retry helpers
-            # exist for) used to re-raise here, and the retry then found the
-            # destination occupied by "another writer" and reported the landed
+            # exist for) would re-raise here, and the retry then finds the
+            # destination occupied by "another writer" and reports the landed
             # track FAILED: red row, misleading log, and its .lrc and cover
             # never moved, with a re-run skipping it as existing so the
-            # sidecars never arrived at all. The source sits in this item's own
+            # sidecars never arrive at all. The source sits in this item's own
             # temp directory, which is cleared when the item finishes.
             with contextlib.suppress(OSError):
                 path_file_source.unlink(missing_ok=True)
@@ -3871,9 +3864,9 @@ class Download:
         Returns:
             bool: True if moved, False otherwise.
         """
-        # Sidecar format (issue #34): jpg or png; raw is Apple-only
+        # Sidecar format: jpg or png; raw is Apple-only
         # and falls back to jpg here so TIDAL behavior stays byte-for-byte.
-        # Per-provider (issue #61): this engine reads its own provider's mirror.
+        # Per-provider: this engine reads its own provider's mirror.
         fmt = (
             str(
                 (getattr(getattr(self, "settings", None), "data", None) and self._psetting("cover_file_format", "jpg"))
@@ -4103,8 +4096,8 @@ class Download:
         # carry entries whose album block is absent, and the re-fetch only
         # replaces an album it already found one to replace. The rest of this
         # method has always guarded for that (see the `if track.album` tests
-        # below); these two spellings did not, and on a playlist that meant an
-        # AttributeError per unlucky track (issue #35).
+        # below); these two spellings must guard too, or a playlist raises an
+        # AttributeError per unlucky track.
         album = getattr(track, "album", None)
 
         if self._psetting("lyrics_embed", False) or self._psetting("lyrics_file", False):
@@ -4412,7 +4405,7 @@ class Download:
         the file is called, whether it sorts by number, or what it lists.
 
         The reported paths carry the list's own track order, so the m3u plays
-        back in TIDAL's order (issue #22); the directory set alone cannot say
+        back in TIDAL's order; the directory set alone cannot say
         which track comes first. They are also the m3u's CONTENTS, skipped
         tracks included: re-downloading an album whose songs are already there
         must still list the whole album, not just the one song that was
@@ -4512,7 +4505,7 @@ class Download:
             (False, "", None, True),
         ]
         if "{provider_name}" in file_template:
-            # The provider split (issue #65) is a new spelling era at bake
+            # The provider split is a new spelling era at bake
             # level too: the pre-split spellings ride along (provider newest
             # first), so a legacy folder can win the bake instead of leaving
             # every item to divert one by one below.
@@ -4640,7 +4633,7 @@ class Download:
             list[pathlib.Path]: The items' landed file paths, in LIST ORDER
             (the submission order of the futures), one per item that produced a
             file. This order is the collection's own track order, which the m3u
-            writer reproduces; a set of directories would lose it (issue #22).
+            writer reproduces; a set of directories would lose it.
         """
         # Report results as they become available
         for future in futures.as_completed(futures_list):
@@ -4656,12 +4649,12 @@ class Download:
 
                 break
 
-            # An item that crashed is THAT item's failure, not the list's. This
-            # used to re-raise, which unwound the whole collection: the outcome
-            # was never judged from the counters, the m3u was never written, and
-            # the row reported whatever the one bad item happened to raise. On a
-            # 500-track playlist a single crash therefore threw away the reading
-            # of 499 successes (issue #35). Counted here, exactly as the merge
+            # An item that crashed is THAT item's failure, not the list's.
+            # Re-raising would unwind the whole collection: the outcome is
+            # never judged from the counters, the m3u is never written, and
+            # the row reports whatever the one bad item happened to raise. On a
+            # 500-track playlist a single crash would therefore throw away the
+            # reading of 499 successes. Counted here, exactly as the merge
             # fan-out counts its own crashes, so _collection_incomplete_reason
             # judges the list.
             try:
@@ -4701,9 +4694,9 @@ class Download:
         refusal, a failed fetch, a stopped download or a name with no free
         variant answers ``(False, <the path it was aiming for>)`` from before
         anything was written there. Neither produced a file, so neither is
-        listed; a first-time album that lost every track used to fail on the
-        playlist's own temp file in a folder that was never created, and that
-        error hid the real reason.
+        listed; a first-time album that lost every track would fail on the
+        playlist's own temp file in a folder that was never created, hiding the
+        real reason.
 
         A reported path is NOT proof this run wrote it. An item found already
         on disk answers ``(True, <the file it found>)``, which is right for the
@@ -4799,7 +4792,7 @@ class Download:
         """Extract FLAC audio from a media file using ffmpeg.
 
         Lossless sources move containers with a stream copy (no re-encode);
-        scope "all" (issue #64) re-encodes lossy sources instead, keeping
+        scope "all" re-encodes lossy sources instead, keeping
         their rate and channels (``-c:a flac`` with no resample flags).
 
         Args:

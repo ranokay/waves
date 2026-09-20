@@ -1,4 +1,4 @@
-"""Issue #222: the Library section renders the files on disk (ADR 0007).
+"""The Library section renders the files on disk (ADR 0007).
 
 WHAT THIS FENCES OFF
 --------------------
@@ -155,7 +155,7 @@ def _register_fake_provider(bridge, logo: str) -> None:
 def _install_library(bridge, lib: str, tags: dict, ids: dict) -> None:
     """Give the live bridge a scanned fixture library through the scanner's
     own seams (no real audio, no real scan process)."""
-    from waves.library_index import LibraryIndex
+    from waves.library.index import LibraryIndex
 
     idx = LibraryIndex(
         os.path.join(os.path.dirname(lib), "library.sqlite3"),
@@ -280,7 +280,7 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
         failures.append("clicking Saved did not switch back")
 
     # A scan that lands while My Music is hidden must not leave the section
-    # stale: the pane refreshes on return (found in review, 2026-09-17).
+    # stale: the pane refreshes on return.
     saved_dir = os.path.join(lib, "A", "Saved")
     _write_book(os.path.join(saved_dir, "04.flac"))
     tags[os.path.join(saved_dir, "04.flac")] = {

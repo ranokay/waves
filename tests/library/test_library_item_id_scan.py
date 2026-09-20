@@ -1,11 +1,11 @@
-"""The scan carries each file's Waves item id (ADR 0007, issue #222).
+"""The scan carries each file's Waves item id (ADR 0007).
 
 WHAT THIS FENCES OFF
 --------------------
 The Library section's Saved view is "the files Waves itself saved", which the
-scan could not answer: the tracks table held a file's title, artist and
-quality but not the item id the download gate writes into its tags. Without
-it, a saved file is indistinguishable from a ripped one.
+scan must answer: the tracks table has to carry the item id the download gate
+writes into its tags, not only a file's title, artist and quality. Without it,
+a saved file is indistinguishable from a ripped one.
 
 These tests pin the scan half: every file is probed once for its id (generic
 first, legacy fallback -- the same read the download gate performs), the id
@@ -22,7 +22,7 @@ import os
 
 import pytest
 
-from waves.library_index import LibraryIndex
+from waves.library.index import LibraryIndex
 
 
 def _mk(base, rel, files):
@@ -65,11 +65,12 @@ def _album_tags(title="Alb", artist="A", date="2000"):
 
 
 def _expire_item_id_capture(idx):
-    """Put a scanned cache back in the pre-#222 state: its rows exist with the
-    item_id column NULL, exactly what the ALTER leaves an existing cache's
-    track rows. The public seam cannot produce that state (its probe always
-    answers something), so the migration fixture reaches the schema directly
-    -- the same way this suite's other legacy-cache tests do."""
+    """Put a scanned cache back before the item_id column existed: its rows
+    exist with the item_id column NULL, exactly what the ALTER leaves an
+    existing cache's track rows. The public seam cannot produce that state
+    (its probe always answers something), so the migration fixture reaches
+    the schema directly -- the same way this suite's other legacy-cache tests
+    do."""
     with idx._lock:
         idx._conn.execute("UPDATE tracks SET item_id = NULL")
         idx._conn.commit()
@@ -138,7 +139,7 @@ def test_the_default_probe_reads_through_the_download_gates_reader(tmp_path, mon
         asked.append(path)
         return "1234"  # what a legacy WAVES_TIDAL_ID answers
 
-    monkeypatch.setattr("waves.metadata.read_item_id_or_none", fake_read_item_id)
+    monkeypatch.setattr("waves.metadata.tags.read_item_id_or_none", fake_read_item_id)
     idx = LibraryIndex(str(tmp_path / "library.sqlite3"), read_tags=_path_reader(pathmap))
     idx.refresh(lib)
     assert asked == [os.path.join(d, "1.flac")]
@@ -150,8 +151,8 @@ def test_the_default_probe_reads_through_the_download_gates_reader(tmp_path, mon
 
 def test_a_warm_scan_probes_no_file(tmp_path):
     """The id probe is per file on a COLD read and never on an unchanged
-    folder: the scan's time budget survives the new column (the issue's own
-    requirement)."""
+    folder, so the extra column costs the scan's time budget nothing on a warm
+    run."""
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/A/Alb", ["1.flac", "2.flac"])
     pathmap = {
@@ -181,7 +182,7 @@ def test_a_pre_item_id_cache_backfills_once_then_rests(tmp_path):
         read_item_id=lambda p: "42",
     )
     idx.refresh(lib)
-    _expire_item_id_capture(idx)  # the pre-#222 cache's NULL rows
+    _expire_item_id_capture(idx)  # rows from before the column existed
     reads.clear()
     idx.refresh(lib)
     assert reads == [os.path.join(d, "1.flac")]  # the one backfill re-read

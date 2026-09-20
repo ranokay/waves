@@ -154,9 +154,9 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.matching import presence_key
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
+        from waves.metadata.matching import presence_key
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -434,10 +434,9 @@ def _run_scenario() -> int:
         verdicts["download_anyway_downloads"] = downloaded == ["al-owned"]
         verdicts["proceeding_closes_the_gate"] = not q("libraryClaimGate.shown")
 
-        # An ownership-store DOWNLOADED is a RECORD, not a guess, and it used
-        # to be inert: a copy the user could not find had no way back (issue
-        # #38). It now opens the owned gate, naming where the copy lives, and
-        # REDOWNLOAD forces the job and starts it.
+        # An ownership-store DOWNLOADED is a RECORD, not a guess: it opens the
+        # owned gate, names where the copy lives, and REDOWNLOAD forces the job
+        # and starts it, so a copy the user cannot find always has a way back.
         q("(function(){" + _find("Owned Album") + " b.owned = true; b.ownFolder = '/old/dl/Owned Album'; })()")
         settle(50)
         tap("Owned Album")

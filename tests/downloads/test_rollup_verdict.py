@@ -25,8 +25,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.ownership import OwnershipStore
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
+from waves.library.ownership import OwnershipStore
 
 OWNED_CURRENT = {"owned": True, "up_to_date": True}
 OWNED_STALE = {"owned": True, "up_to_date": False}
@@ -201,7 +201,7 @@ def test_a_member_stored_below_the_target_rank_un_says_the_album(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Issue #38: where the owned copies live words the face and names the folder.
+# where the owned copies live words the face and names the folder
 # --------------------------------------------------------------------------- #
 def _detail(answers: dict, ids=None) -> dict:
     stub = _LookupStub(answers)

@@ -13,7 +13,7 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Stub:
@@ -57,7 +57,7 @@ def _stub():
     stub._redownload_overrides = set()
     stub._library_claim_overrides = set()
     # And the best-of-both plan stashed for the row, released the same way
-    # (test_wholefile_audit_2026_08_31).
+    # (test_late_skip_clear_and_merge_plans).
     stub._merge_plans = {}
     # The held-download stash, which the withdrawal reads to tell a hold from a
     # give-up (all three marks above survive a hold) and which the clears drain
@@ -69,8 +69,8 @@ def _stub():
     # tests drive the index with nothing running.
     stub._running_qid = None
     stub._abort_if_in_flight = WavesBridge._abort_if_in_flight.__get__(stub, type(stub))
-    # The withdrawal slots credit rollups and sweep for stranded groups now
-    # (issue #32); these tests are about the index, so the groups stay empty.
+    # The withdrawal slots credit rollups and sweep for stranded groups;
+    # these tests are about the index, so the groups stay empty.
     stub._artist_groups = {}
     stub._folder_groups = {}
     stub._artist_lock = Lock()
@@ -132,7 +132,7 @@ def test_each_section_clear_takes_only_its_own_section():
     # Every section clears itself and nothing else, and none of them ever
     # touches a running row: stopping a live transfer is the row's own control.
     # A cancelled row is one STOP ended; it files under its own Stopped
-    # section, whose CLEAR is the only one that takes it (issue #27).
+    # section, whose CLEAR is the only one that takes it.
     for slot, gone in (
         ("clearFinished", {"done"}),  # the Completed section
         ("clearFailed", {"failed"}),
@@ -180,7 +180,7 @@ def _retry_all_stub():
 
 def test_retry_all_failed_retries_exactly_the_failed_rows():
     # RETRY ALL on the Failed header takes the failed rows and nothing else:
-    # not the rows STOP ended (they have their own header, issue #27), never a
+    # not the rows STOP ended (they have their own header), never a
     # live or finished row.
     stub, qids, retried = _retry_all_stub()
     stub.retryAllFailed()
@@ -202,13 +202,12 @@ def test_clear_queue_reindexes():
     assert _mirror_ok(stub)
 
 
-# --- Automatic history retention (issue #24) ----------------------------------
-# Nothing ever removed a finished queue row, and every per-change cost is
-# proportional to the list's length (a full marshal to QML, a row-by-row
-# reconcile there, a per-track registry held per collection row). A long batch
-# therefore got heavier the longer it ran. The finished half is now bounded
-# automatically, with no switch to find and nothing asked of the user: manual
-# clearing should not be the thing standing between them and a responsive app.
+# --- Automatic history retention ---------------------------------------------
+# Every per-change cost is proportional to the list's length (a full marshal
+# to QML, a row-by-row reconcile there, a per-track registry held per
+# collection row), so the finished half stays bounded automatically: a long
+# batch must not get heavier the longer it runs, and manual clearing should not
+# be the thing standing between the user and a responsive app.
 
 
 def _settled_queue(stub, live=0, done=0, failed=0):
@@ -246,7 +245,7 @@ def test_settled_rows_past_the_cap_go_oldest_first():
 
 
 def test_a_stopped_row_is_never_trimmed_either():
-    # A cancelled row is one STOP ended and kept for RETRY (issue #27): the
+    # A cancelled row is one STOP ended and kept for RETRY: the
     # same record a failed row is, so the cap passes over it the same way.
     stub = _stub()
     qids = _settled_queue(stub, done=stub._QUEUE_HISTORY_MAX + 1)

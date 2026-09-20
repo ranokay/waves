@@ -1,4 +1,4 @@
-"""The search page's provider-keyed surface prefs (issue #292).
+"""The search page's provider-keyed surface prefs.
 
 The provider group fold and each section's SHOW ALL state are keyed by
 provider id, so a provider the app has never heard of saves and restores its
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _PrefsStub:

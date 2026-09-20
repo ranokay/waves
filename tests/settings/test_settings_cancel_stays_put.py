@@ -1,9 +1,9 @@
 """CANCEL on the settings page discards edits without leaving the page.
 
-CANCEL used to emit ``closed()``, which dropped the user back to Browse. That
-reads as "get me out of here" rather than "undo what I typed": you lost your
-place, and the page you were reading, to take back a single keystroke. It now
-throws away the pending edits in place.
+CANCEL discards the pending edits in place. Closing the page
+reads as "get me out of here" rather than "undo what I typed": the user loses
+their place, and the page they were reading, to take back a single keystroke.
+It must throw away the pending edits in place.
 
 Two things are easy to lose in a later edit and are pinned here:
 

@@ -1,12 +1,11 @@
-"""The Library section's bridge data (ADR 0007, issue #222).
+"""The Library section's bridge data (ADR 0007).
 
 WHAT THIS FENCES OFF
 --------------------
-My Music had no view of the files on disk at all. The section's two views are
-"Saved" (the files Waves itself saved, carrying the provider the file came
-from) and "All files" (every audio file the scan sees, untagged rows carrying
-no badge), and both are the SCAN's answers: no provider is consulted, so a
-signed-out pane still lists the library.
+The section's two views are "Saved" (the files Waves itself saved, carrying the
+provider the file came from) and "All files" (every audio file the scan sees,
+untagged rows carrying no badge), and both are the SCAN's answers: no provider
+is consulted, so a signed-out pane still lists the library.
 
 These tests drive the real slots on the Qt-free library stub: the seed scan
 runs first, then the pages, so the rows under test are the ones the scanner
@@ -21,7 +20,7 @@ import sqlite3
 
 from support.library_fakes import make_album_dir, make_library_bridge
 
-from waves.waves_ui.backend import _library_file_row
+from waves.desktop.backend import _library_file_row
 
 
 def _tags(album="Alb", artist="A", date="2000", **over):
@@ -145,7 +144,7 @@ def test_the_saved_page_carries_each_namespaces_own_descriptor_mark(tmp_path):
 
 def test_the_second_page_appends_from_the_offset_the_section_holds(tmp_path, monkeypatch):
     bridge, _pathmap, _ids = _seed(tmp_path)
-    monkeypatch.setattr("waves.waves_ui.backend._LIBRARY_PAGE", 2)
+    monkeypatch.setattr("waves.desktop.backend._LIBRARY_PAGE", 2)
     bridge.loadLibraryFiles("all")
     assert bridge.libraryFilesLoaded.emits[0][1] and len(bridge.libraryFilesLoaded.emits[0][1]) == 2
     assert bridge.libraryFilesLoaded.emits[0][2] is True  # a third row waits
@@ -157,8 +156,8 @@ def test_the_second_page_appends_from_the_offset_the_section_holds(tmp_path, mon
 
 
 def test_a_page_load_is_not_dropped_by_another_views_load(tmp_path):
-    """One view's in-flight load never cancels another's (the #259 lesson):
-    each view owns its own load counter."""
+    """One view's in-flight load never cancels another's: each view owns its
+    own load counter."""
     bridge, _pathmap, _ids = _seed(tmp_path)
     bridge.loadLibraryFiles("saved")
     bridge.loadLibraryFiles("all")

@@ -1,8 +1,8 @@
 """The item page hero paints the clicked card's cover the frame the page is
 keyed, and a hovered card has its page warmed before the click.
 
-Source-level pins on Main.qml and Art.qml (the cover box split out in #315
-slice 3) for the plumbing a headless load cannot see fail: the art hint
+Source-level pins on Main.qml and Art.qml (the cover box lives in its own
+file) for the plumbing a headless load cannot see fail: the art hint
 travelling beside the title hint, the Art stand-in layer gating the
 "art: GET" box, the skeleton header, and the hover prefetch wiring.
 """
@@ -14,15 +14,13 @@ import re
 from support.paths import QML_MAIN
 
 MAIN_QML = QML_MAIN.read_text()
-# The cover box is its own file since #315 slice 3, so the Art pins read it
+# The cover box is its own file, so the Art pins read it
 # there; the file body is the component.
 ART_QML = (QML_MAIN.parent / "Art.qml").read_text()
-# Components whose pins below read them in their own files (split out of
-# Main.qml in #315 slice 5).
+# Components whose pins below read them in their own files.
 ALBUM_BLOCK_QML = (QML_MAIN.parent / "AlbumBlock.qml").read_text()
 ART_CARD_QML = (QML_MAIN.parent / "ArtCard.qml").read_text()
 LIB_PLAYLIST_ROW_QML = (QML_MAIN.parent / "LibPlaylistRow.qml").read_text()
-# Split out of Main.qml in #315 slice 6.
 PLAYLIST_BLOCK_QML = (QML_MAIN.parent / "PlaylistBlock.qml").read_text()
 
 
@@ -46,8 +44,8 @@ def _body(start: str, end: str = "}") -> str:
 
 
 def _component(name: str) -> str:
-    """The component's own text: its file when it is split out of Main.qml
-    (#315), else its inline block there."""
+    """The component's own text: its file when it has one, else its inline block
+    in Main.qml."""
     path = QML_MAIN.parent / f"{name}.qml"
     if path.exists():
         return path.read_text()
@@ -88,9 +86,9 @@ def test_page_openers_forward_the_art_they_have():
     assert 'openBrowseItem(kind, card.id, "", card.title || "", card.art || "")' in card
     assert 'openBrowseItem("album", card.album_id, card.id, card.album || "", card.art || "")' in card
     # Rows that name a page pass their cover along too. The album row's two
-    # sites live in AlbumBlock.qml since #315 slice 5.
+    # sites live in AlbumBlock.qml.
     assert ALBUM_BLOCK_QML.count('host.openAlbumPage(albumId, "", title, art)') == 2
-    # The playlist row's two sites moved with PlaylistBlock.qml in #315 slice 6.
+    # The playlist row's two sites live in PlaylistBlock.qml.
     assert PLAYLIST_BLOCK_QML.count("host.openPlaylistPage(plId, title, art)") == 2
     assert "host.openPlaylistPage(plRow.model.id, plRow.model.title, plRow.model.art)" in LIB_PLAYLIST_ROW_QML
 
@@ -261,8 +259,8 @@ def test_prefetched_covers_warm_at_the_sizes_the_page_asks_for():
 def test_the_warm_pool_reports_a_row_ready_only_once_its_pixmap_decoded():
     # "Listed in the pool" is not "warm": a row carries `ready`, flipped by the
     # pool's own Image when its pixmap lands. The hover scenario waits on it
-    # before clicking, so the click cannot race the pool's asynchronous decode
-    # (issue #296); dropping the flag would leave that wait vacuous.
+    # before clicking, so the click cannot race the pool's asynchronous decode;
+    # dropping the flag would leave that wait vacuous.
     assert 'warmArtModel.append({ u: "" + u, w: w, h: h, ready: false })' in _flat(MAIN_QML)
     # The same locator the cache-key guard uses (test_qml_art_cache_keys.py):
     # the pool block through the Item that wraps its Repeater.

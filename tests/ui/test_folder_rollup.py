@@ -11,8 +11,8 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from waves.helper.folders import FolderNode, FolderTree
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
+from waves.providers.tidal_folders import FolderNode, FolderTree
 
 
 class _Signal:

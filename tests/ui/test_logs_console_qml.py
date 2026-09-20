@@ -1,4 +1,4 @@
-"""Realtime logs console (issue #68): bottom-bar button, live tail, filter,
+"""Realtime logs console: bottom-bar button, live tail, filter,
 follow, copy, export.
 
 Offscreen scenario against the real bridge and the real log file: log
@@ -103,9 +103,9 @@ def _scenario() -> int:
     from support.offline import PARK_LOGIN_QML, patch_offline
 
     patch_offline()
-    from waves.waves_ui import diagnostics
-    from waves.waves_ui.app import _load_mono
-    from waves.waves_ui.backend import WavesBridge
+    from waves.desktop import diagnostics
+    from waves.desktop.app import _load_mono
+    from waves.desktop.backend import WavesBridge
 
     engine = QQmlApplicationEngine()
     bridge = WavesBridge(tidal=None)
@@ -132,8 +132,8 @@ def _scenario() -> int:
         QTimer.singleShot(timeout_ms, loop.quit)
         loop.exec()
 
-    # The log view and its follow-scroll live inside LogsDrawer.qml (#315
-    # slice 4); evaluate their expressions in that file's own scope.
+    # The log view and its follow-scroll live inside LogsDrawer.qml;
+    # evaluate their expressions in that file's own scope.
     qd = scoped_q(q, "logsDrawer.background")
 
     settle()

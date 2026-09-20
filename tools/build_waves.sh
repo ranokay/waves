@@ -18,12 +18,12 @@ for arg in "$@"; do
 done
 
 WAVES_APP_NAME="Waves"
-WAVES_VERSION="$(grep -m 1 '__version__' waves/waves_ui/__init__.py | tr -d ' "' | cut -d'=' -f2)"
-[ -n "$WAVES_VERSION" ] || { echo "error: could not parse __version__ from waves/waves_ui/__init__.py" >&2; exit 1; }
+WAVES_VERSION="$(grep -m 1 '__version__' waves/desktop/__init__.py | tr -d ' "' | cut -d'=' -f2)"
+[ -n "$WAVES_VERSION" ] || { echo "error: could not parse __version__ from waves/desktop/__init__.py" >&2; exit 1; }
 DIST="dist"
 # Oldest macOS the bundle can run on: the most demanding file shipped inside
 # decides this, in practice the PySide6 wheels (see the note in pyproject.toml).
-# The locked 6.11.1 really requires macOS 15 (its wheel tag lies, issue #14),
+# The locked 6.11.1 really requires macOS 15 (its wheel tag lies),
 # so 15.0 is the default; CI's legacy macOS legs overlay pyside6 6.9.3 and
 # override this to 12.0 via the environment (hence the :-) for the "_legacy"
 # bundles. The value is declared in Info.plist so an unsupported system shows
@@ -39,7 +39,7 @@ WAVES_MACOS_MIN="${WAVES_MACOS_MIN:-15.0}"
 # a time and cheaper options. The release build cache makes the slower first
 # pass a one-time cost; an environment-provided WAVES_NUITKA_FLAGS still wins.
 #
-# yt-dlp's lazy extractor table is excluded on every host (issue #245): its
+# yt-dlp's lazy extractor table is excluded on every host: its
 # generated C dominated the build (4,182 s of a 4,593 s cold build on Apple
 # silicon) and it is the one module MSVC cannot compile at all -- the full
 # record and numbers live in docs/platform-enablement-review.md. Waves never
@@ -52,7 +52,7 @@ WAVES_MACOS_MIN="${WAVES_MACOS_MIN:-15.0}"
 #
 # On Apple silicon, Nuitka's auto-downloaded ccache is an x86-64 binary (its
 # cache holds one build per version), so Scons runs it under Rosetta and clang
-# then fails with "unable to load libxcrun ... need 'x86_64'" (issue #243).
+# then fails with "unable to load libxcrun ... need 'x86_64'".
 # Keep ccache out on Darwin/arm64 until an arm64 binary is provisioned; the
 # other hosts keep it.
 WAVES_HOST="$(uname -s 2>/dev/null)-$(uname -m 2>/dev/null)"
@@ -70,7 +70,7 @@ WAVES_NUITKA_FLAGS="$WAVES_NUITKA_FLAGS --nofollow-import-to=yt_dlp.extractor.la
 # cannot see. --include-package pulls only the package's Python submodules, so
 # without these explicit includes the bundle ships an empty Crypto/Cipher and
 # Apple downloads die at the first native load ("Cannot load native module
-# 'Crypto.Cipher._raw_aes'", then 'Crypto.Hash._SHA1', issue #304). The list
+# 'Crypto.Cipher._raw_aes'", then 'Crypto.Hash._SHA1'). The list
 # is the native set of the pinned PyCryptodome on the reference platform; the
 # packaging tests fail on a stale name and require every signing/download
 # module to be listed (x86_64-only AES-NI/CLMUL extras are copied through

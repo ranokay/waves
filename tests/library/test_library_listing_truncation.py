@@ -1,16 +1,13 @@
 """A directory listing the scanner cannot trust, and the probe by name that
-covers what such a listing leaves out (waves/library_index.py).
+covers what such a listing leaves out (waves/library/index.py).
 
-THE BUG THIS FENCES OFF
------------------------
 A network share whose directory paging is broken hands the OS the same first
-page over and over: one library root listed as 10000 entries of only 1000
-distinct names. Every artist past that page was invisible to the walk (never
+page over and over: one library root lists as 10000 entries of only 1000
+distinct names. Every artist past that page is invisible to the walk (never
 indexed, every badge "not in library", duplicates downloaded) while a direct
-``os.stat(root/Artist)`` found it at once. Worse, a fresh listing used to be
-taken at its word: every stored child it did not name was condemned and
-pruned that very scan, so anything found by other means would have been
-deleted again on the next walk.
+``os.stat(root/Artist)`` finds it at once. Worse, taking a fresh listing at its
+word would condemn and prune every stored child it does not name, deleting
+anything found by other means on the next walk.
 
 Pinned here: repeats are dropped (one walk per folder, one track row per
 file); a listing that repeats names, or leaves out a child a stat then finds,
@@ -29,8 +26,8 @@ import time
 from support.library_fakes import fake_listing
 from support.library_fakes import make_album_dir as _mk
 
-import waves.library_index as li
-from waves.library_index import SCAN_OK, LibraryIndex
+import waves.library.index as li
+from waves.library.index import SCAN_OK, LibraryIndex
 
 
 def _reader(tagmap, counter=None):
@@ -117,8 +114,8 @@ def test_a_cache_from_before_listings_were_judged_relists_its_root_once(tmp_path
     # reuses every unchanged listing, so a root whose mtime never moves would
     # never be listed again. The cache's first open without the marker makes
     # the next scan re-list the root once. Simulated by scanning with a CLEAN
-    # root listing under the old code's conditions (no marker, no verdict),
-    # then switching the share to a broken one without touching the root.
+    # root listing that predates the marker (no marker, no verdict), then
+    # switching the share to a broken one without touching the root.
     lib, _a, _b, tags = _two_artists(tmp_path)
     idx = _index(tmp_path, tags)
     idx.refresh(lib)

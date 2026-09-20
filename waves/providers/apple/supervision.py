@@ -16,7 +16,7 @@ expiry flips the status light to needs attention with a one-click re-login.
 
 Nothing here touches Qt, so it is pure and unit-testable; the Qt
 slots/signals that drive the queue rows live in
-:mod:`waves.waves_ui.backend`.
+:mod:`waves.desktop.backend`.
 """
 
 from __future__ import annotations
@@ -66,8 +66,8 @@ HELD_POLL_SEC = 5.0
 HELD_START_FAILURES = 2
 
 # How many consecutive unchanged polls a credential hold tolerates before the
-# credential is pronounced unable to return on its own (AP-01: a
-# wrapper-signed-in, cookies-broken account used to hold for good). A cookies
+# credential is pronounced unable to return on its own (a
+# wrapper-signed-in, cookies-broken account would otherwise hold for good). A cookies
 # export cannot be probed server-side, so the cookies hold watches the file
 # and this bound is the user's window to replace it; a wrapper guest that
 # stays signed out cannot refresh itself either. 24 polls at HELD_POLL_SEC is
@@ -720,7 +720,7 @@ class SidecarSupervisor:
 
         A readable mismatch means the container predates the pin (or the tag
         was re-pulled), and recreation is how the refresh lands; the session
-        volume is preserved, so it is safe (AP-07). Unknown on either side
+        volume is preserved, so it is safe. Unknown on either side
         answers True -- a runtime that cannot report IDs must not churn a
         working sidecar on every pass.
         """
@@ -735,7 +735,7 @@ class SidecarSupervisor:
 
         Two reasons: its published bindings are not loopback-private (an older
         container or a stale mapping is rebound on the way back), or it was
-        created from an image other than the one the pin now names (AP-07: a
+        created from an image other than the one the pin now names (a
         pulled tag bump must not keep serving the old bytes). Unknown image
         IDs never recreate; a container that is not there never does.
         """
@@ -838,7 +838,7 @@ class SidecarSupervisor:
         # A container whose bindings are exposed, or which was built from an
         # image other than the one the pin names, is removed so the run below
         # recreates it correctly; the session lives in the host data dir, so
-        # recreation preserves it (AP-07).
+        # recreation preserves it.
         migrated = False
         if self._container_must_recreate(state, img, port, host_decrypt):
             if not self._remove_container():

@@ -1,4 +1,4 @@
-"""Tests for the download-ownership store (waves/ownership.py).
+"""Tests for the download-ownership store (waves/library/ownership.py).
 
 Pure standard library, no PySide6, so these run in the lint venv like the other
 engine-level tests. The store's whole point is that ownership is decided against
@@ -13,7 +13,7 @@ import threading
 
 import pytest
 
-from waves.ownership import OwnershipStore, quality_rank
+from waves.library.ownership import OwnershipStore, quality_rank
 
 
 def _store(tmp_path):
@@ -66,10 +66,9 @@ def test_deleted_file_self_heals(tmp_path):
 
 
 def test_batch_answers_match_the_single_answer_for_a_version_filter(tmp_path):
-    """Issue #237 / LM-02: a row carrying only the audio_type column (no
-    audio_mode) answers the same through the batch query as through the
-    single one, filtered or not -- the batch used to omit the column and fall
-    back to the legacy mode."""
+    """A row carrying only the audio_type column (no audio_mode) answers the
+    same through the batch query as through the single one, filtered or not;
+    the batch must not omit the column and fall back to the legacy mode."""
     store = _store(tmp_path)
     atmos = _track_file(tmp_path, "song.m4a")
     stereo = _track_file(tmp_path, "song.flac")
@@ -169,6 +168,19 @@ def test_optional_metadata_columns_round_trip(tmp_path):
     assert info["bit_depth"] == 24
     assert info["sample_rate"] == 96000
     assert info["codecs"] == "FLAC"
+
+
+def test_a_re_record_without_the_delivered_columns_keeps_them(tmp_path):
+    """A later record of the same (id, path) without the audio columns must not
+    null the copy's Version: the Atmos/stereo fact is what the per-Version
+    ownership gate answers from."""
+    store = _store(tmp_path)
+    path = _track_file(tmp_path, "song.flac")
+    store.record("123", path, "HI_RES_LOSSLESS", audio_type="atmos", audio_mode="DOLBY_ATMOS")
+    store.record("123", path, "HI_RES_LOSSLESS")
+    info = store.ownership_of("123")
+    assert info["audio_type"] == "atmos"
+    assert info["audio_mode"] == "DOLBY_ATMOS"
 
 
 def test_concurrent_records_all_land(tmp_path):

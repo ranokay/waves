@@ -1,4 +1,4 @@
-"""Playlist-folder drill-in (issue #11): the QML state machine end to end.
+"""Playlist-folder drill-in: the QML state machine end to end.
 
 Boots the REAL Main.qml with the real bridge (no login) and drives the folder
 navigation through the same signals the backend uses:
@@ -103,8 +103,8 @@ def _run_scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -141,9 +141,9 @@ def _run_scenario() -> int:
         return EXIT_REGRESSED
 
     # 1. Land on a signed-in TIDAL source's playlists tab with a folder row +
-    #    a playlist row. The pane's groups are the bridge's live sources
-    #    (issue #259), so the scenario seeds the session the real sign-in would
-    #    flip and works through the group.
+    #    a playlist row. The pane's groups are the bridge's live sources,
+    #    so the scenario seeds the session the real sign-in would flip and
+    #    works through the group.
     make_tidal_my_music_source(root, q, settle, bridge)
     root.setProperty("libraryOpen", True)
     group = 'root.libGroupFor("tidal")'

@@ -3,21 +3,20 @@
 WHAT THIS FENCES OFF
 --------------------
 ``login_finalize`` writes the credentials file, but the flag that says a saved
-sign-in exists was set only in ``Tidal.__init__``: a command-line assumption,
+sign-in exists is set only in ``Tidal.__init__``: a command-line assumption,
 where the process signs in once and exits and the next run re-reads the file on
-the way up. A window that stays open does not get a next run, so after a first
-launch on a new install (or a sign-out and back in) the session worked while the
-flag stayed False.
+the way up. A window that stays open does not get a next run, so a first
+launch on a new install (or a sign-out and back in) must record the flag
+itself.
 
-``login_token`` opens on that flag. Every later re-authentication in the same
-run therefore answered False without attempting anything, and the one that
-re-authenticates is the Dolby Atmos switch: it swaps in the Atmos credentials
-and signs in again. So every Atmos track in every download failed for the rest
-of the run, printing "Atmos session authentication failed", and only quitting
-the app fixed it. A restart-to-refresh dependency is exactly what this app does
-not do.
+``login_token`` opens on that flag, and the one re-authentication in a run is
+the Dolby Atmos switch: it swaps in the Atmos credentials and signs in again.
+A False there, from a flag that was never set, fails every Atmos track in
+every download for the rest of the run with "Atmos session authentication
+failed", and only quitting the app fixes it. A restart-to-refresh dependency
+is exactly what this app does not do.
 
-HOW THIS STAYS FIXED
+HOW THE RECORD HOLDS
 --------------------
 The real ``WavesTidal`` finalizes a sign-in against a real credentials file in
 a temp folder, and the symptom is then reproduced end to end through the REAL
@@ -31,8 +30,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from waves.desktop.session import WavesTidal
 from waves.model.cfg import Token as ModelToken
-from waves.waves_ui.session import WavesTidal
 
 
 class _Session:
@@ -113,8 +112,8 @@ def test_a_sign_in_that_did_not_complete_records_nothing(tmp_path):
 
 
 def test_the_app_can_re_authenticate_after_signing_in(tmp_path):
-    """The whole point of the flag: login_token opens on it. Before the fix it
-    returned False having never asked TIDAL anything."""
+    """The whole point of the flag: login_token opens on it. Without it,
+    login_token returns False having never asked TIDAL anything."""
     t = _tidal(tmp_path)
     t.login_finalize()
     assert t.login_token() is True

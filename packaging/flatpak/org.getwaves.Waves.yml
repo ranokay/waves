@@ -39,7 +39,7 @@ modules:
       - install -Dm755 flatpak/waves.sh /app/bin/waves
       - install -Dm644 flatpak/org.getwaves.Waves.desktop /app/share/applications/org.getwaves.Waves.desktop
       - install -Dm644 flatpak/org.getwaves.Waves.metainfo.xml /app/share/metainfo/org.getwaves.Waves.metainfo.xml
-      - install -Dm644 ui/icon256.png /app/share/icons/hicolor/256x256/apps/org.getwaves.Waves.png
+      - install -Dm644 icons/icon256.png /app/share/icons/hicolor/256x256/apps/org.getwaves.Waves.png
     sources:
       # The already-built Nuitka tree (tools/build_waves.sh -> dist/waves.dist).
       - type: dir
@@ -51,5 +51,5 @@ modules:
         dest: flatpak
       # The app icon from the package.
       - type: dir
-        path: ../../waves/ui
-        dest: ui
+        path: ../../waves/desktop/icons
+        dest: icons

@@ -4,10 +4,10 @@ WHAT THIS FENCES OFF
 --------------------
 Expanding an album row pulls the row up to the expand anchor line so the
 panel has room, which scrolls the rows above it off the top of the view.
-Collapsing the row used to leave the view there: the albums the user had
-been looking at stayed off screen and a scroll back up was owed every time
-(livetest report). The expand now keeps the spot the view left, and the
-collapse returns to it with the same motion. A view the user has since
+Collapsing the row must bring the view back to where it was: leaving it
+there strands the albums the user had been looking at off screen and owes
+a scroll back up every time. The expand keeps the spot the view left, and
+the collapse returns to it with the same motion. A view the user has since
 scrolled back above that spot is left alone, and an expand that did not
 move the view (the row was already high enough) owes nothing.
 
@@ -126,8 +126,8 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     app = QGuiApplication.instance() or QGuiApplication([])
     sandbox_qml_settings()
     try:
-        from waves.waves_ui.app import _load_mono
-        from waves.waves_ui.backend import WavesBridge
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
     except Exception as exc:
         print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -222,7 +222,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     # The gap between the row and the panel has to fold with it. A fixed
     # spacing survives to the frame the folded panel leaves the layout and
     # then goes in one step: a small extra collapse after the motion has
-    # visibly ended (livetest: "an additional collapse at the end").
+    # visibly ended.
     check(q(f"root._ab['{low}'].spacing") == 6, "an expanded row lost the gap under it")
     q(f"root._ab['{low}'].toggle()")
     settle(60)

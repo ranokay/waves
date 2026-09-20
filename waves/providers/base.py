@@ -96,8 +96,8 @@ from typing import NamedTuple
 # not session reaches; they move behind the interface when those pages become
 # provider-routed.
 # The one delivered-quality ladder, lowest to highest, is Waves' own
-# (LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS) and lives in waves.constants
-# (issue #24): shared vocabulary spoken by the model layer, the ownership
+# (LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS) and lives in waves.constants:
+# shared vocabulary spoken by the model layer, the ownership
 # store and the bridge -- none of which may import a provider package. This
 # interface speaks it in its signatures; implementations and callers import
 # the ladder (and its rank/fold helpers) from waves.constants directly.
@@ -123,7 +123,7 @@ class Capability(StrEnum):
     DOWNLOAD = "download"
     # The whole-discography verb, on top of DOWNLOAD: TIDAL answers an artist
     # sweep; a catalog without it (Apple) renders no artist-page control at all
-    # instead of a live button whose only answer is a refusal (issue #288).
+    # instead of a live button whose only answer is a refusal.
     ARTIST_DOWNLOAD = "artist_download"
     LYRICS = "lyrics"
     ART = "art"
@@ -182,7 +182,7 @@ class ProviderDescriptor:
     logo_width: int = 20  # the card tile's mark width, px
     logo_header_width: int = 14  # the section header tile's mark width, px
     logo_header_height: int = 14  # the section header tile's mark height, px
-    # The search group head's furniture (issue #292): "accent" is the shipped
+    # The search group head's furniture: "accent" is the shipped
     # TIDAL look (hover-lit accent name, accent rule, compact 42px head) and
     # "plain" is the neutral head (bright name, outline rule, 50px) Apple has
     # always shown. It rides the descriptor because the head already renders
@@ -325,8 +325,7 @@ class Provider(ABC):
     ttml_lyrics: bool = False
     """Whether this provider's engine can write verbatim TTML lyric sidecars.
     The neutral default is False, so the Chooser disables its TTML toggle for a
-    provider that cannot produce one, capability instead of provider identity
-    (issue #235)."""
+    provider that cannot produce one, capability instead of provider identity."""
 
     # ----- search surface (what a group in the results page renders)
 
@@ -334,15 +333,14 @@ class Provider(ABC):
     """The result sections this provider's search answers, in render order.
     The bridge stamps them onto the provider's search group and the page
     renders exactly those, so a provider whose catalog has no videos (Apple)
-    never grows a VIDEOS head -- or shows one under a filter it cannot host
-    (issue #241 / UI-05, generic in #292)."""
+    never grows a VIDEOS head -- or shows one under a filter it cannot host."""
 
     search_artists_layout: str = "flow"
     """How the search page renders this provider's ARTISTS section: "flow"
     (the wrapping grid; a catalog that returns a handful) or "strip" (the
     horizontal shelf TIDAL has always used for a reply that can carry
     dozens). The bridge stamps it onto the provider's search group, so the
-    page renders the provider's own shape with no QML branch (issue #292)."""
+    page renders the provider's own shape with no QML branch."""
 
     search_head_when_alone: bool = True
     """Whether this provider's group still carries a head when it is the only
@@ -350,7 +348,7 @@ class Provider(ABC):
     an additional catalog beside the page's own shape; TIDAL answers False,
     because a TIDAL-only page has always rendered as the search page itself
     (its head exists to separate providers, and there is nothing to separate
-    when it is alone). The bridge stamps it onto the group (issue #292)."""
+    when it is alone). The bridge stamps it onto the group."""
 
     @classmethod
     def descriptor(cls) -> ProviderDescriptor:

@@ -22,9 +22,9 @@ from support.updater_fakes import ASSET as _ASSET
 from support.updater_fakes import make_manifest as _manifest
 from support.updater_fakes import prep_updater as _prep
 
-from waves.waves_ui import signing
-from waves.waves_ui import updater as u
-from waves.waves_ui.updater import AppUpdater, Release, UpdaterError
+from waves.desktop import signing
+from waves.desktop import updater as u
+from waves.desktop.updater import AppUpdater, Release, UpdaterError
 
 
 def _helper_text(up):
@@ -42,10 +42,11 @@ def _helper_text(up):
 def test_apply_unix_tree_is_cross_device_safe(tmp_path, monkeypatch):
     """The staged tree usually lives on a different filesystem than the install
     (e.g. ~/.config vs /opt or an AppImage mount). rename(2) can't cross
-    devices, so a bare os.replace(new_tree, install_root) raised EXDEV and left
-    the app uninstalled. The fix lands the tree on the install volume first, so
-    the final swap is a same-device rename. Simulate EXDEV for any os.replace
-    whose source is the staged tree; the new flow must never make that call."""
+    devices, so a bare os.replace(new_tree, install_root) raises EXDEV and
+    leaves the app uninstalled. Landing the tree on the install volume first
+    makes the final swap a same-device rename. Simulate EXDEV for any
+    os.replace whose source is the staged tree; the new flow must never make
+    that call."""
     up = AppUpdater(tmp_path, "1.0.0", repo="owner/Waves")
     install_root = tmp_path / "app"
     install_root.mkdir()
@@ -60,7 +61,7 @@ def test_apply_unix_tree_is_cross_device_safe(tmp_path, monkeypatch):
     real_replace = os.replace
 
     def fake_replace(src, dst, *a, **k):
-        if str(src) == str(staged):  # the cross-device move the old code did
+        if str(src) == str(staged):  # the cross-device rename os.replace cannot make
             raise OSError(errno.EXDEV, "Invalid cross-device link")
         return real_replace(src, dst, *a, **k)
 
@@ -319,7 +320,7 @@ def test_apply_macos_is_cross_device_safe(tmp_path, monkeypatch):
     real_replace = os.replace
 
     def fake_replace(src, dst, *a, **k):
-        if str(src) == str(staged):  # the cross-device move the old code did
+        if str(src) == str(staged):  # the cross-device rename os.replace cannot make
             raise OSError(errno.EXDEV, "Invalid cross-device link")
         return real_replace(src, dst, *a, **k)
 
@@ -556,10 +557,10 @@ def test_apply_windows_tree_helper_reclaims_foreign_files_before_deleting_the_ba
 
 def test_windows_helpers_are_pure_ascii_whatever_the_paths_are(tmp_path, monkeypatch):
     """cmd.exe decodes a .bat in the console's OEM code page, not UTF-8. A path
-    interpolated into the script therefore arrived as mojibake on any machine
-    whose account name is not ASCII: the first `if not exist` tested a path
-    that cannot exist, the helper applied nothing and deleted itself, and the
-    UI had already said "Updated, restart to finish". Every path now reaches
+    interpolated into the script therefore arrives as mojibake on any machine
+    whose account name is not ASCII: the first `if not exist` tests a path
+    that cannot exist, the helper applies nothing and deletes itself, and the
+    UI has already said "Updated, restart to finish". Every path must reach
     the script as a command-line argument (UTF-16 all the way), so the script
     body is ASCII and the code page cannot touch it."""
     app_dir = tmp_path / "\u041c\u0430\u0440\u0438\u044f" / "AppData" / "Roaming" / "Waves"
@@ -622,10 +623,10 @@ def test_windows_helper_paths_survive_every_character_a_folder_may_hold(tmp_path
 
 
 def test_apply_windows_tree_lands_the_new_tree_on_the_install_volume_first(tmp_path, monkeypatch):
-    """The helper used to robocopy hundreds of megabytes at the one moment most
-    likely to be a Windows shutdown: the app exiting. A shutdown killed the
-    mirror halfway and left the install broken with the only good copy stranded
-    at .old, unrepaired. The copy now happens here, while the app still runs,
+    """The helper must not robocopy hundreds of megabytes at the one moment
+    most likely to be a Windows shutdown: the app exiting. A shutdown kills the
+    mirror halfway and leaves the install broken with the only good copy
+    stranded at .old, unrepaired. The copy happens while the app still runs,
     so the helper does two same-volume renames and nothing else."""
     _, install_root, _target, new_tree, script = _tree_helper_script(tmp_path, monkeypatch)
 
@@ -699,8 +700,8 @@ def _wait_seconds(script: str) -> float:
     the line that goes back to :wait ("ping -n 2" sends one packet, waits one
     second for the second). Nothing else in the loop sleeps, so dropping that
     ping (or making it "-n 1") leaves both the tick count and the promise of
-    hours in place while the helper gives up in minutes: the exact regression
-    the four-hour wait was introduced to fix.
+    hours in place while the helper gives up in minutes, so the four-hour wait
+    promise is false.
     """
     line = next(ln for ln in script.replace("\r\n", "\n").split("\n") if "goto wait" in ln)
     match = re.search(r"ping -n (\d+) ", line)
@@ -830,9 +831,9 @@ def test_a_marker_that_is_not_an_object_is_not_a_marker(tmp_path, monkeypatch):
 
 
 def test_a_second_copy_cannot_stage_over_an_armed_update(tmp_path, monkeypatch):
-    """The armed guard used to be a per-process attribute, so a second copy of
-    Waves re-extracted over the staged tree the first one's helper was waiting
-    to swap in and rewrote the helper script mid-execution. The staging lock is
+    """A per-process armed guard lets a second copy of
+    Waves re-extract over the staged tree the first one's helper is waiting to
+    swap in and rewrite the helper script mid-execution. The staging lock is
     held for the whole life of a process that armed a helper, so the second
     copy is told to restart instead."""
     pub, priv = signing.keygen()
@@ -1401,7 +1402,7 @@ def _no_channel_env(monkeypatch):
 
 
 def _point_config_at(monkeypatch, tmp_path):
-    import waves.helper.path as path_helper
+    import waves.paths as path_helper
 
     monkeypatch.setattr(path_helper, "path_config_base", lambda: str(tmp_path))
 

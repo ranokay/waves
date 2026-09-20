@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from support.paths import QML_MAIN
 
-from waves.waves_ui.backend import WavesBridge
+from waves.desktop.backend import WavesBridge
 
 _METHODS = ("_dress_card", "_dress_cards", "_emit_dressed")
 
@@ -129,15 +129,14 @@ def test_a_page_still_current_is_emitted_dressed():
 
 
 def test_the_cards_in_the_qml_compare_the_stamp_before_trusting_the_answer():
-    """The Python half above is only half the fix: the baked verdict is read
+    """The Python half above is only half the contract: the baked verdict is read
     back in Main.qml, and reading it without comparing the stamp is exactly
     the state this exists to end. Checked on the source because the miss
     needs a publish to land inside a delegate's incubation slice, which is
     not a thing a scenario can arrange.
 
-    Both card styles carry it: the art card on a shelf (ArtCard.qml since
-    #315 slice 5) and the console card in the list style (BrowseCard.qml
-    since #315 slice 7)."""
+    Both card styles carry it: the art card on a shelf (ArtCard.qml) and the
+    console card in the list style (BrowseCard.qml)."""
     import re
 
     from support.paths import QML_DIR

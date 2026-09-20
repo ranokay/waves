@@ -1,22 +1,21 @@
 """Tags may not claim what the download does not know.
 
-Three findings from the gap round of the 2026-08-29 audit, all in the tag
-writer:
+The tag writer states only what the download actually knows:
 
 * A track delivered through the album-404 fallback (the album summary carries
-  no track count) was tagged "of 1" beside its real track number, so a player
-  rendered "7 of 1" and a gap checker read the album as complete. The naming
-  side of the same unknown had already settled the rule: a count we do not
-  have is not a claim we make.
-* Empty MP4 freeform atoms survived the empty-tag sweep, because freeform
-  values are BYTES and the sweep only knew strings. The same track saved as
-  FLAC carried no such fields.
+  no track count) carries no track total beside its real track number, so a
+  player cannot render "7 of 1" and a gap checker cannot read the album as
+  complete. The naming side of the same unknown settled the rule: a count we
+  do not have is not a claim we make.
+* Empty MP4 freeform atoms are swept like empty string tags, because freeform
+  values are BYTES; the same track saved as FLAC and as MP4 carries the same
+  fields.
 * The MP3 branch is unreachable today (no download can produce an .mp3), and
-  every frame in it was wrong: the album artist went into the Original Artist
-  frame, the share URL frame was handed the ISRC through a keyword mutagen
-  discards, the synced-lyrics frame was fed a shape that raises while
-  rendering (which would abort the whole save), and the cover was added with
-  no mime type.
+  every frame in it is pinned correct anyway: the album artist goes into the
+  album artist frame, the share URL frame gets a real URL rather than the ISRC
+  through a keyword mutagen discards, the synced-lyrics frame gets a shape
+  that renders (a raising shape would abort the whole save), and the cover is
+  added with a mime type.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ import pytest
 from tidalapi import Track
 
 from waves.download import Download
-from waves.metadata import Metadata
+from waves.metadata.tags import Metadata
 
 
 def _mp4_stub():
@@ -62,13 +61,13 @@ def _mp3_stub():
 def _write(stub, tmp_path, name, **kw):
     file = tmp_path / name
     file.write_bytes(b"x")
-    with patch("waves.metadata.mutagen.File", return_value=stub):
+    with patch("waves.metadata.tags.mutagen.File", return_value=stub):
         assert Metadata(path_file=file, target_upc={"FLAC": "UPC", "MP4": "UPC", "MP3": "UPC"}, **kw).save() is True
     return stub
 
 
 # --------------------------------------------------------------------------- #
-# G-21: an unknown track count
+# An unknown track count stays unknown
 # --------------------------------------------------------------------------- #
 def test_an_unknown_track_count_is_not_written_as_one(tmp_path):
     flac = _write(
@@ -157,7 +156,7 @@ def _download() -> Download:
     dl.settings.data.metadata_replay_gain = False
     dl.settings.data.mark_explicit = False
     dl.settings.data.metadata_target_upc = "UPC"
-    # Per-provider mirrors (issue #61): this pipeline reads the TIDAL card's
+    # Per-provider mirrors: this pipeline reads the TIDAL card's
     # options, so the stub states them, not just the legacy shared keys.
     dl.settings.data.tidal_lyrics_embed = False
     dl.settings.data.tidal_lyrics_file = False
@@ -196,7 +195,7 @@ def test_the_writer_passes_the_count_it_has_and_nothing_more(num_tracks, expecte
 
 
 # --------------------------------------------------------------------------- #
-# G-23: empty MP4 freeform atoms
+# Empty MP4 freeform atoms are not written
 # --------------------------------------------------------------------------- #
 def test_an_m4a_carries_no_blank_custom_fields(tmp_path):
     """Most downloads have no initial key and no UPC, and lyrics are off by
@@ -254,7 +253,7 @@ def test_the_empty_check_knows_both_spellings():
 
 
 # --------------------------------------------------------------------------- #
-# G-22: the dead MP3 branch, made correct rather than left as a landmine
+# MP3 tag writing
 # --------------------------------------------------------------------------- #
 def _mp3_tags(tmp_path, **kw):
     stub = _write(_mp3_stub(), tmp_path, "t.mp3", title="T", artists=["A"], albumartist=["Band"], **kw)
