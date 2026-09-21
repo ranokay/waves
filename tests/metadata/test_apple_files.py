@@ -10,6 +10,7 @@ import pytest
 from support.audio_fixtures import tone
 
 from waves.providers.apple.files import (
+    facts_without_share_url,
     format_apple_path,
     pick_destination,
     tag_apple_file,
@@ -180,6 +181,22 @@ def test_tag_apple_file_writes_generic_only_tags(tmp_path):
     assert bytes(tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:song-1"
     assert tags["\xa9nam"] == ["Xtal"]
     assert not any("WAVES_TIDAL" in key for key in tags)
+
+
+def test_share_url_withheld_when_its_preference_is_off():
+    from types import SimpleNamespace
+
+    facts = {"share_url": "https://music.apple.com/x", "title": "Xtal"}
+
+    off = facts_without_share_url(SimpleNamespace(metadata_write_url=False), facts)
+    assert off == {"share_url": "", "title": "Xtal"}
+    assert facts["share_url"] == "https://music.apple.com/x", "the caller's facts keep their share"
+
+    on = facts_without_share_url(SimpleNamespace(metadata_write_url=True), facts)
+    assert on == facts
+
+    unset = facts_without_share_url(SimpleNamespace(), facts)
+    assert unset == facts, "an unreadable setting keeps writing"
 
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
