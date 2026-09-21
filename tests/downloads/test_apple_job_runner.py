@@ -6,7 +6,7 @@ import contextlib
 import shutil
 import subprocess
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -1796,3 +1796,187 @@ def test_atmos_album_reuses_a_carried_atmos_probe(tmp_path, monkeypatch):
     done = [ev for ev in relay.events if ev.get("status") == "done"]
     assert len(done) == 3
     assert all(ev["quality"]["audio_mode"] == "DOLBY_ATMOS" for ev in done)
+
+
+# --------------------------------------------------------------------------- #
+# Cancel-after-probe: a press landing while the folder probe runs reaches the
+# hold the gate has just taken (the TIDAL twin reads the same way).
+# --------------------------------------------------------------------------- #
+def _probe_gate_setup(*, abort_during_probe: bool, row_present: bool):
+    """run_job_body hooks with the reachability gate under test control."""
+    abort = Event()
+    stashed: list = []
+    pending: list = []
+    calls: dict = {"replays": 0, "released": [], "statuses": [], "finished": [], "removed": []}
+
+    def gate(retry, media_id=""):
+        # The press lands while the probe runs; the gate stashes regardless.
+        if abort_during_probe:
+            abort.set()
+        stashed.append(media_id)
+        pending.append((media_id, retry))
+        return False
+
+    def discard(media_ids):
+        wanted = {str(mid) for mid in media_ids}
+        dropped = [mid for mid, _ in pending if mid in wanted]
+        pending[:] = [(mid, fn) for mid, fn in pending if mid not in wanted]
+        return dropped
+
+    hooks = runner.AppleJobHooks(
+        provider=lambda: None,
+        settings=lambda: SimpleNamespace(data=SimpleNamespace(download_base_path="/tmp/waves-out")),
+        queue_item=lambda qid: {"qid": qid} if row_present else None,
+        queue_status=lambda qid, status, reason="": calls["statuses"].append(status),
+        download_state=lambda media_id, state: None,
+        download_progress=lambda media_id, pct: None,
+        bump_groups=lambda *args: None,
+        status=lambda text: None,
+        finish_job=lambda qid: calls["finished"].append(qid),
+        remove_row=lambda qid: calls["removed"].append(qid),
+        emit_queue=lambda: None,
+        gate_reachability=gate,
+        download_apple=lambda *args, **kwargs: calls.__setitem__("replays", calls["replays"] + 1) or False,
+        download_failed_with_folder=lambda *args, **kwargs: False,
+        redact=lambda text: text,
+        devlog_event=lambda *args, **kwargs: None,
+        devlog_done=lambda *args, **kwargs: None,
+        devlog_clock=lambda: 0.0,
+        discard_pending_downloads=discard,
+        release_abandoned_hold=lambda media_ids: calls["released"].extend(media_ids),
+    )
+    return SimpleNamespace(hooks=hooks, abort=abort, stashed=stashed, pending=pending, calls=calls)
+
+
+def _run_probe_gated_body(setup) -> None:
+    spec = SimpleNamespace(
+        kind="track",
+        collection=False,
+        media_id="apple:song-1",
+        file_template="{artist_name}/{track_title}",
+        is_retry=False,
+    )
+    runner.run_job_body(
+        setup.hooks, 1, spec, {"id": "song-1"}, signals=_Relay(), job_abort=setup.abort, row_ask=None, name="Xtal"
+    )
+
+
+def test_cancel_during_the_probe_discards_the_stashed_replay():
+    setup = _probe_gate_setup(abort_during_probe=True, row_present=True)
+    _run_probe_gated_body(setup)
+
+    assert setup.stashed == ["apple:song-1"], "the gate stashed regardless"
+    assert setup.pending == [], "the cancel reached the stash: nothing replays on recovery"
+    assert setup.calls["replays"] == 0, "the cancelled job never replayed"
+    assert "cancelled" in setup.calls["statuses"]
+    assert "running" not in setup.calls["statuses"], "the cancelled row never went back to running"
+    assert setup.calls["finished"] == [1]
+
+
+def test_cancel_during_the_probe_releases_the_hold_when_the_row_is_gone():
+    setup = _probe_gate_setup(abort_during_probe=True, row_present=False)
+    _run_probe_gated_body(setup)
+
+    assert setup.pending == []
+    assert setup.calls["released"] == ["apple:song-1"]
+
+
+def test_cancel_during_the_probe_keeps_the_stopped_rows_hold():
+    setup = _probe_gate_setup(abort_during_probe=True, row_present=True)
+    _run_probe_gated_body(setup)
+
+    assert setup.calls["released"] == [], "a Stopped row stays retryable: its force rides the retry"
+
+
+def test_probe_block_without_a_cancel_still_stashes_for_recovery():
+    setup = _probe_gate_setup(abort_during_probe=False, row_present=True)
+    _run_probe_gated_body(setup)
+
+    assert setup.pending and [mid for mid, _ in setup.pending] == ["apple:song-1"]
+    assert setup.calls["replays"] == 0
+    assert "cancelled" not in setup.calls["statuses"]
+    assert setup.calls["removed"] == [1], "the held row withdraws; the replay brings it back"
+
+
+# --------------------------------------------------------------------------- #
+# Pause gate: the track loop waits between tracks, abort-wakeable (the
+# engine's _wait_while_paused polling shape).
+# --------------------------------------------------------------------------- #
+def test_pause_wait_returns_at_once_when_nothing_is_paused():
+    event = Event()
+    event.set()
+    hooks = runner.AppleJobHooks(pause_event=lambda: event)
+    assert runner.wait_while_paused(hooks, Event()) is False
+
+
+def test_pause_wait_without_an_event_never_waits():
+    assert runner.wait_while_paused(runner.AppleJobHooks(), Event()) is False
+
+
+def test_abort_wakes_the_pause_wait():
+    paused = Event()  # cleared: still paused
+    abort = Event()
+    abort.set()
+    hooks = runner.AppleJobHooks(pause_event=lambda: paused)
+    assert runner.wait_while_paused(hooks, abort) is True
+
+
+def test_pause_wait_blocks_until_resumed():
+    paused = Event()
+    hooks = runner.AppleJobHooks(pause_event=lambda: paused)
+    done = Event()
+    outcome: list = []
+    worker = Thread(target=lambda: (outcome.append(runner.wait_while_paused(hooks, Event())), done.set()))
+    worker.start()
+    try:
+        assert not done.wait(0.4), "the wait walked through a pause"
+        paused.set()
+        assert done.wait(10), "resume never released the wait"
+    finally:
+        paused.set()
+        worker.join(10)
+    assert outcome == [False]
+
+
+def test_pause_holds_the_track_loop_before_the_first_fetch(tmp_path):
+    """A paused queue fetches nothing further; STOP wakes the loop and the
+    job settles without fetching."""
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"staged bytes, never fetched")
+    provider = _ThreeTrackProvider(staged)
+    base = tmp_path / "lib"
+    hooks = _three_track_hooks(provider, base)
+    paused = Event()  # cleared: the queue is paused
+    hooks.pause_event = lambda: paused
+    abort = Event()
+    relay = _Relay()
+    spec = SimpleNamespace(kind="album", collection=True, media_id="apple:album-1")
+    finished = Event()
+
+    def _run():
+        try:
+            runner.run_apple_job(
+                hooks,
+                1,
+                spec,
+                _album_resource(),
+                signals=relay,
+                job_abort=abort,
+                file_template="{artist_name}/{track_title}",
+            )
+        finally:
+            finished.set()
+
+    worker = Thread(target=_run)
+    worker.start()
+    try:
+        assert not finished.wait(0.4), "a paused queue finished without waiting"
+        assert worker.is_alive(), "the job died instead of waiting out the pause"
+        assert provider.fetched == [], "a paused queue fetched"
+        abort.set()
+        assert finished.wait(10), "STOP never woke the paused loop"
+    finally:
+        abort.set()
+        worker.join(10)
+    assert provider.fetched == []
+    assert not [ev for ev in relay.events if ev.get("status") == "done"]

@@ -167,6 +167,10 @@ def _empty_set() -> set:
     return set()
 
 
+def _empty_list(*_args, **_kwargs) -> list:
+    return []
+
+
 def _empty_str() -> str:
     return ""
 
@@ -234,6 +238,9 @@ class AppleJobHooks:
     devlog_done: Callable[..., None] = _noop
     devlog_clock: Callable[[], float] = _zero_clock
     library_root: Callable[[], str] = _empty_str
+    pause_event: Callable[[], Any] = _none
+    discard_pending_downloads: Callable[..., list] = _empty_list
+    release_abandoned_hold: Callable[..., None] = _noop
 
 
 # --------------------------------------------------------------------------
@@ -387,6 +394,28 @@ def sleep_abortable(seconds: float, job_abort) -> bool:
         if remaining <= 0:
             return True
         time.sleep(min(0.2, remaining))
+
+
+def wait_while_paused(hooks: AppleJobHooks, job_abort) -> bool:
+    """Block while the queue is paused, staying responsive to abort.
+
+    The engine's _wait_while_paused polling shape (short timeout so a
+    resume or abort is picked up promptly): True means abort, False to
+    proceed. A hook without a pause event never waits.
+    """
+    try:
+        reader = getattr(hooks, "pause_event", None)
+        event = reader() if callable(reader) else None
+    except Exception:
+        return False
+    if event is None:
+        return False
+    while not event.is_set():
+        if job_abort.is_set():
+            return True
+        # Short timeout so a resume or abort is picked up promptly.
+        event.wait(0.1)
+    return bool(job_abort.is_set())
 
 
 # --------------------------------------------------------------------------
@@ -2259,6 +2288,13 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
     for pos, row in enumerate(rows, start=1):
         if job_abort.is_set():
             break
+        # Pause holds the loop between tracks; the wait answers abort with True.
+        try:
+            should_abort = wait_while_paused(hooks, job_abort)
+        except Exception:
+            should_abort = False
+        if should_abort:
+            break
         # Proactive pacing (spec §3): pause after N songs for
         # N seconds, same shape as TIDAL's. STOP lands promptly.
         try:
@@ -2586,6 +2622,30 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
         )
 
     if not hooks.gate_reachability(replay, media_id):
+        # A press that landed while the probe was running has to reach the
+        # hold the gate has just taken: STOP, per-row CANCEL and every clear
+        # set this abort, but the gate stashes its replay regardless, so
+        # without this the cancelled download replays on its own the moment
+        # the share answers. Read AFTER the gate, not before it: the stash
+        # is what makes the download outlive the press, and before the gate
+        # there is nothing to drop. (The TIDAL twin reads the same way.)
+        if job_abort.is_set():
+            with contextlib.suppress(Exception):
+                hooks.discard_pending_downloads([media_id])
+            # Released only when the press took the row with it: a Stopped
+            # row stays retryable, and its force rides the retry.
+            try:
+                row_gone = hooks.queue_item(qid) is None
+            except Exception:
+                row_gone = False
+            if row_gone:
+                with contextlib.suppress(Exception):
+                    hooks.release_abandoned_hold([media_id])
+            hooks.queue_status(qid, "cancelled")
+            hooks.download_state(media_id, "")
+            hooks.bump_groups(media_id, None, "failed")
+            hooks.finish_job(qid)
+            return
         hooks.download_state(media_id, "")
         hooks.finish_job(qid)
         hooks.remove_row(qid)
