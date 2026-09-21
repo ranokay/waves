@@ -2288,13 +2288,12 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
     for pos, row in enumerate(rows, start=1):
         if job_abort.is_set():
             break
-        # The queue pause holds the loop between tracks, abort-wakeable
-        # like the engine's wait: a paused queue fetches nothing further.
+        # Pause holds the loop between tracks; the wait answers abort with True.
         try:
-            paused_out = wait_while_paused(hooks, job_abort)
+            should_abort = wait_while_paused(hooks, job_abort)
         except Exception:
-            paused_out = False
-        if paused_out:
+            should_abort = False
+        if should_abort:
             break
         # Proactive pacing (spec §3): pause after N songs for
         # N seconds, same shape as TIDAL's. STOP lands promptly.
