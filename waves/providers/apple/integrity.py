@@ -100,7 +100,11 @@ def _is_within(child: str | Path, parent: str | Path) -> bool:
     return _fold_path(child_norm).startswith(_fold_path(prefix))
 
 
-def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None = None) -> Path:
+def resolve_quarantine_dir(
+    download_base: str | Path,
+    custom: str | Path | None = None,
+    library_root: str | Path | None = None,
+) -> Path:
     """Where quarantined Apple files land.
 
     Empty custom means the default: <download_base>/Waves Quarantine. A set
@@ -111,7 +115,9 @@ def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None 
     falls back to the default: quarantining into the library at the intended
     relative path would place a corrupt file exactly where a verified copy
     belongs, and registering an ancestor would exclude the whole library
-    from the scan.
+    from the scan. The same holds for the active separate library root: a
+    custom path naming it, or an ancestor of it, would exclude the whole
+    scanned library once registered, so it falls back the same way.
     """
     base = Path(os.path.expanduser(str(download_base or "")))
     text = str(custom or "").strip()
@@ -120,6 +126,12 @@ def resolve_quarantine_dir(download_base: str | Path, custom: str | Path | None 
         if _is_within(base, candidate):
             logger.warning("Apple quarantine folder overlaps the download folder; using the default instead")
             return base / QUARANTINE_DIR_NAME
+        library_text = str(library_root or "").strip()
+        if library_text:
+            library_path = Path(os.path.expanduser(library_text))
+            if _is_within(library_path, candidate):
+                logger.warning("Apple quarantine folder overlaps the library folder; using the default instead")
+                return base / QUARANTINE_DIR_NAME
         return candidate
     return base / QUARANTINE_DIR_NAME
 

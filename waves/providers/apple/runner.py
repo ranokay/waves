@@ -166,6 +166,10 @@ def _empty_set() -> set:
     return set()
 
 
+def _empty_str() -> str:
+    return ""
+
+
 def _zero_port() -> int:
     return 0
 
@@ -228,6 +232,7 @@ class AppleJobHooks:
     devlog_event: Callable[..., None] = _noop
     devlog_done: Callable[..., None] = _noop
     devlog_clock: Callable[[], float] = _zero_clock
+    library_root: Callable[[], str] = _empty_str
 
 
 # --------------------------------------------------------------------------
@@ -757,7 +762,9 @@ def quarantine_root(hooks: AppleJobHooks) -> pathlib.Path:
     """The quarantine folder: custom override or the default inside the
     download folder. Created on use, never here. A custom location registers
     its full path for scan exclusion (basename matching would prune
-    legitimate same-named folders)."""
+    legitimate same-named folders). A custom path naming the active library
+    root (download or separate) falls back to the default, or the whole
+    scanned library would be excluded once registered."""
     try:
         base = str(getattr(_data(hooks), "download_base_path", "") or "")
     except Exception:
@@ -766,7 +773,12 @@ def quarantine_root(hooks: AppleJobHooks) -> pathlib.Path:
         custom = str(getattr(_data(hooks), "apple_quarantine_dir", "") or "")
     except Exception:
         custom = ""
-    root = resolve_quarantine_dir(base, custom or None)
+    try:
+        reader = getattr(hooks, "library_root", None)
+        library_root = str(reader() or "") if callable(reader) else ""
+    except Exception:
+        library_root = ""
+    root = resolve_quarantine_dir(base, custom or None, library_root or None)
     if custom:
         try:
             from waves.library import index as _lib_index
