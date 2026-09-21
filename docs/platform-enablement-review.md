@@ -56,22 +56,24 @@ Tests run in the manual `master` workflow on ubuntu-24.04 only (Python 3.12,
 Linux tests on develop are green in the same window (master run `34928309207`:
 quality, tests on Python 3.12, 3.13 and 3.14).
 
-## CI evidence (2026-09-21; #244, macOS architectures on the leg-selection recipe)
+## CI evidence (2026-09-21; #244, macOS architectures with up-front leg selection)
 
-| Leg                       | Run           | Result                 | Detail                                                                                                                                                                                                      |
-| ------------------------- | ------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS intel, cold         | `35575720429` | built + smoke-launched | ~39 min; Nuitka cache miss (new key from the workflow change), ccache miss on 1,791 files; smoke-launch healthy, 139 Mach-O files honor the 15.0 floor; artifact `waves_macos-intel` (~101 MB) downloadable |
-| macOS apple-silicon, cold | `35575720429` | built + smoke-launched | ~18 min; Nuitka cache miss; smoke-launch healthy, 137 Mach-O files honor the 15.0 floor; artifact `waves_macos-apple-silicon` (~93 MB) downloadable                                                         |
+| Leg                       | Run           | Result                 | Detail                                                                                                                                                                                                                   |
+| ------------------------- | ------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| macOS intel, cold         | `35575720429` | built + smoke-launched | ~39 min at `917d1b0`; Nuitka cache miss (new key from the workflow change), ccache miss on 1,791 files; smoke-launch healthy, 139 Mach-O files honor the 15.0 floor; artifact `waves_macos-intel` (~101 MB) downloadable |
+| macOS apple-silicon, cold | `35575720429` | built + smoke-launched | ~18 min at `917d1b0`; Nuitka cache miss; smoke-launch healthy, 137 Mach-O files honor the 15.0 floor; artifact `waves_macos-apple-silicon` (~93 MB) downloadable                                                         |
+| macOS intel, warm         | `35583595525` | built + smoke-launched | ~24 min at `d36ecb3` (vs ~43 second-cold at the same SHA); exact-primary-key restore, ccache `cache hit: 1791`; artifact downloadable                                                                                    |
+| macOS apple-silicon, warm | `35583595525` | built + smoke-launched | ~21 min at `d36ecb3` (vs ~20 second-cold at the same SHA); exact-primary-key restore (no ccache summary in the log); artifact downloadable                                                                               |
 
-Both legs ran at `917d1b0` with `only=macos-intel,macos-apple-silicon`; the
-six excluded legs never started (no phantom jobs). A second dispatch at
-`d36ecb3` (run `35579368870`, same filter) also went green on both legs but
-missed the cache again — the workflow file itself changed between the two
-dispatches, so the key moved. The true warm re-run (run `35583595525`,
-unchanged inputs) restored the exact primary keys on both legs; intel logged
-ccache `cache hit: 1791` against the cold run's miss on all 1791 (silicon's
-warm log carries the Nuitka restore line without a ccache summary). Full
-rows in `docs/evidence/platform-builds.md`.
+All four ran with `only=macos-intel,macos-apple-silicon`; the six excluded
+legs never started (no phantom jobs). The cache rule behind the cold/warm
+contrast: the Nuitka key hashes `mise.toml`, `tools/build_waves.sh`,
+`pyproject.toml`, the release workflow, `build-legs.json` and `uv.lock`,
+so any edit to those inputs intentionally colds the cache — which is what
+happened to the second dispatch at `d36ecb3` (run `35579368870`, same
+filter, both legs green): the workflow file itself had changed, so the key
+moved. The warm re-run above shared `d36ecb3`'s inputs exactly, hence the
+exact-key restore. Full rows in `docs/evidence/platform-builds.md`.
 
 Reading note (historical — the workflow has since changed): at the time of
 these runs the `only` filter still created every matrix job; legs the filter
