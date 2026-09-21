@@ -69,6 +69,7 @@ from waves.providers.apple.integrity import (
     integrity_retry_delay,
     is_outbreak_era,
     parse_encoded_date,
+    prune_empty_quarantine_dirs,
     quarantine_dest,
     resolve_quarantine_dir,
 )
@@ -870,10 +871,10 @@ def quarantine_file(
 
     Honors the keep-vs-delete toggle (delete keeps no bytes but still marks
     the skip-list via the caller). Files keep their intended names under the
-    quarantine root, so a later verified copy replaces them by name. A kept
-    copy is recorded against the queue row that produced it, so the drawer
-    can offer to reveal or delete it. Never raises: quarantine must not fail
-    a download that already failed.
+    quarantine root so a human can tell what failed; a later verified copy
+    retires them (see quarantine_clear). A kept copy is recorded against the
+    queue row that produced it, so the drawer can offer to reveal or delete
+    it. Never raises: quarantine must not fail a download that already failed.
     """
     if not quarantine_keep(hooks):
         return None
@@ -928,6 +929,68 @@ def quarantine_folder(hooks: AppleJobHooks, qid: int) -> pathlib.Path | None:
         if parent.is_dir():
             return parent
     return None
+
+
+def quarantine_clear(hooks: AppleJobHooks, qid: int) -> None:
+    """Delete one row's quarantined copies after a verified landing.
+
+    A recovered track's corrupt bytes are stale the moment the real copy
+    lands: the skip mark clears beside them (the caller), so the copies go
+    too, freeing the canonical quarantine name a later failure would
+    otherwise number past. Row-scoped — each Version is its own row — so
+    one version's recovery never takes its sibling's bytes. Mirrors
+    deleteQuarantine's record semantics (gone drops from the record,
+    un-deletable stays for the next attempt) without its status words: the
+    landing is the news. Never raises: cleanup must not fail a download
+    that already landed.
+    """
+    try:
+        qid = int(qid)
+    except (TypeError, ValueError):
+        return
+    try:
+        record = hooks.quarantine_paths()
+    except Exception:
+        return
+    try:
+        paths = list(record.get(qid, []))
+    except Exception:
+        return
+    if not paths:
+        return
+    remaining: list[str] = []
+    for text in paths:
+        try:
+            path = pathlib.Path(str(text)).expanduser()
+            # Already gone is not a failure: drop it from the record.
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            logger.debug("Could not delete a quarantined copy for qid %s", qid, exc_info=True)
+            remaining.append(text)
+    try:
+        prune_empty_quarantine_dirs(paths, quarantine_root(hooks))
+    except Exception:
+        logger.debug("Could not prune emptied quarantine folders for qid %s", qid, exc_info=True)
+    try:
+        if remaining:
+            record[qid] = remaining
+        else:
+            record.pop(qid, None)
+    except Exception:
+        logger.debug("Could not record the remaining quarantine paths for qid %s", qid, exc_info=True)
+        return
+    try:
+        item = hooks.queue_item(qid)
+    except Exception:
+        item = None
+    if item is not None:
+        try:
+            item["quarantineCount"] = len(remaining)
+            hooks.queue_mark_changed(qid)
+            hooks.emit_queue()
+        except Exception:
+            logger.debug("Could not publish the cleared quarantine count for qid %s", qid, exc_info=True)
 
 
 def staged_encoded_date(hooks: AppleJobHooks, staged: pathlib.Path) -> str | None:
@@ -2455,11 +2518,18 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             hooks.note_activity()
         # A verified copy landing clears the skip-list (REDOWNLOAD's way
         # back; also clears a stale mark when Apple re-encoded). The
-        # fetched Version clears its own mark (check_version above).
+        # fetched Version clears its own mark (check_version above). Its
+        # quarantined bytes retire beside the mark: corrupt copies are
+        # stale the moment the real one lands, and only this row's own
+        # record goes (each Version is its own row).
         try:
             skiplist_clear(hooks, track_id, check_version)
         except Exception:
             logger.debug("Could not clear the Apple skip-list", exc_info=True)
+        try:
+            quarantine_clear(hooks, qid)
+        except Exception:
+            logger.debug("Could not clear the Apple quarantine copies", exc_info=True)
         signals.track_event.emit(
             {
                 "id": track_id,

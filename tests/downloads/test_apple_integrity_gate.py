@@ -1319,6 +1319,72 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
 
 
 @pytest.mark.ffmpeg
+def test_verified_landing_retires_the_rows_quarantine_bytes(tmp_path, monkeypatch):
+    """Recovery after quarantine: a verified landing deletes the row's own
+    quarantined copies beside the skip mark, while a sibling row's copies
+    (the other Version's own record) survive it."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    base = tmp_path / "lib"
+    store = _SkipStore()
+    store.quarantine_add("apple:song-1", "stereo", "2025-06-23")
+    good = tmp_path / "good.m4a"
+    _tone(good)
+    provider = _FakeProvider([good])
+    stub = _bind(_stub(base, provider, _ownership_store=store))
+    stub._apple_quarantine_paths = {}
+    stub._queue_mark_changed = lambda qid: None
+    stub._emit_queue = lambda: None
+    hooks = stub._apple_job_hooks()
+
+    # The earlier failure's stale bytes: this row's copy plus a sibling
+    # row's copy (the other Version's own quarantine).
+    stale = runner.quarantine_file(
+        hooks, good, relative="Aphex Twin/Xtal", track_id="apple:song-1", audio_type="stereo", qid=1
+    )
+    sibling = runner.quarantine_file(
+        hooks, good, relative="Aphex Twin/Xtal Atmos", track_id="apple:song-1", audio_type="atmos", qid=2
+    )
+    assert stale is not None and stale.is_file()
+    assert sibling is not None and sibling.is_file()
+
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1", audio_type="stereo", is_retry=True)
+    summary = runner.run_apple_job(
+        hooks, 1, spec, _song_resource(), signals=relay, job_abort=Event(), file_template="{artist_name}/{track_title}"
+    )
+
+    assert summary == ""
+    assert store.is_quarantined("apple:song-1", "stereo") is None, "the recovery clears the skip mark"
+    assert not stale.exists(), "the recovered row's corrupt bytes retire with the mark"
+    assert stub._apple_quarantine_paths.get(1) is None
+    assert stub._queue_index[1]["quarantineCount"] == 0
+    assert sibling.is_file(), "the sibling version's bytes are another row's record"
+    assert stub._apple_quarantine_paths.get(2) == [str(sibling)]
+
+
+def test_quarantine_clear_drops_missing_copies_and_ignores_unknown_rows(tmp_path):
+    """Already-gone copies leave the record without an error, and a row
+    with no record is a no-op: cleanup never fails a landed download."""
+    from types import SimpleNamespace
+
+    base = tmp_path / "lib"
+    record: dict = {7: [str(base / "gone.m4a")]}
+    hooks = runner.AppleJobHooks(
+        settings=lambda: SimpleNamespace(data=SimpleNamespace(download_base_path=str(base), apple_quarantine_dir="")),
+        quarantine_paths=lambda: record,
+        queue_item=lambda qid: None,
+    )
+    runner.quarantine_clear(hooks, 7)
+    assert record.get(7) is None
+    runner.quarantine_clear(hooks, 999)
+    runner.quarantine_clear(hooks, "not-a-qid")
+
+
+@pytest.mark.ffmpeg
 def test_hold_cleaned_when_retry_fails_non_integrity(tmp_path, monkeypatch):
 
     from waves.providers.apple import engine as apple_engine
