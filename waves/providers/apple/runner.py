@@ -69,6 +69,7 @@ from waves.providers.apple.integrity import (
     integrity_retry_delay,
     is_outbreak_era,
     parse_encoded_date,
+    prune_empty_quarantine_dirs,
     quarantine_dest,
     resolve_quarantine_dir,
 )
@@ -832,19 +833,37 @@ def skiplist_get(hooks: AppleJobHooks, track_id: str, audio_type: str | None):
         return None
 
 
-def skiplist_add(hooks: AppleJobHooks, track_id: str, audio_type: str | None, encoded_date: str | None = None) -> None:
-    """Mark a track's version as quarantined (bulk runs auto-skip it)."""
+def skiplist_add(
+    hooks: AppleJobHooks,
+    track_id: str,
+    audio_type: str | None,
+    encoded_date: str | None = None,
+    quarantine_path: str | pathlib.Path | None = None,
+) -> None:
+    """Mark a track's version as quarantined (bulk runs auto-skip it).
+
+    Carries the quarantined file's path on the mark: a verified landing
+    retires the recorded bytes with it (see skiplist_clear).
+    """
     store = hooks.ownership()
     if store is None or not hasattr(store, "quarantine_add"):
         return
     try:
-        store.quarantine_add(str(track_id), audio_type, encoded_date)
+        store.quarantine_add(str(track_id), audio_type, encoded_date, str(quarantine_path or "") or None)
     except Exception:
         logger.debug("Could not mark the Apple skip-list", exc_info=True)
 
 
 def skiplist_clear(hooks: AppleJobHooks, track_id: str, audio_type: str | None = None) -> None:
-    """Clear a quarantine mark: a verified copy landed (REDOWNLOAD's way back)."""
+    """Clear a quarantine mark: a verified copy landed (REDOWNLOAD's way back).
+
+    Retires the recorded quarantine bytes with the mark: recovered bytes
+    are stale the moment the real copy lands, and freeing the canonical
+    quarantine name keeps later failures from numbering past it. Mark
+    first, bytes best-effort — a file that cannot go must not re-skip a
+    verified track — then prune emptied folders. A versioned clear removes
+    only that version's bytes (the mark is per-version, so its path is).
+    """
     store = hooks.ownership()
     if store is None or not hasattr(store, "quarantine_remove"):
         return
@@ -852,9 +871,24 @@ def skiplist_clear(hooks: AppleJobHooks, track_id: str, audio_type: str | None =
         # A versioned clear removes only that version; the deliver path
         # passes its own version, so a fixed Atmos copy never leaves a
         # stale stereo mark (or vice versa).
-        store.quarantine_remove(str(track_id), audio_type)
+        recorded = store.quarantine_remove(str(track_id), audio_type)
     except Exception:
         logger.debug("Could not clear the Apple skip-list", exc_info=True)
+        return
+    paths = [text for text in (str(item or "").strip() for item in recorded or []) if text]
+    for text in paths:
+        try:
+            path = pathlib.Path(text).expanduser()
+            # Already gone is not a failure: the mark is what mattered.
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            logger.debug("Could not delete a retired quarantine copy", exc_info=True)
+    if paths:
+        try:
+            prune_empty_quarantine_dirs(paths, quarantine_root(hooks))
+        except Exception:
+            logger.debug("Could not prune emptied quarantine folders", exc_info=True)
 
 
 def quarantine_file(
@@ -870,10 +904,11 @@ def quarantine_file(
 
     Honors the keep-vs-delete toggle (delete keeps no bytes but still marks
     the skip-list via the caller). Files keep their intended names under the
-    quarantine root, so a later verified copy replaces them by name. A kept
-    copy is recorded against the queue row that produced it, so the drawer
-    can offer to reveal or delete it. Never raises: quarantine must not fail
-    a download that already failed.
+    quarantine root so a human can tell what failed; a later verified copy
+    retires them through the skip mark's recorded path (see skiplist_clear).
+    A kept copy is recorded against the queue row that produced it, so the
+    drawer can offer to reveal or delete it. Never raises: quarantine must
+    not fail a download that already failed.
     """
     if not quarantine_keep(hooks):
         return None
@@ -1927,14 +1962,17 @@ def deliver_track(
                             version = version if version in ("stereo", "atmos") else "stereo"
                 if last_staged is not None and last_staged.is_file():
                     try:
-                        quarantine_file(
+                        quarantined = quarantine_file(
                             hooks, last_staged, relative=relative, track_id=track_id, audio_type=version, qid=qid
                         )
                     except Exception:
+                        quarantined = None
                         logger.debug("Could not quarantine the Apple file", exc_info=True)
                     _drop_hold()
+                else:
+                    quarantined = None
                 try:
-                    skiplist_add(hooks, track_id, version, last_encoded)
+                    skiplist_add(hooks, track_id, version, last_encoded, quarantined)
                 except Exception:
                     logger.debug("Could not mark the Apple skip-list", exc_info=True)
                 raise AppleDownloadError(INTEGRITY_FAIL_MESSAGE) from exc
@@ -2455,7 +2493,8 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             hooks.note_activity()
         # A verified copy landing clears the skip-list (REDOWNLOAD's way
         # back; also clears a stale mark when Apple re-encoded). The
-        # fetched Version clears its own mark (check_version above).
+        # fetched Version clears its own mark (check_version above), and
+        # the recorded quarantine bytes retire with it (see skiplist_clear).
         try:
             skiplist_clear(hooks, track_id, check_version)
         except Exception:

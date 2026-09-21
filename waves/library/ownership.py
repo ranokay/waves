@@ -399,13 +399,15 @@ class OwnershipStore:
             # the same track verifying on a later explicit ask — never by a
             # background re-check (there is none).
             self._conn.execute("""CREATE TABLE IF NOT EXISTS integrity_skip (
-                       track_id       TEXT    NOT NULL,
-                       audio_type     TEXT    NOT NULL DEFAULT '',
-                       encoded_date   TEXT,
-                       quarantined_at INTEGER NOT NULL DEFAULT 0,
-                       PRIMARY KEY (track_id, audio_type)
-                   )""")
+                        track_id       TEXT    NOT NULL,
+                        audio_type     TEXT    NOT NULL DEFAULT '',
+                        encoded_date   TEXT,
+                        quarantined_at INTEGER NOT NULL DEFAULT 0,
+                        quarantine_path TEXT,
+                        PRIMARY KEY (track_id, audio_type)
+                    )""")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_integrity_skip_track ON integrity_skip(track_id)")
+            self._ensure_integrity_skip_columns()
             self._ensure_columns()
             self._backfill_namespaced_ids()
             self._backfill_audio_type()
@@ -448,6 +450,30 @@ class OwnershipStore:
                 if name not in present:
                     raise
                 logger.debug("ownership: %s was added by another copy of Waves", name)
+
+    def _ensure_integrity_skip_columns(self) -> None:
+        """Add quarantine_path to an integrity_skip written by an older build.
+
+        The verified landing retires the recorded quarantine bytes with the
+        mark, so the mark carries the file's path. Same duplicate-column
+        tolerance as _ensure_columns: a double launch can race the ALTER.
+        Caller holds the lock.
+        """
+        have = {row[1] for row in self._conn.execute("PRAGMA table_info(integrity_skip)")}
+        if "quarantine_path" in have:
+            return
+        try:
+            self._conn.execute("ALTER TABLE integrity_skip ADD COLUMN quarantine_path TEXT")
+        except sqlite3.OperationalError:
+            # Ask the FILE, do not read the message (see _ensure_columns):
+            # the race this handles can also surface as "database is locked".
+            try:
+                present = {row[1] for row in self._conn.execute("PRAGMA table_info(integrity_skip)")}
+            except sqlite3.Error:
+                present = set()
+            if "quarantine_path" not in present:
+                raise
+            logger.debug("ownership: quarantine_path was added by another copy of Waves")
 
     def _backfill_namespaced_ids(self) -> None:
         """Rewrite the bare ids older builds wrote into the namespaced spelling
@@ -848,38 +874,61 @@ class OwnershipStore:
         text = str(audio_type or "").strip().lower()
         return text if text in ("stereo", "atmos") else ""
 
-    def quarantine_add(self, track_id: str, audio_type: str | None = None, encoded_date: str | None = None) -> None:
-        """Mark a track's version as quarantined (bulk runs auto-skip it)."""
+    def quarantine_add(
+        self,
+        track_id: str,
+        audio_type: str | None = None,
+        encoded_date: str | None = None,
+        quarantine_path: str | None = None,
+    ) -> None:
+        """Mark a track's version as quarantined (bulk runs auto-skip it).
+
+        Carries the quarantined file's path: a verified landing retires the
+        recorded bytes with the mark. A re-quarantine carries the newest
+        copy; a path-less mark (keep-off, or a staging failure) keeps the
+        previous path, so a later recovery still retires the older bytes
+        instead of orphaning them.
+        """
         tid = namespaced_id(track_id)
         key = self._skip_audio_key(audio_type)
         with self._lock:
             self._conn.execute(
-                """INSERT INTO integrity_skip (track_id, audio_type, encoded_date, quarantined_at)
-                   VALUES (?, ?, ?, ?)
+                """INSERT INTO integrity_skip (track_id, audio_type, encoded_date, quarantined_at, quarantine_path)
+                   VALUES (?, ?, ?, ?, ?)
                    ON CONFLICT(track_id, audio_type) DO UPDATE SET
                        encoded_date = excluded.encoded_date,
-                       quarantined_at = excluded.quarantined_at""",
-                (tid, key, str(encoded_date or "") or None, int(time.time())),
+                       quarantined_at = excluded.quarantined_at,
+                       quarantine_path = COALESCE(excluded.quarantine_path, integrity_skip.quarantine_path)""",
+                (tid, key, str(encoded_date or "") or None, int(time.time()), str(quarantine_path or "") or None),
             )
             self._conn.commit()
 
-    def quarantine_remove(self, track_id: str, audio_type: str | None = None) -> None:
+    def quarantine_remove(self, track_id: str, audio_type: str | None = None) -> list[str]:
         """Clear a quarantine mark: a verified copy landed (REDOWNLOAD's way back).
 
         A versioned clear removes only that version; a legacy (None) clear
         removes every version of the track, so one verified copy cannot leave
-        a stale sibling mark behind.
+        a stale sibling mark behind. Returns the recorded quarantine paths
+        (possibly empty) so the caller can retire the bytes with the mark.
         """
         tid = namespaced_id(track_id)
         with self._lock:
             if audio_type is None:
+                rows = self._conn.execute(
+                    "SELECT quarantine_path FROM integrity_skip WHERE track_id = ?", (tid,)
+                ).fetchall()
                 self._conn.execute("DELETE FROM integrity_skip WHERE track_id = ?", (tid,))
             else:
+                rows = self._conn.execute(
+                    "SELECT quarantine_path FROM integrity_skip WHERE track_id = ? AND audio_type = ?",
+                    (tid, self._skip_audio_key(audio_type)),
+                ).fetchall()
                 self._conn.execute(
                     "DELETE FROM integrity_skip WHERE track_id = ? AND audio_type = ?",
                     (tid, self._skip_audio_key(audio_type)),
                 )
             self._conn.commit()
+        return [str(row[0]) for row in rows if row and str(row[0] or "").strip()]
 
     def is_quarantined(self, track_id: str, audio_type: str | None = None) -> dict | None:
         """A skip-list entry for a track's version, or None.

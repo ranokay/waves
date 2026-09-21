@@ -32,6 +32,17 @@ from waves.model.cfg import Settings as ModelSettings
 
 pytestmark = pytest.mark.usefixtures("isolated_settings_migrations")
 
+# The skip-list table as the baseline release created it: no recorded
+# quarantine path. The current store adds the column on open and keeps the
+# old mark readable.
+_BASELINE_SKIP = """CREATE TABLE integrity_skip (
+    track_id TEXT NOT NULL,
+    audio_type TEXT NOT NULL DEFAULT '',
+    encoded_date TEXT,
+    quarantined_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (track_id, audio_type)
+)"""
+
 # The downloads table as the baseline release created it: no audio_type, no
 # presence keys. The current store adds what is missing on open.
 _BASELINE_DOWNLOADS = """CREATE TABLE downloads (
@@ -161,3 +172,32 @@ def test_baseline_ownership_upgrades_without_losing_copies_or_ids(tmp_path):
     (count,) = conn.execute("SELECT COUNT(*) FROM downloads").fetchone()
     conn.close()
     assert count == 3, "a restart duplicated rows"
+
+
+def test_baseline_skip_list_gains_the_recorded_path(tmp_path):
+    db = tmp_path / "skip.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.execute(_BASELINE_SKIP)
+    conn.execute(
+        "INSERT INTO integrity_skip (track_id, audio_type, encoded_date, quarantined_at) VALUES (?, ?, ?, ?)",
+        ("apple:song-1", "stereo", "2025-06-23", 100),
+    )
+    conn.commit()
+    conn.close()
+
+    store = OwnershipStore(str(db))
+    try:
+        # The old mark reads, and the migrated table records new paths.
+        assert store.is_quarantined("apple:song-1", "stereo") is not None
+        stale = tmp_path / "Q" / "Xtal.m4a"
+        stale.parent.mkdir()
+        stale.write_bytes(b"corrupt")
+        store.quarantine_add("apple:song-1", "atmos", None, str(stale))
+        assert store.quarantine_remove("apple:song-1", "atmos") == [str(stale)]
+    finally:
+        store.close()
+
+    conn = sqlite3.connect(db)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(integrity_skip)")}
+    conn.close()
+    assert "quarantine_path" in columns, "the open migrated the baseline table"

@@ -14689,9 +14689,15 @@ class WavesBridge(LibraryMixin, QObject):
         """A skip-list entry for a track's version, or None."""
         return runner.skiplist_get(self._apple_job_hooks(), track_id, audio_type)
 
-    def _apple_skiplist_add(self, track_id: str, audio_type: str | None, encoded_date: str | None = None) -> None:
+    def _apple_skiplist_add(
+        self,
+        track_id: str,
+        audio_type: str | None,
+        encoded_date: str | None = None,
+        quarantine_path: str | pathlib.Path | None = None,
+    ) -> None:
         """Mark a track's version as quarantined (bulk runs auto-skip it)."""
-        runner.skiplist_add(self._apple_job_hooks(), track_id, audio_type, encoded_date)
+        runner.skiplist_add(self._apple_job_hooks(), track_id, audio_type, encoded_date, quarantine_path)
 
     def _apple_skiplist_clear(self, track_id: str, audio_type: str | None = None) -> None:
         """Clear a quarantine mark: a verified copy landed."""

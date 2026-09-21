@@ -336,23 +336,34 @@ class _SkipStore:
 
     def __init__(self):
         self.marks: dict[tuple[str, str], dict] = {}
+        self.paths: dict[tuple[str, str], str | None] = {}
+
+    def _key(self, track_id, audio_type):
+        key = str(audio_type or "").strip().lower()
+        key = key if key in ("stereo", "atmos") else ""
+        return (str(track_id), key)
 
     def ownership_of(self, tid, audio_type=None):
         return None
 
-    def quarantine_add(self, track_id, audio_type=None, encoded_date=None):
-        key = str(audio_type or "").strip().lower()
-        key = key if key in ("stereo", "atmos") else ""
-        self.marks[(str(track_id), key)] = {"encoded_date": encoded_date}
+    def quarantine_add(self, track_id, audio_type=None, encoded_date=None, quarantine_path=None):
+        key = self._key(track_id, audio_type)
+        self.marks[key] = {"encoded_date": encoded_date}
+        if quarantine_path or key not in self.paths:
+            self.paths[key] = str(quarantine_path) if quarantine_path else None
 
     def quarantine_remove(self, track_id, audio_type=None):
         if audio_type is None:
-            for key in [k for k in self.marks if k[0] == str(track_id)]:
-                del self.marks[key]
+            keys = [k for k in self.marks if k[0] == str(track_id)]
         else:
-            key = str(audio_type or "").strip().lower()
-            key = key if key in ("stereo", "atmos") else ""
-            self.marks.pop((str(track_id), key), None)
+            keys = [self._key(track_id, audio_type)]
+        removed = []
+        for key in keys:
+            self.marks.pop(key, None)
+            path = self.paths.pop(key, None)
+            if path:
+                removed.append(path)
+        return removed
 
     def is_quarantined(self, track_id, audio_type=None):
         if audio_type is None:
@@ -1316,6 +1327,104 @@ def test_dual_version_retry_bypasses_both_versions(tmp_path, monkeypatch):
     assert len(provider_st.fetched) == 1 and len(provider_at.fetched) == 1
     assert store.is_quarantined("apple:song-1", "stereo") is None
     assert store.is_quarantined("apple:song-1", "atmos") is None
+
+
+@pytest.mark.ffmpeg
+def test_verified_landing_retires_the_recorded_quarantine_bytes(tmp_path, monkeypatch):
+    """Recovery after quarantine, across the retry's fresh row: the failure
+    job records its copy's path on the version's skip mark, and the recovery
+    job's verified landing deletes those bytes with the mark. The sibling
+    version's bytes and mark survive."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    base = tmp_path / "lib"
+    store = _SkipStore()
+    bad_files = []
+    for i in range(3):
+        bad = tmp_path / f"bad-{i}.m4a"
+        bad.write_bytes(b"not audio at all, just text padding " * 100)
+        bad_files.append(bad)
+
+    # The failure job: three corrupt attempts end quarantined, the copy's
+    # path recorded on the version's skip mark.
+    _run_to_quarantine(base, bad_files, store)
+    quarantined = list((base / QUARANTINE_DIR_NAME).rglob("*.m4a"))
+    assert len(quarantined) == 1
+    assert store.paths.get(("apple:song-1", "stereo")) == str(quarantined[0])
+
+    # The sibling version's own failure, recorded on its own mark.
+    good = tmp_path / "good.m4a"
+    _tone(good)
+    recovery_stub = _bind(_stub(base, _FakeProvider([good]), _ownership_store=store))
+    recovery_stub._apple_quarantine_paths = {}
+    recovery_stub._queue_mark_changed = lambda qid: None
+    recovery_stub._emit_queue = lambda: None
+    recovery_hooks = recovery_stub._apple_job_hooks()
+    sibling = runner.quarantine_file(
+        recovery_hooks, good, relative="Aphex Twin/Xtal Atmos", track_id="apple:song-1", audio_type="atmos", qid=9
+    )
+    assert sibling is not None and sibling.is_file()
+    runner.skiplist_add(recovery_hooks, "apple:song-1", "atmos", None, sibling)
+
+    # The recovery job is a fresh row (the retry's new qid): the bytes go
+    # because the mark knows them, not because the row recorded them.
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1", audio_type="stereo", is_retry=True)
+    summary = runner.run_apple_job(
+        recovery_hooks,
+        2,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert store.is_quarantined("apple:song-1", "stereo") is None, "the recovery clears the skip mark"
+    assert not quarantined[0].exists(), "the recorded corrupt bytes retire with the mark"
+    assert (base / "Aphex Twin" / "Xtal.m4a").is_file(), "the verified copy landed"
+    assert sibling.is_file(), "the sibling version's bytes are another mark's record"
+    assert store.is_quarantined("apple:song-1", "atmos") is not None
+
+
+def test_ownership_skiplist_carries_the_quarantine_path(tmp_path):
+    """The mark records its copy's path, a re-quarantine overwrites it with
+    the newest copy, and the clear hands it back for retirement."""
+    from waves.library.ownership import OwnershipStore
+
+    store = OwnershipStore(str(tmp_path / "own.db"))
+    try:
+        store.quarantine_add("apple:song-1", "stereo", "2025-06-23", str(tmp_path / "Q" / "Xtal.m4a"))
+        assert store.quarantine_remove("apple:song-1", "stereo") == [str(tmp_path / "Q" / "Xtal.m4a")]
+        assert store.is_quarantined("apple:song-1", "stereo") is None
+        store.quarantine_add("apple:song-1", "stereo", None, "/q/old.m4a")
+        store.quarantine_add("apple:song-1", "stereo", None, "/q/new.m4a")
+        assert store.quarantine_remove("apple:song-1", "stereo") == ["/q/new.m4a"]
+        # A path-less re-mark (keep-off, or a staging failure) keeps the
+        # previous path instead of orphaning the older bytes.
+        store.quarantine_add("apple:song-1", "stereo", None, "/q/kept.m4a")
+        store.quarantine_add("apple:song-1", "stereo")
+        assert store.quarantine_remove("apple:song-1", "stereo") == ["/q/kept.m4a"]
+        # A legacy mark carries no path: the clear still clears.
+        store.quarantine_add("apple:song-1", "stereo", "2025-06-23")
+        assert store.quarantine_remove("apple:song-1", "stereo") == []
+        assert store.is_quarantined("apple:song-1", "stereo") is None
+    finally:
+        store.close()
+
+
+def test_skiplist_clear_without_a_recorded_path_still_clears_the_mark():
+    """An older build's path-less mark clears without touching the disk:
+    the clear never fails a landed download for missing bytes."""
+    store = _SkipStore()
+    store.quarantine_add("apple:song-1", "stereo", "2025-06-23")
+    hooks = runner.AppleJobHooks(ownership=lambda: store)
+    runner.skiplist_clear(hooks, "apple:song-1", "stereo")
+    assert store.is_quarantined("apple:song-1", "stereo") is None
 
 
 @pytest.mark.ffmpeg
