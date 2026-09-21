@@ -98,7 +98,7 @@ jobs:
         id: select
         env:
           ONLY_FILTER: ${{ github.event.inputs.only }}
-        run: echo "legs=$(python3 tools/select_build_legs.py .github/workflows/build-legs.json \"$ONLY_FILTER\")" >> "$GITHUB_OUTPUT"
+        run: echo "legs=$(python3 tools/select_build_legs.py "$ONLY_FILTER")" >> "$GITHUB_OUTPUT"
       # A published Release ships binaries with the updater config baked in; if
       # REPO or the signing public key are blank, every copy is permanently unable
       # to auto-update and can't be fixed after download. Fail the whole run early

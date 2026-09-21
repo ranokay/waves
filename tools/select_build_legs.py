@@ -15,6 +15,11 @@ import json
 import sys
 from pathlib import Path
 
+# The leg table lives next to the workflow that consumes it; the path is
+# fixed (relative to this file, not the CLI) so the filter argument can
+# never reach the filesystem — it only selects from in-memory strings.
+LEGS_FILE = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "build-legs.json"
+
 
 def select_legs(legs: list[dict], only: str) -> list[dict]:
     only = (only or "").strip()
@@ -24,17 +29,13 @@ def select_legs(legs: list[dict], only: str) -> list[dict]:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print("usage: select_build_legs.py <legs-json> <only>", file=sys.stderr)
+    if len(argv) != 2:
+        print("usage: select_build_legs.py <only>", file=sys.stderr)
         return 2
-    legs_path = Path(argv[1])
-    if not legs_path.resolve().is_relative_to(Path.cwd().resolve()):
-        print(f"refusing legs file outside the checkout: {argv[1]!r}", file=sys.stderr)
-        return 1
-    legs = json.loads(legs_path.read_text(encoding="utf-8"))["legs"]
-    selected = select_legs(legs, argv[2])
-    if argv[2].strip() and not selected:
-        print(f"no legs match only={argv[2]!r}", file=sys.stderr)
+    legs = json.loads(LEGS_FILE.read_text(encoding="utf-8"))["legs"]
+    selected = select_legs(legs, argv[1])
+    if argv[1].strip() and not selected:
+        print(f"no legs match only={argv[1]!r}", file=sys.stderr)
         return 1
     print(json.dumps(selected, separators=(",", ":")))
     return 0
