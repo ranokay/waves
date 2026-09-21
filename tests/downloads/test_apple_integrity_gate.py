@@ -521,6 +521,60 @@ def test_quarantine_dir_case_only_difference_folds_on_case_insensitive_platforms
     assert resolve_quarantine_dir(base, custom) == base / QUARANTINE_DIR_NAME
 
 
+def test_quarantine_dir_matching_the_separate_library_root_falls_back(tmp_path):
+    # A custom quarantine naming the active separate library root would
+    # exclude the whole scanned library once registered, so the default
+    # inside the download folder stands.
+    base = tmp_path / "downloads"
+    library = tmp_path / "library"
+    assert resolve_quarantine_dir(base, library, library) == base / QUARANTINE_DIR_NAME
+
+
+def test_quarantine_dir_above_the_separate_library_root_falls_back(tmp_path):
+    # An ancestor of the separate library root (that is not an ancestor of
+    # the download folder) still contains the whole scanned library.
+    base = tmp_path / "downloads"
+    library = tmp_path / "libraries" / "music"
+    ancestor = tmp_path / "libraries"
+    assert resolve_quarantine_dir(base, ancestor, library) == base / QUARANTINE_DIR_NAME
+
+
+def test_quarantine_dir_inside_the_separate_library_root_stands(tmp_path):
+    # A custom folder *inside* the separate library is scan-excluded by
+    # registration, so it stays in use: only the root itself and its
+    # ancestors fall back.
+    base = tmp_path / "downloads"
+    library = tmp_path / "library"
+    custom = library / "Waves Quarantine Custom"
+    assert resolve_quarantine_dir(base, custom, library) == custom
+
+
+def test_quarantine_dir_empty_library_root_is_ignored(tmp_path):
+    # No separate library configured means the download guard is the whole
+    # contract: an unrelated custom folder stands, with or without the
+    # optional root.
+    base = tmp_path / "downloads"
+    custom = tmp_path / "elsewhere"
+    assert resolve_quarantine_dir(base, custom, None) == custom
+    assert resolve_quarantine_dir(base, custom, "") == custom
+    assert resolve_quarantine_dir(base, custom, "   ") == custom
+
+
+def test_quarantine_root_hook_falls_back_on_the_separate_library_root(tmp_path):
+    # The runner carries the active library root through its hooks, so a job
+    # quarantines to the default even when the stored custom names the
+    # separate library folder.
+    base = tmp_path / "downloads"
+    library = tmp_path / "library"
+    hooks = runner.AppleJobHooks(
+        settings=lambda: SimpleNamespace(
+            data=SimpleNamespace(download_base_path=str(base), apple_quarantine_dir=str(library))
+        ),
+        library_root=lambda: str(library),
+    )
+    assert runner.quarantine_root(hooks) == base / QUARANTINE_DIR_NAME
+
+
 def test_quarantine_dest_keeps_the_intended_name(tmp_path):
     dest = quarantine_dest(tmp_path / "Q", "Aphex Twin/Xtal", ".m4a")
     assert dest == tmp_path / "Q" / "Aphex Twin" / "Xtal.m4a"

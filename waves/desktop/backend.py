@@ -14149,6 +14149,7 @@ class WavesBridge(LibraryMixin, QObject):
             ownership=lambda: getattr(self, "_ownership", None),
             redownload_overrides=lambda: self._redownload_overrides,
             library_claim_overrides=lambda: self._library_claim_overrides,
+            library_root=lambda: self._library_root() if callable(getattr(self, "_library_root", None)) else "",
             quarantine_paths=lambda: self._apple_quarantine_paths,
             status=lambda text: self._set_status(text),
             queue_status=lambda qid, status, reason="": self._set_queue_status(qid, status, reason),
@@ -14636,11 +14637,13 @@ class WavesBridge(LibraryMixin, QObject):
         return runner.quarantine_keep(self._apple_job_hooks())
 
     def _apple_quarantine_note(self) -> str:
-        """The note for a quarantine folder that overlaps the download folder.
+        """The note for a quarantine folder that overlaps a scanned root.
 
         The resolver refuses a custom folder that is the download root or an
         ancestor of it (quarantining into the library would put corrupt bytes
-        where a verified copy belongs) and uses the default inside the
+        where a verified copy belongs), and likewise one naming the active
+        separate library root or an ancestor of it (registering it would
+        exclude the whole scanned library), using the default inside the
         download root instead. The card says so, or the stored value and the
         folder actually used read as the same thing.
         Empty when no custom value is stored or it is the folder in use.
@@ -14653,14 +14656,24 @@ class WavesBridge(LibraryMixin, QObject):
             if not custom:
                 return ""
             base = str(getattr(data, "download_base_path", "") or "")
-            effective = resolve_quarantine_dir(base, custom)
+            reader = getattr(self, "_library_root", None)
+            try:
+                library_root = str(reader() or "") if callable(reader) else ""
+            except Exception:
+                library_root = ""
+            effective = resolve_quarantine_dir(base, custom, library_root or None)
             if str(effective) == str(pathlib.Path(os.path.expanduser(custom))):
                 return ""
+            download_only = resolve_quarantine_dir(base, custom)
+            if str(download_only) != str(pathlib.Path(os.path.expanduser(custom))):
+                return (
+                    f"That folder overlaps the download folder, so quarantined files are kept in {effective} instead."
+                )
         except Exception:
             logger.debug("Could not resolve the quarantine folder", exc_info=True)
             return ""
         else:
-            return f"That folder overlaps the download folder, so quarantined files are kept in {effective} instead."
+            return f"That folder overlaps the library folder, so quarantined files are kept in {effective} instead."
 
     @staticmethod
     def _is_integrity_failure(exc: BaseException) -> bool:
@@ -20178,8 +20191,8 @@ class WavesBridge(LibraryMixin, QObject):
                 f["child_help"] = self._help_for(child_key)
             if key == "apple_quarantine_dir":
                 # The stored value and the used folder can differ (the resolver
-                # refuses a folder that overlaps the download root); the card
-                # must say which one is in use.
+                # refuses a folder that overlaps the download or library root);
+                # the card must say which one is in use.
                 note = self._apple_quarantine_note()
                 if note:
                     f["help"] = f"{f.get('help', '')} {note}".strip()
@@ -21478,10 +21491,10 @@ class WavesBridge(LibraryMixin, QObject):
         status = "Settings saved" + stopped_note
         if "apple_quarantine_dir" in values or "download_base_path" in values:
             # Warn at save time when the stored quarantine folder is overridden
-            # (the resolver refuses one that overlaps the download root), so
-            # the user learns now rather than from the card's note later. The
-            # note rides the saved word instead of replacing it, so a stopped
-            # download count is never swallowed.
+            # (the resolver refuses one that overlaps the download or library
+            # root), so the user learns now rather than from the card's note
+            # later. The note rides the saved word instead of replacing it, so
+            # a stopped download count is never swallowed.
             quarantine_note = self._apple_quarantine_note()
             if quarantine_note:
                 status = f"{status}. {quarantine_note}"

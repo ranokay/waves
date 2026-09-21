@@ -357,6 +357,26 @@ def test_the_quarantine_card_names_the_folder_really_in_use(tmp_path):
     assert "Waves Quarantine" in _quarantine_field()["help"]
 
 
+def test_the_quarantine_note_names_the_separate_library_overlap(tmp_path):
+    """A custom quarantine naming the separate library root falls back to
+    the default with the library wordings, or the whole scanned library
+    would be excluded once registered."""
+    stub = _schema_stub(apple_enabled=True)
+    stub.settings = SimpleNamespace(data=ModelSettings())
+    stub.settings.data.download_base_path = str(tmp_path / "downloads")
+    stub.settings.data.apple_quarantine_dir = str(tmp_path / "library")
+    stub._library_root = lambda: str(tmp_path / "library")
+    stub._apple_quarantine_note = WavesBridge._apple_quarantine_note.__get__(stub, type(stub))
+
+    note = stub._apple_quarantine_note()
+    assert "overlaps the library folder" in note
+    assert "Waves Quarantine" in note
+
+    # No separate library configured means the same custom folder stands.
+    stub._library_root = lambda: ""
+    assert stub._apple_quarantine_note() == ""
+
+
 def test_saving_the_switch_persists_it():
     stub = _apply_stub()
     _apply(stub, {"apple_enabled": True})
