@@ -1972,8 +1972,6 @@ def deliver_track(
                 else:
                     quarantined = None
                 try:
-                    # The mark carries the copy's path: a verified landing
-                    # retires the recorded bytes with it (see skiplist_clear).
                     skiplist_add(hooks, track_id, version, last_encoded, quarantined)
                 except Exception:
                     logger.debug("Could not mark the Apple skip-list", exc_info=True)

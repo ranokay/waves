@@ -349,7 +349,8 @@ class _SkipStore:
     def quarantine_add(self, track_id, audio_type=None, encoded_date=None, quarantine_path=None):
         key = self._key(track_id, audio_type)
         self.marks[key] = {"encoded_date": encoded_date}
-        self.paths[key] = str(quarantine_path) if quarantine_path else None
+        if quarantine_path or key not in self.paths:
+            self.paths[key] = str(quarantine_path) if quarantine_path else None
 
     def quarantine_remove(self, track_id, audio_type=None):
         if audio_type is None:
@@ -1403,6 +1404,11 @@ def test_ownership_skiplist_carries_the_quarantine_path(tmp_path):
         store.quarantine_add("apple:song-1", "stereo", None, "/q/old.m4a")
         store.quarantine_add("apple:song-1", "stereo", None, "/q/new.m4a")
         assert store.quarantine_remove("apple:song-1", "stereo") == ["/q/new.m4a"]
+        # A path-less re-mark (keep-off, or a staging failure) keeps the
+        # previous path instead of orphaning the older bytes.
+        store.quarantine_add("apple:song-1", "stereo", None, "/q/kept.m4a")
+        store.quarantine_add("apple:song-1", "stereo")
+        assert store.quarantine_remove("apple:song-1", "stereo") == ["/q/kept.m4a"]
         # A legacy mark carries no path: the clear still clears.
         store.quarantine_add("apple:song-1", "stereo", "2025-06-23")
         assert store.quarantine_remove("apple:song-1", "stereo") == []

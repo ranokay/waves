@@ -884,8 +884,10 @@ class OwnershipStore:
         """Mark a track's version as quarantined (bulk runs auto-skip it).
 
         Carries the quarantined file's path: a verified landing retires the
-        recorded bytes with the mark. A re-quarantine overwrites it with the
-        newest copy, so recovery always retires the latest bytes.
+        recorded bytes with the mark. A re-quarantine carries the newest
+        copy; a path-less mark (keep-off, or a staging failure) keeps the
+        previous path, so a later recovery still retires the older bytes
+        instead of orphaning them.
         """
         tid = namespaced_id(track_id)
         key = self._skip_audio_key(audio_type)
@@ -896,7 +898,7 @@ class OwnershipStore:
                    ON CONFLICT(track_id, audio_type) DO UPDATE SET
                        encoded_date = excluded.encoded_date,
                        quarantined_at = excluded.quarantined_at,
-                       quarantine_path = excluded.quarantine_path""",
+                       quarantine_path = COALESCE(excluded.quarantine_path, integrity_skip.quarantine_path)""",
                 (tid, key, str(encoded_date or "") or None, int(time.time()), str(quarantine_path or "") or None),
             )
             self._conn.commit()
