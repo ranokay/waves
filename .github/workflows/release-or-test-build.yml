@@ -192,7 +192,11 @@ jobs:
     # run and fails, don't burn eight legs' worth of build minutes on a
     # release that has nowhere to land. (Hyphenated job id, so bracket syntax:
     # dot notation would parse "create-release" as a subtraction.)
-    if: always() && needs.compute.result == 'success' && needs['create-release'].result != 'failure' && needs['create-release'].result != 'cancelled' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/test-build' || github.event_name == 'workflow_dispatch')
+    # The `only` filter lives here, at the job level, so a leg it excludes
+    # reads Skipped (grey), never Success-with-skipped-steps: job conclusions
+    # alone can be trusted again. The per-step guards below carry only their
+    # own OS/flavor/event conditions.
+    if: always() && needs.compute.result == 'success' && needs['create-release'].result != 'failure' && needs['create-release'].result != 'cancelled' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/test-build' || github.event_name == 'workflow_dispatch') && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH))
     strategy:
       fail-fast: false
       matrix:
@@ -326,16 +330,13 @@ jobs:
       # crowd GitHub's 10 GB repository budget across eight leg caches.
       CCACHE_MAXSIZE: "2G"
     steps:
-      # Skip checkout + setup on legs the `only` filter excludes, so a targeted
-      # dispatch (e.g. only=windows-x64) does not spin the other legs (notably the
-      # 10x-billed macOS runners) through a full environment install just to build
-      # nothing. Releases and test-build pushes leave `only` blank, so every leg
-      # still runs. Same guard the build / smoke / checksum / upload steps use.
+      # The build job's own `if` already skips legs the `only` filter
+      # excludes, so every step below runs exactly on the legs that build.
+      # (Releases and test-build pushes leave `only` blank, so every leg
+      # still runs.)
       - name: Check out
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         uses: actions/checkout@v7
       - name: Set up the environment
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         uses: ./.github/actions/setup-env
       # Carry Nuitka's build tree and its cache root (ccache, module cache,
       # downloads) between runs: content signatures skip recompiling modules
@@ -347,7 +348,6 @@ jobs:
       # another configuration; the restore-key fallback is salted the same
       # way. The policy and the size budget live in docs/dependency-updates.md.
       - name: Restore the Nuitka build cache
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         uses: actions/cache@v6
         with:
           path: |
@@ -359,7 +359,6 @@ jobs:
           restore-keys: |
             nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-
       - name: Build Waves for ${{matrix.TARGET}}
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         run: ${{matrix.CMD_BUILD}}
       # Smoke-launch the freshly built+trimmed bundle headlessly BEFORE it is
       # hashed and release-signed. trim_qt_bundle.sh strips aggressively; without
@@ -379,10 +378,10 @@ jobs:
       # not (ubuntu-24.04 dropped libEGL). Install just enough to launch
       # offscreen; this mirrors a user's desktop, it is not shipped.
       - name: Install Linux GL runtime for smoke-launch
-        if: ${{ runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) && !endsWith(matrix.OS_ARCH, '-arm64') }}
+        if: ${{ runner.os == 'Linux' && !endsWith(matrix.OS_ARCH, '-arm64') }}
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon0 libfontconfig1 libpulse0 libasound2t64
       - name: Smoke-launch trimmed bundle
-        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) && !endsWith(matrix.OS_ARCH, '-arm64') }}
+        if: ${{ !endsWith(matrix.OS_ARCH, '-arm64') }}
         env:
           QT_QPA_PLATFORM: offscreen
           QT_OPENGL: software
@@ -432,7 +431,7 @@ jobs:
       # plist lies (PySide6 6.10 wheels are tagged macOS 13 but
       # contain macOS 15-only libraries).
       - name: Assert macOS version floor
-        if: ${{ startsWith(matrix.OS_ARCH, 'macos-') && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) }}
+        if: ${{ startsWith(matrix.OS_ARCH, 'macos-') }}
         run: |
           set -eu
           MIN="${{ matrix.MACOS_FLOOR }}"
@@ -469,7 +468,7 @@ jobs:
       # so launch the finished file itself too (x64 only, same reason as above;
       # --appimage-extract-and-run because runners have no FUSE).
       - name: Smoke-launch AppImage
-        if: ${{ runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) && !endsWith(matrix.OS_ARCH, '-arm64') }}
+        if: ${{ runner.os == 'Linux' && !endsWith(matrix.OS_ARCH, '-arm64') }}
         env:
           QT_QPA_PLATFORM: offscreen
           QT_OPENGL: software
@@ -501,7 +500,6 @@ jobs:
           fi
           [ "$ok" -eq 1 ] || { echo "::error::smoke-launch: $APPIMG never reached a healthy state"; exit 1; }
       - name: Checksum
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         # Portable per-asset SHA256 (no coreutils dependency on Windows). The
         # line is "<hex>  <filename>": coreutils sha256sum format, which the
         # signed SHA256SUMS manifest and the in-app updater both parse. Linux
@@ -516,7 +514,6 @@ jobs:
             cat "$ASSET.sha256"
           done
       - name: Upload checksum artifact
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         # Tiny per-asset checksums collected by the sign job into one manifest
         # (the glob picks up the AppImage's sidecar on the linux legs).
         uses: actions/upload-artifact@v7
@@ -524,7 +521,7 @@ jobs:
           name: sha256-${{matrix.OS_ARCH}}
           path: ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}*.sha256
       - name: Upload Build Artifact (workflow_dispatch / test-build)
-        if: ${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/test-build') && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) }}
+        if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/test-build' }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}
@@ -540,7 +537,7 @@ jobs:
         # before any matrix leg started, so every leg here finds the same
         # unambiguous Release by tag and just appends its two files, instead
         # of racing to create it themselves.
-        if: ${{ ((github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')) && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) }}
+        if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
         uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}

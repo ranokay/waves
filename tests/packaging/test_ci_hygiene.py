@@ -100,6 +100,21 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
     assert wf["jobs"]["build"]["env"]["CCACHE_MAXSIZE"] == "2G"
 
 
+def test_excluded_legs_skip_at_the_job_level_instead_of_succeeding_green():
+    """R-32: the `only` filter used to live on every build step, so a leg it
+    excluded finished Success with all steps skipped and job conclusions read
+    as passes. The filter now lives on the build job itself: an excluded leg
+    reads Skipped (grey), and no step may reintroduce its own `only` guard."""
+    wf = yaml.safe_load(RELEASE_WORKFLOW.read_text())
+    job_if = str(wf["jobs"]["build"]["if"])
+    assert "github.event.inputs.only" in job_if, "the build job lost its `only` gate"
+    assert "matrix.OS_ARCH" in job_if, "the job gate must match legs, not just blank input"
+    for step in wf["jobs"]["build"]["steps"]:
+        assert "github.event.inputs.only" not in str(step.get("if", "")), (
+            f"step {step.get('name')!r} reintroduces a step-level `only` guard"
+        )
+
+
 def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:
     bash = shutil.which("bash")
     assert bash, "bash is not on PATH; every release build needs it"
