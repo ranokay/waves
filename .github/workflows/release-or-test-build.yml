@@ -198,6 +198,7 @@ jobs:
           draft: true
 
   build:
+    name: build ${{ matrix.leg.target }}
     needs: ["compute", "create-release"]
     # create-release is skipped outright on a non-release run (test-build /
     # a dispatch with no release_tag), which is fine; but if it's supposed to
