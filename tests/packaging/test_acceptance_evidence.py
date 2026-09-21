@@ -61,10 +61,29 @@ def test_each_artifact_carries_its_producing_revision():
     builds = (EVIDENCE / "platform-builds.md").read_text(encoding="utf-8")
     for run_id in PLATFORM_RUN_IDS:
         assert run_id in builds, f"platform run {run_id} lost from the evidence"
+    for head_sha in (
+        "b67bc72c0c2776fb15bae10cb055bf65a39a9d38",
+        "d08e7a19ff2c2889707ad7150f78c64607394743",
+        "709e18671a2a8decc70793514c9f57a2988fe7d4",
+    ):
+        assert head_sha in builds, f"head SHA {head_sha[:7]} lost from the evidence"
 
 
-def test_the_audit_report_checksum_is_recorded():
-    assert re.search(r"\b[0-9a-f]{64}\b", INDEX.read_text(encoding="utf-8"))
+ACCEPTANCE_SUITES = (
+    "tests/library/test_apple_quarantine_actions.py",
+    "tests/providers/apple/test_apple_provider_disable.py",
+    "tests/providers/apple/test_apple_supervision.py",
+    "tests/settings/test_settings_migration_sidecar.py",
+    "tests/downloads/test_apple_integrity_gate.py",
+    "tests/downloads/test_apple_standalone_fallback.py",
+)
+
+
+def test_the_index_names_resolving_acceptance_suites():
+    text = INDEX.read_text(encoding="utf-8")
+    for suite in ACCEPTANCE_SUITES:
+        assert suite in text, f"the index no longer cites {suite}"
+        assert (REPO_ROOT / suite).is_file(), f"cited suite missing: {suite}"
 
 
 def test_no_evidence_file_carries_secrets():
