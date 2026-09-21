@@ -62,6 +62,7 @@ jobs:
     # Workaround to be able to use env vars in the matrix.
     runs-on: ubuntu-24.04
     outputs:
+      legs: ${{ steps.select.outputs.legs }}
       ASSET_EXTENSION: ${{ env.ASSET_EXTENSION }}
       OUT_NAME_FILE: ${{ env.OUT_NAME_FILE }}
       ARCH_MACOS_X64: ${{ env.ARCH_MACOS_X64 }}
@@ -85,6 +86,19 @@ jobs:
           echo "ARCH_LINUX_ARM64=${{ env.ARCH_LINUX_ARM64 }}" >> $GITHUB_OUTPUT
           echo "ARCH_WINDOWS_X64=${{ env.ARCH_WINDOWS_X64 }}" >> $GITHUB_OUTPUT
           echo "ARCH_WINDOWS_ARM64=${{ env.ARCH_WINDOWS_ARM64 }}" >> $GITHUB_OUTPUT
+      - name: Check out (leg selection)
+        uses: actions/checkout@v7
+      # The `only` filter selects matrix legs here, once, instead of
+      # per-step guards in every leg: an excluded leg never becomes a job,
+      # so no Success-with-skipped-steps conclusion can hide an unbuilt
+      # platform. tools/select_build_legs.py keeps the documented substring
+      # rule (naming a legacy leg also runs its regular twin); blank selects
+      # all eight (releases and test-build pushes).
+      - name: Select legs
+        id: select
+        env:
+          ONLY_FILTER: ${{ github.event.inputs.only }}
+        run: echo "legs=$(python3 tools/select_build_legs.py "$ONLY_FILTER")" >> "$GITHUB_OUTPUT"
       # A published Release ships binaries with the updater config baked in; if
       # REPO or the signing public key are blank, every copy is permanently unable
       # to auto-update and can't be fixed after download. Fail the whole run early
@@ -186,156 +200,42 @@ jobs:
           draft: true
 
   build:
+    name: build ${{ matrix.leg.target }}
     needs: ["compute", "create-release"]
     # create-release is skipped outright on a non-release run (test-build /
     # a dispatch with no release_tag), which is fine; but if it's supposed to
     # run and fails, don't burn eight legs' worth of build minutes on a
     # release that has nowhere to land. (Hyphenated job id, so bracket syntax:
     # dot notation would parse "create-release" as a subtraction.)
+    # Leg selection lives in the compute job's Select legs step (tools/select_build_legs.py):
+    # the matrix below iterates only selected legs, so an excluded leg never
+    # becomes a job at all — no Success-with-skipped-steps conclusions exist.
     if: always() && needs.compute.result == 'success' && needs['create-release'].result != 'failure' && needs['create-release'].result != 'cancelled' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/test-build' || github.event_name == 'workflow_dispatch')
     strategy:
       fail-fast: false
+      # The matrix iterates selected legs only (see the Select legs step):
+      # excluded legs never start, so every job conclusion below means a
+      # real build. Leg shapes live in build-legs.json next to this file:
+      # macOS legs zip the trimmed Waves.app (the updater's exact shape);
+      # both build on runners newer than WAVES_MACOS_MIN, so the floor is
+      # asserted statically instead. Legacy legs overlay PySide6 6.9.3 with
+      # WAVES_MACOS_MIN=12.0. Linux legs ship zip + AppImage. Windows legs
+      # set --low-memory explicitly (MSVC C1002 on yt-dlp's generated C).
       matrix:
-        include:
-          # macOS legs ship a zip of the trimmed Waves.app: both a manual
-          # unzip-and-drag install and the exact shape the in-app updater extracts.
-          # Both legs build on runners NEWER than the oldest macOS we support
-          # (WAVES_MACOS_MIN in tools/build_waves.sh), so nothing here can ever prove a
-          # bundle runs on that floor. The "Assert macOS version floor" step
-          # below checks it statically instead: every shipped Mach-O must not
-          # demand anything newer (PySide6 6.10 wheels smuggled in
-          # macOS 15-only libraries, so older systems got a silent Dock bounce).
-          - os: "macos-15-intel"
-            TARGET: "macos-15-intel"
-            OS_ARCH: ${{needs.compute.outputs.ARCH_MACOS_X64}}
-            MACOS_FLOOR: "15.0"
-            # Intel Homebrew lives at /usr/local, whose lib dir overlaps Nuitka's
-            # macOS dependency-scan paths: it sees both the unversioned
-            # /usr/local/lib/libcrypto.dylib symlink AND the openssl@3 keg's real
-            # libcrypto.3.dylib and aborts ("problem with dependency scan ...").
-            # Deleting only the stray unversioned symlinks leaves one canonical
-            # path (the keg), which is what Python's _ssl actually links, so TLS
-            # still works and Nuitka still bundles a working libcrypto/libssl.
-            # arm64 does not abort, but it silently bundles BOTH the versioned
-            # libraries and their unversioned symlink twins (5.7 MB dead), so
-            # its legs run the same pre-clean against /opt/homebrew. Trailing
-            # ';' (not '&&') so a no-op rm never short-circuits the build chain.
-            CMD_BUILD: >
-              ls -l /usr/local/lib/libcrypto* /usr/local/lib/libssl* || true;
-              rm -f /usr/local/lib/libcrypto*.dylib /usr/local/lib/libssl*.dylib || true;
-              bash tools/build_waves.sh &&
-              cd dist &&
-              zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_MACOS_X64}}${{needs.compute.outputs.ASSET_EXTENSION}} waves.app -x "*.DS_Store" &&
-              cd ..
-          - os: "macos-14"
-            TARGET: "macos-14 M1"
-            OS_ARCH: ${{needs.compute.outputs.ARCH_MACOS_ARM64}}
-            MACOS_FLOOR: "15.0"
-            CMD_BUILD: >
-              ls -l /opt/homebrew/lib/libcrypto* /opt/homebrew/lib/libssl* || true;
-              rm -f /opt/homebrew/lib/libcrypto*.dylib /opt/homebrew/lib/libssl*.dylib || true;
-              bash tools/build_waves.sh &&
-              cd dist &&
-              zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_MACOS_ARM64}}${{needs.compute.outputs.ASSET_EXTENSION}} waves.app -x "*.DS_Store" &&
-              cd ..
-          # Legacy macOS flavor for macOS 12 through 14 (see the env note on the
-          # _LEGACY names): the locked PySide6 is overlaid with 6.9.3, the newest
-          # release whose macOS binaries honor their macOS 12 wheel tag, and the
-          # floor drops to 12.0 (the build script takes WAVES_MACOS_MIN from the
-          # environment, default 15.0, so the override reaches Nuitka's
-          # MACOSX_DEPLOYMENT_TARGET and the Info.plist declaration).
-          # --force-reinstall --no-deps: exactly these four wheels swap,
-          # everything else stays as the lock resolved it.
-          - os: "macos-15-intel"
-            TARGET: "macos-15-intel legacy"
-            OS_ARCH: ${{needs.compute.outputs.ARCH_MACOS_X64_LEGACY}}
-            MACOS_FLOOR: "12.0"
-            CMD_BUILD: >
-              ls -l /usr/local/lib/libcrypto* /usr/local/lib/libssl* || true;
-              rm -f /usr/local/lib/libcrypto*.dylib /usr/local/lib/libssl*.dylib || true;
-              uv pip install --force-reinstall --no-deps
-              pyside6==6.9.3 pyside6-addons==6.9.3 pyside6-essentials==6.9.3 shiboken6==6.9.3 &&
-              WAVES_MACOS_MIN=12.0 bash tools/build_waves.sh &&
-              cd dist &&
-              zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_MACOS_X64_LEGACY}}${{needs.compute.outputs.ASSET_EXTENSION}} waves.app -x "*.DS_Store" &&
-              cd ..
-          - os: "macos-14"
-            TARGET: "macos-14 M1 legacy"
-            OS_ARCH: ${{needs.compute.outputs.ARCH_MACOS_ARM64_LEGACY}}
-            MACOS_FLOOR: "12.0"
-            CMD_BUILD: >
-              ls -l /opt/homebrew/lib/libcrypto* /opt/homebrew/lib/libssl* || true;
-              rm -f /opt/homebrew/lib/libcrypto*.dylib /opt/homebrew/lib/libssl*.dylib || true;
-              uv pip install --force-reinstall --no-deps
-              pyside6==6.9.3 pyside6-addons==6.9.3 pyside6-essentials==6.9.3 shiboken6==6.9.3 &&
-              WAVES_MACOS_MIN=12.0 bash tools/build_waves.sh &&
-              cd dist &&
-              zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_MACOS_ARM64_LEGACY}}${{needs.compute.outputs.ASSET_EXTENSION}} waves.app -x "*.DS_Store" &&
-              cd ..
-          # Linux legs ship BOTH a zip of the standalone tree and a single-file
-          # AppImage of the same tree (tools/build_appimage.sh); the in-app
-          # updater keeps each install on its own format.
-          - os: "ubuntu-24.04"
-            TARGET: "ubuntu-24.04"
-            OS_ARCH: ${{needs.compute.outputs.ARCH_LINUX_X64}}
-            CMD_BUILD: >
-              bash tools/build_waves.sh &&
-              cd dist &&
-              mv waves.dist Waves &&
-              zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_LINUX_X64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
-              bash ../tools/build_appimage.sh Waves ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_LINUX_X64}}.AppImage &&
-              cd ..
-          - os: "ubuntu-24.04-arm"
-            TARGET: "ubuntu-24.04-arm"
-            OS_ARCH: ${{needs.compute.outputs.ARCH_LINUX_ARM64}}
-            CMD_BUILD: >
-              bash tools/build_waves.sh &&
-              cd dist &&
-              mv waves.dist Waves &&
-              zip -9 -ry ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_LINUX_ARM64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
-              bash ../tools/build_appimage.sh Waves ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_LINUX_ARM64}}.AppImage &&
-              cd ..
-          # Both Windows legs set the low-memory flag explicitly as well as
-          # inheriting the build script's Windows default (OS=Windows_NT):
-          # Nuitka's parallel C compilation runs MSVC out of heap on the
-          # bundled yt-dlp ("fatal error C1002"), and an explicit setting
-          # survives any environment where that detection is unavailable.
-          - os: "windows-2022"
-            TARGET: "windows-2022"
-            OS_ARCH: ${{needs.compute.outputs.ARCH_WINDOWS_X64}}
-            CMD_BUILD: >
-              choco install zip -y &&
-              WAVES_NUITKA_FLAGS=--low-memory bash tools/build_waves.sh &&
-              cd dist &&
-              mv waves.dist Waves &&
-              zip -9 -r ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_WINDOWS_X64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
-              cd ..
-          - os: "windows-11-arm"
-            TARGET: "windows-11-arm"
-            OS_ARCH: ${{needs.compute.outputs.ARCH_WINDOWS_ARM64}}
-            CMD_BUILD: >
-              choco install zip -y &&
-              WAVES_NUITKA_FLAGS=--low-memory bash tools/build_waves.sh &&
-              cd dist &&
-              mv waves.dist Waves &&
-              zip -9 -r ${{needs.compute.outputs.OUT_NAME_FILE}}_${{needs.compute.outputs.ARCH_WINDOWS_ARM64}}${{needs.compute.outputs.ASSET_EXTENSION}} Waves &&
-              cd ..
-    runs-on: ${{ matrix.os }}
+        leg: ${{ fromJSON(needs.compute.outputs.legs) }}
+    runs-on: ${{ matrix.leg.os }}
     env:
       # ccache lives in the cached Nuitka cache root; its 5 GB default would
       # crowd GitHub's 10 GB repository budget across eight leg caches.
       CCACHE_MAXSIZE: "2G"
     steps:
-      # Skip checkout + setup on legs the `only` filter excludes, so a targeted
-      # dispatch (e.g. only=windows-x64) does not spin the other legs (notably the
-      # 10x-billed macOS runners) through a full environment install just to build
-      # nothing. Releases and test-build pushes leave `only` blank, so every leg
-      # still runs. Same guard the build / smoke / checksum / upload steps use.
+      # Leg selection already happened in the matrix (see the Select legs
+      # step): every job here builds, so steps carry no `only` guards.
+      # (Releases and test-build pushes leave `only` blank, so every leg
+      # still runs.)
       - name: Check out
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         uses: actions/checkout@v7
       - name: Set up the environment
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         uses: ./.github/actions/setup-env
       # Carry Nuitka's build tree and its cache root (ccache, module cache,
       # downloads) between runs: content signatures skip recompiling modules
@@ -347,7 +247,6 @@ jobs:
       # another configuration; the restore-key fallback is salted the same
       # way. The policy and the size budget live in docs/dependency-updates.md.
       - name: Restore the Nuitka build cache
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         uses: actions/cache@v6
         with:
           path: |
@@ -355,12 +254,11 @@ jobs:
             ~/.cache/Nuitka
             ~/Library/Caches/Nuitka
             ~/AppData/Local/Nuitka/Nuitka/Cache
-          key: nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-${{ hashFiles('uv.lock') }}
+          key: nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml', '.github/workflows/build-legs.json') }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            nuitka-v3-${{ matrix.OS_ARCH }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-
-      - name: Build Waves for ${{matrix.TARGET}}
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
-        run: ${{matrix.CMD_BUILD}}
+            nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml', '.github/workflows/build-legs.json') }}-
+      - name: Build Waves for ${{matrix.leg.target}}
+        run: ${{matrix.leg.cmd_build}}
       # Smoke-launch the freshly built+trimmed bundle headlessly BEFORE it is
       # hashed and release-signed. trim_qt_bundle.sh strips aggressively; without
       # this, the first time a trimmed bundle ever runs is on a user's machine.
@@ -379,16 +277,16 @@ jobs:
       # not (ubuntu-24.04 dropped libEGL). Install just enough to launch
       # offscreen; this mirrors a user's desktop, it is not shipped.
       - name: Install Linux GL runtime for smoke-launch
-        if: ${{ runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) && !endsWith(matrix.OS_ARCH, '-arm64') }}
+        if: ${{ runner.os == 'Linux' && !endsWith(matrix.leg.os_arch, '-arm64') }}
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon0 libfontconfig1 libpulse0 libasound2t64
       - name: Smoke-launch trimmed bundle
-        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) && !endsWith(matrix.OS_ARCH, '-arm64') }}
+        if: ${{ !endsWith(matrix.leg.os_arch, '-arm64') }}
         env:
           QT_QPA_PLATFORM: offscreen
           QT_OPENGL: software
         run: |
           set -u
-          case "${{ matrix.OS_ARCH }}" in
+          case "${{ matrix.leg.os_arch }}" in
             macos-*)   BIN="dist/waves.app/Contents/MacOS/Waves" ;;
             windows-*) BIN="dist/Waves/Waves.exe" ;;
             *)         BIN="dist/Waves/Waves" ;;
@@ -432,10 +330,10 @@ jobs:
       # plist lies (PySide6 6.10 wheels are tagged macOS 13 but
       # contain macOS 15-only libraries).
       - name: Assert macOS version floor
-        if: ${{ startsWith(matrix.OS_ARCH, 'macos-') && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) }}
+        if: ${{ startsWith(matrix.leg.os_arch, 'macos-') }}
         run: |
           set -eu
-          MIN="${{ matrix.MACOS_FLOOR }}"
+          MIN="${{ matrix.leg.macos_floor }}"
           [ -n "$MIN" ] || { echo "::error::floor-assert: this macOS leg declares no MACOS_FLOOR in the matrix"; exit 1; }
           PLIST="dist/waves.app/Contents/Info.plist"
           DECLARED="$(plutil -extract LSMinimumSystemVersion raw "$PLIST" 2>/dev/null || true)"
@@ -469,13 +367,13 @@ jobs:
       # so launch the finished file itself too (x64 only, same reason as above;
       # --appimage-extract-and-run because runners have no FUSE).
       - name: Smoke-launch AppImage
-        if: ${{ runner.os == 'Linux' && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) && !endsWith(matrix.OS_ARCH, '-arm64') }}
+        if: ${{ runner.os == 'Linux' && !endsWith(matrix.leg.os_arch, '-arm64') }}
         env:
           QT_QPA_PLATFORM: offscreen
           QT_OPENGL: software
         run: |
           set -u
-          APPIMG="dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}.AppImage"
+          APPIMG="dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.leg.os_arch}}.AppImage"
           if [ ! -e "$APPIMG" ]; then
             echo "::error::smoke-launch: built AppImage '$APPIMG' not found"; exit 1
           fi
@@ -501,7 +399,6 @@ jobs:
           fi
           [ "$ok" -eq 1 ] || { echo "::error::smoke-launch: $APPIMG never reached a healthy state"; exit 1; }
       - name: Checksum
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         # Portable per-asset SHA256 (no coreutils dependency on Windows). The
         # line is "<hex>  <filename>": coreutils sha256sum format, which the
         # signed SHA256SUMS manifest and the in-app updater both parse. Linux
@@ -509,28 +406,27 @@ jobs:
         # of the leg's assets exist.
         run: |
           cd dist
-          BASE="${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}"
+          BASE="${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.leg.os_arch}}"
           for ASSET in "${BASE}${{needs.compute.outputs.ASSET_EXTENSION}}" "${BASE}.AppImage"; do
             [ -e "$ASSET" ] || continue
             python -c "import hashlib,sys; p=sys.argv[1]; open(p+'.sha256','w').write(hashlib.sha256(open(p,'rb').read()).hexdigest()+'  '+p+chr(10))" "$ASSET"
             cat "$ASSET.sha256"
           done
       - name: Upload checksum artifact
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH) }}
         # Tiny per-asset checksums collected by the sign job into one manifest
         # (the glob picks up the AppImage's sidecar on the linux legs).
         uses: actions/upload-artifact@v7
         with:
-          name: sha256-${{matrix.OS_ARCH}}
-          path: ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}*.sha256
+          name: sha256-${{matrix.leg.os_arch}}
+          path: ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.leg.os_arch}}*.sha256
       - name: Upload Build Artifact (workflow_dispatch / test-build)
-        if: ${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/test-build') && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) }}
+        if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/test-build' }}
         uses: actions/upload-artifact@v7
         with:
-          name: ${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}
+          name: ${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.leg.os_arch}}
           path: |
-            ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}${{needs.compute.outputs.ASSET_EXTENSION}}
-            ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}.AppImage
+            ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.leg.os_arch}}${{needs.compute.outputs.ASSET_EXTENSION}}
+            ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.leg.os_arch}}.AppImage
       - name: Upload Release Asset
         # Publish only when a release is actually being made: a tag PUSH (not a
         # dispatch that merely happens to run on a tag ref), OR a dispatch that
@@ -540,7 +436,7 @@ jobs:
         # before any matrix leg started, so every leg here finds the same
         # unambiguous Release by tag and just appends its two files, instead
         # of racing to create it themselves.
-        if: ${{ ((github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')) && (github.event_name != 'workflow_dispatch' || github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.OS_ARCH)) }}
+        if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
         uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
@@ -553,7 +449,7 @@ jobs:
           # its .sha256 on the linux legs. Each leg's OS_ARCH prefix is unique,
           # so a leg can only ever attach its own files.
           files: |
-            ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.OS_ARCH}}*
+            ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.leg.os_arch}}*
 
   sign-manifest:
     # Runs for any release (a tag PUSH or a dispatch+release_tag): gather every
