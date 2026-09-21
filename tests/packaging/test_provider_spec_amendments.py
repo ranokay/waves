@@ -38,7 +38,7 @@ def test_wrapper_image_names_adr_0005():
 def test_platform_section_and_deferrals_name_the_windows_park():
     text = SPEC.read_text(encoding="utf-8")
     assert "0009-windows-builds-parked" in _section(text, "## 10. Packaging")
-    assert "0009" in _section(text, "## 12. Post-v1")
+    assert "0009-windows-builds-parked" in _section(text, "## 12. Post-v1")
 
 
 def test_lyrics_art_defaults_state_the_ratified_set():
