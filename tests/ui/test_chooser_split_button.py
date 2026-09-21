@@ -339,6 +339,83 @@ def test_download_with_chooser_apple_routes_with_pins(monkeypatch):
     assert seen["audio"] == "both"
 
 
+def _held_bridge(**over):
+    """Chooser stub whose folder gate holds, with a real stash to replay."""
+    b = _bridge(**over)
+    b._download_gate = lambda: "nudge"
+    b._pending_downloads = []
+    b._pending_lock = Lock()
+    _bind(b, "_stash_pending_download", "_run_pending_downloads", "_chooser_replay")
+    return b
+
+
+def _chooser_click_patches(monkeypatch):
+    monkeypatch.setattr(backend, "_image", lambda obj, size: "")
+    monkeypatch.setattr(backend, "_quality_label", lambda obj, provider=None: "HI-RES")
+    monkeypatch.setattr(backend, "_primary_artist_name", lambda obj: "Artist")
+    monkeypatch.setattr(backend, "_track_count", lambda obj: 1)
+    monkeypatch.setattr(backend, "_offers_both", lambda obj: True)
+    monkeypatch.setattr(backend, "_atmos_only", lambda obj: False)
+    monkeypatch.setattr(backend, "_has_atmos", lambda obj: True)
+    monkeypatch.setattr(backend, "name_builder_title", lambda obj: "Song")
+
+
+def test_held_chooser_click_confirms_on_replay(monkeypatch):
+    """A Chooser download held by the folder gate queues silently while the
+    status still asks the user to choose; the replay confirms provider /
+    tier / files once it actually queues."""
+    _chooser_click_patches(monkeypatch)
+    b = _held_bridge(tidal_quality_audio="HIGH")
+    b._objs["track"]["t1"] = _track("t1")
+    b.downloadWithChooser("t1", "track", "LOSSLESS", "stereo")
+
+    assert "Queued:" not in b._last_status
+    assert [mid for mid, _ in b._pending_downloads] == ["t1"]
+    assert b._queue == []
+
+    b._download_gate = lambda: "ok"
+    b._run_pending_downloads()
+
+    assert b._pending_downloads == []
+    assert len(b._queue) == 1
+    assert b._last_status == "Queued: TIDAL - LOSSLESS - stereo"
+
+
+def test_replay_held_again_stays_quiet(monkeypatch):
+    """A replay the gate holds again answers False and confirms nothing:
+    only a replay that actually queued confirms, exactly once."""
+    _chooser_click_patches(monkeypatch)
+    b = _held_bridge(tidal_quality_audio="HIGH")
+    b._objs["track"]["t1"] = _track("t1")
+    b.downloadWithChooser("t1", "track", "LOSSLESS", "stereo")
+
+    b._run_pending_downloads()
+
+    assert "Queued:" not in b._last_status
+    assert [mid for mid, _ in b._pending_downloads] == ["t1"]
+    assert b._queue == []
+
+
+def test_chooser_replay_wrapper_confirms_only_queued_pins():
+    b = _bridge()
+    _bind(b, "_chooser_replay", "_chooser_confirm_status")
+
+    # No pins: the identical closure replays bare, confirming nothing.
+    bare = lambda: False
+    assert b._chooser_replay("tidal", "track", bare, None, None, None) is bare
+    assert bare() is False
+    assert b._last_status == ""
+
+    # Pins with a replay that queued: the provider/tier/files confirmation.
+    assert b._chooser_replay("tidal", "track", lambda: True, ("HIGH", "HIGH"), "stereo", {})() is True
+    assert b._last_status == "Queued: TIDAL - HIGH - stereo"
+
+    # Pins with a replay held again: quiet.
+    b._last_status = ""
+    assert b._chooser_replay("tidal", "track", lambda: False, ("HIGH", "HIGH"), "stereo", {})() is False
+    assert b._last_status == ""
+
+
 def test_download_with_chooser_parks_pins_across_a_refetch(monkeypatch):
     """A Chooser click on an evicted id replays with its pins, not Settings."""
     monkeypatch.setattr(backend, "_image", lambda obj, size: "")
