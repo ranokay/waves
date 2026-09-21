@@ -140,6 +140,7 @@ from waves.providers import (
 from waves.providers.apple import runner
 from waves.providers.apple.engine import AppleCredential
 from waves.providers.apple.files import (
+    facts_without_share_url,
     tag_apple_file,
     write_cover_sidecar,
     write_text_sidecar,
@@ -17646,7 +17647,7 @@ class WavesBridge(LibraryMixin, QObject):
                     tag_apple_file(
                         candidate,
                         title=str(row.get("title") or ""),
-                        facts=facts or {},
+                        facts=facts_without_share_url(self.settings.data, facts or {}),
                         lyrics_synced=synced,
                         lyrics_unsynced=plain,
                         cover_data=cover,

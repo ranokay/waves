@@ -55,6 +55,7 @@ from waves.providers.apple.engine import (
 )
 from waves.providers.apple.files import (
     convert_image,
+    facts_without_share_url,
     format_apple_path,
     pick_destination,
     tag_apple_file,
@@ -2061,10 +2062,14 @@ def deliver_track(
     # The embed toggle is the single source for embedding; the sidecars
     # below still receive the fetched text.
     embed_lyrics = bool(options.option("lyrics_embed", False))
+    # The source-URL tag honors its preference like the TIDAL path: off
+    # means no catalog URL lands in the file. Nothing past the tag call
+    # reads facts, so the scrubbed copy stays local to it.
+    tag_facts = facts_without_share_url(data, facts)
     if not tag_apple_file(
         dest,
         title=str(row.get("title") or ""),
-        facts=facts,
+        facts=tag_facts,
         lyrics_synced=lyrics_synced if embed_lyrics else "",
         lyrics_unsynced=lyrics_unsynced if embed_lyrics else "",
         cover_data=embed_cover,

@@ -273,6 +273,20 @@ def write_collection_playlist(
     )
 
 
+def facts_without_share_url(data, facts: dict) -> dict:
+    """facts with the catalog URL withheld when its preference is off.
+
+    Both Apple tag call sites (the download runner and the standalone
+    embed) read the share through this, mirroring the TIDAL call-site
+    gate. An unreadable setting reads as on, preserving current behavior.
+    """
+    if getattr(data, "metadata_write_url", True):
+        return facts
+    if not isinstance(facts, dict):
+        return facts
+    return {**facts, "share_url": ""}
+
+
 def tag_apple_file(
     path: str | Path,
     *,

@@ -378,6 +378,44 @@ def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
 
 
 @pytest.mark.ffmpeg
+def test_landing_with_the_url_preference_off_writes_no_catalog_url(tmp_path, monkeypatch):
+    """Disabling metadata_write_url keeps the catalog URL out of landed
+    Apple files, while the rest of the tag still lands."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    stub.settings = _settings(base, metadata_write_url=False)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    landed = base / "Aphex Twin" / "Xtal.m4a"
+    assert landed.is_file()
+    import mutagen.mp4
+
+    tags = mutagen.mp4.MP4(str(landed)).tags
+    assert tags["\xa9nam"] == ["Xtal"], "the tag itself landed; only the URL is withheld"
+    assert all(not url for url in tags.get("\xa9url", []))
+
+
+@pytest.mark.ffmpeg
 def test_queued_tier_decides_the_fetch_over_the_current_setting(tmp_path, monkeypatch):
     """The row's pinned ask reaches resolve_stream even when Settings disagree."""
     from waves.providers.apple import engine as apple_engine
