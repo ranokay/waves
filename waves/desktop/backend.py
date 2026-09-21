@@ -14172,7 +14172,9 @@ class WavesBridge(LibraryMixin, QObject):
             gate_reachability=lambda retry, media_id="": self._gate_reachability(retry, media_id),
             discard_pending_downloads=lambda media_ids: self._discard_pending_downloads(media_ids),
             release_abandoned_hold=lambda media_ids: self._release_abandoned_hold(media_ids),
-            media_work_outstanding=lambda media_id, qid=None: self._media_work_outstanding(media_id, qid),
+            media_work_outstanding=lambda media_id, qid=None: (
+                self._media_work_outstanding(media_id, qid) if hasattr(self, "_media_work_outstanding") else False
+            ),
             pause_event=lambda: getattr(self, "_event_run", None),
             download_apple=lambda *args, **kwargs: self._download_apple(*args, **kwargs),
             download_failed_with_folder=lambda *args, **kwargs: self._download_failed_with_folder(*args, **kwargs),
@@ -15219,7 +15221,14 @@ class WavesBridge(LibraryMixin, QObject):
                     # (registerRedownload sets both together), so it goes too:
                     # otherwise the album stayed exempt from the claim gate for
                     # as long as its done row sat in Completed.
-                    self._release_redownload_override(media_id, qid)
+                    # getattr: partial test stubs drive download success with
+                    # neither helper, and keep the previous unconditional drop.
+                    release = getattr(self, "_release_redownload_override", None)
+                    if callable(release):
+                        release(media_id, qid)
+                    else:
+                        self._redownload_overrides.discard(media_id)
+                        self._library_claim_overrides.discard(media_id)
                     self.downloadProgress.emit(media_id, 100.0)
                     self._set_queue_progress(qid, 100.0)
                     self.downloadState.emit(media_id, "done")
