@@ -10,7 +10,7 @@
      lines into a row, but other renderers (the mirror frontends among them)
      treat each source line as its own line and stack the badges vertically. -->
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License: AGPL-3.0"></a> <a href="#install"><img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-informational" alt="Platforms"></a> <a href="#install"><img src="https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue" alt="Python"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License: AGPL-3.0"></a> <a href="#install"><img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux-informational" alt="Platforms"></a> <a href="#install"><img src="https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue" alt="Python"></a>
 </p>
 
 <p align="center">
@@ -144,6 +144,8 @@ The log lives at `waves_dev.log`, next to `crash.log`, in the Waves config folde
 ## Install
 
 Grab the build for your platform from the [**latest release**](../../releases/latest):
+
+> **Windows builds are parked:** the bundle does not compile on hosted runners (MSVC fails on one generated module), so no Windows asset ships. The Windows rows below name the assets a release will carry once revalidated — see [ADR 0009](docs/adr/0009-windows-builds-parked.md).
 
 | OS                  | Intel / AMD (x64)              | ARM (Apple silicon, etc.)              |
 | ------------------- | ------------------------------ | -------------------------------------- |
