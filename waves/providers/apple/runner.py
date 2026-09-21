@@ -242,6 +242,7 @@ class AppleJobHooks:
     pause_event: Callable[[], Any] = _none
     discard_pending_downloads: Callable[..., list] = _empty_list
     release_abandoned_hold: Callable[..., None] = _noop
+    media_work_outstanding: Callable[..., bool] = _false
 
 
 # --------------------------------------------------------------------------
@@ -2685,8 +2686,17 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
             hooks.bump_groups(media_id, None, "failed")
             hooks.status(f"Cancelled {name}")
         else:
-            hooks.redownload_overrides().discard(media_id)
-            hooks.library_claim_overrides().discard(media_id)
+            # The REDOWNLOAD force survives while a sibling Version row
+            # still needs it (dual rows share one media id); the last
+            # finisher drops it with the claim override, like the engine.
+            try:
+                outstanding = bool(hooks.media_work_outstanding(media_id, qid))
+            except Exception:
+                # Hook-less stubs answer the default: discard, as before.
+                outstanding = False
+            if not outstanding:
+                hooks.redownload_overrides().discard(media_id)
+                hooks.library_claim_overrides().discard(media_id)
             hooks.download_progress(media_id, 100.0)
             hooks.queue_progress(qid, 100.0)
             hooks.download_state(media_id, "done")
