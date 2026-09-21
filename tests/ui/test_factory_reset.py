@@ -187,6 +187,27 @@ def test_factory_reset_wipes_waves_files_and_keeps_install_channel(tmp_path, mon
     assert _FakeQSettings.cleared, "the QML setup flags are cleared too"
 
 
+def test_factory_reset_wipes_the_remembered_quarantine_roots(tmp_path, monkeypatch):
+    # The sidecar remembers every previously-used custom quarantine folder
+    # for scan exclusion: a reset that kept it would re-exclude those
+    # directories on next launch.
+    from waves.desktop.backend import _FACTORY_WIPE_FILES
+    from waves.providers.apple.integrity import _QUARANTINE_SIDECAR_NAME
+
+    staged = f"{_QUARANTINE_SIDECAR_NAME}.tmp"
+    assert _QUARANTINE_SIDECAR_NAME in _FACTORY_WIPE_FILES
+    assert staged in _FACTORY_WIPE_FILES
+
+    base = tmp_path / "cfg"
+    base.mkdir()
+    (base / _QUARANTINE_SIDECAR_NAME).write_text('["/old/quarantine"]')
+    (base / staged).write_text("[]")
+    _run_factory_reset(base, monkeypatch)
+
+    assert not (base / _QUARANTINE_SIDECAR_NAME).exists()
+    assert not (base / staged).exists()
+
+
 def test_factory_reset_takes_everything_a_self_update_left_behind(tmp_path, monkeypatch):
     """The updates folder as a real self-update leaves it.
 
