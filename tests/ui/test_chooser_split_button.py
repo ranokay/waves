@@ -406,6 +406,10 @@ def test_chooser_replay_wrapper_confirms_only_queued_pins():
     assert bare() is False
     assert b._last_status == ""
 
+    # An empty mapping pinned nothing (and every plain retry carries one):
+    # bare too, so a click the user never chose never confirms.
+    assert b._chooser_replay("tidal", "track", bare, None, None, {}) is bare
+
     # Pins with a replay that queued: the provider/tier/files confirmation.
     assert b._chooser_replay("tidal", "track", lambda: True, ("HIGH", "HIGH"), "stereo", {})() is True
     assert b._last_status == "Queued: TIDAL - HIGH - stereo"

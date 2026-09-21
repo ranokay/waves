@@ -10315,11 +10315,13 @@ class WavesBridge(LibraryMixin, QObject):
         The stash holds bare re-entries whose queued answer the recovery
         runner drops, so without this a held Chooser click queues silently
         while the status still shows the click's choice (or the gate's
-        message). Plain clicks pass no pins and replay bare, unchanged. A
-        replay held again answers False and stays quiet; only a replay that
-        actually queued confirms, exactly once.
+        message). Only a pinned choice wraps: an empty mapping pinned
+        nothing (and every plain retry carries one), so it replays bare —
+        a false "Queued" on a click the user never chose would be worse
+        than a quiet one. A replay held again answers False and stays
+        quiet; only a replay that actually queued confirms, exactly once.
         """
-        if ask is None and audio is None and toggles is None:
+        if ask is None and audio is None and not toggles:
             return replay
         audio = self._chooser_normalize_audio(audio, provider_id)
 
@@ -13512,6 +13514,15 @@ class WavesBridge(LibraryMixin, QObject):
         on its way and acknowledged); False when a gate held or blocked the
         click and nothing was queued, so callers that confirm with their own
         status line keep the gate's message instead of overwriting it."""
+        # getattr: partial test stubs drive _download without the Chooser
+        # helper; their holds replay bare, as before.
+        _chooser_wrap = getattr(self, "_chooser_replay", None)
+
+        def _wrap(replay):
+            if callable(_chooser_wrap):
+                return _chooser_wrap(provider_id, type_media, replay, chooser_ask, chooser_audio, chooser_toggles)
+            return replay
+
         if not self._logged_in:
             self._set_status("Sign in before downloading")
             return False
@@ -13533,9 +13544,7 @@ class WavesBridge(LibraryMixin, QObject):
             # later, on the worker, by _gate_reachability.)
             self._stash_pending_download(
                 media_id,
-                self._chooser_replay(
-                    provider_id,
-                    type_media,
+                _wrap(
                     lambda: self._download(
                         obj,
                         type_media,
@@ -13548,18 +13557,13 @@ class WavesBridge(LibraryMixin, QObject):
                         chooser_ask=chooser_ask,
                         chooser_audio=chooser_audio,
                         chooser_toggles=chooser_toggles,
-                    ),
-                    chooser_ask,
-                    chooser_audio,
-                    chooser_toggles,
+                    )
                 ),
             )
             return False
         if self._ffmpeg_gate_holds(
             media_id,
-            self._chooser_replay(
-                provider_id,
-                type_media,
+            _wrap(
                 lambda: self._download(
                     obj,
                     type_media,
@@ -13572,10 +13576,7 @@ class WavesBridge(LibraryMixin, QObject):
                     chooser_ask=chooser_ask,
                     chooser_audio=chooser_audio,
                     chooser_toggles=chooser_toggles,
-                ),
-                chooser_ask,
-                chooser_audio,
-                chooser_toggles,
+                )
             ),
         ):
             return False
@@ -13901,12 +13902,19 @@ class WavesBridge(LibraryMixin, QObject):
         if gate == "block":
             self.downloadState.emit(media_id, "")
             return False
+        # getattr: partial test stubs drive _download_apple without the
+        # Chooser helper; their holds replay bare, as before.
+        _chooser_wrap = getattr(self, "_chooser_replay", None)
+
+        def _wrap(replay):
+            if callable(_chooser_wrap):
+                return _chooser_wrap(CTX_APPLE, type_media, replay, chooser_ask, chooser_audio, chooser_toggles)
+            return replay
+
         if gate == "nudge":
             self._stash_pending_download(
                 media_id,
-                self._chooser_replay(
-                    CTX_APPLE,
-                    type_media,
+                _wrap(
                     lambda: self._download_apple(
                         type_media,
                         row,
@@ -13919,18 +13927,13 @@ class WavesBridge(LibraryMixin, QObject):
                         chooser_ask=chooser_ask,
                         chooser_audio=chooser_audio,
                         chooser_toggles=chooser_toggles,
-                    ),
-                    chooser_ask,
-                    chooser_audio,
-                    chooser_toggles,
+                    )
                 ),
             )
             return False
         if self._ffmpeg_gate_holds(
             media_id,
-            self._chooser_replay(
-                CTX_APPLE,
-                type_media,
+            _wrap(
                 lambda: self._download_apple(
                     type_media,
                     row,
@@ -13943,10 +13946,7 @@ class WavesBridge(LibraryMixin, QObject):
                     chooser_ask=chooser_ask,
                     chooser_audio=chooser_audio,
                     chooser_toggles=chooser_toggles,
-                ),
-                chooser_ask,
-                chooser_audio,
-                chooser_toggles,
+                )
             ),
         ):
             return False
