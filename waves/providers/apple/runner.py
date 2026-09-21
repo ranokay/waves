@@ -2692,6 +2692,7 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
             try:
                 outstanding = bool(hooks.media_work_outstanding(media_id, qid))
             except Exception:
+                # Hook-less stubs answer the default: discard, as before.
                 outstanding = False
             if not outstanding:
                 hooks.redownload_overrides().discard(media_id)

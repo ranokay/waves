@@ -14172,6 +14172,7 @@ class WavesBridge(LibraryMixin, QObject):
             gate_reachability=lambda retry, media_id="": self._gate_reachability(retry, media_id),
             discard_pending_downloads=lambda media_ids: self._discard_pending_downloads(media_ids),
             release_abandoned_hold=lambda media_ids: self._release_abandoned_hold(media_ids),
+            # getattr: partial test stubs build these hooks without the helper.
             media_work_outstanding=lambda media_id, qid=None: (
                 self._media_work_outstanding(media_id, qid) if hasattr(self, "_media_work_outstanding") else False
             ),
