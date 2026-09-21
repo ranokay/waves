@@ -154,7 +154,7 @@ Grab the build for your platform from the [**latest release**](../../releases/la
 | Windows             | `waves_windows-x64.zip`        | `waves_windows-arm64.zip`              |
 | Linux               | `waves_linux-x64.zip`          | `waves_linux-arm64.zip`                |
 
-Unzip and run: on macOS drag `waves.app` to Applications (first launch needs a one‑time approval in System Settings, see the note below); on Windows and Linux run `Waves` from the unzipped folder. Every asset ships with a SHA‑256 checksum, and the release carries a signed `SHA256SUMS` manifest.
+Unzip and run: on macOS drag `waves.app` to Applications (first launch needs a one‑time approval in System Settings, see the note below); on Linux run `Waves` from the unzipped folder (Windows builds are parked — see above). Every asset ships with a SHA‑256 checksum, and the release carries a signed `SHA256SUMS` manifest.
 
 **macOS via Homebrew:**
 
@@ -187,7 +187,7 @@ Waves is GUI‑first and does not ship a command‑line interface. If you prefer
 
 > **A note on macOS Gatekeeper:** the builds are not yet Apple‑notarized, so macOS quarantines a freshly downloaded `waves.app`. On first launch macOS shows a warning with no way to proceed; click **Done**, then go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the Waves entry. Confirm once and macOS remembers the choice from then on. (The old right‑click → Open shortcut no longer works on macOS 15 Sequoia and later.)
 >
-> **A note on Windows SmartScreen:** the builds are not yet code‑signed, so the first launch may show a Microsoft Defender SmartScreen prompt ("Windows protected your PC"). Click **More info**, then **Run anyway**. SmartScreen is a reputation check on new, unsigned software, not a malware detection; it fades on its own as a release accumulates clean installs.
+> **A note on Windows SmartScreen (for when Windows builds resume shipping):** the builds are not yet code‑signed, so the first launch may show a Microsoft Defender SmartScreen prompt ("Windows protected your PC"). Click **More info**, then **Run anyway**. SmartScreen is a reputation check on new, unsigned software, not a malware detection; it fades on its own as a release accumulates clean installs.
 
 **Waves is open source, and that means you can check the code for yourself. If reading the source is not something you are capable of doing, you can upload the downloaded zip to [VirusTotal](https://www.virustotal.com) and have it checked for viruses before you even extract it. Your privacy and security are important to me. Trust, but verify.**
 

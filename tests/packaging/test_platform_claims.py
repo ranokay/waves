@@ -34,6 +34,8 @@ def test_the_install_section_names_the_park_and_points_at_the_adr():
     # The asset names stay documented (they are what a revalidated release
     # will carry), but not as downloadable builds.
     assert "waves_windows-x64.zip" in text
+    # The run instructions must not present the parked build as runnable.
+    assert "on Windows and Linux run" not in text
 
 
 def test_the_windows_park_is_recorded_with_reentry_conditions():
