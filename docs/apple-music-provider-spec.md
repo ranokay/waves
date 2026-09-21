@@ -11,7 +11,7 @@
 1. **Don't break what works.** The TIDAL path's behavior is unchanged everywhere except where a section below explicitly states a ratified product change (one exists: the Atmos toggle's meaning, §5.1). Apple is additive.
 2. **Config-first.** Anything possibly configurable is exposed in Settings rather than hardcoded. Every default named below is an initial value, user-tunable.
 3. **Optional component.** Apple Music ships as a user-enabled component: off by default, explicit opt-in in Settings.
-4. **Platform order**: macOS Apple silicon first, then Windows, then Linux.
+4. **Platform order**: macOS Apple silicon first, then Windows, then Linux. (Windows parked — see §10.5.)
 5. **License discipline.** Waves is AGPL-3.0. Every bundled, vendored, or wrapped artifact must be license-compatible (§2, §11).
 6. **One-time external setup is acceptable**; fully-in-app setup is a bonus, never a requirement.
 
@@ -255,11 +255,14 @@ SRT is dropped for v1 (a conversion artifact, not something Apple provides).
 (Decided during spec synthesis, resolving the map's packaging fog — grounded in the engine decision's build-and-pin ruling and the setup run's evidence.)
 
 1. **Nothing Apple-engine ships inside Waves' own package.** Waves' signed/notarized application contains no Apple-engine artifacts; every engine piece is **provisioned at setup time** through the managed-runtime flow (§2) — downloaded, checksum-verified, extracted (tar.gz), chmod'd, version-pinned. This keeps Waves' installer free of Apple-adjacent material and follows the FFmpeg-manager precedent exactly.
+   > **Amended by [ADR 0004](adr/0004-apple-engine-bundling.md).** The bundle ships the open-source client libraries it depends on (gamdl, yt-dlp) as ordinary runtime dependencies; "Apple-engine artifacts" above means the Apple-derived or proprietary pieces and the separately provisioned executables, not a general-purpose open-source client. `tools/inspect_bundle.py` enforces the boundary.
 2. **The Apple Music APK is user-supplied, never redistributed or proxied by Waves** — it is Apple's proprietary software; bundling, mirroring, or fetching it through Waves' infrastructure would be redistribution. The wizard guides the user to source the pinned version (from wrapper-v2's `LIBS_VERSION.json`), verifies it by SHA-256, and scripts the `.apkm` extraction — every step of which was proven in the setup run. **Automatic APK fetching is explicitly not v1** (legal exposure for zero real friction; the manual step took one download).
    > **Ratified 2026-09-11 (wrapper image publishing, issues #76/#80/#82).** Waves now publishes its own pinned wrapper image (`docs/wrapper-image.md`) whose build downloads the blessed APK, extracts its arm64 native libraries, and bakes them into the image. End users pull that image and never supply or extract an APK. Waves still never redistributes or proxies the APK itself, and automatic APK fetching remains out of scope.
+   > **Amended by [ADR 0005](adr/0005-wrapper-image-distribution.md).** The published image stays public with license notices, OCI provenance labels, and pull-time digest verification against the pinned digest (the published `0.2.3` predates all three; the next publish carries them).
 3. **Container runtime dependency**: the full tier presumes a container runtime (Docker). The wizard detects it, attempts a gentle start on macOS, and guides when absent (§2) — it never silently installs one.
 4. **Engine bumps ride the updater**: Waves pins gamdl (version line), its own wrapper-v2 image build, and the N_m3u8DL-RE release; when upstream fixes scraper breakage, a pinned-version bump ships through Waves' normal update channel — the user updates Waves, the runtime refresh follows on next wizard/supervision pass.
 5. **Platform order**: macOS Apple silicon ships first (arm64 image runs natively — the deciding fact). **Windows and Linux follow as later enablements**: both need the container-runtime path verified per platform (image architecture for x86-64 hosts among them) — an enablement-verification requirement of those milestones, not an open design decision.
+   > **Parked for Windows ([ADR 0009](adr/0009-windows-builds-parked.md)).** The Windows bundle does not compile on hosted runners (MSVC fails on yt-dlp's generated `lazy_extractors` alone), so no Windows asset ships until both Windows legs go green on the exclusion recipe (re-entry: ADR 0009); Linux x64 built and smoke-launched in CI and Linux arm64 built (`docs/platform-enablement-review.md`), neither published from this fork yet.
 6. **Notarization**: Waves' own signing/notarization pipeline is unchanged; the provisioning flow must keep downloaded executables inside the app's managed-runtime area with provenance recorded (source URL + checksum), the pattern the FFmpeg manager already uses.
 
 ## 11. What does _not_ change
@@ -278,7 +281,7 @@ Not decisions pending — decisions made to defer:
 - **ISRC-deduped merged search results** across providers (v1 ships sections per provider). The documented ISRC batch lookup (`filter[isrc]`, 25 max) is the natural dedupe key, already identified.
 - **Animated Apple artwork** (needs an ffmpeg-derived decode of `editorialVideo`).
 - **Automatic APK fetching** (§10.2).
-- **Windows and Linux enablement** (§10.5).
+- **Windows and Linux enablement** (§10.5 — Windows parked per ADR 0009; Linux CI-verified, unpublished from this fork).
 - **SRT lyrics sidecar** if ever wanted (config-first addition).
 - **qobuz** — a separate future effort upstream; the Provider seam must not (and does not) preclude it. Better Lyrics as a lyrics source: likewise ruled out of this effort.
 
