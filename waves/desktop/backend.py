@@ -14172,6 +14172,7 @@ class WavesBridge(LibraryMixin, QObject):
             gate_reachability=lambda retry, media_id="": self._gate_reachability(retry, media_id),
             discard_pending_downloads=lambda media_ids: self._discard_pending_downloads(media_ids),
             release_abandoned_hold=lambda media_ids: self._release_abandoned_hold(media_ids),
+            media_work_outstanding=lambda media_id, qid=None: self._media_work_outstanding(media_id, qid),
             pause_event=lambda: getattr(self, "_event_run", None),
             download_apple=lambda *args, **kwargs: self._download_apple(*args, **kwargs),
             download_failed_with_folder=lambda *args, **kwargs: self._download_failed_with_folder(*args, **kwargs),
@@ -15211,15 +15212,14 @@ class WavesBridge(LibraryMixin, QObject):
                     if merge_plan is not None:
                         self._merge_plans.pop(media_id, None)
                     # A REDOWNLOAD mark is one job's force, not a standing
-                    # policy: the job it forced has finished, so a later click
+                    # policy: once no sibling row still needs it, a later click
                     # on the same item meets the normal owned gate again. Kept
                     # on failure and cancel, so a retry stays forced. The
                     # DOWNLOAD ANYWAY mark is the same kind of one-job force
                     # (registerRedownload sets both together), so it goes too:
                     # otherwise the album stayed exempt from the claim gate for
                     # as long as its done row sat in Completed.
-                    self._redownload_overrides.discard(media_id)
-                    self._library_claim_overrides.discard(media_id)
+                    self._release_redownload_override(media_id, qid)
                     self.downloadProgress.emit(media_id, 100.0)
                     self._set_queue_progress(qid, 100.0)
                     self.downloadState.emit(media_id, "done")
@@ -15401,6 +15401,44 @@ class WavesBridge(LibraryMixin, QObject):
         self._bump_artist_group(media_id, pct, state)
         self._bump_folder_group(media_id, pct, state)
 
+    def _media_work_outstanding(self, media_id: str, qid: int | None = None) -> bool:
+        """Whether this media has outstanding group work beyond one row.
+
+        Dual Version rows share one media id, and a held replay has no row
+        at all: the first finisher must settle neither its groups nor the
+        REDOWNLOAD force while a sibling still runs or waits held. Takes
+        _queue_lock and _pending_lock sequentially, never nested and never
+        while holding a group lock (the bumps snapshot before theirs).
+        """
+        mid = str(media_id or "")
+        if not mid:
+            return False
+        with self._queue_lock:
+            rows_live = any(
+                str(it.get("media_id", "") or "") == mid
+                and it.get("status") in ("queued", "running")
+                and (qid is None or str(it.get("qid")) != str(qid))
+                for it in self._queue
+            )
+        if rows_live:
+            return True
+        with self._pending_lock:
+            return any(str(stashed) == mid for stashed, _fn in self._pending_downloads if stashed)
+
+    def _release_redownload_override(self, media_id: str, qid: int) -> None:
+        """Drop a REDOWNLOAD mark once no sibling row still needs it.
+
+        The mark is one job's force, not a standing policy — but dual
+        Version rows share one media id under a serial queue, so the first
+        finisher must not unforce its sibling before it builds. Kept on
+        failure and cancel, so a retry stays forced, like the withdrawal
+        path's live-hold rule.
+        """
+        if self._media_work_outstanding(media_id, qid):
+            return
+        self._redownload_overrides.discard(media_id)
+        self._library_claim_overrides.discard(media_id)
+
     def _bump_folder_group(self, media_id: str, pct, state) -> None:
         """Roll a playlist's progress into EVERY folder 'download all' group it
         belongs to. The folder button's bar is track-weighted (a 200-track
@@ -15418,12 +15456,19 @@ class WavesBridge(LibraryMixin, QObject):
         # Same stale-emit guard as _bump_artist_group: a bump that raced a
         # STOP keeps its arithmetic but must not re-light a swept button.
         gen = self._scan_gen
+        # Dual Version rows share one media id: the first finisher records
+        # its progress but must not settle the group while its sibling still
+        # runs (or waits held for recovery) — settled early, the group is
+        # deleted and the sibling's later verdict has nowhere to go.
+        held = state in ("done", "failed") and self._media_work_outstanding(media_id)
         updates: list[tuple] = []
         with self._folder_lock:
             for fid in [f for f, g in self._folder_groups.items() if media_id in g["keys"]]:
                 grp = self._folder_groups[fid]
                 if state == "done":
                     grp["prog"][media_id] = 100.0
+                    if held:
+                        continue
                     grp["done"].add(media_id)
                     # A member that failed earlier and has landed is not a
                     # failure any more. Without this discard the credit was
@@ -15433,6 +15478,8 @@ class WavesBridge(LibraryMixin, QObject):
                     # rollup red over a folder where every playlist arrived.
                     grp["failed"].discard(media_id)
                 elif state == "failed":
+                    if held:
+                        continue
                     grp["done"].add(media_id)
                     grp["failed"].add(media_id)
                 elif pct is not None:
@@ -15479,18 +15526,27 @@ class WavesBridge(LibraryMixin, QObject):
         # The generation captured here goes stale the instant STOP is pressed,
         # and a stale bump keeps its arithmetic but drops its emits.
         gen = self._scan_gen
+        # Dual Version rows share one media id: the first finisher records
+        # its progress but must not settle the group while its sibling still
+        # runs (or waits held for recovery) — settled early, the group is
+        # deleted and the sibling's later verdict has nowhere to go.
+        held = state in ("done", "failed") and self._media_work_outstanding(media_id)
         updates: list[tuple] = []
         with self._artist_lock:
             for aid in [a for a, g in self._artist_groups.items() if media_id in g["keys"]]:
                 grp = self._artist_groups[aid]
                 if state == "done":
                     grp["prog"][media_id] = 100.0
+                    if held:
+                        continue
                     grp["done"].add(media_id)
                     # Same add-only credit, same red discography over a run in
                     # which every album eventually landed; see the twin in
                     # _bump_folder_group.
                     grp["failed"].discard(media_id)
                 elif state == "failed":
+                    if held:
+                        continue
                     grp["done"].add(media_id)
                     grp["failed"].add(media_id)
                 elif pct is not None:
