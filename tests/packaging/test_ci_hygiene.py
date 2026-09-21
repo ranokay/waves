@@ -16,7 +16,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import yaml
@@ -133,14 +132,19 @@ def test_excluded_legs_never_start_instead_of_succeeding_green():
 BUILD_LEGS = REPO_ROOT / ".github" / "workflows" / "build-legs.json"
 
 
+def _selector_module():
+    """The leg selector as a module, exercised in-process: spawning a child
+    interpreter here would trip the marker guard for no reason (this is pure
+    stdlib filtering, not a Qt or integration surface)."""
+    spec = importlib.util.spec_from_file_location("select_build_legs", REPO_ROOT / "tools" / "select_build_legs.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _selected_legs(only: str) -> list:
-    result = subprocess.run(  # noqa: S603 (fixed argv: the repo's own selector, its legs file, a filter string)
-        [sys.executable, str(REPO_ROOT / "tools" / "select_build_legs.py"), str(BUILD_LEGS), only],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return json.loads(result.stdout)
+    legs = json.loads(BUILD_LEGS.read_text())["legs"]
+    return _selector_module().select_legs(legs, only)
 
 
 def test_the_leg_selector_keeps_the_documented_substring_rule():
@@ -154,6 +158,14 @@ def test_the_leg_selector_keeps_the_documented_substring_rule():
     )
     assert [leg["os_arch"] for leg in _selected_legs("windows-x64")] == ["windows-x64"]
     assert _selected_legs("no-such-leg") == [], "an unknown filter must select nothing, not everything"
+
+
+def test_the_selector_cli_prints_json_and_rejects_bad_argv(capsys):
+    module = _selector_module()
+    assert module.main(["select_build_legs.py", str(BUILD_LEGS), "macos-intel"]) == 0
+    out = capsys.readouterr().out
+    assert [leg["os_arch"] for leg in json.loads(out)] == ["macos-intel"]
+    assert module.main(["select_build_legs.py"]) == 2
 
 
 def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:
