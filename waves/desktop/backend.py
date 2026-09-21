@@ -662,6 +662,11 @@ _FACTORY_WIPE_FILES = (
     "page_cache.json.tmp",
     "browse_tile_art.json",
     "browse_tile_art.json.tmp",
+    # The remembered Apple quarantine roots: every previously-used custom
+    # quarantine folder stays scan-excluded, so keeping this sidecar across
+    # a reset would re-exclude those directories on next launch.
+    "apple_quarantine_roots.json",
+    "apple_quarantine_roots.json.tmp",
     "ownership.sqlite3",
     "ownership.sqlite3-wal",
     "ownership.sqlite3-shm",
