@@ -1,7 +1,10 @@
 # Review-thread dispositions (R-02)
 
-Source: audit finding HD-04 (`docs/audits/full-codebase-2026-09-16/`, now
-removed with the audit workspace) and issue #226. At capture time 107
+Source: audit finding HD-04 (thread capture in the untracked audit
+workspace `docs/audits/full-codebase-2026-09-16/evidence/history/unresolved-threads.json`,
+not committed to the repo) and issue #226. Each row's discussion URL is the
+stable primary key — the scope re-derives from GitHub alone — and the guard
+test embeds all 98 ids. At capture time 107
 review threads stood unresolved on 9 merged PRs: 33 P1, 65 P2, 1 P3 and
 8 unbadged. This table dispositions the 98 P1/P2 threads; the P3 and the
 unbadged threads are outside R-02's scope.
@@ -10,7 +13,9 @@ Method: every thread below was re-checked live on 2026-09-21 — all 98
 still stand unresolved with no replies, so each disposition comes from
 the current code, not from thread discussion. Citations use the
 post-#344 package layout (`waves/desktop/`, `waves/library/`,
-`waves/metadata/`, `waves/providers/`). Every `fixed-in` SHA is a
+`waves/metadata/`, `waves/providers/`) as read on develop `8759829`
+(2026-09-21); line numbers will drift, the discussion URL plus the
+quoted construct re-locates each one. Every `fixed-in` SHA is a
 develop squash (or, for PR #37's true-merge, the branch commit) verified
 present on `develop`; the cited lines were read, not inferred. Ten
 threads describe defects that are still live; each is deferred to a
@@ -80,7 +85,7 @@ groups, as the issue asks, then the rest in PR order.
 | https://github.com/ranokay/waves/pull/48#discussion_r3962785729 | P2       | Retain every previous custom Quarantine root            | fixed-in `2e8c564` | `waves/providers/apple/integrity.py:166` — the remember list is uncapped by design; no oldest-root eviction.                                                                                 |
 | https://github.com/ranokay/waves/pull/48#discussion_r3962877823 | P1       | Reject Quarantine ancestors of the separate library     | deferred → #360    | `waves/providers/apple/integrity.py:103` — the resolver takes only `download_base`, while `waves/desktop/bridge_library.py:752` proves the scan root can be an independent `library_folder`. |
 | https://github.com/ranokay/waves/pull/48#discussion_r3962877833 | P2       | Delete the Quarantine sidecar during factory reset      | deferred → #361    | `waves/providers/apple/integrity.py:134` names `apple_quarantine_roots.json` (+`.tmp` at `:171`); `waves/desktop/backend.py:647` `_FACTORY_WIPE_FILES` lists neither.                        |
-| https://github.com/ranokay/waves/pull/48#discussion_r3962877839 | P2       | Remove stale Quarantine bytes after recovery            | deferred → #362    | Landing clears only the SQLite mark (`waves/providers/apple/runner.py:2448` via `waves/library/ownership.py:866`); the disk artifact is never removed and no path is recorded.               |
+| https://github.com/ranokay/waves/pull/48#discussion_r3962877839 | P2       | Remove stale Quarantine bytes after recovery            | deferred → #362    | `waves/providers/apple/runner.py:2448` clears only the SQLite mark (via `waves/library/ownership.py:866`); the disk artifact is never removed and no path is recorded.                       |
 | https://github.com/ranokay/waves/pull/48#discussion_r3962877844 | P2       | Canonicalize walked paths before Quarantine matching    | fixed-in `2e8c564` | `waves/library/index.py:2097` — fresh listings check the full walked path via the canonicalizing `_is_quarantine_path`.                                                                      |
 
 ## PR #37 — seam resolver binding, artist credits (2: fixed in `5e01ab0` on PR #37's branch; true-merge `0499364`)

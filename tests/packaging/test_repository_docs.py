@@ -186,5 +186,10 @@ def test_every_open_p1_p2_thread_has_a_disposition():
     )
     assert len(rows) == len(found), "a thread id appears outside a table row"
     for row in rows:
-        assert any(verdict in row for verdict in _VERDICTS), f"no verdict: {row[:120]}"
-        assert re.search(r"waves/[^`]*:\d+", row), f"no current-path citation: {row[:120]}"
+        # Cell-scoped: the verdict belongs in the Disposition cell and the
+        # citation in the Evidence cell, so prose mentioning a verdict
+        # elsewhere cannot satisfy the contract.
+        cells = [cell.strip() for cell in row.split("|")]
+        assert len(cells) == 7, f"malformed row: {row[:120]}"
+        assert any(verdict in cells[4] for verdict in _VERDICTS), f"no verdict: {row[:120]}"
+        assert re.search(r"waves/[^`]*:\d+", cells[5]), f"no current-path citation: {row[:120]}"
