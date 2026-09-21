@@ -161,7 +161,7 @@ def test_the_leg_selector_keeps_the_documented_substring_rule():
     assert _selected_legs("no-such-leg") == [], "an unknown filter must select nothing, not everything"
 
 
-def test_the_selector_cli_prints_json_and_rejects_bad_argv(capsys):
+def test_the_selector_cli_prints_json_and_rejects_bad_argv(capsys, tmp_path):
     module = _selector_module()
     assert module.main(["select_build_legs.py", str(BUILD_LEGS), "macos-intel"]) == 0
     out = capsys.readouterr().out
@@ -170,6 +170,11 @@ def test_the_selector_cli_prints_json_and_rejects_bad_argv(capsys):
     # A non-blank filter that matches nothing must fail the run loudly: an
     # empty matrix would otherwise stay green with no artifacts built.
     assert module.main(["select_build_legs.py", str(BUILD_LEGS), "no-such-leg"]) == 1
+    # The legs file must live inside the checkout: a CLI path is
+    # attacker-reachable in a dispatch, so traversal outside fails shut.
+    outside = tmp_path / "legs.json"
+    outside.write_text(BUILD_LEGS.read_text(encoding="utf-8"), encoding="utf-8")
+    assert module.main(["select_build_legs.py", str(outside), ""]) == 1
 
 
 def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:

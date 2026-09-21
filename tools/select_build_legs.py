@@ -27,7 +27,11 @@ def main(argv: list[str]) -> int:
     if len(argv) != 3:
         print("usage: select_build_legs.py <legs-json> <only>", file=sys.stderr)
         return 2
-    legs = json.loads(Path(argv[1]).read_text(encoding="utf-8"))["legs"]
+    legs_path = Path(argv[1])
+    if not legs_path.resolve().is_relative_to(Path.cwd().resolve()):
+        print(f"refusing legs file outside the checkout: {argv[1]!r}", file=sys.stderr)
+        return 1
+    legs = json.loads(legs_path.read_text(encoding="utf-8"))["legs"]
     selected = select_legs(legs, argv[2])
     if argv[2].strip() and not selected:
         print(f"no legs match only={argv[2]!r}", file=sys.stderr)
