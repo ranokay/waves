@@ -1504,6 +1504,7 @@ class AppleProvider(Provider):
         raw_id = str((item or {}).get("id") or "") if isinstance(item, dict) else ""
         artist_ids = self._track_artist_ids(item if isinstance(item, dict) else {}, attrs)
         album_attrs: dict = {}
+        album_artist_id = ""
         album_id = self._album_id(item if isinstance(item, dict) else {}, attrs)
         if album_id:
             album_raw = self._objects.get("album", {}).get(album_id.removeprefix(f"{CTX_APPLE}:"))
@@ -1511,16 +1512,25 @@ class AppleProvider(Provider):
                 maybe = self._attributes(album_raw)
                 if isinstance(maybe, dict):
                     album_attrs = maybe
+                album_artist_id = self._related_id(album_raw, "artists")
         artist_name = str(attrs.get("artistName") or "")
+        album_artist_name = str(album_attrs.get("artistName") or "")
+        if album_artist_name:
+            album_artists = [album_artist_name]
+            album_artist_ids = [album_artist_id] if album_artist_id else []
+        else:
+            # No cached album: the track credit is the only answer available.
+            album_artists = [artist_name] if artist_name else []
+            album_artist_ids = [artist_ids[0]] if artist_ids else []
         return {
             "item_id": self._id(raw_id),
             "artist_ids": artist_ids,
-            "album_artist_ids": [artist_ids[0]] if artist_ids else [],
+            "album_artist_ids": album_artist_ids,
             # One combined display credit: per-artist names are unavailable,
             # so only the first id carries it and the rest stay id-only
             # instead of repeating the same string per credit.
             "artists": [(artist_ids[0], artist_name)] + [(aid, "") for aid in artist_ids[1:]] if artist_ids else [],
-            "album_artists": [artist_name] if artist_name else [],
+            "album_artists": album_artists,
             "copyright": str(attrs.get("copyright") or ""),
             "isrc": str(attrs.get("isrc") or ""),
             "explicit": attrs.get("contentRating") == "explicit",

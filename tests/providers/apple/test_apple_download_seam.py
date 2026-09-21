@@ -84,6 +84,57 @@ def test_track_facts_name_only_the_first_of_several_credits():
     assert facts["artists"] == [("apple:artist-1", "Aphex Twin"), ("apple:artist-2", "")]
 
 
+def _compilation_track():
+    """A guest credit on a compilation: the track names the guest, the
+    album names the compilation artist."""
+    resource = _song_resource(song_id="song-9")
+    resource["attributes"]["artistName"] = "Guest Artist"
+    resource["attributes"]["url"] = "https://music.apple.com/us/album/x/comp-1?i=song-9"
+    resource["relationships"] = {"artists": {"data": [{"id": "guest-9"}]}}
+    return resource
+
+
+def _compilation_album(*, with_artist_relationship: bool = True):
+    album = {
+        "id": "comp-1",
+        "type": "albums",
+        "attributes": {"name": "Summer Hits", "artistName": "Various Artists"},
+    }
+    if with_artist_relationship:
+        album["relationships"] = {"artists": {"data": [{"id": "compilation-9"}]}}
+    return album
+
+
+def test_track_facts_take_the_album_artist_from_the_cached_album():
+    provider = AppleProvider(catalog=None)
+    provider._objects["album"]["comp-1"] = _compilation_album()
+
+    facts = provider.track_facts(_compilation_track())
+
+    assert facts["artists"] == [("apple:guest-9", "Guest Artist")]
+    assert facts["album_artists"] == ["Various Artists"]
+    assert facts["album_artist_ids"] == ["apple:compilation-9"]
+
+
+def test_track_facts_fall_back_to_the_track_credit_without_a_cached_album():
+    provider = AppleProvider(catalog=None)
+
+    facts = provider.track_facts(_compilation_track())
+
+    assert facts["album_artists"] == ["Guest Artist"]
+    assert facts["album_artist_ids"] == ["apple:guest-9"]
+
+
+def test_track_facts_name_the_album_without_an_album_artist_id():
+    provider = AppleProvider(catalog=None)
+    provider._objects["album"]["comp-1"] = _compilation_album(with_artist_relationship=False)
+
+    facts = provider.track_facts(_compilation_track())
+
+    assert facts["album_artists"] == ["Various Artists"]
+    assert facts["album_artist_ids"] == []
+
+
 def test_classify_refusal_sorts_credentials_throttle_and_gone():
     provider = AppleProvider(catalog=None)
 
