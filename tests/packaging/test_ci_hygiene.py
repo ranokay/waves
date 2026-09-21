@@ -97,6 +97,7 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
         "tools/build_waves.sh",
         "pyproject.toml",
         "release-or-test-build.yml",
+        "build-legs.json",
     ):
         assert part in key, part
         assert part in restore_keys, part
@@ -166,6 +167,9 @@ def test_the_selector_cli_prints_json_and_rejects_bad_argv(capsys):
     out = capsys.readouterr().out
     assert [leg["os_arch"] for leg in json.loads(out)] == ["macos-intel"]
     assert module.main(["select_build_legs.py"]) == 2
+    # A non-blank filter that matches nothing must fail the run loudly: an
+    # empty matrix would otherwise stay green with no artifacts built.
+    assert module.main(["select_build_legs.py", str(BUILD_LEGS), "no-such-leg"]) == 1
 
 
 def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:

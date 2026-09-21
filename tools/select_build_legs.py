@@ -28,7 +28,11 @@ def main(argv: list[str]) -> int:
         print("usage: select_build_legs.py <legs-json> <only>", file=sys.stderr)
         return 2
     legs = json.loads(Path(argv[1]).read_text(encoding="utf-8"))["legs"]
-    print(json.dumps(select_legs(legs, argv[2]), separators=(",", ":")))
+    selected = select_legs(legs, argv[2])
+    if argv[2].strip() and not selected:
+        print(f"no legs match only={argv[2]!r}", file=sys.stderr)
+        return 1
+    print(json.dumps(selected, separators=(",", ":")))
     return 0
 
 

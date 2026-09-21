@@ -68,16 +68,17 @@ six excluded legs never started (no phantom jobs). A second dispatch at
 `d36ecb3` (run `35579368870`, same filter) also went green on both legs but
 missed the cache again — the workflow file itself changed between the two
 dispatches, so the key moved. The true warm re-run (run `35583595525`,
-unchanged inputs) restored the exact primary keys on both legs with ccache
-`cache hit: 1791` against the cold run's miss on all 1791; full rows in
-`docs/evidence/platform-builds.md`.
+unchanged inputs) restored the exact primary keys on both legs; intel logged
+ccache `cache hit: 1791` against the cold run's miss on all 1791 (silicon's
+warm log carries the Nuitka restore line without a ccache summary). Full
+rows in `docs/evidence/platform-builds.md`.
 
 Reading note (historical — the workflow has since changed): at the time of
 these runs the `only` filter still created every matrix job; legs the filter
 excluded finished "success" with every step skipped, so job conclusions alone
 could look like passes. Since #244 the filter selects matrix legs up front
 in the compute job, so an excluded leg never starts and every conclusion
-means a real build. The failed Windows jobs below were genuine build
+means a real build. The failed Windows jobs above were genuine build
 attempts; the raw logs live in the run pages above.
 
 ## Why Windows fails while Linux passes

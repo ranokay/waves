@@ -96,7 +96,9 @@ jobs:
       # all eight (releases and test-build pushes).
       - name: Select legs
         id: select
-        run: echo "legs=$(python3 tools/select_build_legs.py .github/workflows/build-legs.json '${{ github.event.inputs.only }}')" >> "$GITHUB_OUTPUT"
+        env:
+          ONLY_FILTER: ${{ github.event.inputs.only }}
+        run: echo "legs=$(python3 tools/select_build_legs.py .github/workflows/build-legs.json \"$ONLY_FILTER\")" >> "$GITHUB_OUTPUT"
       # A published Release ships binaries with the updater config baked in; if
       # REPO or the signing public key are blank, every copy is permanently unable
       # to auto-update and can't be fixed after download. Fail the whole run early
@@ -252,9 +254,9 @@ jobs:
             ~/.cache/Nuitka
             ~/Library/Caches/Nuitka
             ~/AppData/Local/Nuitka/Nuitka/Cache
-          key: nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-${{ hashFiles('uv.lock') }}
+          key: nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml', '.github/workflows/build-legs.json') }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml') }}-
+            nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml', '.github/workflows/build-legs.json') }}-
       - name: Build Waves for ${{matrix.leg.target}}
         run: ${{matrix.leg.cmd_build}}
       # Smoke-launch the freshly built+trimmed bundle headlessly BEFORE it is
