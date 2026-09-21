@@ -11,10 +11,12 @@ recompiles every module from a cold runner.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -90,7 +92,13 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
     # recipe changes.
     key = str(with_block["key"])
     restore_keys = str(with_block["restore-keys"])
-    for part in ("matrix.OS_ARCH", "mise.toml", "tools/build_waves.sh", "pyproject.toml", "release-or-test-build.yml"):
+    for part in (
+        "matrix.leg.os_arch",
+        "mise.toml",
+        "tools/build_waves.sh",
+        "pyproject.toml",
+        "release-or-test-build.yml",
+    ):
         assert part in key, part
         assert part in restore_keys, part
     assert "uv.lock" in key
@@ -100,19 +108,52 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
     assert wf["jobs"]["build"]["env"]["CCACHE_MAXSIZE"] == "2G"
 
 
-def test_excluded_legs_skip_at_the_job_level_instead_of_succeeding_green():
+def test_excluded_legs_never_start_instead_of_succeeding_green():
     """R-32: the `only` filter used to live on every build step, so a leg it
     excluded finished Success with all steps skipped and job conclusions read
-    as passes. The filter now lives on the build job itself: an excluded leg
-    reads Skipped (grey), and no step may reintroduce its own `only` guard."""
+    as passes. Selection now happens once, in the compute job, and the build
+    matrix iterates only selected legs: an excluded leg never becomes a job,
+    and no build step may reintroduce its own `only` guard."""
     wf = yaml.safe_load(RELEASE_WORKFLOW.read_text())
-    job_if = str(wf["jobs"]["build"]["if"])
-    assert "github.event.inputs.only" in job_if, "the build job lost its `only` gate"
-    assert "matrix.OS_ARCH" in job_if, "the job gate must match legs, not just blank input"
+    matrix = wf["jobs"]["build"]["strategy"]["matrix"]
+    assert set(matrix) == {"leg"}, f"the build matrix grew static axes again: {sorted(matrix)}"
+    assert "fromJSON(needs.compute.outputs.legs)" in str(matrix["leg"])
+    select_steps = [
+        step
+        for step in wf["jobs"]["compute"]["steps"]
+        if str(step.get("id", "")) == "select" or "select_build_legs" in str(step.get("run", ""))
+    ]
+    assert select_steps, "the compute job lost its leg-selection step"
     for step in wf["jobs"]["build"]["steps"]:
         assert "github.event.inputs.only" not in str(step.get("if", "")), (
             f"step {step.get('name')!r} reintroduces a step-level `only` guard"
         )
+
+
+BUILD_LEGS = REPO_ROOT / ".github" / "workflows" / "build-legs.json"
+
+
+def _selected_legs(only: str) -> list:
+    result = subprocess.run(  # noqa: S603 (fixed argv: the repo's own selector, its legs file, a filter string)
+        [sys.executable, str(REPO_ROOT / "tools" / "select_build_legs.py"), str(BUILD_LEGS), only],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_the_leg_selector_keeps_the_documented_substring_rule():
+    legs = _selected_legs("")
+    assert len(legs) == 8, "blank `only` must select every leg"
+    regular = _selected_legs("macos-intel,macos-apple-silicon")
+    assert [leg["os_arch"] for leg in regular] == ["macos-intel", "macos-apple-silicon"]
+    legacy = _selected_legs("macos-intel_legacy")
+    assert [leg["os_arch"] for leg in legacy] == ["macos-intel", "macos-intel_legacy"], (
+        "naming a legacy leg must also run its regular twin"
+    )
+    assert [leg["os_arch"] for leg in _selected_legs("windows-x64")] == ["windows-x64"]
+    assert _selected_legs("no-such-leg") == [], "an unknown filter must select nothing, not everything"
 
 
 def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:
@@ -133,15 +174,11 @@ def test_windows_builds_ask_nuitka_for_low_memory():
     """MSVC dies compiling yt-dlp's generated C at full parallelism, so both
     Windows legs must build with one C compiler job (the numbers live in
     docs/platform-enablement-review.md and its evidence file)."""
-    wf = yaml.safe_load(RELEASE_WORKFLOW.read_text())
-    windows_legs = [
-        leg
-        for leg in wf["jobs"]["build"]["strategy"]["matrix"]["include"]
-        if str(leg.get("os", "")).startswith("windows")
-    ]
-    assert len(windows_legs) == 2, "expected both Windows legs in the matrix"
+    legs = json.loads(BUILD_LEGS.read_text())["legs"]
+    windows_legs = [leg for leg in legs if str(leg.get("os", "")).startswith("windows")]
+    assert len(windows_legs) == 2, "expected both Windows legs in the leg table"
     for leg in windows_legs:
-        assert "WAVES_NUITKA_FLAGS=--low-memory" in str(leg["CMD_BUILD"]), leg["os"]
+        assert "WAVES_NUITKA_FLAGS=--low-memory" in str(leg["cmd_build"]), leg["os"]
 
     # The build script's Windows default is what a local Windows build gets; it
     # must resolve from OS=Windows_NT alone and stay out of the other

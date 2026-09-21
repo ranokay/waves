@@ -1,0 +1,60 @@
+{
+  "legs": [
+    {
+      "os": "macos-15-intel",
+      "target": "macos-15-intel",
+      "os_arch": "macos-intel",
+      "macos_floor": "15.0",
+      "cmd_build": "ls -l /usr/local/lib/libcrypto* /usr/local/lib/libssl* || true; rm -f /usr/local/lib/libcrypto*.dylib /usr/local/lib/libssl*.dylib || true; bash tools/build_waves.sh && cd dist && zip -9 -ry waves_macos-intel.zip waves.app -x \"*.DS_Store\" && cd .."
+    },
+    {
+      "os": "macos-14",
+      "target": "macos-14 M1",
+      "os_arch": "macos-apple-silicon",
+      "macos_floor": "15.0",
+      "cmd_build": "ls -l /opt/homebrew/lib/libcrypto* /opt/homebrew/lib/libssl* || true; rm -f /opt/homebrew/lib/libcrypto*.dylib /opt/homebrew/lib/libssl*.dylib || true; bash tools/build_waves.sh && cd dist && zip -9 -ry waves_macos-apple-silicon.zip waves.app -x \"*.DS_Store\" && cd .."
+    },
+    {
+      "os": "macos-15-intel",
+      "target": "macos-15-intel legacy",
+      "os_arch": "macos-intel_legacy",
+      "macos_floor": "12.0",
+      "cmd_build": "ls -l /usr/local/lib/libcrypto* /usr/local/lib/libssl* || true; rm -f /usr/local/lib/libcrypto*.dylib /usr/local/lib/libssl*.dylib || true; uv pip install --force-reinstall --no-deps pyside6==6.9.3 pyside6-addons==6.9.3 pyside6-essentials==6.9.3 shiboken6==6.9.3 && WAVES_MACOS_MIN=12.0 bash tools/build_waves.sh && cd dist && zip -9 -ry waves_macos-intel_legacy.zip waves.app -x \"*.DS_Store\" && cd .."
+    },
+    {
+      "os": "macos-14",
+      "target": "macos-14 M1 legacy",
+      "os_arch": "macos-apple-silicon_legacy",
+      "macos_floor": "12.0",
+      "cmd_build": "ls -l /opt/homebrew/lib/libcrypto* /opt/homebrew/lib/libssl* || true; rm -f /opt/homebrew/lib/libcrypto*.dylib /opt/homebrew/lib/libssl*.dylib || true; uv pip install --force-reinstall --no-deps pyside6==6.9.3 pyside6-addons==6.9.3 pyside6-essentials==6.9.3 shiboken6==6.9.3 && WAVES_MACOS_MIN=12.0 bash tools/build_waves.sh && cd dist && zip -9 -ry waves_macos-apple-silicon_legacy.zip waves.app -x \"*.DS_Store\" && cd .."
+    },
+    {
+      "os": "ubuntu-24.04",
+      "target": "ubuntu-24.04",
+      "os_arch": "linux-x64",
+      "macos_floor": null,
+      "cmd_build": "bash tools/build_waves.sh && cd dist && mv waves.dist Waves && zip -9 -ry waves_linux-x64.zip Waves && bash ../tools/build_appimage.sh Waves waves_linux-x64.AppImage && cd .."
+    },
+    {
+      "os": "ubuntu-24.04-arm",
+      "target": "ubuntu-24.04-arm",
+      "os_arch": "linux-arm64",
+      "macos_floor": null,
+      "cmd_build": "bash tools/build_waves.sh && cd dist && mv waves.dist Waves && zip -9 -ry waves_linux-arm64.zip Waves && bash ../tools/build_appimage.sh Waves waves_linux-arm64.AppImage && cd .."
+    },
+    {
+      "os": "windows-2022",
+      "target": "windows-2022",
+      "os_arch": "windows-x64",
+      "macos_floor": null,
+      "cmd_build": "choco install zip -y && WAVES_NUITKA_FLAGS=--low-memory bash tools/build_waves.sh && cd dist && mv waves.dist Waves && zip -9 -r waves_windows-x64.zip Waves && cd .."
+    },
+    {
+      "os": "windows-11-arm",
+      "target": "windows-11-arm",
+      "os_arch": "windows-arm64",
+      "macos_floor": null,
+      "cmd_build": "choco install zip -y && WAVES_NUITKA_FLAGS=--low-memory bash tools/build_waves.sh && cd dist && mv waves.dist Waves && zip -9 -r waves_windows-arm64.zip Waves && cd .."
+    }
+  ]
+}
