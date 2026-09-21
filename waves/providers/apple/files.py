@@ -282,8 +282,6 @@ def facts_without_share_url(data, facts: dict) -> dict:
     """
     if getattr(data, "metadata_write_url", True):
         return facts
-    if not isinstance(facts, dict):
-        return facts
     return {**facts, "share_url": ""}
 
 
