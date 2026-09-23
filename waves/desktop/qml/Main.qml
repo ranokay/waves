@@ -9773,6 +9773,7 @@ ApplicationWindow {
           onClicked: appFfmpeg.install()
         }
         GateCard {
+          objectName: "ffmpegGateLaterCard"
           visible: appFfmpeg.stateKey === "missing" && !appFfmpeg.busy
           title: "Set it up myself later"
           desc: "Point Waves at your own FFmpeg from Settings."

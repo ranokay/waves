@@ -155,7 +155,7 @@ TRACK = {
 # on screen.
 _APPLE_SWITCH = """
     var sw = findFirst(root, function (o) {
-        return o.objectName === "appleEnableSwitch" && o.activeFocusOnTab === true;
+        return o.objectName === "appleEnableSwitch" && o.visible === true && o.activeFocusOnTab === true;
     });
 """
 
@@ -183,6 +183,22 @@ def _spoken_name(q, object_name: str) -> str:
     return q(
         scene_js(f'var c = findObject(root, "{object_name}"); return c && c.Accessible ? "" + c.Accessible.name : "";')
     )
+
+
+def _open_settings(q, settle) -> bool:
+    """Open the Settings page through its nav tab; whether it is open after."""
+    opened = bool(
+        q(
+            scene_js("""
+        var tab = findFirst(root, function (o) { return o.label === "Settings" && o.clicked !== undefined; });
+        if (!tab) return false;
+        tab.clicked();
+        return true;
+    """)
+        )
+    )
+    settle(300)
+    return opened and bool(q("root.settingsOpen"))
 
 
 def _tab_step(q, settle, root) -> dict:
@@ -306,11 +322,11 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
             handlers = body.count(f"Keys.on{key}Pressed")
             assert handlers >= file_presses, f"{name}: only {handlers} {key} handlers for {file_presses} press actions"
     # Every adoption names itself: the primitive defaults its spoken name to
-    # empty, so an unnamed adopter would ship a silent button.
-    adoptions = qml.count("TapAction {")
-    labels = qml.count("accessibleLabel:")
-    assert adoptions >= 8, "the adopted controls lost their tap area"
-    assert labels >= adoptions, f"{adoptions} TapAction adoptions but only {labels} spoken names"
+    # empty, so an unnamed adopter would ship a silent button. The label
+    # bindings are pinned one by one, since counting ``accessibleLabel:``
+    # across the files would be satisfied by the unrelated declarations in
+    # QueueDrawer/SpecBtn/TapAction.
+    assert qml.count("TapAction {") >= 8, "the adopted controls lost their tap area"
     flat = re.sub(r"\s+", " ", qml)
     for needle in (
         "if (!event.isAutoRepeat)",
@@ -327,6 +343,15 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         "db.chooserPickAudio(modelData)",
         'db.chooserToggle("lyrics_ttml_file")',
         "Accessible.onPressAction: function () { db.confirmChooser() }",
+        # Every adopted tap area carries its spoken name, the toast's
+        # following the face it draws.
+        'accessibleLabel: "CANCEL"',
+        'accessibleLabel: "SAVE CHANGES"',
+        "accessibleLabel: utAct.realLabel",
+        'accessibleLabel: updateToast.face === "ready" ? "LATER" : "Dismiss"',
+        'accessibleLabel: "Not now"',
+        'accessibleLabel: "I don\'t need FFmpeg. Stop showing this at launch."',
+        "accessibleLabel: ga.label",
         # The gate card's spoken name carries its chip.
         'accessibleLabel: gcard.title + (gcard.chip !== ""',
         # The queue's repeated actions name their own section.
@@ -489,18 +514,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         if bool(q("root.settingsOpen")):
             problems.append("the Tab walk ran with the Settings page open")
         else:
-            opened_settings = bool(
-                q(
-                    scene_js("""
-                var tab = findFirst(root, function (o) { return o.label === "Settings" && o.clicked !== undefined; });
-                if (!tab) return false;
-                tab.clicked();
-                return true;
-            """)
-                )
-            )
-            settle(300)
-            if not opened_settings or not bool(q("root.settingsOpen")):
+            if not _open_settings(q, settle):
                 problems.append("the Settings tab did not open the Settings page")
             else:
                 page_stops, _ = _tab_cycle(q, settle, root, limit=80)
@@ -710,18 +724,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     # --- The Settings commit actions: an edit stages, Tab reaches CANCEL and
     # SAVE CHANGES in the page's own chain, Return commits, and Space
     # discards without ever committing the pointer's side.
-    opened = bool(
-        q(
-            scene_js("""
-        var tab = findFirst(root, function (o) { return o.label === "Settings" && o.clicked !== undefined; });
-        if (!tab) return false;
-        tab.clicked();
-        return true;
-    """)
-        )
-    )
-    settle(300)
-    if not opened or not bool(q("root.settingsOpen")):
+    if not _open_settings(q, settle):
         problems.append("the Settings tab did not open the Settings page for the commit actions")
     else:
         before = bool(q("waves.appleEnabled"))
@@ -799,29 +802,6 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     if q("updateToast.phase") != "offer":
         problems.append("the update toast did not offer for the toast leg")
     else:
-        # Every face's word rides the spoken name: INSTALL/VIEW on the offer
-        # face, then RESTART NOW, RETRY and CANCEL.
-        q("updateToast.selfInstall = true")
-        for phase, word in (
-            ("offer", "INSTALL"),
-            ("ready", "RESTART NOW"),
-            ("failed", "RETRY"),
-            ("installing", "CANCEL"),
-        ):
-            q(f"updateToast.phase = '{phase}'")
-            settle(150)
-            spoken = _spoken_name(q, "updateToastPrimary")
-            if spoken != word:
-                problems.append(f"the toast's {word} face speaks as {spoken!r}")
-        q("updateToast.selfInstall = false")
-        q("updateToast.phase = 'offer'")
-        settle(150)
-        if _spoken_name(q, "updateToastPrimary") != "VIEW":
-            problems.append("the toast's package-manager face does not speak VIEW")
-
-        q("updateToast.selfInstall = true")
-        q("updateToast.phase = 'offer'")
-        settle(250)
         primary = _adopted(q, "updateToastPrimary")
         if primary is None:
             problems.append("the toast's primary action is not in the tree")
@@ -836,8 +816,25 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
                 problems.append("Return on the toast's INSTALL never took the install branch")
             elif q("setupSettings.updateToastDismissed") != "9.9.9":
                 problems.append("the toast's key press never marked the offer acted on")
-            elif _spoken_name(q, "updateToastPrimary") != "CANCEL":
-                problems.append("the toast's spoken name did not follow its face to CANCEL")
+
+        # Every face's word rides the spoken name: CANCEL on the installing
+        # face the press just reached, then RESTART NOW, RETRY, INSTALL and
+        # VIEW on the other faces.
+        for phase, word in (
+            ("installing", "CANCEL"),
+            ("ready", "RESTART NOW"),
+            ("failed", "RETRY"),
+            ("offer", "INSTALL"),
+        ):
+            q(f"updateToast.phase = '{phase}'")
+            settle(150)
+            spoken = _spoken_name(q, "updateToastPrimary")
+            if spoken != word:
+                problems.append(f"the toast's {word} face speaks as {spoken!r}")
+        q("updateToast.selfInstall = false")
+        settle(150)
+        if _spoken_name(q, "updateToastPrimary") != "VIEW":
+            problems.append("the toast's package-manager face does not speak VIEW")
 
         # The secondary answers Space and dismisses; its name is LATER while
         # the face says LATER, and Dismiss while it draws only the glyph.
@@ -894,6 +891,19 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
             problems.append(f"the managed-install card is not exposed as a button (role {card['role']})")
         if not card["focusable"]:
             problems.append("the managed-install card is not in the tab order")
+
+    # The card's action, driven for real: "Set it up myself later" only
+    # records the choice, unlike the install card next to it.
+    later_card = _adopted(q, "ffmpegGateLaterCard")
+    if later_card is None:
+        problems.append("the FFmpeg gate's later card is not in the tree")
+    else:
+        later_card.forceActiveFocus()
+        settle(80)
+        QTest.keyClick(root, Qt.Key_Return)
+        settle(300)
+        if not bool(q("ffmpegGate.sessionSnoozed")):
+            problems.append("Return on a gate card never took the card's path")
     q("ffmpegGate.visible = false")
     settle(150)
 

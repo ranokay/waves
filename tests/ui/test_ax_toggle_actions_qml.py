@@ -81,7 +81,7 @@ TRACK = {
 
 _FIND_SWITCH = """
 var sw = findFirst(root, function (o) {
-    return o.objectName === "appleEnableSwitch" && o.activeFocusOnTab === true;
+    return o.objectName === "appleEnableSwitch" && o.visible === true && o.activeFocusOnTab === true;
 });
 """
 
