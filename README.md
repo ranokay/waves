@@ -145,7 +145,7 @@ The log lives at `waves_dev.log`, next to `crash.log`, in the Waves config folde
 
 Grab the build for your platform from the [**latest release**](https://github.com/iamprivacy/Waves/releases/latest):
 
-> **Releases ship from upstream.** This fork is a development line: it publishes no releases and holds no signing key. A fork build checks upstream for updates, so updating one replaces it with an upstream build, which has no Apple Music engine.
+> **Releases ship from iamprivacy/Waves.** This fork is a development line. It publishes no releases and holds no signing key. A fork build checks that repository for updates, so updating one replaces it with a build from iamprivacy/Waves, which has no Apple Music engine.
 
 | OS                  | Intel / AMD (x64)              | ARM (Apple silicon, etc.)              |
 | ------------------- | ------------------------------ | -------------------------------------- |

@@ -213,17 +213,17 @@ enough while the writer still knows the real path.
 ## Releases and the publication model
 
 Releases are published from the upstream repository,
-[`iamprivacy/Waves`](https://github.com/iamprivacy/Waves/releases): it holds
-the signing key (`WAVES_SIGNING_KEY`) and the release line. This fork is a
-development line — it publishes no releases, and the `UPDATE_PUBLIC_KEY`
-embedded in `waves/desktop/signing.py` is upstream's, whose private half the
-fork does not hold.
+[`iamprivacy/Waves`](https://github.com/iamprivacy/Waves/releases). It holds the
+signing key (`WAVES_SIGNING_KEY`) and the release line. This fork is a
+development line. It publishes no releases and cannot sign one. The
+`UPDATE_PUBLIC_KEY` in `waves/desktop/signing.py` is upstream's public key, and
+the private half is not in this repository.
 
-Every build, fork or upstream, resolves updates from upstream (`REPO` in
+The in-app updater resolves updates from upstream (`REPO` in
 `waves/desktop/updater.py`), so a fork build can be replaced in place by an
-upstream release — one without the Apple Music engine, which is fork-only. The
-release workflow (`.github/workflows/release-or-test-build.yml`) is
-rehearsal-only here: dispatch it with a blank `release_tag` to build the
+upstream release. The Apple Music engine is fork-only and is not in that
+release. The release workflow (`.github/workflows/release-or-test-build.yml`)
+is rehearsal-only here. Dispatch it with a blank `release_tag` to build the
 unsigned artifacts; the `vX.Y.Z` tag and `release_tag` paths belong to
 upstream.
 

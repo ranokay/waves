@@ -5,13 +5,12 @@ name: release-or-test-build
 # in-app updater verifies before installing.
 #
 # Publication model: releases are published from the upstream repository
-# (iamprivacy/Waves), which holds the signing key (`WAVES_SIGNING_KEY`). This
-# fork is a development line: it holds no signing key and publishes no releases,
-# and every build it produces checks upstream for updates. The fork's supported
-# run is a rehearsal: dispatch with a blank `release_tag` (or push `test-build`)
-# to build the unsigned artifacts. The `vX.Y.Z` tag and `release_tag` paths
-# belong to upstream, and the comments below describe the machinery as it runs
-# there.
+# iamprivacy/Waves, which holds the signing key (`WAVES_SIGNING_KEY`). This fork
+# is a development line. It holds no signing key, publishes no releases, and
+# every build it produces checks upstream for updates. The fork's supported run
+# is a rehearsal. Dispatch with a blank `release_tag`, or push `test-build`, to
+# build the unsigned artifacts; the `vX.Y.Z` tag and `release_tag` paths belong
+# to upstream. The comments below describe the machinery as it runs there.
 
 permissions:
   contents: write
@@ -29,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Publish a GitHub Release at this tag (e.g. v0.1.0). Upstream only: this fork holds no signing key, so leave it blank to rehearse. Blank = artifacts only."
+        description: "Publish a GitHub Release at this tag (e.g. v0.1.0). Upstream only; this fork cannot sign one, so leave it blank to rehearse. Blank = artifacts only."
         required: false
         default: ""
       only:
