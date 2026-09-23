@@ -14257,10 +14257,6 @@ class WavesBridge(LibraryMixin, QObject):
         """The AudioType an unpinned Apple job fetches (runner policy)."""
         return runner.fetch_audio_type(self._apple_job_hooks())
 
-    def _apple_setting_tier(self):
-        """The Apple quality setting folded onto the ladder, or None."""
-        return runner.setting_tier(self._apple_job_hooks())
-
     def _apple_options(self, pinned: dict | None = None) -> _JobOptions:
         """The lyrics/art options one Apple job runs with (runner policy)."""
         return runner.job_options(self._apple_job_hooks(), pinned)
@@ -14268,12 +14264,6 @@ class WavesBridge(LibraryMixin, QObject):
     def _apple_target_rank(self, pinned=None) -> int:
         """Rank of the quality an Apple run targets (runner policy)."""
         return runner.target_rank(self._apple_job_hooks(), pinned)
-
-    def _apple_expected_word(self, job_atype, *, requested_rank: int, ceiling_rank: int) -> str:
-        """The queue row's expected word for one Apple run (runner policy)."""
-        return runner.queue_expected_word(
-            self._apple_job_hooks(), job_atype, requested_rank=requested_rank, ceiling_rank=ceiling_rank
-        )
 
     def _run_apple_job(self, qid, spec, obj, *, signals, job_abort, file_template) -> str:
         """Download one Apple track or collection (runner policy)."""
@@ -14780,10 +14770,6 @@ class WavesBridge(LibraryMixin, QObject):
             audio_type=audio_type,
             qid=qid,
         )
-
-    def _apple_record_quarantine(self, qid: int, dest: pathlib.Path | str) -> None:
-        """Remember one quarantined copy on its queue row (open/delete actions)."""
-        runner.record_quarantine(self._apple_job_hooks(), qid, dest)
 
     @Slot(int)
     def openQuarantine(self, qid: int) -> None:

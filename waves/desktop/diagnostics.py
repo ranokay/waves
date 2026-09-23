@@ -517,10 +517,6 @@ def set_verbose(on: bool) -> None:
         logger.warning("[init] verbose diagnostics OFF")
 
 
-def is_verbose() -> bool:
-    return _verbose
-
-
 def stop_freeze_watchdog() -> None:
     """Stop the freeze watchdog and cancel any pending dump (teardown).
 
