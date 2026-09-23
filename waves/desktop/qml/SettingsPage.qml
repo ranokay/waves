@@ -3490,6 +3490,7 @@ Item {
                           spacing: 10
                           Item {
                             id: swItem
+                            objectName: "appleEnableSwitch"
                             visible: statusCol.hasSwitch
                             Layout.alignment: Qt.AlignVCenter
                             implicitWidth: swRow.width

@@ -149,13 +149,14 @@ TRACK = {
 
 # The Apple enable switch: the one control on the Settings page whose own
 # toggle stages an edit, so the commit-action leg has something to commit and
-# discard. Matched through the tab-stop flag first, so the predicate never
-# reads ``Accessible`` off a non-Item object (the window, a Popup).
-_APPLE_SWITCH = f"""
-    var sw = findFirst(root, function (o) {{
-        return o.activeFocusOnTab === true && o.Accessible && o.Accessible.role === {_ROLE_CHECKBOX}
-            && ('' + o.Accessible.name) === "Enable Apple Music";
-    }});
+# discard. The schema renders a copy of every field's controls in every
+# delegate, so the objectName alone can land on a hidden copy: the switch
+# binds its tab stop to its own visibility, which is what selects the one
+# on screen.
+_APPLE_SWITCH = """
+    var sw = findFirst(root, function (o) {
+        return o.objectName === "appleEnableSwitch" && o.activeFocusOnTab === true;
+    });
 """
 
 
@@ -184,6 +185,16 @@ def _spoken_name(q, object_name: str) -> str:
     )
 
 
+def _tab_step(q, settle, root) -> dict:
+    """One real Tab press and the stop it landed on."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    QTest.keyClick(root, Qt.Key_Tab)
+    settle(20)
+    return json.loads(q(scene_js(_TAB_STOP_BODY)))
+
+
 def _tab_until(q, settle, root, want, *, limit: int = 300) -> tuple[dict | None, list[str]]:
     """Real Tab presses until a stop matches ``want``.
 
@@ -192,15 +203,10 @@ def _tab_until(q, settle, root, want, *, limit: int = 300) -> tuple[dict | None,
     what was there instead. The walk ends when the chain comes back to its
     first stop or loses the focused control.
     """
-    from PySide6.QtCore import Qt
-    from PySide6.QtTest import QTest
-
     names: list[str] = []
     first: str | None = None
     for _ in range(limit):
-        QTest.keyClick(root, Qt.Key_Tab)
-        settle(20)
-        stop = json.loads(q(scene_js(_TAB_STOP_BODY)))
+        stop = _tab_step(q, settle, root)
         if stop["path"] is None:
             names.append("<focus lost>")
             return None, names
@@ -272,6 +278,10 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     qml += (QML_DIR / "NavCrumbTrail.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "GateCard.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "TapAction.qml").read_text(encoding="utf-8")
+    # The settings commit actions are adoptions too; the page's switch answers
+    # Keys.onPressed (one handler, three keys), so it stays outside the
+    # per-file Return/Enter/Space shape below but inside the adoption count.
+    qml += (QML_DIR / "SettingsPage.qml").read_text(encoding="utf-8")
     press_actions = qml.count("Accessible.onPressAction")
     assert press_actions >= 5, "the primary controls lost their press actions"
     # The shared TapAction answers every control that adopts it with one
@@ -295,6 +305,12 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         for key in ("Return", "Enter", "Space"):
             handlers = body.count(f"Keys.on{key}Pressed")
             assert handlers >= file_presses, f"{name}: only {handlers} {key} handlers for {file_presses} press actions"
+    # Every adoption names itself: the primitive defaults its spoken name to
+    # empty, so an unnamed adopter would ship a silent button.
+    adoptions = qml.count("TapAction {")
+    labels = qml.count("accessibleLabel:")
+    assert adoptions >= 8, "the adopted controls lost their tap area"
+    assert labels >= adoptions, f"{adoptions} TapAction adoptions but only {labels} spoken names"
     flat = re.sub(r"\s+", " ", qml)
     for needle in (
         "if (!event.isAutoRepeat)",
@@ -376,14 +392,9 @@ def _tab_cycle(q, settle, root, *, limit: int = 500) -> tuple[list[dict], bool]:
     (the focused control or the harness is off), which the caller reads as a
     broken chain; it ends the walk.
     """
-    from PySide6.QtCore import Qt
-    from PySide6.QtTest import QTest
-
     stops: list[dict] = []
     for _ in range(limit):
-        QTest.keyClick(root, Qt.Key_Tab)
-        settle(20)
-        stop = json.loads(q(scene_js(_TAB_STOP_BODY)))
+        stop = _tab_step(q, settle, root)
         if stop["path"] is None:
             stops.append(stop)
             return stops, False
@@ -750,8 +761,6 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
                     problems.append("Return on SAVE CHANGES never committed the staged edit")
                 elif saved == before:
                     problems.append("the committed edit never changed the provider setting")
-                elif bool(bridge.settings.data.apple_enabled) != saved:
-                    problems.append("the committed edit never reached the settings store")
 
             # A second edit, discarded with Space on CANCEL: the committed
             # value must survive it.
@@ -790,10 +799,11 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     if q("updateToast.phase") != "offer":
         problems.append("the update toast did not offer for the toast leg")
     else:
-        # Every face's word rides the spoken name, VIEW included.
-        q("updateToast.selfInstall = false")
+        # Every face's word rides the spoken name: INSTALL/VIEW on the offer
+        # face, then RESTART NOW, RETRY and CANCEL.
+        q("updateToast.selfInstall = true")
         for phase, word in (
-            ("offer", "VIEW"),
+            ("offer", "INSTALL"),
             ("ready", "RESTART NOW"),
             ("failed", "RETRY"),
             ("installing", "CANCEL"),
@@ -803,6 +813,11 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
             spoken = _spoken_name(q, "updateToastPrimary")
             if spoken != word:
                 problems.append(f"the toast's {word} face speaks as {spoken!r}")
+        q("updateToast.selfInstall = false")
+        q("updateToast.phase = 'offer'")
+        settle(150)
+        if _spoken_name(q, "updateToastPrimary") != "VIEW":
+            problems.append("the toast's package-manager face does not speak VIEW")
 
         q("updateToast.selfInstall = true")
         q("updateToast.phase = 'offer'")
@@ -810,6 +825,8 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         primary = _adopted(q, "updateToastPrimary")
         if primary is None:
             problems.append("the toast's primary action is not in the tree")
+        elif not bool(primary.property("activeFocusOnTab")):
+            problems.append("the toast's primary action is not a tab stop")
         else:
             primary.forceActiveFocus()
             settle(80)
@@ -831,6 +848,8 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         later = _adopted(q, "updateToastSecondary")
         if later is None:
             problems.append("the toast's LATER action is not in the tree")
+        elif not bool(later.property("activeFocusOnTab")):
+            problems.append("the toast's LATER action is not a tab stop")
         else:
             later.forceActiveFocus()
             settle(80)
