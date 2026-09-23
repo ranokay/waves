@@ -88,6 +88,9 @@ jobs:
             exit 1
           fi
 
+      - name: Check out this repo (the notices templates live here)
+        uses: actions/checkout@v7
+
       - name: Check out upstream wrapper-v2 at the pinned ref
         uses: actions/checkout@v7
         with:

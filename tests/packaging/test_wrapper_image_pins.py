@@ -132,6 +132,18 @@ def test_the_pinned_image_digest_matches_the_runbook():
     assert WRAPPER_V2_IMAGE_DIGEST in RUNBOOK.read_text(), "the image digest pin and the runbook disagree"
 
 
+def test_the_publish_checks_out_this_repo_for_the_notices_templates():
+    steps = _workflow()["jobs"]["build"]["steps"]
+    names = [s.get("name") for s in steps]
+    own_checkouts = [
+        index
+        for index, step in enumerate(steps)
+        if str(step.get("uses", "")).startswith("actions/checkout") and "repository" not in step.get("with", {})
+    ]
+    assert own_checkouts, "the notices stage reads tools/wrapper-image/, which needs this repo checked out"
+    assert own_checkouts[0] < names.index("Prepare notices")
+
+
 def test_the_publish_adds_notices_and_provenance_labels():
     steps = _workflow()["jobs"]["build"]["steps"]
     prepare = next((s for s in steps if s.get("name") == "Prepare notices"), None)
