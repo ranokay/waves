@@ -843,10 +843,13 @@ class Download:
             p_task (TaskID): Progress bar task ID.
             progress_to_stdout (bool): Whether to show progress in stdout.
             event_stop (Event | None, optional): Event to stop the download. Defaults to None.
-            n_tail_spurious (int | None, optional): How many trailing URLs the manifest
-                proves are over-generated padding (0 means none, so a failed final
-                segment is a real failure). None means unproven and keeps the legacy
-                last-segment leniency. Defaults to None.
+            n_tail_spurious (int | None, optional): The manifest's proven count of
+                over-generated trailing URLs: > 0 means the trailing failures are
+                harmless padding, 0 means every URL is required audio (a failed final
+                segment is a real failure), and a negative count means the list is short
+                of the timeline (``_download`` fails such an item before this pass). None
+                means unproven and keeps the legacy last-segment leniency. Defaults to
+                None.
 
         Returns:
             tuple[bool, list[DownloadSegmentResult]]: (result_segments, list of segment results)
@@ -956,7 +959,8 @@ class Download:
             stream_info (StreamInfo | None, optional): The seam's stream answer
                 for a track. Defaults to None.
             n_tail_spurious (int | None, optional): Manifest-proven count of over-generated
-                trailing URLs; see ``_download_segments``. Defaults to None.
+                trailing URLs (negative means the list is short; see ``_download_segments``).
+                Defaults to None.
 
         Returns:
             tuple[bool, pathlib.Path]: (Success, path to the downloaded file)
@@ -1021,6 +1025,18 @@ class Download:
         # and preserves the legacy last-segment leniency downstream.
         n_tail_spurious: int | None = stream_info.tail_spurious if stream_info is not None else None
 
+        # A NEGATIVE count is the provider proving the URL list is short of the
+        # manifest timeline. Every URL that exists may still download fine, yet
+        # the file would be missing audio, so fail the item here, before the
+        # segment fan-out, rather than merge a truncated file and report it
+        # done. The provider logged its own warning when it derived the count.
+        if n_tail_spurious is not None and n_tail_spurious < 0:
+            self.fn_logger.error(
+                f"'{log_content(media_name)}' is missing {-n_tail_spurious} segment(s) the manifest requires; "
+                "refusing to write a truncated file."
+            )
+            return False, path_file
+
         # Set the correct progress output channel.
         if self.progress_gui is None:
             progress_to_stdout: bool = True
@@ -1062,7 +1078,8 @@ class Download:
             path_file (pathlib.Path): Path to the output file.
             dl_segment_results (list[DownloadSegmentResult]): List of segment download results.
             n_tail_spurious (int | None, optional): Manifest-proven count of over-generated
-                trailing URLs; see ``_download_segments``. Defaults to None.
+                trailing URLs (negative means the list is short; see ``_download_segments``).
+                Defaults to None.
 
         Returns:
             bool: True if merge succeeded, False otherwise.
