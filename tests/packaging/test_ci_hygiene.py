@@ -1,6 +1,7 @@
 """The update hygiene stays wired: Dependabot targets develop, the release
-build carries Nuitka's build tree between runs, and the contributor gate
-record matches the manual test workflow.
+build carries Nuitka's build tree between runs, the contributor gate
+record matches the manual test workflow, and the Python classifiers name
+only the versions that workflow tests.
 
 Dependabot reads the PEP 621 metadata and uv.lock through the "pip" ecosystem;
 the ignored names are the pins that move by hand (docs/dependency-updates.md).
@@ -16,6 +17,7 @@ import os
 import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -25,6 +27,7 @@ DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-or-test-build.yml"
 MASTER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "master.yml"
 CONTRIBUTING = REPO_ROOT / "CONTRIBUTING.md"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 
 def _inspector_module():
@@ -34,6 +37,10 @@ def _inspector_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _master_workflow() -> dict:
+    return yaml.safe_load(MASTER_WORKFLOW.read_text())
 
 
 def _entry(cfg: dict, ecosystem: str) -> dict:
@@ -293,7 +300,7 @@ def test_the_merge_gate_record_matches_the_manual_workflow():
     short SHA the PR body carries; if the trigger ever grows beyond a manual
     dispatch, the contributor record has to say so too, and this fails until
     it does."""
-    wf = yaml.safe_load(MASTER_WORKFLOW.read_text())
+    wf = _master_workflow()
     # YAML 1.1 reads the `on:` key as boolean True (the wrapper-image pins
     # test notes the same quirk); the trigger set must stay dispatch-only.
     assert set(wf[True]) == {"workflow_dispatch"}, wf[True]
@@ -306,3 +313,18 @@ def test_the_merge_gate_record_matches_the_manual_workflow():
     # develop): a reworded per-push claim would need a human read, but this
     # sentence coming back fails here first.
     assert "runs across Python" not in text
+
+
+def test_the_classifiers_match_the_tested_python_versions():
+    """DEP-03: the classifiers claimed 3.14 while the pinned toolchain and the
+    only 3.14 leg stopped short of proving it. A classifier may only name a
+    version the manual workflow actually tests, so adding one or dropping a
+    matrix leg fails here until the other side moves with it."""
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
+    claimed = {
+        classifier.rsplit("::", 1)[1].strip()
+        for classifier in project["classifiers"]
+        if classifier.startswith("Programming Language :: Python :: 3.")
+    }
+    tested = set(_master_workflow()["jobs"]["test"]["strategy"]["matrix"]["python-version"])
+    assert claimed == tested, f"classifiers claim {sorted(claimed)}, the workflow tests {sorted(tested)}"

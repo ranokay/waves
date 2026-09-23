@@ -39,17 +39,17 @@ never leaks into the default run or CI.
 
 ## The update table
 
-| Artifact         | Pinned in                                                            | Cadence                                     | Procedure                                                                                                                           |
-| ---------------- | -------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| gamdl            | `pyproject.toml` (`>=3.8.5,<3.9`, patch-only on purpose)             | When Apple breaks, or a monthly glance      | Branch off `develop`, open the constraint to the needed minor and relock, then gate on tests + live suite (below).                  |
-| yt-dlp           | Floored to gamdl's own floor; the lockfile holds the version         | Only with a gamdl bump                      | `uv lock` after the gamdl change; never bump it alone.                                                                              |
-| Wrapper image    | `WRAPPER_V2_IMAGE` + `WRAPPER_V2_IMAGE_DIGEST`                       | On the watcher's issue, or when ALAC breaks | Dispatch `wrapper-image` with the new upstream SHA, then move tag + digest + runbook in one commit (below).                         |
-| APK / guest libs | `APK_PINNED_VERSION`, runbook, private asset                         | Only with an image rebuild                  | The image build re-pins libs from the blessed APK; the app never manages them.                                                      |
-| N_m3u8DL-RE      | `waves/providers/apple/runtime.py` version, asset and SHA-256 tables | When a needed fix lands                     | Re-pin asset names and hashes together in one commit; the pin test enforces coverage; a live fetch confirms.                        |
-| FFmpeg           | The FFmpeg manager's sources (martin-riedl, BtbN)                    | On breakage                                 | Bump the manager's parser/pin when a source changes shape; smoke-test a managed install.                                            |
-| Qt / PySide6     | `pyproject.toml`, locked                                             | Deliberately, per release                   | Re-check the macOS floor, the 6.9.3 legacy overlay and the QML suite (below).                                                       |
-| Nuitka           | `pyproject.toml` (`==2.8.4`, exact)                                  | Deliberately, per release                   | Kept exact: a bump invalidates the release build cache and needs a verified packaged artifact on the release matrix; revisit there. |
-| Everything else  | `uv.lock`                                                            | Weekly via Dependabot, or on advisories     | Review the grouped PR: `uv lock --upgrade-package <pkg>`, `mise run check`, full suite.                                             |
+| Artifact         | Pinned in                                                            | Cadence                                     | Procedure                                                                                                                    |
+| ---------------- | -------------------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| gamdl            | `pyproject.toml` (`>=3.8.5,<3.9`, patch-only on purpose)             | When Apple breaks, or a monthly glance      | Branch off `develop`, open the constraint to the needed minor and relock, then gate on tests + live suite (below).           |
+| yt-dlp           | Floored to gamdl's own floor; the lockfile holds the version         | Only with a gamdl bump                      | `uv lock` after the gamdl change; never bump it alone.                                                                       |
+| Wrapper image    | `WRAPPER_V2_IMAGE` + `WRAPPER_V2_IMAGE_DIGEST`                       | On the watcher's issue, or when ALAC breaks | Dispatch `wrapper-image` with the new upstream SHA, then move tag + digest + runbook in one commit (below).                  |
+| APK / guest libs | `APK_PINNED_VERSION`, runbook, private asset                         | Only with an image rebuild                  | The image build re-pins libs from the blessed APK; the app never manages them.                                               |
+| N_m3u8DL-RE      | `waves/providers/apple/runtime.py` version, asset and SHA-256 tables | When a needed fix lands                     | Re-pin asset names and hashes together in one commit; the pin test enforces coverage; a live fetch confirms.                 |
+| FFmpeg           | The FFmpeg manager's sources (martin-riedl, BtbN)                    | On breakage                                 | Bump the manager's parser/pin when a source changes shape; smoke-test a managed install.                                     |
+| Qt / PySide6     | `pyproject.toml`, locked                                             | Deliberately, per release                   | Re-check the macOS floor, the 6.9.3 legacy overlay and the QML suite (below).                                                |
+| Nuitka           | `pyproject.toml` (`==4.2.2`, exact)                                  | Deliberately, per release                   | Kept exact: a bump invalidates the release build cache and needs a verified packaged artifact on the release matrix (below). |
+| Everything else  | `uv.lock`                                                            | Weekly via Dependabot, or on advisories     | Review the grouped PR: `uv lock --upgrade-package <pkg>`, `mise run check`, full suite.                                      |
 
 ### gamdl
 
@@ -99,6 +99,26 @@ The locked PySide6 has a real macOS 15 floor, and CI's legacy legs overlay
 6.9.3 for macOS 12 through 14. Any bump re-runs the macOS version-floor
 assertions and the QML suite, and verifies the legacy overlay wheels still
 honor their macOS 12 tag. Treat a Qt bump like a release, not a chore.
+
+### Nuitka
+
+Nuitka 4.x is the release compiler because 2.8.4's supported Python stops at
+3.13; the 4.x bump is what makes the 3.14 claim real. Its license changed from
+Apache-2.0 to **AGPL-3.0-only**, and the decision is to accept it: Nuitka is a
+build-time dev tool that never ships in the bundle, and Waves itself is
+AGPL-3.0-only, so the change adds no obligation to the project. The pin stays
+exact — a bump invalidates the release build cache (the workflow's cache key
+hashes `pyproject.toml` and `uv.lock`, and the `nuitka-` prefix is a manual
+lever on top) and needs a verified packaged artifact before the pin moves. The
+proof is one build leg: dispatch the release workflow with an `only` filter and
+a blank `release_tag`, then record the run and head SHA in
+`docs/evidence/platform-builds.md`.
+
+The same pin carries the 3.14 story: `uv sync --locked --all-extras --python
+3.14` succeeds (the pinned PyCryptodome publishes no cp314 wheel, but its
+`cp37-abi3` artifact installs and loads its native libraries through ctypes),
+and the manual workflow's 3.14 test leg is green — both recorded in
+`docs/evidence/platform-builds.md`.
 
 ## Reviewing a Dependabot PR
 
