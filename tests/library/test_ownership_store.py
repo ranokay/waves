@@ -295,3 +295,63 @@ def test_folder_names_under_respects_its_limit(tmp_path):
         open(path, "w").close()
         store.record(str(i), path, "LOSSLESS")
     assert len(store.folder_names_under(base, limit=3)) == 3
+
+
+# --------------------------------------------------------------------------- #
+# The store lets go of its file
+# --------------------------------------------------------------------------- #
+def test_close_takes_every_thread_s_read_connection_not_just_its_own(tmp_path):
+    """Reads run on a connection per thread, and the thread-local holding them
+    only ever reaches the CALLING thread. Left to close with their threads, a
+    pool thread that had answered one ownership question kept a handle on the
+    store file open: on Windows an open handle refuses a delete, and
+    factoryReset closes this store and then unlinks its file, so the ownership
+    database survived the wipe that promises to remove it."""
+    store = _store(tmp_path)
+    path = _track_file(tmp_path, "song.flac")
+    store.record("123", path, "LOSSLESS")
+    store.ownership_of("123")  # the calling thread's own reader
+
+    # A pool thread that answers an ownership question and then parks, exactly
+    # as a QThreadPool thread does between jobs.
+    parked = threading.Event()
+    release = threading.Event()
+
+    def reader():
+        store.ownership_of("123")
+        parked.set()
+        release.wait(10)
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    assert parked.wait(10), "the reader never answered"
+    closed_over = [r.conn for r in (ref() for ref in store._reader_refs) if r is not None]
+    assert len(closed_over) >= 2, "the parked reader was never registered"
+
+    store.close()
+
+    assert store._reader_refs == set(), "the store still holds readers after close()"
+    assert closed_over, "close() forgot the readers instead of shutting them"
+    for conn in closed_over:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+    release.set()
+    t.join(10)
+
+
+def test_a_reader_whose_thread_has_gone_is_dropped_from_the_registry(tmp_path):
+    """The registry must not become the thing that keeps a dead thread's
+    connection open. It is the only strong reference left once that thread is
+    gone, so the weakref callback prunes the entry and the connection with it."""
+    store = _store(tmp_path)
+    path = _track_file(tmp_path, "song.flac")
+    store.record("123", path, "LOSSLESS")
+
+    before = len(store._reader_refs)
+    t = threading.Thread(target=lambda: store.ownership_of("123"))
+    t.start()
+    t.join(10)
+
+    assert len(store._reader_refs) == before, "a dead thread's reader is held open by the store"
+    assert all(ref() is not None for ref in store._reader_refs)
+    store.close()

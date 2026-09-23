@@ -14,7 +14,7 @@ pattern) so no display or live bridge is needed:
 from __future__ import annotations
 
 import os
-from threading import Event
+from threading import Event, Thread
 
 from waves.desktop import backend as backend_mod
 from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge
@@ -193,6 +193,47 @@ def test_factory_reset_wipes_waves_files_and_keeps_install_channel(tmp_path, mon
     assert sorted(os.listdir(base)) == ["install_channel"], "every Waves file (and empty subdir) is gone"
     assert (base / "install_channel").read_text() == "homebrew"
     assert _FakeQSettings.cleared, "the QML setup flags are cleared too"
+
+
+def test_factory_reset_takes_the_ownership_files_with_a_parked_reader(tmp_path, monkeypatch):
+    """The three ownership files go even while a pool thread still holds a
+    read connection on them.
+
+    Reads open a connection per thread, and a QThreadPool thread parks between
+    jobs with its thread-local still holding that connection. On Windows an
+    open handle refuses the delete, so a close that leaves other threads'
+    readers open lets ownership.sqlite3 and its sidecars survive the wipe.
+    """
+    from waves.library.ownership import OwnershipStore
+
+    base = tmp_path / "cfg"
+    base.mkdir()
+    store = OwnershipStore(str(base / "ownership.sqlite3"))
+    track = tmp_path / "song.flac"
+    track.write_text("audio")
+    store.record("123", str(track), "LOSSLESS")
+
+    parked = Event()
+    release = Event()
+
+    def reader():
+        store.ownership_of("123")
+        parked.set()
+        release.wait(10)
+
+    t = Thread(target=reader, daemon=True)
+    t.start()
+    assert parked.wait(10), "the reader never answered"
+
+    stub = _reset_stub()
+    stub._ownership = store
+    _, original_store = _run_factory_reset(base, monkeypatch, stub=stub)
+
+    assert original_store is store
+    for name in ("ownership.sqlite3", "ownership.sqlite3-wal", "ownership.sqlite3-shm"):
+        assert not (base / name).exists(), f"{name} survived the wipe"
+    release.set()
+    t.join(10)
 
 
 def test_factory_reset_wipes_the_remembered_quarantine_roots(tmp_path, monkeypatch):

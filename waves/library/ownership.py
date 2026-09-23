@@ -22,11 +22,13 @@ tests without the GUI stack and never couples the download engine to the UI.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sqlite3
 import sys
 import time
+import weakref
 from threading import Lock, local
 
 from waves.constants import quality_rank
@@ -329,6 +331,21 @@ def _best_surviving(rows, roots: list[str] | None = None) -> dict | None:
     return None
 
 
+class _Reader:
+    """One thread's read connection, held by that thread's local storage.
+
+    A plain sqlite3.Connection cannot be weakly referenced, and the store has
+    to be able to find every live reader (see close) without becoming the
+    thing that keeps a dead thread's connection open. This wrapper can, so
+    the strong reference stays exactly where it was: with the thread.
+    """
+
+    __slots__ = ("__weakref__", "conn")
+
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+
 class OwnershipStore:
     """A small sqlite record of downloaded tracks: (track_id, final path) plus the
     delivered quality. One row per distinct on-disk path, so a re-download to a
@@ -359,6 +376,11 @@ class OwnershipStore:
         # shared across connections, so that one case keeps the shared
         # connection.
         self._readers = local()
+        # Every live reader, weakly: close() must be able to reach the ones
+        # parked on other threads (see close), and the set must not be what
+        # keeps a dead thread's connection alive. The library index's cache
+        # holds the same registry, for the same reason.
+        self._reader_refs: set = set()
         self._closed = False
         # The folders ownership answers are confined to (see set_roots).
         self._roots = None
@@ -533,11 +555,17 @@ class OwnershipStore:
         if self._path == ":memory:" or self._closed:
             with self._lock:
                 return self._conn.execute(sql, params).fetchall()
-        conn = getattr(self._readers, "conn", None)
-        if conn is None:
-            conn = sqlite3.connect(self._path)
-            self._readers.conn = conn
-        return conn.execute(sql, params).fetchall()
+        reader = getattr(self._readers, "reader", None)
+        if reader is None:
+            # check_same_thread off so close() can take it from the thread
+            # that is quitting. Each connection is still only ever USED by
+            # the thread it was made on, which is what the flag guards.
+            reader = _Reader(sqlite3.connect(self._path, check_same_thread=False))
+            self._readers.reader = reader
+            # discard as the callback: the entry goes the moment the owning
+            # thread does, on that thread, with no lock to wait for.
+            self._reader_refs.add(weakref.ref(reader, self._reader_refs.discard))
+        return reader.conn.execute(sql, params).fetchall()
 
     def record(
         self,
@@ -964,9 +992,23 @@ class OwnershipStore:
         with self._lock:
             self._closed = True
             self._conn.close()
-        # Other threads' read connections close with their threads; this
-        # thread's own goes now so the file handle is not held past quit.
-        conn = getattr(self._readers, "conn", None)
-        if conn is not None:
-            self._readers.conn = None
-            conn.close()
+            readers, self._reader_refs = list(self._reader_refs), set()
+        # EVERY read connection, not just this thread's. Leaving a parked pool
+        # thread's reader open kept a handle on the database file, and on
+        # Windows an open handle refuses the delete: the factory reset that
+        # closes this store and then unlinks the file quietly left the
+        # database and its sidecars behind. Same close as the library index's.
+        #
+        # Closed explicitly, and BEFORE this thread's own reference is
+        # dropped: releasing the thread-local first leaves the close to the
+        # collector, which also leaves the WAL unfolded beside the database.
+        # Suppressed one at a time because a straggler read can be inside its
+        # own connection as this runs, which sqlite answers for itself (the
+        # close defers until the statement finishes).
+        for ref in readers:
+            reader = ref()
+            if reader is None:
+                continue  # its thread already took it
+            with contextlib.suppress(Exception):
+                reader.conn.close()
+        self._readers.reader = None
