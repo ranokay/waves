@@ -272,15 +272,6 @@ def cover_file_dimension(embedded: CoverDimensions, pref: str) -> CoverDimension
         return embedded
 
 
-FAVORITES: dict[str, dict[str, str]] = {
-    "fav_videos": {"name": "Videos", "function_name": "videos"},
-    "fav_tracks": {"name": "Tracks", "function_name": "tracks_paginated"},
-    "fav_mixes": {"name": "Mixes & Radio", "function_name": "mixes"},
-    "fav_artists": {"name": "Artists", "function_name": "artists_paginated"},
-    "fav_albums": {"name": "Albums", "function_name": "albums_paginated"},
-}
-
-
 class AudioExtensionsValid(StrEnum):
     FLAC = ".flac"
     M4A = ".m4a"
