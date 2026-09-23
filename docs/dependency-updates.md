@@ -107,16 +107,18 @@ Nuitka 4.x is the release compiler because 2.8.4's supported Python stops at
 Apache-2.0 to **AGPL-3.0-only**, and the decision is to accept it: Nuitka is a
 build-time dev tool that never ships in the bundle, and Waves itself is
 AGPL-3.0-only, so the change adds no obligation to the project. The pin stays
-exact — a bump invalidates the release build cache (the `nuitka-` key prefix in
-the release workflow) and needs a verified packaged artifact before the pin
-moves. The proof is one build leg: dispatch the release workflow with an `only`
-filter and a blank `release_tag`, then record the run and head SHA in
+exact — a bump invalidates the release build cache (the workflow's cache key
+hashes `pyproject.toml` and `uv.lock`, and the `nuitka-` prefix is a manual
+lever on top) and needs a verified packaged artifact before the pin moves. The
+proof is one build leg: dispatch the release workflow with an `only` filter and
+a blank `release_tag`, then record the run and head SHA in
 `docs/evidence/platform-builds.md`.
 
 The same pin carries the 3.14 story: `uv sync --locked --all-extras --python
 3.14` succeeds (the pinned PyCryptodome publishes no cp314 wheel, but its
 `cp37-abi3` artifact installs and loads its native libraries through ctypes),
-and the manual workflow's 3.14 test leg is green.
+and the manual workflow's 3.14 test leg is green — both recorded in
+`docs/evidence/platform-builds.md`.
 
 ## Reviewing a Dependabot PR
 

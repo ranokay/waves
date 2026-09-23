@@ -39,6 +39,10 @@ def _inspector_module():
     return module
 
 
+def _master_workflow() -> dict:
+    return yaml.safe_load(MASTER_WORKFLOW.read_text())
+
+
 def _entry(cfg: dict, ecosystem: str) -> dict:
     matches = [
         update for update in cfg["updates"] if update["package-ecosystem"] == ecosystem and update["directory"] == "/"
@@ -296,7 +300,7 @@ def test_the_merge_gate_record_matches_the_manual_workflow():
     short SHA the PR body carries; if the trigger ever grows beyond a manual
     dispatch, the contributor record has to say so too, and this fails until
     it does."""
-    wf = yaml.safe_load(MASTER_WORKFLOW.read_text())
+    wf = _master_workflow()
     # YAML 1.1 reads the `on:` key as boolean True (the wrapper-image pins
     # test notes the same quirk); the trigger set must stay dispatch-only.
     assert set(wf[True]) == {"workflow_dispatch"}, wf[True]
@@ -322,6 +326,5 @@ def test_the_classifiers_match_the_tested_python_versions():
         for classifier in project["classifiers"]
         if classifier.startswith("Programming Language :: Python :: 3.")
     }
-    wf = yaml.safe_load(MASTER_WORKFLOW.read_text())
-    tested = set(wf["jobs"]["test"]["strategy"]["matrix"]["python-version"])
+    tested = set(_master_workflow()["jobs"]["test"]["strategy"]["matrix"]["python-version"])
     assert claimed == tested, f"classifiers claim {sorted(claimed)}, the workflow tests {sorted(tested)}"
