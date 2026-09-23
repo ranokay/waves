@@ -57,6 +57,10 @@ _SCROLL_TO_CARD = scene_js("""
     if (!hit) return "";
     var holder = settingsPage.scrollViewport;
     var y = hit.mapToItem(holder.contentItem, 0, hit.height / 2).y;
+    // An explicit destination outranks the page's remembered spot (the same
+    // reason jumpToCard disarms it): leave it disarmed, or a later re-measure
+    // re-applies it and undoes this scroll.
+    settingsPage.pendingY = -1;
     settingsPage.scrollY = Math.max(0, y - holder.height / 2);
     return "scrolled";
 """)
@@ -92,6 +96,23 @@ def test_a_third_provider_card_renders_and_acts():
         sandbox_prefix="waves-provider-card-",
         failure_message="a third provider does not render or act through the descriptor contract",
     )
+
+
+def _card_on_screen(q, settle) -> str:
+    """Scroll until the card's point is inside the root; "" when it lands.
+
+    The schema rebuild re-measures the column, and a late layout pass can
+    strand a scroll that landed before it (how long the re-measure takes
+    depends on the runner's font metrics), so re-aim and re-check on a
+    bounded loop instead of trusting one settle.
+    """
+    for _ in range(8):
+        if q(_SCROLL_TO_CARD) == "":
+            return "the third provider's card did not render (no 'NewCo' text)"
+        settle(250)
+        if q(_CARD_POINT) not in ("", None):
+            return ""
+    return "the third provider's card never came on screen"
 
 
 def _run_scenario() -> int:
@@ -131,12 +152,9 @@ def _run_scenario() -> int:
     settle(300)
 
     # The card and its generated action render in the live page, on screen.
-    if q(_SCROLL_TO_CARD) == "":
-        print("the third provider's card did not render (no 'NewCo' text)", file=sys.stderr)
-        return EXIT_REGRESSED
-    settle(300)
-    if q(_CARD_POINT) in ("", None):
-        print("the third provider's card never came on screen", file=sys.stderr)
+    failure = _card_on_screen(q, settle)
+    if failure:
+        print(failure, file=sys.stderr)
         return EXIT_REGRESSED
 
     pill = q(_PILL)
