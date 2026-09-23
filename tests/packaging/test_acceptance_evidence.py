@@ -36,6 +36,7 @@ PLATFORM_RUN_IDS = (
     "35579368870",
     "35583595525",
     "35588929771",
+    "35836125855",
 )
 
 _SECRET_PATTERNS = (
@@ -69,6 +70,7 @@ def test_each_artifact_carries_its_producing_revision():
         "b67bc72c0c2776fb15bae10cb055bf65a39a9d38",
         "d08e7a19ff2c2889707ad7150f78c64607394743",
         "709e18671a2a8decc70793514c9f57a2988fe7d4",
+        "cbf4827315f5e6b8ac2bc5dffa5b75270b33d38e",
     ):
         assert head_sha in builds, f"head SHA {head_sha[:7]} lost from the evidence"
 

@@ -1,8 +1,21 @@
 # 0009: Windows bundle builds are parked until the engine compiles under MSVC
 
-- Status: accepted
+- Status: superseded (2026-09-23) — both Windows legs went green on the exclusion recipe; see Supersession
 - Decided: 2026-09-21 (issue #227, audit remediation R-03; evidence in `docs/platform-enablement-review.md`; the #205 closing overclaim is corrected by that issue's follow-up comment, not by editing history)
 - Scope: whether this fork publishes Windows artifacts
+
+## Supersession
+
+Run [35836125855](https://github.com/ranokay/waves/actions/runs/35836125855)
+(2026-09-23, head `cbf4827315f5e6b8ac2bc5dffa5b75270b33d38e`) dispatched
+`only=windows-x64,windows-arm64` on the exclusion recipe and both legs went
+green: `windows-2022` built and smoke-launched offscreen (healthy, ~1h36m),
+`windows-11-arm` built (no launch by design, ~1h44m), both artifacts
+uploaded. The park is lifted: the release matrix keeps all eight legs, the
+README presents the Windows assets as downloadable, and the platform-claim
+tests pin this state. The decision and its reasoning below stand as the
+record of the park while it held; the Windows test job and the live
+verification stay owed as separate work (see Consequences).
 
 ## Decision
 
@@ -52,7 +65,8 @@ which is follow-up work, not this decision).
 ## Consequences
 
 - The README marks the Windows rows parked and the platform badge covers
-  only shippable platforms until re-entry.
+  only shippable platforms until re-entry (met on 2026-09-23; see
+  Supersession).
 - Re-entry needs all three, in order: (1) a tracked run with both Windows
   legs green on the exclusion recipe (x64 build plus smoke-launch, arm64
   build, arm64 launch still by design); (2) the README table and badge
