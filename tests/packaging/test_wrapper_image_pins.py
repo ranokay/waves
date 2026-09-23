@@ -79,7 +79,11 @@ def test_workflow_refuses_to_overwrite_a_published_tag():
     assert guard is not None, "the publish lost its tag guard"
     run = str(guard["run"])
     assert "imagetools inspect" in run
-    assert "allow_tag_overwrite" in run and "exit 1" in run
+    assert "exit 1" in run
+    # The override arrives through the environment, never interpolated into
+    # the script text.
+    assert guard["env"]["ALLOW_TAG_OVERWRITE"] == "${{ inputs.allow_tag_overwrite }}"
+    assert "${ALLOW_TAG_OVERWRITE}" in run
     names = [s.get("name") for s in steps]
     assert names.index("Refuse to overwrite an existing tag") < names.index("Build and push")
 

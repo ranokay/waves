@@ -80,11 +80,13 @@ jobs:
 
     steps:
       - name: Require a full upstream commit SHA
+        env:
+          WRAPPER_REF: ${{ inputs.wrapper_ref }}
         run: |
           # The OCI revision label and .github/wrapper-upstream.sha are only
           # provenance if the built ref cannot move. Branches and tags can.
-          if [[ ! "${{ inputs.wrapper_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::wrapper_ref must be a full 40-hex commit SHA; got '${{ inputs.wrapper_ref }}'."
+          if [[ ! "${WRAPPER_REF}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::wrapper_ref must be a full 40-hex commit SHA; got '${WRAPPER_REF}'."
             exit 1
           fi
 
@@ -120,23 +122,25 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Refuse to overwrite an existing tag
+        env:
+          ALLOW_TAG_OVERWRITE: ${{ inputs.allow_tag_overwrite }}
         run: |
           # A published tag is an address clients already pulled, and the app
           # pins its digest: republishing it serves different bytes under a
           # pin that still names the old ones. New releases take a new tag.
           if out="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" 2>&1)"; then
-            if [[ "${{ inputs.allow_tag_overwrite }}" == "true" ]]; then
+            if [[ "${ALLOW_TAG_OVERWRITE}" == "true" ]]; then
               echo "::warning::overwriting existing tag ${IMAGE}:${TAG} (allow_tag_overwrite=true)"
             else
               echo "::error::tag ${IMAGE}:${TAG} already exists; publish a new tag, or set allow_tag_overwrite=true to repair this one."
               exit 1
             fi
           else
-            # A missing tag reads "not found"; a namespace that has never
-            # published this package reads as a failed token exchange. Every
-            # other failure is unknown and must not authorize a push.
+            # A missing tag and a package that does not exist yet both read
+            # as not found; every other failure (auth, registry) is unknown
+            # and must not authorize a push.
             case "$out" in
-              *"not found"*|*"manifest unknown"*|*"failed to authorize"*|*"denied"*)
+              *"not found"*|*"manifest unknown"*)
                 echo "tag ${IMAGE}:${TAG} does not exist yet; proceeding" ;;
               *)
                 echo "::error::cannot tell whether ${IMAGE}:${TAG} exists (registry error): ${out}"
@@ -193,8 +197,13 @@ jobs:
           if [[ "${APK_URL}" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)$ ]]; then
             owner="${BASH_REMATCH[1]}"; repo="${BASH_REMATCH[2]}"
             tag="${BASH_REMATCH[3]}"; asset_name="${BASH_REMATCH[4]}"
-            asset_id="$(curl -fsSL "${auth_args[@]}" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}" \
+            if ! release_json="$(curl -fsSL --retry 3 --retry-delay 2 "${auth_args[@]}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}")"; then
+              echo "::error::could not resolve release '${tag}' in ${owner}/${repo} through the API."
+              exit 1
+            fi
+            asset_id="$(printf '%s' "${release_json}" \
               | jq -r --arg name "${asset_name}" '.assets[] | select(.name == $name) | .id')"
             if [[ -z "${asset_id}" || "${asset_id}" == "null" ]]; then
               echo "::error::no asset named '${asset_name}' in ${owner}/${repo} release '${tag}'."
