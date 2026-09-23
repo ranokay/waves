@@ -132,12 +132,17 @@ def test_absent_expected_dependencies_are_reported_not_failed(tmp_path):
     assert report["ok"] is True
 
 
-def test_expected_dependency_shipped_as_a_package_is_reported_by_path(tmp_path):
-    bundle = _bundle(tmp_path, ("site-packages/pywidevine/__init__.py",))
+def test_expected_dependencies_shipped_as_packages_are_reported_by_path(tmp_path):
+    """pywidevine ships as its own package; protobuf lives under `google/`."""
+    bundle = _bundle(
+        tmp_path,
+        ("site-packages/pywidevine/__init__.py", "site-packages/google/protobuf/__init__.py"),
+    )
 
     report = inspect_bundle_tool.inspect_bundle(bundle, runner=lambda args: _fake(), verify_signature=False)
 
     assert "pywidevine: site-packages/pywidevine" in report["expected"]
+    assert "protobuf: site-packages/google/protobuf" in report["expected"]
     assert report["ok"] is True
 
 

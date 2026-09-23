@@ -62,10 +62,8 @@ _EMBEDDED_MARKERS = (
     (re.compile(r"^yt_dlp(\.|$)"), "yt-dlp"),
 )
 # Dependencies that ride gamdl into the compiled bundle by decision, not
-# accident: gamdl's license exchange imports pywidevine (GPL-3.0-only), which
-# pulls protobuf (BSD-3-Clause). Both stay — excluding pywidevine would mean
-# patching out the import path the engine uses — and the decision is recorded
-# in docs/dependency-updates.md. Each is reported present or absent, never
+# accident: pywidevine (GPL-3.0-only) and protobuf (BSD-3-Clause), recorded in
+# docs/dependency-updates.md. Presence and absence are both reported, never
 # failed, so a bundle that gains or loses either is visible in the record.
 _EXPECTED = (
     (re.compile(r"^pywidevine(\.|$)", re.IGNORECASE), "pywidevine"),
@@ -133,6 +131,16 @@ def _scan_targets(bundle: Path) -> list[Path]:
     return out
 
 
+def _expected_file(entries: list[Path], path: Path, name: str) -> str | None:
+    """The first entry that is the package directory, a file under it, or its
+    dist-info directory (``google/protobuf``, ``protobuf-…dist-info``)."""
+    for entry in entries:
+        rel = entry.relative_to(path)
+        if any(part == name or (part.startswith(f"{name}-") and part.endswith(".dist-info")) for part in rel.parts):
+            return str(rel)
+    return None
+
+
 def _embedded(binaries: list[Path], runner, markers) -> dict[str, str]:
     """Module markers inside the executables, keyed by the name they report."""
     found: dict[str, str] = {}
@@ -198,9 +206,9 @@ def inspect_bundle(
     seen = {item.split(":", 1)[0] for item in clients}
     embedded = _embedded(_scan_targets(path), runner, _EMBEDDED_MARKERS + _EXPECTED)
     clients.extend(embedded[name] for _pattern, name in _EMBEDDED_MARKERS if name in embedded and name not in seen)
-    expected = []
-    for pattern, name in _EXPECTED:
-        file_hit = next((str(entry.relative_to(path)) for entry in entries if pattern.match(entry.name)), None)
+    expected: list[str] = []
+    for _pattern, name in _EXPECTED:
+        file_hit = _expected_file(entries, path, name)
         expected.append(embedded.get(name) or (f"{name}: {file_hit}" if file_hit else f"{name}: absent"))
     signature = (
         _signature(path, runner, target_platform)
