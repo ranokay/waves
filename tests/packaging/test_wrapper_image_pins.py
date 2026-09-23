@@ -91,6 +91,9 @@ def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
     assert "secrets.APK_URL" in text
     # Private hosting authenticates through an optional masked header.
     assert "secrets.APK_AUTH_HEADER" in text
+    # A private repo's /releases/download/ URL only serves a browser
+    # session, so the step must resolve it through the asset API.
+    assert "releases/assets" in text
     assert "push: true" in text
     # Pins regenerate deterministically from the blessed APK
     # instead of trusting upstream's file to track it; the strict

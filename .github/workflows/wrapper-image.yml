@@ -182,7 +182,25 @@ jobs:
           if [[ -n "${APK_AUTH_HEADER}" ]]; then
             auth_args=(-H "${APK_AUTH_HEADER}")
           fi
-          curl -fL --retry 3 --retry-delay 2 "${auth_args[@]}" -o "${artifact}" "${APK_URL}"
+          # A private repo's /releases/download/ URL serves a browser
+          # session only: a token header gets a 404 there. Resolve that URL
+          # through the release API and fetch the asset endpoint instead,
+          # which is the documented token path.
+          download_url="${APK_URL}"
+          if [[ "${APK_URL}" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)$ ]]; then
+            owner="${BASH_REMATCH[1]}"; repo="${BASH_REMATCH[2]}"
+            tag="${BASH_REMATCH[3]}"; asset_name="${BASH_REMATCH[4]}"
+            asset_id="$(curl -fsSL "${auth_args[@]}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}" \
+              | jq -r --arg name "${asset_name}" '.assets[] | select(.name == $name) | .id')"
+            if [[ -z "${asset_id}" || "${asset_id}" == "null" ]]; then
+              echo "::error::no asset named '${asset_name}' in ${owner}/${repo} release '${tag}'."
+              exit 1
+            fi
+            download_url="https://api.github.com/repos/${owner}/${repo}/releases/assets/${asset_id}"
+            auth_args+=(-H "Accept: application/octet-stream")
+          fi
+          curl -fL --retry 3 --retry-delay 2 "${auth_args[@]}" -o "${artifact}" "${download_url}"
           echo "APPLE_MUSIC_ARTIFACT=${artifact}" >> "$GITHUB_ENV"
           ls -lh "${artifact}"
 
