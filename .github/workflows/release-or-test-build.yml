@@ -2,8 +2,16 @@ name: release-or-test-build
 
 # Builds the Waves QML app for every platform and, on a version tag, publishes
 # the binaries to a GitHub Release together with a signed checksum manifest the
-# in-app updater verifies before installing. Tag a release on the public repo as
-# `vX.Y.Z`; `test-build` / workflow_dispatch produce unsigned artifacts only.
+# in-app updater verifies before installing.
+#
+# Publication model: releases are published from the upstream repository
+# (iamprivacy/Waves), which holds the signing key (`WAVES_SIGNING_KEY`). This
+# fork is a development line: it holds no signing key and publishes no releases,
+# and every build it produces checks upstream for updates. The fork's supported
+# run is a rehearsal: dispatch with a blank `release_tag` (or push `test-build`)
+# to build the unsigned artifacts. The `vX.Y.Z` tag and `release_tag` paths
+# belong to upstream, and the comments below describe the machinery as it runs
+# there.
 
 permissions:
   contents: write
@@ -21,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Publish a GitHub Release at this tag (e.g. v0.1.0). Blank = artifacts only."
+        description: "Publish a GitHub Release at this tag (e.g. v0.1.0). Upstream only: this fork holds no signing key, so leave it blank to rehearse. Blank = artifacts only."
         required: false
         default: ""
       only:
@@ -454,10 +462,11 @@ jobs:
   sign-manifest:
     # Runs for any release (a tag PUSH or a dispatch+release_tag): gather every
     # per-asset checksum into one SHA256SUMS manifest, sign it with the Ed25519
-    # release key (CI secret WAVES_SIGNING_KEY), and publish SHA256SUMS +
-    # SHA256SUMS.sig, then flip the Release live. The app verifies the signature
-    # against the public key baked into the binary before trusting any hash, so a
-    # tampered release can't slip a malicious build past the updater.
+    # release key (CI secret WAVES_SIGNING_KEY, held by the upstream repository),
+    # and publish SHA256SUMS + SHA256SUMS.sig, then flip the Release live. The
+    # app verifies the signature against the public key baked into the binary
+    # before trusting any hash, so a tampered release can't slip a malicious
+    # build past the updater.
     needs: ["compute", "build"]
     if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
     runs-on: ubuntu-24.04
