@@ -270,9 +270,12 @@ class StreamInfo:
     # The provider refuses to serve an encrypted delivery as audio: the
     # pipeline must fail the item rather than write an unplayable file.
     encrypted: bool = False
-    # Provider-proven count of over-generated trailing URLs (padding whose
-    # failure is harmless); None when nothing is proven and the pipeline
-    # keeps its legacy last-segment leniency.
+    # Provider-proven count of over-generated trailing URLs: > 0 is padding
+    # whose failure is harmless, 0 means every URL is required audio, and a
+    # negative count means the timeline promises more audio than the URL list
+    # carries (the pipeline fails the item rather than land truncated audio).
+    # None when nothing is proven and the pipeline keeps its legacy
+    # last-segment leniency.
     tail_spurious: int | None = None
     # The delivery arrived as one complete file (no fragmented-segment merge),
     # so its container is already whole and needs no duration-repairing remux.

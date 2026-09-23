@@ -48,6 +48,10 @@ def _track() -> Track:
 
 
 def test_proven_short_url_list_fails_the_item_and_writes_nothing(tmp_path):
+    """The manifest proved the list short (``tail_spurious=-1``) while every
+    URL it does carry downloads fine: the old pipeline merged that into a
+    written, tagged, moved file and a done row. The item must fail instead,
+    before any segment is fetched, leaving no file behind."""
     dl = _download()
     dst = tmp_path / "track.m4a"
     stream_info = StreamInfo(urls=["seg-0", "seg-1"], tail_spurious=-1)

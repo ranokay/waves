@@ -843,10 +843,13 @@ class Download:
             p_task (TaskID): Progress bar task ID.
             progress_to_stdout (bool): Whether to show progress in stdout.
             event_stop (Event | None, optional): Event to stop the download. Defaults to None.
-            n_tail_spurious (int | None, optional): How many trailing URLs the manifest
-                proves are over-generated padding (0 means none, so a failed final
-                segment is a real failure). None means unproven and keeps the legacy
-                last-segment leniency. Defaults to None.
+            n_tail_spurious (int | None, optional): The manifest's proven count of
+                over-generated trailing URLs: > 0 means the trailing failures are
+                harmless padding, 0 means every URL is required audio (a failed final
+                segment is a real failure), and a negative count means the list is short
+                of the timeline (``_download`` fails such an item before this pass). None
+                means unproven and keeps the legacy last-segment leniency. Defaults to
+                None.
 
         Returns:
             tuple[bool, list[DownloadSegmentResult]]: (result_segments, list of segment results)
@@ -956,7 +959,8 @@ class Download:
             stream_info (StreamInfo | None, optional): The seam's stream answer
                 for a track. Defaults to None.
             n_tail_spurious (int | None, optional): Manifest-proven count of over-generated
-                trailing URLs; see ``_download_segments``. Defaults to None.
+                trailing URLs (negative means the list is short; see ``_download_segments``).
+                Defaults to None.
 
         Returns:
             tuple[bool, pathlib.Path]: (Success, path to the downloaded file)
@@ -1074,7 +1078,8 @@ class Download:
             path_file (pathlib.Path): Path to the output file.
             dl_segment_results (list[DownloadSegmentResult]): List of segment download results.
             n_tail_spurious (int | None, optional): Manifest-proven count of over-generated
-                trailing URLs; see ``_download_segments``. Defaults to None.
+                trailing URLs (negative means the list is short; see ``_download_segments``).
+                Defaults to None.
 
         Returns:
             bool: True if merge succeeded, False otherwise.
