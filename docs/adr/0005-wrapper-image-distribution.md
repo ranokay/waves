@@ -50,9 +50,9 @@ does not replace legal advice.
 - Every republish produces a new manifest digest, so the tag, `WRAPPER_V2_IMAGE`
   and `WRAPPER_V2_IMAGE_DIGEST` move together in `docs/wrapper-image.md`'s
   lockstep table. The publish summary prints the digest.
-- The published `0.2.3` predates the notices and labels; the `0.2.4` publish
-  (2026-09-23) carries them, and the app-side digest check applies to
-  whichever tag the pin names.
+- Notices and labels ride the publish pipeline from 2026-09-15 on; the tag
+  that carries them is recorded in `docs/wrapper-image.md`'s lockstep table,
+  and the app-side digest check applies to whichever tag the pin names.
 - Digest verification is a pull-time check: it catches a registry serving
   different bytes than the pin. A local image mutated after verification by
   someone with Docker access is outside its threat model.

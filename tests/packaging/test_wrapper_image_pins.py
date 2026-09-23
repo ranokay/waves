@@ -26,6 +26,11 @@ def _workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text())
 
 
+def _inputs() -> dict:
+    # YAML reads `on:` as boolean True.
+    return _workflow()[True]["workflow_dispatch"]["inputs"]
+
+
 def _tracked_wrapper_files() -> set[str]:
     """The paths under tools/wrapper-image that git actually carries."""
     git = shutil.which("git")
@@ -43,9 +48,7 @@ def _tracked_wrapper_files() -> set[str]:
 def test_workflow_defaults_publish_exactly_the_pinned_image():
     from waves.providers.apple.runtime import WRAPPER_V2_IMAGE
 
-    wf = _workflow()
-    inputs = wf[True]["workflow_dispatch"]["inputs"]  # YAML reads `on:` as boolean True
-    tag = inputs["image_tag"]["default"]
+    tag = _inputs()["image_tag"]["default"]
     # The tag must equal the app pin; the registry path defaults to the
     # publishing owner's namespace, so forks need no edits.
     assert WRAPPER_V2_IMAGE.rsplit(":", 1)[1] == tag
@@ -54,8 +57,7 @@ def test_workflow_defaults_publish_exactly_the_pinned_image():
 
 def test_workflow_requires_a_full_upstream_sha():
     wf = _workflow()
-    inputs = wf[True]["workflow_dispatch"]["inputs"]
-    ref = inputs["wrapper_ref"]
+    ref = _inputs()["wrapper_ref"]
     assert ref.get("required") is True
     assert "default" not in ref, "a default ref lets a one-click dispatch build a moving branch"
     step = next(
@@ -70,8 +72,7 @@ def test_workflow_requires_a_full_upstream_sha():
 
 def test_workflow_refuses_to_overwrite_a_published_tag():
     wf = _workflow()
-    inputs = wf[True]["workflow_dispatch"]["inputs"]
-    override = inputs["allow_tag_overwrite"]
+    override = _inputs()["allow_tag_overwrite"]
     assert override["type"] == "boolean"
     assert override["default"] is False
     steps = wf["jobs"]["build"]["steps"]
@@ -95,9 +96,6 @@ def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
     assert "secrets.APK_URL" in text
     # Private hosting authenticates through an optional masked header.
     assert "secrets.APK_AUTH_HEADER" in text
-    # A private repo's /releases/download/ URL only serves a browser
-    # session, so the step must resolve it through the asset API.
-    assert "releases/assets" in text
     assert "push: true" in text
     # Pins regenerate deterministically from the blessed APK
     # instead of trusting upstream's file to track it; the strict
@@ -110,13 +108,21 @@ def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
     assert "/health" in text and "11020" in text
 
 
-def test_blessed_apk_inputs_match_the_app_pins():
-    import yaml
+def test_the_private_apk_download_goes_through_the_release_api():
+    """A private repo's /releases/download/ URL only serves a browser
+    session, so the step resolves it through the release asset API."""
+    steps = _workflow()["jobs"]["build"]["steps"]
+    download = next((s for s in steps if s.get("name") == "Download Apple Music artifact"), None)
+    assert download is not None, "the publish lost its APK download stage"
+    run = str(download["run"])
+    assert "api.github.com/repos/" in run and "releases/assets" in run
+    assert "Accept: application/octet-stream" in run
 
+
+def test_blessed_apk_inputs_match_the_app_pins():
     from waves.providers.apple.runtime import APK_PINNED_VERSION
 
-    wf = yaml.safe_load(WORKFLOW.read_text())
-    inputs = wf[True]["workflow_dispatch"]["inputs"]  # YAML reads `on:` as boolean True
+    inputs = _inputs()
     assert inputs["apk_version"]["default"] == APK_PINNED_VERSION
     assert inputs["apk_build"]["default"] == "1109"
 
