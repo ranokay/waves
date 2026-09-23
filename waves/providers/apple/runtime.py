@@ -58,8 +58,8 @@ _UA = "Waves-apple-runtime"
 # flow pulls this exact tag. The digest is the registry manifest the runbook
 # documents; ensure_image checks it when the runtime can report one, so a
 # retagged or mutated registry copy is refused (item 24).
-WRAPPER_V2_IMAGE = "ghcr.io/ranokay/waves-wrapper-v2:0.2.3"
-WRAPPER_V2_IMAGE_DIGEST = "sha256:1aac416aae06995095fac19a12d180d869a3bc615b83d31b0773281a9801be15"
+WRAPPER_V2_IMAGE = "ghcr.io/ranokay/waves-wrapper-v2:0.2.4"
+WRAPPER_V2_IMAGE_DIGEST = "sha256:79a36375a3555ca9e4aa6a9d1ccffbf0ac45a1604d19d307761c6d6ba29b428b"
 # The wrapper's guest-lib set this image was built against, mirrored from
 # wrapper-v2's LIBS_VERSION.json. Surfaced in the wizard's image detail and
 # in the custom-build extraction plan, so an image and an APK can never

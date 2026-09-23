@@ -36,9 +36,9 @@ who pulls it.
    attribution/license retention. Fixed in the publish pipeline on
    2026-09-15: a single build now appends `COPY` lines to upstream's
    Dockerfile and ships `NOTICE`, `Apache-2.0`, `BSD-3-Clause` and
-   `BSD-2-Clause` under `/licenses` (`tools/wrapper-image/`). The currently
-   published `0.2.3` predates this; the next publish carries it. No retag
-   happens — republishes take a new tag per the runbook. The three-clause text
+   `BSD-2-Clause` under `/licenses` (`tools/wrapper-image/`). The `0.2.3`
+   tag predates this; the `0.2.4` publish carries it. No retag happened —
+   republishes take a new tag per the runbook. The three-clause text
    is byte-identical to Debian's `/usr/share/common-licenses/BSD` (verified
    from `debian:bookworm-slim`, 2026-09-16), the generic UC Regents form
    Debian ships in the image's own base; AOSP's
@@ -53,8 +53,8 @@ who pulls it.
    cannot ship again.
 3. **No image provenance labels.** Fixed in the same pipeline change: OCI
    title, source, revision (the exact wrapper-v2 commit), licenses and
-   description labels are set through the build action. The current `0.2.3`
-   predates them.
+   description labels are set through the build action. The `0.2.3` tag
+   predates them; `0.2.4` carries them.
 4. **The pinned digest was documented but unenforced in the app.** Fixed:
    `AppleRuntimeManager` resolves the pulled image's repo digest (preferring
    the pin when the runtime reports several) after `docker pull`; a digest

@@ -1,7 +1,7 @@
 # Upstream wrapper-v2 SHA the live image was built from.
 #
-# The 0.2.3 image was built from this commit plus regenerated 3.6.0 lib
-# pins (see docs/wrapper-image.md); no source changes. When the scheduled
+# The 0.2.4 image (and 0.2.3 before it) was built from this commit plus
+# regenerated 3.6.0 lib pins (see docs/wrapper-image.md); no source changes. When the scheduled
 # watcher finds upstream main ahead of this SHA it opens an issue; after
 # publishing from the new ref, move this pin forward in the same change
 # (image tag + app pin ride along per the lockstep).

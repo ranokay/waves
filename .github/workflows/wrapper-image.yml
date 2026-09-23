@@ -35,7 +35,7 @@ on:
       image_tag:
         description: "Tag to push (must equal the WRAPPER_V2_IMAGE pin and must not already exist)"
         required: false
-        default: "0.2.3"
+        default: "0.2.4"
         type: string
       allow_tag_overwrite:
         description: "Overwrite an existing tag (repair only; a release never sets this)"
