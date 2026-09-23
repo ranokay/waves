@@ -115,7 +115,8 @@ def test_the_private_apk_download_goes_through_the_release_api():
     download = next((s for s in steps if s.get("name") == "Download Apple Music artifact"), None)
     assert download is not None, "the publish lost its APK download stage"
     run = str(download["run"])
-    assert "api.github.com/repos/" in run and "releases/assets" in run
+    assert "api.github.com/repos/" in run
+    assert "releases/assets" in run
     assert "Accept: application/octet-stream" in run
 
 

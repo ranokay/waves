@@ -197,7 +197,8 @@ jobs:
           if [[ "${APK_URL}" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)$ ]]; then
             owner="${BASH_REMATCH[1]}"; repo="${BASH_REMATCH[2]}"
             tag="${BASH_REMATCH[3]}"; asset_name="${BASH_REMATCH[4]}"
-            if ! release_json="$(curl -fsSL --retry 3 --retry-delay 2 "${auth_args[@]}" \
+            if ! release_json="$(curl -fsSL --proto '=https' --proto-redir '=https' \
+              --retry 3 --retry-delay 2 "${auth_args[@]}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}")"; then
               echo "::error::could not resolve release '${tag}' in ${owner}/${repo} through the API."
@@ -212,7 +213,10 @@ jobs:
             download_url="https://api.github.com/repos/${owner}/${repo}/releases/assets/${asset_id}"
             auth_args+=(-H "Accept: application/octet-stream")
           fi
-          curl -fL --retry 3 --retry-delay 2 "${auth_args[@]}" -o "${artifact}" "${download_url}"
+          # HTTPS only, redirects included: the request carries a masked
+          # credential and must never follow a downgrade.
+          curl -fL --proto '=https' --proto-redir '=https' \
+            --retry 3 --retry-delay 2 "${auth_args[@]}" -o "${artifact}" "${download_url}"
           echo "APPLE_MUSIC_ARTIFACT=${artifact}" >> "$GITHUB_ENV"
           ls -lh "${artifact}"
 
