@@ -143,9 +143,9 @@ class WavesTidal(Tidal):
     def token_persist(self) -> None:
         """Drop the save once a factory reset has wiped the credentials file.
 
-        The reset latches this before it deletes anything and takes the token
-        path once more after the drain (a save already inside the write is the
-        only thing left to catch); without the gate, a PKCE sign-in completing
+        The reset latches this before it deletes anything and re-runs the
+        allowlist after the drain (a save already inside the write is the only
+        thing left to catch); without the gate, a PKCE sign-in completing
         during the wipe leaves a signed-in token on what is supposed to be a
         brand-new install.
         """

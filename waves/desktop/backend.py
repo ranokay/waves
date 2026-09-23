@@ -21728,7 +21728,7 @@ class WavesBridge(LibraryMixin, QObject):
         logger.info("factory reset requested; wiping the config directory")
         # The token store is the config module's own and cannot see that latch:
         # freeze it too, so a sign-in or refresh landing during the wipe cannot
-        # write token.json back over the file deleted below (the second unlink
+        # write token.json back over the file deleted below (the allowlist pass
         # near the end covers a save already past this gate).
         tidal = getattr(self, "tidal", None)
         if tidal is not None:
