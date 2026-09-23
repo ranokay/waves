@@ -653,6 +653,10 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
     token_from_storage: bool = False
     settings: Settings
     is_pkce: bool
+    # Latched by the desktop bridge's factory reset, which the config layer
+    # cannot see: the wipe deletes token.json, and a sign-in or refresh that
+    # lands afterwards must not write it back.
+    persistence_frozen: bool = False
 
     def __init__(self, settings: Settings | None = None):
         self.cls_model = ModelToken
@@ -758,6 +762,11 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
             sink()
 
     def token_persist(self) -> None:
+        # A factory reset wipes the config folder and latches this first, so a
+        # token save that lands during or after the wipe is dropped instead of
+        # re-creating the file the reset promised to erase.
+        if self.persistence_frozen:
+            return
         self.set_option("token_type", self.session.token_type)
         self.set_option("access_token", self.session.access_token)
         self.set_option("refresh_token", self.session.refresh_token)

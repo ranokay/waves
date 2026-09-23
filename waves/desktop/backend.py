@@ -18472,7 +18472,13 @@ class WavesBridge(LibraryMixin, QObject):
         disk work to the background writer. Because the JSON is snapshotted
         before the caller re-injects the transient ffmpeg values, the write
         that lands later can never leak them to disk, however the timing
-        falls; consecutive saves coalesce to the newest snapshot."""
+        falls; consecutive saves coalesce to the newest snapshot.
+
+        The factory-reset latch takes the same early return as the prefs,
+        page-cache and tile-art writers: shutdown's flush runs after the wipe,
+        so a save submitted while the reset is running must never reach disk."""
+        if getattr(self, "_factory_reset", False):
+            return
         data_json = self.settings.data.to_json()
         settings = self.settings
         self._config_writer.submit("settings", lambda: settings.write_serialized(data_json))
@@ -21699,9 +21705,11 @@ class WavesBridge(LibraryMixin, QObject):
         """Erase what Waves keeps on this machine (Advanced settings "reset
         application"): settings, prefs, the sign-in token, the ownership
         store, disk caches, logs and the QSettings setup flags. Downloaded
-        music is never touched. The UI quits right after this returns (its
-        aboutToQuit shutdown aborts any in-flight downloads), so the next
-        launch starts like a brand-new install.
+        music is never touched. Persistence is latched off, every transfer is
+        stopped and the pending config writes are drained BEFORE anything is
+        deleted, so no late writer can put the files back after the wipe; the
+        UI quits right after this returns, and the next launch starts like a
+        brand-new install.
 
         Safety property, load-bearing: the wipe can only ever delete Waves'
         own files. It works from the _FACTORY_WIPE_* allowlists of exact
@@ -21718,6 +21726,33 @@ class WavesBridge(LibraryMixin, QObject):
         worst a leftover crash.log on Windows."""
         self._factory_reset = True
         logger.info("factory reset requested; wiping the config directory")
+        # The token store is the config module's own and cannot see that latch:
+        # freeze it too, so a sign-in or refresh landing during the wipe cannot
+        # write token.json back over the file deleted below (the second unlink
+        # near the end covers a save already past this gate).
+        tidal = getattr(self, "tidal", None)
+        if tidal is not None:
+            tidal.persistence_frozen = True
+        # End every transfer NOW, not at the quit: shutdown runs after the
+        # wipe, so a job still running (or a spec still queued, or a download
+        # held for an unreachable folder) could land a settings or token save
+        # over the files just deleted. STOP's own abort internals do the work
+        # -- job aborts, queued specs, the held stash, the global run gate --
+        # then the global abort the teardown path raises goes up too.
+        stop = getattr(self, "stopAll", None)
+        if callable(stop):
+            with contextlib.suppress(Exception):
+                stop()
+        abort = getattr(self, "_event_abort", None)
+        if abort is not None:
+            abort.set()
+        # Drain the background config writer BEFORE the wipe: a settings or
+        # prefs write submitted moments earlier is only queued, and the QML
+        # quits the instant this returns, so shutdown's own flush would run
+        # after the wipe and put the file back.
+        writer = getattr(self, "_config_writer", None)
+        if writer is not None:
+            writer.flush()
         with contextlib.suppress(Exception):
             self._ownership.close()
         # Any straggler ownership query before the quit hits a
@@ -21783,6 +21818,10 @@ class WavesBridge(LibraryMixin, QObject):
             with contextlib.suppress(OSError):
                 os.rmdir(sub)
         _factory_wipe_art_cache(os.path.join(base, _ART_CACHE_DIR))
+        # The token path once more, after the drain: a save that passed the
+        # freeze gate just before it latched can still have landed while the
+        # wipe ran, and nothing later in the quit would take it.
+        unlink(os.path.join(base, "token.json"))
         # QSettings backs the QML-side setup flags (first-run FFmpeg gate,
         # update-toast memory); clearing it only edits Waves' own preferences
         # store, no file deletion involved.
