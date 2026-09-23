@@ -80,6 +80,11 @@ class _Redactor:
         r"(\s+)(['\"]?)((?=[^\s'\"&;,]*[\d\-_./+=])[^\s'\"&;,]{6,}|[^\s'\"&;,]{16,})"
         r")"
     )
+    # A labelled cookie header is a list of pairs, and the key/value pattern
+    # above stops at the first ";": the pairs after it are cookie values too,
+    # so the whole header goes, to end of line. The colon-less "cookie <value>"
+    # form stays with the key/value pass.
+    _COOKIE_HEADER = re.compile(r"(?i)\b(set-cookie|cookie)\s*:\s*[^\r\n]+")
     # Bare high-entropy blobs: long hex (ids, digests) and long base64ish runs.
     _LONG_HEX = re.compile(r"\b[0-9a-fA-F]{32,}\b")
     _B64ISH = re.compile(
@@ -152,6 +157,7 @@ class _Redactor:
         text = self._URL_QUERY.sub("?‹query›", text)
         text = self._BEARER.sub("Bearer ‹redacted›", text)
         text = self._KV_SECRET.sub(self._kv_sub, text)
+        text = self._COOKIE_HEADER.sub(r"\1: ‹redacted›", text)
         text = self._MAC.sub("‹mac›", text)
         text = self._IPV6.sub(self._ipv6_sub, text)
         text = self._IPV4.sub("‹ip›", text)
