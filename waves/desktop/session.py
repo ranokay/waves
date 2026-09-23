@@ -134,3 +134,21 @@ class WavesTidal(Tidal):
         if result:
             self.token_from_storage = True
         return result
+
+    # Latched by the bridge's factory reset, which the engine's token store
+    # cannot see: the wipe deletes token.json, and a sign-in or refresh worker
+    # finishing afterwards must not write it back.
+    persistence_frozen: bool = False
+
+    def token_persist(self) -> None:
+        """Drop the save once a factory reset has wiped the credentials file.
+
+        The reset latches this before it deletes anything and takes the token
+        path once more after the drain (a save already inside the write is the
+        only thing left to catch); without the gate, a PKCE sign-in completing
+        during the wipe leaves a signed-in token on what is supposed to be a
+        brand-new install.
+        """
+        if self.persistence_frozen:
+            return
+        super().token_persist()

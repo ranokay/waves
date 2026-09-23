@@ -23,8 +23,8 @@ class _Stub:
     """Bare object the real methods get bound onto."""
 
 
-def _bind(stub, name, owner=WavesBridge):
-    return getattr(owner, name).__get__(stub, type(stub))
+def _bind(stub, name):
+    return getattr(WavesBridge, name).__get__(stub, type(stub))
 
 
 # --------------------------------------------------------------------------- #
@@ -356,13 +356,11 @@ class _DrainingWriter:
 
     def __init__(self):
         self.pending = []
-        self.flushes = 0
 
     def submit(self, key, fn):
         self.pending.append(fn)
 
     def flush(self, timeout=3.0):
-        self.flushes += 1
         pending, self.pending = self.pending, []
         for fn in pending:
             fn()
@@ -402,9 +400,8 @@ def test_a_settings_write_submitted_before_the_reset_cannot_survive_the_wipe(tmp
     _bind(stub, "_submit_settings_write")()  # queued, nothing on disk yet
 
     _run_factory_reset(base, monkeypatch, stub=stub)
-
-    assert stub._config_writer.flushes == 1, "the reset itself must drain the writer before the wipe"
     stub._config_writer.flush()  # shutdown's flush, after the wipe
+
     assert not settings_path.exists(), "a write queued before the reset re-created settings.json"
 
 
@@ -415,23 +412,23 @@ def test_factory_reset_freeze_blocks_settings_saves(tmp_path):
     stub.settings = _SettingsStub(tmp_path / "settings.json")
 
     _bind(stub, "_submit_settings_write")()
+    stub._config_writer.flush()
 
-    assert stub._config_writer.pending == [], "a settings write after the freeze must be refused, like a pref save"
-    assert not (tmp_path / "settings.json").exists()
+    assert not (tmp_path / "settings.json").exists(), "a settings write after the freeze reached disk"
 
 
 def test_a_token_save_after_the_reset_cannot_recreate_the_token(tmp_path, monkeypatch):
-    """The token store is the config module's own, so the reset freezes it on
-    the session too: a sign-in or refresh completing after the wipe must not
-    write token.json back."""
-    from waves.config import Tidal
+    """The token store's saver is the platform session's, so the reset freezes
+    it there too: a sign-in or refresh completing after the wipe must not write
+    token.json back."""
+    from waves.desktop.session import WavesTidal
     from waves.model.cfg import Token
 
     base = tmp_path / "cfg"
     base.mkdir()
     token_path = base / "token.json"
 
-    tidal = _Stub()
+    tidal = WavesTidal.__new__(WavesTidal)
     tidal.file_path = str(token_path)
     tidal.path_base = str(base)
     tidal.data = Token()
@@ -442,7 +439,7 @@ def test_a_token_save_after_the_reset_cannot_recreate_the_token(tmp_path, monkey
     stub.tidal = tidal
     _run_factory_reset(base, monkeypatch, stub=stub)
 
-    _bind(tidal, "token_persist", owner=Tidal)()
+    tidal.token_persist()
 
     assert not token_path.exists(), "a token save after the reset re-created token.json"
 

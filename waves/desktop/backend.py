@@ -646,6 +646,11 @@ class _SingleFlightWriter:
                 logger.exception("Config write during shutdown flush failed")
 
 
+# The session token, named once: the wipe list takes it with the rest, and
+# factoryReset unlinks it once more after the drain (that file's saver is the
+# config module's, which has no writer here to drain).
+_TOKEN_FILE_NAME = "token.json"  # noqa: S105 - a file name, not a secret
+
 _FACTORY_WIPE_FILES = (
     "settings.json",
     "settings.json.bak",
@@ -654,7 +659,7 @@ _FACTORY_WIPE_FILES = (
     # pattern below). The fixed names stay listed so a leftover from an older
     # build still falls to the reset.
     "settings.json.tmp",
-    "token.json",
+    _TOKEN_FILE_NAME,
     "token.json.bak",
     "token.json.tmp",
     "waves.json",
@@ -21821,7 +21826,7 @@ class WavesBridge(LibraryMixin, QObject):
         # The token path once more, after the drain: a save that passed the
         # freeze gate just before it latched can still have landed while the
         # wipe ran, and nothing later in the quit would take it.
-        unlink(os.path.join(base, "token.json"))
+        unlink(os.path.join(base, _TOKEN_FILE_NAME))
         # QSettings backs the QML-side setup flags (first-run FFmpeg gate,
         # update-toast memory); clearing it only edits Waves' own preferences
         # store, no file deletion involved.
