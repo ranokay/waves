@@ -14,6 +14,7 @@ pattern) so no display or live bridge is needed:
 from __future__ import annotations
 
 import os
+from threading import Event
 
 from waves.desktop import backend as backend_mod
 from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge
@@ -127,14 +128,21 @@ class _FakeQtCore:
     QSettings = _FakeQSettings
 
 
-def _run_factory_reset(base, monkeypatch):
+def _reset_stub():
+    """A bare bridge carrying what factoryReset cannot default for itself."""
+    stub = _Stub()
+    stub._factory_reset = False
+    stub._ownership = _FakeOwnership()
+    return stub
+
+
+def _run_factory_reset(base, monkeypatch, stub=None):
     monkeypatch.setattr(backend_mod, "path_config_base", lambda: str(base))
     monkeypatch.setattr(backend_mod.diagnostics, "detach_disk_log", lambda: None)
     _FakeQSettings.cleared = False
     monkeypatch.setattr(backend_mod, "QtCore", _FakeQtCore)
-    stub = _Stub()
-    stub._factory_reset = False
-    stub._ownership = _FakeOwnership()
+    if stub is None:
+        stub = _reset_stub()
     original_store = stub._ownership
     _bind(stub, "factoryReset")()
     return stub, original_store
@@ -329,6 +337,150 @@ def test_factory_reset_freeze_blocks_pref_saves(tmp_path):
     stub._waves_prefs = {"explicit_mode": "explicit"}
     _bind(stub, "_save_waves_prefs")()
     assert not os.path.exists(stub._waves_prefs_path), "no pref file may re-appear after the wipe"
+
+
+# --------------------------------------------------------------------------- #
+# Late writers: the wipe survives a save that outlives it
+#
+# shutdown() flushes the background config writer and aborts jobs AFTER the
+# wipe (the QML quits the moment factoryReset returns), so a write that was
+# already queued, or a worker that is still running, would put files back on
+# what is supposed to be a brand-new install.
+# --------------------------------------------------------------------------- #
+class _DrainingWriter:
+    """The bridge's config-writer seam, deterministic for ordering tests.
+
+    ``_SingleFlightWriter`` runs submitted closures on its own thread, which
+    would race an assertion about whether a write landed before or after the
+    wipe. Same contract, run at flush: exactly what the shutdown path uses.
+    """
+
+    def __init__(self):
+        self.pending = []
+
+    def submit(self, key, fn):
+        self.pending.append(fn)
+
+    def flush(self, timeout=3.0):
+        pending, self.pending = self.pending, []
+        for fn in pending:
+            fn()
+
+
+class _SettingsStub:
+    """The slice of waves.config.Settings a write submission touches."""
+
+    class data:
+        @staticmethod
+        def to_json():
+            return "{}"
+
+    def __init__(self, path):
+        self._path = path
+
+    def write_serialized(self, data_json):
+        with open(self._path, "w", encoding="utf-8") as handle:
+            handle.write(data_json)
+
+
+class _TokenSession:
+    token_type = "Bearer"  # noqa: S105 - canned test credentials
+    access_token = "late-access"  # noqa: S105
+    refresh_token = "late-refresh"  # noqa: S105
+    expiry_time = 0.0
+
+
+def test_a_settings_write_submitted_before_the_reset_cannot_survive_the_wipe(tmp_path, monkeypatch):
+    base = tmp_path / "cfg"
+    base.mkdir()
+    settings_path = base / "settings.json"
+
+    stub = _reset_stub()
+    stub._config_writer = _DrainingWriter()
+    stub.settings = _SettingsStub(settings_path)
+    _bind(stub, "_submit_settings_write")()  # queued, nothing on disk yet
+
+    _run_factory_reset(base, monkeypatch, stub=stub)
+    stub._config_writer.flush()  # shutdown's flush, after the wipe
+
+    assert not settings_path.exists(), "a write queued before the reset re-created settings.json"
+
+
+def test_factory_reset_freeze_blocks_settings_saves(tmp_path):
+    stub = _reset_stub()
+    stub._factory_reset = True
+    stub._config_writer = _DrainingWriter()
+    stub.settings = _SettingsStub(tmp_path / "settings.json")
+
+    _bind(stub, "_submit_settings_write")()
+    stub._config_writer.flush()
+
+    assert not (tmp_path / "settings.json").exists(), "a settings write after the freeze reached disk"
+
+
+def test_a_token_save_after_the_reset_cannot_recreate_the_token(tmp_path, monkeypatch):
+    """The token store's saver is the platform session's, so the reset freezes
+    it there too: a sign-in or refresh completing after the wipe must not write
+    token.json back."""
+    from waves.desktop.session import WavesTidal
+    from waves.model.cfg import Token
+
+    base = tmp_path / "cfg"
+    base.mkdir()
+    token_path = base / "token.json"
+
+    tidal = WavesTidal.__new__(WavesTidal)
+    tidal.file_path = str(token_path)
+    tidal.path_base = str(base)
+    tidal.data = Token()
+    tidal.session = _TokenSession()
+    tidal.on_session_credentials = None
+
+    stub = _reset_stub()
+    stub.tidal = tidal
+    _run_factory_reset(base, monkeypatch, stub=stub)
+
+    tidal.token_persist()
+
+    assert not token_path.exists(), "a token save after the reset re-created token.json"
+
+
+def test_a_token_write_landing_during_the_wipe_is_taken_after_the_drain(tmp_path, monkeypatch):
+    """A save that passed its freeze gate a moment before it latched can still
+    land while the wipe runs; the reset runs the allowlist once more after the
+    wipe, so nothing survives the drain."""
+    base = tmp_path / "cfg"
+    base.mkdir()
+    settings_path = base / "settings.json"
+    token_path = base / "token.json"
+
+    def late_save(_art: str) -> None:
+        settings_path.write_text("{}", encoding="utf-8")
+        token_path.write_text('{"access_token": "late"}', encoding="utf-8")
+
+    monkeypatch.setattr(backend_mod, "_factory_wipe_art_cache", late_save)
+
+    _run_factory_reset(base, monkeypatch)
+
+    assert not settings_path.exists(), "a settings document written during the wipe survived the reset"
+    assert not token_path.exists(), "a token document written during the wipe survived the reset"
+
+
+def test_the_reset_stops_every_transfer_before_it_deletes_anything(tmp_path, monkeypatch):
+    base = tmp_path / "cfg"
+    base.mkdir()
+    settings_path = base / "settings.json"
+    settings_path.write_text("x", encoding="utf-8")
+    still_on_disk: list[bool] = []
+
+    stub = _reset_stub()
+    stub.stopAll = lambda: still_on_disk.append(settings_path.exists())
+    stub._event_abort = Event()
+
+    _run_factory_reset(base, monkeypatch, stub=stub)
+
+    assert still_on_disk == [True], "STOP's internals must run while the files are still on disk"
+    assert stub._event_abort.is_set(), "the global abort gate goes up with them"
 
 
 # --------------------------------------------------------------------------- #
