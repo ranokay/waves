@@ -1021,6 +1021,18 @@ class Download:
         # and preserves the legacy last-segment leniency downstream.
         n_tail_spurious: int | None = stream_info.tail_spurious if stream_info is not None else None
 
+        # A NEGATIVE count is the provider proving the URL list is short of the
+        # manifest timeline. Every URL that exists may still download fine, yet
+        # the file would be missing audio, so fail the item here, before the
+        # segment fan-out, rather than merge a truncated file and report it
+        # done. The provider logged its own warning when it derived the count.
+        if n_tail_spurious is not None and n_tail_spurious < 0:
+            self.fn_logger.error(
+                f"'{log_content(media_name)}' is missing {-n_tail_spurious} segment(s) the manifest requires; "
+                "refusing to write a truncated file."
+            )
+            return False, path_file
+
         # Set the correct progress output channel.
         if self.progress_gui is None:
             progress_to_stdout: bool = True

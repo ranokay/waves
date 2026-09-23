@@ -131,6 +131,22 @@ def test_manifest_proven_spurious_tail_is_tolerated():
     assert ok is True
 
 
+def test_manifest_proven_short_url_list_tail_failure_is_real():
+    """The negative count (the list is short of the timeline) is the opposite
+    verdict from padding, never the tolerable quirk: a failed final segment is
+    a real failure, same as ``n_tail_spurious=0``."""
+    urls = ["seg1", "seg2", "seg3"]
+    b, p_task = _bridge(total=len(urls))
+    calls: list[str] = []
+    b._download_segment = _tail_fails(urls, calls)
+
+    ok, results = _run(b, urls, p_task, n_tail_spurious=-1)
+
+    assert ok is False
+    assert sorted(calls) == sorted(urls)
+    assert len(results) == len(urls)
+
+
 def test_manifest_proven_required_tail_failure_is_real():
     """The manifest proved every URL is required audio (n_tail_spurious=0),
     so a failed final segment is a REAL failure: anything less truncates the
