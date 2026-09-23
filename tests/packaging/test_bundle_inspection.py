@@ -1,10 +1,12 @@
 """The bundle inspector that enforces spec §10.1.
 
 The tool classifies a built bundle: Apple-derived engine material must never
-be there, open-source clients ship (ADR 0004) and are reported, and on macOS
-the code signature must verify. These tests pin the classifier against a fake
-bundle tree and a fake codesign/strings; the real signed bundle inspection is
-run per build and recorded as evidence.
+be there, open-source clients ship (ADR 0004) and are reported, gamdl's
+pywidevine and protobuf dependencies are reported present or absent
+(`docs/dependency-updates.md`), and on macOS the code signature must verify.
+These tests pin the classifier against a fake bundle tree and a fake
+codesign/strings; the real signed bundle inspection is run per build and
+recorded as evidence.
 """
 
 from __future__ import annotations
@@ -100,6 +102,42 @@ def test_embedded_client_markers_are_found_in_the_executable(tmp_path):
 
     assert any(item.startswith("gamdl: embedded") for item in report["clients"])
     assert any(item.startswith("yt-dlp: embedded") for item in report["clients"])
+    assert report["ok"] is True
+
+
+def test_expected_dependencies_are_reported_present_or_absent(tmp_path):
+    """pywidevine and protobuf ride gamdl in by decision
+    (docs/dependency-updates.md); the report names each present or absent and
+    fails neither."""
+    bundle = _bundle(tmp_path, ())
+
+    def runner(args):
+        if args[0] == "strings":
+            return _fake(stdout="pywidevine\npywidevine.cdm\ngoogle.protobuf\n")
+        return _fake()
+
+    report = inspect_bundle_tool.inspect_bundle(bundle, runner=runner, verify_signature=False)
+
+    assert any(item.startswith("pywidevine: embedded") for item in report["expected"])
+    assert any(item.startswith("protobuf: embedded") for item in report["expected"])
+    assert report["ok"] is True
+
+
+def test_absent_expected_dependencies_are_reported_not_failed(tmp_path):
+    bundle = _bundle(tmp_path, ())
+
+    report = inspect_bundle_tool.inspect_bundle(bundle, runner=lambda args: _fake(), verify_signature=False)
+
+    assert report["expected"] == ["pywidevine: absent", "protobuf: absent"]
+    assert report["ok"] is True
+
+
+def test_expected_dependency_shipped_as_a_package_is_reported_by_path(tmp_path):
+    bundle = _bundle(tmp_path, ("site-packages/pywidevine/__init__.py",))
+
+    report = inspect_bundle_tool.inspect_bundle(bundle, runner=lambda args: _fake(), verify_signature=False)
+
+    assert "pywidevine: site-packages/pywidevine" in report["expected"]
     assert report["ok"] is True
 
 

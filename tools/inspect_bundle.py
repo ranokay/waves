@@ -6,9 +6,11 @@ no N_m3u8DL-RE binary, no wrapper image and no wrapper session/guest
 libraries. Those are provisioned at setup through the managed-runtime flow.
 The open-source client libraries (gamdl, yt-dlp) are ordinary dependencies
 under ADR 0004 and are reported, never failed unless
-``--strict-clients`` is given. Pure-Python packages are often compiled into
-the main executable, so its module markers are scanned as well as the
-bundle's files.
+``--strict-clients`` is given. gamdl's own pywidevine and protobuf
+dependencies ship by the recorded keep-and-document decision
+(``docs/dependency-updates.md``) and are reported present or absent, never
+failed. Pure-Python packages are often compiled into the main executable, so
+its module markers are scanned as well as the bundle's files.
 
 It also checks the other direction: native modules the runtime loads by name
 must be present. PyCryptodome's cipher modules are the known case:
@@ -58,6 +60,16 @@ _CLIENTS = (
 _EMBEDDED_MARKERS = (
     (re.compile(r"^gamdl(\.|$)"), "gamdl"),
     (re.compile(r"^yt_dlp(\.|$)"), "yt-dlp"),
+)
+# Dependencies that ride gamdl into the compiled bundle by decision, not
+# accident: gamdl's license exchange imports pywidevine (GPL-3.0-only), which
+# pulls protobuf (BSD-3-Clause). Both stay — excluding pywidevine would mean
+# patching out the import path the engine uses — and the decision is recorded
+# in docs/dependency-updates.md. Each is reported present or absent, never
+# failed, so a bundle that gains or loses either is visible in the record.
+_EXPECTED = (
+    (re.compile(r"^pywidevine(\.|$)", re.IGNORECASE), "pywidevine"),
+    (re.compile(r"^google\.protobuf(\.|$)", re.IGNORECASE), "protobuf"),
 )
 # Native modules the bundle must carry: loaded by name at runtime (ctypes), so
 # a build or a trim can drop them silently (the #304 case). The names are the
@@ -121,8 +133,8 @@ def _scan_targets(bundle: Path) -> list[Path]:
     return out
 
 
-def _embedded_clients(binaries: list[Path], runner) -> list[str]:
-    """Client module markers inside the executables, by name."""
+def _embedded(binaries: list[Path], runner, markers) -> dict[str, str]:
+    """Module markers inside the executables, keyed by the name they report."""
     found: dict[str, str] = {}
     for binary in binaries:
         try:
@@ -130,10 +142,10 @@ def _embedded_clients(binaries: list[Path], runner) -> list[str]:
         except (FileNotFoundError, UnicodeDecodeError):  # strings absent or binary decoded badly
             continue
         lines = text.splitlines()
-        for pattern, client in _EMBEDDED_MARKERS:
-            if client not in found and any(pattern.match(line) for line in lines):
-                found[client] = f"{client}: embedded in {binary.name}"
-    return list(found.values())
+        for pattern, name in markers:
+            if name not in found and any(pattern.match(line) for line in lines):
+                found[name] = f"{name}: embedded in {binary.name}"
+    return found
 
 
 def inspect_bundle(
@@ -150,7 +162,9 @@ def inspect_bundle(
     ``strict_clients`` fails the report when an open-source client ships (the
     ADR 0004 alternative); ``require_developer_id`` fails anything that is not
     a verified Developer ID signature, for release pipelines. A missing
-    required native module (``_REQUIRED_NATIVE``) always fails the report.
+    required native module (``_REQUIRED_NATIVE``) always fails the report. The
+    expected dependencies (``_EXPECTED``) are reported present or absent,
+    never failed.
     """
     path = Path(bundle)
     if not path.exists():
@@ -182,7 +196,12 @@ def inspect_bundle(
         )
     ]
     seen = {item.split(":", 1)[0] for item in clients}
-    clients.extend(item for item in _embedded_clients(_scan_targets(path), runner) if item.split(":", 1)[0] not in seen)
+    embedded = _embedded(_scan_targets(path), runner, _EMBEDDED_MARKERS + _EXPECTED)
+    clients.extend(embedded[name] for _pattern, name in _EMBEDDED_MARKERS if name in embedded and name not in seen)
+    expected = []
+    for pattern, name in _EXPECTED:
+        file_hit = next((str(entry.relative_to(path)) for entry in entries if pattern.match(entry.name)), None)
+        expected.append(embedded.get(name) or (f"{name}: {file_hit}" if file_hit else f"{name}: absent"))
     signature = (
         _signature(path, runner, target_platform)
         if verify_signature
@@ -197,6 +216,7 @@ def inspect_bundle(
         "forbidden": forbidden,
         "missing": missing,
         "clients": clients,
+        "expected": expected,
         "signature": signature,
         "policy": {"strict_clients": strict_clients, "require_developer_id": require_developer_id},
         "ok": ok,
@@ -228,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"MISSING REQUIRED: {item}")
         for client in report["clients"]:
             print(f"client shipped (ADR 0004): {client}")
+        for item in report["expected"]:
+            print(f"expected dependency: {item}")
         sig = report["signature"]
         if sig["checked"]:
             state = "verified" if sig["verified"] else "FAILED to verify"

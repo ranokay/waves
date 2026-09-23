@@ -65,6 +65,16 @@ change updates that list in the same PR. A bump that changes packaging (new
 Qt plugin, new bundled client) also builds one leg and runs
 `tools/inspect_bundle.py` before shipping.
 
+gamdl's closure also pulls **pywidevine** (GPL-3.0-only, the Widevine CDM
+library its license exchange imports from `gamdl.interface.base`) and
+**protobuf** (BSD-3-Clause, pywidevine's license-protocol wire format) into
+the compiled bundle. The decision is to keep and document both, not exclude
+them: the engine imports `gamdl.interface.base`
+(`waves/providers/apple/engine.py`), so excluding pywidevine would mean
+patching the client. `tools/inspect_bundle.py` reports each as present or
+absent, so a bundle that gains or loses either is visible in the inspection
+record; app-bundle third-party notices are a separate decision.
+
 ### The wrapper image
 
 1. The weekly watcher opens an issue with a compare link; decide, then
