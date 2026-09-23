@@ -646,11 +646,6 @@ class _SingleFlightWriter:
                 logger.exception("Config write during shutdown flush failed")
 
 
-# The session token, named once: the wipe list takes it with the rest, and
-# factoryReset unlinks it once more after the drain (that file's saver is the
-# config module's, which has no writer here to drain).
-_TOKEN_FILE_NAME = "token.json"  # noqa: S105 - a file name, not a secret
-
 _FACTORY_WIPE_FILES = (
     "settings.json",
     "settings.json.bak",
@@ -659,7 +654,7 @@ _FACTORY_WIPE_FILES = (
     # pattern below). The fixed names stay listed so a leftover from an older
     # build still falls to the reset.
     "settings.json.tmp",
-    _TOKEN_FILE_NAME,
+    "token.json",
     "token.json.bak",
     "token.json.tmp",
     "waves.json",
@@ -21741,9 +21736,8 @@ class WavesBridge(LibraryMixin, QObject):
         # End every transfer NOW, not at the quit: shutdown runs after the
         # wipe, so a job still running (or a spec still queued, or a download
         # held for an unreachable folder) could land a settings or token save
-        # over the files just deleted. STOP's own abort internals do the work
-        # -- job aborts, queued specs, the held stash, the global run gate --
-        # then the global abort the teardown path raises goes up too.
+        # over the files just deleted. STOP's own abort internals do the work,
+        # and the global abort gate goes up with them.
         stop = getattr(self, "stopAll", None)
         if callable(stop):
             with contextlib.suppress(Exception):
@@ -21823,10 +21817,14 @@ class WavesBridge(LibraryMixin, QObject):
             with contextlib.suppress(OSError):
                 os.rmdir(sub)
         _factory_wipe_art_cache(os.path.join(base, _ART_CACHE_DIR))
-        # The token path once more, after the drain: a save that passed the
-        # freeze gate just before it latched can still have landed while the
-        # wipe ran, and nothing later in the quit would take it.
-        unlink(os.path.join(base, _TOKEN_FILE_NAME))
+        # The allowlisted files once more, after the drain: a save that passed
+        # its freeze gate just before it latched (or a write already inside
+        # the config writer when its flush deadline expired) can still have
+        # landed while the wipe ran, and nothing later in the quit would take
+        # it -- the token's saver, in the config module, has no writer here to
+        # drain at all.
+        for name in _FACTORY_WIPE_FILES:
+            unlink(os.path.join(base, name))
         # QSettings backs the QML-side setup flags (first-run FFmpeg gate,
         # update-toast memory); clearing it only edits Waves' own preferences
         # store, no file deletion involved.

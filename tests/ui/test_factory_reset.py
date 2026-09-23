@@ -14,6 +14,7 @@ pattern) so no display or live bridge is needed:
 from __future__ import annotations
 
 import os
+from threading import Event
 
 from waves.desktop import backend as backend_mod
 from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge
@@ -445,21 +446,41 @@ def test_a_token_save_after_the_reset_cannot_recreate_the_token(tmp_path, monkey
 
 
 def test_a_token_write_landing_during_the_wipe_is_taken_after_the_drain(tmp_path, monkeypatch):
-    """A save that passed the freeze gate a moment before it latched can still
-    land while the wipe runs; the reset unlinks the token path once more after
-    the wipe, so nothing survives the drain."""
+    """A save that passed its freeze gate a moment before it latched can still
+    land while the wipe runs; the reset runs the allowlist once more after the
+    wipe, so nothing survives the drain."""
     base = tmp_path / "cfg"
     base.mkdir()
+    settings_path = base / "settings.json"
     token_path = base / "token.json"
 
     def late_save(_art: str) -> None:
+        settings_path.write_text("{}", encoding="utf-8")
         token_path.write_text('{"access_token": "late"}', encoding="utf-8")
 
     monkeypatch.setattr(backend_mod, "_factory_wipe_art_cache", late_save)
 
     _run_factory_reset(base, monkeypatch)
 
+    assert not settings_path.exists(), "a settings document written during the wipe survived the reset"
     assert not token_path.exists(), "a token document written during the wipe survived the reset"
+
+
+def test_the_reset_stops_every_transfer_before_it_deletes_anything(tmp_path, monkeypatch):
+    base = tmp_path / "cfg"
+    base.mkdir()
+    settings_path = base / "settings.json"
+    settings_path.write_text("x", encoding="utf-8")
+    still_on_disk: list[bool] = []
+
+    stub = _reset_stub()
+    stub.stopAll = lambda: still_on_disk.append(settings_path.exists())
+    stub._event_abort = Event()
+
+    _run_factory_reset(base, monkeypatch, stub=stub)
+
+    assert still_on_disk == [True], "STOP's internals must run while the files are still on disk"
+    assert stub._event_abort.is_set(), "the global abort gate goes up with them"
 
 
 # --------------------------------------------------------------------------- #
