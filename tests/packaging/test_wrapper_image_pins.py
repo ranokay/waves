@@ -26,6 +26,11 @@ def _workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text())
 
 
+def _inputs() -> dict:
+    # YAML reads `on:` as boolean True.
+    return _workflow()[True]["workflow_dispatch"]["inputs"]
+
+
 def _tracked_wrapper_files() -> set[str]:
     """The paths under tools/wrapper-image that git actually carries."""
     git = shutil.which("git")
@@ -43,14 +48,45 @@ def _tracked_wrapper_files() -> set[str]:
 def test_workflow_defaults_publish_exactly_the_pinned_image():
     from waves.providers.apple.runtime import WRAPPER_V2_IMAGE
 
-    wf = _workflow()
-    inputs = wf[True]["workflow_dispatch"]["inputs"]  # YAML reads `on:` as boolean True
-    tag = inputs["image_tag"]["default"]
+    tag = _inputs()["image_tag"]["default"]
     # The tag must equal the app pin; the registry path defaults to the
     # publishing owner's namespace, so forks need no edits.
     assert WRAPPER_V2_IMAGE.rsplit(":", 1)[1] == tag
     assert "ghcr.io/${{ github.repository_owner }}/waves-wrapper-v2" in WORKFLOW.read_text()
-    assert inputs["wrapper_ref"]["default"]
+
+
+def test_workflow_requires_a_full_upstream_sha():
+    wf = _workflow()
+    ref = _inputs()["wrapper_ref"]
+    assert ref.get("required") is True
+    assert "default" not in ref, "a default ref lets a one-click dispatch build a moving branch"
+    step = next(
+        (s for s in wf["jobs"]["build"]["steps"] if s.get("name") == "Require a full upstream commit SHA"),
+        None,
+    )
+    assert step is not None, "the publish lost its ref guard"
+    run = str(step["run"])
+    assert "^[0-9a-f]{40}$" in run
+    assert "exit 1" in run
+
+
+def test_workflow_refuses_to_overwrite_a_published_tag():
+    wf = _workflow()
+    override = _inputs()["allow_tag_overwrite"]
+    assert override["type"] == "boolean"
+    assert override["default"] is False
+    steps = wf["jobs"]["build"]["steps"]
+    guard = next((s for s in steps if s.get("name") == "Refuse to overwrite an existing tag"), None)
+    assert guard is not None, "the publish lost its tag guard"
+    run = str(guard["run"])
+    assert "imagetools inspect" in run
+    assert "exit 1" in run
+    # The override arrives through the environment, never interpolated into
+    # the script text.
+    assert guard["env"]["ALLOW_TAG_OVERWRITE"] == "${{ inputs.allow_tag_overwrite }}"
+    assert "${ALLOW_TAG_OVERWRITE}" in run
+    names = [s.get("name") for s in steps]
+    assert names.index("Refuse to overwrite an existing tag") < names.index("Build and push")
 
 
 def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
@@ -72,13 +108,22 @@ def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
     assert "/health" in text and "11020" in text
 
 
-def test_blessed_apk_inputs_match_the_app_pins():
-    import yaml
+def test_the_private_apk_download_goes_through_the_release_api():
+    """A private repo's /releases/download/ URL only serves a browser
+    session, so the step resolves it through the release asset API."""
+    steps = _workflow()["jobs"]["build"]["steps"]
+    download = next((s for s in steps if s.get("name") == "Download Apple Music artifact"), None)
+    assert download is not None, "the publish lost its APK download stage"
+    run = str(download["run"])
+    assert "api.github.com/repos/" in run
+    assert "releases/assets" in run
+    assert "Accept: application/octet-stream" in run
 
+
+def test_blessed_apk_inputs_match_the_app_pins():
     from waves.providers.apple.runtime import APK_PINNED_VERSION
 
-    wf = yaml.safe_load(WORKFLOW.read_text())
-    inputs = wf[True]["workflow_dispatch"]["inputs"]  # YAML reads `on:` as boolean True
+    inputs = _inputs()
     assert inputs["apk_version"]["default"] == APK_PINNED_VERSION
     assert inputs["apk_build"]["default"] == "1109"
 
@@ -96,6 +141,18 @@ def test_the_pinned_image_digest_matches_the_runbook():
     from waves.providers.apple.runtime import WRAPPER_V2_IMAGE_DIGEST
 
     assert WRAPPER_V2_IMAGE_DIGEST in RUNBOOK.read_text(), "the image digest pin and the runbook disagree"
+
+
+def test_the_publish_checks_out_this_repo_for_the_notices_templates():
+    steps = _workflow()["jobs"]["build"]["steps"]
+    names = [s.get("name") for s in steps]
+    own_checkouts = [
+        index
+        for index, step in enumerate(steps)
+        if str(step.get("uses", "")).startswith("actions/checkout") and "repository" not in step.get("with", {})
+    ]
+    assert own_checkouts, "the notices stage reads tools/wrapper-image/, which needs this repo checked out"
+    assert own_checkouts[0] < names.index("Prepare notices")
 
 
 def test_the_publish_adds_notices_and_provenance_labels():

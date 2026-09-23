@@ -63,6 +63,7 @@ def test_each_artifact_carries_its_producing_revision():
     assert re.search(r"\b[0-9a-f]{40}\b", bundle), "no producing revision in the bundle inspection"
     image = (EVIDENCE / "wrapper-image-inspection.md").read_text(encoding="utf-8")
     assert "sha256:1aac416aae06995095fac19a12d180d869a3bc615b83d31b0773281a9801be15" in image
+    assert "sha256:79a36375a3555ca9e4aa6a9d1ccffbf0ac45a1604d19d307761c6d6ba29b428b" in image
     builds = (EVIDENCE / "platform-builds.md").read_text(encoding="utf-8")
     for run_id in PLATFORM_RUN_IDS:
         assert run_id in builds, f"platform run {run_id} lost from the evidence"

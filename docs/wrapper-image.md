@@ -1,8 +1,8 @@
 # Publishing the Waves wrapper image
 
 Upstream `wrapper-v2` ships source only, so Waves publishes its own pinned
-image (`ghcr.io/ranokay/waves-wrapper-v2:0.2.3`, digest
-`sha256:1aac416aae06995095fac19a12d180d869a3bc615b83d31b0773281a9801be15`)
+image (`ghcr.io/ranokay/waves-wrapper-v2:0.2.4`, digest
+`sha256:79a36375a3555ca9e4aa6a9d1ccffbf0ac45a1604d19d307761c6d6ba29b428b`)
 for end-user pulls. This page covers who uses what, then the maintainer
 runbook: one-time setup, how to publish, and the version lockstep.
 
@@ -18,8 +18,8 @@ runbook: one-time setup, how to publish, and the version lockstep.
   APK below; the publish summary in Actions records the exact source SHA
   and guest-lib pins, so anyone can audit what went in. Images published after
   2026-09-15 also ship their third-party notices under `/licenses` and OCI
-  provenance labels (the currently published `0.2.3` predates them; the next
-  publish carries them), and the app verifies the pinned digest when it pulls;
+  provenance labels (the current `0.2.4` carries them; the earlier `0.2.3`
+  predates them), and the app verifies the pinned digest when it pulls;
   the distribution decision and its accepted risk are recorded in
   `wrapper-image-license-review.md`.
 - **You fork or clone Waves to hack on it.** Still nothing to do: the app
@@ -83,10 +83,14 @@ runbook: one-time setup, how to publish, and the version lockstep.
 
 Actions → **wrapper-image** → Run workflow:
 
-- `wrapper_ref` — upstream `wrapper-v2` ref to build. Prefer a full
-  commit SHA for reproducibility; `main` tracks upstream.
+- `wrapper_ref` — upstream `wrapper-v2` **full commit SHA** to build.
+  Required, and the run refuses anything that is not 40 hex characters:
+  a branch or tag moves, so it cannot be recorded as provenance.
 - `image_tag` — the tag to push. **It must equal the `WRAPPER_V2_IMAGE`
-  pin in `waves/providers/apple/runtime.py`** (the suite enforces this).
+  pin in `waves/providers/apple/runtime.py`** (the suite enforces this),
+  and it must be new: the run refuses to overwrite an existing tag.
+  `allow_tag_overwrite` exists only to repair a bad publish and is never
+  set for a release.
 
 The run downloads the APK, extracts and hash-verifies the arm64 native
 libs against the source tree's `LIBS_VERSION.json`, builds `linux/arm64`,
@@ -115,9 +119,9 @@ These five move together; bump them as one change:
 
 | Piece        | Where                                                                                                                                                                                                                                                                                    | Current                   |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| Image tag    | workflow `image_tag` input                                                                                                                                                                                                                                                               | `0.2.3`                   |
-| Image pin    | `WRAPPER_V2_IMAGE`, `waves/providers/apple/runtime.py`                                                                                                                                                                                                                                   | `…:0.2.3`                 |
-| Image digest | `WRAPPER_V2_IMAGE_DIGEST`, same file + the digest named at the top of this page                                                                                                                                                                                                          | `sha256:1aac…be15`        |
+| Image tag    | workflow `image_tag` input                                                                                                                                                                                                                                                               | `0.2.4`                   |
+| Image pin    | `WRAPPER_V2_IMAGE`, `waves/providers/apple/runtime.py`                                                                                                                                                                                                                                   | `…:0.2.4`                 |
+| Image digest | `WRAPPER_V2_IMAGE_DIGEST`, same file + the digest named at the top of this page                                                                                                                                                                                                          | `sha256:79a3…428b`        |
 | APK version  | `APK_PINNED_VERSION`, same file + `APK_URL` content                                                                                                                                                                                                                                      | `3.6.0-beta` (build 1109) |
 | Guest libs   | regenerated from the blessed APK at build time: upstream's pin file matched 3.6.0-1109 when last checked, but nothing guarantees it tracks the blessed APK, so CI pins deterministically from the file itself; `WRAPPER_LIBS_VERSION` (`17.0.0`) is still recorded in the image manifest | 18 arm64 libs             |
 
@@ -137,7 +141,7 @@ old bytes.
 
 A weekly scheduled workflow (`wrapper-upstream-check`, Mondays) compares
 upstream `main` against the tracked pin (`.github/wrapper-upstream.sha`,
-currently the `0.2.3` build SHA) and opens one deduped issue when it moves,
+currently the `0.2.4` build SHA) and opens one deduped issue when it moves,
 with the compare link and the checklist above. It never builds or publishes
 on its own — shipping new decryption code stays a human decision. The same
 watch runs on forks, against the same upstream, which is what they want.
