@@ -846,6 +846,27 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         if bool(q("root.folderGateBlocking")):
             problems.append("Space on the folder gate's Not now never closed the gate")
 
+    # A disabled host disables its tap area: the terms gate's ACKNOWLEDGE is
+    # inert until its checkbox is ticked, so while disabled it is no tab stop,
+    # and ticking the box makes it one again. Without the host binding the
+    # tap area keeps the MouseArea's own enabled=true and stays reachable.
+    q("termsGate.visible = true")
+    settle(300)
+    ack = q(scene_js('return findFirst(root, function (o) { return o.accessibleLabel === "ACKNOWLEDGE & AGREE"; });'))
+    if ack is None:
+        problems.append("the terms gate's ACKNOWLEDGE action is not in the tree")
+    else:
+        if bool(ack.property("enabled")):
+            problems.append("a disabled gate action's tap area still reads enabled")
+        if bool(ack.property("activeFocusOnTab")):
+            problems.append("a disabled gate action is still a tab stop")
+        q("ackChk.checked = true")
+        settle(150)
+        if not bool(ack.property("enabled")) or not bool(ack.property("activeFocusOnTab")):
+            problems.append("ticking the terms checkbox never enabled its ACKNOWLEDGE action")
+    q("termsGate.visible = false")
+    settle(150)
+
     if problems:
         for line in problems:
             print(f"REGRESSED: {line}", file=sys.stderr)

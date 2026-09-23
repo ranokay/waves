@@ -60,6 +60,9 @@ Rectangle {
   TapAction {
     id: gaMa
     anchors.fill: parent
+    // The host's own state, not the tap area's default: a disabled gate
+    // action is no tab stop, no press target and no hand cursor.
+    enabled: ga.enabled
     accessibleLabel: ga.label
     focusRadius: ga.radius
     onTriggered: ga.clicked()

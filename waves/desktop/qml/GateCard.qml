@@ -87,6 +87,9 @@ Rectangle {
   TapAction {
     id: gcMa
     anchors.fill: parent
+    // The host's own state, not the tap area's default: a disabled card is
+    // no tab stop, no press target and no hand cursor.
+    enabled: gcard.enabled
     // The chip (RECOMMENDED, the detected version) is what tells two cards
     // in one gate apart, so it rides the spoken name too.
     accessibleLabel: gcard.title + (gcard.chip !== "" ? ", " + gcard.chip : "") + (gcard.desc !== "" ? ", " + gcard.desc : "")
