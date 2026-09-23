@@ -5,7 +5,8 @@ vendoring them would bloat the repo without adding verifiability. The
 durable record is the run id (linkable forever), the head SHA it ran, and
 what it proved — tabulated here from `docs/platform-enablement-review.md`.
 Accepted by #205; the #205 closing overclaim is corrected by that issue's
-follow-up comment, and the Windows park by ADR 0009.
+follow-up comment, and the Windows park by ADR 0009 (superseded 2026-09-23;
+see the revalidation rows below).
 
 | Leg                                          | Run                                                                         | Head SHA                                                        | Result                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | -------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -45,4 +46,6 @@ means a real build. Local macOS build evidence since comes from
 #243 (cold 76 m 33 s, darwin/arm64) and #245 (385 s with the
 `lazy_extractors` exclusion); the Windows revalidation on that recipe
 landed with run `35836125855` (2026-09-23, both legs green), and ADR 0009
-is superseded.
+is superseded. The Windows legs' applicable steps are build plus
+smoke-launch (x64) and build (arm64): the macOS floor assert is
+macOS-only and does not apply to them.

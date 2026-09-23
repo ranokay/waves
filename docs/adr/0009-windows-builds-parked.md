@@ -65,7 +65,8 @@ which is follow-up work, not this decision).
 ## Consequences
 
 - The README marks the Windows rows parked and the platform badge covers
-  only shippable platforms until re-entry.
+  only shippable platforms until re-entry (met on 2026-09-23; see
+  Supersession).
 - Re-entry needs all three, in order: (1) a tracked run with both Windows
   legs green on the exclusion recipe (x64 build plus smoke-launch, arm64
   build, arm64 launch still by design); (2) the README table and badge
