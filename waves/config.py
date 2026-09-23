@@ -206,16 +206,14 @@ class BaseConfig[TModel: (ModelSettings, ModelToken)]:
                 # defaults. This runs in the bridge constructor before QML
                 # loads, so an OSError here is an app that never opens a window.
                 try:
-                    # First check if a backup file already exists. If yes, remove it.
                     if os.path.exists(path_bak):
                         os.remove(path_bak)
 
-                    # Move the invalid config file to the backup location.
                     shutil.move(path, path_bak)
-                except OSError as move_error:
+                except OSError as repair_error:
                     logger.warning(
-                        "Could not move the corrupt config aside; leaving it in place and starting on defaults (%s)",
-                        type(move_error).__name__,
+                        "Could not back up the corrupt config; starting on defaults (%s)",
+                        type(repair_error).__name__,
                     )
                 else:
                     print(

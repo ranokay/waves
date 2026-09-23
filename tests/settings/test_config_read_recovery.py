@@ -6,7 +6,7 @@ a ``.bak`` that cannot be removed, raised ``OSError`` out of the constructor.
 ``Settings.__init__`` runs in the bridge constructor before QML loads, so that
 exception meant the app never opened its window -- in exactly the locked-file
 environment the atomic write already accounts for. The repair is now
-best-effort: on failure the file stays where it is, a warning is logged, and
+best-effort: on failure the file is not moved aside, a warning is logged, and
 the defaults stand.
 """
 
@@ -65,8 +65,13 @@ def test_a_bak_that_cannot_be_removed_still_reads_as_defaults(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text("[]", encoding="utf-8")
     # A directory in the .bak slot: os.remove raises OSError on every platform.
-    (tmp_path / "settings.json.bak").mkdir()
+    bak = tmp_path / "settings.json.bak"
+    bak.mkdir()
     cfg = _cfg(tmp_path)
 
-    assert cfg.read(str(path)) is False
+    with _config_log_records() as records:
+        assert cfg.read(str(path)) is False
+
+    assert [record.levelno for record in records] == [logging.WARNING]
+    assert list(bak.iterdir()) == [], "the corrupt file was not moved into the .bak either"
     assert cfg.data == ModelSettings()
