@@ -146,6 +146,14 @@ def test_expected_dependencies_shipped_as_packages_are_reported_by_path(tmp_path
     assert report["ok"] is True
 
 
+def test_expected_dependency_dist_info_is_reported_by_path(tmp_path):
+    bundle = _bundle(tmp_path, ("site-packages/protobuf-6.33.6.dist-info/METADATA",))
+
+    report = inspect_bundle_tool.inspect_bundle(bundle, runner=lambda args: _fake(), verify_signature=False)
+
+    assert "protobuf: site-packages/protobuf-6.33.6.dist-info" in report["expected"]
+
+
 def test_signature_verification_and_kind(tmp_path):
     bundle = _bundle(tmp_path, ())
     calls: list[list[str]] = []
