@@ -2,8 +2,8 @@ name: flatpak-build
 
 # Builds Flatpak bundles from the same Nuitka dist the Linux release legs ship
 # (x64 and arm64 runners, each with its native freedesktop runtime). A manual
-# dispatch produces the artifacts; a version tag also uploads them to that
-# Release. The in-app updater defers to Flatpak through its managed-channel
+# dispatch produces the artifacts; upstream, a version tag also uploads them to
+# that Release. The in-app updater defers to Flatpak through its managed-channel
 # detection (FLATPAK_ID / .flatpak-info), so the bundle never self-updates;
 # the AppImage channel is unchanged.
 
