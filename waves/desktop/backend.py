@@ -21706,10 +21706,10 @@ class WavesBridge(LibraryMixin, QObject):
         application"): settings, prefs, the sign-in token, the ownership
         store, disk caches, logs and the QSettings setup flags. Downloaded
         music is never touched. Persistence is latched off, every transfer is
-        stopped and the pending config writes are drained BEFORE anything is
-        deleted, so no late writer can put the files back after the wipe; the
-        UI quits right after this returns, and the next launch starts like a
-        brand-new install.
+        stopped and the pending config writes are drained before anything is
+        deleted, and the allowlisted files are taken once more after the
+        drain; the UI quits right after this returns, and the next launch
+        starts like a brand-new install.
 
         Safety property, load-bearing: the wipe can only ever delete Waves'
         own files. It works from the _FACTORY_WIPE_* allowlists of exact
@@ -21786,13 +21786,15 @@ class WavesBridge(LibraryMixin, QObject):
             with contextlib.suppress(OSError):
                 os.remove(path)
 
+        def wipe_named_files() -> None:
+            for name in _FACTORY_WIPE_FILES:
+                unlink(os.path.join(base, name))
+
         try:
             names = set(os.listdir(base))
         except OSError:
             names = set()
-        for name in _FACTORY_WIPE_FILES:
-            if name in names:
-                unlink(os.path.join(base, name))
+        wipe_named_files()
         for name in names:
             if any(pat.match(name) for pat in _FACTORY_WIPE_LOG_PATTERNS):
                 unlink(os.path.join(base, name))
@@ -21823,8 +21825,7 @@ class WavesBridge(LibraryMixin, QObject):
         # landed while the wipe ran, and nothing later in the quit would take
         # it -- the token's saver, in the config module, has no writer here to
         # drain at all.
-        for name in _FACTORY_WIPE_FILES:
-            unlink(os.path.join(base, name))
+        wipe_named_files()
         # QSettings backs the QML-side setup flags (first-run FFmpeg gate,
         # update-toast memory); clearing it only edits Waves' own preferences
         # store, no file deletion involved.
