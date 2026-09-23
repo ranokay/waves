@@ -30,11 +30,21 @@ from waves.providers.base import ProviderDescriptor, StatusKind
 # Every case here boots the real Main.qml in a child interpreter.
 pytestmark = pytest.mark.qml
 
-_TEXT_POINT_JS = """
-    function pointOfText(needle) {
-        var hit = findFirst(root, function (o) {
-            return o.text !== undefined && String(o.text) === needle;
+_VISIBLE_TEXT_JS = """
+    // The visible instance: the settings schema renders hidden copies.
+    function findVisibleText(needle) {
+        return findFirst(root, function (o) {
+            return o.visible === true && o.text !== undefined && String(o.text) === needle
+                && o.width > 0 && o.height > 0;
         });
+    }
+"""
+
+_TEXT_POINT_JS = (
+    _VISIBLE_TEXT_JS
+    + """
+    function pointOfText(needle) {
+        var hit = findVisibleText(needle);
         if (!hit) return "";
         var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);
         // Off-screen at this scroll position is not a rendered, clickable mark.
@@ -42,6 +52,7 @@ _TEXT_POINT_JS = """
         return JSON.stringify([p.x, p.y]);
     }
 """
+)
 
 _CARD_POINT = scene_js(
     _TEXT_POINT_JS
@@ -50,21 +61,46 @@ _CARD_POINT = scene_js(
 """
 )
 
-_SCROLL_TO_CARD = scene_js("""
-    var hit = findFirst(root, function (o) {
-        return o.text !== undefined && String(o.text) === "NewCo";
-    });
+_SCROLL_TO_CARD = scene_js(
+    _VISIBLE_TEXT_JS
+    + """
+    var hit = findVisibleText("NewCo");
     if (!hit) return "";
     var holder = settingsPage.scrollViewport;
     var y = hit.mapToItem(holder.contentItem, 0, hit.height / 2).y;
+    // An explicit destination outranks the page's remembered spot (the same
+    // reason jumpToCard disarms it): leave it disarmed, or a later re-measure
+    // re-applies it and undoes this scroll.
+    settingsPage.pendingY = -1;
     settingsPage.scrollY = Math.max(0, y - holder.height / 2);
     return "scrolled";
-""")
+"""
+)
+
+# What the last failed attempt saw, so a future runner-only failure names its
+# geometry instead of repeating the message alone.
+_CARD_GEOMETRY = scene_js(
+    _VISIBLE_TEXT_JS
+    + """
+    var holder = settingsPage.scrollViewport;
+    var geometry = {
+        scrollY: Math.round(holder.contentY),
+        viewport: Math.round(holder.height),
+        content: Math.round(holder.contentHeight),
+        root: [Math.round(root.width), Math.round(root.height)]
+    };
+    var hit = findVisibleText("NewCo");
+    if (!hit) return JSON.stringify(geometry) + " (no visible 'NewCo' text)";
+    var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);
+    geometry.point = [Math.round(p.x), Math.round(p.y)];
+    return JSON.stringify(geometry);
+"""
+)
 
 _PILL = scene_js("""
     var hit = findFirst(root, function (o) {
         return o.actKey !== undefined && String(o.actKey) === "newco_signout"
-            && o.visible !== false && o.width > 0;
+            && o.visible === true && o.width > 0;
     });
     if (!hit) return "";
     var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);
@@ -77,7 +113,8 @@ _PILL = scene_js("""
 
 _RUN_PILL = scene_js("""
     var hit = findFirst(root, function (o) {
-        return o.actKey !== undefined && String(o.actKey) === "newco_signout";
+        return o.actKey !== undefined && String(o.actKey) === "newco_signout"
+            && o.visible === true && o.width > 0;
     });
     if (hit) hit.runAction();
     return hit ? "called" : "";
@@ -92,6 +129,24 @@ def test_a_third_provider_card_renders_and_acts():
         sandbox_prefix="waves-provider-card-",
         failure_message="a third provider does not render or act through the descriptor contract",
     )
+
+
+def _bring_card_on_screen(q, settle) -> str:
+    """Scroll until the card's point is inside the root; "" when it lands.
+
+    The schema rebuild re-measures the column, and a late layout pass can
+    strand a scroll that landed before it (how long the re-measure takes
+    depends on the runner's font metrics), so re-aim and re-check on a
+    bounded loop instead of trusting one settle. The failure message carries
+    the geometry the last attempt saw.
+    """
+    for _ in range(8):
+        if q(_SCROLL_TO_CARD) == "":
+            return f"the third provider's card did not render: {q(_CARD_GEOMETRY)}"
+        settle(250)
+        if q(_CARD_POINT) not in ("", None):
+            return ""
+    return f"the third provider's card never came on screen: {q(_CARD_GEOMETRY)}"
 
 
 def _run_scenario() -> int:
@@ -131,12 +186,9 @@ def _run_scenario() -> int:
     settle(300)
 
     # The card and its generated action render in the live page, on screen.
-    if q(_SCROLL_TO_CARD) == "":
-        print("the third provider's card did not render (no 'NewCo' text)", file=sys.stderr)
-        return EXIT_REGRESSED
-    settle(300)
-    if q(_CARD_POINT) in ("", None):
-        print("the third provider's card never came on screen", file=sys.stderr)
+    failure = _bring_card_on_screen(q, settle)
+    if failure:
+        print(failure, file=sys.stderr)
         return EXIT_REGRESSED
 
     pill = q(_PILL)
