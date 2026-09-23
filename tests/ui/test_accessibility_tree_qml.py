@@ -105,7 +105,7 @@ _TAB_STOP_BODY = """
     // flags without a KeyError (the path is the broken-chain signal).
     if (!it) return JSON.stringify({ path: null,
                                      object: "", name: "", label: "", type: "",
-                                     visible: false, enabled: false,
+                                     visible: false, enabled: false, focusable: false,
                                      inSettings: false, inChooser: false, inDrawer: false });
     function inTree(o, needle) {
         while (o) { if (o === needle) return true; o = o.parent; }
@@ -119,6 +119,7 @@ _TAB_STOP_BODY = """
                             type: "" + it,
                             visible: it.visible !== false,
                             enabled: it.enabled !== false,
+                            focusable: it.activeFocusOnTab === true,
                             inSettings: inTree(it, settingsPage),
                             inChooser: chooser ? inTree(it, chooser.contentItem) : false,
                             inDrawer: queueDrawer.contentItem ? inTree(it, queueDrawer.contentItem) : false });
@@ -150,26 +151,36 @@ TRACK = {
 # toggle stages an edit, so the commit-action leg has something to commit and
 # discard. Matched through the tab-stop flag first, so the predicate never
 # reads ``Accessible`` off a non-Item object (the window, a Popup).
-_APPLE_SWITCH = """
-    var sw = findFirst(root, function (o) {
-        return o.activeFocusOnTab === true && o.Accessible && o.Accessible.role === 44
+_APPLE_SWITCH = f"""
+    var sw = findFirst(root, function (o) {{
+        return o.activeFocusOnTab === true && o.Accessible && o.Accessible.role === {_ROLE_CHECKBOX}
             && ('' + o.Accessible.name) === "Enable Apple Music";
-    });
+    }});
 """
 
 
-def _named_control(q, name: str):
-    """The tab-reachable adopted control with this spoken name, or None.
+def _adopted(q, object_name: str):
+    """The adopted tap area the named host owns, or None.
 
-    Matched on the primitive's own label property, never on ``o.Accessible``:
-    reading the attached property off a non-Item object (the window, a Popup)
-    logs a warning, and only adopted controls carry ``accessibleLabel``.
+    The host is the control itself for a direct adoption, or the component
+    instance (a ``GateAction``/``GateCard``) whose inner tap area carries the
+    contract. Reached by objectName, so a hidden copy of the same control on
+    another surface can never answer for it.
     """
     return q(
         scene_js(
-            f'return findFirst(root, function (o) {{ return o.accessibleLabel === "{name}"'
-            f" && o.activeFocusOnTab === true; }});"
+            f'var host = findObject(root, "{object_name}");'
+            " if (!host) return null;"
+            " if (host.accessibleLabel !== undefined) return host;"
+            " return findFirst(host, function (o) { return o.accessibleLabel !== undefined; });"
         )
+    )
+
+
+def _spoken_name(q, object_name: str) -> str:
+    """The spoken name of the named control, or "" when it is not in the tree."""
+    return q(
+        scene_js(f'var c = findObject(root, "{object_name}"); return c && c.Accessible ? "" + c.Accessible.name : "";')
     )
 
 
@@ -712,15 +723,23 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
             q("settingsPage.forceActiveFocus()")
             settle(80)
             cancel_stop, seen = _tab_until(
-                q, settle, root, lambda s: s["name"] == "CANCEL" and s["inSettings"], limit=120
+                q, settle, root, lambda s: s["object"] == "cancelEditsBtn" and s["inSettings"], limit=120
             )
             if cancel_stop is None:
                 problems.append(f"Tab never reached CANCEL inside Settings: {seen[-8:]}")
+            elif cancel_stop["name"] != "CANCEL" or not cancel_stop["focusable"]:
+                problems.append(
+                    f"CANCEL is not a named tab stop: name={cancel_stop['name']!r} focusable={cancel_stop['focusable']}"
+                )
             save_stop, seen = _tab_until(
-                q, settle, root, lambda s: s["name"] == "SAVE CHANGES" and s["inSettings"], limit=120
+                q, settle, root, lambda s: s["object"] == "saveChangesBtn" and s["inSettings"], limit=120
             )
             if save_stop is None:
                 problems.append(f"Tab never reached SAVE CHANGES inside Settings: {seen[-8:]}")
+            elif save_stop["name"] != "SAVE CHANGES" or not save_stop["focusable"]:
+                problems.append(
+                    f"SAVE CHANGES is not a named tab stop: name={save_stop['name']!r} focusable={save_stop['focusable']}"
+                )
             elif not save_stop["enabled"]:
                 problems.append("SAVE CHANGES is not enabled while an edit is staged")
             else:
@@ -746,7 +765,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
                     q("settingsPage.forceActiveFocus()")
                     settle(80)
                     cancel_stop, seen = _tab_until(
-                        q, settle, root, lambda s: s["name"] == "CANCEL" and s["inSettings"], limit=120
+                        q, settle, root, lambda s: s["object"] == "cancelEditsBtn" and s["inSettings"], limit=120
                     )
                     if cancel_stop is None:
                         problems.append(f"Tab never reached CANCEL for the discard: {seen[-8:]}")
@@ -771,9 +790,26 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     if q("updateToast.phase") != "offer":
         problems.append("the update toast did not offer for the toast leg")
     else:
-        primary = _named_control(q, "INSTALL")
+        # Every face's word rides the spoken name, VIEW included.
+        q("updateToast.selfInstall = false")
+        for phase, word in (
+            ("offer", "VIEW"),
+            ("ready", "RESTART NOW"),
+            ("failed", "RETRY"),
+            ("installing", "CANCEL"),
+        ):
+            q(f"updateToast.phase = '{phase}'")
+            settle(150)
+            spoken = _spoken_name(q, "updateToastPrimary")
+            if spoken != word:
+                problems.append(f"the toast's {word} face speaks as {spoken!r}")
+
+        q("updateToast.selfInstall = true")
+        q("updateToast.phase = 'offer'")
+        settle(250)
+        primary = _adopted(q, "updateToastPrimary")
         if primary is None:
-            problems.append("the toast's primary action is not a named tab stop")
+            problems.append("the toast's primary action is not in the tree")
         else:
             primary.forceActiveFocus()
             settle(80)
@@ -783,16 +819,18 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
                 problems.append("Return on the toast's INSTALL never took the install branch")
             elif q("setupSettings.updateToastDismissed") != "9.9.9":
                 problems.append("the toast's key press never marked the offer acted on")
-            elif _named_control(q, "CANCEL") is None:
+            elif _spoken_name(q, "updateToastPrimary") != "CANCEL":
                 problems.append("the toast's spoken name did not follow its face to CANCEL")
 
         # The secondary answers Space and dismisses; its name is LATER while
         # the face says LATER, and Dismiss while it draws only the glyph.
         q("updateToast.phase = 'ready'")
         settle(250)
-        later = _named_control(q, "LATER")
+        if _spoken_name(q, "updateToastSecondary") != "LATER":
+            problems.append("the toast's LATER action is not named LATER")
+        later = _adopted(q, "updateToastSecondary")
         if later is None:
-            problems.append("the toast's LATER action is not a named tab stop")
+            problems.append("the toast's LATER action is not in the tree")
         else:
             later.forceActiveFocus()
             settle(80)
@@ -802,14 +840,44 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
                 problems.append("Space on the toast's LATER never dismissed it")
         q("updateToast.phase = 'offer'")
         settle(250)
-        if _named_control(q, "Dismiss") is None:
+        if _spoken_name(q, "updateToastSecondary") != "Dismiss":
             problems.append("the toast's glyph action is not named Dismiss")
     q("updateToast.phase = ''")
     bridge._app_update_inflight = False
     settle(200)
 
-    # --- The gate actions: a GateAction and a gate's raw tap target are named
-    # tab stops, and their key presses take the gate's own path.
+    # --- The gate actions: a GateAction, a GateCard and a gate's raw tap
+    # target are named tab stops, and their key presses take the gate's own
+    # path. The GateCard's own action starts a real install, so only its
+    # metadata is read. The FFmpeg state is forced missing (and the gate up)
+    # so the option cards are really on screen, not hidden behind state.
+    q('appFfmpeg.status = {state: "missing"}')
+    q("ffmpegGate.visible = true")
+    settle(300)
+    card = json.loads(
+        q(
+            scene_js("""
+        var c = findFirst(root, function (o) {
+            return o.accessibleLabel !== undefined && o.accessibleLabel.indexOf("Install a managed copy") === 0;
+        });
+        return JSON.stringify(c ? { name: "" + c.Accessible.name,
+                                    role: Number(c.Accessible.role),
+                                    focusable: c.activeFocusOnTab === true } : null);
+    """)
+        )
+    )
+    if card is None:
+        problems.append("the FFmpeg gate's managed-install card is not in the tree")
+    else:
+        if not card["name"].startswith("Install a managed copy, RECOMMENDED"):
+            problems.append(f"the managed-install card speaks as {card['name']!r}, without its chip")
+        if card["role"] != _ROLE_BUTTON:
+            problems.append(f"the managed-install card is not exposed as a button (role {card['role']})")
+        if not card["focusable"]:
+            problems.append("the managed-install card is not in the tab order")
+    q("ffmpegGate.visible = false")
+    settle(150)
+
     q("root.ffmpegBlocked = true")
     settle(300)
     _check_buttons(
@@ -817,9 +885,9 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         _buttons(q, "function (o) { return o.accessibleLabel === 'Continue anyway'; }"),
         "the FFmpeg block gate's CONTINUE action",
     )
-    continue_anyway = _named_control(q, "Continue anyway")
+    continue_anyway = _adopted(q, "ffmpegGateContinue")
     if continue_anyway is None:
-        problems.append("the FFmpeg block gate's CONTINUE action is not a named tab stop")
+        problems.append("the FFmpeg block gate's CONTINUE action is not in the tree")
     else:
         continue_anyway.forceActiveFocus()
         settle(80)
@@ -835,9 +903,9 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         _buttons(q, "function (o) { return o.accessibleLabel === 'Not now'; }"),
         "the folder gate's Not now action",
     )
-    not_now = _named_control(q, "Not now")
+    not_now = _adopted(q, "folderGateNotNow")
     if not_now is None:
-        problems.append("the folder gate's Not now action is not a named tab stop")
+        problems.append("the folder gate's Not now action is not in the tree")
     else:
         not_now.forceActiveFocus()
         settle(80)
@@ -852,7 +920,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     # tap area keeps the MouseArea's own enabled=true and stays reachable.
     q("termsGate.visible = true")
     settle(300)
-    ack = q(scene_js('return findFirst(root, function (o) { return o.accessibleLabel === "ACKNOWLEDGE & AGREE"; });'))
+    ack = _adopted(q, "termsAckAction")
     if ack is None:
         problems.append("the terms gate's ACKNOWLEDGE action is not in the tree")
     else:

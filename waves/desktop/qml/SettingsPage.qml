@@ -1381,6 +1381,7 @@ Item {
             font.letterSpacing: page.btnTrack
           }
           TapAction {
+            objectName: "cancelEditsBtn"
             anchors.fill: parent
             enabled: page.dirty
             accessibleLabel: "CANCEL"
@@ -1411,6 +1412,7 @@ Item {
             font.letterSpacing: page.btnTrack
           }
           TapAction {
+            objectName: "saveChangesBtn"
             anchors.fill: parent
             enabled: saveBtn.canSave
             accessibleLabel: "SAVE CHANGES"

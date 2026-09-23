@@ -9232,6 +9232,7 @@ ApplicationWindow {
           color: root.textLo
           font.pixelSize: 13
           TapAction {
+            objectName: "folderGateNotNow"
             anchors.fill: parent
             anchors.margins: -6
             accessibleLabel: "Not now"
@@ -9794,6 +9795,7 @@ ApplicationWindow {
           }
           TapAction {
             id: ffNoAskMa
+            objectName: "ffmpegGateNoAsk"
             anchors.fill: ffNoAskTxt
             accessibleLabel: "I don't need FFmpeg. Stop showing this at launch."
             onTriggered: {
@@ -10086,6 +10088,7 @@ ApplicationWindow {
         }
         TapAction {
           id: utGo
+          objectName: "updateToastPrimary"
           anchors.fill: parent
           anchors.margins: -8
           // The spoken name follows the face's own word, so a reader hears
@@ -10133,6 +10136,7 @@ ApplicationWindow {
         font.letterSpacing: updateToast.face === "ready" ? 0.8 : 0
         TapAction {
           id: utX
+          objectName: "updateToastSecondary"
           anchors.fill: parent
           anchors.margins: -8
           // The glyph alone does not say what it does; LATER names itself.
@@ -10207,6 +10211,7 @@ ApplicationWindow {
             }
           }
           GateAction {
+            objectName: "ffmpegGateContinue"
             showArrow: false
             neutral: true
             label: "Continue anyway"
@@ -10385,6 +10390,7 @@ ApplicationWindow {
           }
         }
         GateAction {
+          objectName: "termsAckAction"
           label: "ACKNOWLEDGE & AGREE"
           enabled: ackChk.checked
           opacity: ackChk.checked ? 1 : 0.4
