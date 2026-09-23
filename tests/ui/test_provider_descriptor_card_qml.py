@@ -32,10 +32,11 @@ pytestmark = pytest.mark.qml
 
 _TEXT_POINT_JS = """
     function pointOfText(needle) {
+        // The visible instance: the settings schema renders hidden copies.
         var hit = findFirst(root, function (o) {
-            return o.text !== undefined && String(o.text) === needle;
+            return o.visible === true && o.text !== undefined && String(o.text) === needle;
         });
-        if (!hit) return "";
+        if (!hit || hit.width <= 0 || hit.height <= 0) return "";
         var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);
         // Off-screen at this scroll position is not a rendered, clickable mark.
         if (p.x < 0 || p.y < 0 || p.x > root.width || p.y > root.height) return "";
@@ -52,9 +53,9 @@ _CARD_POINT = scene_js(
 
 _SCROLL_TO_CARD = scene_js("""
     var hit = findFirst(root, function (o) {
-        return o.text !== undefined && String(o.text) === "NewCo";
+        return o.visible === true && o.text !== undefined && String(o.text) === "NewCo";
     });
-    if (!hit) return "";
+    if (!hit || hit.width <= 0 || hit.height <= 0) return "";
     var holder = settingsPage.scrollViewport;
     var y = hit.mapToItem(holder.contentItem, 0, hit.height / 2).y;
     // An explicit destination outranks the page's remembered spot (the same
@@ -63,6 +64,25 @@ _SCROLL_TO_CARD = scene_js("""
     settingsPage.pendingY = -1;
     settingsPage.scrollY = Math.max(0, y - holder.height / 2);
     return "scrolled";
+""")
+
+# What the last failed attempt saw, so a future runner-only failure names its
+# geometry instead of repeating the message alone.
+_CARD_GEOMETRY = scene_js("""
+    var holder = settingsPage.scrollViewport;
+    var geometry = {
+        scrollY: Math.round(holder.contentY),
+        viewport: Math.round(holder.height),
+        content: Math.round(holder.contentHeight),
+        root: [Math.round(root.width), Math.round(root.height)]
+    };
+    var hit = findFirst(root, function (o) {
+        return o.visible === true && o.text !== undefined && String(o.text) === "NewCo";
+    });
+    if (!hit) return JSON.stringify(geometry) + " (no visible 'NewCo' text)";
+    var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);
+    geometry.point = [Math.round(p.x), Math.round(p.y)];
+    return JSON.stringify(geometry);
 """)
 
 _PILL = scene_js("""
@@ -98,13 +118,14 @@ def test_a_third_provider_card_renders_and_acts():
     )
 
 
-def _card_on_screen(q, settle) -> str:
+def _bring_card_on_screen(q, settle) -> str:
     """Scroll until the card's point is inside the root; "" when it lands.
 
     The schema rebuild re-measures the column, and a late layout pass can
     strand a scroll that landed before it (how long the re-measure takes
     depends on the runner's font metrics), so re-aim and re-check on a
-    bounded loop instead of trusting one settle.
+    bounded loop instead of trusting one settle. The failure message carries
+    the geometry the last attempt saw.
     """
     for _ in range(8):
         if q(_SCROLL_TO_CARD) == "":
@@ -112,7 +133,7 @@ def _card_on_screen(q, settle) -> str:
         settle(250)
         if q(_CARD_POINT) not in ("", None):
             return ""
-    return "the third provider's card never came on screen"
+    return f"the third provider's card never came on screen: {q(_CARD_GEOMETRY)}"
 
 
 def _run_scenario() -> int:
@@ -152,7 +173,7 @@ def _run_scenario() -> int:
     settle(300)
 
     # The card and its generated action render in the live page, on screen.
-    failure = _card_on_screen(q, settle)
+    failure = _bring_card_on_screen(q, settle)
     if failure:
         print(failure, file=sys.stderr)
         return EXIT_REGRESSED
