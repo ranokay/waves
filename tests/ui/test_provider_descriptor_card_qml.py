@@ -30,19 +30,29 @@ from waves.providers.base import ProviderDescriptor, StatusKind
 # Every case here boots the real Main.qml in a child interpreter.
 pytestmark = pytest.mark.qml
 
-_TEXT_POINT_JS = """
-    function pointOfText(needle) {
-        // The visible instance: the settings schema renders hidden copies.
-        var hit = findFirst(root, function (o) {
-            return o.visible === true && o.text !== undefined && String(o.text) === needle;
+_VISIBLE_TEXT_JS = """
+    // The visible instance: the settings schema renders hidden copies.
+    function findVisibleText(needle) {
+        return findFirst(root, function (o) {
+            return o.visible === true && o.text !== undefined && String(o.text) === needle
+                && o.width > 0 && o.height > 0;
         });
-        if (!hit || hit.width <= 0 || hit.height <= 0) return "";
+    }
+"""
+
+_TEXT_POINT_JS = (
+    _VISIBLE_TEXT_JS
+    + """
+    function pointOfText(needle) {
+        var hit = findVisibleText(needle);
+        if (!hit) return "";
         var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);
         // Off-screen at this scroll position is not a rendered, clickable mark.
         if (p.x < 0 || p.y < 0 || p.x > root.width || p.y > root.height) return "";
         return JSON.stringify([p.x, p.y]);
     }
 """
+)
 
 _CARD_POINT = scene_js(
     _TEXT_POINT_JS
@@ -51,11 +61,11 @@ _CARD_POINT = scene_js(
 """
 )
 
-_SCROLL_TO_CARD = scene_js("""
-    var hit = findFirst(root, function (o) {
-        return o.visible === true && o.text !== undefined && String(o.text) === "NewCo";
-    });
-    if (!hit || hit.width <= 0 || hit.height <= 0) return "";
+_SCROLL_TO_CARD = scene_js(
+    _VISIBLE_TEXT_JS
+    + """
+    var hit = findVisibleText("NewCo");
+    if (!hit) return "";
     var holder = settingsPage.scrollViewport;
     var y = hit.mapToItem(holder.contentItem, 0, hit.height / 2).y;
     // An explicit destination outranks the page's remembered spot (the same
@@ -64,11 +74,14 @@ _SCROLL_TO_CARD = scene_js("""
     settingsPage.pendingY = -1;
     settingsPage.scrollY = Math.max(0, y - holder.height / 2);
     return "scrolled";
-""")
+"""
+)
 
 # What the last failed attempt saw, so a future runner-only failure names its
 # geometry instead of repeating the message alone.
-_CARD_GEOMETRY = scene_js("""
+_CARD_GEOMETRY = scene_js(
+    _VISIBLE_TEXT_JS
+    + """
     var holder = settingsPage.scrollViewport;
     var geometry = {
         scrollY: Math.round(holder.contentY),
@@ -76,19 +89,18 @@ _CARD_GEOMETRY = scene_js("""
         content: Math.round(holder.contentHeight),
         root: [Math.round(root.width), Math.round(root.height)]
     };
-    var hit = findFirst(root, function (o) {
-        return o.visible === true && o.text !== undefined && String(o.text) === "NewCo";
-    });
+    var hit = findVisibleText("NewCo");
     if (!hit) return JSON.stringify(geometry) + " (no visible 'NewCo' text)";
     var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);
     geometry.point = [Math.round(p.x), Math.round(p.y)];
     return JSON.stringify(geometry);
-""")
+"""
+)
 
 _PILL = scene_js("""
     var hit = findFirst(root, function (o) {
         return o.actKey !== undefined && String(o.actKey) === "newco_signout"
-            && o.visible !== false && o.width > 0;
+            && o.visible === true && o.width > 0;
     });
     if (!hit) return "";
     var p = hit.mapToItem(null, hit.width / 2, hit.height / 2);
@@ -101,7 +113,8 @@ _PILL = scene_js("""
 
 _RUN_PILL = scene_js("""
     var hit = findFirst(root, function (o) {
-        return o.actKey !== undefined && String(o.actKey) === "newco_signout";
+        return o.actKey !== undefined && String(o.actKey) === "newco_signout"
+            && o.visible === true && o.width > 0;
     });
     if (hit) hit.runAction();
     return hit ? "called" : "";
@@ -129,7 +142,7 @@ def _bring_card_on_screen(q, settle) -> str:
     """
     for _ in range(8):
         if q(_SCROLL_TO_CARD) == "":
-            return "the third provider's card did not render (no 'NewCo' text)"
+            return f"the third provider's card did not render: {q(_CARD_GEOMETRY)}"
         settle(250)
         if q(_CARD_POINT) not in ("", None):
             return ""
