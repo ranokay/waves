@@ -41,7 +41,7 @@ from waves.constants import (
 from waves.errors import DownloadIncomplete
 from waves.library.ownership import copy_is_current, record_names_a_broken_copy
 from waves.metadata.lyrics import fetch_lrclib_lyrics, lyrics_sidecar_choices
-from waves.metadata.tags import normalize_audio_type_tag, occupant_is_version, sniff_image_format
+from waves.metadata.tags import normalize_audio_type_tag, occupant_is_version, read_item_id, sniff_image_format
 from waves.model.cfg import cover_sidecar_format, wants_both_default
 from waves.providers.apple import engine as apple_engine
 from waves.providers.apple.engine import (
@@ -1703,6 +1703,22 @@ def ensure_sidecar(hooks: AppleJobHooks, qid: int, job_abort, *, need_wrapper: b
 # --------------------------------------------------------------------------
 
 
+def _occupant_is_this_track(path_file: str | pathlib.Path, track_id: str, version: str | None) -> bool:
+    """Whether the file at this path is THIS track's copy.
+
+    The delivery skip's full question, Version and identity: occupant_is_version
+    answers the Version half, and the occupant's item id (read_item_id) must be
+    this track's. An absent id is identity unknown, never another track's, so it
+    keeps the skip -- the rule the shared engine's ``_existing_same_item_at``
+    asks. A tagged file for a different track falls through to pick_destination,
+    which gives the colliding fetch its numbered name.
+    """
+    if not occupant_is_version(path_file, version):
+        return False
+    occupant_id = read_item_id(path_file)
+    return not occupant_id or occupant_id == track_id
+
+
 def deliver_track(
     hooks: AppleJobHooks,
     provider,
@@ -1780,7 +1796,7 @@ def deliver_track(
         # the sibling's audio while its record goes stale.
         dest = pathlib.Path(owned_path) if owned_path else exact
         dest.parent.mkdir(parents=True, exist_ok=True)
-    elif data.skip_existing and exact.exists() and occupant_is_version(exact, version_hint):
+    elif data.skip_existing and exact.exists() and _occupant_is_this_track(exact, track_id, version_hint):
         raise _AppleSkipped()
     else:
         dest = pick_destination(base, relative, guess_ext_value)
@@ -1848,15 +1864,16 @@ def deliver_track(
                     dest.parent.mkdir(parents=True, exist_ok=True)
                 else:
                     exact_true = base / f"{relative}{want_ext}"
-                    # Same Version gate as the pre-stream skip, with the
+                    # Same Version-and-id gate as the pre-stream skip, with the
                     # stream's own answer (known by now): a file of the OTHER
-                    # Version at this name is not this fetch's copy.
+                    # Version, or of a different track, at this name is not this
+                    # fetch's copy.
                     delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
                     if (
                         not force
                         and data.skip_existing
                         and exact_true.exists()
-                        and occupant_is_version(exact_true, delivered_version)
+                        and _occupant_is_this_track(exact_true, track_id, delivered_version)
                     ):
                         raise _AppleSkipped()  # noqa: TRY301
                     dest = pick_destination(base, relative, want_ext)
