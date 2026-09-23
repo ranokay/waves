@@ -50,6 +50,10 @@ IDENTITY_CORPUS = [
     ("header Authorization: Bearer abc123DEF456ghi789 sent", ["abc123DEF456ghi789"]),
     ("retry with api_key=sk_live_9f8e7d6c5b4a3210 next", ["sk_live_9f8e7d6c5b4a3210"]),
     ("cookie sessionid=s3ss10nv4lu3xyz; path=/", ["s3ss10nv4lu3xyz"]),
+    # A labelled cookie header is a LIST of pairs; the key/value pass stops at
+    # the first ";" and would leave every pair after the first.
+    ("Cookie: session=abc123def456; csrftoken=SECRETSECRET; _ga=GA1.2.3", ["abc123def456", "SECRETSECRET", "_ga"]),
+    ("Set-Cookie: a=1; b=2", ["a=1", "b=2"]),
     ("password = 'hunter2-but-long'", ["hunter2-but-long"]),
     # bare high-entropy blobs
     ("etag 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", ["9f86d081884c7d659a2f"]),
@@ -86,6 +90,7 @@ KEEP_CORPUS = [
     ("album The Secret History of Rock scanned", ["Secret History"]),
     ("downloading Auth Mode by Cipher", ["Auth Mode"]),
     ("skipped Password Kids single", ["Password Kids"]),
+    ("track: Secret Song", ["track: Secret Song"]),
 ]
 
 
@@ -101,6 +106,18 @@ def test_identity_pii_never_survives(redactor, line, leaks):
     out = redactor.scrub(line)
     for leak in leaks:
         assert leak not in out, f"leaked {leak!r} in {out!r}"
+
+
+def test_labelled_cookie_headers_scrub_to_one_placeholder(redactor):
+    """Every pair in a cookie header is a cookie value, so the whole header
+    goes to end of line, not just the first pair the key/value pass reaches."""
+    line = "Cookie: session=abc123def456; csrftoken=SECRETSECRET; _ga=GA1.2.3"
+    out = redactor.scrub(line)
+    assert out == "Cookie: ‹redacted›"
+    assert redactor.scrub(out) == out  # idempotent, like every other pass
+    out = redactor.scrub("Set-Cookie: a=1; b=2")
+    assert out == "Set-Cookie: ‹redacted›"
+    assert redactor.scrub(out) == out
 
 
 def test_this_machines_identity_never_survives(redactor):
