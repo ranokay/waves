@@ -20,3 +20,13 @@ This repo is a fork: `upstream` is the parent project, `origin` is the fork.
 6. **Squash-merge** into `develop`.
 7. **Check the issue closed**: the PR body's `Closes #<n>` auto-closes it on the squash, now that `develop` is the default branch. Close explicitly (`gh issue close <n>` with a one-line delivery note) only when the auto-close did not fire.
 8. **Delete the branch** locally and on the remote. One issue per run — the next issue waits for its own ask.
+
+## Test scope
+
+The strict group is the merge gate, not a per-edit ritual. What an edit needs before it moves on:
+
+- **Prose**: docs, comments, and docstrings with no `>>>` example. `mise run check` covers the file, and the suite proves nothing about a comment. One exception: `tests/packaging/` guards read CONTEXT.md, the ADRs and the platform, CI and OCR docs, so a change to one of those runs its guard file.
+- **A comment or docstring inside a function a test reads as source**: the `inspect.getsource` guards, for example the wipe guards in `tests/ui/test_factory_reset.py` and the source assertions in `tests/downloads/test_login_token_persist_listener.py`. Run that test file, plus `mise run check`.
+- **Code, or a `>>>` example in a docstring**: every test task passes `--doctest-modules`. The focused test files while iterating, then `mise run test-strict` once on the final SHA.
+
+The tested SHA named in the PR body holds while that SHA is the head. If a later commit is prose-only, fold the fix in before the gate run, or record the delta in the body: `strict green at <sha>; the commits since are prose-only`.
