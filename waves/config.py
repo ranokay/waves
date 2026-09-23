@@ -201,16 +201,27 @@ class BaseConfig[TModel: (ModelSettings, ModelToken)]:
             if isinstance(e, ValueError | AttributeError):
                 path_bak = path + ".bak"
 
-                # First check if a backup file already exists. If yes, remove it.
-                if os.path.exists(path_bak):
-                    os.remove(path_bak)
+                # The repair is best-effort: an unwritable config folder, or a
+                # .bak that cannot be removed, must still leave the app on the
+                # defaults. This runs in the bridge constructor before QML
+                # loads, so an OSError here is an app that never opens a window.
+                try:
+                    # First check if a backup file already exists. If yes, remove it.
+                    if os.path.exists(path_bak):
+                        os.remove(path_bak)
 
-                # Move the invalid config file to the backup location.
-                shutil.move(path, path_bak)
-                print(
-                    "Something is wrong with your config. Maybe it is not compatible anymore due to a new app version."
-                    f" You can find a backup of your old config here: '{path_bak}'. A new default config was created."
-                )
+                    # Move the invalid config file to the backup location.
+                    shutil.move(path, path_bak)
+                except OSError as move_error:
+                    logger.warning(
+                        "Could not move the corrupt config aside; leaving it in place and starting on defaults (%s)",
+                        type(move_error).__name__,
+                    )
+                else:
+                    print(
+                        "Something is wrong with your config. Maybe it is not compatible anymore due to a new app version."
+                        f" You can find a backup of your old config here: '{path_bak}'. A new default config was created."
+                    )
 
             self.data = self.cls_model()
 
