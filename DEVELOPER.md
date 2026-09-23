@@ -169,8 +169,9 @@ lockfile is the environment and drift fails the run.
   dynamic-seam categories (attribute access, argument types, mixin Signal
   descriptors) and the inherited engine's shape are warnings, with the reasons
   in `pyproject.toml`; error-level diagnostics elsewhere fail the gate,
-  warnings do not (ty's own default-warn rules included). The burn-down is
-  tracked in the repository's tracker.
+  warnings do not (ty's own default-warn rules included). The remaining
+  warnings are accepted as the permanent shape; re-check each reason when a
+  seam, a stub, or the inherited engine moves.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
 `uv pip uninstall tidaler`, then `mise run install` (or
