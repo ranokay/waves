@@ -124,7 +124,7 @@ invalid-attribute-access = "warn"
 # see the download.py entry in [tool.ruff.lint.per-file-ignores]) predates the
 # gate: its Optional-vs-declared attributes, string-vs-enum/path assignments,
 # m3u8 union and raise path need upstream-shaped fixes, so those diagnostics
-# stay visible as accepted warnings instead of failing today. Hand-written
+# stay visible as accepted warnings rather than failing the gate. Hand-written
 # modules are not covered by this override.
 [[tool.ty.overrides]]
 include = ["waves/download.py"]
