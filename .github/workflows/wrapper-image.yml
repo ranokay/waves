@@ -18,21 +18,30 @@
 # compile stage stays linux/amd64 because Google ships the NDK as x86_64
 # only). The pushed tag must equal the pin in waves/providers/apple/runtime.py
 # (WRAPPER_V2_IMAGE); the pin-drift test fails the suite otherwise.
+#
+# A dispatch names a full upstream commit SHA and a tag that does not exist
+# yet: the run refuses to build a moving ref, and refuses to overwrite a
+# published tag without the explicit repair override. Both are guards, not
+# documentation — see docs/wrapper-image.md.
 name: wrapper-image
 
 on:
   workflow_dispatch:
     inputs:
       wrapper_ref:
-        description: "Upstream wrapper-v2 ref to build (branch, tag, or SHA; prefer a SHA)"
-        required: false
-        default: "main"
+        description: "Upstream wrapper-v2 commit to build (full 40-hex SHA; the run refuses branches and tags)"
+        required: true
         type: string
       image_tag:
-        description: "Tag to push (must equal the WRAPPER_V2_IMAGE pin)"
+        description: "Tag to push (must equal the WRAPPER_V2_IMAGE pin and must not already exist)"
         required: false
         default: "0.2.3"
         type: string
+      allow_tag_overwrite:
+        description: "Overwrite an existing tag (repair only; a release never sets this)"
+        required: false
+        default: false
+        type: boolean
       apk_version:
         description: "Blessed APK version (must equal APK_PINNED_VERSION)"
         required: false
@@ -70,6 +79,15 @@ jobs:
       RUNTIME_PLATFORM: linux/arm64
 
     steps:
+      - name: Require a full upstream commit SHA
+        run: |
+          # The OCI revision label and .github/wrapper-upstream.sha are only
+          # provenance if the built ref cannot move. Branches and tags can.
+          if [[ ! "${{ inputs.wrapper_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::wrapper_ref must be a full 40-hex commit SHA; got '${{ inputs.wrapper_ref }}'."
+            exit 1
+          fi
+
       - name: Check out upstream wrapper-v2 at the pinned ref
         uses: actions/checkout@v7
         with:
@@ -97,6 +115,31 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite an existing tag
+        run: |
+          # A published tag is an address clients already pulled, and the app
+          # pins its digest: republishing it serves different bytes under a
+          # pin that still names the old ones. New releases take a new tag.
+          if out="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" 2>&1)"; then
+            if [[ "${{ inputs.allow_tag_overwrite }}" == "true" ]]; then
+              echo "::warning::overwriting existing tag ${IMAGE}:${TAG} (allow_tag_overwrite=true)"
+            else
+              echo "::error::tag ${IMAGE}:${TAG} already exists; publish a new tag, or set allow_tag_overwrite=true to repair this one."
+              exit 1
+            fi
+          else
+            # A missing tag reads "not found"; a namespace that has never
+            # published this package reads as a failed token exchange. Every
+            # other failure is unknown and must not authorize a push.
+            case "$out" in
+              *"not found"*|*"manifest unknown"*|*"failed to authorize"*|*"denied"*)
+                echo "tag ${IMAGE}:${TAG} does not exist yet; proceeding" ;;
+              *)
+                echo "::error::cannot tell whether ${IMAGE}:${TAG} exists (registry error): ${out}"
+                exit 1 ;;
+            esac
+          fi
 
       - name: Install host tools
         run: |

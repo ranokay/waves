@@ -83,10 +83,14 @@ runbook: one-time setup, how to publish, and the version lockstep.
 
 Actions → **wrapper-image** → Run workflow:
 
-- `wrapper_ref` — upstream `wrapper-v2` ref to build. Prefer a full
-  commit SHA for reproducibility; `main` tracks upstream.
+- `wrapper_ref` — upstream `wrapper-v2` **full commit SHA** to build.
+  Required, and the run refuses anything that is not 40 hex characters:
+  a branch or tag moves, so it cannot be recorded as provenance.
 - `image_tag` — the tag to push. **It must equal the `WRAPPER_V2_IMAGE`
-  pin in `waves/providers/apple/runtime.py`** (the suite enforces this).
+  pin in `waves/providers/apple/runtime.py`** (the suite enforces this),
+  and it must be new: the run refuses to overwrite an existing tag.
+  `allow_tag_overwrite` exists only to repair a bad publish and is never
+  set for a release.
 
 The run downloads the APK, extracts and hash-verifies the arm64 native
 libs against the source tree's `LIBS_VERSION.json`, builds `linux/arm64`,

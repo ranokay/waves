@@ -50,7 +50,38 @@ def test_workflow_defaults_publish_exactly_the_pinned_image():
     # publishing owner's namespace, so forks need no edits.
     assert WRAPPER_V2_IMAGE.rsplit(":", 1)[1] == tag
     assert "ghcr.io/${{ github.repository_owner }}/waves-wrapper-v2" in WORKFLOW.read_text()
-    assert inputs["wrapper_ref"]["default"]
+
+
+def test_workflow_requires_a_full_upstream_sha():
+    wf = _workflow()
+    inputs = wf[True]["workflow_dispatch"]["inputs"]
+    ref = inputs["wrapper_ref"]
+    assert ref.get("required") is True
+    assert "default" not in ref, "a default ref lets a one-click dispatch build a moving branch"
+    step = next(
+        (s for s in wf["jobs"]["build"]["steps"] if s.get("name") == "Require a full upstream commit SHA"),
+        None,
+    )
+    assert step is not None, "the publish lost its ref guard"
+    run = str(step["run"])
+    assert "^[0-9a-f]{40}$" in run
+    assert "exit 1" in run
+
+
+def test_workflow_refuses_to_overwrite_a_published_tag():
+    wf = _workflow()
+    inputs = wf[True]["workflow_dispatch"]["inputs"]
+    override = inputs["allow_tag_overwrite"]
+    assert override["type"] == "boolean"
+    assert override["default"] is False
+    steps = wf["jobs"]["build"]["steps"]
+    guard = next((s for s in steps if s.get("name") == "Refuse to overwrite an existing tag"), None)
+    assert guard is not None, "the publish lost its tag guard"
+    run = str(guard["run"])
+    assert "imagetools inspect" in run
+    assert "allow_tag_overwrite" in run and "exit 1" in run
+    names = [s.get("name") for s in steps]
+    assert names.index("Refuse to overwrite an existing tag") < names.index("Build and push")
 
 
 def test_workflow_builds_arm64_from_upstream_source_with_a_secret_apk():
