@@ -65,8 +65,10 @@ dev = [
   "pyupgrade>=3.21.2,<4",
   "pillow>=12.0.0,<13",
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
-  # bump invalidates it (docs/dependency-updates.md).
-  "nuitka==2.8.4",
+  # bump invalidates it (docs/dependency-updates.md). 4.x is AGPL-3.0-only, a
+  # license accepted for this build-only tool; 4.x is also what supports
+  # Python 3.14.
+  "nuitka==4.2.2",
   # Exact pin: ty is pre-1.0 and its diagnostics shift between releases;
   # Dependabot may bump it like any other dev tool, and a bump re-baselines
   # the rule exceptions below.
