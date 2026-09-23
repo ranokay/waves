@@ -323,11 +323,11 @@ def read_file_audio_type(path_file: str | pathlib.Path) -> str | None:
 def occupant_is_version(path_file: str | pathlib.Path, version: str | None) -> bool:
     """Whether the audio file at this path may stand in for ``version``'s copy.
 
-    The one rule every Version-aware skip asks (the shared engine's
-    ``_existing_same_item_at`` and the Apple runner's own delivery skip): an
-    occupant whose on-disk Version differs is the OTHER Version's file, so it
-    is not this one's copy however its id reads -- a dual download keeps one
-    file per Version, and a blank Atmos template aims both at one name.
+    The Version half of :func:`occupant_is_own`, the full question every
+    Version-aware skip asks: an occupant whose on-disk Version differs is the
+    OTHER Version's file, so it is not this one's copy however its id reads --
+    a dual download keeps one file per Version, and a blank Atmos template
+    aims both at one name.
 
     A Version the caller did not pin (None: a legacy single row, or a stream
     that has not answered yet) and an occupant whose Version cannot be read
@@ -338,6 +338,25 @@ def occupant_is_version(path_file: str | pathlib.Path, version: str | None) -> b
         return True
     on_disk = read_file_audio_type(path_file)
     return on_disk is None or on_disk == version
+
+
+def occupant_is_own(path_file: str | pathlib.Path, owned_ids: set[str], version: str | None) -> bool:
+    """Whether the audio file at this path is one of these items' own copy.
+
+    The full skip question, Version and identity: the occupant must be the
+    Version's copy (:func:`occupant_is_version`) and carry one of the owned
+    ids. An absent id is identity unknown, never another item's -- the rule
+    the shared engine's ``_existing_same_item_at`` and the Apple runner's
+    delivery skip both ask, so a tagged file for a DIFFERENT item falls
+    through to destination numbering and is fetched instead of skipped.
+
+    ``owned_ids`` mirrors ``waves.download._waves_owned_ids``: every id a file
+    of the item may legitimately carry (its own, plus the legacy spellings).
+    """
+    if not occupant_is_version(path_file, version):
+        return False
+    occupant_id = read_item_id(path_file)
+    return not occupant_id or occupant_id in owned_ids
 
 
 class Metadata:

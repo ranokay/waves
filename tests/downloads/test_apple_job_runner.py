@@ -335,6 +335,17 @@ def _tone(path: Path):
     )
 
 
+def _write_item_id(path: Path, item_id: str) -> None:
+    """Stamp an MP4 fixture with the atom the download gates read."""
+    import mutagen.mp4
+
+    handle = mutagen.mp4.MP4(str(path))
+    if handle.tags is None:
+        handle.add_tags()
+    handle["----:com.apple.iTunes:WAVES_ITEM_ID"] = [item_id.encode("utf-8")]
+    handle.save()
+
+
 @pytest.mark.ffmpeg
 def test_single_track_lands_tagged_with_done_event(tmp_path, monkeypatch):
     from waves.providers.apple import engine as apple_engine
@@ -730,6 +741,130 @@ def test_the_atmos_row_is_not_skipped_by_the_stereo_file(tmp_path, monkeypatch):
     import mutagen.mp4
 
     assert bytes(mutagen.mp4.MP4(str(landed)).tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:song-1"
+
+
+def _skip_case(tmp_path, monkeypatch, occupant_item_id):
+    """Run the one-track job over a library whose rendered path is taken.
+
+    The occupant is a staged tone stamped with ``occupant_item_id`` (None for
+    a file from before the id tags). Returns
+    (summary, provider, relay, occupant, base).
+    """
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    occupant = base / "Aphex Twin" / "Xtal.m4a"
+    occupant.parent.mkdir(parents=True)
+    _tone(occupant)
+    if occupant_item_id is not None:
+        _write_item_id(occupant, occupant_item_id)
+    stub = _bind(_stub(base, provider))
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+    return summary, provider, relay, occupant, base
+
+
+@pytest.mark.ffmpeg
+def test_a_different_tracks_tag_at_the_path_does_not_skip_the_fetch(tmp_path, monkeypatch):
+    """Two distinct Apple tracks can render one relative path. A tagged file
+    for a DIFFERENT track is not this track's copy: the skip must read the
+    occupant's item id, let the fetch run, and land it at the numbered
+    variant beside the stranger."""
+    summary, provider, relay, stranger, base = _skip_case(tmp_path, monkeypatch, "apple:other-song")
+
+    assert summary == ""
+    assert provider.fetched == [AudioType.STEREO], "a different track's file silently skipped this fetch"
+    assert not any(ev.get("status") == "skipped" for ev in relay.events)
+    import mutagen.mp4
+
+    assert (
+        bytes(mutagen.mp4.MP4(str(stranger)).tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:other-song"
+    ), "the stranger's file must be left alone"
+    landed = base / "Aphex Twin" / "Xtal_01.m4a"
+    assert landed.is_file(), "the colliding track did not land at the numbered variant"
+    assert bytes(mutagen.mp4.MP4(str(landed)).tags["----:com.apple.iTunes:WAVES_ITEM_ID"][0]) == b"apple:song-1"
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.parametrize("occupant_item_id", ["apple:song-1", None], ids=["this-tracks-id", "untagged"])
+def test_an_own_or_untagged_occupant_still_skips(tmp_path, monkeypatch, occupant_item_id):
+    """This track's own id skips without fetching, and an untagged occupant
+    skips too: identity unknown is never evidence of a DIFFERENT track, so a
+    library from before the id tags must not be duplicated wholesale."""
+    summary, provider, relay, _occupant, base = _skip_case(tmp_path, monkeypatch, occupant_item_id)
+
+    assert summary == " (already downloaded)"
+    assert provider.fetched == []
+    assert any(ev.get("status") == "skipped" for ev in relay.events)
+    assert not (base / "Aphex Twin" / "Xtal_01.m4a").exists()
+
+
+@pytest.mark.ffmpeg
+def test_a_stranger_at_the_true_extension_does_not_skip_the_fetch(tmp_path, monkeypatch):
+    """When the delivery's true extension differs from the guessed one, the
+    post-stream skip asks identity too: a DIFFERENT track's tagged file at the
+    true name must not settle the fetch, which lands at the numbered variant."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    resolve_stream = provider.resolve_stream
+
+    def resolve_without_a_codec(raw, tier, audio_type):
+        # Scope "all" guesses .flac before the fetch, but the delivery names no
+        # codec, so the true extension falls back to .m4a.
+        info = resolve_stream(raw, tier, audio_type)
+        info.codecs = ""
+        info.delivered = {"tier": info.delivered["tier"], "audio_type": info.delivered["audio_type"]}
+        return info
+
+    provider.resolve_stream = resolve_without_a_codec
+    base = tmp_path / "lib"
+    stranger = base / "Aphex Twin" / "Xtal.m4a"
+    stranger.parent.mkdir(parents=True)
+    _tone(stranger)
+    _write_item_id(stranger, "apple:other-song")
+    stub = _bind(_stub(base, provider))
+    stub.settings = _settings(base, extract_flac_all=True)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    assert provider.fetched == [AudioType.STEREO], "a different track's file at the true extension skipped the fetch"
+    assert stranger.is_file(), "the stranger's file must be left alone"
+    landed = base / "Aphex Twin" / "Xtal_01.m4a"
+    assert landed.is_file(), "the fetch did not land at the numbered variant"
+    assert not (base / "Aphex Twin" / "Xtal.flac").exists()
 
 
 def test_album_job_reports_a_partial_shortfall(tmp_path):
