@@ -41,7 +41,13 @@ from waves.constants import (
 from waves.errors import DownloadIncomplete
 from waves.library.ownership import copy_is_current, record_names_a_broken_copy
 from waves.metadata.lyrics import fetch_lrclib_lyrics, lyrics_sidecar_choices
-from waves.metadata.tags import normalize_audio_type_tag, occupant_is_own, sniff_image_format
+from waves.metadata.tags import (
+    normalize_audio_type_tag,
+    occupant_is_own,
+    occupant_is_version,
+    read_item_id,
+    sniff_image_format,
+)
 from waves.model.cfg import cover_sidecar_format, wants_both_default
 from waves.providers.apple import engine as apple_engine
 from waves.providers.apple.engine import (
@@ -700,7 +706,13 @@ def extract_flac(hooks: AppleJobHooks, staged: pathlib.Path) -> tuple[pathlib.Pa
     return out, tmpdir
 
 
-def place_file(staged: pathlib.Path, dest: pathlib.Path) -> None:
+def place_file(
+    staged: pathlib.Path,
+    dest: pathlib.Path,
+    *,
+    overwrite: bool = False,
+    occupant_is_own: Callable[[pathlib.Path], bool] | None = None,
+) -> bool:
     """Land one staged file on its final path, atomically.
 
     Staging lives on another filesystem (system temp vs library, typically a
@@ -709,15 +721,40 @@ def place_file(staged: pathlib.Path, dest: pathlib.Path) -> None:
     skip_existing would then treat as complete. Copy beside the target and
     rename over it instead: readers never see a half file, and forced
     overwrites never delete the good copy before its replacement is whole.
+
+    An occupied destination is replaced only when the caller owns it:
+    ``overwrite`` (a forced re-download) or an ``occupant_is_own`` answer that
+    proves the file is this download's own copy. Both are asked after the
+    copy, one syscall before the swap, so a same-named stranger written
+    between the destination pick and the placement is left alone.
+
+    Args:
+        staged (pathlib.Path): Source file, in the provider's staging area.
+        dest (pathlib.Path): Final path under the library.
+        overwrite (bool): Whether an existing destination may be replaced
+            regardless of who wrote it.
+        occupant_is_own (Callable[[pathlib.Path], bool] | None): Asked, when
+            the destination is occupied and ``overwrite`` is off, whether the
+            file sitting there is this download's own copy after all. Defaults
+            to None, which reads every occupant as a stranger.
+
+    Returns:
+        bool: True when the file landed; False when the destination was
+            occupied and nothing was written.
     """
     tmp = dest.with_name(f"{dest.name}.part-{uuid4().hex[:8]}")
     try:
         shutil.copyfile(staged, tmp)
+        if not overwrite and dest.exists() and not (occupant_is_own is not None and occupant_is_own(dest)):
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            return False
         os.replace(tmp, dest)
     except Exception:
         with contextlib.suppress(OSError):
             tmp.unlink()
         raise
+    return True
 
 
 def _require_codec_family(codec: str, staged: pathlib.Path, *, expect_atmos: bool) -> None:
@@ -1841,6 +1878,10 @@ def deliver_track(
                 logger.debug("Apple FLAC extraction skipped (no ffmpeg); keeping the original file")
                 mode = ""
             want_ext = ".flac" if mode else ".m4a"
+            # The Version these bytes ARE, from the stream's own answer (known
+            # by now): the extension gate below and the place-time ownership
+            # check both read it, exactly as the tag write does.
+            delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
             if dest.suffix != want_ext:
                 if force and owned_path:
                     owned = pathlib.Path(owned_path)
@@ -1852,7 +1893,6 @@ def deliver_track(
                     # stream's own answer (known by now): a file of the OTHER
                     # Version, or of a different track, at this name is not this
                     # fetch's copy.
-                    delivered_version = str(AudioType.ATMOS) if atmos else str(AudioType.STEREO)
                     if (
                         not force
                         and data.skip_existing
@@ -1870,12 +1910,43 @@ def deliver_track(
                 # The converted file lands outside the provider's workdir,
                 # which discard_delivery removes below.
                 staged, flac_tmpdir = extract_flac(hooks, staged)
+
+            def _occupant_is_this_items_own(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
+                """Whether the occupant PROVES it is this track's delivered Version.
+
+                The skip gate's two readers (item id + Version) with the move's
+                rule on an unreadable id: unknown is a stranger here, because a
+                Finder copy is untagged and may not be replaced. The TIDAL move
+                asks the same positive question
+                (waves.download.Download._already_landed_here). The ``version``
+                default binds this attempt's delivered Version.
+                """
+                if not occupant_is_version(path_occupied, version):
+                    return False
+                return read_item_id(path_occupied) == track_id
+
+            # The destination name was picked before the fetch, and the fetch
+            # runs seconds to minutes: a same-named stranger written in that
+            # window must not be replaced (DL-03). A forced re-download keeps
+            # its overwrite right; every other placement replaces only a proven
+            # own copy and otherwise steps aside to a numbered name.
             try:
-                place_file(staged, dest)
+                placed = place_file(staged, dest, overwrite=force, occupant_is_own=_occupant_is_this_items_own)
+                if not placed:
+                    dest = pick_destination(base, relative, want_ext)
+                    placed = place_file(staged, dest, occupant_is_own=_occupant_is_this_items_own)
             finally:
                 if flac_tmpdir is not None:
                     with contextlib.suppress(OSError):
                         shutil.rmtree(flac_tmpdir, ignore_errors=True)
+            if not placed:
+                # A writer that keeps taking every name the item is offered:
+                # nothing may replace it, so the item fails with the move's
+                # own words instead of landing over the stranger.
+                raise AppleDownloadError(  # noqa: TRY301
+                    "Destination is already occupied by another writer, "
+                    f"leaving the download out of the library: '{dest.name}'"
+                )
         except _AppleAborted:
             if info is not None:
                 try:
