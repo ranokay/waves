@@ -82,8 +82,8 @@ class _Redactor:
     )
     # A labelled cookie header is a list of pairs, and the key/value pattern
     # above stops at the first ";": the pairs after it are cookie values too,
-    # so the whole header goes, to end of line. Runs after the key/value pass,
-    # which still owns the bare "cookie <value>" and quoted-JSON spellings.
+    # so the whole header goes, to end of line. The colon-less "cookie <value>"
+    # form stays with the key/value pass.
     _COOKIE_HEADER = re.compile(r"(?i)\b(set-cookie|cookie)\s*:\s*[^\r\n]+")
     # Bare high-entropy blobs: long hex (ids, digests) and long base64ish runs.
     _LONG_HEX = re.compile(r"\b[0-9a-fA-F]{32,}\b")
