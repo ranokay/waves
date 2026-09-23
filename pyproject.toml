@@ -94,14 +94,16 @@ module-root = ""
 include = ["waves"]
 
 [tool.ty.terminal]
-# Warnings stay visible (the burn-down ledger) but do not fail the gate, the
-# same shape as the basedpyright warning level this replaces: errors exit
-# non-zero, warnings exit zero.
+# Warnings stay visible but do not fail the gate, the same shape as the
+# basedpyright warning level this replaces: errors exit non-zero, warnings
+# exit zero. The remaining warnings are accepted as the permanent shape, not
+# a burn-down in progress: re-check each rule's reason when a seam, a stub,
+# or the inherited engine moves.
 error-on-warning = false
 
 # Downgraded, with reasons. All three stay visible as warnings, like ty's own
 # default-warn rules (redundant-condition, deprecated); error-level categories
-# fail the gate. Warnings are the burn-down ledger, not a pass.
+# fail the gate. Accepted as the permanent shape, not a pass.
 # - unresolved-attribute: catalog/engine objects cross the provider seam as
 #   plain objects by design (the row-dict contract), and the cooperative
 #   library mixin's methods resolve `self` to the mixin, so its Qt members
@@ -122,8 +124,8 @@ invalid-attribute-access = "warn"
 # see the download.py entry in [tool.ruff.lint.per-file-ignores]) predates the
 # gate: its Optional-vs-declared attributes, string-vs-enum/path assignments,
 # m3u8 union and raise path need upstream-shaped fixes, so those diagnostics
-# stay visible as warnings for the #319 burn-down instead of failing today.
-# Hand-written modules are not covered by this override.
+# stay visible as accepted warnings instead of failing today. Hand-written
+# modules are not covered by this override.
 [[tool.ty.overrides]]
 include = ["waves/download.py"]
 
