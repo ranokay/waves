@@ -57,44 +57,14 @@ Rectangle {
       size: 15
     }
   }
-  MouseArea {
+  TapAction {
     id: gaMa
     anchors.fill: parent
-    hoverEnabled: true
-    cursorShape: Qt.PointingHandCursor
-    onClicked: ga.clicked()
-  }
-  activeFocusOnTab: ga.visible && ga.enabled
-  Accessible.role: Accessible.Button
-  Accessible.name: ga.label
-  Accessible.onPressAction: function () {
-    if (ga.enabled)
-      ga.clicked()
-  }
-  Keys.onReturnPressed: function (event) {
-    if (!event.isAutoRepeat && ga.enabled) {
-      event.accepted = true
-      ga.clicked()
-    }
-  }
-  Keys.onEnterPressed: function (event) {
-    if (!event.isAutoRepeat && ga.enabled) {
-      event.accepted = true
-      ga.clicked()
-    }
-  }
-  Keys.onSpacePressed: function (event) {
-    if (!event.isAutoRepeat && ga.enabled) {
-      event.accepted = true
-      ga.clicked()
-    }
-  }
-  Rectangle {
-    anchors.fill: parent
-    radius: ga.radius
-    color: "transparent"
-    border.width: 2
-    border.color: accent
-    visible: ga.activeFocus
+    // The host's own state, not the tap area's default: a disabled gate
+    // action is no tab stop, no press target and no hand cursor.
+    enabled: ga.enabled
+    accessibleLabel: ga.label
+    focusRadius: ga.radius
+    onTriggered: ga.clicked()
   }
 }

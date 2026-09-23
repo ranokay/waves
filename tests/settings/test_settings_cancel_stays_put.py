@@ -30,10 +30,10 @@ def _source() -> str:
 
 
 def _cancel_button() -> str:
-    """The CANCEL button's whole block, from its Rectangle to its onClicked."""
+    """The CANCEL button's whole block, from its Rectangle to its handler."""
     src = _source()
     start = src.index("width: cancelTxt.width")
-    end = src.index("onClicked", start)
+    end = src.index("onTriggered", start)
     return src[start : src.index("\n", end)]
 
 

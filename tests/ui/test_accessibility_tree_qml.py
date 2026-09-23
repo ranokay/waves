@@ -17,6 +17,10 @@ the metadata and focus reachability that make them usable keyboard-only:
 - the Chooser's rows are named, uniquely, as pickers/checkboxes/buttons, its
   picks and toggle reach the parked ask through the shared paths, and a closed
   popover leaves no tab stop inside it;
+- the Settings commit actions (CANCEL, SAVE CHANGES) and the update toast's
+  actions are named tab stops that answer the keyboard with the commit or the
+  branch the pointer takes, and the gate actions (a ``GateAction`` and a
+  gate's raw tap target) do the same;
 - a real Tab walk (QtTest key delivery) never lands on a control that is not
   on screen: thousands of controls inside closed surfaces (mostly Qt's own
   TextField/ComboBox defaults in the hidden Settings page) keep
@@ -74,9 +78,9 @@ _CHOOSER_ROWS_BODY = """
 """
 
 # One stop of a real Tab walk: the stop's tree path (for cycle
-# detection), what it is, and the effective flags Qt's chain filters on. A
-# stop inside a closed surface (the Settings page, the Chooser popover, the
-# queue drawer) is a failure, whatever its flags say.
+# detection), what it is, its spoken name, and the effective flags Qt's chain
+# filters on. A stop inside a closed surface (the Settings page, the Chooser
+# popover, the queue drawer) is a failure, whatever its flags say.
 _TAB_STOP_BODY = """
     function pathOf(o, target, path, depth) {
         if (!o || depth > 200) return null;
@@ -100,8 +104,8 @@ _TAB_STOP_BODY = """
     // No focused control: keep the stop's full shape so callers can read its
     // flags without a KeyError (the path is the broken-chain signal).
     if (!it) return JSON.stringify({ path: null,
-                                     object: "", label: "", type: "",
-                                     visible: false, enabled: false,
+                                     object: "", name: "", label: "", type: "",
+                                     visible: false, enabled: false, focusable: false,
                                      inSettings: false, inChooser: false, inDrawer: false });
     function inTree(o, needle) {
         while (o) { if (o === needle) return true; o = o.parent; }
@@ -110,10 +114,12 @@ _TAB_STOP_BODY = """
     var chooser = findObject(root, "chooserPopover");
     return JSON.stringify({ path: pathOf(root, it, "root", 0),
                             object: "" + (it.objectName || ""),
+                            name: "" + (it.Accessible && it.Accessible.name ? it.Accessible.name : ""),
                             label: "" + (it.label || ""),
                             type: "" + it,
                             visible: it.visible !== false,
                             enabled: it.enabled !== false,
+                            focusable: it.activeFocusOnTab === true,
                             inSettings: inTree(it, settingsPage),
                             inChooser: chooser ? inTree(it, chooser.contentItem) : false,
                             inDrawer: queueDrawer.contentItem ? inTree(it, queueDrawer.contentItem) : false });
@@ -140,6 +146,95 @@ TRACK = {
     "explicit": False,
     "added": "",
 }
+
+# The Apple enable switch: the one control on the Settings page whose own
+# toggle stages an edit, so the commit-action leg has something to commit and
+# discard. The schema renders a copy of every field's controls in every
+# delegate, so the objectName alone can land on a hidden copy: the switch
+# binds its tab stop to its own visibility, which is what selects the one
+# on screen.
+_APPLE_SWITCH = """
+    var sw = findFirst(root, function (o) {
+        return o.objectName === "appleEnableSwitch" && o.visible === true && o.activeFocusOnTab === true;
+    });
+"""
+
+
+def _adopted(q, object_name: str):
+    """The adopted tap area the named host owns, or None.
+
+    The host is the control itself for a direct adoption, or the component
+    instance (a ``GateAction``/``GateCard``) whose inner tap area carries the
+    contract. Reached by objectName, so a hidden copy of the same control on
+    another surface can never answer for it.
+    """
+    return q(
+        scene_js(
+            f'var host = findObject(root, "{object_name}");'
+            " if (!host) return null;"
+            " if (host.accessibleLabel !== undefined) return host;"
+            " return findFirst(host, function (o) { return o.accessibleLabel !== undefined; });"
+        )
+    )
+
+
+def _spoken_name(q, object_name: str) -> str:
+    """The spoken name of the named control, or "" when it is not in the tree."""
+    return q(
+        scene_js(f'var c = findObject(root, "{object_name}"); return c && c.Accessible ? "" + c.Accessible.name : "";')
+    )
+
+
+def _open_settings(q, settle) -> bool:
+    """Open the Settings page through its nav tab; whether it is open after."""
+    opened = bool(
+        q(
+            scene_js("""
+        var tab = findFirst(root, function (o) { return o.label === "Settings" && o.clicked !== undefined; });
+        if (!tab) return false;
+        tab.clicked();
+        return true;
+    """)
+        )
+    )
+    settle(300)
+    return opened and bool(q("root.settingsOpen"))
+
+
+def _tab_step(q, settle, root) -> dict:
+    """One real Tab press and the stop it landed on."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    QTest.keyClick(root, Qt.Key_Tab)
+    settle(20)
+    return json.loads(q(scene_js(_TAB_STOP_BODY)))
+
+
+def _tab_until(q, settle, root, want, *, limit: int = 300) -> tuple[dict | None, list[str]]:
+    """Real Tab presses until a stop matches ``want``.
+
+    Returns the matching stop (or None) and the spoken names of the stops the
+    walk did reach, so a control that fell out of the tab order fails with
+    what was there instead. The walk ends when the chain comes back to its
+    first stop or loses the focused control.
+    """
+    names: list[str] = []
+    first: str | None = None
+    for _ in range(limit):
+        stop = _tab_step(q, settle, root)
+        if stop["path"] is None:
+            names.append("<focus lost>")
+            return None, names
+        names.append(stop["name"] or stop["object"] or stop["type"])
+        if want(stop):
+            return stop, names
+        if first is None:
+            first = stop["path"]
+        elif stop["path"] == first:
+            return None, names
+    return None, names
+
 
 # Every object under the scene whose own shape says "a named button the
 # accessibility tree should expose" (marker properties per component), as
@@ -187,8 +282,9 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     clears the search box, Delete cancels a queued row) are present."""
     # The download control, the queue drawer, the shared action button, the
     # gate action, the paste-decode controller and the nav chrome live in
-    # their own files; the pins span the whole primary-control
-    # surface, so read all nine.
+    # their own files, and the controls that adopted the shared tap area now
+    # answer through TapAction.qml; the pins span the whole primary-control
+    # surface, so read all ten.
     qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "DownloadButton.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "QueueDrawer.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "SpecBtn.qml").read_text(encoding="utf-8")
@@ -197,11 +293,40 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     qml += (QML_DIR / "NavTab.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "NavCrumbTrail.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "GateCard.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "TapAction.qml").read_text(encoding="utf-8")
+    # The settings commit actions are adoptions too; the page's switch answers
+    # Keys.onPressed (one handler, three keys), so it stays outside the
+    # per-file Return/Enter/Space shape below but inside the adoption count.
+    qml += (QML_DIR / "SettingsPage.qml").read_text(encoding="utf-8")
     press_actions = qml.count("Accessible.onPressAction")
     assert press_actions >= 5, "the primary controls lost their press actions"
-    for key in ("Return", "Enter", "Space"):
-        handlers = qml.count(f"Keys.on{key}Pressed")
-        assert handlers >= press_actions, f"only {handlers} {key} handlers for {press_actions} press actions"
+    # The shared TapAction answers every control that adopts it with one
+    # handler trio, so the global counts no longer pair one-to-one; the shape
+    # that still holds is per file: a file that answers presses carries at
+    # least as many Return/Enter/Space handlers.
+    for name in (
+        "Main.qml",
+        "DownloadButton.qml",
+        "QueueDrawer.qml",
+        "SpecBtn.qml",
+        "GateAction.qml",
+        "DecodeController.qml",
+        "NavTab.qml",
+        "NavCrumbTrail.qml",
+        "GateCard.qml",
+        "TapAction.qml",
+    ):
+        body = (QML_MAIN if name == "Main.qml" else QML_DIR / name).read_text(encoding="utf-8")
+        file_presses = body.count("Accessible.onPressAction")
+        for key in ("Return", "Enter", "Space"):
+            handlers = body.count(f"Keys.on{key}Pressed")
+            assert handlers >= file_presses, f"{name}: only {handlers} {key} handlers for {file_presses} press actions"
+    # Every adoption names itself: the primitive defaults its spoken name to
+    # empty, so an unnamed adopter would ship a silent button. The label
+    # bindings are pinned one by one, since counting ``accessibleLabel:``
+    # across the files would be satisfied by the unrelated declarations in
+    # QueueDrawer/SpecBtn/TapAction.
+    assert qml.count("TapAction {") >= 8, "the adopted controls lost their tap area"
     flat = re.sub(r"\s+", " ", qml)
     for needle in (
         "if (!event.isAutoRepeat)",
@@ -218,8 +343,17 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         "db.chooserPickAudio(modelData)",
         'db.chooserToggle("lyrics_ttml_file")',
         "Accessible.onPressAction: function () { db.confirmChooser() }",
+        # Every adopted tap area carries its spoken name, the toast's
+        # following the face it draws.
+        'accessibleLabel: "CANCEL"',
+        'accessibleLabel: "SAVE CHANGES"',
+        "accessibleLabel: utAct.realLabel",
+        'accessibleLabel: updateToast.face === "ready" ? "LATER" : "Dismiss"',
+        'accessibleLabel: "Not now"',
+        'accessibleLabel: "I don\'t need FFmpeg. Stop showing this at launch."',
+        "accessibleLabel: ga.label",
         # The gate card's spoken name carries its chip.
-        'Accessible.name: gcard.title + (gcard.chip !== ""',
+        'accessibleLabel: gcard.title + (gcard.chip !== ""',
         # The queue's repeated actions name their own section.
         '"Retry all " + host.queueSectionWord(secItem.section)',
         '"Clear " + host.queueSectionWord(secItem.section)',
@@ -283,14 +417,9 @@ def _tab_cycle(q, settle, root, *, limit: int = 500) -> tuple[list[dict], bool]:
     (the focused control or the harness is off), which the caller reads as a
     broken chain; it ends the walk.
     """
-    from PySide6.QtCore import Qt
-    from PySide6.QtTest import QTest
-
     stops: list[dict] = []
     for _ in range(limit):
-        QTest.keyClick(root, Qt.Key_Tab)
-        settle(20)
-        stop = json.loads(q(scene_js(_TAB_STOP_BODY)))
+        stop = _tab_step(q, settle, root)
         if stop["path"] is None:
             stops.append(stop)
             return stops, False
@@ -322,6 +451,9 @@ def _run_scenario() -> int:
 
 
 def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
     booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
@@ -382,18 +514,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         if bool(q("root.settingsOpen")):
             problems.append("the Tab walk ran with the Settings page open")
         else:
-            opened_settings = bool(
-                q(
-                    scene_js("""
-                var tab = findFirst(root, function (o) { return o.label === "Settings" && o.clicked !== undefined; });
-                if (!tab) return false;
-                tab.clicked();
-                return true;
-            """)
-                )
-            )
-            settle(300)
-            if not opened_settings or not bool(q("root.settingsOpen")):
+            if not _open_settings(q, settle):
                 problems.append("the Settings tab did not open the Settings page")
             else:
                 page_stops, _ = _tab_cycle(q, settle, root, limit=80)
@@ -599,6 +720,249 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
             stray = [s for s in final_stops if _offscreen(s)]
             if stray:
                 problems.append(f"Tab reaches a control behind a closed surface: {stray[:3]}")
+
+    # --- The Settings commit actions: an edit stages, Tab reaches CANCEL and
+    # SAVE CHANGES in the page's own chain, Return commits, and Space
+    # discards without ever committing the pointer's side.
+    if not _open_settings(q, settle):
+        problems.append("the Settings tab did not open the Settings page for the commit actions")
+    else:
+        before = bool(q("waves.appleEnabled"))
+        saved = before
+        staged = bool(q(scene_js(_APPLE_SWITCH + "if (!sw) return false; sw.toggle(); return true;")))
+        settle(250)
+        if not staged or not bool(q("settingsPage.dirty")):
+            problems.append("the Apple switch could not stage an edit to commit")
+        else:
+            q("settingsPage.forceActiveFocus()")
+            settle(80)
+            cancel_stop, seen = _tab_until(
+                q, settle, root, lambda s: s["object"] == "cancelEditsBtn" and s["inSettings"], limit=120
+            )
+            if cancel_stop is None:
+                problems.append(f"Tab never reached CANCEL inside Settings: {seen[-8:]}")
+            elif cancel_stop["name"] != "CANCEL" or not cancel_stop["focusable"]:
+                problems.append(
+                    f"CANCEL is not a named tab stop: name={cancel_stop['name']!r} focusable={cancel_stop['focusable']}"
+                )
+            save_stop, seen = _tab_until(
+                q, settle, root, lambda s: s["object"] == "saveChangesBtn" and s["inSettings"], limit=120
+            )
+            if save_stop is None:
+                problems.append(f"Tab never reached SAVE CHANGES inside Settings: {seen[-8:]}")
+            elif save_stop["name"] != "SAVE CHANGES" or not save_stop["focusable"]:
+                problems.append(
+                    f"SAVE CHANGES is not a named tab stop: name={save_stop['name']!r} focusable={save_stop['focusable']}"
+                )
+            elif not save_stop["enabled"]:
+                problems.append("SAVE CHANGES is not enabled while an edit is staged")
+            else:
+                QTest.keyClick(root, Qt.Key_Return)
+                settle(500)
+                saved = bool(q("waves.appleEnabled"))
+                if bool(q("settingsPage.dirty")) or not bool(q("settingsPage.savedFlash")):
+                    problems.append("Return on SAVE CHANGES never committed the staged edit")
+                elif saved == before:
+                    problems.append("the committed edit never changed the provider setting")
+
+            # A second edit, discarded with Space on CANCEL: the committed
+            # value must survive it.
+            if not bool(q(scene_js(_APPLE_SWITCH + "if (!sw) return false; sw.toggle(); return true;"))):
+                problems.append("the Apple switch vanished before the CANCEL leg")
+            else:
+                settle(250)
+                if not bool(q("settingsPage.dirty")):
+                    problems.append("the second edit did not stage")
+                else:
+                    q("settingsPage.forceActiveFocus()")
+                    settle(80)
+                    cancel_stop, seen = _tab_until(
+                        q, settle, root, lambda s: s["object"] == "cancelEditsBtn" and s["inSettings"], limit=120
+                    )
+                    if cancel_stop is None:
+                        problems.append(f"Tab never reached CANCEL for the discard: {seen[-8:]}")
+                    else:
+                        QTest.keyClick(root, Qt.Key_Space)
+                        settle(400)
+                        if bool(q("settingsPage.dirty")):
+                            problems.append("Space on CANCEL never discarded the staged edit")
+                        elif bool(q("waves.appleEnabled")) != saved:
+                            problems.append("CANCEL discarded the committed value, not just the staged edit")
+    q("settingsPage.closed()")
+    settle(250)
+
+    # --- The update toast: both actions are named as drawn, tab-reachable,
+    # and the key press takes the same branch the pointer does. The install
+    # worker is pinned inflight, so the branch's own bookkeeping runs without
+    # spawning a real download.
+    bridge._app_update_inflight = True
+    q('updateToast.offer("9.9.9")')
+    q("updateToast.selfInstall = true")
+    settle(250)
+    if q("updateToast.phase") != "offer":
+        problems.append("the update toast did not offer for the toast leg")
+    else:
+        primary = _adopted(q, "updateToastPrimary")
+        if primary is None:
+            problems.append("the toast's primary action is not in the tree")
+        elif not bool(primary.property("activeFocusOnTab")):
+            problems.append("the toast's primary action is not a tab stop")
+        else:
+            primary.forceActiveFocus()
+            settle(80)
+            QTest.keyClick(root, Qt.Key_Return)
+            settle(300)
+            if q("updateToast.phase") != "installing":
+                problems.append("Return on the toast's INSTALL never took the install branch")
+            elif q("setupSettings.updateToastDismissed") != "9.9.9":
+                problems.append("the toast's key press never marked the offer acted on")
+
+        # Every face's word rides the spoken name: CANCEL on the installing
+        # face the press just reached, then RESTART NOW, RETRY, INSTALL and
+        # VIEW on the other faces.
+        for phase, word in (
+            ("installing", "CANCEL"),
+            ("ready", "RESTART NOW"),
+            ("failed", "RETRY"),
+            ("offer", "INSTALL"),
+        ):
+            q(f"updateToast.phase = '{phase}'")
+            settle(150)
+            spoken = _spoken_name(q, "updateToastPrimary")
+            if spoken != word:
+                problems.append(f"the toast's {word} face speaks as {spoken!r}")
+        q("updateToast.selfInstall = false")
+        settle(150)
+        if _spoken_name(q, "updateToastPrimary") != "VIEW":
+            problems.append("the toast's package-manager face does not speak VIEW")
+
+        # The secondary answers Space and dismisses; its name is LATER while
+        # the face says LATER, and Dismiss while it draws only the glyph.
+        q("updateToast.phase = 'ready'")
+        settle(250)
+        if _spoken_name(q, "updateToastSecondary") != "LATER":
+            problems.append("the toast's LATER action is not named LATER")
+        later = _adopted(q, "updateToastSecondary")
+        if later is None:
+            problems.append("the toast's LATER action is not in the tree")
+        elif not bool(later.property("activeFocusOnTab")):
+            problems.append("the toast's LATER action is not a tab stop")
+        else:
+            later.forceActiveFocus()
+            settle(80)
+            QTest.keyClick(root, Qt.Key_Space)
+            settle(300)
+            if q("updateToast.phase") != "":
+                problems.append("Space on the toast's LATER never dismissed it")
+        q("updateToast.phase = 'offer'")
+        settle(250)
+        if _spoken_name(q, "updateToastSecondary") != "Dismiss":
+            problems.append("the toast's glyph action is not named Dismiss")
+    q("updateToast.phase = ''")
+    bridge._app_update_inflight = False
+    settle(200)
+
+    # --- The gate actions: a GateAction, a GateCard and a gate's raw tap
+    # target are named tab stops, and their key presses take the gate's own
+    # path. The GateCard's own action starts a real install, so only its
+    # metadata is read. The FFmpeg state is forced missing (and the gate up)
+    # so the option cards are really on screen, not hidden behind state.
+    q('appFfmpeg.status = {state: "missing"}')
+    q("ffmpegGate.visible = true")
+    settle(300)
+    card = json.loads(
+        q(
+            scene_js("""
+        var c = findFirst(root, function (o) {
+            return o.accessibleLabel !== undefined && o.accessibleLabel.indexOf("Install a managed copy") === 0;
+        });
+        return JSON.stringify(c ? { name: "" + c.Accessible.name,
+                                    role: Number(c.Accessible.role),
+                                    focusable: c.activeFocusOnTab === true } : null);
+    """)
+        )
+    )
+    if card is None:
+        problems.append("the FFmpeg gate's managed-install card is not in the tree")
+    else:
+        if not card["name"].startswith("Install a managed copy, RECOMMENDED"):
+            problems.append(f"the managed-install card speaks as {card['name']!r}, without its chip")
+        if card["role"] != _ROLE_BUTTON:
+            problems.append(f"the managed-install card is not exposed as a button (role {card['role']})")
+        if not card["focusable"]:
+            problems.append("the managed-install card is not in the tab order")
+
+    # The card's action, driven for real: "Set it up myself later" only
+    # records the choice, unlike the install card next to it.
+    later_card = _adopted(q, "ffmpegGateLaterCard")
+    if later_card is None:
+        problems.append("the FFmpeg gate's later card is not in the tree")
+    else:
+        later_card.forceActiveFocus()
+        settle(80)
+        QTest.keyClick(root, Qt.Key_Return)
+        settle(300)
+        if not bool(q("ffmpegGate.sessionSnoozed")):
+            problems.append("Return on a gate card never took the card's path")
+    q("ffmpegGate.visible = false")
+    settle(150)
+
+    q("root.ffmpegBlocked = true")
+    settle(300)
+    _check_buttons(
+        problems,
+        _buttons(q, "function (o) { return o.accessibleLabel === 'Continue anyway'; }"),
+        "the FFmpeg block gate's CONTINUE action",
+    )
+    continue_anyway = _adopted(q, "ffmpegGateContinue")
+    if continue_anyway is None:
+        problems.append("the FFmpeg block gate's CONTINUE action is not in the tree")
+    else:
+        continue_anyway.forceActiveFocus()
+        settle(80)
+        QTest.keyClick(root, Qt.Key_Return)
+        settle(300)
+        if bool(q("root.ffmpegBlocked")):
+            problems.append("Return on a gate action never took the gate's path")
+
+    q("root.folderGateBlocking = true")
+    settle(300)
+    _check_buttons(
+        problems,
+        _buttons(q, "function (o) { return o.accessibleLabel === 'Not now'; }"),
+        "the folder gate's Not now action",
+    )
+    not_now = _adopted(q, "folderGateNotNow")
+    if not_now is None:
+        problems.append("the folder gate's Not now action is not in the tree")
+    else:
+        not_now.forceActiveFocus()
+        settle(80)
+        QTest.keyClick(root, Qt.Key_Space)
+        settle(300)
+        if bool(q("root.folderGateBlocking")):
+            problems.append("Space on the folder gate's Not now never closed the gate")
+
+    # A disabled host disables its tap area: the terms gate's ACKNOWLEDGE is
+    # inert until its checkbox is ticked, so while disabled it is no tab stop,
+    # and ticking the box makes it one again. Without the host binding the
+    # tap area keeps the MouseArea's own enabled=true and stays reachable.
+    q("termsGate.visible = true")
+    settle(300)
+    ack = _adopted(q, "termsAckAction")
+    if ack is None:
+        problems.append("the terms gate's ACKNOWLEDGE action is not in the tree")
+    else:
+        if bool(ack.property("enabled")):
+            problems.append("a disabled gate action's tap area still reads enabled")
+        if bool(ack.property("activeFocusOnTab")):
+            problems.append("a disabled gate action is still a tab stop")
+        q("ackChk.checked = true")
+        settle(150)
+        if not bool(ack.property("enabled")) or not bool(ack.property("activeFocusOnTab")):
+            problems.append("ticking the terms checkbox never enabled its ACKNOWLEDGE action")
+    q("termsGate.visible = false")
+    settle(150)
 
     if problems:
         for line in problems:

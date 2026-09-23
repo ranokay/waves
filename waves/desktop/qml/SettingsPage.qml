@@ -1380,11 +1380,13 @@ Item {
             font.bold: true
             font.letterSpacing: page.btnTrack
           }
-          MouseArea {
+          TapAction {
+            objectName: "cancelEditsBtn"
             anchors.fill: parent
             enabled: page.dirty
-            cursorShape: page.dirty ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: page.discardEdits()
+            accessibleLabel: "CANCEL"
+            focusRadius: page.btnRad
+            onTriggered: page.discardEdits()
           }
         }
         Rectangle {
@@ -1409,15 +1411,17 @@ Item {
             font.bold: true
             font.letterSpacing: page.btnTrack
           }
-          MouseArea {
+          TapAction {
+            objectName: "saveChangesBtn"
             anchors.fill: parent
             enabled: saveBtn.canSave
-            cursorShape: saveBtn.canSave ? Qt.PointingHandCursor : Qt.ArrowCursor
+            accessibleLabel: "SAVE CHANGES"
+            focusRadius: page.btnRad
             // Keep editMap so the controls keep showing the values
             // we just saved (clearing it would revert them to the
             // now-stale schema defaults); it's reset on next open,
             // when needsRefresh pulls the fresh persisted values.
-            onClicked: {
+            onTriggered: {
               waves.applySettings(page.editMap)
               page.dirty = false
               page.needsRefresh = true
@@ -3486,6 +3490,7 @@ Item {
                           spacing: 10
                           Item {
                             id: swItem
+                            objectName: "appleEnableSwitch"
                             visible: statusCol.hasSwitch
                             Layout.alignment: Qt.AlignVCenter
                             implicitWidth: swRow.width

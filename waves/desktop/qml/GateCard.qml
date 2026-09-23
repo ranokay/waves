@@ -84,43 +84,16 @@ Rectangle {
       Layout.alignment: Qt.AlignVCenter
     }
   }
-  MouseArea {
+  TapAction {
     id: gcMa
     anchors.fill: parent
-    hoverEnabled: true
-    cursorShape: Qt.PointingHandCursor
-    onClicked: gcard.clicked()
-  }
-  activeFocusOnTab: gcard.visible
-  Accessible.role: Accessible.Button
-  // The chip (RECOMMENDED, the detected version) is what tells two cards
-  // in one gate apart, so it rides the spoken name too.
-  Accessible.name: gcard.title + (gcard.chip !== "" ? ", " + gcard.chip : "") + (gcard.desc !== "" ? ", " + gcard.desc : "")
-  Accessible.onPressAction: gcard.clicked()
-  Keys.onReturnPressed: function (event) {
-    if (!event.isAutoRepeat) {
-      event.accepted = true
-      gcard.clicked()
-    }
-  }
-  Keys.onEnterPressed: function (event) {
-    if (!event.isAutoRepeat) {
-      event.accepted = true
-      gcard.clicked()
-    }
-  }
-  Keys.onSpacePressed: function (event) {
-    if (!event.isAutoRepeat) {
-      event.accepted = true
-      gcard.clicked()
-    }
-  }
-  Rectangle {
-    anchors.fill: parent
-    radius: gcard.radius
-    color: "transparent"
-    border.width: 2
-    border.color: accent
-    visible: gcard.activeFocus
+    // The host's own state, not the tap area's default: a disabled card is
+    // no tab stop, no press target and no hand cursor.
+    enabled: gcard.enabled
+    // The chip (RECOMMENDED, the detected version) is what tells two cards
+    // in one gate apart, so it rides the spoken name too.
+    accessibleLabel: gcard.title + (gcard.chip !== "" ? ", " + gcard.chip : "") + (gcard.desc !== "" ? ", " + gcard.desc : "")
+    focusRadius: gcard.radius
+    onTriggered: gcard.clicked()
   }
 }

@@ -81,7 +81,7 @@ TRACK = {
 
 _FIND_SWITCH = """
 var sw = findFirst(root, function (o) {
-    return o.Accessible && o.Accessible.role === 44 && ('' + o.Accessible.name) === "Enable Apple Music";
+    return o.objectName === "appleEnableSwitch" && o.visible === true && o.activeFocusOnTab === true;
 });
 """
 

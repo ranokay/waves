@@ -221,5 +221,8 @@ class TestTheSettingsBoxRefusesIllegalCharacters:
 
         assert "readonly property bool canSave: page.dirty && !page.hasInvalidEdits()" in src
         assert "opacity: canSave ? 1 : 0.4" in src
-        assert re.search(r"MouseArea \{\s*\n\s*anchors\.fill: parent\n\s*enabled: saveBtn\.canSave", src)
+        assert re.search(
+            r'TapAction \{\s*\n\s*objectName: "saveChangesBtn"\n\s*anchors\.fill: parent\n\s*enabled: saveBtn\.canSave',
+            src,
+        )
         assert "cleanSanitized" not in src

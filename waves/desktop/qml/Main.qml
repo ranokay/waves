@@ -9231,11 +9231,12 @@ ApplicationWindow {
           text: "Not now"
           color: root.textLo
           font.pixelSize: 13
-          MouseArea {
+          TapAction {
+            objectName: "folderGateNotNow"
             anchors.fill: parent
             anchors.margins: -6
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.folderGateBlocking = false
+            accessibleLabel: "Not now"
+            onTriggered: root.folderGateBlocking = false
           }
         }
       }
@@ -9772,6 +9773,7 @@ ApplicationWindow {
           onClicked: appFfmpeg.install()
         }
         GateCard {
+          objectName: "ffmpegGateLaterCard"
           visible: appFfmpeg.stateKey === "missing" && !appFfmpeg.busy
           title: "Set it up myself later"
           desc: "Point Waves at your own FFmpeg from Settings."
@@ -9792,12 +9794,12 @@ ApplicationWindow {
             font.pixelSize: 12
             font.underline: true
           }
-          MouseArea {
+          TapAction {
             id: ffNoAskMa
+            objectName: "ffmpegGateNoAsk"
             anchors.fill: ffNoAskTxt
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
+            accessibleLabel: "I don't need FFmpeg. Stop showing this at launch."
+            onTriggered: {
               setupSettings.ffmpegPromptDismissed = true
               setupSettings.ffmpegSetupDone = true
               ffmpegGate.sessionSnoozed = true
@@ -10085,17 +10087,19 @@ ApplicationWindow {
             utAct.scr = out
           }
         }
-        MouseArea {
+        TapAction {
           id: utGo
+          objectName: "updateToastPrimary"
           anchors.fill: parent
           anchors.margins: -8
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
+          // The spoken name follows the face's own word, so a reader hears
+          // INSTALL / VIEW / CANCEL / RESTART NOW / RETRY as drawn.
+          accessibleLabel: utAct.realLabel
           onEntered: if (updateToast.phase !== "installing") {
             utAct._gt = 0
             utGlitch.restart()
           }
-          onClicked: {
+          onTriggered: {
             if ((updateToast.phase === "offer" || updateToast.phase === "failed") && !updateToast.selfInstall) {
               // Package-manager-owned install: hand off to the
               // releases page, never write over the managed copy.
@@ -10131,13 +10135,14 @@ ApplicationWindow {
         font.pixelSize: updateToast.face === "ready" ? 10 : 11
         font.bold: updateToast.face === "ready"
         font.letterSpacing: updateToast.face === "ready" ? 0.8 : 0
-        MouseArea {
+        TapAction {
           id: utX
+          objectName: "updateToastSecondary"
           anchors.fill: parent
           anchors.margins: -8
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          onClicked: updateToast.dismiss()
+          // The glyph alone does not say what it does; LATER names itself.
+          accessibleLabel: updateToast.face === "ready" ? "LATER" : "Dismiss"
+          onTriggered: updateToast.dismiss()
         }
       }
     }
@@ -10207,6 +10212,7 @@ ApplicationWindow {
             }
           }
           GateAction {
+            objectName: "ffmpegGateContinue"
             showArrow: false
             neutral: true
             label: "Continue anyway"
@@ -10385,6 +10391,7 @@ ApplicationWindow {
           }
         }
         GateAction {
+          objectName: "termsAckAction"
           label: "ACKNOWLEDGE & AGREE"
           enabled: ackChk.checked
           opacity: ackChk.checked ? 1 : 0.4
