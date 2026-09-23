@@ -341,11 +341,6 @@ ColumnLayout {
     folderList.pendingY = (entry.y === undefined ? 0 : entry.y)
     waves.openPlaylistFolder(group.sourceId, entry.id)
   }
-  function folderReset() {
-    group.folderStack = []
-    group.currentFolder = ""
-    folderModel.clear()
-  }
   function applyFolder(fid, rows, path) {
     // Stale guard: the user already moved to another folder (or back
     // to the root) while this answer was in flight.

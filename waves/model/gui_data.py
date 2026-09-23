@@ -38,12 +38,6 @@ class ResultItem:
 
 
 @dataclass
-class StatusbarMessage:
-    message: str
-    timeout: int = 0
-
-
-@dataclass
 class QueueDownloadItem:
     status: str
     name: str

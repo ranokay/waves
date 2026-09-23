@@ -536,14 +536,6 @@ def container_states(ps_output: str) -> dict[str, str]:
     return states
 
 
-def container_exists(running_names: str, name: str = WRAPPER_CONTAINER_NAME) -> bool:
-    """Whether a container listing names our sidecar (any state, either listing shape)."""
-    wanted = str(name).strip()
-    if not wanted:
-        return False
-    return any((line.strip().split(None, 1) or [""])[0] == wanted for line in str(running_names or "").splitlines())
-
-
 class SidecarSupervisor:
     """Lazily start, health-probe and idle-stop the wrapper sidecar.
 
@@ -660,10 +652,6 @@ class SidecarSupervisor:
         if getattr(proc, "returncode", 1) != 0:
             return ""
         return container_states(getattr(proc, "stdout", "") or "").get(self._container, "")
-
-    def _have_container(self) -> bool:
-        """Whether a sidecar container exists to restart by name (any state)."""
-        return bool(self._container_state())
 
     def _container_bindings_private(self, http_port: int, decrypt_port: int) -> bool:
         """Whether the existing sidecar publishes both ports on loopback only."""

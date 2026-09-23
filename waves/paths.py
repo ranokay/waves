@@ -26,7 +26,6 @@ from waves.constants import (
     FILENAME_SANITIZE_PLACEHOLDER,
     FORMAT_TEMPLATE_EXPLICIT,
     UNIQUIFY_THRESHOLD,
-    MediaType,
 )
 from waves.metadata.naming import name_builder_album_artist, name_builder_artist, name_builder_title
 
@@ -190,15 +189,6 @@ def path_config_base() -> str:
         if CONFIG_MIGRATION == "failed":
             return legacy
     return native
-
-
-def path_file_log() -> str:
-    """Get the path to the log file.
-
-    Returns:
-        str: The log file path.
-    """
-    return os.path.join(path_config_base(), "app.log")
 
 
 def path_file_token() -> str:
@@ -1040,34 +1030,6 @@ def calculate_number_padding(padding_minimum: int, item_position: int, items_max
     return result
 
 
-def get_format_template(
-    media: Track | Album | Playlist | UserPlaylist | Video | Mix | MediaType, settings
-) -> str | bool:
-    """Get the format template for a given media type.
-
-    Args:
-        media (Track | Album | Playlist | UserPlaylist | Video | Mix | MediaType): The media object or type.
-        settings: The settings object containing format templates.
-
-    Returns:
-        str | bool: The format template string or False if not found.
-    """
-    result = False
-
-    if isinstance(media, Track) or media == MediaType.TRACK:
-        result = settings.data.format_track
-    elif isinstance(media, Album) or media == MediaType.ALBUM or media == MediaType.ARTIST:
-        result = settings.data.format_album
-    elif isinstance(media, Playlist | UserPlaylist) or media == MediaType.PLAYLIST:
-        result = settings.data.format_playlist
-    elif isinstance(media, Mix) or media == MediaType.MIX:
-        result = settings.data.format_mix
-    elif isinstance(media, Video) or media == MediaType.VIDEO:
-        result = settings.data.format_video
-
-    return result
-
-
 def _no_traversal(part: str) -> str:
     """Neutralize a bare current/parent-directory path component.
 
@@ -1718,21 +1680,6 @@ def check_file_exists(path_file: pathlib.Path, extension_ignore: bool = False) -
             return False
 
     return any(_nonempty(_file) for _file in path_files)
-
-
-def resource_path(relative_path: str) -> str:
-    """Get the absolute path to a resource.
-
-    Args:
-        relative_path: The relative path to the resource.
-
-    Returns:
-        str: The absolute path to the resource.
-    """
-    # PyInstaller creates a temp folder and stores path in _MEIPASS
-    base_path = getattr(sys, "_MEIPASS", os.path.abspath("."))
-
-    return os.path.join(base_path, relative_path)
 
 
 def url_to_filename(url: str) -> str:

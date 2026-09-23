@@ -15,7 +15,7 @@ from tidalapi.artist import Artist
 from tidalapi.media import MediaMetadataTags, Quality
 from tidalapi.user import LoggedInUser
 
-from waves.constants import FAVORITES, MediaType
+from waves.constants import MediaType
 from waves.errors import MediaUnknown
 
 logger = logging.getLogger(__name__)
@@ -50,18 +50,6 @@ def get_tidal_media_type(url_media: str) -> MediaType | bool:
             result = MediaType.ARTIST
 
     return result
-
-
-def url_ending_clean(url: str) -> str:
-    """Checks if a link ends with "/u" or "?u" and removes that part.
-
-    Args:
-        url (str): The URL to clean.
-
-    Returns:
-        str: The cleaned URL.
-    """
-    return url[:-2] if url.endswith("/u") or url.endswith("?u") else url
 
 
 def search_results_all(
@@ -142,13 +130,6 @@ def items_results_all(
         result = paginate_results(func_get_items_media)  # ty: ignore[invalid-assignment]  # the paginate family returns the wide union
 
     return result
-
-
-def all_artist_album_ids(media_artist: Artist) -> list[int | None]:
-    func_get_items_media: list[Callable] = [media_artist.get_albums, media_artist.get_ep_singles]
-    albums: list[Album] = paginate_results(func_get_items_media)  # ty: ignore[invalid-assignment]  # album/EP callables only return Albums
-
-    return [album.id for album in albums]
 
 
 def paginate_results(func_get_items_media: list[Callable]) -> list[Track | Video | Album | Playlist | UserPlaylist]:
@@ -266,10 +247,3 @@ def quality_audio_highest(media: Track | Album) -> Quality:
         quality = media.audio_quality  # ty: ignore[invalid-assignment]
 
     return quality
-
-
-def favorite_function_factory(tidal, favorite_item: str):
-    function_name: str = FAVORITES[favorite_item]["function_name"]
-    function_list: Callable = getattr(tidal.session.user.favorites, function_name)
-
-    return function_list

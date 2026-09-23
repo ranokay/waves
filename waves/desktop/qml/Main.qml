@@ -2295,21 +2295,6 @@ ApplicationWindow {
     return count > 0 && (filterType === "all" || filterType === name)
   }
 
-  // Console helpers: ASCII download bar + popularity-meter segments
-  // asciiBar renders a monospace progress bar of filled (█) + dim (░) cells.
-  function asciiBar(pct, n) {
-    n = n || 9
-    var f = Math.max(0, Math.min(n, Math.round((pct / 100) * n)))
-    return "█".repeat(f)
-  }
-  function asciiBarDim(pct, n) {
-    n = n || 9
-    var f = Math.max(0, Math.min(n, Math.round((pct / 100) * n)))
-    return "░".repeat(n - f)
-  }
-  function popLit(v) {
-    return Math.round(Math.max(0, Math.min(100, v)) / 100 * 10)
-  }
   function segColor(i) {
     return i < 5 ? green : i < 8 ? gold : red
   }
@@ -2402,9 +2387,6 @@ ApplicationWindow {
   }
   function navBackLabel() {
     return navHistory.length > 0 ? navHistory[navHistory.length - 1].label : ""
-  }
-  function navForwardLabel() {
-    return navForwardHistory.length > 0 ? navForwardHistory[navForwardHistory.length - 1].label : ""
   }
   function navBack() {
     var levelUp = navHistory.length === 0;

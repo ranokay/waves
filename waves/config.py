@@ -927,15 +927,3 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
         del self.session
 
         return True
-
-    def is_authentication_error(self, error: Exception) -> bool:
-        """Check if an error is related to authentication/OAuth issues.
-
-        Args:
-            error (Exception): The exception to check.
-
-        Returns:
-            bool: True if the error is authentication-related, False otherwise.
-        """
-        error_msg = str(error)
-        return "401" in error_msg or "OAuth" in error_msg or "token" in error_msg.lower()

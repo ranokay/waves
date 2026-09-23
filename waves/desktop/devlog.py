@@ -108,37 +108,14 @@ def done(category: str, message: str = "", duration: float = 0.0, **fields) -> N
         )
 
 
-class _Span:
-    """Mutable handle yielded by :func:`span` so the timed block can attach
-    fields it only learns mid-flight (result counts, sub-durations, …)."""
-
-    __slots__ = ("_t0", "fields")
-
-    def __init__(self, fields: dict) -> None:
-        self.fields = fields
-        self._t0 = time.perf_counter()
-
-    def set(self, **fields) -> _Span:
-        self.fields.update(fields)
-        return self
-
-    def lap(self) -> float:
-        """Seconds elapsed since the span (or the last :meth:`reset`) started."""
-        return time.perf_counter() - self._t0
-
-    def reset(self) -> None:
-        self._t0 = time.perf_counter()
-
-
 @contextmanager
 def span(category: str, message: str = "", **fields):
     """Time a block and log a :func:`done` line when it exits (even on error)."""
-    handle = _Span(dict(fields))
     start = time.perf_counter()
     try:
-        yield handle
+        yield
     finally:
-        done(category, message, time.perf_counter() - start, **handle.fields)
+        done(category, message, time.perf_counter() - start, **fields)
 
 
 def clock() -> float:
