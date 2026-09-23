@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -1365,8 +1366,14 @@ def test_force_overwrites_the_owned_collision_path(tmp_path, monkeypatch):
     assert done["path"] == str(owned)
 
 
-@pytest.mark.ffmpeg
-def test_a_foreign_occupant_takes_the_numbered_name_and_keeps_its_bytes(tmp_path, monkeypatch):
+def _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, on_place):
+    """Run the one-track job while a writer strikes the picked destination.
+
+    ``on_place(dest, call)`` runs right before each real placement (``call`` is
+    0 for the picked name, 1 for the step-aside) and writes the file the race
+    is about there: the fetch window DL-03 names, simulated at its last
+    moment. Returns (summary, relay, base).
+    """
     from waves.providers.apple import engine as apple_engine
 
     monkeypatch.setattr(
@@ -1376,17 +1383,12 @@ def test_a_foreign_occupant_takes_the_numbered_name_and_keeps_its_bytes(tmp_path
     _tone(staged)
     provider = _FakeProvider(fixture=staged)
     base = tmp_path / "lib"
-    foreign = base / "Aphex Twin" / "Xtal.m4a"
     real_place = runner.place_file
-    placed_names: list[str] = []
+    calls: list[Path] = []
 
     def racing_place(staged_file, dest, **kwargs):
-        if not placed_names:
-            # The pick chose this name while it was free; a stranger lands on
-            # it during the fetch (the seconds-to-minutes window DL-03 names).
-            foreign.parent.mkdir(parents=True, exist_ok=True)
-            foreign.write_bytes(b"foreign-audio")
-        placed_names.append(dest.name)
+        on_place(dest, len(calls))
+        calls.append(dest)
         return real_place(staged_file, dest, **kwargs)
 
     monkeypatch.setattr(runner, "place_file", racing_place)
@@ -1403,57 +1405,68 @@ def test_a_foreign_occupant_takes_the_numbered_name_and_keeps_its_bytes(tmp_path
         job_abort=Event(),
         file_template="{artist_name}/{track_title}",
     )
+    return summary, relay, base
+
+
+@pytest.mark.ffmpeg
+def test_a_foreign_occupant_takes_the_numbered_name_and_keeps_its_bytes(tmp_path, monkeypatch):
+    def occupy_once(dest: Path, call: int) -> None:
+        if call == 0:
+            dest.write_bytes(b"foreign-audio")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, occupy_once)
 
     assert summary == ""
-    assert foreign.read_bytes() == b"foreign-audio"
+    assert (base / "Aphex Twin" / "Xtal.m4a").read_bytes() == b"foreign-audio"
     landed = base / "Aphex Twin" / "Xtal_01.m4a"
     assert landed.is_file() and landed.stat().st_size != len(b"foreign-audio")
-    assert placed_names == ["Xtal.m4a", "Xtal_01.m4a"]
     done = next(ev for ev in relay.events if ev.get("status") == "done")
     assert done["path"] == str(landed)
 
 
 @pytest.mark.ffmpeg
-def test_a_foreign_occupant_that_follows_every_name_fails_the_item(tmp_path, monkeypatch):
-    from waves.providers.apple import engine as apple_engine
-
-    monkeypatch.setattr(
-        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
-    )
-    staged = tmp_path / "staged.m4a"
-    _tone(staged)
-    provider = _FakeProvider(fixture=staged)
-    base = tmp_path / "lib"
-    real_place = runner.place_file
-    offered: list[str] = []
-
-    def racing_place(staged_file, dest, **kwargs):
+def test_a_foreign_occupant_that_follows_every_name_fails_the_item(tmp_path, monkeypatch, caplog):
+    def occupy_always(dest: Path, _call: int) -> None:
         # A writer that beats the item to every name it is offered.
-        dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"foreign-audio")
-        offered.append(dest.name)
-        return real_place(staged_file, dest, **kwargs)
 
-    monkeypatch.setattr(runner, "place_file", racing_place)
-    stub = _bind(_stub(base, provider))
-    relay = _Relay()
-    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+    # The app's diagnostics setup can leave the "waves" tree non-propagating;
+    # caplog reads through the root, so restore it (the same guard as
+    # tests/ui/test_move_errno_breadcrumb.py).
+    monkeypatch.setattr(logging.getLogger("waves"), "propagate", True, raising=True)
+    with caplog.at_level(logging.ERROR), pytest.raises(DownloadIncomplete):
+        _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, occupy_always)
 
-    with pytest.raises(DownloadIncomplete):
-        runner.run_apple_job(
-            stub._apple_job_hooks(),
-            1,
-            spec,
-            _song_resource(),
-            signals=relay,
-            job_abort=Event(),
-            file_template="{artist_name}/{track_title}",
-        )
-
-    assert offered == ["Xtal.m4a", "Xtal_01.m4a"]
+    base = tmp_path / "lib"
     assert (base / "Aphex Twin" / "Xtal.m4a").read_bytes() == b"foreign-audio"
     assert (base / "Aphex Twin" / "Xtal_01.m4a").read_bytes() == b"foreign-audio"
-    assert any(ev.get("status") == "failed" for ev in relay.events)
+    # The failure is loud with the move's own words, not a bare traceback.
+    assert any(
+        "Destination is already occupied by another writer, leaving the download out of the library"
+        in str(record.exc_info[1])
+        for record in caplog.records
+        if record.exc_info
+    )
+
+
+@pytest.mark.ffmpeg
+def test_a_proven_own_occupant_is_replaced_in_place(tmp_path, monkeypatch):
+    def own_copy_once(dest: Path, call: int) -> None:
+        if call == 0:
+            _tone(dest)
+            _write_item_id(dest, "apple:song-1")
+
+    summary, relay, base = _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, own_copy_once)
+
+    assert summary == ""
+    landed = base / "Aphex Twin" / "Xtal.m4a"
+    assert landed.is_file(), "the proven own copy was not replaced in place"
+    assert not (base / "Aphex Twin" / "Xtal_01.m4a").exists(), "an own copy was stepped aside"
+    import mutagen.mp4
+
+    assert mutagen.mp4.MP4(str(landed)).tags["\xa9nam"] == ["Xtal"]
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done["path"] == str(landed)
 
 
 def test_place_file_leaves_no_partials(tmp_path):

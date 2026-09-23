@@ -1914,12 +1914,10 @@ def deliver_track(
             def _occupant_is_this_items_own(path_occupied: pathlib.Path, version: str = delivered_version) -> bool:
                 """Whether the occupant PROVES it is this track's delivered Version.
 
-                The skip gate's two readers (item id + Version), with the move's
-                stricter rule on an unreadable id: unknown is a stranger here,
-                because a Finder copy or a sync tool's file is untagged. The
-                soft "identity unknown, treat as this item" answer belongs to
-                the skip question (wrongly replacing is worse than wrongly
-                skipping); the TIDAL move asks the same positive question
+                The skip gate's two readers (item id + Version) with the move's
+                rule on an unreadable id: unknown is a stranger here, because a
+                Finder copy is untagged and may not be replaced. The TIDAL move
+                asks the same positive question
                 (waves.download.Download._already_landed_here). The ``version``
                 default binds this attempt's delivered Version.
                 """
