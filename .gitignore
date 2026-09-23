@@ -176,16 +176,10 @@ scratchpad/
 packaging/aur/
 packaging/winget/
 
-# Local audit / review reports (working notes, never part of the shipped app).
-# Root-scoped on purpose: the tracked tests/ files that mention "audit" in their
-# names are real source and must stay tracked. release.sh publishes the tree of
-# a ref, so untracked files were already safe from the public repo; this closes
-# the other door, a stray `git add -A` sweeping one into a commit.
-/*audit*.md
-
-# Dated audit working notes and their captured evidence (screenshots, logs,
-# JSON dumps): local analysis artifacts, not product documentation. Promote a
-# report into docs/ deliberately if it should become durable.
+# AUDIT.md at the root is the durable production-readiness audit. Dated audit
+# working notes and their captured evidence (screenshots, logs, JSON dumps) are
+# local analysis artifacts, not product documentation; promote one deliberately
+# if it should become durable.
 docs/audits/
 
 # macOS Finder metadata and the local Apple cookies export used for manual
