@@ -1,8 +1,11 @@
 # Windows and Linux enablement review
 
-- Status: review complete; Linux verified, Windows parked with the blocker
-  recorded and the recipe exclusion landed, revalidation
-  owed
+- Status: review complete; Linux verified; Windows bundle builds revalidated
+  green on the exclusion recipe (run
+  [35836125855](https://github.com/ranokay/waves/actions/runs/35836125855),
+  2026-09-23; ADR 0009 superseded). The body below is the 2026-09-21 review as
+  written: its Windows-build blocker is resolved, while gaps 1–4 and the
+  test-job and live-verification recommendations stay owed
 - Scope: what the Windows and Linux builds ship, how the platform-dependent
   code branches behave, and which claims are verified versus still open
 - Method: code audit of the platform branches in production code (paths,

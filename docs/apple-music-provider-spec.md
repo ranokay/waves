@@ -11,7 +11,7 @@
 1. **Don't break what works.** The TIDAL path's behavior is unchanged everywhere except where a section below explicitly states a ratified product change (one exists: the Atmos toggle's meaning, §5.1). Apple is additive.
 2. **Config-first.** Anything possibly configurable is exposed in Settings rather than hardcoded. Every default named below is an initial value, user-tunable.
 3. **Optional component.** Apple Music ships as a user-enabled component: off by default, explicit opt-in in Settings.
-4. **Platform order**: macOS Apple silicon first, then Windows, then Linux. (Windows parked — see §10.5.)
+4. **Platform order**: macOS Apple silicon first, then Windows, then Linux. (Windows and Linux follow as later enablements — see §10.5.)
 5. **License discipline.** Waves is AGPL-3.0. Every bundled, vendored, or wrapped artifact must be license-compatible (§2, §11).
 6. **One-time external setup is acceptable**; fully-in-app setup is a bonus, never a requirement.
 
@@ -262,7 +262,7 @@ SRT is dropped for v1 (a conversion artifact, not something Apple provides).
 3. **Container runtime dependency**: the full tier presumes a container runtime (Docker). The wizard detects it, attempts a gentle start on macOS, and guides when absent (§2) — it never silently installs one.
 4. **Engine bumps ride the updater**: Waves pins gamdl (version line), its own wrapper-v2 image build, and the N_m3u8DL-RE release; when upstream fixes scraper breakage, a pinned-version bump ships through Waves' normal update channel — the user updates Waves, the runtime refresh follows on next wizard/supervision pass.
 5. **Platform order**: macOS Apple silicon ships first (arm64 image runs natively — the deciding fact). **Windows and Linux follow as later enablements**: both need the container-runtime path verified per platform (image architecture for x86-64 hosts among them) — an enablement-verification requirement of those milestones, not an open design decision.
-   > **Parked for Windows ([ADR 0009](adr/0009-windows-builds-parked.md)).** The Windows bundle does not compile on hosted runners (MSVC fails on yt-dlp's generated `lazy_extractors` alone), so no Windows asset ships until both Windows legs go green on the exclusion recipe (re-entry: ADR 0009); Linux x64 built and smoke-launched in CI and Linux arm64 built (`docs/platform-enablement-review.md`), neither published from this fork yet.
+   > **Windows bundle builds revalidated ([ADR 0009](adr/0009-windows-builds-parked.md), superseded).** Both Windows legs went green on the exclusion recipe in run [35836125855](https://github.com/ranokay/waves/actions/runs/35836125855) (2026-09-23), so no park holds: the release matrix keeps both Windows legs and the README presents the assets as downloadable. A green bundle is not a tested platform — the container-runtime path and the Windows test job stay later-enablement requirements (this section). Linux x64 built and smoke-launched in CI and Linux arm64 built (`docs/platform-enablement-review.md`), neither published from this fork yet.
 6. **Notarization**: Waves' own signing/notarization pipeline is unchanged; the provisioning flow must keep downloaded executables inside the app's managed-runtime area with provenance recorded (source URL + checksum), the pattern the FFmpeg manager already uses.
 
 ## 11. What does _not_ change
@@ -281,7 +281,7 @@ Not decisions pending — decisions made to defer:
 - **ISRC-deduped merged search results** across providers (v1 ships sections per provider). The documented ISRC batch lookup (`filter[isrc]`, 25 max) is the natural dedupe key, already identified.
 - **Animated Apple artwork** (needs an ffmpeg-derived decode of `editorialVideo`).
 - **Automatic APK fetching** (§10.2).
-- **Windows and Linux enablement** (§10.5 — Windows parked per ADR 0009; Linux CI-verified, unpublished from this fork).
+- **Windows and Linux enablement** (§10.5 — the Windows bundle is unblocked (ADR 0009 superseded); Linux CI-verified; neither published from this fork yet).
 - **SRT lyrics sidecar** if ever wanted (config-first addition).
 - **qobuz** — a separate future effort upstream; the Provider seam must not (and does not) preclude it. Better Lyrics as a lyrics source: likewise ruled out of this effort.
 

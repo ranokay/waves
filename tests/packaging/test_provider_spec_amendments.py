@@ -35,7 +35,7 @@ def test_wrapper_image_names_adr_0005():
     assert "0005-wrapper-image-distribution" in section
 
 
-def test_platform_section_and_deferrals_name_the_windows_park():
+def test_platform_section_and_deferrals_name_the_windows_record():
     text = SPEC.read_text(encoding="utf-8")
     assert "0009-windows-builds-parked" in _section(text, "## 10. Packaging")
     assert "ADR 0009" in _section(text, "## 12. Post-v1")
