@@ -199,7 +199,7 @@ ColumnLayout {
     if (!configured || loading || listFor(category).count > 0)
       return ""
     if (counts[category] === -1)
-      return "Reopen My Music to try again."
+      return "Check the folder is available, then retry."
     if (scanning || !indexReady)
       return "Everything on disk appears here as the scan finds it."
     return category === "all" ? "Waves found no audio files in your music folder." : "Files Waves downloads land here, badged with the provider they came from."
@@ -360,6 +360,13 @@ ColumnLayout {
           color: textLo
           font.pixelSize: 13
           visible: text !== ""
+        }
+        GateAction {
+          objectName: "libRetryAction"
+          width: parent.width
+          label: "RETRY"
+          visible: libSection.statusText() === "Could not read your music folder"
+          onClicked: libSection.reload()
         }
       }
     }
