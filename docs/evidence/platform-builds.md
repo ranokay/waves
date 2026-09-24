@@ -30,13 +30,16 @@ see the revalidation rows below).
 | Windows arm64 (revalidation)                 | [35836125855](https://github.com/ranokay/waves/actions/runs/35836125855)    | `cbf4827315f5e6b8ac2bc5dffa5b75270b33d38e`                      | filter `only=windows-x64,windows-arm64`; built (~1h44m); no launch by design; checksum + artifact `waves_windows-arm64` uploaded                                                                                                                                                                                                                                                                                                           |
 | macOS apple-silicon (Nuitka 4.2.2)           | [35867946239](https://github.com/ranokay/waves/actions/runs/35867946239)    | `1a30cb62b617a867e3842ec33c9ca18d2839ca61`                      | filter `only=macos-apple-silicon`; built (~17 min) under Nuitka 4.2.2 on Python 3.13 + smoke-launch healthy + 136 Mach-O files honor the 15.0 floor; cold Nuitka cache (the 4.x bump moves `pyproject.toml` and `uv.lock` in the key); artifact `waves_macos-apple-silicon` uploaded                                                                                                                                                       |
 | Linux tests (3.12/3.13/3.14) + quality       | [35867942489](https://github.com/ranokay/waves/actions/runs/35867942489)    | `1a30cb62b617a867e3842ec33c9ca18d2839ca61`                      | quality green; every test leg syncs `--locked --all-extras` on its own Python (so `uv sync` on 3.14 is proven) and runs the strict group: 3.14 `4461 passed, 78 skipped`; the one failure on all three legs is `tests/ui/test_provider_descriptor_card_qml.py`, pre-existing on Linux and tracked in #409 (control run [35870307437](https://github.com/ranokay/waves/actions/runs/35870307437) on unmodified `develop` fails identically) |
+| macOS intel legacy (floor 12.0)              | [36031832661](https://github.com/ranokay/waves/actions/runs/36031832661)    | `33f0f6f34e41ce5584af5e689719c18f9ab2a379`                      | filter `only=macos-intel_legacy,macos-apple-silicon_legacy` (substring rule also runs the regular twins); built (~27 min) + smoke-launch healthy + 138 Mach-O files honor the 12.0 floor; artifact `waves_macos-intel_legacy` downloadable                                                                                                                                                                                                 |
+| macOS apple-silicon legacy (floor 12.0)      | [36031832661](https://github.com/ranokay/waves/actions/runs/36031832661)    | `33f0f6f34e41ce5584af5e689719c18f9ab2a379`                      | same filter; built (~14 min) + smoke-launch healthy + 136 Mach-O files honor the 12.0 floor; artifact `waves_macos-apple-silicon_legacy` downloadable                                                                                                                                                                                                                                                                                      |
 
 Legacy floor-12 legs (`macos-intel_legacy`, `macos-apple-silicon_legacy`)
-did not run here: the per-architecture proof above plus the documented
-flavor difference (same builders, PySide6 6.9.3 overlay with
-`WAVES_MACOS_MIN=12.0`) is the coverage the issue's alternative permits.
-A release cut builds all eight legs including legacy by the
-all-platform guard, so legacy evidence arrives with the first release.
+are proven by the two rows above: run `36031832661` at `33f0f6f` built both
+with the PySide6 6.9.3 overlay and `WAVES_MACOS_MIN=12.0`, smoke-launch
+healthy and every Mach-O file honoring the 12.0 floor. The Qt overlay pin is
+guarded by `test_legacy_macos_legs_carry_the_pinned_qt_overlay` in
+`tests/packaging/test_ci_hygiene.py`. A release cut builds all eight legs
+including legacy by the all-platform guard.
 
 Local evidence for the Nuitka 4.2.2 bump (branch
 `chore/issue-393-python-3-14-nuitka-4`): a macOS arm64 build at `1a30cb6`
