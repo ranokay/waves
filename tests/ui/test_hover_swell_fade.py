@@ -37,6 +37,10 @@ from support.qml import (
 # The designed durations, and the slack the measurement is allowed. Sampling is
 # coarse (a 5ms event-loop tick) and an offscreen frame clock is not exact, so
 # the assertions only pin each fade to its own half of the range.
+# PERF-MARKER: these bounds are intentionally tighter than 3x (in <=170 vs
+# designed 90, out 200..420 vs designed 260) because they fence the exact
+# inversion this test caught (~262ms in, ~98ms out): a 3x ceiling (270/780)
+# would let the inverted build pass. Tight by design, not by accident.
 _IN_MS = 90
 _OUT_MS = 260
 _IN_CEILING = 170
@@ -100,7 +104,7 @@ def _run_scenario() -> int:
         QTimer.singleShot(ms, loop.quit)
         loop.exec()
 
-    settle(120)
+    settle(120)  # one wall-clock beat so the engine finishes loading; fades below poll
     # A real HoverSwell: its own component file, resolved through
     # the qml directory import (which has to be relative: absolute paths are
     # rejected). This measures whatever the app actually ships, not a copy.
@@ -117,19 +121,26 @@ def _run_scenario() -> int:
         return EXIT_PRECONDITION
 
     def fade_ms(to_on: bool) -> float:
-        """Wall-clock time for the opacity to finish travelling."""
+        """Time for the opacity to finish travelling, polling the property itself."""
+        from support.qml import wait_until
+
         target = 1.0 if to_on else 0.0
         swell.setProperty("on", to_on)
         started = time.monotonic()
-        while (time.monotonic() - started) * 1000 < _GIVE_UP_MS:
-            settle(_SAMPLE_MS)
-            if abs(float(swell.property("opacity")) - target) < 0.01:
-                return (time.monotonic() - started) * 1000
-        return float("inf")
+        try:
+            wait_until(
+                lambda: abs(float(swell.property("opacity")) - target) < 0.01,
+                timeout_ms=_GIVE_UP_MS,
+                interval_ms=_SAMPLE_MS,
+                message=f"swell opacity -> {target}",
+            )
+        except AssertionError:
+            return float("inf")
+        return (time.monotonic() - started) * 1000
 
-    settle(60)
+    settle(60)  # one wall-clock beat so the probe settles; fades below poll
     in_ms = fade_ms(True)
-    settle(300)  # fully lit and idle before timing the way back
+    settle(300)  # fully lit and idle before timing the way back: the out-fade must start from rest
     out_ms = fade_ms(False)
 
     ok_in = in_ms <= _IN_CEILING

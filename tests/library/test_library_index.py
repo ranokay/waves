@@ -252,7 +252,10 @@ def test_on_progress_rate_limited_by_default(tmp_path):
 def test_tag_reads_run_concurrently(tmp_path):
     # A cold NAS scan is latency-bound, so tag reads must overlap. A reader that
     # sleeps 50ms per file over 16 albums takes 800ms serially; in parallel it
-    # finishes in a couple of pool rounds. Generous bound to stay un-flaky.
+    # finishes in a couple of pool rounds (observed ~0.13s).
+    # PERF-MARKER with a 3x+ margin: 0.5s is ~3.8x the observed parallel and
+    # still well under the 0.8s serial floor, so it proves overlap without
+    # flaking on a loaded runner.
     import time as _time
 
     lib = _mk(tmp_path, "lib", [])
@@ -275,7 +278,9 @@ def test_tag_reads_run_concurrently(tmp_path):
 def test_walk_lists_directories_concurrently(tmp_path, monkeypatch):
     # Discovery is one listing per folder, a network round trip on a NAS, so the
     # walk must overlap listings like the tag reads overlap file opens. 20ms per
-    # listing over ~49 folders is ~1s serially; concurrent finishes well under.
+    # listing over ~49 folders is ~1s serially; concurrent lands ~0.21s.
+    # PERF-MARKER with a 3x+ margin: 0.7s is ~3.3x the observed parallel and
+    # still under the 1s serial floor, so it proves overlap without flaking.
     import time as _time
 
     import waves.library.index as li
@@ -296,7 +301,7 @@ def test_walk_lists_directories_concurrently(tmp_path, monkeypatch):
     monkeypatch.setattr(li.os, "scandir", slow_scandir)
     t0 = _time.monotonic()
     assert idx.refresh(lib) == 24
-    assert _time.monotonic() - t0 < 0.6  # serial would be >= 1s
+    assert _time.monotonic() - t0 < 0.7  # serial would be >= 1s
 
 
 def test_scan_status_ok_after_successful_scan(tmp_path):
