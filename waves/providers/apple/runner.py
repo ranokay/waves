@@ -46,6 +46,7 @@ from waves.metadata.tags import (
     occupant_is_own,
     occupant_is_version,
     read_item_id,
+    read_item_id_or_none,
     sniff_image_format,
 )
 from waves.model.cfg import cover_sidecar_format, wants_both_default
@@ -1435,7 +1436,17 @@ def gate_track(
     except Exception:
         ceiling = None
     current = copy_is_current(rec, requested_rank, wants, ceiling)
-    return ("skip", rec) if current else ("force", rec)
+    if current:
+        # A tag write that failed leaves an owned but untagged file: retry
+        # tagging instead of skipping forever. Unreadable stays skipped.
+        try:
+            owned_path = str((rec or {}).get("path") or "")
+            if owned_path and read_item_id_or_none(owned_path) == "":
+                return "force", rec
+        except Exception:
+            logger.debug("Apple tag-retry read failed; keeping the skip", exc_info=True)
+        return "skip", rec
+    return "force", rec
 
 
 # --------------------------------------------------------------------------
@@ -2139,7 +2150,7 @@ def deliver_track(
     # means no catalog URL lands in the file. Nothing past the tag call
     # reads facts, so the scrubbed copy stays local to it.
     tag_facts = facts_without_share_url(data, facts)
-    if not tag_apple_file(
+    tag_ok = tag_apple_file(
         dest,
         title=str(row.get("title") or ""),
         facts=tag_facts,
@@ -2150,7 +2161,8 @@ def deliver_track(
         metadata_target_upc=str(getattr(data, "metadata_target_upc", "UPC") or "UPC"),
         audio_type="atmos" if atmos else "stereo",
         **hooks.tag_write_flags(),
-    ):
+    )
+    if not tag_ok:
         logger.debug("Apple tagging reported failure for %s", hooks.redact(track_id))
     write_sidecars(
         hooks,
@@ -2223,6 +2235,7 @@ def deliver_track(
         ceiling_for_record = int(ceiling_rank)
     return {
         "path": str(dest),
+        "tagged": bool(tag_ok),
         "quality": {
             "tier": tier,
             "audio_mode": "DOLBY_ATMOS" if atmos else "STEREO",
@@ -2613,12 +2626,15 @@ def run_apple_job(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, f
             skiplist_clear(hooks, track_id, check_version)
         except Exception:
             logger.debug("Could not clear the Apple skip-list", exc_info=True)
+        tagged = bool(delivered.get("tagged", True))
         signals.track_event.emit(
             {
                 "id": track_id,
                 "status": "done",
                 "path": delivered["path"],
                 "quality": delivered["quality"],
+                "tagged": tagged,
+                **({} if tagged else {"reason": "saved, tags failed"}),
             }
         )
         emit_progress(signals, collection, pos, total, media_id, qid)
