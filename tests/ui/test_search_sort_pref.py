@@ -124,12 +124,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario, two legs)
     name = q(scene_js(_FIND_SORT_DIR + "return '' + btn.Accessible.name;"))
     if name != "Sort descending":
         problems.append(f"the accessible name is {name!r}, not 'Sort descending'")
-    tip = q(
-        scene_js(
-            'var btn = findObject(root, "sortDirectionButton");'
-            " return btn && btn.parent ? '' + btn.parent.ToolTip.text : '';"
-        )
-    )
+    tip = q(scene_js(_FIND_SORT_DIR + "return btn && btn.parent ? '' + btn.parent.ToolTip.text : '';"))
     if "Relevance" not in str(tip):
         problems.append("the direction button carries no tooltip saying why it is inert")
 
@@ -146,7 +141,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario, two legs)
     if bridge.wavesPref("search_sort_asc") != before_pref:
         problems.append("clicking the inert direction button wrote search_sort_asc")
 
-    # --- Away from Relevance the control answers Tab and Space.
+    # --- Away from Relevance the control answers Tab, Space, Return and Enter.
     q("sortBox.currentIndex = 2")
     settle(250)
     if not bool(q(scene_js(_FIND_SORT_DIR + "return btn.enabled === true;"))):
@@ -159,14 +154,27 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario, two legs)
         if not bool(q(scene_js(_FIND_SORT_DIR + "return btn.activeFocus === true;"))):
             problems.append("the direction button never took keyboard focus")
         else:
-            root.requestActivate()
-            settle(100)
-            QTest.keyClick(root, Qt.Key_Space)
-            settle(400)
-            if not bool(q("root.sortAsc === true")):
-                problems.append("Space on the direction button never flipped it")
-            elif bridge.wavesPref("search_sort_asc") is not True:
-                problems.append("the flipped direction never persisted search_sort_asc")
+            # Every key the spec names flips it on its own: reset to
+            # descending before each so each press proves its own flip.
+            for key, words in ((Qt.Key_Space, "Space"), (Qt.Key_Return, "Return"), (Qt.Key_Enter, "Enter")):
+                q("root.sortAsc = false")
+                q("waves.setWavesPref('search_sort_asc', false)")
+                settle(150)
+                q(scene_js(_FIND_SORT_DIR + "btn.forceActiveFocus(); return true;"))
+                settle(150)
+                if not bool(q(scene_js(_FIND_SORT_DIR + "return btn.activeFocus === true;"))):
+                    problems.append("the direction button never took keyboard focus")
+                    break
+                root.requestActivate()
+                settle(100)
+                QTest.keyClick(root, key)
+                settle(400)
+                if not bool(q("root.sortAsc === true")):
+                    problems.append(f"{words} on the direction button never flipped it")
+                    break
+                if bridge.wavesPref("search_sort_asc") is not True:
+                    problems.append(f"the {words} flip never persisted search_sort_asc")
+                    break
             else:
                 flipped_name = q(scene_js(_FIND_SORT_DIR + "return '' + btn.Accessible.name;"))
                 if flipped_name != "Sort ascending":
