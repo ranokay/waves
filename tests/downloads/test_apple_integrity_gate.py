@@ -1116,6 +1116,32 @@ def test_atmos_rejects_plain_ac3(tmp_path, monkeypatch):
         runner.verify_staged(stub._apple_job_hooks(), bad, expect_atmos=True)
 
 
+def test_stereo_rejects_ec3(tmp_path, monkeypatch):
+    """Stereo codec negative: an ec3 delivery asked as stereo fails naming it.
+
+    Runs everywhere: the probe path is forced like the ALAC acceptance test,
+    so no ffmpeg is needed. Fails when the stereo codec branch is removed.
+    """
+    from waves.providers.apple import engine as apple_engine
+    from waves.providers.apple.engine import AppleIntegrityError
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "ec3", "sample_rate": "48000"}
+    )
+    monkeypatch.setattr(apple_engine, "decode_check", lambda staged, ffmpeg_path="": None)
+    bad = tmp_path / "ec3-as-stereo.m4a"
+    bad.write_bytes(b"fake-ec3-bytes")
+    provider = _FakeProvider([bad])
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    monkeypatch.setattr(runner, "probe_binary", lambda hooks: "/fake/ffprobe")
+
+    with pytest.raises(AppleIntegrityError) as excinfo:
+        runner.verify_staged(stub._apple_job_hooks(), bad, expect_atmos=False)
+
+    assert "ec3" in str(excinfo.value).lower()
+
+
 @pytest.mark.ffmpeg
 def test_success_after_a_retry_leaves_no_hold_dirs(tmp_path, monkeypatch):
 
