@@ -44,8 +44,10 @@ from support.qml import (
     EXIT_OK,
     EXIT_PRECONDITION,
     EXIT_REGRESSED,
+    checkpoint,
     run_scenario,
     sandbox_qml_settings,
+    wait_until,
 )
 
 
@@ -126,7 +128,7 @@ def _run_scenario() -> int:
         QTimer.singleShot(ms, loop.quit)
         loop.exec()
 
-    settle(120)
+    settle(120)  # one wall-clock beat so the engine finishes loading; state below polls
     # Back to the launch frame, then drive the dials by hand so the
     # assertions are about the bindings rather than about timing.
     for stop in ("bootSeq", "bootHandover", "bootBlk", "handoverCap", "bootZoom"):
@@ -134,12 +136,21 @@ def _run_scenario() -> int:
     q("bootOverlay.done = false")
     q("bootContentShown = 0")
     q("bootWarming = false")
-    settle(60)
+    try:
+        wait_until(lambda: float(q("mainColumn.opacity")) == 0.0, message="prewarm: cold frame hidden")
+    except AssertionError:
+        print("CHECKPOINT prewarm-cold FAILED: interface is not hidden at launch", file=sys.stderr)
+        return EXIT_REGRESSED
     # Before the drain: nothing of the interface is drawn at all.
     cold = float(q("mainColumn.opacity")) == 0.0
 
+    checkpoint("prewarm-warm")
     q("bootWarming = true")
-    settle(60)
+    try:
+        wait_until(lambda: float(q("mainColumn.opacity")) > 0.001, message="prewarm-warm: page painted")
+    except AssertionError:
+        print("CHECKPOINT prewarm-warm FAILED: warming never painted the page", file=sys.stderr)
+        return EXIT_REGRESSED
     warm_op = float(q("mainColumn.opacity"))
     # Above the renderer's skip threshold, so the page is actually painted...
     rendered = warm_op > 0.001
@@ -149,11 +160,25 @@ def _run_scenario() -> int:
     inert = not bool(q("mainColumn.enabled")) and bool(q("bootShield.enabled"))
 
     # The reveal still owns the fade: warming cannot clamp or offset it.
+    checkpoint("prewarm-reveal")
     q("bootContentShown = 0.5")
-    settle(60)
+    try:
+        wait_until(
+            lambda: abs(float(q("mainColumn.opacity")) - 0.5) < 1e-6, message="prewarm-reveal: reveal owns the fade"
+        )
+    except AssertionError:
+        print("CHECKPOINT prewarm-reveal FAILED: warming clamped the reveal dial", file=sys.stderr)
+        return EXIT_REGRESSED
     reveal_exact = abs(float(q("mainColumn.opacity")) - 0.5) < 1e-6
     q("bootContentShown = 1")
-    settle(60)
+    try:
+        wait_until(
+            lambda: bool(q("mainColumn.enabled")) and not bool(q("bootShield.enabled")),
+            message="prewarm-reveal: interface open",
+        )
+    except AssertionError:
+        print("CHECKPOINT prewarm-reveal FAILED: interface did not open on reveal", file=sys.stderr)
+        return EXIT_REGRESSED
     revealed_open = bool(q("mainColumn.enabled")) and not bool(q("bootShield.enabled"))
 
     ok = cold and rendered and unseen and inert and reveal_exact and revealed_open

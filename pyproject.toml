@@ -219,6 +219,7 @@ ignore = [
 # The boot scenarios replay one launch sequence start to finish; the
 # branching is the sequence (C901).
 "tests/ui/test_boot_fade_landing_park.py" = ["C901"]
+"tests/ui/test_boot_reveal_prewarm.py" = ["C901"]
 "tests/ui/test_boot_shield_cursor_release.py" = ["C901"]
 "tests/ui/test_boot_version_drain_order.py" = ["C901"]
 # The ported browse scenarios keep their boot -> drive -> assert shape as one

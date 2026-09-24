@@ -35,8 +35,10 @@ from support.qml import (
     EXIT_OK,
     EXIT_PRECONDITION,
     EXIT_REGRESSED,
+    checkpoint,
     run_scenario,
     sandbox_qml_settings,
+    wait_until,
 )
 
 
@@ -94,7 +96,7 @@ def _run_scenario() -> int:
         QTimer.singleShot(ms, loop.quit)
         loop.exec()
 
-    settle()
+    settle()  # one wall-clock beat so the engine finishes loading; state below polls
     # Freeze the boot machinery so the fade state is driven purely by this
     # scenario. Payloads carry no sections, so no delegate ever incubates:
     # browseChips is the applied/not-applied witness.
@@ -108,43 +110,54 @@ def _run_scenario() -> int:
     q("_browseParked = null")
 
     # 1. Mid-fade, first build: the payload must park, not apply.
+    checkpoint("fade-park")
     q("bootIntro.restart()")
-    settle(30)
-    if not bool(q("bootIntro.running")):
-        print("could not hold bootIntro running", file=sys.stderr)
+    try:
+        wait_until(lambda: bool(q("bootIntro.running")), message="fade-park: bootIntro running")
+    except AssertionError:
+        print("CHECKPOINT fade-park FAILED: could not hold bootIntro running", file=sys.stderr)
         return EXIT_PRECONDITION
     bridge.browseLoaded.emit({"sections": [], "genres": ["parked-genre"], "moods": [], "decades": [], "error": False})
-    settle(30)
-    if not bool(q("_browseParked !== null")):
-        print("mid-fade payload was not parked", file=sys.stderr)
+    try:
+        wait_until(lambda: bool(q("_browseParked !== null")), message="fade-park: payload parked")
+    except AssertionError:
+        print("CHECKPOINT fade-park FAILED: mid-fade payload was not parked", file=sys.stderr)
         return EXIT_REGRESSED
     if q("(browseChips.genres || []).length") != 0:
-        print("mid-fade payload was applied during the fade", file=sys.stderr)
+        print("CHECKPOINT fade-park FAILED: mid-fade payload was applied during the fade", file=sys.stderr)
         return EXIT_REGRESSED
 
     # 2. The fade finishing must apply the parked payload.
+    checkpoint("fade-apply")
     q("bootIntro.complete()")
-    settle(60)
-    if not bool(q("_browseParked === null")):
-        print("parked payload still held after the fade", file=sys.stderr)
+    try:
+        wait_until(lambda: bool(q("_browseParked === null")), message="fade-apply: parked applied")
+    except AssertionError:
+        print("CHECKPOINT fade-apply FAILED: parked payload still held after the fade", file=sys.stderr)
         return EXIT_REGRESSED
     if q("(browseChips.genres || [])[0]") != "parked-genre":
-        print("parked payload was not applied when the fade finished", file=sys.stderr)
+        print("CHECKPOINT fade-apply FAILED: parked payload was not applied when the fade finished", file=sys.stderr)
         return EXIT_REGRESSED
 
     # 3. An error payload mid-fade must go straight through.
+    checkpoint("fade-error-passthrough")
     q("browseSections = []")
     q("browseChips = ({ genres: [], moods: [], decades: [] })")
     q("browseError = false")
     q("bootIntro.restart()")
-    settle(30)
+    try:
+        wait_until(lambda: bool(q("bootIntro.running")), message="fade-error-passthrough: bootIntro running")
+    except AssertionError:
+        print("CHECKPOINT fade-error-passthrough FAILED: could not hold bootIntro running", file=sys.stderr)
+        return EXIT_PRECONDITION
     bridge.browseLoaded.emit({"sections": [], "genres": [], "moods": [], "decades": [], "error": True})
-    settle(30)
-    if not bool(q("browseError")):
-        print("error payload did not apply during the fade", file=sys.stderr)
+    try:
+        wait_until(lambda: bool(q("browseError")), message="fade-error-passthrough: error applied")
+    except AssertionError:
+        print("CHECKPOINT fade-error-passthrough FAILED: error payload did not apply during the fade", file=sys.stderr)
         return EXIT_REGRESSED
     if not bool(q("_browseParked === null")):
-        print("error payload was parked instead of applied", file=sys.stderr)
+        print("CHECKPOINT fade-error-passthrough FAILED: error payload was parked instead of applied", file=sys.stderr)
         return EXIT_REGRESSED
     q("bootIntro.stop()")
 

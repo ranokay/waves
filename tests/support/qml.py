@@ -19,6 +19,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -146,6 +148,49 @@ def _tail(stdout: str | None, stderr: str | None, limit: int = 12, drop: tuple[s
     return "\n".join(lines[-limit:])
 
 
+def wait_until(
+    predicate: Callable[[], object],
+    timeout_ms: int = 2000,
+    interval_ms: int = 10,
+    *,
+    message: str = "condition not met",
+) -> float:
+    """Poll ``predicate`` until truthy, pumping the Qt event loop between polls.
+
+    Use this for animation/state assertions: the child reaches the state when
+    it reaches it, not after a fixed sleep. ``settle`` stays only where a
+    timer must fire (a one-shot that needs wall-clock time to elapse), with a
+    one-line reason at the call site. Returns elapsed ms; raises
+    AssertionError naming the checkpoint on timeout so the pytest output
+    attributes the failed checkpoint.
+    """
+    start = time.monotonic()
+    deadline = start + timeout_ms / 1000
+    try:
+        from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+
+        has_qt_pump = QCoreApplication.instance() is not None
+    except ImportError:
+        has_qt_pump = False
+    while True:
+        if predicate():
+            return (time.monotonic() - start) * 1000
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"CHECKPOINT {message} (waited {timeout_ms}ms)")
+        if has_qt_pump:
+            loop = QEventLoop()
+            QTimer.singleShot(interval_ms, loop.quit)
+            loop.exec()
+        else:
+            time.sleep(interval_ms / 1000)
+
+
+def checkpoint(name: str, detail: str = "") -> None:
+    """Name a multi-checkpoint step so the child's tail attributes the failure."""
+    line = f"CHECKPOINT {name}" + (f": {detail}" if detail else "")
+    print(line, flush=True)
+
+
 def _skip_or_fail_missing_qt() -> None:
     message = "PySide6 / offscreen Qt unavailable"
     if require_qml():
@@ -214,7 +259,9 @@ def run_scenario(
     application import errors, QML load failures and regressions all read
     as failures. ``failure_message`` prefixes the failure when the caller
     has a sharper verdict than "the scenario failed", and ``drop`` removes
-    known-noisy lines (Qt warnings) from the reported tail.
+    known-noisy lines (Qt warnings) from the reported tail. Children print
+    ``CHECKPOINT <name>`` lines (see :func:`checkpoint`); the tail keeps the
+    failed checkpoint in the pytest output for multi-checkpoint scenarios.
     """
     path = Path(script).resolve()
     if missing_qt():
