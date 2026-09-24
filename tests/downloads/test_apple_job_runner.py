@@ -2257,3 +2257,86 @@ def test_pause_holds_the_track_loop_before_the_first_fetch(tmp_path):
         worker.join(10)
     assert provider.fetched == []
     assert not [ev for ev in relay.events if ev.get("status") == "done"]
+
+
+@pytest.mark.ffmpeg
+def test_tag_failure_surfaces_on_the_done_event(tmp_path, monkeypatch):
+    """A tag writer returning False is a visible done, not a debug log."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+    staged = tmp_path / "staged.m4a"
+    _tone(staged)
+    provider = _FakeProvider(fixture=staged)
+    base = tmp_path / "lib"
+    stub = _bind(_stub(base, provider))
+    monkeypatch.setattr(runner, "tag_apple_file", lambda *a, **k: False)
+    relay = _Relay()
+    spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+
+    summary = runner.run_apple_job(
+        stub._apple_job_hooks(),
+        1,
+        spec,
+        _song_resource(),
+        signals=relay,
+        job_abort=Event(),
+        file_template="{artist_name}/{track_title}",
+    )
+
+    assert summary == ""
+    done = next(ev for ev in relay.events if ev.get("status") == "done")
+    assert done.get("tagged") is False
+    assert done.get("reason") == "saved, tags failed"
+
+
+@pytest.mark.ffmpeg
+def test_owned_untagged_file_retries_tagging_while_tagged_skips(tmp_path, monkeypatch):
+    """An owned but untagged file re-fetches; a tagged own file still skips."""
+    from waves.providers.apple import engine as apple_engine
+
+    monkeypatch.setattr(
+        apple_engine, "probe_audio_file", lambda path, ffprobe_path="": {"codec": "aac", "sample_rate": "44100"}
+    )
+
+    def _run_over(occupant_item_id):
+        staged = tmp_path / f"staged-{occupant_item_id or 'untagged'}.m4a"
+        _tone(staged)
+        provider = _FakeProvider(fixture=staged)
+        base = tmp_path / "lib"
+        occupant = base / "Aphex Twin" / "Xtal.m4a"
+        occupant.parent.mkdir(parents=True, exist_ok=True)
+        _tone(occupant)
+        if occupant_item_id is not None:
+            _write_item_id(occupant, occupant_item_id)
+        rec = {
+            "path": str(occupant),
+            "quality_rank": quality_rank(QualityTier.HIGH),
+            "requested_rank": quality_rank(QualityTier.HIGH),
+            "ceiling_rank": quality_rank(QualityTier.HIGH),
+            "audio_mode": "STEREO",
+        }
+        stub = _bind(_stub(base, provider, _ownership=SimpleNamespace(ownership_of=lambda tid, **k: rec)))
+        relay = _Relay()
+        spec = SimpleNamespace(kind="track", collection=False, media_id="apple:song-1")
+        summary = runner.run_apple_job(
+            stub._apple_job_hooks(),
+            1,
+            spec,
+            _song_resource(),
+            signals=relay,
+            job_abort=Event(),
+            file_template="{artist_name}/{track_title}",
+        )
+        return summary, provider, relay
+
+    summary, provider, relay = _run_over(None)
+    assert provider.fetched != [], "an owned untagged file must retry tagging, not skip"
+    assert not any(ev.get("status") == "skipped" for ev in relay.events)
+
+    summary, provider, relay = _run_over("apple:song-1")
+    assert summary == " (already downloaded)"
+    assert provider.fetched == []
+    assert any(ev.get("status") == "skipped" for ev in relay.events)
