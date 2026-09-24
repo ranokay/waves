@@ -94,7 +94,7 @@ jobs:
           echo "ARCH_WINDOWS_X64=${{ env.ARCH_WINDOWS_X64 }}" >> $GITHUB_OUTPUT
           echo "ARCH_WINDOWS_ARM64=${{ env.ARCH_WINDOWS_ARM64 }}" >> $GITHUB_OUTPUT
       - name: Check out (leg selection)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # The `only` filter selects matrix legs here, once, instead of
       # per-step guards in every leg: an excluded leg never becomes a job,
       # so no Success-with-skipped-steps conclusion can hide an unbuilt
@@ -113,7 +113,7 @@ jobs:
       # gates real releases; test-build / artifact-only runs are unaffected.
       - name: Check out (release-config guard)
         if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Guard, a published release must be able to self-update
         if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
         run: |
@@ -241,7 +241,7 @@ jobs:
       # (Releases and test-build pushes leave `only` blank, so every leg
       # still runs.)
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up the environment
         uses: ./.github/actions/setup-env
       # Carry Nuitka's build tree and its cache root (ccache, module cache,
@@ -254,7 +254,7 @@ jobs:
       # another configuration; the restore-key fallback is salted the same
       # way. The policy and the size budget live in docs/dependency-updates.md.
       - name: Restore the Nuitka build cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             dist/waves.build
@@ -422,13 +422,13 @@ jobs:
       - name: Upload checksum artifact
         # Tiny per-asset checksums collected by the sign job into one manifest
         # (the glob picks up the AppImage's sidecar on the linux legs).
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sha256-${{matrix.leg.os_arch}}
           path: ./dist/${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.leg.os_arch}}*.sha256
       - name: Upload Build Artifact (workflow_dispatch / test-build)
         if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/test-build' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{needs.compute.outputs.OUT_NAME_FILE}}_${{matrix.leg.os_arch}}
           path: |
@@ -471,11 +471,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up the environment
         uses: ./.github/actions/setup-env
       - name: Collect per-asset checksums
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: sha256-*
           merge-multiple: true
@@ -585,7 +585,7 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
     steps:
       - name: Collect per-asset checksums
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: sha256-*
           merge-multiple: true
