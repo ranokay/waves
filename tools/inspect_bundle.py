@@ -29,8 +29,8 @@ Usage:
                                    [--strict-clients] [--require-developer-id]
 
 Exit status 0 when no forbidden artifact is found, every required native
-module is present, the client policy holds and, on macOS with a ``.app``
-bundle, codesign verifies. 1 otherwise.
+module is present, the third-party notices ship, the client policy holds
+and, on macOS with a ``.app`` bundle, codesign verifies. 1 otherwise.
 """
 
 from __future__ import annotations
@@ -172,7 +172,8 @@ def inspect_bundle(
     a verified Developer ID signature, for release pipelines. A missing
     required native module (``_REQUIRED_NATIVE``) always fails the report. The
     expected dependencies (``_EXPECTED``) are reported present or absent,
-    never failed.
+    never failed. The third-party notices (DEP-09: ``THIRD_PARTY_NOTICES``
+    plus ``licenses/`` texts beside the app) always fail when absent.
     """
     path = Path(bundle)
     if not path.exists():
@@ -210,6 +211,16 @@ def inspect_bundle(
     for _pattern, name in _EXPECTED:
         file_hit = _expected_file(entries, path, name)
         expected.append(embedded.get(name) or (f"{name}: {file_hit}" if file_hit else f"{name}: absent"))
+    notices = path / "THIRD_PARTY_NOTICES"
+    licenses_dir = path / "licenses"
+    missing_notices = [
+        kind
+        for kind, present in (
+            ("THIRD_PARTY_NOTICES", notices.is_file()),
+            ("licenses/ texts", licenses_dir.is_dir() and any(licenses_dir.iterdir())),
+        )
+        if not present
+    ]
     signature = (
         _signature(path, runner, target_platform)
         if verify_signature
@@ -218,11 +229,12 @@ def inspect_bundle(
     signature_ok = not signature["checked"] or signature["verified"]
     if require_developer_id:
         signature_ok = signature["checked"] and signature["verified"] and signature["kind"] == "Developer ID"
-    ok = not forbidden and not missing and signature_ok and (not strict_clients or not clients)
+    ok = not forbidden and not missing and not missing_notices and signature_ok and (not strict_clients or not clients)
     return {
         "bundle": str(path),
         "forbidden": forbidden,
         "missing": missing,
+        "missing_notices": missing_notices,
         "clients": clients,
         "expected": expected,
         "signature": signature,
@@ -254,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"FORBIDDEN {item['kind']}: {item['path']}")
         for item in report["missing"]:
             print(f"MISSING REQUIRED: {item}")
+        for item in report.get("missing_notices", []):
+            print(f"MISSING NOTICES: {item}")
         for client in report["clients"]:
             print(f"client shipped (ADR 0004): {client}")
         for item in report["expected"]:

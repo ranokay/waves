@@ -151,6 +151,14 @@ elif [ -d "$DIST/waves.dist" ]; then
   bash tools/trim_qt_bundle.sh "$DIST/waves.dist"
 fi
 
+# Third-party notices ride every bundle (DEP-09): generated from the locked
+# venv's metadata plus the license texts, beside the app in each layout.
+if [ -d "$DIST/waves.app" ]; then
+  "${WAVES_PYTHON[@]}" tools/generate_third_party_notices.py "$DIST/waves.app"
+elif [ -d "$DIST/waves.dist" ]; then
+  "${WAVES_PYTHON[@]}" tools/generate_third_party_notices.py "$DIST/waves.dist"
+fi
+
 # Spec §10.1 (ADR 0004): no Apple-derived engine material may ship; the
 # open-source clients are reported. Fails the build on forbidden material.
 if [ -d "$DIST/waves.app" ]; then

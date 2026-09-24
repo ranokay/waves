@@ -32,7 +32,7 @@ def _fake(*, rc: int = 0, stdout: str = "", stderr: str = "") -> SimpleNamespace
     return SimpleNamespace(returncode=rc, stdout=stdout, stderr=stderr)
 
 
-def _bundle(tmp_path, names: tuple[str, ...], *, with_natives: bool = True):
+def _bundle(tmp_path, names: tuple[str, ...], *, with_natives: bool = True, with_notices: bool = True):
     root = tmp_path / "waves.app"
     (root / "Contents" / "MacOS").mkdir(parents=True)
     (root / "Contents" / "MacOS" / "waves").write_bytes(b"\x00")
@@ -41,6 +41,11 @@ def _bundle(tmp_path, names: tuple[str, ...], *, with_natives: bool = True):
             path = root / "Contents" / "MacOS" / "Crypto" / "Cipher" / f"{module}.abi3.so"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"\x00")
+    if with_notices:
+        (root / "THIRD_PARTY_NOTICES").write_text("notices")
+        licenses = root / "licenses"
+        licenses.mkdir(exist_ok=True)
+        (licenses / "example-LICENSE").write_bytes(b"\x00")
     for name in names:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -280,6 +285,26 @@ def test_every_platform_spelling_of_the_native_modules_is_accepted(tmp_path):
 def test_a_missing_bundle_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         inspect_bundle_tool.inspect_bundle(tmp_path / "nope.app", verify_signature=False)
+
+
+def test_missing_notices_fail_the_inspection(tmp_path):
+    bundle = _bundle(tmp_path, (), with_notices=False)
+
+    report = inspect_bundle_tool.inspect_bundle(bundle, verify_signature=False)
+
+    assert report["missing_notices"] == ["THIRD_PARTY_NOTICES", "licenses/ texts"]
+    assert report["ok"] is False
+
+
+def test_empty_licenses_dir_fails_the_inspection(tmp_path):
+    bundle = _bundle(tmp_path, (), with_notices=False)
+    (bundle / "THIRD_PARTY_NOTICES").write_text("notices")
+    (bundle / "licenses").mkdir()
+
+    report = inspect_bundle_tool.inspect_bundle(bundle, verify_signature=False)
+
+    assert report["missing_notices"] == ["licenses/ texts"]
+    assert report["ok"] is False
 
 
 def test_cli_exit_codes(tmp_path):
