@@ -109,7 +109,7 @@ _QOBUZ = SimpleNamespace(
 
 
 def _qobuz_descriptor():
-    """A third provider's descriptor, the identity its segment tile reads."""
+    """A third provider's descriptor, the identity its badge renders."""
     return SimpleNamespace(
         id="qobuz",
         name="Qobuz",
@@ -356,37 +356,16 @@ def test_provider_descriptor_answers_by_namespace_or_provider_id():
     assert none_descriptor.providerDescriptor("none:artist-1") is None
 
 
-def test_chooser_segment_tiles_come_from_the_enabled_providers_descriptors():
-    """The provider segment is bridge data: a disabled provider
-    draws no tile, the row's own provider always does, and each tile carries
-    the descriptor's own name and mark -- no provider name or asset path in
-    QML, so a third provider renders with no QML edit."""
-    b = _bridge(apple_enabled=False)
-    d = b.chooserDefaults("t1", "track")
-    assert [t["id"] for t in d["providers"]] == ["tidal"]
-    assert d["providers"][0]["selected"] is True
-
-    # A third provider with no setup switch is always on; it renders from its
-    # descriptor and metadata alone.
-    b = _bridge(
-        providers={CTX_TIDAL: TidalProvider(SimpleNamespace()), "qobuz": _QOBUZ}, qobuz_quality_audio="LOSSLESS"
-    )
-    tiles = b.chooserDefaults("qobuz:1", "track")["providers"]
-    assert [t["id"] for t in tiles] == ["tidal", "qobuz"]
-    assert [t["selected"] for t in tiles] == [False, True]
-    qobuz = tiles[1]
-    assert qobuz["name"] == "Qobuz" and qobuz["logo"] == "assets/providers/qobuz.png"
-
+def test_the_chooser_carries_the_row_s_own_provider_and_no_provider_list():
+    """The Chooser states the row's provider, it does not offer a pick:
+    chooserDefaults carries the row's provider id and no provider list. The
+    chip's mark comes from providerDescriptor, the badge's own identity
+    answer, so a third provider chips from its descriptor with no QML edit."""
     b = _bridge(apple_enabled=True)
-    b._provider_status_probes = {CTX_APPLE: lambda: {"enabled": True}}
-    tiles = b.chooserDefaults("apple:1", "track")["providers"]
-    assert [t["id"] for t in tiles] == ["tidal", "apple"]
-    assert [t["selected"] for t in tiles] == [False, True]
-    apple = tiles[1]
-    descriptor = AppleProvider.descriptor()
-    assert apple["name"] == descriptor.name
-    assert apple["logo"] == descriptor.logo
-    assert apple["logo_width"] == descriptor.logo_width
+    d = b.chooserDefaults("apple:1", "track")
+    assert d["provider"] == "apple"
+    assert "providers" not in d, "the Chooser grew a provider list back; a pick needs its own deliverable"
+    assert b.providerDescriptor("apple")["name"] == AppleProvider.descriptor().name
 
 
 def test_the_chooser_carries_which_sections_apply_per_provider():
@@ -436,7 +415,7 @@ def test_a_stereo_only_provider_clamps_the_stored_both_default():
 def test_the_chooser_qml_names_no_provider():
     """Acceptance for a third provider: the popover region carries no provider
     id, name or asset, so a provider registered with a descriptor and the
-    right metadata renders its segment, audio words and section gates without
+    right metadata renders its chip, audio words and section gates without
     a QML edit."""
     import pathlib
 
@@ -451,6 +430,18 @@ def test_the_chooser_qml_names_no_provider():
     assert "PROVIDER" in region, "the guard is looking at the wrong region"
     for needle in ("tidal", "apple", "assets/providers", "chooserRowProvider"):
         assert needle.lower() not in region.lower(), f"the Chooser region still names a provider: {needle}"
+
+
+def test_the_chooser_offers_no_inert_control():
+    """The provider chip is static (issue #414): no control in the Chooser
+    wears a cursor without acting. The audit's own evidence check -- an
+    ``enabled: false`` control in DownloadButton.qml -- must stay empty."""
+    import pathlib
+
+    from waves.desktop import backend as backend_module
+
+    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "DownloadButton.qml").read_text(encoding="utf-8")
+    assert "enabled: false" not in qml, "an inert control came back into the download button"
 
 
 # --------------------------------------------------------------------------- #

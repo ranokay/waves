@@ -213,12 +213,11 @@ The per-click Chooser's two answer-only slots are capability-driven (issue
 says whether a control carries the split button at all (the covered kinds plus
 the row's provider metadata: a quality rung, an audio type, or a lyrics/art
 capability), and `chooserDefaults(mediaId, kind)` returns the popover's data --
-`provider`, `providers` (segment tiles: id, name, logo,
-logo_width, selected, one per enabled provider with the row's own always
-present), `tier`, `audioType` (clamped to `audioOptions`), `audioOptions`,
-`atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt` and the
-lyrics/art quick-toggles. A provider whose metadata offers nothing per-click
-answers `chooserSupported` False, so no chevron renders.
+`provider` (the row's own, stated as a static chip whose mark comes from
+`providerDescriptor`), `tier`, `audioType` (clamped to `audioOptions`),
+`audioOptions`, `atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt`
+and the lyrics/art quick-toggles. A provider whose metadata offers nothing
+per-click answers `chooserSupported` False, so no chevron renders.
 `artistDownloadSupported(artistId)` is the same kind of answer for the artist
 page's discography control: True only where the artist's provider
 declares `Capability.ARTIST_DOWNLOAD`, so an Apple artist page renders no

@@ -105,11 +105,14 @@ Rectangle {
   property bool chooserBuilt: false
   readonly property bool chooserOpen: chooserLoader.item !== null && chooserLoader.item.visible
   property string chooserProvider: ""
+  // The row's provider as the popover's chip states it: the descriptor the
+  // badges render (the bridge's identity answer), resolved when the popover
+  // opens. Nothing here picks a provider — the row's own is the only one.
+  readonly property var chooserProviderInfo: ("" + db.chooserProvider) !== "" ? waves.providerDescriptor(db.chooserProvider) : null
   property string chooserTier: ""
   property string chooserAudio: "stereo"
   property bool chooserAtmosOnly: false
   property var chooserTiers: []
-  property var chooserProviders: []
   property var chooserAudioOptions: ["stereo"]
   property bool chooserShowLyrics: false
   property bool chooserShowTtml: false
@@ -133,7 +136,6 @@ Rectangle {
     if (db.chooserAtmosOnly)
       db.chooserAudio = "atmos"
     db.chooserTiers = d.tiers || []
-    db.chooserProviders = d.providers || []
     var audios = d.audioOptions || []
     db.chooserAudioOptions = audios.length > 0 ? audios : ["stereo"]
     db.chooserShowLyrics = d.showLyrics === true
@@ -1272,7 +1274,7 @@ Rectangle {
           font.letterSpacing: 1
         }
         Column {
-          visible: db.chooserProviders.length > 0
+          visible: db.chooserProviderInfo !== null
           spacing: 4
           Text {
             textFormat: Text.PlainText
@@ -1281,54 +1283,24 @@ Rectangle {
             font.family: mono
             font.pixelSize: 9
           }
-          Flow {
+          // The row's own provider, stated: one static chip, never a
+          // pick. ProviderBadge renders the descriptor's mark and the
+          // label its name, so a third provider chips like the first
+          // two with no provider id or asset path in QML.
+          Row {
             spacing: 6
-            width: 296
-            // One tile per enabled provider, straight from the
-            // bridge: fixed to the row's provider
-            // in v1, and the row's own tile always present. No
-            // provider id, name or asset path lives in QML, so
-            // a third provider renders with no edit here (the
-            // Flow wraps however many arrive).
-            Repeater {
-              model: db.chooserProviders
-              delegate: Rectangle {
-                required property var modelData
-                width: 140
-                height: 26
-                radius: 6
-                color: modelData.selected ? accentCont : surface3
-                border.color: modelData.selected ? accentDim : outline
-                border.width: 1
-                Row {
-                  anchors.centerIn: parent
-                  spacing: 6
-                  Image {
-                    visible: ("" + (modelData.logo || "")) !== ""
-                    anchors.verticalCenter: parent.verticalCenter
-                    source: "" + (modelData.logo || "")
-                    width: modelData.logo_width > 0 ? modelData.logo_width : 16
-                    height: 14
-                    fillMode: Image.PreserveAspectFit
-                    smooth: true
-                    cache: true
-                  }
-                  Text {
-                    textFormat: Text.PlainText
-                    text: ("" + (modelData.name || modelData.id)).toUpperCase()
-                    color: modelData.selected ? accentContTx : textLo
-                    font.family: uiFont
-                    font.pixelSize: 10
-                    font.bold: true
-                    anchors.verticalCenter: parent.verticalCenter
-                  }
-                }
-                MouseArea {
-                  anchors.fill: parent
-                  enabled: false
-                  cursorShape: Qt.PointingHandCursor
-                }
-              }
+            ProviderBadge {
+              descriptor: db.chooserProviderInfo
+              anchors.verticalCenter: parent.verticalCenter
+            }
+            Text {
+              textFormat: Text.PlainText
+              text: ("" + (db.chooserProviderInfo ? (db.chooserProviderInfo.name || db.chooserProviderInfo.id) : "")).toUpperCase()
+              color: textLo
+              font.family: uiFont
+              font.pixelSize: 10
+              font.bold: true
+              anchors.verticalCenter: parent.verticalCenter
             }
           }
         }

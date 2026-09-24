@@ -47,7 +47,8 @@ from support.paths import QML_DIR
 #                    attacker-controllable → remote.
 #   DownloadButton.qml  the download control and its Chooser:
 #                    `db.label` carries a remote artist
-#                    name and the provider tiles carry bridge descriptor names.
+#                    name and the provider chip carries the bridge
+#                    descriptor's name.
 #   Art.qml          the VideoCell closure:
 #   PlayBadge.qml    Art renders every cover (titles/names ride its callers),
 #   BigVideoThumb.qml  BigVideoThumb/VideoCell render a video result's title,

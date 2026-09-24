@@ -175,7 +175,9 @@ class StreamInfo:
 
 ### 7.2 The Chooser gesture
 
-Every download control is a **split button**: main face = one click with saved defaults (the queued toast confirms provider/tier/files); `▾` face (or right-click anywhere on the control) = the full Chooser as an **anchored popover** — never a dialog on every click. Chooser content: provider segmented control (fixed on collection rows — a collection belongs to its provider), the provider's quality tiers with detail text (Apple: "ALAC 24/192 · ALAC 16/44.1 · AAC 256"; TIDAL: its four rungs), audio type stereo/Atmos/both (collapsing to ATMOS ONLY on Atmos-only tracks), lyrics embed/.lrc/.ttml quick toggles, art sidecar/embed toggles, **SET AS DEFAULTS** (writes back to Settings) + DOWNLOAD. Choice applies to that click only.
+Every download control is a **split button**: main face = one click with saved defaults (the queued toast confirms provider/tier/files); `▾` face (or right-click anywhere on the control) = the full Chooser as an **anchored popover** — never a dialog on every click. Chooser content: the row's provider as a **static chip** (a collection belongs to its provider), the provider's quality tiers with detail text (Apple: "ALAC 24/192 · ALAC 16/44.1 · AAC 256"; TIDAL: its four rungs), audio type stereo/Atmos/both (collapsing to ATMOS ONLY on Atmos-only tracks), lyrics embed/.lrc/.ttml quick toggles, art sidecar/embed toggles, **SET AS DEFAULTS** (writes back to Settings) + DOWNLOAD. Choice applies to that click only.
+
+> **Amended by issue #414 (Chooser provider chip).** The provider control ships as a static chip in this release — the row's own provider, stated not picked; picking a provider in the Chooser remains a future deliverable with its own bridge slot.
 
 ### 7.3 Standalone lyrics/art actions
 

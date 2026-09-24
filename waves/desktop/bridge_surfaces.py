@@ -3,9 +3,9 @@ composed from the live bridge state and the provider registry.
 
 The surfaces themselves are QML. What they need beyond the fields a provider
 descriptor already carries is composed here once, so a third provider's card,
-light, chooser tile, shelf group or search group renders with no QML edit.
+light, chooser chip, shelf group or search group renders with no QML edit.
 This module is the source behind the provider cards, the header's status
-lights, the Chooser's provider segment, My Music's saved-shelf sources, the
+lights, the Chooser's provider chip, My Music's saved-shelf sources, the
 Library section's file rows, Browse's availability, and the search page's
 provider-keyed prefs.
 
@@ -612,12 +612,12 @@ def _provider_lights(bridge) -> list[dict]:
     return [light for light in lights if light is not None]
 
 
-# ----- the Chooser's control and provider segment -----
+# ----- the Chooser's control -----
 #
 # The per-click Chooser belongs to the control and the provider metadata, not
 # to Apple: a TIDAL-only install gets it, a provider that declares no per-click
-# options gets no chevron, and a third provider's segment tile renders from its
-# descriptor with no QML branch.
+# options gets no chevron, and the popover states the row's own provider as a
+# static chip whose mark the badge renders from its descriptor.
 
 # The download kinds that carry the per-click control (spec §7.2): track rows
 # and collection pages. Bulk sweeps keep Settings and a single face.
@@ -625,56 +625,6 @@ def _provider_lights(bridge) -> list[dict]:
 # appears here (a kind it does not know falls back to the plain download slot
 # there).
 _CHOOSER_KINDS: tuple[str, ...] = ("track", "album", "playlist", "mix", "video")
-
-
-def _provider_is_enabled(bridge, provider) -> bool:
-    """Whether a provider is enabled, from the same flags its light reads.
-
-    A SESSION provider (TIDAL) has no switch and is always on; a SETUP
-    provider answers from its live setup flags, a missing probe reading off --
-    the same rule its status light follows. No provider id enters the rule.
-    """
-    try:
-        descriptor = provider.descriptor()
-    except Exception:
-        logger.debug("A provider's descriptor failed; treating it as disabled", exc_info=True)
-        return False
-    if descriptor.status_kind is not StatusKind.SETUP:
-        return True
-    return bool(_provider_setup_flags(bridge, provider).get("enabled", False))
-
-
-def _chooser_provider_tiles(bridge, selected_id: str) -> list[dict]:
-    """The Chooser's provider segment tiles, descriptor-driven.
-
-    One tile per ENABLED provider; the selected provider always gets its tile
-    even while its switch is off (the row is on screen already, and hiding the
-    selected tile would leave a bare segment). Each carries the descriptor's
-    own name and mark, so QML renders a third provider's tile with no branch
-    and no provider id or asset path in QML.
-    """
-    tiles: list[dict] = []
-    for provider in _provider_registry(bridge):
-        try:
-            descriptor = provider.descriptor()
-        except Exception:
-            logger.debug("A provider's descriptor failed; no Chooser tile for it", exc_info=True)
-            continue
-        pid = str(getattr(descriptor, "id", "") or "")
-        if not pid:
-            continue
-        if pid != selected_id and not _provider_is_enabled(bridge, provider):
-            continue
-        tiles.append(
-            {
-                "id": pid,
-                "name": str(getattr(descriptor, "name", "") or pid),
-                "logo": str(getattr(descriptor, "logo", "") or ""),
-                "logo_width": int(getattr(descriptor, "logo_width", 0) or 0),
-                "selected": pid == selected_id,
-            }
-        )
-    return tiles
 
 
 def _browse_nav(bridge) -> dict:

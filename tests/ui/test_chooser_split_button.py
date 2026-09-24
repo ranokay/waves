@@ -4,8 +4,8 @@ WHAT THIS FENCES OFF
 --------------------
 Every download control is a split button: the main face queues with the saved
 Settings defaults, the chevron face (or right-click) opens the anchored
-Chooser popover. The popover carries the provider segment (fixed on
-collections), the provider's tiers with detail text, audio type
+Chooser popover. The popover carries the row's provider as a static chip
+(fixed on collections), the provider's tiers with detail text, audio type
 stereo/Atmos/both (collapsing to ATMOS ONLY on atmos-only tracks), lyrics/art
 quick toggles, SET AS DEFAULTS (writes back to Settings) + DOWNLOAD. The
 choice applies to that click only. The control is capability-driven, not an
@@ -16,8 +16,7 @@ HOW THIS STAYS FIXED
 --------------------
 Method-bound stubs, no display and no session: chooserTiers names the tiers
 with spec detail text (Apple has no LOW); chooserDefaults answers provider /
-the segment tiles / tier / audioType / atmosOnly / toggles from
-provider metadata and Settings;
+tier / audioType / atmosOnly / toggles from provider metadata and Settings;
 saveChooserDefaults stages tier + audio + toggles through applySettings and
 refuses Apple LOW; downloadWithChooser pins tier + audio for that click only
 without touching _quality_overrides, both queues two rows, atmos/stereo queue
