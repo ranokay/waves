@@ -244,6 +244,7 @@ ignore = [
 "tests/ui/test_progress_matrix_stable_width.py" = ["C901"]
 "tests/ui/test_progress_pad_cells.py" = ["C901"]
 "tests/ui/test_queue_drawer_close_button.py" = ["C901"]
+"tests/ui/test_queue_clear_confirm.py" = ["C901"]
 "tests/ui/test_queue_drawer_resize.py" = ["C901"]
 "tests/ui/test_queue_expected_tier.py" = ["C901"]
 "tests/ui/test_queue_failed_section.py" = ["C901"]
