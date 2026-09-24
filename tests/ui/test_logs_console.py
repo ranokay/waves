@@ -47,13 +47,15 @@ def test_tail_is_byte_capped(tmp_path, monkeypatch):
 
 
 def test_tail_returns_promptly_when_the_disk_writer_is_wedged(tmp_path, monkeypatch):
-    """The poll must not inherit the export path's 2s flush deadline: a wedged
-    writer holds the GUI thread for that long, leaking the stall class the
-    console exists to diagnose."""
+    """A writer blocked inside its file write holds the handler lock, so the
+    poll must skip the flush rather than wait on it, and still read what
+    already landed: inheriting the export path's 2s deadline would leak the
+    stall class the console exists to diagnose."""
     monkeypatch.setattr(diagnostics, "_log_dir", tmp_path)
     _write_log(tmp_path, ["line 1", "line 2"])
+    wedged_file = SimpleNamespace(flush=lambda: time.sleep(5))
     monkeypatch.setattr(diagnostics, "_disk_handler", SimpleNamespace(queue=SimpleNamespace(empty=lambda: False)))
-    monkeypatch.setattr(diagnostics, "_file_handler", None)
+    monkeypatch.setattr(diagnostics, "_file_handler", wedged_file)
 
     started = time.monotonic()
     out = diagnostics.log_tail()

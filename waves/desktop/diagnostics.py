@@ -578,14 +578,18 @@ def _stop_disk_listener() -> None:
 def flush_disk_log(timeout: float = 2.0) -> None:
     """Best-effort wait for queued disk records to reach the file (before an
     export reads it back). Bounded: a busy disk is precisely what the queue
-    exists to keep off this thread, so it never waits longer than ``timeout``."""
+    exists to keep off this thread, so it never waits longer than ``timeout``.
+
+    A writer still behind at the deadline is left alone: it is likely blocked
+    inside its file write, holding the handler lock, and waiting on that lock
+    here would undo the bound."""
     handler = _disk_handler
     if handler is None:
         return
     deadline = time.monotonic() + timeout
     while not handler.queue.empty() and time.monotonic() < deadline:
         time.sleep(0.01)
-    if _file_handler is not None:
+    if handler.queue.empty() and _file_handler is not None:
         with contextlib.suppress(Exception):
             _file_handler.flush()
 
