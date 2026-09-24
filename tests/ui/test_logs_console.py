@@ -6,6 +6,7 @@ cannot stall the GUI thread that polls it; a missing log reads as "".
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 from waves.desktop import diagnostics
@@ -43,6 +44,23 @@ def test_tail_is_byte_capped(tmp_path, monkeypatch):
     out = diagnostics.log_tail(max_lines=2000, max_bytes=262144)
     assert len(out.encode("utf-8")) <= 262144 + 4096
     assert len(out.splitlines()) <= 2000
+
+
+def test_tail_returns_promptly_when_the_disk_writer_is_wedged(tmp_path, monkeypatch):
+    """The poll must not inherit the export path's 2s flush deadline: a wedged
+    writer holds the GUI thread for that long, leaking the stall class the
+    console exists to diagnose."""
+    monkeypatch.setattr(diagnostics, "_log_dir", tmp_path)
+    _write_log(tmp_path, ["line 1", "line 2"])
+    monkeypatch.setattr(diagnostics, "_disk_handler", SimpleNamespace(queue=SimpleNamespace(empty=lambda: False)))
+    monkeypatch.setattr(diagnostics, "_file_handler", None)
+
+    started = time.monotonic()
+    out = diagnostics.log_tail()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.1
+    assert out.splitlines() == ["line 1", "line 2"]
 
 
 def test_bad_arguments_fall_back_to_defaults(tmp_path, monkeypatch):

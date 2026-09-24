@@ -388,6 +388,12 @@ def register_pool(name: str, pool) -> None:
     _sampler.register_pool(name, pool)
 
 
+#: log_tail's flush deadline. The logs drawer polls every second, so a wedged
+#: writer must cost the GUI thread tens of milliseconds, not the export path's
+#: full 2s: that wait would be the stall class the console exists to diagnose.
+_LOG_TAIL_FLUSH_SEC = 0.05
+
+
 def log_path() -> Path | None:
     return (_log_dir / LOG_FILENAME) if _log_dir else None
 
@@ -395,17 +401,18 @@ def log_path() -> Path | None:
 def log_tail(max_lines: int = 500, max_bytes: int = 262144) -> str:
     """The on-disk log's tail for the in-app console.
 
-    Flushes the disk queue first so just-written lines show up, then reads
-    at most max_bytes off the end and keeps the last max_lines. Bounded both
-    ways so a runaway log cannot stall the GUI thread that asked; "" when
-    there is no log file yet.
+    Flushes the disk queue first so just-written lines show up, but only
+    within a short deadline: a wedged writer costs the poll milliseconds and
+    the tail still reads what already landed. Then reads at most max_bytes off
+    the end and keeps the last max_lines. Bounded both ways so a runaway log
+    cannot stall the GUI thread that asked; "" when there is no log file yet.
     """
     try:
         lines = max(1, min(int(max_lines), 2000))
         cap = max(4096, min(int(max_bytes), 1_048_576))
     except (TypeError, ValueError):
         lines, cap = 500, 262144
-    flush_disk_log()
+    flush_disk_log(_LOG_TAIL_FLUSH_SEC)
     path = log_path()
     if path is None:
         return ""
