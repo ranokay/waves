@@ -348,6 +348,48 @@ Drawer {
         readonly property bool expandable: model.collection === true && model.tracks !== 1
         readonly property bool single: model.collection === true && model.tracks === 1
         readonly property bool qexp: expandable && host.queueExpanded[model.qid] === true
+        // A row's stops share one focusability rule: a collapsed Completed
+        // row, or a row on its way out, is not on screen and keeps no stop.
+        readonly property bool rowFocusable: qrow.visible && !qrow.collapsed && !qrow.leaving
+        // A running or queued row's ✕ gives up the wait; a settled row's ✕
+        // removes it. One read for the ✕'s styling, the ✕'s press action
+        // and the row's Delete key, so the three can never disagree.
+        readonly property bool live: st === "running" || st === "queued"
+        // What the row is called in the accessibility tree: the drawn title
+        // and artist, or the queue id when a row arrives without either (an
+        // unnamed tab stop is a silent one).
+        function spokenName() {
+          var n = "" + (model.name || "")
+          if (model.artist)
+            n = n === "" ? "" + model.artist : n + " by " + model.artist
+          return n === "" ? "Queue item " + model.qid : n
+        }
+        // Return/Enter/Space on the row. The pointer's click opens a
+        // ledger, so the row's keyboard action opens it too; a settled row
+        // with no ledger to open retries, the face its retry mark draws. A
+        // live row answers neither (Delete gives it up).
+        function rowActivate() {
+          if (qrow.expandable) {
+            qrow.qtoggle()
+            return
+          }
+          if (host.retryableStatus(qrow.st))
+            waves.retryQueueItem(model.qid)
+        }
+        // The ✕ action, shared by the pointer, the reader and Delete.
+        function giveUp() {
+          if (qrow.live)
+            waves.cancelQueueItem(model.qid)
+          else
+            waves.removeQueueItem(model.qid)
+        }
+        // Delete gives the row up from any of the row's own stops: the key
+        // bubbles up from the focused card, retry mark or give-up control to
+        // the delegate, so one handler covers all three.
+        Keys.onDeletePressed: function (event) {
+          event.accepted = true
+          qrow.giveUp()
+        }
         // Hover peek: a collapsed album card dips open ~30px so the
         // track view's existence is discoverable without a click.
         // A single peeks too, and that is the point: a row that does
@@ -471,22 +513,63 @@ Drawer {
               duration: 120
             }
           }
-          // Card-wide expand toggle for album rows; declared first so
-          // the retry/cancel MouseAreas (later siblings) stay on top.
+          // Card-wide expand toggle for album rows, and the row's keyboard
+          // home. A MouseArea rather than a TapAction, deliberately: the
+          // row's pointer and keyboard actions differ (the click only opens
+          // a ledger; Return also retries a settled row that has none), and
+          // TapAction's one `triggered` handler exists to make those paths
+          // agree. This is DownloadButton's shape: one MouseArea carrying
+          // the accessible contract, its pointer and its keys free to take
+          // different branches. Declared first so the retry/cancel tap areas
+          // (later siblings) stay on top.
           MouseArea {
             id: cardHover
+            objectName: "queueRowCard"
             anchors.fill: parent
-            enabled: qrow.peekable
+            // Enabled for every row so Tab can reach it: a settled row is
+            // still removable and a live one cancellable. Hover stays where
+            // it was, so no row grows a highlight its click does not back
+            // up; the hand still only appears where a click expands.
             hoverEnabled: qrow.peekable
-            // The hand is a promise that a click does something,
-            // so only the rows that can expand wear it.
             cursorShape: qrow.expandable ? Qt.PointingHandCursor : Qt.ArrowCursor
+            activeFocusOnTab: qrow.rowFocusable
+            Accessible.role: Accessible.Button
+            Accessible.name: qrow.spokenName()
+            Accessible.onPressAction: qrow.rowActivate()
+            Keys.onReturnPressed: function (event) {
+              if (!event.isAutoRepeat) {
+                event.accepted = true
+                qrow.rowActivate()
+              }
+            }
+            Keys.onEnterPressed: function (event) {
+              if (!event.isAutoRepeat) {
+                event.accepted = true
+                qrow.rowActivate()
+              }
+            }
+            Keys.onSpacePressed: function (event) {
+              if (!event.isAutoRepeat) {
+                event.accepted = true
+                qrow.rowActivate()
+              }
+            }
             onClicked: qrow.qtoggle()
             // Fetch the track list as soon as the peek starts so the
             // sliver shows real titles, not just "Loading tracks…".
             onContainsMouseChanged: {
               if (containsMouse && qrow.expandable && !qrow.qexp && !(host.queueTracks[model.qid]))
                 waves.loadQueueTracks(model.qid)
+            }
+            // The focus ring TapAction draws for its hosts: an overlay, so
+            // the card's own fill/border recipe is never repainted.
+            Rectangle {
+              anchors.fill: parent
+              radius: 8
+              color: "transparent"
+              border.width: 2
+              border.color: accent
+              visible: cardHover.activeFocus
             }
           }
           ColumnLayout {
@@ -698,26 +781,35 @@ Drawer {
                 visible: host.retryableStatus(qrow.st)
                 color: accent
                 box: 16
-                MouseArea {
+                TapAction {
+                  objectName: "queueRowRetry"
                   anchors.fill: parent
                   anchors.margins: -4
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: waves.retryQueueItem(model.qid)
+                  accessibleLabel: "Retry " + qrow.spokenName()
+                  focusRadius: 4
+                  // A row on its way out (collapsed Completed or leaving)
+                  // must not keep a stop on its invisible controls.
+                  activeFocusOnTab: qrow.rowFocusable
+                  onTriggered: waves.retryQueueItem(model.qid)
                 }
               }
               Ico {
                 Layout.alignment: Qt.AlignVCenter
-                readonly property bool active: qrow.st === "running" || qrow.st === "queued"
+                readonly property bool active: qrow.live
                 name: "close"
                 size: 14
                 bold: active ? 8 : 0   // heavier while cancellable
                 color: cancMa.containsMouse ? red : (active ? textLo : textDim)
-                MouseArea {
+                TapAction {
                   id: cancMa
+                  objectName: "queueRowGiveUp"
                   anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: parent.active ? waves.cancelQueueItem(model.qid) : waves.removeQueueItem(model.qid)
+                  accessibleLabel: (qrow.live ? "Cancel " : "Remove ") + qrow.spokenName()
+                  focusRadius: 3
+                  // Same gate as the card: a collapsed or leaving row's ✕
+                  // is not on screen and must not be a tab stop.
+                  activeFocusOnTab: qrow.rowFocusable
+                  onTriggered: qrow.giveUp()
                 }
               }
             }

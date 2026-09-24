@@ -13,7 +13,12 @@ the metadata and focus reachability that make them usable keyboard-only:
 - the queue drawer's actions (PAUSE/RESUME, STOP, close) are ``SpecBtns``,
   which carry the metadata for every dialog action, and the repeated CLEAR /
   RETRY ALL controls name their own section;
+- a seeded queue's rows carry a keyboard path: Tab reaches each row's card,
+  its retry mark and its give-up control, each named for its row; Return
+  retries a settled row (or opens a ledger) and Delete gives the row up;
 - the search field is named;
+- the type chips, SHOW ALL, the logs drawer's level/FOLLOW chips and the gate
+  checkboxes are named tab stops that answer Space/Return;
 - the Chooser's rows are named, uniquely, as pickers/checkboxes/buttons, its
   picks and toggle reach the parked ask through the shared paths, and a closed
   popover leaves no tab stop inside it;
@@ -41,7 +46,7 @@ import sys
 
 import pytest
 from support.paths import QML_DIR, QML_MAIN
-from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, boot_main_qml, run_scenario
+from support.qml import EXIT_OK, EXIT_PRECONDITION, EXIT_REGRESSED, boot_main_qml, run_scenario, scoped_q
 from support.qml_probe import scene_js
 
 # QAccessible::Button / CheckBox / RadioButton.
@@ -77,32 +82,18 @@ _CHOOSER_ROWS_BODY = """
     return JSON.stringify({ open: true, rows: out });
 """
 
-# One stop of a real Tab walk: the stop's tree path (for cycle
-# detection), what it is, its spoken name, and the effective flags Qt's chain
+# One stop of a real Tab walk: the stop's identity (for cycle detection),
+# what it is, its spoken name, and the effective flags Qt's chain
 # filters on. A stop inside a closed surface (the Settings page, the Chooser
 # popover, the queue drawer) is a failure, whatever its flags say.
+# The identity is the object itself, not a downward tree path: a Popup's
+# content hangs off the window's overlay, which an ApplicationWindow's
+# contentItem does not contain, so a downward walk from root can never
+# locate a drawer's rows.
 _TAB_STOP_BODY = """
-    function pathOf(o, target, path, depth) {
-        if (!o || depth > 200) return null;
-        if (o === target) return path;
-        var kids = o.children || [];
-        for (var i = 0; i < kids.length; i++) {
-            var hit = pathOf(kids[i], target, path + "/c" + i, depth + 1);
-            if (hit) return hit;
-        }
-        if (o.contentItem && o.contentItem !== o) {
-            var content = pathOf(o.contentItem, target, path + "/content", depth + 1);
-            if (content) return content;
-        }
-        if (o.item && o.item !== o) {
-            var loaded = pathOf(o.item, target, path + "/item", depth + 1);
-            if (loaded) return loaded;
-        }
-        return null;
-    }
     var it = root.activeFocusItem;
     // No focused control: keep the stop's full shape so callers can read its
-    // flags without a KeyError (the path is the broken-chain signal).
+    // flags without a KeyError (the null identity is the broken-chain signal).
     if (!it) return JSON.stringify({ path: null,
                                      object: "", name: "", label: "", type: "",
                                      visible: false, enabled: false, focusable: false,
@@ -112,7 +103,7 @@ _TAB_STOP_BODY = """
         return false;
     }
     var chooser = findObject(root, "chooserPopover");
-    return JSON.stringify({ path: pathOf(root, it, "root", 0),
+    return JSON.stringify({ path: "" + it,
                             object: "" + (it.objectName || ""),
                             name: "" + (it.Accessible && it.Accessible.name ? it.Accessible.name : ""),
                             label: "" + (it.label || ""),
@@ -159,23 +150,96 @@ _APPLE_SWITCH = """
     });
 """
 
+# A seeded queue for the row-level keyboard legs: one settled failure with a
+# retry mark and a give-up control, one running collection row whose Return
+# opens its ledger, and one queued row whose Delete gives up the wait. The
+# row shape is the bridge's own (the one reconcileQueue carries).
+_QUEUE_ROWS = (
+    "{qid: 9001, name: 'Broken Song', type: 'track', status: 'failed', progress: 0, "
+    "media_id: 'm9001', template: '', collection: false, artist: 'Artist', tracks: 0, art: ''},"
+    "{qid: 9002, name: 'Rolling Album', type: 'album', status: 'running', progress: 40, "
+    "media_id: 'm9002', template: '', collection: true, artist: 'Artist', tracks: 10, art: ''},"
+    "{qid: 9003, name: 'Waiting Song', type: 'track', status: 'queued', progress: 0, "
+    "media_id: 'm9003', template: '', collection: false, artist: 'Artist', tracks: 0, art: ''}"
+)
+
+# Every spoken name the seeded queue's row controls must carry: each row's
+# card, its retry mark (when retryable) and its give-up control.
+_QUEUE_ROW_NAMES = [
+    "Broken Song by Artist",
+    "Cancel Rolling Album by Artist",
+    "Cancel Waiting Song by Artist",
+    "Remove Broken Song by Artist",
+    "Retry Broken Song by Artist",
+    "Rolling Album by Artist",
+    "Waiting Song by Artist",
+]
+
 
 def _adopted(q, object_name: str):
     """The adopted tap area the named host owns, or None.
 
     The host is the control itself for a direct adoption, or the component
-    instance (a ``GateAction``/``GateCard``) whose inner tap area carries the
-    contract. Reached by objectName, so a hidden copy of the same control on
-    another surface can never answer for it.
+    instance (a ``GateAction``/``GateCard``/``Check``) whose inner tap area
+    carries the contract. Reached by objectName, so a hidden copy of the same
+    control on another surface can never answer for it. The host counts only
+    when it carries an accessible role itself: a component like ``Check``
+    declares ``accessibleLabel`` without adopting the primitive, so returning
+    the host there would read the wrong object.
     """
     return q(
         scene_js(
             f'var host = findObject(root, "{object_name}");'
             " if (!host) return null;"
-            " if (host.accessibleLabel !== undefined) return host;"
-            " return findFirst(host, function (o) { return o.accessibleLabel !== undefined; });"
+            " if (host.accessibleLabel !== undefined && Number(host.Accessible.role) !== 0) return host;"
+            " return findFirst(host, function (o) { return o.accessibleLabel !== undefined && Number(o.Accessible.role) !== 0; });"
         )
     )
+
+
+def _control_facts(q, finder_js: str) -> dict | None:
+    """The reader facts of the control a JS expression names."""
+    return json.loads(
+        q(
+            scene_js(f"""
+        var c = {finder_js};
+        return JSON.stringify(c ? {{ name: "" + c.Accessible.name,
+                                    role: Number(c.Accessible.role),
+                                    checkable: c.Accessible.checkable === true,
+                                    checked: c.Accessible.checked === true,
+                                    focusable: c.activeFocusOnTab === true }} : null);
+    """)
+        )
+    )
+
+
+def _focus(q, finder_js: str) -> None:
+    """Give the control a JS expression names the active focus."""
+    q(scene_js(f"var c = {finder_js}; if (c) c.forceActiveFocus();"))
+
+
+def _check_finder(host_js: str) -> str:
+    """A JS expression naming the checkbox tap area inside a host."""
+    return f"findFirst({host_js}, function (o) {{ return Number(o.Accessible.role) === {_ROLE_CHECKBOX}; }})"
+
+
+def _press_checkbox(problems: list[str], q, settle, root, finder_js: str, key, checked_js: str, what: str) -> None:
+    """A gate checkbox is a named checkbox tab stop, and ``key`` ticks it."""
+    from PySide6.QtTest import QTest
+
+    facts = _control_facts(q, finder_js)
+    if facts is None or not facts["focusable"] or not facts["name"]:
+        problems.append(f"{what} is not a named tab stop: {facts}")
+        return
+    if facts["role"] != _ROLE_CHECKBOX:
+        problems.append(f"{what} is not exposed as a checkbox: {facts}")
+        return
+    _focus(q, finder_js)
+    settle(80)
+    QTest.keyClick(root, key)
+    settle(150)
+    if not bool(q(checked_js)):
+        problems.append(f"the key press on {what} never ticked it")
 
 
 def _spoken_name(q, object_name: str) -> str:
@@ -284,7 +348,7 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     # gate action, the paste-decode controller and the nav chrome live in
     # their own files, and the controls that adopted the shared tap area now
     # answer through TapAction.qml; the pins span the whole primary-control
-    # surface, so read all ten.
+    # surface, so read all thirteen.
     qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "DownloadButton.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "QueueDrawer.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "SpecBtn.qml").read_text(encoding="utf-8")
@@ -294,6 +358,9 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     qml += (QML_DIR / "NavCrumbTrail.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "GateCard.qml").read_text(encoding="utf-8")
     qml += (QML_DIR / "TapAction.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "Check.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "ShowAllLabel.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "LogsDrawer.qml").read_text(encoding="utf-8")
     # The settings commit actions are adoptions too; the page's switch answers
     # Keys.onPressed (one handler, three keys), so it stays outside the
     # per-file Return/Enter/Space shape below but inside the adoption count.
@@ -315,6 +382,9 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         "NavCrumbTrail.qml",
         "GateCard.qml",
         "TapAction.qml",
+        "Check.qml",
+        "ShowAllLabel.qml",
+        "LogsDrawer.qml",
     ):
         body = (QML_MAIN if name == "Main.qml" else QML_DIR / name).read_text(encoding="utf-8")
         file_presses = body.count("Accessible.onPressAction")
@@ -357,8 +427,30 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         # The queue's repeated actions name their own section.
         '"Retry all " + host.queueSectionWord(secItem.section)',
         '"Clear " + host.queueSectionWord(secItem.section)',
+        # The queue's row controls name their own row, and the row's
+        # Return/Delete ride the row's own activate/give-up paths.
+        "qrow.rowActivate()",
+        "qrow.giveUp()",
+        'accessibleLabel: "Retry " + qrow.spokenName()',
+        '(qrow.live ? "Cancel " : "Remove ") + qrow.spokenName()',
+        # The chips, SHOW ALL and the gate checkboxes speak the words they
+        # draw, and a checkable one says so.
+        "accessibleLabel: saText.text",
+        "accessibleLabel: tchip.modelData[1]",
+        '"Log level " + modelData[1]',
+        'accessibleLabel: "Follow new log lines"',
+        'accessibleLabel: "Don\'t ask again"',
+        'accessibleLabel: "Don\'t warn me again"',
+        'accessibleLabel: "I have read and agree to these terms."',
+        "onTriggered: chk.toggled()",
     ):
         assert re.sub(r"\s+", " ", needle) in flat, f"the keyboard path is missing: {needle}"
+    # The queue row's Delete key is the row's own give-up path, not a
+    # second copy of the cancel/remove rule.
+    queue_qml = (QML_DIR / "QueueDrawer.qml").read_text(encoding="utf-8")
+    assert "Keys.onDeletePressed" in queue_qml, "the queue row lost its Delete key"
+    assert queue_qml.count("waves.cancelQueueItem(model.qid)") == 1, "the queue row grew a second cancel path"
+    assert queue_qml.count("waves.removeQueueItem(model.qid)") == 1, "the queue row grew a second remove path"
 
 
 def _buttons(q, marker: str, scope: str = "[root.contentItem]") -> list[dict]:
@@ -368,8 +460,10 @@ def _buttons(q, marker: str, scope: str = "[root.contentItem]") -> list[dict]:
     return list(json.loads(q(scene_js(body))))
 
 
-def _check_buttons(problems: list[str], buttons: list[dict], what: str, *, minimum: int = 1) -> None:
-    """Named, button-roled and tab-reachable: what a screen reader needs."""
+def _check_buttons(
+    problems: list[str], buttons: list[dict], what: str, *, minimum: int = 1, role: int = _ROLE_BUTTON
+) -> None:
+    """Named, correctly-roled and tab-reachable: what a screen reader needs."""
     if len(buttons) < minimum:
         problems.append(f"{what}: {len(buttons)} found, expected at least {minimum}")
         return
@@ -377,8 +471,8 @@ def _check_buttons(problems: list[str], buttons: list[dict], what: str, *, minim
         where = f"{what} ({button['word'] or 'unnamed'})"
         if not button["name"]:
             problems.append(f"{where} carries no accessible name")
-        if button["role"] != _ROLE_BUTTON:
-            problems.append(f"{where} is not exposed as a button (role {button['role']})")
+        if button["role"] != role:
+            problems.append(f"{where} is not exposed with role {role} (role {button['role']})")
         if not button["focusable"]:
             problems.append(f"{where} is not in the tab order")
 
@@ -451,7 +545,8 @@ def _run_scenario() -> int:
 
 
 def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QAccessible
     from PySide6.QtTest import QTest
 
     booted = boot_main_qml()
@@ -620,11 +715,8 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     if not bool(q("queueDrawer.opened")):
         print("the queue drawer did not open", file=sys.stderr)
         return EXIT_PRECONDITION
-    q(
-        "queueModel.append({'qid': 'a11y-row', 'title': 'Song', 'sub': 'Artist',"
-        " 'state': 'queued', 'uiGroup': 'queued'})"
-    )
-    settle(150)
+    q(f"reconcileQueue([{_QUEUE_ROWS}])")
+    settle(250)
     _check_buttons(
         problems,
         _buttons(
@@ -640,10 +732,6 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     # Two sections are on screen, so the names have
     # to differ; the view pools headers, so identical (name) pairs from the
     # same section dedupe before the uniqueness read.
-    q(
-        "queueModel.append({'qid': 'a11y-failed', 'title': 'Broken', 'sub': 'Artist', 'state': 'failed', 'uiGroup': 'failed'})"
-    )
-    settle(200)
     drawer_names = sorted(
         {
             row["name"]
@@ -661,6 +749,138 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     retries = sorted(name for name in drawer_names if name.startswith("Retry all "))
     if retries != ["Retry all Failed downloads"]:
         problems.append(f"the queue's RETRY ALL control does not name its section: {drawer_names}")
+
+    # --- The row-level keyboard paths. Every row control is a named tab
+    # stop that names its row; Tab reaches the card, the retry mark and the
+    # give-up control, and the keys take the row's own bridge paths (recorded
+    # here, since the seeded rows are QML-side only). The card's Return opens
+    # a ledger where there is one and retries where there is not; Delete
+    # gives the row up, cancelling a live one and removing a settled one.
+    calls: list[tuple[str, int]] = []
+    bridge.retryQueueItem = lambda qid: calls.append(("retry", int(qid)))
+    bridge.cancelQueueItem = lambda qid: calls.append(("cancel", int(qid)))
+    bridge.removeQueueItem = lambda qid: calls.append(("remove", int(qid)))
+
+    rows = _buttons(
+        q,
+        "function (o) { return o.objectName === 'queueRowCard' || o.objectName === 'queueRowRetry' || o.objectName === 'queueRowGiveUp'; }",
+        "[queueDrawer.contentItem]",
+    )
+    row_names = sorted({row["name"] for row in rows})
+    if row_names != _QUEUE_ROW_NAMES:
+        problems.append(f"the queue rows do not name their own controls: {row_names}")
+    problems.extend(
+        f"a queue row control is not a named tab stop: {row}" for row in rows if not row["name"] or not row["focusable"]
+    )
+
+    # The pointer path is unchanged: a real click on the album row's card
+    # opens its ledger exactly once per click (the keyboard's retry must not
+    # ride the click, and no handler pair may toggle it twice), and a click
+    # on a settled row's card reaches no row action.
+    def _card_point(name: str) -> dict | None:
+        raw = q(
+            scene_js(f"""
+        var c = findFirst(queueDrawer.contentItem, function (o) {{
+            return o.objectName === "queueRowCard" && ("" + o.Accessible.name) === "{name}";
+        }});
+        if (!c) return null;
+        var p = c.mapToItem(null, c.width / 2, c.height / 2);
+        return JSON.stringify({{ x: Math.round(p.x), y: Math.round(p.y) }});
+    """)
+        )
+        return json.loads(raw) if raw is not None else None
+
+    album_point = _card_point("Rolling Album by Artist")
+    if album_point is None:
+        problems.append("the album row's card is not in the tree to click")
+    else:
+        before = len(calls)
+        QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(album_point["x"], album_point["y"]))
+        settle(300)
+        if not bool(q("queueExpanded[9002] === true")):
+            problems.append("a click on the album row's card never opened its ledger")
+        if len(calls) != before:
+            problems.append(f"a click on the album row's card reached a row action: {calls[before:]}")
+        # Re-measure: the card grew its ledger under the first click.
+        album_point = _card_point("Rolling Album by Artist")
+        if album_point is None:
+            problems.append("the album row's card left the tree after opening")
+        else:
+            QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(album_point["x"], album_point["y"]))
+            settle(300)
+            if bool(q("queueExpanded[9002] === true")):
+                problems.append("a second click on the album row's card never closed its ledger")
+    failed_point = _card_point("Broken Song by Artist")
+    if failed_point is not None:
+        before = len(calls)
+        QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(failed_point["x"], failed_point["y"]))
+        settle(250)
+        if len(calls) != before:
+            problems.append(f"a click on a settled row's card reached a row action: {calls[before:]}")
+
+    qd = scoped_q(q, "queueDrawer.background")
+    qd("queueCloseBtn.forceActiveFocus()")
+    settle(80)
+
+    def _row_stop(name: str, limit: int = 140) -> tuple[dict | None, list[str]]:
+        return _tab_until(q, settle, root, lambda s: s["name"] == name, limit=limit)
+
+    # The failed row's card: Return retries it, Delete removes it.
+    stop, seen = _row_stop("Broken Song by Artist")
+    if stop is None:
+        problems.append(f"Tab never reached the failed row's card: {seen[-8:]}")
+    else:
+        QTest.keyClick(root, Qt.Key_Return)
+        settle(200)
+        if ("retry", 9001) not in calls:
+            problems.append(f"Return on the failed row's card never retried it: {calls}")
+        QTest.keyClick(root, Qt.Key_Delete)
+        settle(200)
+        if ("remove", 9001) not in calls:
+            problems.append(f"Delete on the failed row's card never removed it: {calls}")
+
+    # Its retry mark and give-up control answer Return on their own, and
+    # Delete works from any of the row's stops: the key bubbles from the
+    # focused control to the delegate's one give-up handler.
+    stop, seen = _row_stop("Retry Broken Song by Artist")
+    if stop is None:
+        problems.append(f"Tab never reached the row's retry mark: {seen[-8:]}")
+    else:
+        QTest.keyClick(root, Qt.Key_Return)
+        settle(200)
+        if calls.count(("retry", 9001)) < 2:
+            problems.append(f"Return on the retry mark never retried the row: {calls}")
+        QTest.keyClick(root, Qt.Key_Delete)
+        settle(200)
+        if calls.count(("remove", 9001)) < 2:
+            problems.append(f"Delete on the retry mark never gave the row up: {calls}")
+    stop, seen = _row_stop("Remove Broken Song by Artist")
+    if stop is None:
+        problems.append(f"Tab never reached the row's give-up control: {seen[-8:]}")
+    else:
+        QTest.keyClick(root, Qt.Key_Return)
+        settle(200)
+        if calls.count(("remove", 9001)) < 3:
+            problems.append(f"Return on the give-up control never removed the row: {calls}")
+
+    # A collection row's card opens its ledger on Return; a live row's card
+    # gives the wait up on Delete.
+    stop, seen = _row_stop("Rolling Album by Artist")
+    if stop is None:
+        problems.append(f"Tab never reached the album row's card: {seen[-8:]}")
+    else:
+        QTest.keyClick(root, Qt.Key_Return)
+        settle(250)
+        if not bool(q("queueExpanded[9002] === true")):
+            problems.append("Return on an album row's card never opened its ledger")
+    stop, seen = _row_stop("Waiting Song by Artist")
+    if stop is None:
+        problems.append(f"Tab never reached the queued row's card: {seen[-8:]}")
+    else:
+        QTest.keyClick(root, Qt.Key_Delete)
+        settle(200)
+        if ("cancel", 9003) not in calls:
+            problems.append(f"Delete on the queued row's card never gave up the wait: {calls}")
 
     # No tab stop may sit behind a closed popup: after confirming, nothing in
     # the popover keeps activeFocusOnTab.
@@ -957,11 +1177,215 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
             problems.append("a disabled gate action's tap area still reads enabled")
         if bool(ack.property("activeFocusOnTab")):
             problems.append("a disabled gate action is still a tab stop")
-        q("ackChk.checked = true")
-        settle(150)
+        # The gate's checkbox answers the keyboard too: its tap area is a
+        # named checkbox tab stop, and Space ticks it, which is what arms
+        # ACKNOWLEDGE.
+        _press_checkbox(
+            problems,
+            q,
+            settle,
+            root,
+            _check_finder("ackChk"),
+            Qt.Key_Space,
+            "ackChk.checked",
+            "the terms gate's checkbox",
+        )
         if not bool(ack.property("enabled")) or not bool(ack.property("activeFocusOnTab")):
             problems.append("ticking the terms checkbox never enabled its ACKNOWLEDGE action")
     q("termsGate.visible = false")
+    settle(150)
+
+    # --- The repeated filter/toggle controls: the search type chips, SHOW
+    # ALL, the logs drawer's level and FOLLOW chips, and the remaining two
+    # gate checkboxes. Each is a named tab stop that answers Space/Return
+    # through the same handler the pointer takes.
+    bridge._logged_in = True
+    bridge.loggedInChanged.emit()
+    q("root.refreshProviderSurfaces()")
+    settle(200)
+    q("openSearch()")
+    settle(200)
+    q("root._searchSeq = root._navSeq")
+    many_tracks = [
+        {
+            "id": f"t{i}",
+            "kind": "track",
+            "title": f"Track {i}",
+            "artist": "Artist",
+            "artist_id": "a1",
+            "album": "Album",
+            "album_id": "al1",
+            "num": i,
+            "vol": 1,
+            "art": "",
+            "year": "2026",
+            "date": "2026-09-01",
+            "duration": "3:00",
+            "duration_sec": 180,
+            "quality": "LOSSLESS",
+            "popularity": 1,
+            "explicit": False,
+            "added": "",
+        }
+        for i in range(1, 7)
+    ]
+    bridge.searchResults.emit(
+        {
+            "groups": [
+                {
+                    "provider": "tidal",
+                    "artists_layout": "strip",
+                    "head_when_alone": False,
+                    "artists": [],
+                    "albums": [],
+                    "tracks": many_tracks,
+                    "videos": [],
+                    "playlists": [],
+                    "mixes": [],
+                    "top": None,
+                    "error": "",
+                }
+            ]
+        }
+    )
+    settle(500)
+    if not bool(q("root.signedIn")) or not bool(q("root.hasResults")):
+        problems.append("the scenario never reached a signed-in search page for the chips")
+
+    chips = _buttons(q, "function (o) { return o.objectName === 'searchTypeChip'; }")
+    _check_buttons(problems, chips, "a search type chip", minimum=7, role=_ROLE_RADIO)
+    chip_names = sorted(chip["name"] for chip in chips)
+    if chip_names != ["Albums", "All", "Artists", "Mixes", "Playlists", "Tracks", "Videos"]:
+        problems.append(f"the type chips do not speak their own words: {chip_names}")
+
+    # Tab from the search field to the Albums chip and activate it; the
+    # results filter the way the pointer's click filters.
+    q("searchField.forceActiveFocus()")
+    settle(80)
+    stop, seen = _tab_until(
+        q, settle, root, lambda s: s["object"] == "searchTypeChip" and s["name"] == "Albums", limit=140
+    )
+    if stop is None:
+        problems.append(f"Tab never reached the Albums chip: {seen[-8:]}")
+    else:
+        QTest.keyClick(root, Qt.Key_Return)
+        settle(250)
+        if str(q("root.filterType")) != "albums":
+            problems.append(f"Return on the Albums chip never filtered the results: {q('root.filterType')!r}")
+        q("root.filterType = 'all'")
+        settle(200)
+
+    # The platform's Toggle (what macOS sends for an AX press on a checkable
+    # role) reaches a chip through the primitive's one toggle handler.
+    chip_item = q(
+        scene_js("""
+        return findFirst(root, function (o) {
+            return o.objectName === "searchTypeChip" && ("" + o.Accessible.name) === "Tracks";
+        });
+    """)
+    )
+    chip_actions = None
+    if chip_item is not None:
+        chip_iface = QAccessible.queryAccessibleInterface(chip_item)
+        chip_actions = chip_iface.actionInterface() if chip_iface is not None and chip_iface.isValid() else None
+    if chip_actions is None or "Toggle" not in list(chip_actions.actionNames()):
+        problems.append("the Tracks chip advertises no platform toggle action")
+    else:
+        chip_actions.doAction("Toggle")
+        settle(250)
+        if str(q("root.filterType")) != "tracks":
+            problems.append("the platform Toggle never reached the Tracks chip")
+        q("root.filterType = 'all'")
+        settle(200)
+
+    # SHOW ALL: the capped tracks section's only way open. A disclosure, not
+    # a checkbox: its drawn words already state the state (SHOW ALL/SHOW
+    # LESS), so it stays a plain button whose name follows the label.
+    show_all = _buttons(
+        q,
+        "function (o) { return o.objectName === 'showAllToggle' && ('' + o.Accessible.name).indexOf('SHOW ALL') === 0; }",
+    )
+    if not show_all:
+        problems.append("the capped tracks section offers no SHOW ALL control")
+    else:
+        _check_buttons(problems, show_all, "the tracks section's SHOW ALL")
+        stop, seen = _tab_until(q, settle, root, lambda s: s["name"] == "SHOW ALL 6", limit=140)
+        if stop is None:
+            problems.append(f"Tab never reached the tracks SHOW ALL: {seen[-8:]}")
+        else:
+            QTest.keyClick(root, Qt.Key_Return)
+            settle(300)
+            if not bool(q("root.searchGroupFor('tidal').isExpanded('tracks')")):
+                problems.append("Return on SHOW ALL never expanded the section")
+
+    # The logs drawer's level and FOLLOW chips.
+    q("logsDrawer.open()")
+    settle(400)
+    log_chips = _buttons(
+        q,
+        "function (o) { return o.objectName === 'logLevelChip'; }",
+        "[logsDrawer.contentItem]",
+    )
+    _check_buttons(problems, log_chips, "a log level chip", minimum=4, role=_ROLE_RADIO)
+    follow = _buttons(
+        q,
+        "function (o) { return o.objectName === 'logFollowChip'; }",
+        "[logsDrawer.contentItem]",
+    )
+    _check_buttons(problems, follow, "the logs FOLLOW chip", role=_ROLE_CHECKBOX)
+    qd_logs = scoped_q(q, "logsDrawer.background")
+    qd_logs("logsCloseBtn.forceActiveFocus()")
+    settle(80)
+    stop, seen = _tab_until(q, settle, root, lambda s: s["name"] == "Log level ERROR", limit=40)
+    if stop is None:
+        problems.append(f"Tab never reached the logs ERROR chip: {seen[-6:]}")
+    else:
+        QTest.keyClick(root, Qt.Key_Return)
+        settle(200)
+        if int(q("logsDrawer.logsMinLevel")) != 3:
+            problems.append("Return on the logs ERROR chip never raised the level filter")
+    stop, seen = _tab_until(q, settle, root, lambda s: s["name"] == "Follow new log lines", limit=40)
+    if stop is None:
+        problems.append(f"Tab never reached the logs FOLLOW chip: {seen[-6:]}")
+    else:
+        QTest.keyClick(root, Qt.Key_Space)
+        settle(200)
+        if bool(q("logsDrawer.logsFollow")):
+            problems.append("Space on the logs FOLLOW chip never took the follow off")
+    q("logsDrawer.close()")
+    settle(250)
+
+    # The exit gate's checkbox and the bulk-download gate's. The gates live
+    # in different layers (the exit gate in the window's overlay), so each is
+    # reached through its own control id rather than a root-down walk.
+    q("exitGate.open = true")
+    settle(300)
+    _press_checkbox(
+        problems,
+        q,
+        settle,
+        root,
+        _check_finder("exitSkip"),
+        Qt.Key_Space,
+        "exitSkip.checked",
+        "the exit gate's checkbox",
+    )
+    q("exitGate.open = false")
+    settle(250)
+
+    q("root.catDlPrompt = {path: 'playlists/1', title: 'Category', count: 2}")
+    settle(300)
+    _press_checkbox(
+        problems,
+        q,
+        settle,
+        root,
+        _check_finder("cdSkip"),
+        Qt.Key_Return,
+        "cdSkip.checked",
+        "the bulk-download checkbox",
+    )
+    q("root.catDlDismiss()")
     settle(150)
 
     if problems:

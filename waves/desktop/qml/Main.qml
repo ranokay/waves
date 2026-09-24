@@ -6752,10 +6752,15 @@ ApplicationWindow {
                     font.pixelSize: 13
                   }
                 }
-                MouseArea {
+                TapAction {
+                  objectName: "searchTypeChip"
                   anchors.fill: parent
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.filterType = tchip.modelData[0]
+                  accessibleLabel: tchip.modelData[1]
+                  role: Accessible.RadioButton
+                  checkable: true
+                  checked: tchip.on
+                  focusRadius: 8
+                  onTriggered: root.filterType = tchip.modelData[0]
                 }
                 // Cascade in left-to-right the moment results land, decoupled
                 // from the card build veil (searchBuilding): gating the chips on
@@ -9375,7 +9380,9 @@ ApplicationWindow {
           spacing: 8
           Check {
             id: cdSkip
+            objectName: "catDlSkipCheck"
             anchors.verticalCenter: parent.verticalCenter
+            accessibleLabel: "Don't ask again"
             onToggled: checked = !checked
           }
           Text {
@@ -10355,6 +10362,7 @@ ApplicationWindow {
           spacing: 10
           Rectangle {
             id: ackChk
+            objectName: "termsAckCheck"
             property bool checked: false
             Layout.alignment: Qt.AlignTop
             implicitWidth: 20
@@ -10371,10 +10379,14 @@ ApplicationWindow {
               size: 13
               bold: 8
             }
-            MouseArea {
+            TapAction {
               anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: ackChk.checked = !ackChk.checked
+              accessibleLabel: "I have read and agree to these terms."
+              role: Accessible.CheckBox
+              checkable: true
+              checked: ackChk.checked
+              focusRadius: 5
+              onTriggered: ackChk.checked = !ackChk.checked
             }
           }
           Text {
@@ -10838,7 +10850,9 @@ ApplicationWindow {
           spacing: 8
           Check {
             id: exitSkip
+            objectName: "exitSkipCheck"
             anchors.verticalCenter: parent.verticalCenter
+            accessibleLabel: "Don't warn me again"
             onToggled: checked = !checked
           }
           Text {

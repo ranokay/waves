@@ -145,10 +145,15 @@ Drawer {
             font.pixelSize: 11
             font.bold: true
           }
-          MouseArea {
+          TapAction {
+            objectName: "logLevelChip"
             anchors.fill: parent
-            cursorShape: Qt.PointingHandCursor
-            onClicked: logsDrawer.logsMinLevel = modelData[0]
+            accessibleLabel: "Log level " + modelData[1]
+            role: Accessible.RadioButton
+            checkable: true
+            checked: on
+            focusRadius: 8
+            onTriggered: logsDrawer.logsMinLevel = modelData[0]
           }
         }
       }
@@ -170,10 +175,15 @@ Drawer {
           font.pixelSize: 11
           font.bold: true
         }
-        MouseArea {
+        TapAction {
+          objectName: "logFollowChip"
           anchors.fill: parent
-          cursorShape: Qt.PointingHandCursor
-          onClicked: {
+          accessibleLabel: "Follow new log lines"
+          role: Accessible.CheckBox
+          checkable: true
+          checked: logsDrawer.logsFollow
+          focusRadius: 8
+          onTriggered: {
             logsDrawer.logsFollow = !logsDrawer.logsFollow
             if (logsDrawer.logsFollow)
               logsFlick.contentY = Math.max(0, logsFlick.contentHeight - logsFlick.height)

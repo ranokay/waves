@@ -45,6 +45,14 @@ def test_every_checkable_role_answers_the_toggle_action():
     toggles = qml.count("Accessible.onToggleAction")
     assert roles > 0, "the checkable roles are gone from the scanned files"
     assert roles == toggles, f"{roles} checkable roles but {toggles} toggle handlers"
+    # The adopters that take their checkable role from the shared tap area
+    # are answered by its one toggle handler, so their files carry no pair of
+    # their own: the primitive must keep the checkable flag and the handler
+    # gated on it.
+    tap = re.sub(r"\s+", " ", (QML_DIR / "TapAction.qml").read_text(encoding="utf-8"))
+    assert "Accessible.checkable: ta.checkable" in tap, "the shared tap area lost its checkable flag"
+    assert "Accessible.onToggleAction" in tap, "the shared tap area lost its toggle action"
+    assert "if (ta.checkable && ta.enabled)" in tap, "the shared toggle no longer gates on checkable"
 
 
 def test_the_welcome_skip_is_a_named_press_target():

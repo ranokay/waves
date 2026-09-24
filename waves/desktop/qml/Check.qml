@@ -4,6 +4,7 @@ import QtQuick
 // The palette values are local copies of Main.qml's static literals —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Rectangle {
+  id: chk
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
   readonly property color accent: "#3dff6e"   // phosphor green (primary)
@@ -11,6 +12,11 @@ Rectangle {
   readonly property color outline: "#3a3f49"   // strong border (search / qtag / switch)
 
   property bool checked: false
+  // The spoken name. The gate rows set it; an unnamed checkbox (the album
+  // and playlist selection ticks) keeps out of the tab order, so no silent
+  // stop enters the keyboard chain, while its node stays in the tree as the
+  // checkbox it is, togglable by a reader.
+  property string accessibleLabel: ""
   signal toggled
   width: 18
   height: 18
@@ -26,9 +32,14 @@ Rectangle {
     size: 12
     bold: 8
   }
-  MouseArea {
+  TapAction {
     anchors.fill: parent
-    cursorShape: Qt.PointingHandCursor
-    onClicked: parent.toggled()
+    accessibleLabel: chk.accessibleLabel
+    role: Accessible.CheckBox
+    checkable: true
+    checked: chk.checked
+    focusRadius: 4
+    activeFocusOnTab: chk.visible && chk.enabled && chk.accessibleLabel !== ""
+    onTriggered: chk.toggled()
   }
 }
