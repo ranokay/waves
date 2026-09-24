@@ -155,7 +155,8 @@ fi
 # venv's metadata plus the license texts, beside the app in each layout.
 if [ -d "$DIST/waves.app" ]; then
   "${WAVES_PYTHON[@]}" tools/generate_third_party_notices.py "$DIST/waves.app"
-elif [ -d "$DIST/waves.dist" ]; then
+fi
+if [ -d "$DIST/waves.dist" ]; then
   "${WAVES_PYTHON[@]}" tools/generate_third_party_notices.py "$DIST/waves.dist"
 fi
 

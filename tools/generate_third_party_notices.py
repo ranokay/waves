@@ -90,7 +90,7 @@ def generate(bundle: str | Path) -> Path:
         "Waves third-party notices",
         "===========================",
         "",
-        "Generated from the build environment's installed metadata (uv.lock).",
+        "Generated from the build environment's installed metadata (``uv sync --locked`` materializes ``uv.lock``).",
         "LGPL libraries (Qt/PySide6, tidalapi) ship as separate shared",
         "libraries, never static-linked, so the relinking path is library replacement.",
         "",
