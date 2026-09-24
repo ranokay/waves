@@ -68,6 +68,7 @@ _BRIDGE_SURFACE_ALIASES = (
 # ``backend._name`` reference turns those patches vacuous.
 _PATCH_TARGETS = (
     "_IS_MACOS",
+    "_ProgressSignals",
     "_all_playlist_items",
     "_artist_id",
     "_artist_popularity",
@@ -84,8 +85,11 @@ _PATCH_TARGETS = (
     "_primary_artist_name",
     "_quality_label",
     "_track_count",
+    "OwnershipStore",
     "format_path_media",
+    "name_builder_artist",
     "name_builder_title",
+    "path_config_base",
 )
 
 # Names tests import from backend, plus what shipped code imports
@@ -95,7 +99,9 @@ _PUBLIC_IMPORTS = (
     "_ART_CACHE_DIR",
     "_FACTORY_WIPE_LOG_PATTERNS",
     "_FACTORY_WIPE_SUBDIRS",
+    "_FIRST_RUN_OVERRIDES",
     "_MergeRec",
+    "_TEMPLATE_TOKENS",
     "_TrackedDownload",
     "_align_edition",
     "_as_member_of",
@@ -108,6 +114,7 @@ _PUBLIC_IMPORTS = (
     "_explicit_sides",
     "_merge_rec_title",
     "_norm_track_title",
+    "_seed_merge_registry",
     "_split_explicit_editions",
     "_strip_edition_quals",
     "WavesBridge",
