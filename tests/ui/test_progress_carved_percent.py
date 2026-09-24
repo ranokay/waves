@@ -56,7 +56,6 @@ card-wide HoverHandler.
 
 from __future__ import annotations
 
-import contextlib
 import math
 import re
 import sys
@@ -170,7 +169,7 @@ def _run_carved_scenario() -> int:
     booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
-    _root, q, settle, _bridge = booted
+    _root, q, _settle, _bridge = booted  # all waits poll via wait_until; no fixed sleep remains
 
     def shape():
         return q(
@@ -211,15 +210,17 @@ def _run_carved_scenario() -> int:
             lambda: bool(q("root.dlHolder('al-roll') !== null && root.dlHolder('al-roll') !== undefined")),
             message="carved: search built",
         )
-    except AssertionError:
-        settle(700)  # fallback beat so a slow first build still lands before the verdict
+    except AssertionError as exc:
+        print(f"CHECKPOINT carved-search FAILED: {exc}", file=sys.stderr)
+        return EXIT_REGRESSED
 
     q("(function(){ var h = root.dlHolder('al-roll'); h.st = 'running'; h.pct = 37; return 1 })()")
     # Poll for the running face (state: word lands at 37%), not a fixed sleep.
     try:
         wait_until(lambda: shape_word() == "37%", message="carved: running face ready")
-    except AssertionError:
-        settle(900)  # fallback beat so a slow face still lands before the verdict
+    except AssertionError as exc:
+        print(f"CHECKPOINT carved-running FAILED: {exc}", file=sys.stderr)
+        return EXIT_REGRESSED
 
     rep = shape()
     if not str(rep).startswith("{"):
@@ -282,9 +283,8 @@ def _run_carved_scenario() -> int:
     # --- hovered: the reveal animates (not a snap) and lands at 1
     print("CHECKPOINT carved-hover", flush=True)
     q("(function(){" + _WALKERS + " walkBtn(contentCol).wordHover = true; return 1 })()")
-    # Sample for a mid-flight value (proves an animation, not a snap) instead of
-    # asserting at a fixed 160ms wall-clock delta; then poll for the landing.
-    mid = -1.0
+    # Poll for a mid-flight value (proves an animation, not a snap) instead of
+    # asserting at a fixed wall-clock delta; then poll for the landing.
     try:
         wait_until(
             lambda: 0 < json.loads(shape())["reveal"] < 1,
@@ -292,12 +292,15 @@ def _run_carved_scenario() -> int:
             message="carved-hover: reveal mid-flight",
         )
         mid = json.loads(shape())["reveal"]
-    except AssertionError:
-        mid = json.loads(shape())["reveal"]
-    if not (0 < mid < 1):
+    except AssertionError as exc:
+        failures.append(f"CHECKPOINT carved-hover FAILED: never mid-flight ({exc})")
+        mid = -1.0
+    if mid != -1.0 and not (0 < mid < 1):
         failures.append(f"CHECKPOINT carved-hover: the reveal is {mid}: it should animate mid-way, not snap")
-    with contextlib.suppress(AssertionError):
+    try:
         wait_until(lambda: json.loads(shape())["reveal"] == 1, message="carved-hover: reveal landed")
+    except AssertionError as exc:
+        failures.append(f"CHECKPOINT carved-hover FAILED: never landed ({exc})")
     s2 = json.loads(shape())
     if s2["reveal"] != 1:
         failures.append(f"CHECKPOINT carved-hover: hovered and settled, the reveal is {s2['reveal']}, not 1")
@@ -367,8 +370,10 @@ def _run_carved_scenario() -> int:
     # --- unhovered: back to a plain bar
     print("CHECKPOINT carved-unhover", flush=True)
     q("(function(){" + _WALKERS + " walkBtn(contentCol).wordHover = false; return 1 })()")
-    with contextlib.suppress(AssertionError):
+    try:
         wait_until(lambda: json.loads(shape())["reveal"] == 0, message="carved-unhover: reveal released")
+    except AssertionError as exc:
+        failures.append(f"CHECKPOINT carved-unhover FAILED: never released ({exc})")
     s3 = json.loads(shape())
     if s3["reveal"] != 0:
         failures.append(f"CHECKPOINT carved-unhover: unhovered and settled, the reveal is {s3['reveal']}, not 0")

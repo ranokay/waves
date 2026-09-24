@@ -20,7 +20,6 @@ process-global handlers that must not leak into the rest of the suite.
 from __future__ import annotations
 
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -32,6 +31,7 @@ from support.qml import (
     EXIT_REGRESSED,
     run_scenario,
     sandbox_qml_settings,
+    wait_until,
 )
 
 # The designed durations, and the slack the measurement is allowed. Sampling is
@@ -122,13 +122,10 @@ def _run_scenario() -> int:
 
     def fade_ms(to_on: bool) -> float:
         """Time for the opacity to finish travelling, polling the property itself."""
-        from support.qml import wait_until
-
         target = 1.0 if to_on else 0.0
         swell.setProperty("on", to_on)
-        started = time.monotonic()
         try:
-            wait_until(
+            return wait_until(
                 lambda: abs(float(swell.property("opacity")) - target) < 0.01,
                 timeout_ms=_GIVE_UP_MS,
                 interval_ms=_SAMPLE_MS,
@@ -136,7 +133,6 @@ def _run_scenario() -> int:
             )
         except AssertionError:
             return float("inf")
-        return (time.monotonic() - started) * 1000
 
     settle(60)  # one wall-clock beat so the probe settles; fades below poll
     in_ms = fade_ms(True)
