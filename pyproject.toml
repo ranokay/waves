@@ -136,6 +136,8 @@ invalid-raise = "warn"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config"]
+xfail_strict = true
 markers = [
   "qml: drives the real QML tree offscreen (needs PySide6; skipped without it)",
   "ffmpeg: uses a real ffmpeg/ffprobe binary (skipped when none is on PATH)",

@@ -16,6 +16,10 @@ from __future__ import annotations
 import os
 from threading import Event, Thread
 
+import pytest
+
+pytest.importorskip("PySide6")
+
 from waves.desktop import backend as backend_mod
 from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge
 
@@ -551,6 +555,7 @@ def _fill_art_cache(art):
     return entries
 
 
+@pytest.mark.qml
 def test_factory_reset_empties_the_cover_cache(tmp_path, monkeypatch):
     base = tmp_path / "cfg"
     base.mkdir()
@@ -564,6 +569,7 @@ def test_factory_reset_empties_the_cover_cache(tmp_path, monkeypatch):
     assert os.listdir(base) == [], "nothing of Waves' is left"
 
 
+@pytest.mark.qml
 def test_factory_reset_leaves_a_foreign_file_in_the_cover_cache_alone(tmp_path, monkeypatch):
     base = tmp_path / "cfg"
     base.mkdir()
@@ -580,6 +586,7 @@ def test_factory_reset_leaves_a_foreign_file_in_the_cover_cache_alone(tmp_path, 
     assert bucket.is_dir() and art.is_dir(), "and it keeps its directories alive"
 
 
+@pytest.mark.qml
 def test_factory_reset_never_deletes_through_a_symlinked_cover_cache(tmp_path, monkeypatch):
     base = tmp_path / "cfg"
     base.mkdir()

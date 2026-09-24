@@ -21,6 +21,8 @@ from PySide6.QtNetwork import QNetworkCacheMetaData, QNetworkDiskCache
 
 from waves.desktop.app import _ArtCacheFactory, _ImmutableArtCache
 
+pytestmark = pytest.mark.qml
+
 URL = "https://img.test/cover/320x320.jpg"
 
 
