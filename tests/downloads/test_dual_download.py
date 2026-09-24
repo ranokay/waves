@@ -10,6 +10,7 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+import pytest
 from tidalapi.media import AudioMode, Quality, Track
 
 from waves.constants import quality_rank
@@ -229,6 +230,7 @@ def test_untagged_files_read_no_audio_type(tmp_path):
     assert read_audio_type(p) is None
 
 
+@pytest.mark.ffmpeg
 def test_file_mode_reader_prefers_the_tag_over_the_codec(tmp_path, monkeypatch):
     """WAVES_AUDIO_TYPE answers first; the codec sniff is legacy fallback."""
     import shutil
@@ -240,8 +242,6 @@ def test_file_mode_reader_prefers_the_tag_over_the_codec(tmp_path, monkeypatch):
 
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
-        import pytest
-
         pytest.skip("needs ffmpeg")
     target = tmp_path / "song.m4a"
     subprocess.run(  # noqa: S603 (fixed argv: a local tone fixture, no user input)

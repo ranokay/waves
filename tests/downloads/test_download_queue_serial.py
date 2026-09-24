@@ -19,6 +19,10 @@ import inspect
 import re
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("PySide6")
+
 from waves.desktop import backend as backend_mod
 
 BACKEND_SRC = Path(inspect.getsourcefile(backend_mod))
@@ -55,6 +59,7 @@ def test_the_knob_still_reaches_the_track_executor():
     assert "max_workers=self.settings.data.downloads_concurrent_max" in src
 
 
+@pytest.mark.qml
 def test_a_one_thread_pool_actually_runs_submissions_in_order():
     """Behavioral pin, not a source grep: the serial design leans on
     QThreadPool draining equal-priority runnables in submission order, so

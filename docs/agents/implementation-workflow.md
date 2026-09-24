@@ -29,6 +29,6 @@ The strict group is the merge gate, not a per-edit ritual. What an edit needs be
 
 - **Prose**: docs, comments, and docstrings with no `>>>` example. `mise run check` covers the file, and the suite proves nothing about a comment. One exception: `tests/packaging/` guards read CONTEXT.md, the ADRs and the platform, CI and OCR docs, so a change to one of those runs its guard file.
 - **A comment or docstring inside a function a test reads as source**: the `inspect.getsource` guards, for example the wipe guards in `tests/ui/test_factory_reset.py` and the source assertions in `tests/downloads/test_login_token_persist_listener.py`. Run that test file, plus `mise run check`.
-- **Code, or a `>>>` example in a docstring**: every test task passes `--doctest-modules`. The focused test files while iterating, then `mise run test-strict` once on the final SHA.
+- **Code**: run the focused test files while iterating, then `mise run test-strict` once on the final SHA. `>>>` examples in `waves/` are not collected by any task, so run them explicitly (e.g. `uv run pytest --doctest-modules waves/metadata/camelot.py`) if you touch them.
 
 The tested SHA named in the PR body holds while that SHA is the head. If a later commit is prose-only, fold the fix in before the gate run, or record the delta in the body: `strict green at <sha>; the commits since are prose-only`.

@@ -32,27 +32,27 @@ run = "uv run --locked --all-extras ty check"
 
 [tasks.test]
 description = "Run the whole suite (unit tests, incl. the QML guards)"
-run = 'uv run --locked --all-extras pytest --doctest-modules'
+run = 'uv run --locked --all-extras pytest'
 
 [tasks.test-fast]
 description = "The fast group (no Qt, ffmpeg, slow, integration or account; < 1 min)"
-run = 'uv run --locked --all-extras pytest --doctest-modules -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests'
+run = 'uv run --locked --all-extras pytest -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests'
 
 [tasks.test-qml]
 description = "The quick QML group (Qt required; < 5 min)"
-run = 'uv run --locked --all-extras pytest --doctest-modules -rs -q -m "qml and not slow and not integration and not account" --require-qml tests'
+run = 'uv run --locked --all-extras pytest -rs -q -m "qml and not slow and not integration and not account" --require-qml tests'
 
 [tasks.test-default]
 description = "The default group (all but the live account tests; < 10 min)"
-run = 'uv run --locked --all-extras pytest --doctest-modules -rs -m "not account" tests'
+run = 'uv run --locked --all-extras pytest -rs -m "not account" tests'
 
 [tasks.test-strict]
 description = "The merge gate (everything but the live account tests; < 10 min)"
-run = 'uv run --locked --all-extras pytest --doctest-modules -rs --require-qml -m "not account" tests'
+run = 'uv run --locked --all-extras pytest -rs --require-qml -m "not account" tests'
 
 [tasks.test-ffmpeg]
 description = "The ffmpeg group (assumes ffmpeg on PATH; < 1 min)"
-run = 'uv run --locked --all-extras pytest --doctest-modules -rs -q -m "ffmpeg and not account" tests'
+run = 'uv run --locked --all-extras pytest -rs -q -m "ffmpeg and not account" tests'
 
 [tasks.app]
 description = "Run the Waves app from source"

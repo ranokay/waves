@@ -59,6 +59,8 @@ from types import SimpleNamespace
 import pytest
 from conftest import _InlinePool
 
+pytestmark = pytest.mark.qml
+
 _QID = 7
 # A second queued album, so "un-say" can be held to the row it is about.
 _OTHER_QID = 9

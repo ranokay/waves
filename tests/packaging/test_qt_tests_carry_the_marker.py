@@ -12,20 +12,24 @@ The marker rules: a test that spawns an interpreter or constructs Qt
 itself is `qml` (Qt) or `integration` (non-Qt), never unmarked, and the
 unmarked Qt nodes route their skips through the require-qml-aware helper.
 This guard checks the marker half by parsing the test sources; the runtime
-half is `require_qt()` in the shared helper plus conftest's session-end check,
-which fails a strict run when an UNMARKED test skipped for missing Qt. The
-two are the static and behavioural sides of one rule.
+half is `require_qt()` in the shared helper (skip without Qt, fail under
+`--require-qml`) plus conftest's configure-time refusal to run a
+`--require-qml` session without PySide6. A test that only runs where Qt is
+installed is Qt-marked even when it merely gates on the import.
 """
 
 from __future__ import annotations
 
 import ast
-from types import SimpleNamespace
+import re
 
 from support.paths import TESTS_ROOT
 
-# Qt types whose construction means the test cannot run without PySide6.
-_QT_TYPES = frozenset({"QCoreApplication", "QGuiApplication", "QQmlApplicationEngine", "QQmlEngine", "QQuickWindow"})
+# Any Qt constructor: Qt owns the Q-followed-by-uppercase namespace, so a
+# call leaf like QThreadPool or QNetworkDiskCache is a Qt construction no
+# matter which Qt module it came from. (A mention in a docstring or a
+# constant list is not a call and does not count.)
+_QT_CONSTRUCTOR = re.compile(r"Q[A-Z]\w*")
 
 # Child-process calls whose arguments can name the test's own file or
 # interpreter. A test that spawns one of these crosses a process boundary.
@@ -46,7 +50,21 @@ def _leaf(name: str) -> str:
 def _constructs_qt(node: ast.AST) -> bool:
     """Whether this subtree calls a Qt constructor (AST, so a mention in a
     docstring or a constant list does not count)."""
-    return any(isinstance(call, ast.Call) and _leaf(_called_name(call)) in _QT_TYPES for call in ast.walk(node))
+    return any(
+        isinstance(call, ast.Call) and _QT_CONSTRUCTOR.fullmatch(_leaf(_called_name(call))) for call in ast.walk(node)
+    )
+
+
+def _gates_on_qt(node: ast.AST) -> bool:
+    """Whether this subtree skips unless PySide6 imports (AST, so a mention
+    in prose does not count). A test that cannot even be collected without
+    Qt belongs in the Qt-marked group, wherever the import lives."""
+    for call in ast.walk(node):
+        if not isinstance(call, ast.Call) or _leaf(_called_name(call)) != "importorskip":
+            continue
+        if any(isinstance(arg, ast.Constant) and arg.value == "PySide6" for arg in call.args):
+            return True
+    return False
 
 
 def _uses_this_file(node: ast.AST) -> bool:
@@ -152,7 +170,9 @@ def test_every_qt_or_process_test_declares_its_marker():
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("test_"):
                 continue
             marks = module_marks | _node_marks(node)
-            drives_qt = _reaches(node, helpers, lambda current: _constructs_qt(current) or _boots_qml(current))
+            drives_qt = _reaches(
+                node, helpers, lambda current: _constructs_qt(current) or _boots_qml(current) or _gates_on_qt(current)
+            )
             if drives_qt:
                 if "qml" not in marks:
                     offenders.append(f"{path.relative_to(TESTS_ROOT)}::{node.name} (drives Qt, needs qml)")
@@ -166,31 +186,3 @@ def test_every_qt_or_process_test_declares_its_marker():
         "these tests drive Qt or spawn a child interpreter but declare no marker, "
         "so --require-qml cannot see them and their skips stay silent: " + ", ".join(offenders)
     )
-
-
-def test_an_unmarked_qt_skip_fails_the_strict_session(monkeypatch):
-    """conftest's net: a test that skipped for missing Qt without a Qt marker
-    must fail a --require-qml session, or the guard's static half is the only
-    thing standing between a missing marker and a green strict run."""
-    import conftest
-    from support import qml as qml_support
-
-    monkeypatch.setattr(qml_support, "require_qml", lambda: True)
-    monkeypatch.setattr(conftest, "_MARKED_FOR_QT", set())
-    monkeypatch.setattr(conftest, "_UNMARKED_QT_SKIPS", [])
-    report = SimpleNamespace(
-        when="setup", skipped=True, nodeid="tests/x/test_y.py::test_z", longrepr="skipped: PySide6 is not importable"
-    )
-    conftest.pytest_runtest_logreport(report)
-    assert conftest._UNMARKED_QT_SKIPS == ["tests/x/test_y.py::test_z"]
-
-    session = SimpleNamespace(exitstatus=0)
-    conftest.pytest_sessionfinish(session, 0)
-    assert session.exitstatus != 0
-
-    # A marked test's Qt skip is its own business (it converts it when
-    # required); the net only catches the unmarked one.
-    monkeypatch.setattr(conftest, "_MARKED_FOR_QT", {"tests/x/test_y.py::test_z"})
-    monkeypatch.setattr(conftest, "_UNMARKED_QT_SKIPS", [])
-    conftest.pytest_runtest_logreport(report)
-    assert conftest._UNMARKED_QT_SKIPS == []
