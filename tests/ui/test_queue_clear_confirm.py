@@ -197,19 +197,38 @@ def _run_scenario() -> int:
             print(f"no CLEAR header for section {section}; model may not have partitioned", file=sys.stderr)
             return EXIT_PRECONDITION
 
-    # 1+2. Failed CLEAR arms instead of clearing; the second click clears.
+    # 1+2. Failed CLEAR arms instead of clearing; letting the window lapse
+    # disarms with the queue intact; re-arming and clicking again clears.
     btn = clear_btn("failed")
     click(btn)
     if "failed" not in bridge_statuses():
         bad.append("first click on Failed CLEAR cleared the row: no confirm gate")
     btn = clear_btn("failed")
-    if btn is None or btn_label(btn) not in ("SURE?", "CONFIRM?", "CONFIRM CLEAR"):
+    if btn is None or btn_label(btn) != "SURE?":
         bad.append("first click on Failed CLEAR showed no confirm gate")
     else:
-        click(btn)
-        settle(400)
-        if "failed" in bridge_statuses():
-            bad.append("second click on armed Failed CLEAR did not clear")
+        # Poll for the disarm rather than assuming its exact length.
+        disarmed = False
+        for _ in range(40):
+            settle(250)
+            now = clear_btn("failed")
+            if now is not None and btn_label(now) == "CLEAR":
+                disarmed = True
+                break
+        if "failed" not in bridge_statuses():
+            bad.append("a dismissed Failed CLEAR confirm still cleared the queue")
+        if not disarmed:
+            bad.append("the Failed CLEAR confirm never disarmed back to CLEAR")
+        else:
+            click(clear_btn("failed"))
+            btn = clear_btn("failed")
+            if btn is None or btn_label(btn) != "SURE?":
+                bad.append("re-arming Failed CLEAR after a lapse showed no confirm gate")
+            else:
+                click(btn)
+                settle(400)
+                if "failed" in bridge_statuses():
+                    bad.append("second click on armed Failed CLEAR did not clear")
 
     # Stopped CLEAR: same two-step.
     btn = clear_btn("stopped")
@@ -220,7 +239,7 @@ def _run_scenario() -> int:
         if "cancelled" not in bridge_statuses():
             bad.append("first click on Stopped CLEAR cleared the row: no confirm gate")
         btn = clear_btn("stopped")
-        if btn is None or btn_label(btn) not in ("SURE?", "CONFIRM?", "CONFIRM CLEAR"):
+        if btn is None or btn_label(btn) != "SURE?":
             bad.append("first click on Stopped CLEAR showed no confirm gate")
         else:
             click(btn)
@@ -228,7 +247,7 @@ def _run_scenario() -> int:
             if "cancelled" in bridge_statuses():
                 bad.append("second click on armed Stopped CLEAR did not clear")
 
-    # Queued CLEAR: arm, then let the window lapse — the queue survives.
+    # Queued CLEAR: same two-step.
     btn = clear_btn("queued")
     if btn is None:
         bad.append("Queued CLEAR header vanished before its own check")
@@ -236,19 +255,14 @@ def _run_scenario() -> int:
         click(btn)
         if "queued" not in bridge_statuses():
             bad.append("first click on Queued CLEAR cleared the row: no confirm gate")
+        btn = clear_btn("queued")
+        if btn is None or btn_label(btn) != "SURE?":
+            bad.append("first click on Queued CLEAR showed no confirm gate")
         else:
-            # Poll for the disarm rather than assuming its exact length.
-            disarmed = False
-            for _ in range(40):
-                settle(250)
-                now = clear_btn("queued")
-                if now is not None and btn_label(now) == "CLEAR":
-                    disarmed = True
-                    break
-            if "queued" not in bridge_statuses():
-                bad.append("a dismissed Queued CLEAR confirm still cleared the queue")
-            if not disarmed:
-                bad.append("the Queued CLEAR confirm never disarmed back to CLEAR")
+            click(btn)
+            settle(400)
+            if "queued" in bridge_statuses():
+                bad.append("second click on armed Queued CLEAR did not clear")
 
     # 3. Completed CLEAR stays one click.
     btn = clear_btn("completed")

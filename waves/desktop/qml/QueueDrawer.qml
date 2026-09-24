@@ -224,8 +224,8 @@ Drawer {
             // for, which is the danger red the exit prompt uses.
             primary: secItem.section === "completed"
             danger: secItem.section !== "completed"
-            label: secItem.clearArmed && secItem.section !== "completed" ? "SURE?" : "CLEAR"
-            accessibleLabel: (secItem.clearArmed && secItem.section !== "completed" ? "Confirm clearing " : "Clear ") + host.queueSectionWord(secItem.section) + " downloads"
+            label: secItem.clearArmed ? "SURE?" : "CLEAR"
+            accessibleLabel: (secItem.clearArmed ? "Confirm clearing " : "Clear ") + host.queueSectionWord(secItem.section) + " downloads"
             visible: secItem.section !== "downloading"
             Layout.alignment: Qt.AlignVCenter
             onClicked: {
