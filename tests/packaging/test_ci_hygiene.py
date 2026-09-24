@@ -239,10 +239,12 @@ def test_yt_dlp_floor_matches_gamdl_and_exclusion_is_real():
     """DEP-05: pyproject's yt-dlp floor tracks gamdl's own requirement, and the
     build's nofollow module exists in the locked yt-dlp."""
     project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
-    declared = next(d for d in project["dependencies"] if d.startswith("yt-dlp"))
+    declared = next((d for d in project["dependencies"] if d.startswith("yt-dlp")), None)
+    assert declared is not None, "pyproject lost its yt-dlp floor"
     floor = declared[len("yt-dlp") :].strip()
     gamdl_reqs = importlib.metadata.requires("gamdl") or []
-    gamdl_req = next(r for r in gamdl_reqs if r.lower().startswith("yt-dlp"))
+    gamdl_req = next((r for r in gamdl_reqs if r.lower().startswith("yt-dlp")), None)
+    assert gamdl_req is not None, "gamdl no longer requires yt-dlp"
     gamdl_spec = re.split(r";", gamdl_req, maxsplit=1)[0][len("yt-dlp") :].strip()
     assert floor == gamdl_spec, f"pyproject pins yt-dlp{floor}, gamdl requires yt-dlp{gamdl_spec}"
     assert importlib.util.find_spec("yt_dlp.extractor.lazy_extractors") is not None, (
