@@ -156,7 +156,7 @@ def _scenario() -> int:
     # Records written through the logging tree stream into the view.
     log = logging.getLogger("waves.test-console")
     log.error("console-marker-error-1")
-    diagnostics.flush_disk_log()
+    diagnostics.wait_for_disk_log()
     q("logsDrawer.logsRefresh()")
     settle(100)
     stream_ok = "console-marker-error-1" in qd("logsText.text")
@@ -165,7 +165,7 @@ def _scenario() -> int:
     diagnostics.set_verbose(True)
     log.info("console-marker-info-1")
     log.error("console-marker-error-2")
-    diagnostics.flush_disk_log()
+    diagnostics.wait_for_disk_log()
     q("logsDrawer.logsRefresh()")
     settle(100)
     both_ok = "console-marker-info-1" in qd("logsText.text") and "console-marker-error-2" in qd("logsText.text")
@@ -207,7 +207,7 @@ def _scenario() -> int:
     # Follow sticks to the bottom; a manual scroll up takes over.
     for i in range(200):
         log.error(f"console-flood-{i:03d}")
-    diagnostics.flush_disk_log()
+    diagnostics.wait_for_disk_log()
     q("logsDrawer.logsRefresh()")
     settle(200)
     follow_ok = qd("logsFlick.contentY") > 0

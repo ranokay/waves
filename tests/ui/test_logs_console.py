@@ -1,7 +1,8 @@
 """Realtime logs console: tail helper plus the copy/tail slots.
 
-The tail is bounded both ways (line count and bytes) so a runaway log file
-cannot stall the GUI thread that polls it; a missing log reads as "".
+The tail is bounded three ways (line count, bytes and the wait for the disk
+writer) so no runaway log can stall the GUI thread that polls it; a missing
+log reads as "".
 """
 
 from __future__ import annotations
@@ -47,10 +48,10 @@ def test_tail_is_byte_capped(tmp_path, monkeypatch):
 
 
 def test_tail_returns_promptly_when_the_disk_writer_is_wedged(tmp_path, monkeypatch):
-    """A writer blocked inside its file write holds the handler lock, so the
-    poll must skip the flush rather than wait on it, and still read what
-    already landed: inheriting the export path's 2s deadline would leak the
-    stall class the console exists to diagnose."""
+    """A writer blocked inside its file write leaves its queue backed up and
+    holds the handler lock. The poll must wait only on the queue, bounded, and
+    still read what already landed: inheriting the export path's 2s deadline
+    would leak the stall class the console exists to diagnose."""
     monkeypatch.setattr(diagnostics, "_log_dir", tmp_path)
     _write_log(tmp_path, ["line 1", "line 2"])
     wedged_file = SimpleNamespace(flush=lambda: time.sleep(5))
@@ -63,6 +64,24 @@ def test_tail_returns_promptly_when_the_disk_writer_is_wedged(tmp_path, monkeypa
 
     assert elapsed < 0.1
     assert out.splitlines() == ["line 1", "line 2"]
+
+
+def test_tail_does_not_wait_on_a_write_in_progress(tmp_path, monkeypatch):
+    """A drained queue is not the writer finishing: it dequeues a record
+    before writing it, so an empty queue can still mean the handler lock is
+    held. The poll never touches the file handler, so it cannot wait there."""
+    monkeypatch.setattr(diagnostics, "_log_dir", tmp_path)
+    _write_log(tmp_path, ["line 1"])
+    wedged_file = SimpleNamespace(flush=lambda: time.sleep(5))
+    monkeypatch.setattr(diagnostics, "_disk_handler", SimpleNamespace(queue=SimpleNamespace(empty=lambda: True)))
+    monkeypatch.setattr(diagnostics, "_file_handler", wedged_file)
+
+    started = time.monotonic()
+    out = diagnostics.log_tail()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.1
+    assert out == "line 1"
 
 
 def test_bad_arguments_fall_back_to_defaults(tmp_path, monkeypatch):

@@ -56,7 +56,7 @@ def test_loggers_hold_a_queue_not_the_file_and_the_line_still_lands_scrubbed(mon
             assert RotatingFileHandler not in kinds, "the disk writer must not sit on the caller's thread"
             assert QueueHandler in kinds
         logging.getLogger("waves.probe").warning("copy failed for /Users/somebody/Music/x.flac (marker-A)")
-        diagnostics.flush_disk_log()
+        diagnostics.wait_for_disk_log()
         deadline = time.monotonic() + 3.0
         text = ""
         while time.monotonic() < deadline:
@@ -75,7 +75,7 @@ def test_an_error_still_carries_its_breadcrumb_trail_to_disk(monkeypatch, tmp_pa
     try:
         logging.getLogger("waves.probe").info("crumb-B happened first")
         logging.getLogger("waves.probe").error("then this broke (marker-C)")
-        diagnostics.flush_disk_log()
+        diagnostics.wait_for_disk_log()
         deadline = time.monotonic() + 3.0
         text = ""
         while time.monotonic() < deadline:
