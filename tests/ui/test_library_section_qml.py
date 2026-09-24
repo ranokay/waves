@@ -307,6 +307,8 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
 
     # A read failure is a state, not an empty library: the bridge answers
     # total -1 and the section says so instead of "No saved files yet".
+    orig_files_page = bridge._library.files_page
+
     def boom(*_a, **_k):
         raise RuntimeError("boom")
 
@@ -317,6 +319,20 @@ def _run_configured() -> int:  # noqa: C901 (one straight scenario)
         failures.append("a failed page read as an empty library")
     if bool(q(_text_visible("libSection", "No saved files yet"))):
         failures.append("a failed page showed the empty sentence")
+    # The failure is actionable at the point it is stated, and the hint no
+    # longer sends the user away from the page.
+    if not bool(q(_text_visible("libSection", "Check the folder is available, then retry."))):
+        failures.append("the read-error hint did not state the retry")
+    if bool(q(_text_visible("libSection", "Reopen My Music to try again."))):
+        failures.append("the read-error hint still asks to reopen the page")
+    if not bool(q(_visible("libSection", "libRetryAction"))):
+        failures.append("the read-error state showed no retry control")
+    else:
+        bridge._library.files_page = orig_files_page
+        if not _click(
+            root, q, settle, _point("libSection", "libRetryAction"), _text_visible("libSection", "Saved · 4"), wait=800
+        ):
+            failures.append("the retry control did not re-run the scan")
 
     for line in failures:
         print(f"REGRESSED: {line}", file=sys.stderr)
