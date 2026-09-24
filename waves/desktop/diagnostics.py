@@ -388,6 +388,13 @@ def register_pool(name: str, pool) -> None:
     _sampler.register_pool(name, pool)
 
 
+#: log_tail's wait for the disk writer to catch up. The logs drawer polls every
+#: second, so a writer wedged in a file write must cost the GUI thread tens of
+#: milliseconds, not the export path's full 2s: that wait would be the stall
+#: class the console exists to diagnose.
+_LOG_TAIL_WAIT_SEC = 0.05
+
+
 def log_path() -> Path | None:
     return (_log_dir / LOG_FILENAME) if _log_dir else None
 
@@ -395,17 +402,18 @@ def log_path() -> Path | None:
 def log_tail(max_lines: int = 500, max_bytes: int = 262144) -> str:
     """The on-disk log's tail for the in-app console.
 
-    Flushes the disk queue first so just-written lines show up, then reads
-    at most max_bytes off the end and keeps the last max_lines. Bounded both
-    ways so a runaway log cannot stall the GUI thread that asked; "" when
-    there is no log file yet.
+    Waits briefly for the disk writer to catch up so just-written lines show
+    up, then reads at most max_bytes off the end and keeps the last max_lines.
+    The wait is bounded and observes only the writer's queue, so a write in
+    progress cannot stall the poll; bounded both ways so a runaway log cannot
+    stall the GUI thread that asked. "" when there is no log file yet.
     """
     try:
         lines = max(1, min(int(max_lines), 2000))
         cap = max(4096, min(int(max_bytes), 1_048_576))
     except (TypeError, ValueError):
         lines, cap = 500, 262144
-    flush_disk_log()
+    wait_for_disk_log(_LOG_TAIL_WAIT_SEC)
     path = log_path()
     if path is None:
         return ""
@@ -568,19 +576,23 @@ def _stop_disk_listener() -> None:
             listener.stop()
 
 
-def flush_disk_log(timeout: float = 2.0) -> None:
-    """Best-effort wait for queued disk records to reach the file (before an
-    export reads it back). Bounded: a busy disk is precisely what the queue
-    exists to keep off this thread, so it never waits longer than ``timeout``."""
+def wait_for_disk_log(timeout: float = 2.0) -> None:
+    """Best-effort wait for the disk writer to consume what is queued (before
+    an export or a console poll reads the file back).
+
+    Bounded, and it observes only the queue: a writer wedged inside its file
+    write keeps the queue backed up and holds the handler lock, so waiting on
+    either past ``timeout`` would be the stall the queue exists to prevent.
+    Each record is flushed as the writer writes it, so a drained queue means
+    everything the writer has finished has landed; the record being written
+    right now may or may not, and nothing is left in a buffer for a caller to
+    flush out."""
     handler = _disk_handler
     if handler is None:
         return
     deadline = time.monotonic() + timeout
     while not handler.queue.empty() and time.monotonic() < deadline:
         time.sleep(0.01)
-    if _file_handler is not None:
-        with contextlib.suppress(Exception):
-            _file_handler.flush()
 
 
 # --------------------------------------------------------------------------
@@ -624,9 +636,9 @@ def export_bundle(redact_content: bool = False) -> str:
     content spans are hashed when the user asked for that too."""
     if _log_dir is None:
         return ""
-    # The disk log is written by its own thread; let what is queued land
-    # first so the bundle carries the newest lines.
-    flush_disk_log()
+    # The disk log is written by its own thread; wait for it to catch up so
+    # the bundle carries every line the writer has finished.
+    wait_for_disk_log()
     # Sub-second suffix: two exports in the same second (double-click, or one
     # with and one without content redaction) must not overwrite each other.
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
