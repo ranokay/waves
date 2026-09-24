@@ -78,26 +78,33 @@ _SETTINGS_TILE_JS = "findFirst(settingsPage, function (o) { return o.dualLogo ==
 
 # A search row's Chooser button, opened through the control's own action. No
 # other state is set up here: openChooser() builds and refreshes the chooser
-# itself, exactly as the chevron's click does.
-_OPEN_CHOOSER_BODY = """
+# itself, exactly as the chevron's click does. The two drivers share the one
+# row lookup.
+_ROW_JS = """
     var db = findFirst(root.contentItem, function (o) {
         return o.chooserKind !== undefined && ("" + o.mediaId) === "__MEDIA_ID__";
     });
+"""
+
+_OPEN_CHOOSER_BODY = (
+    _ROW_JS
+    + """
     if (!db) return "no-button";
     if (!db.showChooser) return "hidden:" + db.st + ":" + db.waiting;
     db.openChooser();
     return "opened";
 """
+)
 
 # The same row's popover, closed again so the next row's chip is read from
 # the popover that row opened, never from a neighbour's stale one.
-_CLOSE_CHOOSER_BODY = """
-    var db = findFirst(root.contentItem, function (o) {
-        return o.chooserKind !== undefined && ("" + o.mediaId) === "__MEDIA_ID__";
-    });
+_CLOSE_CHOOSER_BODY = (
+    _ROW_JS
+    + """
     if (db) db.closeChooser();
     return true;
 """
+)
 
 # The OPEN popover: rows keep their built (hidden) popovers alive, so a
 # walk must not read a closed neighbour's chip.

@@ -9986,7 +9986,8 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str, result="QVariant")
     def providerDescriptor(self, value: str) -> dict | None:
-        """The descriptor a badge or a section head renders for an id.
+        """The descriptor a badge, a section head or the Chooser's provider
+        chip renders for an id.
 
         ``value`` is either a media id -- resolved by its namespace
         (``waves.ids.provider_of_id``: a bare legacy id reads as TIDAL's) -- or

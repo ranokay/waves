@@ -108,7 +108,7 @@ Rectangle {
   // The row's provider as the popover's chip states it: the descriptor the
   // badges render (the bridge's identity answer), resolved when the popover
   // opens. Nothing here picks a provider — the row's own is the only one.
-  readonly property var chooserProviderInfo: ("" + db.chooserProvider) !== "" ? waves.providerDescriptor(db.chooserProvider) : null
+  readonly property var chooserProviderDescriptor: ("" + db.chooserProvider) !== "" ? waves.providerDescriptor(db.chooserProvider) : null
   property string chooserTier: ""
   property string chooserAudio: "stereo"
   property bool chooserAtmosOnly: false
@@ -1274,7 +1274,7 @@ Rectangle {
           font.letterSpacing: 1
         }
         Column {
-          visible: db.chooserProviderInfo !== null
+          visible: db.chooserProviderDescriptor !== null
           spacing: 4
           Text {
             textFormat: Text.PlainText
@@ -1290,12 +1290,12 @@ Rectangle {
           Row {
             spacing: 6
             ProviderBadge {
-              descriptor: db.chooserProviderInfo
+              descriptor: db.chooserProviderDescriptor
               anchors.verticalCenter: parent.verticalCenter
             }
             Text {
               textFormat: Text.PlainText
-              text: ("" + (db.chooserProviderInfo ? (db.chooserProviderInfo.name || db.chooserProviderInfo.id) : "")).toUpperCase()
+              text: ("" + (db.chooserProviderDescriptor ? (db.chooserProviderDescriptor.name || db.chooserProviderDescriptor.id) : "")).toUpperCase()
               color: textLo
               font.family: uiFont
               font.pixelSize: 10
