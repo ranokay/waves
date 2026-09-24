@@ -6683,6 +6683,9 @@ ApplicationWindow {
               radius: 8
               color: root.surface2
               border.color: root.outline
+              opacity: sortBox.currentIndex === 0 ? 0.55 : 1
+              ToolTip.text: "Sort direction needs Date, Name or Popularity — Relevance has no direction"
+              ToolTip.visible: sortHover.containsMouse && sortTap.enabled === false
               Text {
                 textFormat: Text.PlainText
                 anchors.centerIn: parent
@@ -6692,9 +6695,19 @@ ApplicationWindow {
                 font.pixelSize: 18
               }
               MouseArea {
+                id: sortHover
                 anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
+                hoverEnabled: true
+                acceptedButtons: Qt.NoButton
+              }
+              TapAction {
+                id: sortTap
+                objectName: "sortDirectionButton"
+                anchors.fill: parent
+                focusRadius: 8
+                enabled: sortBox.currentIndex !== 0
+                accessibleLabel: root.sortAsc ? "Sort ascending" : "Sort descending"
+                onTriggered: {
                   root.sortAsc = !root.sortAsc
                   waves.setWavesPref("search_sort_asc", root.sortAsc)
                   root.applySort()
