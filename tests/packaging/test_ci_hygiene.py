@@ -179,6 +179,30 @@ def test_the_selector_cli_prints_json_and_rejects_bad_argv(capsys):
     assert module.main(["select_build_legs.py", "no-such-leg"]) == 1
 
 
+def test_legacy_macos_legs_carry_the_pinned_qt_overlay():
+    """BUILD-03/DEP-04: the legacy macOS legs build on the same runners as
+    the regular twins but overlay PySide6 6.9.3 with the 12.0 floor. A leg
+    that loses or retags the overlay ships the wrong Qt on macOS 12-14, so
+    the pin set fails here first."""
+    legs = json.loads(BUILD_LEGS.read_text())["legs"]
+    assert {leg["os_arch"] for leg in legs if "pyside6==" in str(leg.get("cmd_build", ""))} == {
+        "macos-intel_legacy",
+        "macos-apple-silicon_legacy",
+    }, "the Qt overlay belongs on exactly the two legacy legs"
+    for leg in legs:
+        if not str(leg.get("os_arch", "")).endswith("_legacy"):
+            continue
+        assert leg["macos_floor"] == "12.0", leg["os_arch"]
+        assert "WAVES_MACOS_MIN=12.0" in str(leg["cmd_build"]), leg["os_arch"]
+        pins = dict(re.findall(r"(pyside6(?:-addons|-essentials)?|shiboken6)==([^\s'\"]+)", str(leg["cmd_build"])))
+        assert pins == {
+            "pyside6": "6.9.3",
+            "pyside6-addons": "6.9.3",
+            "pyside6-essentials": "6.9.3",
+            "shiboken6": "6.9.3",
+        }, leg["os_arch"]
+
+
 def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:
     bash = shutil.which("bash")
     assert bash, "bash is not on PATH; every release build needs it"
