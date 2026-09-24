@@ -59,16 +59,47 @@ def test_on_track_event_forwards_lifecycle_dict_to_bridge():
     assert seen == [(9, {"id": "t1", "status": "running"})], "the lifecycle event must reach the bridge as a dict"
 
 
-# Signals: item_name (emission contract: emits what a listener receives).
-def test_progress_item_name_signal_carries_the_title():
+# Signals: item_name (emission contract: _build_download hands the relay's
+# signal to the engine's ProgressBars, which publishes per-item names through
+# it; deleting that wiring line must fail this test).
+def test_build_download_hands_the_relay_item_name_to_the_engine(monkeypatch):
+    from threading import Event
+
+    captured = {}
+
+    class _Dl:
+        ffmpeg_missing = False
+
+        def __init__(self, **kw):
+            captured.update(kw)
+
+    monkeypatch.setattr(bk, "_TrackedDownload", _Dl)
     relay = _ProgressSignals(None, 1, "m1", False)
     try:
-        seen = []
-        relay.item_name.connect(seen.append)
-        relay.item_name.emit("Song Title")
-        assert seen == ["Song Title"], "item_name must deliver the emitted title to listeners"
+        s = _stub(
+            tidal=object(),
+            settings=SimpleNamespace(data=SimpleNamespace(download_base_path="/tmp/w", skip_existing=False)),
+            providers={"tidal": object()},
+            _event_abort=Event(),
+            _event_run=Event(),
+            _waves_prefs={},
+            _ffmpeg_missing_warned=False,
+            _ownership=SimpleNamespace(ownership_of=lambda *a: None, stamp_ceiling=0),
+            _target_quality_rank=lambda q: 0,
+            ffmpegStatusChanged=_Signal(),
+            _resolve_ffmpeg=lambda: None,
+        )
+        s._waves_pref_bool = _bind(s, "_waves_pref_bool")
+        s._warn_if_ffmpeg_missing = _bind(s, "_warn_if_ffmpeg_missing")
+        s._build_download = _bind(s, "_build_download")
+        s._build_download(relay)
     finally:
         relay.deleteLater()
+    gui = captured["progress_gui"]
+    assert gui.item_name is relay.item_name, "the engine must publish item names through the relay's own signal"
+    assert gui.item is relay.item and gui.list_item is relay.list_item and gui.list_name is relay.list_name, (
+        "the whole relay travels together"
+    )
 
 
 # ---------------------------------------------------------------------------
