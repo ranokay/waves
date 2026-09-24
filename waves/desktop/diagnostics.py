@@ -584,7 +584,8 @@ def wait_for_disk_log(timeout: float = 2.0) -> None:
     write keeps the queue backed up and holds the handler lock, so waiting on
     either past ``timeout`` would be the stall the queue exists to prevent.
     Each record is flushed as the writer writes it, so a drained queue means
-    everything logged has landed; nothing is left in a buffer for a caller to
+    everything the writer has finished has landed; the record being written
+    right now may or may not, and nothing is left in a buffer for a caller to
     flush out."""
     handler = _disk_handler
     if handler is None:
@@ -635,8 +636,8 @@ def export_bundle(redact_content: bool = False) -> str:
     content spans are hashed when the user asked for that too."""
     if _log_dir is None:
         return ""
-    # The disk log is written by its own thread; let what is queued land
-    # first so the bundle carries the newest lines.
+    # The disk log is written by its own thread; wait for it to catch up so
+    # the bundle carries every line the writer has finished.
     wait_for_disk_log()
     # Sub-second suffix: two exports in the same second (double-click, or one
     # with and one without content redaction) must not overwrite each other.
