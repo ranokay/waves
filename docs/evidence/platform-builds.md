@@ -36,7 +36,8 @@ see the revalidation rows below).
 Legacy floor-12 legs (`macos-intel_legacy`, `macos-apple-silicon_legacy`)
 are proven by the two rows above: run `36031832661` at `33f0f6f` built both
 with the PySide6 6.9.3 overlay and `WAVES_MACOS_MIN=12.0`, smoke-launch
-healthy and every Mach-O file honoring the 12.0 floor. The Qt overlay pin is
+healthy, the floor-assert step confirming `Info.plist
+LSMinimumSystemVersion 12.0`, and every Mach-O file honoring the 12.0 floor. The Qt overlay pin is
 guarded by `test_legacy_macos_legs_carry_the_pinned_qt_overlay` in
 `tests/packaging/test_ci_hygiene.py`. A release cut builds all eight legs
 including legacy by the all-platform guard.
