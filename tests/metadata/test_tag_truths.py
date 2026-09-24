@@ -91,6 +91,69 @@ def test_the_mp4_track_pair_spells_an_unknown_total_as_zero(tmp_path):
     assert mp4.tags["trkn"] == [[7, 0]], "0 is how MP4 spells an unknown total, 1 would be a lie"
 
 
+# --------------------------------------------------------------------------- #
+# An unknown volume count stays unknown (no "disc 1 of 0")
+# --------------------------------------------------------------------------- #
+def test_an_unknown_disc_total_writes_no_flac_total(tmp_path):
+    flac = _write(
+        _flac_stub(),
+        tmp_path,
+        "t.flac",
+        title="T",
+        artists=["A"],
+        albumartist=["A"],
+        discnumber=1,
+        totaldisc=0,
+    )
+    assert flac.tags["DISCNUMBER"] == ["1"]
+    assert "DISCTOTAL" not in flac.tags, "'1 of 0' is a claim the album summary never made"
+
+
+def test_a_known_disc_total_is_still_written(tmp_path):
+    flac = _write(
+        _flac_stub(),
+        tmp_path,
+        "t.flac",
+        title="T",
+        artists=["A"],
+        albumartist=["A"],
+        discnumber=2,
+        totaldisc=3,
+    )
+    assert flac.tags["DISCTOTAL"] == ["3"]
+
+
+def test_an_unknown_disc_total_writes_no_mp4_disk_atom(tmp_path):
+    mp4 = _write(
+        _mp4_stub(),
+        tmp_path,
+        "t.m4a",
+        title="T",
+        artists=["A"],
+        albumartist=["A"],
+        tracknumber=7,
+        totaltrack=0,
+        discnumber=1,
+        totaldisc=0,
+    )
+    assert "disk" not in mp4.tags, "'1 of 0' is a claim the album summary never made"
+    assert mp4.tags["trkn"] == [[7, 0]], "the pinned trkn unknown spelling stays"
+
+
+def test_a_known_disc_total_writes_the_mp4_pair(tmp_path):
+    mp4 = _write(
+        _mp4_stub(),
+        tmp_path,
+        "t.m4a",
+        title="T",
+        artists=["A"],
+        albumartist=["A"],
+        discnumber=2,
+        totaldisc=3,
+    )
+    assert mp4.tags["disk"] == [[2, 3]]
+
+
 class _RecMeta:
     """Records the Metadata construction the tag writer performs."""
 
@@ -102,6 +165,24 @@ class _RecMeta:
 
     def save(self):
         return True
+
+
+@pytest.mark.parametrize(("num_volumes", "expected"), [(None, 0), (2, 2)])
+def test_tag_apple_file_passes_the_volume_count_it_has(tmp_path, num_volumes, expected):
+    from waves.providers.apple import files as apple_files
+
+    path = tmp_path / "t.m4a"
+    path.write_bytes(b"x")
+    with patch.object(apple_files, "Metadata", _RecMeta):
+        assert (
+            apple_files.tag_apple_file(
+                path,
+                title="T",
+                facts={"album": {"name": "A", "num_tracks": 13, "num_volumes": num_volumes}, "artists": []},
+            )
+            is True
+        )
+    assert _RecMeta.last.kw["totaldisc"] == expected
 
 
 def _album(num_tracks):

@@ -319,7 +319,7 @@ def tag_apple_file(
             tracknumber=int(facts.get("track_num") or 0),
             discnumber=int(facts.get("volume_num") or 1),
             totaltrack=int(album.get("num_tracks") or 0),
-            totaldisc=0,
+            totaldisc=int(album.get("num_volumes") or 0),
             isrc=facts.get("isrc") or "",
             date=str(facts.get("release_date") or ""),
             lyrics=lyrics_synced,

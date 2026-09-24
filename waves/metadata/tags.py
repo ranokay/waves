@@ -617,7 +617,10 @@ class Metadata:
         # cleanup_tags drops the empty value before the file is saved.
         self.m.tags["TRACKTOTAL"] = str(self.totaltrack) if self.totaltrack > 0 else ""
         self.m.tags["DISCNUMBER"] = str(self.discnumber)
-        self.m.tags["DISCTOTAL"] = str(self.totaldisc)
+        # 0 means the volume count is unknown: write nothing rather than
+        # "of 0", mirroring TRACKTOTAL above. cleanup_tags drops the empty
+        # value before the file is saved.
+        self.m.tags["DISCTOTAL"] = str(self.totaldisc) if self.totaldisc > 0 else ""
         self.m.tags["DATE"] = self.date
         self.m.tags["ORIGINALDATE"] = self.date
         self.m.tags["LYRICS"] = self._primary_lyrics()
@@ -734,7 +737,14 @@ class Metadata:
         self.m.tags["\xa9ART"] = self.artists
         self._set_mp4_custom_tags()
         self.m.tags["trkn"] = [[self.tracknumber, self.totaltrack]]
-        self.m.tags["disk"] = [[self.discnumber, self.totaldisc]]
+        # An unknown volume count writes no disk atom rather than "1 of 0":
+        # 0 is how trkn spells an unknown total (pinned), but a zero disc
+        # total is a claim no source made. Pop any staged value so a retag
+        # never leaves the old total behind.
+        if self.totaldisc > 0:
+            self.m.tags["disk"] = [[self.discnumber, self.totaldisc]]
+        else:
+            self.m.tags.pop("disk", None)
         # self.m.tags['\xa9gen'] = self.genre
         self.m.tags["\xa9day"] = self.date
         self.m.tags["\xa9lyr"] = self._primary_lyrics()
