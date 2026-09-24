@@ -88,13 +88,16 @@ Drawer {
         onClicked: waves.paused ? waves.resumeQueue() : waves.pauseQueue()
       }
       // Stop everything: abort running downloads and the queued
-      // ones; the rows stay, as Stopped, with RETRY.
+      // ones; the rows stay, as Stopped, with RETRY. One click, always:
+      // it is the panic control. The screen-reader name says what the
+      // click will end, since the visible word stays the short one.
       SpecBtn {
         // Or a scan in flight: it has no row yet, and this is
         // the only control that ends it.
         visible: host.activeQueueCount > 0 || waves.scanning
         danger: true
         label: "STOP"
+        accessibleLabel: host.activeQueueCount === 0 ? "Stop the scan, nothing queued yet" : host.activeQueueCount === 1 ? "Stop 1 download, the row stays for retry" : "Stop " + host.activeQueueCount + " downloads, rows stay for retry"
         onClicked: waves.stopAll()
       }
       // Shut the drawer. Clicking the page behind it already does
@@ -208,27 +211,50 @@ Drawer {
           // button that has to name what it sweeps. Downloading
           // has none: stopping a live transfer is the row's own
           // control, never a bulk one.
+          // The three destructive ones (Failed, Stopped, Queued)
+          // arm first: the first click says SURE? and clears
+          // nothing, the second clears, letting the window lapse
+          // disarms. Completed is tidy-up and stays one click.
           SpecBtn {
+            id: clearBtn
+            objectName: "queueClearBtn"
             compact: true
             // Completed is tidy-up, so it takes the green
             // recipe; the other three discard work you asked
             // for, which is the danger red the exit prompt uses.
             primary: secItem.section === "completed"
             danger: secItem.section !== "completed"
-            label: "CLEAR"
-            accessibleLabel: "Clear " + host.queueSectionWord(secItem.section) + " downloads"
+            label: secItem.clearArmed && secItem.section !== "completed" ? "SURE?" : "CLEAR"
+            accessibleLabel: (secItem.clearArmed && secItem.section !== "completed" ? "Confirm clearing " : "Clear ") + host.queueSectionWord(secItem.section) + " downloads"
             visible: secItem.section !== "downloading"
             Layout.alignment: Qt.AlignVCenter
             onClicked: {
-              if (secItem.section === "completed")
+              if (secItem.section === "completed") {
                 waves.clearFinished()
-              else if (secItem.section === "failed")
+                return
+              }
+              if (!secItem.clearArmed) {
+                secItem.clearArmed = true
+                clearDisarm.restart()
+                return
+              }
+              secItem.clearArmed = false
+              clearDisarm.stop()
+              if (secItem.section === "failed")
                 waves.clearFailed()
               else if (secItem.section === "stopped")
                 waves.clearStopped()
               else
                 waves.clearQueued()
             }
+          }
+          // The armed window: lapse it and the button is CLEAR again,
+          // the queue untouched. Three seconds is long enough to mean
+          // it and short enough that a stale SURE? never waits.
+          Timer {
+            id: clearDisarm
+            interval: 3000
+            onTriggered: secItem.clearArmed = false
           }
           Text {
             textFormat: Text.PlainText
@@ -275,6 +301,10 @@ Drawer {
         // tests/ui/test_queue_section_pulse.py pins.
         property int secPulsedTick: 0
         property int secArmedTick: -1
+        // The CLEAR confirm gate: first click arms (SURE?), second
+        // clears. Reset on re-section like the pulse above — a pooled
+        // header must never carry another section's armed click.
+        property bool clearArmed: false
         // Whether this header holds the section that rose and has
         // not pulsed for the current tick yet.
         function secPulseDue() {
@@ -300,6 +330,8 @@ Drawer {
         onSectionChanged: {
           secPulse.stop()
           secLbl.scale = 1
+          clearArmed = false
+          clearDisarm.stop()
           if (secArmedTick === host.pulseTick && secPulseDue())
             secArm.restart()
         }
