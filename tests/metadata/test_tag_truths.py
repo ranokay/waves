@@ -154,44 +154,6 @@ def test_a_known_disc_total_writes_the_mp4_pair(tmp_path):
     assert mp4.tags["disk"] == [[2, 3]]
 
 
-def test_tag_apple_file_passes_the_volume_count_it_has(tmp_path):
-    from waves.providers.apple import files as apple_files
-
-    seen = {}
-
-    class _Capture:
-        def __init__(self, **kw):
-            seen.update(kw)
-
-        def save(self):
-            return True
-
-    path = tmp_path / "t.m4a"
-    path.write_bytes(b"x")
-    with patch.object(apple_files, "Metadata", _Capture):
-        assert (
-            apple_files.tag_apple_file(
-                path,
-                title="T",
-                facts={"album": {"name": "A", "num_tracks": 13, "num_volumes": None}, "artists": []},
-            )
-            is True
-        )
-    assert seen["totaldisc"] == 0, "unknown stays unknown so the writer omits it"
-
-    seen.clear()
-    with patch.object(apple_files, "Metadata", _Capture):
-        assert (
-            apple_files.tag_apple_file(
-                path,
-                title="T",
-                facts={"album": {"name": "A", "num_tracks": 13, "num_volumes": 2}, "artists": []},
-            )
-            is True
-        )
-    assert seen["totaldisc"] == 2, "a real multi-volume total still lands on both containers"
-
-
 class _RecMeta:
     """Records the Metadata construction the tag writer performs."""
 
@@ -203,6 +165,24 @@ class _RecMeta:
 
     def save(self):
         return True
+
+
+@pytest.mark.parametrize(("num_volumes", "expected"), [(None, 0), (2, 2)])
+def test_tag_apple_file_passes_the_volume_count_it_has(tmp_path, num_volumes, expected):
+    from waves.providers.apple import files as apple_files
+
+    path = tmp_path / "t.m4a"
+    path.write_bytes(b"x")
+    with patch.object(apple_files, "Metadata", _RecMeta):
+        assert (
+            apple_files.tag_apple_file(
+                path,
+                title="T",
+                facts={"album": {"name": "A", "num_tracks": 13, "num_volumes": num_volumes}, "artists": []},
+            )
+            is True
+        )
+    assert _RecMeta.last.kw["totaldisc"] == expected
 
 
 def _album(num_tracks):
