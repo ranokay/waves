@@ -11,6 +11,7 @@ recompiles every module from a cold runner.
 
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import json
 import os
@@ -232,6 +233,23 @@ def test_windows_builds_ask_nuitka_for_low_memory():
     # platforms' commands.
     assert "--low-memory" in _dry_run_nuitka_command({"OS": "Windows_NT"})
     assert "--low-memory" not in _dry_run_nuitka_command({"OS": ""})
+
+
+def test_yt_dlp_floor_matches_gamdl_and_exclusion_is_real():
+    """DEP-05: pyproject's yt-dlp floor tracks gamdl's own requirement, and the
+    build's nofollow module exists in the locked yt-dlp."""
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
+    declared = next((d for d in project["dependencies"] if d.startswith("yt-dlp")), None)
+    assert declared is not None, "pyproject lost its yt-dlp floor"
+    floor = declared[len("yt-dlp") :].strip()
+    gamdl_reqs = importlib.metadata.requires("gamdl") or []
+    gamdl_req = next((r for r in gamdl_reqs if r.lower().startswith("yt-dlp")), None)
+    assert gamdl_req is not None, "gamdl no longer requires yt-dlp"
+    gamdl_spec = re.split(r";", gamdl_req, maxsplit=1)[0][len("yt-dlp") :].strip()
+    assert floor == gamdl_spec, f"pyproject pins yt-dlp{floor}, gamdl requires yt-dlp{gamdl_spec}"
+    assert importlib.util.find_spec("yt_dlp.extractor.lazy_extractors") is not None, (
+        "the locked yt-dlp lost yt_dlp.extractor.lazy_extractors the build excludes by name"
+    )
 
 
 def test_the_build_excludes_yt_dlps_lazy_extractor_table():
