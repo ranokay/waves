@@ -225,7 +225,7 @@ Drawer {
             primary: secItem.section === "completed"
             danger: secItem.section !== "completed"
             label: secItem.clearArmed ? "SURE?" : "CLEAR"
-            accessibleLabel: (secItem.clearArmed ? "Confirm clearing " : "Clear ") + host.queueSectionWord(secItem.section) + " downloads"
+            accessibleLabel: "Clear " + host.queueSectionWord(secItem.section) + " downloads" + (secItem.clearArmed ? " — click again to confirm" : "")
             visible: secItem.section !== "downloading"
             Layout.alignment: Qt.AlignVCenter
             onClicked: {
