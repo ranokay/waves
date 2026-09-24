@@ -6711,11 +6711,12 @@ ApplicationWindow {
           // Hidden until a search returns results; the chips then cascade
           // in (staggered fade + downward settle) as the bar grows down.
           RowLayout {
+            objectName: "searchTypeChips"
             Layout.fillWidth: true
             Layout.leftMargin: 22
             Layout.topMargin: 8
             spacing: 8
-            visible: root.signedIn && root.hasResults && !root.artistOpen && !root.settingsOpen && !root.libraryOpen && !root.browseOpen
+            visible: root.searchAvailable && root.hasResults && !root.artistOpen && !root.settingsOpen && !root.libraryOpen && !root.browseOpen
             Repeater {
               model: [["all", "All"], ["artists", "Artists"], ["albums", "Albums"], ["tracks", "Tracks"], ["videos", "Videos"], ["playlists", "Playlists"], ["mixes", "Mixes"]]
               delegate: Rectangle {

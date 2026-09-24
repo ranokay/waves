@@ -68,6 +68,30 @@ def _find_visible(q, object_name: str):
     return q(_FIND_VISIBLE % object_name)
 
 
+_CHIP_BY_LABEL = """
+(function () {
+    function walk(o) {
+        if (!o) return null;
+        if (o.objectName === "searchTypeChip" && o.accessibleLabel === "%s") return o;
+        var kids = o.children || [];
+        for (var i = 0; i < kids.length; i++) {
+            var hit = walk(kids[i]);
+            if (hit) return hit;
+        }
+        if (o.contentItem) { var c = walk(o.contentItem); if (c) return c; }
+        if (o.item) { var it = walk(o.item); if (it) return it; }
+        return null;
+    }
+    return walk(root);
+})()
+"""
+
+
+def _click_chip(q, label: str) -> None:
+    """Click a search type chip the way the pointer does."""
+    q("(" + (_CHIP_BY_LABEL % label) + ").triggered()")
+
+
 def _settle_until(q, settle, predicate, *, timeout_ms: int = 5000, step_ms: int = 20) -> bool:
     """Spin the event loop until the predicate holds, or its budget runs out.
 
@@ -145,6 +169,30 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
     build_total_ok = q("root._searchBuildTotal") == len(_ARTISTS)
     veil_down = _settle_until(q, settle, lambda: not bool(q("searchBuildHint.active")))
     loading_ok = rows_landed and build_total_ok and hint_seen and veil_down
+
+    # The type chips show for an Apple-only signed-out search with results,
+    # and clicking one filters the Apple groups.
+    chips_visible = bool(_find_visible(q, "searchTypeChips"))
+    if chips_visible:
+        _click_chip(q, "Videos")
+        chip_click_ok = _settle_until(
+            q,
+            settle,
+            lambda: q("root.filterType") == "videos" and not bool(q(apple + ".headVisible")),
+            timeout_ms=1000,
+            step_ms=5,
+        )
+        _click_chip(q, "All")
+        chip_click_ok = chip_click_ok and _settle_until(
+            q,
+            settle,
+            lambda: q("root.filterType") == "all" and bool(q(apple + ".headVisible")),
+            timeout_ms=1000,
+            step_ms=5,
+        )
+    else:
+        chip_click_ok = False
+    loading_ok = loading_ok and chips_visible and chip_click_ok
 
     # A failed Apple fetch shows the honest words in its own group with a
     # RETRY, and the RETRY issues the search again: the words give way to the
