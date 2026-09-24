@@ -32,6 +32,8 @@ def _deny_lists() -> dict[str, set[str]]:
         match = re.search(rf"^{name}=\(\s*(.*?)\s*\)", text, re.MULTILINE | re.DOTALL)
         assert match, f"{TRIM_SCRIPT} no longer defines {name}; update this test"
         lists[name] = set(match.group(1).split())
+    for extra in ("QtQml/StateMachine", "labs/platform"):
+        assert extra in text, f"{TRIM_SCRIPT} no longer removes {extra}; update _EXTRA_DENIED"
     return lists
 
 
