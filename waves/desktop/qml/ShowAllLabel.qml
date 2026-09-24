@@ -44,13 +44,15 @@ Item {
       }
     }
   }
-  MouseArea {
+  TapAction {
     id: saMa
+    objectName: "showAllToggle"
     anchors.fill: parent
     anchors.margins: -4
-    hoverEnabled: true
-    cursorShape: Qt.PointingHandCursor
-    onClicked: {
+    // The drawn words, so the reader hears the toggle the user sees.
+    accessibleLabel: saText.text
+    focusRadius: 4
+    onTriggered: {
       // Capture before toggled() flips the bound expanded state.
       var collapsing = sa.expanded
       sa.toggled()
