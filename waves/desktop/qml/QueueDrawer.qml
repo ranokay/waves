@@ -518,8 +518,9 @@ Drawer {
           // row's pointer and keyboard actions differ (the click only opens
           // a ledger; Return also retries a settled row that has none), and
           // TapAction's one `triggered` handler exists to make those paths
-          // agree. This is DownloadButton's shape, the model the audit
-          // names for the row. Declared first so the retry/cancel tap areas
+          // agree. This is DownloadButton's shape: one MouseArea carrying
+          // the accessible contract, its pointer and its keys free to take
+          // different branches. Declared first so the retry/cancel tap areas
           // (later siblings) stay on top.
           MouseArea {
             id: cardHover

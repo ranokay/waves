@@ -546,6 +546,7 @@ def _run_scenario() -> int:
 
 def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QAccessible
     from PySide6.QtTest import QTest
 
     booted = boot_main_qml()
@@ -800,10 +801,15 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
             problems.append("a click on the album row's card never opened its ledger")
         if len(calls) != before:
             problems.append(f"a click on the album row's card reached a row action: {calls[before:]}")
-        QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(album_point["x"], album_point["y"]))
-        settle(300)
-        if bool(q("queueExpanded[9002] === true")):
-            problems.append("a second click on the album row's card never closed its ledger")
+        # Re-measure: the card grew its ledger under the first click.
+        album_point = _card_point("Rolling Album by Artist")
+        if album_point is None:
+            problems.append("the album row's card left the tree after opening")
+        else:
+            QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(album_point["x"], album_point["y"]))
+            settle(300)
+            if bool(q("queueExpanded[9002] === true")):
+                problems.append("a second click on the album row's card never closed its ledger")
     failed_point = _card_point("Broken Song by Artist")
     if failed_point is not None:
         before = len(calls)
@@ -1266,6 +1272,29 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         settle(250)
         if str(q("root.filterType")) != "albums":
             problems.append(f"Return on the Albums chip never filtered the results: {q('root.filterType')!r}")
+        q("root.filterType = 'all'")
+        settle(200)
+
+    # The platform's Toggle (what macOS sends for an AX press on a checkable
+    # role) reaches a chip through the primitive's one toggle handler.
+    chip_item = q(
+        scene_js("""
+        return findFirst(root, function (o) {
+            return o.objectName === "searchTypeChip" && ("" + o.Accessible.name) === "Tracks";
+        });
+    """)
+    )
+    chip_actions = None
+    if chip_item is not None:
+        chip_iface = QAccessible.queryAccessibleInterface(chip_item)
+        chip_actions = chip_iface.actionInterface() if chip_iface is not None and chip_iface.isValid() else None
+    if chip_actions is None or "Toggle" not in list(chip_actions.actionNames()):
+        problems.append("the Tracks chip advertises no platform toggle action")
+    else:
+        chip_actions.doAction("Toggle")
+        settle(250)
+        if str(q("root.filterType")) != "tracks":
+            problems.append("the platform Toggle never reached the Tracks chip")
         q("root.filterType = 'all'")
         settle(200)
 

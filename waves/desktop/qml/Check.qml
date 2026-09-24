@@ -13,8 +13,9 @@ Rectangle {
 
   property bool checked: false
   // The spoken name. The gate rows set it; an unnamed checkbox (the album
-  // and playlist selection ticks) stays pointer-only, so no silent stop
-  // enters the tab order.
+  // and playlist selection ticks) keeps out of the tab order, so no silent
+  // stop enters the keyboard chain, while its node stays in the tree as the
+  // checkbox it is, togglable by a reader.
   property string accessibleLabel: ""
   signal toggled
   width: 18
