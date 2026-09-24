@@ -213,24 +213,23 @@ The per-click Chooser's two answer-only slots are capability-driven (issue
 says whether a control carries the split button at all (the covered kinds plus
 the row's provider metadata: a quality rung, an audio type, or a lyrics/art
 capability), and `chooserDefaults(mediaId, kind)` returns the popover's data --
-`provider`, `providers` (segment tiles: id, name, logo,
-logo_width, selected, one per enabled provider with the row's own always
-present), `tier`, `audioType` (clamped to `audioOptions`), `audioOptions`,
-`atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt` and the
-lyrics/art quick-toggles. A provider whose metadata offers nothing per-click
-answers `chooserSupported` False, so no chevron renders.
+`provider` (the row's own, stated as a static chip whose mark comes from
+`providerDescriptor`), `tier`, `audioType` (clamped to `audioOptions`),
+`audioOptions`, `atmosOnly`, `tiers`, `showLyrics`/`showLyricsTtml`/`showArt`
+and the lyrics/art quick-toggles. A provider whose metadata offers nothing
+per-click answers `chooserSupported` False, so no chevron renders.
 `artistDownloadSupported(artistId)` is the same kind of answer for the artist
 page's discography control: True only where the artist's provider
 declares `Capability.ARTIST_DOWNLOAD`, so an Apple artist page renders no
 control for the verb its catalog cannot answer (the click is refused with
 honest words either way).
 
-`providerDescriptor(value)` is the identity answer the badges and group heads
-render: `{id, name, logo, logo_header_width, logo_header_height,
-head_style}` for a media id (resolved by its namespace: a bare legacy id reads
-as TIDAL's) or a provider id matched exactly (a head asking for its own
-provider), and `None` for an id no registered provider claims -- an unknown
-namespace wears no mark, never another provider's. `head_style` picks the
+`providerDescriptor(value)` is the identity answer the badges, group heads and
+the Chooser's provider chip render: `{id, name, logo, logo_header_width,
+logo_header_height, head_style}` for a media id (resolved by its namespace: a
+bare legacy id reads as TIDAL's) or a provider id matched exactly (a head
+asking for its own provider), and `None` for an id no registered provider
+claims -- an unknown namespace wears no mark, never another provider's. `head_style` picks the
 search group head's furniture ("accent" is TIDAL's shipped look; "plain" the
 neutral one), so each provider's head keeps its own shape. The
 Library section's bulk rows carry the same fields (`provider`, `provider_logo`)

@@ -24,7 +24,7 @@ A provider's own surface for serving download asks; providers without one use th
 _Avoid_: provider hook, download hook
 
 **Chooser**:
-The per-download control where the user picks provider, audio quality, audio type, and lyrics/art options; its defaults come from Settings, and one click uses those defaults.
+The per-download control where the user picks audio quality, audio type, and lyrics/art options; the provider is the row's own, stated rather than picked. Its defaults come from Settings, and one click uses those defaults.
 _Avoid_: download dialog, picker
 
 **Audio type**:

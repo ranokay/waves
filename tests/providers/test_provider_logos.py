@@ -3,8 +3,8 @@
 The asset placement test stays; the rendered scenario drives the real
 Main.qml and asserts each mark is a visible image with a real size on its own
 surface: the Settings Providers card's dual-logo tile, both search group
-headers and the Chooser's provider segments. A mark that is hidden,
-zero-sized or left off its surface fails.
+headers and the Chooser's provider chip. A mark that is hidden, zero-sized or
+left off its surface fails.
 """
 
 from __future__ import annotations
@@ -76,23 +76,47 @@ _MARKS_BODY = """
 # The Providers card's dual-logo tile: the one Rectangle carrying both marks.
 _SETTINGS_TILE_JS = "findFirst(settingsPage, function (o) { return o.dualLogo === true; })"
 
-# The search row's Chooser button, opened through the control's own action. No
+# A search row's Chooser button, opened through the control's own action. No
 # other state is set up here: openChooser() builds and refreshes the chooser
-# itself, exactly as the chevron's click does.
-_OPEN_CHOOSER_BODY = """
+# itself, exactly as the chevron's click does. The two drivers share the one
+# row lookup.
+_ROW_JS = """
     var db = findFirst(root.contentItem, function (o) {
-        return o.chooserKind !== undefined && ("" + o.mediaId) === "t1";
+        return o.chooserKind !== undefined && ("" + o.mediaId) === "__MEDIA_ID__";
     });
+"""
+
+_OPEN_CHOOSER_BODY = (
+    _ROW_JS
+    + """
     if (!db) return "no-button";
     if (!db.showChooser) return "hidden:" + db.st + ":" + db.waiting;
     db.openChooser();
     return "opened";
 """
+)
 
-_POPOVER_JS = "findObject(root.contentItem, 'chooserPopover')"
+# The same row's popover, closed again so the next row's chip is read from
+# the popover that row opened, never from a neighbour's stale one.
+_CLOSE_CHOOSER_BODY = (
+    _ROW_JS
+    + """
+    if (db) db.closeChooser();
+    return true;
+"""
+)
 
+# The OPEN popover: rows keep their built (hidden) popovers alive, so a
+# walk must not read a closed neighbour's chip.
+_POPOVER_JS = (
+    "findFirst(root.contentItem, function (o) { return o.objectName === 'chooserPopover' && o.visible === true; })"
+)
 
 _js = scene_js
+
+
+def _chooser_js(body: str, media_id: str) -> str:
+    return _js(body.replace("__MEDIA_ID__", media_id))
 
 
 def _marks_expr(scope: str) -> str:
@@ -196,18 +220,30 @@ def _run_scenario() -> int:
         if not visible_mark(scope, asset):
             problems.append(f"the {name} search header shows no visible mark")
 
-    # 3. The Chooser's provider segments.
-    chooser = str(q(_js(_OPEN_CHOOSER_BODY)))
-    if chooser != "opened":
-        problems.append(f"the Chooser button would not open ({chooser})")
-    else:
+    # 3. The Chooser's provider chip: one static mark, the row's own. A TIDAL
+    # row and an Apple row in turn prove the chip follows the row; each
+    # popover must show its own mark and never the other provider's.
+    if not bool(q("root.searchGroupFor('apple').isExpanded('tracks')")):
+        q("root.searchGroupFor('apple').toggleExpanded('tracks')")
+        settle(250)
+    for media_id, own_name, own_asset, other_name, other_asset in (
+        ("t1", "TIDAL", "tidal.png", "APPLE MUSIC", "apple-music.png"),
+        ("apple:t1", "APPLE MUSIC", "apple-music.png", "TIDAL", "tidal.png"),
+    ):
+        chooser = str(q(_chooser_js(_OPEN_CHOOSER_BODY, media_id)))
+        if chooser != "opened":
+            problems.append(f"the Chooser button for {media_id} would not open ({chooser})")
+            continue
         settle(400)
-        if q(_js("    return findObject(root.contentItem, 'chooserPopover');")) is None:
-            problems.append("the Chooser popover did not open")
+        if q(_js("    return " + _POPOVER_JS + ";")) is None:
+            problems.append(f"the Chooser popover for {media_id} did not open")
         else:
-            for name, asset in (("TIDAL", "tidal.png"), ("APPLE MUSIC", "apple-music.png")):
-                if not visible_mark(_POPOVER_JS, asset):
-                    problems.append(f"the Chooser shows no visible {name} mark")
+            if not visible_mark(_POPOVER_JS, own_asset):
+                problems.append(f"the Chooser for {media_id} shows no visible {own_name} mark")
+            if visible_mark(_POPOVER_JS, other_asset):
+                problems.append(f"the Chooser for {media_id} shows another provider's mark ({other_name})")
+        q(_chooser_js(_CLOSE_CHOOSER_BODY, media_id))
+        settle(200)
 
     if problems:
         for line in problems:

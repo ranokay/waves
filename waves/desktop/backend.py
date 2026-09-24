@@ -167,7 +167,6 @@ from .bridge_surfaces import (
     _apple_status,
     _begin_login,
     _browse_nav,
-    _chooser_provider_tiles,
     _fmt_duration,
     _is_provider_surface_pref,
     _lib_disk_key,
@@ -9987,7 +9986,8 @@ class WavesBridge(LibraryMixin, QObject):
 
     @Slot(str, result="QVariant")
     def providerDescriptor(self, value: str) -> dict | None:
-        """The descriptor a badge or a section head renders for an id.
+        """The descriptor a badge, a section head or the Chooser's provider
+        chip renders for an id.
 
         ``value`` is either a media id -- resolved by its namespace
         (``waves.ids.provider_of_id``: a bare legacy id reads as TIDAL's) -- or
@@ -10024,15 +10024,15 @@ class WavesBridge(LibraryMixin, QObject):
     def chooserDefaults(self, media_id: str, kind: str = "") -> dict:
         """Everything the Chooser popover needs to open on this control.
 
-        provider: the row's provider id; providers: the segment tiles
-        (enabled providers, the row's own always present, each descriptor's
-        name/mark/logo_width and which one is selected); tier: the Settings
-        tier word for that provider; audioType: stereo/both from Settings,
-        clamped to the words ``audioOptions`` offers; atmosOnly: collapse the
-        audio control; tiers: the provider's tier entries; audioOptions: the
-        provider's own audio words; showLyrics/showLyricsTtml/showArt: whether
-        each popover section applies to this provider (capability and engine
-        facts, never provider identity); lyrics/art: the shared quick-toggles."""
+        provider: the row's provider id, stated by the popover as a static
+        chip (its mark comes from ``providerDescriptor``, the badge's identity
+        answer); tier: the Settings tier word for that provider; audioType:
+        stereo/both from Settings, clamped to the words ``audioOptions``
+        offers; atmosOnly: collapse the audio control; tiers: the provider's
+        tier entries; audioOptions: the provider's own audio words;
+        showLyrics/showLyricsTtml/showArt: whether each popover section
+        applies to this provider (capability and engine facts, never provider
+        identity); lyrics/art: the shared quick-toggles."""
         provider_id = self._chooser_provider_of(media_id)
         provider = self._provider_meta(provider_id)
         capabilities = provider.capabilities if provider is not None else frozenset()
@@ -10068,7 +10068,6 @@ class WavesBridge(LibraryMixin, QObject):
             audio_default = "stereo"
         return {
             "provider": provider_id,
-            "providers": _chooser_provider_tiles(self, provider_id),
             "tier": self._chooser_default_tier_word(provider_id),
             "audioType": audio_default,
             "atmosOnly": bool(self._chooser_atmos_only(media_id, kind)),
