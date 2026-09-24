@@ -4,9 +4,7 @@ import QtQuick
 // label-plus-tap-area pattern, carrying the metadata a pointer-only MouseArea
 // lacks. The host draws the label and passes its spoken name; the pointer,
 // the reader's press action and Return/Enter/Space all run the one
-// `triggered` handler, so no path can drift from another. The one adopter
-// that splits them is the queue row's card, where the pointer's click opens
-// a ledger and Return adds retry; see QueueDrawer.qml for why.
+// `triggered` handler, so no path can drift from another.
 // The palette values are local copies of Main.qml's static literals —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 MouseArea {

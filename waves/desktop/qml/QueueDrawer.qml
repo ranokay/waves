@@ -348,6 +348,9 @@ Drawer {
         readonly property bool expandable: model.collection === true && model.tracks !== 1
         readonly property bool single: model.collection === true && model.tracks === 1
         readonly property bool qexp: expandable && host.queueExpanded[model.qid] === true
+        // A row's stops share one focusability rule: a collapsed Completed
+        // row, or a row on its way out, is not on screen and keeps no stop.
+        readonly property bool rowFocusable: qrow.visible && !qrow.collapsed && !qrow.leaving
         // A running or queued row's ✕ gives up the wait; a settled row's ✕
         // removes it. One read for the ✕'s styling, the ✕'s press action
         // and the row's Delete key, so the three can never disagree.
@@ -511,35 +514,61 @@ Drawer {
             }
           }
           // Card-wide expand toggle for album rows, and the row's keyboard
-          // home: Tab lands here, Delete gives the row up, Return retries a
-          // settled row with no ledger to open. Declared first so the
-          // retry/cancel tap areas (later siblings) stay on top.
-          TapAction {
+          // home. A MouseArea rather than a TapAction, deliberately: the
+          // row's pointer and keyboard actions differ (the click only opens
+          // a ledger; Return also retries a settled row that has none), and
+          // TapAction's one `triggered` handler exists to make those paths
+          // agree. This is DownloadButton's shape, the model the audit
+          // names for the row. Declared first so the retry/cancel tap areas
+          // (later siblings) stay on top.
+          MouseArea {
             id: cardHover
             objectName: "queueRowCard"
             anchors.fill: parent
             // Enabled for every row so Tab can reach it: a settled row is
-            // still removable and a live one cancellable. The hand still
-            // only appears where a click expands (the cursor override), and
-            // hover stays where it was, so no row grows a hover highlight
-            // its click does not back up.
-            cursorShape: qrow.expandable ? Qt.PointingHandCursor : Qt.ArrowCursor
+            // still removable and a live one cancellable. Hover stays where
+            // it was, so no row grows a highlight its click does not back
+            // up; the hand still only appears where a click expands.
             hoverEnabled: qrow.peekable
-            activeFocusOnTab: qrow.visible && !qrow.collapsed && !qrow.leaving
-            accessibleLabel: qrow.spokenName()
-            focusRadius: 8
-            // The row is the one control whose pointer and keyboard actions
-            // differ: the pointer's click only opens a ledger, while Return
-            // adds retry for a settled row that has none. So the pointer
-            // keeps its own handler and the primitive's keyboard/reader
-            // path runs rowActivate.
+            cursorShape: qrow.expandable ? Qt.PointingHandCursor : Qt.ArrowCursor
+            activeFocusOnTab: qrow.rowFocusable
+            Accessible.role: Accessible.Button
+            Accessible.name: qrow.spokenName()
+            Accessible.onPressAction: qrow.rowActivate()
+            Keys.onReturnPressed: function (event) {
+              if (!event.isAutoRepeat) {
+                event.accepted = true
+                qrow.rowActivate()
+              }
+            }
+            Keys.onEnterPressed: function (event) {
+              if (!event.isAutoRepeat) {
+                event.accepted = true
+                qrow.rowActivate()
+              }
+            }
+            Keys.onSpacePressed: function (event) {
+              if (!event.isAutoRepeat) {
+                event.accepted = true
+                qrow.rowActivate()
+              }
+            }
             onClicked: qrow.qtoggle()
-            onTriggered: qrow.rowActivate()
             // Fetch the track list as soon as the peek starts so the
             // sliver shows real titles, not just "Loading tracks…".
             onContainsMouseChanged: {
               if (containsMouse && qrow.expandable && !qrow.qexp && !(host.queueTracks[model.qid]))
                 waves.loadQueueTracks(model.qid)
+            }
+            // The focus ring TapAction draws for its hosts: an overlay, so
+            // the card's own fill/border recipe is never repainted.
+            Rectangle {
+              anchors.fill: parent
+              radius: 8
+              color: "transparent"
+              border.width: 2
+              border.color: accent
+              visible: cardHover.activeFocus
             }
           }
           ColumnLayout {
@@ -759,7 +788,7 @@ Drawer {
                   focusRadius: 4
                   // A row on its way out (collapsed Completed or leaving)
                   // must not keep a stop on its invisible controls.
-                  activeFocusOnTab: qrow.visible && !qrow.collapsed && !qrow.leaving
+                  activeFocusOnTab: qrow.rowFocusable
                   onTriggered: waves.retryQueueItem(model.qid)
                 }
               }
@@ -778,7 +807,7 @@ Drawer {
                   focusRadius: 3
                   // Same gate as the card: a collapsed or leaving row's ✕
                   // is not on screen and must not be a tab stop.
-                  activeFocusOnTab: qrow.visible && !qrow.collapsed && !qrow.leaving
+                  activeFocusOnTab: qrow.rowFocusable
                   onTriggered: qrow.giveUp()
                 }
               }

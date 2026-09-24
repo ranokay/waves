@@ -218,6 +218,30 @@ def _focus(q, finder_js: str) -> None:
     q(scene_js(f"var c = {finder_js}; if (c) c.forceActiveFocus();"))
 
 
+def _check_finder(host_js: str) -> str:
+    """A JS expression naming the checkbox tap area inside a host."""
+    return f"findFirst({host_js}, function (o) {{ return Number(o.Accessible.role) === {_ROLE_CHECKBOX}; }})"
+
+
+def _press_checkbox(problems: list[str], q, settle, root, finder_js: str, key, checked_js: str, what: str) -> None:
+    """A gate checkbox is a named checkbox tab stop, and ``key`` ticks it."""
+    from PySide6.QtTest import QTest
+
+    facts = _control_facts(q, finder_js)
+    if facts is None or not facts["focusable"] or not facts["name"]:
+        problems.append(f"{what} is not a named tab stop: {facts}")
+        return
+    if facts["role"] != _ROLE_CHECKBOX:
+        problems.append(f"{what} is not exposed as a checkbox: {facts}")
+        return
+    _focus(q, finder_js)
+    settle(80)
+    QTest.keyClick(root, key)
+    settle(150)
+    if not bool(q(checked_js)):
+        problems.append(f"the key press on {what} never ticked it")
+
+
 def _spoken_name(q, object_name: str) -> str:
     """The spoken name of the named control, or "" when it is not in the tree."""
     return q(
@@ -521,7 +545,7 @@ def _run_scenario() -> int:
 
 
 def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QPoint, Qt
     from PySide6.QtTest import QTest
 
     booted = boot_main_qml()
@@ -747,6 +771,46 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     problems.extend(
         f"a queue row control is not a named tab stop: {row}" for row in rows if not row["name"] or not row["focusable"]
     )
+
+    # The pointer path is unchanged: a real click on the album row's card
+    # opens its ledger exactly once per click (the keyboard's retry must not
+    # ride the click, and no handler pair may toggle it twice), and a click
+    # on a settled row's card reaches no row action.
+    def _card_point(name: str) -> dict | None:
+        raw = q(
+            scene_js(f"""
+        var c = findFirst(queueDrawer.contentItem, function (o) {{
+            return o.objectName === "queueRowCard" && ("" + o.Accessible.name) === "{name}";
+        }});
+        if (!c) return null;
+        var p = c.mapToItem(null, c.width / 2, c.height / 2);
+        return JSON.stringify({{ x: Math.round(p.x), y: Math.round(p.y) }});
+    """)
+        )
+        return json.loads(raw) if raw is not None else None
+
+    album_point = _card_point("Rolling Album by Artist")
+    if album_point is None:
+        problems.append("the album row's card is not in the tree to click")
+    else:
+        before = len(calls)
+        QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(album_point["x"], album_point["y"]))
+        settle(300)
+        if not bool(q("queueExpanded[9002] === true")):
+            problems.append("a click on the album row's card never opened its ledger")
+        if len(calls) != before:
+            problems.append(f"a click on the album row's card reached a row action: {calls[before:]}")
+        QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(album_point["x"], album_point["y"]))
+        settle(300)
+        if bool(q("queueExpanded[9002] === true")):
+            problems.append("a second click on the album row's card never closed its ledger")
+    failed_point = _card_point("Broken Song by Artist")
+    if failed_point is not None:
+        before = len(calls)
+        QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(failed_point["x"], failed_point["y"]))
+        settle(250)
+        if len(calls) != before:
+            problems.append(f"a click on a settled row's card reached a row action: {calls[before:]}")
 
     qd = scoped_q(q, "queueDrawer.background")
     qd("queueCloseBtn.forceActiveFocus()")
@@ -1110,19 +1174,16 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         # The gate's checkbox answers the keyboard too: its tap area is a
         # named checkbox tab stop, and Space ticks it, which is what arms
         # ACKNOWLEDGE.
-        terms_finder = "findFirst(ackChk, function (o) { return Number(o.Accessible.role) === 44; })"
-        terms_chk = _control_facts(q, terms_finder)
-        if terms_chk is None or not terms_chk["focusable"] or not terms_chk["name"]:
-            problems.append(f"the terms gate's checkbox is not a named tab stop: {terms_chk}")
-        elif terms_chk["role"] != _ROLE_CHECKBOX:
-            problems.append(f"the terms gate's checkbox is not exposed as a checkbox: {terms_chk}")
-        else:
-            _focus(q, terms_finder)
-            settle(80)
-            QTest.keyClick(root, Qt.Key_Space)
-            settle(150)
-            if not bool(q("ackChk.checked")):
-                problems.append("Space on the terms checkbox never ticked it")
+        _press_checkbox(
+            problems,
+            q,
+            settle,
+            root,
+            _check_finder("ackChk"),
+            Qt.Key_Space,
+            "ackChk.checked",
+            "the terms gate's checkbox",
+        )
         if not bool(ack.property("enabled")) or not bool(ack.property("activeFocusOnTab")):
             problems.append("ticking the terms checkbox never enabled its ACKNOWLEDGE action")
     q("termsGate.visible = false")
@@ -1270,33 +1331,31 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     # reached through its own control id rather than a root-down walk.
     q("exitGate.open = true")
     settle(300)
-    exit_finder = "findFirst(exitSkip, function (o) { return Number(o.Accessible.role) === 44; })"
-    exit_chk = _control_facts(q, exit_finder)
-    if exit_chk is None or not exit_chk["focusable"] or not exit_chk["name"]:
-        problems.append(f"the exit gate's checkbox is not a named tab stop: {exit_chk}")
-    else:
-        _focus(q, exit_finder)
-        settle(80)
-        QTest.keyClick(root, Qt.Key_Space)
-        settle(150)
-        if not bool(q("exitSkip.checked")):
-            problems.append("Space on the exit gate's checkbox never ticked it")
+    _press_checkbox(
+        problems,
+        q,
+        settle,
+        root,
+        _check_finder("exitSkip"),
+        Qt.Key_Space,
+        "exitSkip.checked",
+        "the exit gate's checkbox",
+    )
     q("exitGate.open = false")
     settle(250)
 
     q("root.catDlPrompt = {path: 'playlists/1', title: 'Category', count: 2}")
     settle(300)
-    cd_finder = "findFirst(cdSkip, function (o) { return Number(o.Accessible.role) === 44; })"
-    cd_chk = _control_facts(q, cd_finder)
-    if cd_chk is None or not cd_chk["focusable"] or not cd_chk["name"]:
-        problems.append(f"the bulk-download gate's checkbox is not a named tab stop: {cd_chk}")
-    else:
-        _focus(q, cd_finder)
-        settle(80)
-        QTest.keyClick(root, Qt.Key_Return)
-        settle(150)
-        if not bool(q("cdSkip.checked")):
-            problems.append("Return on the bulk-download checkbox never ticked it")
+    _press_checkbox(
+        problems,
+        q,
+        settle,
+        root,
+        _check_finder("cdSkip"),
+        Qt.Key_Return,
+        "cdSkip.checked",
+        "the bulk-download checkbox",
+    )
     q("root.catDlDismiss()")
     settle(150)
 
