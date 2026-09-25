@@ -95,24 +95,41 @@ jobs:
           fi
           [ "$ok" -eq 1 ] || { echo "::error::flatpak smoke-launch never reached a healthy state"; exit 1; }
 
+      - name: Checksum
+        # Portable per-asset SHA256, same "<hex>  <filename>" coreutils format
+        # the release legs emit: the sidecar is what sign-manifest covers.
+        run: |
+          cd dist
+          ASSET="waves_${{ matrix.OS_ARCH }}.flatpak"
+          python -c "import hashlib,sys; p=sys.argv[1]; open(p+'.sha256','w').write(hashlib.sha256(open(p,'rb').read()).hexdigest()+'  '+p+chr(10))" "$ASSET"
+          cat "$ASSET.sha256"
       - name: Upload the bundle artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: waves_${{ matrix.OS_ARCH }}.flatpak
-          path: dist/waves_${{ matrix.OS_ARCH }}.flatpak
+          path: |
+            dist/waves_${{ matrix.OS_ARCH }}.flatpak
+            dist/waves_${{ matrix.OS_ARCH }}.flatpak.sha256
 
       # Upload, never create: the release workflow creates the (draft) Release
       # before its matrix starts, and a find-or-create here could race it into
-      # duplicate or unsigned releases (the v0.1.2 incident). If the Release
-      # does not exist yet, the bundle stays a workflow artifact.
+      # duplicate or unsigned releases (the v0.1.2 incident). The draft appears
+      # within the first minutes of the release run while this leg still builds,
+      # so wait for it briefly; if it never appears the bundle stays a workflow
+      # artifact (and sign-manifest will refuse to sign without its sidecar).
       - name: Attach the bundle to the release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          for _ in $(seq 1 6); do
+            gh release view "$TAG" >/dev/null 2>&1 && break
+            echo "waiting for release $TAG ..."
+            sleep 120
+          done
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "dist/waves_${{ matrix.OS_ARCH }}.flatpak" --clobber
+            gh release upload "$TAG" "dist/waves_${{ matrix.OS_ARCH }}.flatpak" "dist/waves_${{ matrix.OS_ARCH }}.flatpak.sha256" --clobber
           else
             echo "::warning::release $TAG does not exist (yet); the bundle stays a workflow artifact"
           fi

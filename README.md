@@ -173,7 +173,7 @@ Waves then knows it's Homebrew‑managed: the in‑app "Update & restart" button
 flatpak install --user waves_linux-x64.flatpak
 ```
 
-The bundle runs in a minimal sandbox (network, your home folder, GPU, audio) and never updates itself: the in‑app updater defers to `flatpak update`. A music library on a NAS or external drive needs a one‑time `flatpak override --filesystem=...`; see `packaging/flatpak/README.md`.
+The bundle runs in a minimal sandbox (network, your home folder, GPU, audio) and never updates itself: the in‑app updater defers to `flatpak update`. Each `.flatpak` ships with a `.sha256` sidecar covered by the release's signed `SHA256SUMS` manifest. A music library on a NAS or external drive needs a one‑time `flatpak override --filesystem=...`; see `packaging/flatpak/README.md`.
 
 Prefer to run from source?
 
