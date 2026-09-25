@@ -12,13 +12,14 @@ fail=0
 
 out() { printf '%s\n' "$*"; }
 run() {
-  out "\$ $*"
+  out "\$ $(printf '%q ' "$@")"
   "$@" 2>&1 || { rc=$?; out "(exit $rc)"; fail=1; }
 }
-if [ -n "$dest" ]; then exec > >(tee "$dest"); fi
 
 rev="$(git rev-parse HEAD 2>/dev/null)" || { echo "error: cannot determine revision" >&2; exit 1; }
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ -n "$dest" ]; then exec > >(tee "$dest"); fi
+
 out "revision: $rev ($branch)"
 out ""
 out "## bundle (docs/evidence/bundle-inspection.md)"
