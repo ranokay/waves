@@ -26,7 +26,7 @@ SH_START='<!-- star-history:start -->'
 SH_END='<!-- star-history:end -->'
 
 if ! git remote get-url "$PUBLIC_REMOTE" >/dev/null 2>&1; then
-  if git remote get-url "$FALLBACK_REMOTE" >/dev/null 2>&1; then
+  if url="$(git remote get-url "$FALLBACK_REMOTE" 2>/dev/null)" && [[ "$url" == *iamprivacy/Waves* ]]; then
     echo "note: remote '$PUBLIC_REMOTE' is not configured; using '$FALLBACK_REMOTE' (the chart is upstream iamprivacy/Waves's)." >&2
     PUBLIC_REMOTE="$FALLBACK_REMOTE"
   else

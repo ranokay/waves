@@ -6,35 +6,49 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 fail=0
 say() { printf '%s\n' "$*"; }
-bad() { say "FAIL: $1 (fix: $2)"; fail=1; }
+bad() { say "FAIL: $1 (fix: $2)"; fail=$((fail + 1)); }
 ok() { say "ok: $1"; }
 
 say "versions:"
 command -v mise >/dev/null && say "  mise $(mise --version 2>/dev/null)" || say "  mise: not on PATH"
-command -v uv >/dev/null && say "  uv $(uv --version 2>/dev/null)" || bad "uv not on PATH" "install uv, then mise run install"
+have_uv=0
+if command -v uv >/dev/null; then
+  have_uv=1
+  say "  uv $(uv --version 2>/dev/null)"
+else
+  bad "uv not on PATH" "install uv, then mise run install"
+fi
 say "  python $(python3 --version 2>&1)"
 
 # Stale editable install from the tidaler -> waves rename.
-if uv pip show tidaler >/dev/null 2>&1; then
+# Without uv the install state is unknown, so skip rather than misreport.
+if [ "$have_uv" -eq 0 ]; then
+  say "skip: uv-dependent checks need uv"
+elif uv pip show tidaler >/dev/null 2>&1; then
   bad "stale 'tidaler' distribution still installed" "uv pip uninstall tidaler && mise run install"
 else
   ok "no stale 'tidaler' distribution"
 fi
-if uv pip show waves >/dev/null 2>&1; then
+if [ "$have_uv" -eq 0 ]; then
+  :
+elif uv pip show waves >/dev/null 2>&1; then
   ok "'waves' distribution installed"
 else
   bad "'waves' distribution not installed (app runs as Waves-dev, looks signed out)" "mise run install"
 fi
 
 # Lockfile is the environment.
-if uv lock --check >/dev/null 2>&1; then
+if [ "$have_uv" -eq 0 ]; then
+  :
+elif uv lock --check >/dev/null 2>&1; then
   ok "uv.lock in sync"
 else
   bad "uv.lock drift" "uv sync --all-extras (or mise run install)"
 fi
 
-# Pre-commit hooks.
-if [ -x .git/hooks/pre-commit ] || [ -f .git/hooks/pre-commit ]; then
+# Pre-commit hooks (git-dir aware: .git is a file in worktrees).
+hook="$(git rev-parse --git-path hooks/pre-commit 2>/dev/null)"
+if [ -n "${hook:-}" ] && [ -x "$hook" ]; then
   ok "pre-commit hook installed"
 else
   bad "pre-commit hook missing" "mise run install"
@@ -46,7 +60,9 @@ if [ -f waves/desktop/qml/Main.qml ]; then
 else
   bad "qml/Main.qml missing" "reconcile the checkout against develop"
 fi
-if uv run --locked --no-sync python -c "import waves" >/dev/null 2>&1; then
+if [ "$have_uv" -eq 0 ]; then
+  :
+elif uv run --locked --no-sync python -c "import waves" >/dev/null 2>&1; then
   ok "'import waves' resolves"
 else
   bad "'import waves' fails" "mise run install"
