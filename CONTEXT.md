@@ -65,3 +65,19 @@ _Avoid_: My Tidal, account home
 **Saved vs Library**:
 Two different collections. Saved means the files Waves itself downloaded, each carrying the provider it came from; Library means every audio file in the folder Waves scans, whoever put it there. A saved file is normally part of the library, but the two answer different questions: what Waves saved, and what is on disk.
 _Avoid_: downloads (for Library), collection (for either)
+
+**Capability**:
+What a provider can do (search, download, lyrics, browse, and the rest, enumerated in `waves/providers/base.py`). Surfaces consult these instead of branching on provider identity, so provider-scoped areas stay honest without `if`-branches.
+_Avoid_: feature flag, permission
+
+**Edition**:
+One release among an album's releases — a reissue, remaster, anniversary, or regional pressing. The discography collapses duplicates to the most complete edition by default; "Show every edition on artist pages" lists them all again.
+_Avoid_: version, release, variant
+
+**Held**:
+A queued download waiting its turn or paused at a boundary (an unreachable folder, a missing runtime), resuming automatically when the path clears. Queue state, distinct from Stopped.
+_Avoid_: pending, paused, waiting
+
+**Twin**:
+Files sharing one track's attach identity (title, artist, and play length) that count as a single track — an Atmos copy attaching to its stereo canonical entry, never counted twice.
+_Avoid_: duplicate, match, copy
