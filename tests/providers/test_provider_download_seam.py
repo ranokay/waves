@@ -22,6 +22,7 @@ from support.provider_fakes import BareProvider
 from tidalapi.media import AudioMode, Quality
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 from waves.download import Download
 from waves.model.downloader import TrackStreamInfo
 from waves.providers import (
@@ -560,11 +561,12 @@ class TestJobSpecDispatch:
                 worker.run()
 
         stub = SimpleNamespace()
+        stub._jobs = JobRuntime()
         stub._logged_in = True
-        stub._job_aborts = {}
-        stub._job_signals = {}
-        stub._job_dls = {}
-        stub._job_tracks = {}
+        stub._jobs.aborts = {}
+        stub._jobs.signals = {}
+        stub._jobs.dls = {}
+        stub._jobs.tracks = {}
         stub._merge_plans = {}
         stub._redownload_overrides = set()
         stub._library_claim_overrides = set()
@@ -591,7 +593,7 @@ class TestJobSpecDispatch:
         stub._queue_item = lambda qid: stub._queue_index.get(qid)
         stub._row_ask = lambda qid: None
         stub._build_download = _build_download
-        stub._release_job_signals = lambda qid: stub._job_signals.pop(qid, None)
+        stub._release_job_signals = lambda qid: stub._jobs.signals.pop(qid, None)
         stub._gate_reachability = lambda retry, media_id: True
         stub._library_claim_media = lambda media, album=None: stub._library_claim_records.append(album) or False
         arm_dispatch(stub)

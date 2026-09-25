@@ -33,6 +33,7 @@ from support.dispatch_stub import arm_dispatch, arm_queue
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 
 
 class _Sig:
@@ -55,6 +56,7 @@ def _queue_stub(statuses):
     """A queue of albums in the given statuses, plus one live discography
     rollup spanning all of them, with the real withdrawal slots bound."""
     s = _Stub()
+    s._jobs = JobRuntime()
     s._queue = [
         {"qid": n, "media_id": f"m{n}", "status": st, "type": "album", "name": f"r{n}"}
         for n, st in enumerate(statuses, 1)
@@ -62,8 +64,8 @@ def _queue_stub(statuses):
     s._queue_lock = Lock()
     s._queue_index = {it["qid"]: it for it in s._queue}
     s._queue_emit_suspended = False
-    s._job_specs = {it["qid"]: object() for it in s._queue}
-    s._job_aborts = {}
+    s._jobs.specs = {it["qid"]: object() for it in s._queue}
+    s._jobs.aborts = {}
     s._pending_qids = deque(it["qid"] for it in s._queue)
     s._event_run = Event()
     s._paused = False
@@ -77,7 +79,7 @@ def _queue_stub(statuses):
     s.folderRemaining = _Sig()
     s.statuses = []
     s._set_status = s.statuses.append
-    s._job_objs = {}
+    s._jobs.objs = {}
     s._artist_groups = {
         "art1": {"keys": {it["media_id"] for it in s._queue}, "done": set(), "failed": set(), "prog": {}}
     }
@@ -170,7 +172,7 @@ def test_cancelling_a_rollup_leaves_other_queue_rows_alone():
     s = _queue_stub(["queued", "queued"])
     s._queue.append({"qid": 9, "media_id": "other", "status": "queued", "type": "album", "name": "r9"})
     s._queue_index[9] = s._queue[-1]
-    s._job_specs[9] = object()
+    s._jobs.specs[9] = object()
     s.cancelQueuedGroup("art1")
     assert [it["qid"] for it in s._queue] == [9]
 
@@ -191,7 +193,7 @@ def test_cancel_of_a_running_row_leaves_the_credit_to_its_worker():
     body's cancel branch); the slot crediting it too would be a double count
     of a member the worker still owns."""
     s = _queue_stub(["running", "queued"])
-    s._job_aborts[1] = Event()
+    s._jobs.aborts[1] = Event()
     s.cancelQueueItem(1)
     grp = s._artist_groups["art1"]
     assert "m1" not in grp["done"], "the slot must not settle a member its worker still owns"
@@ -332,6 +334,7 @@ def test_a_bump_with_the_generation_still_current_emits_normally():
 # --------------------------------------------------------------------------- #
 def _enqueue_stub():
     s = _Stub()
+    s._jobs = JobRuntime()
     s._scan_gen = 1
     # The scan marks every album key exempt from the edition scan before it
     # emits the batch; a refused batch has to give those marks back.
@@ -420,6 +423,7 @@ def test_stale_track_and_video_batches_are_refused_the_same_way():
 # --------------------------------------------------------------------------- #
 def _download_stub(existing_status="queued", existing_quality="LOSSLESS"):
     s = _Stub()
+    s._jobs = JobRuntime()
     s._logged_in = True
     s._download_gate = lambda: "ok"
     s._ffmpeg_gate_holds = lambda media_id, retry: False
@@ -443,9 +447,9 @@ def _download_stub(existing_status="queued", existing_quality="LOSSLESS"):
     s.downloadState = _Sig()
     s.enqueued = []
     s._enqueue = lambda *a, **kw: s.enqueued.append(a) or 99
-    s._job_objs = {}
-    s._job_specs = {}
-    s._job_tracks = {}
+    s._jobs.objs = {}
+    s._jobs.specs = {}
+    s._jobs.tracks = {}
     s._merge_plans = {}
     s._pending_qids = deque()
     s._pump_queue = lambda: None
@@ -528,6 +532,7 @@ class _BodyDownload:
 
 def _body_stub(fail=False):
     s = _Stub()
+    s._jobs = JobRuntime()
     s._logged_in = True
     s._download_gate = lambda: "ok"
     s._ffmpeg_gate_holds = lambda media_id, retry: False
@@ -553,13 +558,13 @@ def _body_stub(fail=False):
     s._set_queue_progress = lambda qid, pct: None
     s._set_status = lambda msg: None
     s._bump_download_groups = lambda media_id, pct, status: None
-    s._release_job_signals = lambda qid: s._job_signals.pop(qid, None)
-    s._job_aborts = {}
-    s._job_signals = {}
-    s._job_tracks = {}
+    s._release_job_signals = lambda qid: s._jobs.signals.pop(qid, None)
+    s._jobs.aborts = {}
+    s._jobs.signals = {}
+    s._jobs.tracks = {}
     # The finally clause pops it; unseeded, that raised too and hid the same
     # ground.
-    s._job_dls = {}
+    s._jobs.dls = {}
     s._merge_plans = {}
     s._redownload_overrides = {"m1"}
     s._library_claim_overrides = set()

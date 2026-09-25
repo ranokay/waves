@@ -14,6 +14,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 
 
 class _Stub:
@@ -26,6 +27,7 @@ def _bind(stub, name):
 
 def _stub():
     stub = _Stub()
+    stub._jobs = JobRuntime()
     stub._queue = []
     stub._queue_index = {}
     stub._queue_seq = 0
@@ -38,9 +40,9 @@ def _stub():
     stub._qdirty_changed = {}
     stub._qdirty_removed = []
     stub._qdirty_full = False
-    stub._job_specs = {}
-    stub._job_objs = {}
-    stub._job_tracks = {}
+    stub._jobs.specs = {}
+    stub._jobs.objs = {}
+    stub._jobs.tracks = {}
     stub._job_owned = {}
     stub._job_fetched = {}
     # A queued row states the tier its job will ask for; the setting behind
@@ -52,7 +54,7 @@ def _stub():
     # And likewise the library-skip gate a row pins for its job (see
     # test_queue_row_pins_the_library_skip.py).
     stub._library_bulk_skip_on = lambda: True
-    stub._job_aborts = {}
+    stub._jobs.aborts = {}
     # A withdrawn row gives up its REDOWNLOAD force (test_queue_withdrawal_rollup).
     stub._redownload_overrides = set()
     stub._library_claim_overrides = set()
@@ -174,7 +176,7 @@ def _retry_all_stub():
     qids = [stub._enqueue(n, "track", media_id=n) for n in ("A", "B", "C", "D", "E", "F")]
     for qid, st in zip(qids, ("failed", "running", "failed", "cancelled", "done", "cancelled"), strict=False):
         stub._queue_item(qid)["status"] = st
-        stub._job_objs[qid] = object()  # the row's kept live object
+        stub._jobs.objs[qid] = object()  # the row's kept live object
     return stub, qids, retried
 
 

@@ -33,6 +33,7 @@ from types import SimpleNamespace
 import pytest
 
 from waves.desktop import diagnostics
+from waves.desktop.job_runtime import JobRuntime
 
 
 def _qt_app():
@@ -120,7 +121,7 @@ def test_shutdown_stops_the_watchdog_before_it_drains_the_pools():
         _teardown_library_watch=lambda: None,
         _library_gen=0,
         _event_abort=None,
-        _job_aborts={},
+        _jobs=JobRuntime(),
         _event_run=None,
         _ffmpeg_abort=None,
         dl_pool=_Pool("dl"),

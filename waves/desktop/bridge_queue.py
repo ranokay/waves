@@ -199,7 +199,7 @@ class QueueMixin:
         qid = self._running_qid
         if qid is None or qid not in set(gone):
             return
-        ev = self._job_aborts.get(qid)
+        ev = self._jobs.aborts.get(qid)
         if ev is not None:
             ev.set()
 
@@ -562,13 +562,13 @@ class QueueMixin:
         whichever sibling registered last, the roll-up sums those mirrored
         values, and because the roll-up only ever rises the wrong answer sticks
         for the rest of the job."""
-        if not self._job_dls:
+        if not self._jobs.dls:
             self._track_poll.stop()
             self._pct_last.clear()  # bound the broadcast-gate memo to one session
             self._prune_job_tracks()  # nothing is running: settle per-row state whose row has gone
             return
-        for qid, dl in list(self._job_dls.items()):
-            reg = self._job_tracks.get(qid)
+        for qid, dl in list(self._jobs.dls.items()):
+            reg = self._jobs.tracks.get(qid)
             if not reg:
                 continue
             try:
@@ -651,7 +651,7 @@ class QueueMixin:
             # go: keeping it would leave a list per row on both sides of the
             # bridge for a row neither side still has.
             return
-        reg = self._job_tracks.get(int(qid), {})
+        reg = self._jobs.tracks.get(int(qid), {})
         # Predicted skips (_predict_skips), applied only where the run has not
         # spoken for that track yet: a live event is fact and always wins.
         marks = self._job_owned.get(int(qid), {})
@@ -721,12 +721,12 @@ class QueueMixin:
         moment rather than held for the session."""
         if qids is None:
             live = {it["qid"] for it in self._queue}
-            qids = [q for q in list(self._job_tracks) + list(self._job_objs) if q not in live]
+            qids = [q for q in list(self._jobs.tracks) + list(self._jobs.objs) if q not in live]
         for qid in qids:
-            self._job_tracks.pop(qid, None)
+            self._jobs.tracks.pop(qid, None)
             self._job_owned.pop(qid, None)
             self._job_fetched.pop(qid, None)
-            self._job_objs.pop(qid, None)
+            self._jobs.objs.pop(qid, None)
 
     @Slot(str)
     def cancelQueuedGroup(self, gid: str) -> None:
@@ -820,7 +820,7 @@ class QueueMixin:
         withdrawn: list[str] = []
         gone = self._remove_rows_where(lambda q: q["status"] == "queued", withdrawn)
         for qid in gone:
-            self._job_specs.pop(qid, None)
+            self._jobs.specs.pop(qid, None)
         self._abort_if_in_flight(gone)
         # A clear has to reach the stash too, or an item held for the download
         # folder to come back re-downloads itself when the share answers, over
@@ -859,7 +859,7 @@ class QueueMixin:
         withdrawn: list[str] = []
         gone = self._remove_rows_where(lambda q: q["status"] != "running", withdrawn)
         for qid in gone:
-            self._job_specs.pop(qid, None)
+            self._jobs.specs.pop(qid, None)
         self._abort_if_in_flight(gone)
         # The stash goes with the rows, for the same reason as the Queued
         # section's clear: nothing downloads invisibly behind a clear, and a
@@ -874,7 +874,7 @@ class QueueMixin:
 
     @Slot(int)
     def removeQueueItem(self, qid: int) -> None:
-        self._job_specs.pop(qid, None)
+        self._jobs.specs.pop(qid, None)
         withdrawn: list[str] = []
         if self._remove_row(qid, withdrawn):
             self._abort_if_in_flight((qid,))

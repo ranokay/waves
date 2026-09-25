@@ -32,6 +32,7 @@ from tidalapi.media import Track
 
 from waves import download as download_mod
 from waves.desktop.backend import WavesBridge, _TrackedDownload
+from waves.desktop.job_runtime import JobRuntime
 from waves.download import Download
 from waves.progress import Progress
 
@@ -65,8 +66,9 @@ class _PollStub:
     with the real poller and the real roll-up bound on."""
 
     def __init__(self, dl, reg, total):
-        self._job_dls = {7: dl}
-        self._job_tracks = {7: reg}
+        self._jobs = JobRuntime()
+        self._jobs.dls = {7: dl}
+        self._jobs.tracks = {7: reg}
         self._track_poll = MagicMock()
         self._pct_last = {}
         self.queueTrackPct = _Signal()

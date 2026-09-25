@@ -27,10 +27,12 @@ from support.dispatch_stub import arm_dispatch
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge, _JobSpec
+from waves.desktop.job_runtime import JobRuntime
 
 
 class _Signal:
     def __init__(self):
+        self._jobs = JobRuntime()
         self.emits: list = []
 
     def emit(self, *args) -> None:
@@ -58,13 +60,14 @@ class _Stub:
     """Enough bridge for one job body, with the gate under the test's control."""
 
     def __init__(self, stop_during_the_probe: bool) -> None:
+        self._jobs = JobRuntime()
         self._stop_during_the_probe = stop_during_the_probe
         self._logged_in = True
         self.providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: _media())}
-        self._job_aborts: dict[int, Event] = {}
-        self._job_signals: dict = {}
-        self._job_dls: dict = {}
-        self._job_tracks: dict = {}
+        self._jobs.aborts: dict[int, Event] = {}
+        self._jobs.signals: dict = {}
+        self._jobs.dls: dict = {}
+        self._jobs.tracks: dict = {}
         self._merge_plans: dict = {}
         self._redownload_overrides: set = set()
         self._library_claim_overrides: set = set()
@@ -106,14 +109,14 @@ class _Stub:
         return self.dl
 
     def _release_job_signals(self, qid) -> None:
-        self._job_signals.pop(qid, None)
+        self._jobs.signals.pop(qid, None)
 
     def _gate_reachability(self, retry, media_id) -> bool:
         """The probe. STOP lands while it is running, exactly as stopAll
         does: every row is marked cancelled and every job's abort is set."""
         if self._stop_during_the_probe:
             self._queue[0]["status"] = "cancelled"
-            self._job_aborts[1].set()
+            self._jobs.aborts[1].set()
         return True  # the mount answered in the end
 
 
@@ -149,9 +152,9 @@ def test_a_stop_during_the_probe_never_re_lights_the_button():
 def test_a_stopped_job_lets_go_of_everything_it_was_holding():
     stub = _run(stop_during_the_probe=True)
 
-    assert stub._job_aborts == {}
-    assert stub._job_signals == {}
-    assert stub._job_dls == {}, "the per-track poll keeps ticking on a job it can still see"
+    assert stub._jobs.aborts == {}
+    assert stub._jobs.signals == {}
+    assert stub._jobs.dls == {}, "the per-track poll keeps ticking on a job it can still see"
 
 
 def test_a_job_nobody_stopped_still_starts():

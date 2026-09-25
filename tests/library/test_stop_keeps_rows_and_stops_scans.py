@@ -40,6 +40,7 @@ from support.dispatch_stub import arm_queue
 from support.paths import QML_MAIN
 
 from waves.desktop.backend import _RETRYABLE, WavesBridge, _stop_check_for
+from waves.desktop.job_runtime import JobRuntime
 
 # ---------------------------------------------------------------------------
 # 1. STOP during a discography scan
@@ -324,13 +325,14 @@ class _QueueStub:
     _row_object = WavesBridge._row_object
 
     def __init__(self, statuses):
+        self._jobs = JobRuntime()
         self._queue = [
             {"qid": n, "media_id": f"m{n}", "status": st, "type": "album", "name": f"r{n}"}
             for n, st in enumerate(statuses, 1)
         ]
         self._queue_lock = Lock()
         self._queue_index = {it["qid"]: it for it in self._queue}
-        self._job_aborts = {it["qid"]: Event() for it in self._queue if it["status"] in ("queued", "running")}
+        self._jobs.aborts = {it["qid"]: Event() for it in self._queue if it["status"] in ("queued", "running")}
         self._event_run = Event()
         self._paused = True
         self.pausedChanged = _Signal()
@@ -350,7 +352,7 @@ class _QueueStub:
         self._pending_qids = deque()
         arm_queue(self)
         # Every row keeps its live object now (RETRY re-downloads from it).
-        self._job_objs = {it["qid"]: object() for it in self._queue}
+        self._jobs.objs = {it["qid"]: object() for it in self._queue}
 
     def _emit_queue(self):
         # The real gate: a suspended emit is dropped, the batch emits once.
@@ -380,7 +382,7 @@ def test_stop_marks_queued_and_running_rows_stopped_and_keeps_every_row():
     # ones are untouched.
     assert stub.by_status() == ["done", "failed", "cancelled", "cancelled", "cancelled"]
     # The transfers themselves are still ended.
-    assert all(ev.is_set() for ev in stub._job_aborts.values())
+    assert all(ev.is_set() for ev in stub._jobs.aborts.values())
     # The scan generation moved, so any scan in flight is stale.
     assert stub._scan_gen == 1
     # Buttons of the stopped rows (and the artist aggregate) go back to idle;

@@ -190,6 +190,7 @@ from .bridge_surfaces import (
     _source_rows,
 )
 from .ffmpeg_manager import FfmpegCancelled, FfmpegManager
+from .job_runtime import JobRuntime
 from .library_proc import LibraryWorker
 from .updater import AppUpdater, UpdateCancelled
 
@@ -3917,13 +3918,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
       flush then ships only the rows concerned via the three delta signals
       (``queueRowsAdded`` / ``queueRowsChanged`` / ``queueRowsRemoved``),
       with ``queueChanged`` kept for the rare full resync. A queued row
-      waits as a ``_JobSpec`` (plus ``_job_objs``, its live object, kept for
+      waits as a ``_JobSpec`` (plus ``_jobs.objs``, its live object, kept for
       RETRY); ``_pump_queue`` builds the actual job when the pool is free,
       one at a time, so the running job alone holds the per-job companions
-      keyed by qid: ``_job_aborts`` (cancel it without stopping the rest),
-      ``_job_signals`` (the GUI-thread progress relay), and ``_job_tracks``
-      (per-track rows behind the queue drawer expansion, kept for terminal
-      rows until their row leaves).
+      on the runtime keyed by qid: ``_jobs.aborts`` (cancel it without stopping
+      the rest), ``_jobs.signals`` (the GUI-thread progress relay), and
+      ``_jobs.tracks`` (per-track rows behind the queue drawer expansion,
+      kept for terminal rows until their row leaves).
     * Session caches: ``_lib_cache`` (My Music pages + scroll offsets),
       ``_browse_root_cache``/``_browse_pages`` (editorial pages), and
       ``_artist_cache`` (stale-while-revalidate artist pages). A snapshot of
@@ -4722,7 +4723,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # row waits as a _JobSpec; _pump_queue (GUI thread only) builds the
         # job and hands it to dl_pool when nothing is running, in queue
         # order, and the Worker's end comes back through _jobFinished.
-        self._job_specs: dict[int, _JobSpec] = {}
+        # The per-qid lifecycle records (specs, live objects, abort events,
+        # signal relays, track registries, live downloads) live on the job
+        # runtime, which also owns the GUI-thread construction contract.
+        self._jobs = JobRuntime(self)
         self._pending_qids: deque[int] = deque()
         self._running_qid: int | None = None
         self._jobFinished.connect(self._on_job_finished, QtCore.Qt.ConnectionType.QueuedConnection)
@@ -4731,8 +4735,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # re-downloads from it, so a retry never depends on the row's object
         # still being in the search-scoped _objs buckets (a new search clears
         # them) and never has to re-fetch it, which across a STOPPED
-        # discography would be one request per album.
-        self._job_objs: dict[int, object] = {}
+        # discography would be one request per album. (Lives on the runtime.)
         # Quarantined copies one failed row produced (qid -> paths). The row
         # carries a count so the drawer can offer open/delete; the paths stay
         # here so removing or retrying the row cannot strand them in QML.
@@ -4745,19 +4748,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._base_ok: tuple[str, float] = ("", 0.0)
         # Per-job abort events keyed by queue id, so a single running download
         # can be cancelled (the global _event_abort would stop everything).
-        self._job_aborts: dict[int, Event] = {}
+        # (Lives on the runtime.)
         # Strong refs to each job's progress relay so its bound slot stays
         # connected for the whole download (dropped in _download's finally).
-        self._job_signals: dict[int, _ProgressSignals] = {}
+        # (Lives on the runtime.)
         # Per-job track registry (qid -> {track_id: row}) behind the queue
         # drawer's album expansion. Mutated only on the GUI thread (via the
         # relay's queued track_event); kept after a job ends so an expanded
         # done row still shows its tracks, pruned with the queue rows.
-        self._job_tracks: dict[int, dict[str, dict]] = {}
+        # (Lives on the runtime.)
         # Live Download objects per running job, the poll timer reads their
         # Progress tasks for per-track percentages (thread-safe: Progress
-        # guards its task list with an internal lock).
-        self._job_dls: dict[int, Download] = {}
+        # guards its task list with an internal lock). (Lives on the runtime.)
         # Coalesce the broadcast progress fan-out (see _report_pct). Keyed by
         # media id -> (last_broadcast_pct, monotonic_time). GUI-thread only, so
         # no lock; cleared when the queue drains (in _poll_track_progress).
@@ -10020,13 +10022,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     def _track_lifecycle(self, qid: int, ev: dict) -> None:
         """Record one track's state change and stream it to QML. Called on the
         GUI thread via _ProgressSignals.track_event (queued connection)."""
-        if qid not in self._job_tracks and self._queue_item(qid) is None:
+        if qid not in self._jobs.tracks and self._queue_item(qid) is None:
             # The row was cleared or cancelled while this event was crossing
             # the thread hop. Seeding a registry for it would build per
             # track state nothing can ever show or free: qids are never
             # reused, so it would sit there for the rest of the session.
             return
-        reg = self._job_tracks.setdefault(qid, {})
+        reg = self._jobs.tracks.setdefault(qid, {})
         row = reg.get(ev["id"])
         if row is None:
             row = {**ev, "pct": 0.0}
@@ -10035,7 +10037,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # the collection being downloaded regardless of how the download
             # itself turns out, so this is learned once, unconditionally on
             # outcome. Free (no extra fetch): the id is already in ev.
-            sig = getattr(self, "_job_signals", {}).get(qid)
+            sig = self._jobs.signals.get(qid)
             if sig is not None and getattr(sig, "_collection", False):
                 try:
                     self._ownership.record_members_add(sig._media_id, [ev["id"]])
@@ -12792,7 +12794,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._jobSignalsReleased.emit(qid)
 
     def _drop_job_signals(self, qid: int) -> None:
-        sig = self._job_signals.pop(qid, None)
+        sig = self._jobs.signals.pop(qid, None)
         if sig is not None:
             sig.deleteLater()
 
@@ -13025,7 +13027,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if collection or merge_plan is not None:
                 # Seed the per-track registry. A merge plan knows its exact track
                 # list up front; a plain collection fills in as tracks start.
-                self._job_tracks[qid] = _seed_merge_registry(merge_plan, self.providers[CTX_TIDAL])
+                self._jobs.tracks[qid] = _seed_merge_registry(merge_plan, self.providers[CTX_TIDAL])
                 if merge_plan is not None:
                     # A plain collection learns its membership in _track_lifecycle,
                     # on first sight of each track. A merge pre-seeds every row here,
@@ -13033,7 +13035,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # members at all: after a restart a fully-downloaded album read
                     # as "not downloaded" until something else loaded its track list.
                     try:
-                        self._ownership.record_members_add(media_id, list(self._job_tracks[qid]))
+                        self._ownership.record_members_add(media_id, list(self._jobs.tracks[qid]))
                         self.collectionMembershipChanged.emit(media_id)
                     except Exception:
                         logger.debug("Could not record merge collection membership", exc_info=True)
@@ -13041,8 +13043,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # then the row costs its dict, the live object the row dressing reads,
             # and the spec's name for the object -- who serves it, what it is, and
             # the namespaced id it resolves from at dispatch.
-            self._job_objs[qid] = obj
-            self._job_specs[qid] = _JobSpec(
+            self._jobs.objs[qid] = obj
+            self._jobs.specs[qid] = _JobSpec(
                 provider_id=provider_id,
                 kind=type_media,
                 object_id=f"{provider_id}:{media_id}",
@@ -13405,8 +13407,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             queued_any = True
             # The row's kept object for retries: Apple rows never enter _objs,
             # so the retry path reads them back from here (see _row_object).
-            self._job_objs[qid] = row
-            self._job_specs[qid] = _JobSpec(
+            self._jobs.objs[qid] = row
+            self._jobs.specs[qid] = _JobSpec(
                 provider_id=CTX_APPLE,
                 kind=type_media,
                 object_id=f"{CTX_APPLE}:{str(media_id).removeprefix(f'{CTX_APPLE}:')}",
@@ -13494,9 +13496,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
     def _finish_job(self, qid: int) -> None:
         """Drop a finished job's abort token, progress relay and poll entry."""
-        self._job_aborts.pop(qid, None)
+        self._jobs.aborts.pop(qid, None)
         self._release_job_signals(qid)
-        self._job_dls.pop(qid, None)
+        self._jobs.dls.pop(qid, None)
 
     def _apple_job_hooks(self) -> AppleJobHooks:
         """The bridge-owned services one Apple job reaches, as plain callables.
@@ -14214,7 +14216,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return
         while self._pending_qids:
             qid = self._pending_qids.popleft()
-            spec = self._job_specs.pop(qid, None)
+            spec = self._jobs.specs.pop(qid, None)
             item = self._queue_item(qid)
             if spec is None or item is None or item.get("status") != "queued":
                 continue
@@ -14253,12 +14255,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # Per-job abort event so this one download can be cancelled on its own
         # (the shared _event_abort would stop every concurrent download).
         job_abort = Event()
-        self._job_aborts[qid] = job_abort
+        self._jobs.aborts[qid] = job_abort
         # Each job gets its own relay so concurrent downloads don't cross-talk.
         # The relay wires the per-track signal to a bound slot (see
         # _ProgressSignals); hold a strong ref so it lives for the whole job.
-        signals = _ProgressSignals(self, qid, media_id, collection)
-        self._job_signals[qid] = signals
+        # Built through the runtime: relay construction is GUI-thread only,
+        # and the factory resolves from this module's globals at call time.
+        signals = self._jobs.construct_signals(_ProgressSignals, qid, media_id, collection)
         # The bulk claim gate rides only on collection jobs: a single-item
         # click is an explicit ask and is never second-guessed by a tag match.
         # DOWNLOAD ANYWAY on a claimed album registers an override for that
@@ -14304,8 +14307,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 chooser_toggles=getattr(spec, "chooser_toggles", None),
             )
         if dl is not None and (collection or merge_plan is not None):
-            self._job_tracks.setdefault(qid, {})
-            self._job_dls[qid] = dl
+            self._jobs.tracks.setdefault(qid, {})
+            self._jobs.dls[qid] = dl
             if not self._track_poll.isActive():
                 self._track_poll.start()
 
@@ -14332,11 +14335,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._set_queue_status(qid, "cancelled")
                 self.downloadState.emit(media_id, "")
                 self._bump_download_groups(media_id, None, "failed")
-                self._job_aborts.pop(qid, None)
+                self._jobs.aborts.pop(qid, None)
                 self._release_job_signals(qid)
                 # Drop the track-poll registration too, or the 500 ms per-track
                 # progress timer keeps polling this dead job forever.
-                self._job_dls.pop(qid, None)
+                self._jobs.dls.pop(qid, None)
 
             # Cancelled between being handed to the pool and picked up (STOP
             # in that instant).
@@ -14433,9 +14436,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # abandoned rather than replayed is made where the abandoning
                 # happens, in dismissDownloadFolderNudge (stopAll drops the
                 # groups outright instead, so it credits nothing).
-                self._job_aborts.pop(qid, None)
+                self._jobs.aborts.pop(qid, None)
                 self._release_job_signals(qid)
-                self._job_dls.pop(qid, None)
+                self._jobs.dls.pop(qid, None)
                 # Put the merge plan back before the row goes. A clear pressed
                 # while this probe was running took the row away on the GUI
                 # thread BEFORE the stash above existed, so the withdrawal's
@@ -14500,9 +14503,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     if not job_abort.is_set() and (spec.audio_type or "") in ("stereo", "atmos"):
                         saw = bool(dl._saw_atmos) if spec.audio_type == "atmos" else bool(dl._saw_stereo)
                         if not saw:
-                            self._job_aborts.pop(qid, None)
+                            self._jobs.aborts.pop(qid, None)
                             self._release_job_signals(qid)
-                            self._job_dls.pop(qid, None)
+                            self._jobs.dls.pop(qid, None)
                             self._remove_row(qid)
                             self._emit_queue()
                             return
@@ -14538,9 +14541,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     if not job_abort.is_set() and (spec.audio_type or "") in ("stereo", "atmos"):
                         saw = bool(dl._saw_atmos) if spec.audio_type == "atmos" else bool(dl._saw_stereo)
                         if not saw:
-                            self._job_aborts.pop(qid, None)
+                            self._jobs.aborts.pop(qid, None)
                             self._release_job_signals(qid)
-                            self._job_dls.pop(qid, None)
+                            self._jobs.dls.pop(qid, None)
                             self._remove_row(qid)
                             self._emit_queue()
                             return
@@ -14637,11 +14640,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     self._set_status(f"Failed {name}{': ' + reason if reason else ''}")
                     devlog.done("download", f"FAILED {type_media} id={media_id}", devlog.clock() - t0)
             finally:
-                self._job_aborts.pop(qid, None)
+                self._jobs.aborts.pop(qid, None)
                 self._release_job_signals(qid)
                 # Worker-thread pop is safe (the GUI poller iterates a list()
                 # snapshot); the poll timer stops itself once this is empty.
-                self._job_dls.pop(qid, None)
+                self._jobs.dls.pop(qid, None)
 
         self.dl_pool.start(Worker(work))
 
@@ -17479,9 +17482,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._scan_gen += 1
         # The one job in flight gets its abort; the rows behind it never
         # became jobs, so dropping their specs is all it takes to stop them.
-        for ev in list(self._job_aborts.values()):
+        for ev in list(self._jobs.aborts.values()):
             ev.set()
-        self._job_specs.clear()
+        self._jobs.specs.clear()
         self._pending_qids.clear()
         # Downloads held for an unreachable download folder are neither
         # running nor queued: the gate withdrew their rows, so the sweep below
@@ -17577,10 +17580,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # A queued row's spec must go with it, or its turn starts it
             # anyway; a running row's abort ends the fetch in place and its
             # worker settles without erasing the reason above.
-            self._job_specs.pop(qid, None)
+            self._jobs.specs.pop(qid, None)
             with contextlib.suppress(ValueError):
                 self._pending_qids.remove(qid)
-            ev = self._job_aborts.get(qid)
+            ev = self._jobs.aborts.get(qid)
             if ev is not None:
                 ev.set()
             mid = str((self._queue_index.get(qid) or {}).get("media_id", "") or "")
@@ -17654,10 +17657,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._event_abort.set()
         except Exception:
             logger.debug("shutdown: no global abort event", exc_info=True)
-        for ev in list(self._job_aborts.values()):
+        for ev in list(self._jobs.aborts.values()):
             ev.set()
         # Nothing queued behind the running job may start during teardown.
-        getattr(self, "_job_specs", {}).clear()
+        # Defensive getattr like the lines above: shutdown also runs on
+        # partial stand-ins in tests.
+        jobs = getattr(self, "_jobs", None)
+        if jobs is not None:
+            jobs.specs.clear()
         getattr(self, "_pending_qids", deque()).clear()
         if getattr(self, "_event_run", None) is not None:
             self._event_run.set()  # release any paused worker so it hits the abort
@@ -18124,7 +18131,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     @Slot(int)
     def cancelQueueItem(self, qid: int) -> None:
         """Cancel one download (running or queued) and drop it from the queue."""
-        ev = self._job_aborts.get(qid)
+        ev = self._jobs.aborts.get(qid)
         if ev is not None:
             # Set only this job's abort gate. Do NOT set the global _event_run
             # here: while paused it would resume EVERY other worker (they park in
@@ -18135,7 +18142,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             ev.set()
         # A row still waiting has no job to abort: dropping its spec is what
         # cancels it (_pump_queue skips a row without one).
-        self._job_specs.pop(qid, None)
+        self._jobs.specs.pop(qid, None)
         item = self._queue_item(qid)
         if item is not None:
             self.downloadState.emit(str(item.get("media_id", "")), "")
@@ -18210,7 +18217,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         search-scoped bucket, else the row's provider cache through its
         download adapter, else nothing (the caller re-fetches). A
         provider-run row's cache never needs the network on a hit."""
-        obj = self._job_objs.get(item["qid"])
+        obj = self._jobs.objs.get(item["qid"])
         if obj is None:
             obj = self._objs.get(item["type"], {}).get(item["media_id"])
         if obj is None:

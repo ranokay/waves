@@ -21,6 +21,7 @@ from support.updater_fakes import prep_updater as _prep
 from waves.desktop import backend as backend_mod
 from waves.desktop import signing
 from waves.desktop.backend import WavesBridge, _graft_scroll_growth
+from waves.desktop.job_runtime import JobRuntime
 from waves.desktop.updater import UpdateCancelled
 from waves.metadata.naming import name_builder_album_artist
 from waves.paths import FILENAME_LENGTH_MAX, format_path_media, path_file_uniquify
@@ -400,8 +401,9 @@ class _LifecycleStub:
     _track_lifecycle = WavesBridge._track_lifecycle
 
     def __init__(self, base):
-        self._job_tracks: dict = {1: {}}
-        self._job_signals: dict = {}
+        self._jobs = JobRuntime()
+        self._jobs.tracks: dict = {1: {}}
+        self._jobs.signals: dict = {}
         self._own_pool = _HeldPool()
         self.queueTrackState = _Signal()
         self.stamps: list = []
@@ -443,17 +445,17 @@ def test_a_track_landing_under_the_current_folder_stamps_liveness(tmp_path):
 
 
 def test_release_job_signals_defers_the_pop_through_the_queued_hop():
-    stub = SimpleNamespace(_job_signals={}, _jobSignalsReleased=_Signal())
+    stub = SimpleNamespace(_jobs=JobRuntime(), _jobSignalsReleased=_Signal())
     dropped: list = []
     sig = SimpleNamespace(deleteLater=lambda: dropped.append("deleted"))
-    stub._job_signals[7] = sig
+    stub._jobs.signals[7] = sig
 
     WavesBridge._release_job_signals(stub, 7)
-    assert 7 in stub._job_signals, "the relay must survive the worker's release call"
+    assert 7 in stub._jobs.signals, "the relay must survive the worker's release call"
     assert stub._jobSignalsReleased.emits == [(7,)]
 
     WavesBridge._drop_job_signals(stub, 7)
-    assert stub._job_signals == {} and dropped == ["deleted"]
+    assert stub._jobs.signals == {} and dropped == ["deleted"]
 
 
 # A failed preview remux removes its orphaned output temp.
@@ -512,7 +514,8 @@ class _ShutdownStub:
         self._event_abort = Event()
         self._event_run = Event()
         self._ffmpeg_abort = Event()
-        self._job_aborts: dict = {}
+        self._jobs = JobRuntime()
+        self._jobs.aborts: dict = {}
         self.dl_pool = _Pool(self.log, "dl")
         self._scan_pool = _Pool(self.log, "scan")
         self.threadpool = _Pool(self.log, "main")

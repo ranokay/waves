@@ -34,6 +34,8 @@ from support.qml import (
     scoped_q,
 )
 
+from waves.desktop.job_runtime import JobRuntime
+
 
 class _Signal:
     def __init__(self):
@@ -45,15 +47,16 @@ class _Signal:
 
 class _Stub:
     def __init__(self):
+        self._jobs = JobRuntime()
         from waves.desktop import backend
 
-        self._job_tracks = {}
+        self._jobs.tracks = {}
         # The ledger merge also overlays an expansion's predicted skips
         # (test_queue_owned_prediction.py); empty here, so every row in
         # this scenario is the live registry's answer alone.
         self._job_owned = {}
         self._job_fetched = {}
-        self._job_signals = {}
+        self._jobs.signals = {}
         # The row these events belong to: a registry writer ignores a qid
         # whose row has gone, so a cleared row cannot re-create per-row state.
         self._queue = [{"qid": 1, "media_id": "m1", "status": "running"}]
@@ -75,7 +78,7 @@ def test_the_registry_keeps_the_owned_copy_and_how_it_was_found():
     # Seeded as pending by an earlier merge, then the skip lands on it.
     b._track_lifecycle(1, {"id": "9", "title": "t", "status": "pending"})
     b._track_lifecycle(1, {"id": "9", "status": "skipped", "quality": "HI-RES", "owned": "own"})
-    row = b._job_tracks[1]["9"]
+    row = b._jobs.tracks[1]["9"]
     assert (row["status"], row["quality"], row["owned"], row["pct"]) == ("skipped", "HI-RES", "own", 100.0)
     # A first-sight skip (no earlier row) keeps them too, and the merge
     # carries both onto the fetched order.

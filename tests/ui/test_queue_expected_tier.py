@@ -45,6 +45,8 @@ from support.qml import (
     scoped_q,
 )
 
+from waves.desktop.job_runtime import JobRuntime
+
 
 # ---- bridge side --------------------------------------------------------------
 class _Signal:
@@ -59,15 +61,16 @@ class _Stub:
     """Just enough bridge for the registry."""
 
     def __init__(self, target="HI-RES"):
+        self._jobs = JobRuntime()
         from waves.desktop import backend
 
-        self._job_tracks = {}
+        self._jobs.tracks = {}
         # The ledger merge also overlays an expansion's predicted skips
         # (test_queue_owned_prediction.py); empty here, so every row in
         # this scenario is the live registry's answer alone.
         self._job_owned = {}
         self._job_fetched = {}
-        self._job_signals = {}
+        self._jobs.signals = {}
         # The row these events belong to: a registry writer ignores a qid
         # whose row has gone, so a cleared row cannot re-create per-row state.
         self._queue = [{"qid": 1, "media_id": "m1", "status": "running"}]
@@ -102,16 +105,16 @@ def test_a_setting_change_leaves_every_queued_row_alone():
     # it). One hidden behind a helper is caught by the drawer scenario below,
     # which reads the target from the real setting and watches the pill.
     code = "\n".join(line for line in src.splitlines() if not line.strip().startswith("#"))
-    for touch in ("_queue", "_job_tracks", "_emit_queue", "queueChanged", "askQuality", "_target_tier"):
+    for touch in ("_queue", "_jobs.tracks", "_emit_queue", "queueChanged", "askQuality", "_target_tier"):
         assert touch not in code, f"applySettings reaches for {touch!r}: a setting change may not retarget the queue"
 
 
 def test_running_event_seeds_the_track_ceiling_and_a_later_one_keeps_it():
     b = _Stub()
     b._track_lifecycle(1, {"id": "9", "title": "t", "status": "running", "expected": "LOSSLESS"})
-    assert b._job_tracks[1]["9"]["expected"] == "LOSSLESS"
+    assert b._jobs.tracks[1]["9"]["expected"] == "LOSSLESS"
     b._track_lifecycle(1, {"id": "9", "status": "done"})  # the early done carries none
-    assert b._job_tracks[1]["9"]["expected"] == "LOSSLESS"
+    assert b._jobs.tracks[1]["9"]["expected"] == "LOSSLESS"
     assert b.queueTrackState.calls[-1][1]["expected"] == "LOSSLESS"
 
 
@@ -125,7 +128,7 @@ def test_merge_carries_the_ceiling_from_the_fetch_and_from_the_registry():
             self._merge_queue_tracks = backend.WavesBridge._merge_queue_tracks.__get__(self, _B)
 
     b = _B()
-    b._job_tracks[1] = {"2": {"id": "2", "title": "b", "status": "running", "pct": 0.0, "expected": "HI-RES"}}
+    b._jobs.tracks[1] = {"2": {"id": "2", "title": "b", "status": "running", "pct": 0.0, "expected": "HI-RES"}}
     b._merge_queue_tracks(
         1,
         [
