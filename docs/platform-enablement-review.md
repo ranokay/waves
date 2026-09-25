@@ -45,48 +45,17 @@ Tests run in the manual `master` workflow on ubuntu-24.04 only (Python 3.12,
 | FFmpeg manager (`ffmpeg_manager.py`)                           | all                   | martin-riedl for macOS/Linux, BtbN builds for Windows; `.exe` naming                                                                                                              |
 | Library worker (`library_worker.py`)                           | all                   | Stdlib-only child process; symlink-aware walk                                                                                                                                     |
 
-## CI evidence (2026-09-15/16; runs at `b67bc72` unless noted)
+## CI evidence
 
-| Leg                       | Run           | Result                 | Detail                                                                                                                                                  |
-| ------------------------- | ------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linux x64                 | `34928310777` | built + smoke-launched | 1h53m build; the offscreen smoke-launch passed                                                                                                          |
-| Linux arm64               | `34929398611` | built                  | 3h53m; no smoke-launch by design                                                                                                                        |
-| Windows x64               | `34928310777` | **failed**             | MSVC `fatal error C1002: compiler is out of heap space in pass 2` after 2h29m, on yt-dlp's `youtube.jsc._builtin.ejs` and `lazy_extractors` generated C |
-| Windows arm64             | `34929398611` | **failed**             | the same C1002 on `lazy_extractors`, after 2h45m                                                                                                        |
-| Windows x64, low-memory   | `35019374456` | **failed**             | 3h04m; the flag reached Nuitka; `cl` stack overflow (`Error 3221225725` = `0xC00000FD`) on `lazy_extractors`                                            |
-| Windows arm64, low-memory | `35019374456` | **failed**             | 3h11m; the C1002 heap failure persists on `lazy_extractors`; every other module compiled                                                                |
-
-Linux tests on develop are green in the same window (master run `34928309207`:
-quality, tests on Python 3.12, 3.13 and 3.14).
-
-## CI evidence (2026-09-21; #244, macOS architectures with up-front leg selection)
-
-| Leg                             | Run           | Result                 | Detail                                                                                                                                                                                                                   |
-| ------------------------------- | ------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| macOS intel, cold               | `35575720429` | built + smoke-launched | ~39 min at `917d1b0`; Nuitka cache miss (new key from the workflow change), ccache miss on 1,791 files; smoke-launch healthy, 139 Mach-O files honor the 15.0 floor; artifact `waves_macos-intel` (~101 MB) downloadable |
-| macOS apple-silicon, cold       | `35575720429` | built + smoke-launched | ~18 min at `917d1b0`; Nuitka cache miss; smoke-launch healthy, 137 Mach-O files honor the 15.0 floor; artifact `waves_macos-apple-silicon` (~93 MB) downloadable                                                         |
-| macOS intel, warm               | `35583595525` | built + smoke-launched | ~24 min at `d36ecb3` (vs ~43 second-cold at the same SHA); exact-primary-key restore, ccache `cache hit: 1791`; artifact downloadable                                                                                    |
-| macOS apple-silicon, warm       | `35583595525` | built + smoke-launched | ~21 min at `d36ecb3` (vs ~20 second-cold at the same SHA); exact-primary-key restore (no ccache summary in the log); artifact downloadable                                                                               |
-| macOS intel, final cold         | `35588929771` | built + smoke-launched | ~41 min at `088e9c9` (the branch tip: env-passed filter, legs in the cache key, fail-empty selection); miss on the widened key, ccache miss on 1791; artifact downloadable                                               |
-| macOS apple-silicon, final cold | `35588929771` | built + smoke-launched | ~20 min at `088e9c9`; same miss for the same reason; artifact downloadable                                                                                                                                               |
-
-All four ran with `only=macos-intel,macos-apple-silicon`; the six excluded
-legs never started (no phantom jobs). The cache rule behind the cold/warm
-contrast: the Nuitka key hashes `mise.toml`, `tools/build_waves.sh`,
-`pyproject.toml`, the release workflow, `build-legs.json` and `uv.lock`,
-so any edit to those inputs intentionally colds the cache — which is what
-happened to the second dispatch at `d36ecb3` (run `35579368870`, same
-filter, both legs green): the workflow file itself had changed, so the key
-moved. The warm re-run above shared `d36ecb3`'s inputs exactly, hence the
-exact-key restore. Full rows in `docs/evidence/platform-builds.md`.
-
-Reading note (historical — the workflow has since changed): at the time of
-these runs the `only` filter still created every matrix job; legs the filter
-excluded finished "success" with every step skipped, so job conclusions alone
-could look like passes. Since #244 the filter selects matrix legs up front
-in the compute job, so an excluded leg never starts and every conclusion
-means a real build. The failed Windows jobs above were genuine build
-attempts; the raw logs live in the run pages above.
+The run-by-run tables used to live here; they now live in a single place,
+`docs/evidence/platform-builds.md`, which this document no longer duplicates.
+Status: the Windows park is lifted — run
+[35836125855](https://github.com/ranokay/waves/actions/runs/35836125855)
+(2026-09-23) revalidated both Windows legs on the exclusion recipe
+(`windows-2022` built and smoke-launched healthy, `windows-11-arm` built),
+and ADR 0009 is superseded accordingly. The fast test jobs for Windows and
+macOS (#439) are wired into the manual workflow; their first runs are still
+owed, as is the opt-in account suite on those platforms (see Gaps below).
 
 ## Why Windows fails while Linux passes
 
@@ -146,12 +115,12 @@ Options assessed for the parked fix:
 - A larger runner — the x64 failure is `cl`'s own stack, so memory alone may
   not remove it.
 
-Decision (2026-09-16): park Windows and record the blocker; Windows artifacts
+Decision (2026-09-16, historical — superseded by the revalidation in CI
+evidence above): park Windows and record the blocker; Windows artifacts
 stay unpublished for now. The low-memory mode stays in place, because it is
 the prerequisite for any of the options and costs only build time, which the
 cache makes one-time. The exclusion above ships in
-`WAVES_NUITKA_FLAGS`, so no build compiles the module; the Windows legs still
-owe their own revalidation, see the VS 2026 note below.)
+`WAVES_NUITKA_FLAGS`, so no build compiles the module.
 
 ## Gaps and risks
 
@@ -164,22 +133,20 @@ owe their own revalidation, see the VS 2026 note below.)
    tier's performance and reliability there are unverified.
 4. **No live account or container verification** on Windows or Linux; the
    opt-in account suite has only run on macOS Apple silicon.
-5. **Windows bundle builds are blocked by the bundled engine's compile
+5. **Windows bundle builds were blocked by the bundled engine's compile
    size.** yt-dlp's generated `lazy_extractors` module cannot be compiled by
    MSVC on hosted runners (stack overflow on x64, heap exhaustion on arm64),
    even serially. The recipe excludes that module, so no
-   build compiles it; the Windows legs have not been re-run since, and Windows
-   artifacts stay unpublished until they are. Windows arm64 runners migrate to
-   Visual Studio 2026 on 2026-09-21, which may change the compiler's behavior;
-   revalidate then.
+   build compiles it; the Windows legs have since been revalidated green (run
+   `35836125855`, 2026-09-23; ADR 0009 superseded) and the park is lifted.
 
 ## Recommendations
 
-- Windows needs a successful build with the exclusion in place (the smallest
-  of the recorded options, now shipped; the eager fallback is proven), or one
-  of the alternatives: amend ADR 0004 to drop the engine there, or move to a
-  compiler/runner that handles the module. The low-memory flag stays either
-  way.
+- Windows needed a successful build with the exclusion in place — done via
+  the revalidation in CI evidence above (the eager fallback is proven). The
+  low-memory flag stays either way. Remaining alternatives, if the recipe
+  ever regresses: amend ADR 0004 to drop the engine there, or move to a
+  compiler/runner that handles the module.
 - Add a fast-domain test job for Windows (no QML/ffmpeg markers) to the manual
   workflow; it is the cheapest way to catch pure-Python platform breaks.
 - Either smoke-launch arm64 artifacts or state in the workflow why not, so
