@@ -59,7 +59,7 @@ gives you structural context (callers, dependents, test coverage) that file sear
 
 ### Workflow
 
-1. The graph auto-updates on file changes (via hooks).
+1. The edit hook is best-effort: when `list_graph_stats_tool` reports `head_matches_build: false`, run `mise run graph` (`uvx code-review-graph update`). Semantic search is keyword fallback until embeddings are intentionally generated.
 2. Use `detect_changes_tool` for code review.
 3. Use `get_affected_flows_tool` to understand impact.
 4. Use `query_graph_tool` pattern="tests_for" to check coverage.
