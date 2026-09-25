@@ -203,6 +203,8 @@ None of that changes the welcome. If something breaks, behaves oddly, or just fe
 
 ## Star History
 
+Chart for upstream [`iamprivacy/Waves`](https://github.com/iamprivacy/Waves) — rendered there, mirrored here via `mise run star-history`.
+
 <!-- star-history:start -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/star-history/star-history-dark.svg">
