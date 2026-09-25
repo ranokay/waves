@@ -67,11 +67,11 @@ Two different collections. Saved means the files Waves itself downloaded, each c
 _Avoid_: downloads (for Library), collection (for either)
 
 **Capability**:
-What a provider can do (search, download, lyrics, browse, and the rest, enumerated in `waves/providers/base.py`). Surfaces consult these instead of branching on provider identity, so provider-scoped areas stay honest without `if`-branches.
+What a provider can do (search, download, lyrics, browse, and the rest).
 _Avoid_: feature flag, permission
 
 **Edition**:
-One release among an album's releases — a reissue, remaster, anniversary, or regional pressing. The discography collapses duplicates to the most complete edition by default; "Show every edition on artist pages" lists them all again.
+One release among an album's releases — a reissue, remaster, anniversary, or regional pressing.
 _Avoid_: version, release, variant
 
 **Held**:
