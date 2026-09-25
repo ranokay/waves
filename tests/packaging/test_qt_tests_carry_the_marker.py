@@ -9,7 +9,8 @@ run, and the run reports a complete pass while a whole surface was never
 exercised.
 
 The marker rules: a test that spawns an interpreter or constructs Qt
-itself is `qml` (Qt) or `integration` (non-Qt), never unmarked, and the
+itself is `qml` (Qt) or `integration` (non-Qt, including `bash` script runs),
+never unmarked; a host-tooling spawn already covered by `platform` counts too.
 unmarked Qt nodes route their skips through the require-qml-aware helper.
 This guard checks the marker half by parsing the test sources; the runtime
 half is `require_qt()` in the shared helper (skip without Qt, fail under
@@ -34,6 +35,11 @@ _QT_CONSTRUCTOR = re.compile(r"Q[A-Z]\w*")
 # Child-process calls whose arguments can name the test's own file or
 # interpreter. A test that spawns one of these crosses a process boundary.
 _CHILD_PROCESS_CALLS = frozenset({"subprocess.run", "subprocess.Popen", "subprocess.check_output", "subprocess.call"})
+
+# A shell spawned by name: `subprocess.run([bash, ...])` crosses the same
+# process boundary as `sys.executable` without naming the interpreter, so the
+# old file/interpreter check stayed green on every bash-spawning test.
+_BASH_SPAWN = re.compile(r"\bbash\b")
 
 
 def _called_name(call: ast.Call) -> str:
@@ -99,9 +105,19 @@ def _spawns_child(node: ast.AST) -> bool:
     for call in ast.walk(node):
         if not isinstance(call, ast.Call):
             continue
-        if _called_name(call) in _CHILD_PROCESS_CALLS and (_uses_this_interpreter(call) or _uses_this_file(call)):
+        if _called_name(call) in _CHILD_PROCESS_CALLS and (
+            _uses_this_interpreter(call) or _uses_this_file(call) or _BASH_SPAWN.search(ast.unparse(call))
+        ):
             return True
     return False
+
+
+def test_a_bash_spawn_counts_as_a_child_process():
+    """Negative: the old file/interpreter-only check stayed green on
+    `subprocess.run([bash, ...])`, so bash-spawning tests carried no marker."""
+    node = ast.parse("import subprocess\nsubprocess.run([bash, 'tools/build_waves.sh'])\n").body[1].value
+    assert not _uses_this_file(node) and not _uses_this_interpreter(node)
+    assert _spawns_child(node)
 
 
 def _module_helpers(tree: ast.Module) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -134,20 +150,20 @@ def _reaches(
 
 
 def _module_pytestmark_marks(tree: ast.Module) -> set[str]:
-    """The markers a module-level `pytestmark` names (qml, integration)."""
+    """The markers a module-level `pytestmark` names (qml, integration, platform)."""
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         if not any(isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets):
             continue
         text = ast.unparse(node.value)
-        return {marker for marker in ("qml", "integration") if marker in text}
+        return {marker for marker in ("qml", "integration", "platform") if marker in text}
     return set()
 
 
 def _node_marks(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     text = " ".join(ast.unparse(decorator) for decorator in node.decorator_list)
-    return {marker for marker in ("qml", "integration") if marker in text}
+    return {marker for marker in ("qml", "integration", "platform") if marker in text}
 
 
 def test_every_qt_or_process_test_declares_its_marker():
@@ -177,9 +193,9 @@ def test_every_qt_or_process_test_declares_its_marker():
                 if "qml" not in marks:
                     offenders.append(f"{path.relative_to(TESTS_ROOT)}::{node.name} (drives Qt, needs qml)")
                 continue
-            if _reaches(node, helpers, _spawns_child) and not marks:
+            if _reaches(node, helpers, _spawns_child) and not (marks & {"qml", "integration", "platform"}):
                 offenders.append(
-                    f"{path.relative_to(TESTS_ROOT)}::{node.name} (spawns a child, needs qml or integration)"
+                    f"{path.relative_to(TESTS_ROOT)}::{node.name} (spawns a child, needs qml, integration or platform)"
                 )
 
     assert not offenders, (

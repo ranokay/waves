@@ -94,8 +94,15 @@ def test_a_playlist_waiting_on_the_folder_sweep_never_lights_the_progress_bar():
     assert stub.downloadState.calls == [("p1", "preparing")]
 
 
-def test_every_pre_queue_hand_off_uses_the_same_word():
-    """No entry point may publish "running" for a click it has not queued."""
+def test_wiring_every_pre_queue_hand_off_uses_the_same_word():
+    """No entry point may publish "running" for a click it has not queued.
+
+    Wiring pin, not behavior coverage: the five acknowledgements (refetch, apple
+    refetch, playlist warm, category warm, edition scan) share one word the QML
+    buttons draw as a wait. The behavior is proved by the refetch/warm tests
+    above plus test_the_buttons_draw_preparing_as_a_wait_not_a_download below;
+    this fences the count so a sixth hand-off cannot introduce a second word.
+    """
     src = (REPO_ROOT / "waves" / "desktop" / "backend.py").read_text()
     # The pre-queue acknowledgements, each immediately before a return or
     # a worker dispatch. Any of them saying "running" is the progress-bar flash.

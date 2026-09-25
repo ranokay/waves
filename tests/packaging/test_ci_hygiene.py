@@ -21,6 +21,7 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
 from support.paths import REPO_ROOT
 
@@ -218,6 +219,7 @@ def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:
     return result.stdout
 
 
+@pytest.mark.integration
 def test_windows_builds_ask_nuitka_for_low_memory():
     """MSVC dies compiling yt-dlp's generated C at full parallelism, so both
     Windows legs must build with one C compiler job (the numbers live in
@@ -252,6 +254,7 @@ def test_yt_dlp_floor_matches_gamdl_and_exclusion_is_real():
     )
 
 
+@pytest.mark.integration
 def test_the_build_excludes_yt_dlps_lazy_extractor_table():
     """Every host must exclude yt-dlp's lazy extractor table: its
     generated C dominated the cold build (the measured numbers live in
@@ -268,6 +271,7 @@ def test_the_build_excludes_yt_dlps_lazy_extractor_table():
         assert "--nofollow-import-to=yt_dlp.extractor.lazy_extractors" in command, env
 
 
+@pytest.mark.integration
 def test_the_build_includes_the_pycryptodome_native_modules():
     """PyCryptodome loads its native modules by name through ctypes
     (load_pycryptodome_raw_lib), which Nuitka's import following cannot see:
@@ -306,6 +310,7 @@ def test_the_build_includes_the_pycryptodome_native_modules():
     assert missing == [], f"the include list dropped: {missing}"
 
 
+@pytest.mark.integration
 def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
     """A trim allowlist built for the signing surface alone
     would delete the native modules Apple downloads load by name

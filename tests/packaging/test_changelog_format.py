@@ -63,28 +63,88 @@ def test_subheadings_follow_canonical_order():
         )
 
 
-def test_bullets_are_never_wrapped_across_lines():
-    """One bullet, one line: a source newline becomes a break in the Release."""
-    lines = CHANGELOG.read_text(encoding="utf-8").splitlines()
+def _classify(line: str) -> str:
+    """The structural kind of a changelog line: release, fence, blank, heading, bullet, or text."""
+    if line.startswith("## "):
+        return "release"
+    if line.lstrip().startswith("```"):
+        return "fence"
+    if not line.strip():
+        return "blank"
+    if line.startswith("### ") or line.startswith("# "):
+        return "heading"
+    if line.startswith("- "):
+        return "bullet"
+    return "text"
+
+
+def _wrapped_bullet_lines(lines: list[str]) -> list[str]:
+    """Non-blank text hanging directly off a bullet (or its continuation).
+
+    Bullet-scoped, not line-pair-scoped: headings, the footer markup inside a
+    section, and indented blocks after a blank line are not bullets, so starting
+    a wrapped continuation with `<` no longer exempts it. Each release section
+    carries its own state instead of one flag for the whole file.
+    """
     wrapped = []
     in_release = False
     in_fence = False
+    in_bullet = False
     for lineno, line in enumerate(lines, 1):
-        if line.startswith("## "):
-            in_release = True
-        if line.lstrip().startswith("```"):
+        kind = _classify(line)
+        if kind == "fence":
             in_fence = not in_fence
+            in_bullet = False
+        elif in_fence:
             continue
-        previous = lines[lineno - 2] if lineno > 1 else ""
-        if not in_release or in_fence or not line.strip() or not previous.strip():
-            continue
-        # A bullet may carry an indented block (a command, a follow-up
-        # paragraph) below it, but only after a blank line: what is banned is
-        # text hanging directly off the line above, which is a wrap.
-        if line.startswith(("#", "- ", "<")) or previous.lstrip().startswith("<"):
-            continue
-        wrapped.append(f"line {lineno}: {line.strip()[:60]}")
+        elif kind == "release":
+            in_release = True
+            in_bullet = False
+        elif kind in ("blank", "heading") or not in_release:
+            in_bullet = False
+        elif kind == "bullet":
+            in_bullet = True
+        elif in_bullet and lines[lineno - 2].strip():
+            # A bullet may carry an indented block (a command, a follow-up
+            # paragraph) below it, but only after a blank line: what is banned
+            # is text hanging directly off the bullet above, which is a wrap.
+            wrapped.append(f"line {lineno}: {line.strip()[:60]}")
+        else:
+            in_bullet = False
+    return wrapped
+
+
+def test_bullets_are_never_wrapped_across_lines():
+    """One bullet, one line: a source newline becomes a break in the Release."""
+    lines = CHANGELOG.read_text(encoding="utf-8").splitlines()
+    wrapped = _wrapped_bullet_lines(lines)
     assert not wrapped, "write each bullet on one line, unwrapped:\n" + "\n".join(wrapped)
+
+
+def test_no_bullets_live_outside_release_sections():
+    """The preamble carries the format contract in prose; bullets live in sections."""
+    lines = CHANGELOG.read_text(encoding="utf-8").splitlines()
+    first = next((index for index, line in enumerate(lines) if line.startswith("## ")), None)
+    assert first is not None, "CHANGELOG.md has no '## ' release sections"
+    strays = [
+        f"line {lineno}: {line.strip()[:60]}" for lineno, line in enumerate(lines[:first], 1) if line.startswith("- ")
+    ]
+    assert not strays, "bullets outside any release section:\n" + "\n".join(strays)
+
+
+def test_a_bullet_wrapped_with_an_angle_bracket_continuation_fails_the_guard():
+    """Negative: the old line-pair check exempted any continuation starting with
+    `<`, so a wrapped bullet could pass by opening its second line with markup."""
+    lines = ["## Unreleased", "", "### Fixed", "", "- a bullet", "<wrapped continuation>"]
+    assert _wrapped_bullet_lines(lines) == ["line 6: <wrapped continuation>"]
+
+
+def test_section_boundaries_reset_bullet_state():
+    """Negative: state is per-section — a heading ends the previous bullet, so
+    text opening the next section is not a wrap of it, while a real wrap in the
+    new section is still caught. The old single-flag check flagged the opener."""
+    lines = ["## v1", "", "- bullet", "## v2", "plain text", "", "- other", "wrapped"]
+    assert _wrapped_bullet_lines(lines) == ["line 8: wrapped"]
 
 
 def test_issue_references_are_labelled_links():

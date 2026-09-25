@@ -198,13 +198,19 @@ class TestTheSettingsBoxRefusesIllegalCharacters:
         assert WavesBridge.sanitizeFilenameReplacement(None, "?") == ""
         assert WavesBridge.sanitizeFilenameReplacement(None, " - ") == " - "
 
-    def test_the_field_is_marked_for_laundering(self):
+    def test_wiring_the_field_is_marked_for_laundering(self):
+        """The single-char replacement field registers for sanitize-on-save (wiring
+        pin: the launderer itself is proved by the behavioral test above and the
+        filename-torture suite; this fences the field registration)."""
         src = (_UI / "backend.py").read_text()
 
         assert '_SANITIZED_FIELDS = {"filename_illegal_replacement"}' in src
         assert 'extra["sanitize"] = True' in src
 
-    def test_the_box_turns_red_while_the_value_would_not_survive(self):
+    def test_wiring_the_box_turns_red_while_the_value_would_not_survive(self):
+        """The red-outline/hold-save QML machinery reads the engine's launderer
+        (wiring pin: same behavioral backing as above; this fences the QML call
+        sites so the page cannot judge by a rule of its own)."""
         src = (_UI / "qml" / "SettingsPage.qml").read_text()
 
         # SText paints its outline red on `invalid` ...
@@ -213,7 +219,9 @@ class TestTheSettingsBoxRefusesIllegalCharacters:
         assert "invalid: page.sanitizeDirty(modelData)" in src
         assert "waves.sanitizeFilenameReplacement(String(val(f)))" in src
 
-    def test_a_red_field_greys_out_save_instead_of_correcting_it(self):
+    def test_wiring_a_red_field_greys_out_save_instead_of_correcting_it(self):
+        """The held-save button wiring (wiring pin: no cheaper seam than the QML
+        text; the no-silent-rewrite behavior is fenced here, not elsewhere)."""
         # Correcting the value on save flashed "changes saved" over a silent
         # rewrite. The button is held instead, leaving the bad character on
         # screen to be fixed.
