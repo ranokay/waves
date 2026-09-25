@@ -139,6 +139,14 @@ def test_a_bullet_wrapped_with_an_angle_bracket_continuation_fails_the_guard():
     assert _wrapped_bullet_lines(lines) == ["line 6: <wrapped continuation>"]
 
 
+def test_section_boundaries_reset_bullet_state():
+    """Negative: state is per-section — a heading ends the previous bullet, so
+    text opening the next section is not a wrap of it, while a real wrap in the
+    new section is still caught. The old single-flag check flagged the opener."""
+    lines = ["## v1", "", "- bullet", "## v2", "plain text", "", "- other", "wrapped"]
+    assert _wrapped_bullet_lines(lines) == ["line 8: wrapped"]
+
+
 def test_issue_references_are_labelled_links():
     """No bare '#12' anywhere: an issue is named and linked, or not cited."""
     bare = []
