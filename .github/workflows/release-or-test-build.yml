@@ -529,6 +529,15 @@ jobs:
             echo "::error::WAVES_SIGNING_KEY is not set; a tagged release MUST be signed or the in-app updater (fail-closed) will refuse every update. Add the WAVES_SIGNING_KEY secret before tagging."
             exit 1
           fi
+      - name: Verify SHA256SUMS against the baked update key
+        # Fail the release before it goes live when the signing secret does not
+        # match the public key compiled into the shipped binary: a key/secret
+        # mismatch would ship an updater that refuses every update, and no
+        # in-repo test can see it (round-trip tests monkeypatch the key). This
+        # exercises the real verify() over the just-signed manifest bytes.
+        run: |
+          uv run --no-sync python -c "from waves.desktop.signing import UPDATE_PUBLIC_KEY, verify; import sys; ok = verify(open('SHA256SUMS','rb').read(), open('SHA256SUMS.sig').read().strip(), UPDATE_PUBLIC_KEY); sys.exit(0 if ok else 'SHA256SUMS.sig does not verify against the baked UPDATE_PUBLIC_KEY')"
+          echo "SHA256SUMS verifies against the baked update key."
       # The Release body comes from CHANGELOG.md: the section whose heading is
       # exactly "## <tag> (date)". Missing section = empty body + a warning,
       # never a failed release.
