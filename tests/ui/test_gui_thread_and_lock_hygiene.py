@@ -91,7 +91,15 @@ def test_no_slot_resolves_media_objects_on_the_gui_thread():
     resolvers = {"_get_artist", "_get_album", "_get_track"}
     offenders: list[str] = []
 
-    for name, member in vars(WavesBridge).items():
+    # Walk the MRO, not just WavesBridge's own dict: bridge behavior lives in
+    # mixins (bridge_library, bridge_queue), and a vars() sweep would go blind
+    # to every moved slot.
+    members: dict[str, object] = {}
+    for klass in WavesBridge.__mro__:
+        for key, value in vars(klass).items():
+            members.setdefault(key, value)
+
+    for name, member in members.items():
         if not callable(member) or name.startswith("__"):
             continue
         try:

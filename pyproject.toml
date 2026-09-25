@@ -343,7 +343,9 @@ ignore = [
 # The Waves bridge has several inherently branchy but linear functions (the
 # settings-schema builder, the settings dispatcher and the search/discography
 # orchestration) that trip mccabe (C901) without being genuinely complex.
+# The queue pilot (ARCH-01) moved the same shape into bridge_queue.py.
 "waves/desktop/backend.py" = ["C901"]
+"waves/desktop/bridge_queue.py" = ["C901"]
 # The ffmpeg manager's job is to download and run a static ffmpeg build, so it
 # intentionally shells out (S603/S607); install() is one linear sequence (C901);
 # and its raised errors carry deliberately descriptive messages (TRY003).
