@@ -53,3 +53,33 @@ jobs:
 
       - name: Test (strict group)
         run: mise run test-strict
+
+  # The fast group is interpreter-only (no Qt), so these legs need no Qt
+  # runtime libraries: the PySide6 wheels are self-contained on macOS and
+  # Windows. One Python (the repo default, 3.13) per family keeps metered
+  # minutes down; the full 3.12/3.13/3.14 x strict matrix stays on Linux.
+  # Scope decision on #439: test-fast, manual dispatch (test-qml is a one-line
+  # follow-up per job if GUI signal on these families is wanted).
+  test-macos:
+    runs-on: macos-14
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up the environment
+        uses: ./.github/actions/setup-env
+
+      - name: Test (fast group)
+        run: mise run test-fast
+
+  test-windows:
+    runs-on: windows-2022
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up the environment
+        uses: ./.github/actions/setup-env
+
+      - name: Test (fast group)
+        run: mise run test-fast
