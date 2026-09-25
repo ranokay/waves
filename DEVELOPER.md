@@ -181,6 +181,7 @@ until it is clean.
   seam, a stub, or the inherited engine moves.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
+`mise run doctor` first — it detects the stale state — then
 `uv pip uninstall tidaler`, then `mise run install` (or
 `uv sync --all-extras`). A stale editable install keeps `import tidaler`
 resolving against dead code, and without the `waves` distribution installed
