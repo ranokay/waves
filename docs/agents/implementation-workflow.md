@@ -32,3 +32,28 @@ The strict group is the merge gate, not a per-edit ritual. What an edit needs be
 - **Code**: run the focused test files while iterating, then `mise run test-strict` once on the final SHA. `>>>` examples in `waves/` are not collected by any task, so run them explicitly (e.g. `uv run pytest --doctest-modules waves/metadata/camelot.py`) if you touch them.
 
 The tested SHA named in the PR body holds while that SHA is the head. If a later commit is prose-only, fold the fix in before the gate run, or record the delta in the body: `strict green at <sha>; the commits since are prose-only`.
+
+## UI verification ladder
+
+Each layer owns its claims. Use the cheapest layer that can observe the
+behavior; do not repeat a lower-layer claim with pixel automation.
+
+- **Unit and contract (pytest, no Qt)**: data rules, gates, quality matrix,
+  stores, tag writes. Every push, fast.
+- **Offscreen QML scenario**: widget state, geometry, bindings, queue/search
+  state machines. `mise run test-qml`, `test-strict`.
+- **Real-process boot**: composed launch, settings round-trip, library scan,
+  quit flush. `test-strict`.
+- **Pixel and native automation (cua-driver)**: real hover, native window
+  chrome, DPI scaling, real fonts, modal dialogs, OS menu actions. Opt-in
+  built-bundle smoke only, bounded with postconditions, each run naming the
+  native-only claim it proves; attach the recording
+  or screenshots to the issue, PR or release record. Do not re-verify with
+  screenshots behavior the QML and process layers already cover.
+
+## Gate evidence
+
+The PR body carries the raw output of the exact gate commands (`mise run
+check`, `mise run test-strict`), pasted verbatim — never summarized or
+rewritten. Screenshots and recordings are evidence
+only for native claims the offscreen layers cannot prove.

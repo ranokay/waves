@@ -101,7 +101,8 @@ mise run test-strict
 The merge stands on that local run: there is no per-push test gate —
 `master.yml` is manual-only (`workflow_dispatch`), so record the gate in
 the PR body with the tested short SHA (the strict result, run alone, plus
-`mise run check` and the two reviews).
+`mise run check` and the two reviews). Paste the raw output of the exact
+gate commands verbatim — never summarized or rewritten.
 The manual workflow covers the same group across Python 3.12, 3.13 and
 3.14. To run another version locally, re-sync the venv onto it
 first (uv keeps the existing interpreter otherwise):
