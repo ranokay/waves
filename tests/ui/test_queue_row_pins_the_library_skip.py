@@ -37,6 +37,7 @@ from support.dispatch_stub import arm_dispatch
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 
 
 class _Signal:
@@ -78,6 +79,7 @@ class _Stub:
     _row_ask = WavesBridge._row_ask
 
     def __init__(self, pref) -> None:
+        self._jobs = JobRuntime()
         # `pref` is a zero-argument callable, so a test can move the live
         # setting between the moment a row is queued and the moment something
         # reads it back.
@@ -87,10 +89,10 @@ class _Stub:
         self._queue: list = []
         self._queue_index: dict = {}
         self._queue_lock = Lock()
-        self._job_aborts: dict = {}
-        self._job_signals: dict = {}
-        self._job_dls: dict = {}
-        self._job_tracks: dict = {}
+        self._jobs.aborts: dict = {}
+        self._jobs.signals: dict = {}
+        self._jobs.dls: dict = {}
+        self._jobs.tracks: dict = {}
         self._merge_plans: dict = {}
         self._redownload_overrides: set = set()
         self._library_claim_overrides: set = set()

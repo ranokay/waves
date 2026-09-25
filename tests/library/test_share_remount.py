@@ -20,11 +20,13 @@ from support.dispatch_stub import arm_queue
 
 import waves.desktop.backend as backend_mod
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 from waves.library import netmount
 
 
 def _bridge(base_path="", origins=None):
     b = WavesBridge.__new__(WavesBridge)
+    b._jobs = JobRuntime()
     b.settings = types.SimpleNamespace(
         data=types.SimpleNamespace(
             download_base_path=base_path,
@@ -265,7 +267,7 @@ def _midflight_bridge(monkeypatch, verdict, remounted=False):
     b._queue = [{"qid": 7, "status": "running"}]
     b._queue_lock = Lock()
     b._queue_index = {7: b._queue[0]}
-    b._job_tracks = {7: {}}
+    b._jobs.tracks = {7: {}}
     arm_queue(b)
     b._emitted_queue = 0
 
@@ -306,7 +308,7 @@ def test_folder_death_midflight_is_held_and_watched(monkeypatch):
     b = _midflight_bridge(monkeypatch, "dead")
     assert b._download_failed_with_folder(lambda: None, "m1", 7, "Song") is True
     assert [m for m, _fn in b._pending_downloads] == ["m1"]
-    assert b._queue == [] and b._job_tracks == {}  # row withdrawn
+    assert b._queue == [] and b._jobs.tracks == {}  # row withdrawn
     assert ("m1", "") in b._states  # button reset, not red
     assert b._watch_requests == 1
     assert b._recovery_dialog_shown is False  # dialog deferred, not dead

@@ -15,6 +15,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 from waves.providers import Refusal, RefusalKind
 
 
@@ -45,10 +46,9 @@ def arm_queue(stub) -> None:
     # which path needs it, because a missing one fails as an AttributeError
     # deep inside a bound method rather than at the stand-in.
     defaults = (
-        # The per-row stores the remove path prunes.
-        ("_job_specs", dict),
-        ("_job_objs", dict),
-        ("_job_tracks", dict),
+        # The per-row stores the remove path prunes, on the job runtime
+        # (constructed here, so stub builds must stay on the main thread).
+        ("_jobs", JobRuntime),
         ("_job_owned", dict),
         ("_job_fetched", dict),
         ("_queue_lock", Lock),
@@ -139,8 +139,8 @@ def _arm_rollups(stub) -> None:
 
 def arm_dispatch(stub) -> None:
     arm_queue(stub)
-    stub._job_specs = {}
-    stub._job_objs = {}
+    stub._jobs.specs = {}
+    stub._jobs.objs = {}
     stub._pending_qids = deque()
     stub._running_qid = None
     stub._paused = getattr(stub, "_paused", False)
@@ -174,8 +174,9 @@ def _queue_stub(statuses, *, running_qid=None):
     s._queue_lock = Lock()
     s._queue_index = {it["qid"]: it for it in s._queue}
     s._queue_emit_suspended = False
-    s._job_specs = {it["qid"]: object() for it in s._queue}
-    s._job_aborts = {}
+    s._jobs = JobRuntime()
+    s._jobs.specs = {it["qid"]: object() for it in s._queue}
+    s._jobs.aborts = {}
     s._pending_qids = deque(it["qid"] for it in s._queue)
     s._event_run = Event()
     s._paused = False
@@ -189,7 +190,7 @@ def _queue_stub(statuses, *, running_qid=None):
     s.folderRemaining = _RecordingSignal()
     s.statuses = []
     s._set_status = s.statuses.append
-    s._job_objs = {}
+    s._jobs.objs = {}
     s._artist_groups = {
         "art1": {"keys": {it["media_id"] for it in s._queue}, "done": set(), "failed": set(), "prog": {}}
     }

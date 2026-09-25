@@ -36,6 +36,7 @@ from tidalapi.media import Quality
 
 from waves.constants import CTX_TIDAL
 from waves.desktop import backend
+from waves.desktop.job_runtime import JobRuntime
 from waves.library.ownership import quality_rank
 
 
@@ -55,6 +56,7 @@ def _bind(stub, *names) -> None:
 def _bridge(setting="LOSSLESS"):
     """A bare bridge with the real override + queue methods bound on."""
     b = SimpleNamespace()
+    b._jobs = JobRuntime()
     b._quality_overrides = {}
     b._objs = {"track": {}, "album": {}}
     b.settings = SimpleNamespace(data=SimpleNamespace(tidal_quality_audio=setting))
@@ -72,9 +74,9 @@ def _bridge(setting="LOSSLESS"):
     b._logged_in = True
     b._download_gate = lambda: "ok"
     b._ffmpeg_gate_holds = lambda *a, **k: False
-    b._job_tracks = {}
-    b._job_objs = {}
-    b._job_specs = {}
+    b._jobs.tracks = {}
+    b._jobs.objs = {}
+    b._jobs.specs = {}
     b._pending_qids = []
     b._pump_queue = lambda: None
     b._queue_item = lambda qid: b._queue_index.get(qid)

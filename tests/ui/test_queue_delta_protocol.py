@@ -31,6 +31,7 @@ from support.dispatch_stub import arm_dispatch, arm_queue
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 
 
 def _plain_relay():
@@ -59,6 +60,7 @@ def _bind(stub, *names):
 
 def _delta_stub():
     stub = _Stub()
+    stub._jobs = JobRuntime()
     stub._queue = []
     stub._queue_index = {}
     stub._queue_seq = 0
@@ -185,13 +187,13 @@ def test_the_trim_reports_what_it_dropped():
     qids = [stub._enqueue(str(n), "album", media_id=str(n)) for n in range(stub._QUEUE_HISTORY_MAX + 3)]
     for qid in qids:
         stub._queue_item(qid)["status"] = "done"
-        stub._job_tracks[qid] = {"t": {}}
+        stub._jobs.tracks[qid] = {"t": {}}
     stub._queue_emit_suspended = False
     stub._emit_queue()
     removed = _payloads(stub, "removed")
     assert removed == [qids[:3]], "oldest settled rows past the cap, reported to QML"
     for qid in qids[:3]:
-        assert qid not in stub._job_tracks, "the registry goes with the row"
+        assert qid not in stub._jobs.tracks, "the registry goes with the row"
 
 
 def test_a_worker_thread_posts_one_flush_request_for_a_burst():
@@ -238,9 +240,9 @@ def _job_stub(pool=None):
     stub.dl_pool = pool if pool is not None else _HoldPool()
     stub.downloadState = _Sig(stub.log, "state")
     stub.downloadProgress = _Sig(stub.log, "progress")
-    stub._job_aborts = {}
-    stub._job_signals = {}
-    stub._job_dls = {}
+    stub._jobs.aborts = {}
+    stub._jobs.signals = {}
+    stub._jobs.dls = {}
     stub._merge_plans = {}
     stub._redownload_overrides = set()
     stub._library_claim_overrides = set()
@@ -252,7 +254,7 @@ def _job_stub(pool=None):
     stub._set_queue_progress = lambda qid, pct: None
     stub._set_status = lambda msg: None
     stub._bump_download_groups = lambda media_id, pct, status: None
-    stub._release_job_signals = lambda qid: stub._job_signals.pop(qid, None)
+    stub._release_job_signals = lambda qid: stub._jobs.signals.pop(qid, None)
     stub.built = []
     stub._build_download = lambda signals, **kw: stub.built.append(kw) or _NullDl()
     _bind(stub, "_download", "cancelQueueItem", "clearQueued", "stopAll", "resumeQueue", "pauseQueue")
@@ -297,8 +299,8 @@ def test_a_backlog_holds_one_job_and_the_rest_wait_as_specs():
         for n in range(5):
             stub._download(_albumish(f"m{n}"), "track", f"m{n}", "{title}", False, f"m{n}")
     assert len(stub.dl_pool.started) == 1, "one Worker in the pool however long the queue"
-    assert len(stub._job_signals) == 1 and len(stub._job_aborts) == 1
-    assert len(stub._job_specs) == 4, "the waiting rows are specs, not jobs"
+    assert len(stub._jobs.signals) == 1 and len(stub._jobs.aborts) == 1
+    assert len(stub._jobs.specs) == 4, "the waiting rows are specs, not jobs"
     assert stub._running_qid is not None
 
 
@@ -315,7 +317,7 @@ def test_jobs_run_in_queue_order_and_hand_over():
             stub._download(_albumish(f"m{n}"), "track", f"m{n}", "{title}", False, f"m{n}")
     ran = [qid for qid, st in order if st == "running"]
     assert ran == sorted(ran) and len(ran) == 3, order
-    assert stub._running_qid is None and not stub._job_specs
+    assert stub._running_qid is None and not stub._jobs.specs
 
 
 def test_cancelling_a_waiting_row_drops_its_spec_and_row():
@@ -323,10 +325,10 @@ def test_cancelling_a_waiting_row_drops_its_spec_and_row():
     with _plain_relay():
         for n in range(3):
             stub._download(_albumish(f"m{n}"), "track", f"m{n}", "{title}", False, f"m{n}")
-    waiting = list(stub._job_specs)
+    waiting = list(stub._jobs.specs)
     victim = waiting[0]
     stub.cancelQueueItem(victim)
-    assert victim not in stub._job_specs
+    assert victim not in stub._jobs.specs
     assert stub._queue_item(victim) is None
     # Its turn comes and goes without a job.
     stub._running_qid = None
@@ -341,7 +343,7 @@ def test_stop_clears_every_waiting_spec():
         for n in range(4):
             stub._download(_albumish(f"m{n}"), "track", f"m{n}", "{title}", False, f"m{n}")
     stub.stopAll()
-    assert not stub._job_specs and not stub._pending_qids
+    assert not stub._jobs.specs and not stub._pending_qids
     assert all(it["status"] == "cancelled" for it in stub._queue)
     assert len(stub.dl_pool.started) == 1, "no new job may start off the back of a stop"
 

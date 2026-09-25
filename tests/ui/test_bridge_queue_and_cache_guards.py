@@ -25,6 +25,7 @@ import pytest
 from support.dispatch_stub import arm_queue
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 
 
 class _Signal:
@@ -45,12 +46,13 @@ class _Stub:
     _lib_start = WavesBridge._lib_start
 
     def __init__(self):
+        self._jobs = JobRuntime()
         self._queue: list[dict] = []
         self._queue_index: dict[int, dict] = {}
-        self._job_aborts: dict[int, Event] = {}
-        self._job_signals: dict = {}
-        self._job_dls: dict = {}
-        self._job_tracks: dict = {}
+        self._jobs.aborts: dict[int, Event] = {}
+        self._jobs.signals: dict = {}
+        self._jobs.dls: dict = {}
+        self._jobs.tracks: dict = {}
         self._merge_plans: dict = {}
         self._pending_downloads: list = []
         self._pending_lock = Lock()
@@ -158,7 +160,7 @@ def _bind(stub, name):
 def test_cancel_queue_item_keeps_pause_gate_cleared():
     stub = _Stub()
     ev = Event()
-    stub._job_aborts[7] = ev
+    stub._jobs.aborts[7] = ev
     stub._seed_queue([{"qid": 7, "media_id": "m7", "status": "running"}])
     # Simulate a paused queue: the global run gate is cleared.
     stub._event_run.clear()
@@ -189,8 +191,8 @@ def test_cancel_queue_item_missing_job_still_removes_row():
 def test_clear_queue_aborts_removed_queued_items():
     stub = _Stub()
     running = Event()
-    stub._job_aborts = {1: running}
-    stub._job_specs = {2: object()}
+    stub._jobs.aborts = {1: running}
+    stub._jobs.specs = {2: object()}
     stub._seed_queue(
         [
             {"qid": 1, "status": "running"},
@@ -202,7 +204,7 @@ def test_clear_queue_aborts_removed_queued_items():
     _bind(stub, "clearQueue")()
 
     assert not running.is_set(), "a running job must keep going, not be aborted"
-    assert stub._job_specs == {}, "a cleared queued row's spec goes with it, or it downloads unseen"
+    assert stub._jobs.specs == {}, "a cleared queued row's spec goes with it, or it downloads unseen"
     assert [q["qid"] for q in stub._queue] == [1], "only running rows remain"
 
 

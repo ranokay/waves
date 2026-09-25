@@ -22,10 +22,12 @@ from types import SimpleNamespace
 from support.dispatch_stub import arm_queue
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 
 
 class _Sig:
     def __init__(self):
+        self._jobs = JobRuntime()
         self.emits: list = []
 
     def emit(self, *a):
@@ -43,6 +45,7 @@ class _Stub:
 def _queue_stub(statuses, *, running_qid=None):
     """A bridge stand-in holding one row per status, media ids m1..mN."""
     s = _Stub()
+    s._jobs = JobRuntime()
     s._queue = [
         {"qid": n, "media_id": f"m{n}", "status": st, "type": "album", "name": f"r{n}"}
         for n, st in enumerate(statuses, 1)
@@ -50,8 +53,8 @@ def _queue_stub(statuses, *, running_qid=None):
     s._queue_lock = Lock()
     s._queue_index = {it["qid"]: it for it in s._queue}
     s._queue_emit_suspended = False
-    s._job_specs = {it["qid"]: object() for it in s._queue}
-    s._job_aborts = {}
+    s._jobs.specs = {it["qid"]: object() for it in s._queue}
+    s._jobs.aborts = {}
     s._pending_qids = deque(it["qid"] for it in s._queue)
     s._event_run = Event()
     s._paused = False
@@ -65,7 +68,7 @@ def _queue_stub(statuses, *, running_qid=None):
     s.folderRemaining = _Sig()
     s.statuses = []
     s._set_status = s.statuses.append
-    s._job_objs = {}
+    s._jobs.objs = {}
     s._artist_groups = {
         "art1": {"keys": {it["media_id"] for it in s._queue}, "done": set(), "failed": set(), "prog": {}}
     }
@@ -162,13 +165,14 @@ class _JobStub:
     press landing while the probe runs (the window the gate stashes in)."""
 
     def __init__(self, *, press: str, merge_plan=None) -> None:
+        self._jobs = JobRuntime()
         self._press = press
         self._logged_in = True
         self.providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: SimpleNamespace(id=raw_id))}
-        self._job_aborts: dict = {}
-        self._job_signals: dict = {}
-        self._job_dls: dict = {}
-        self._job_tracks: dict = {}
+        self._jobs.aborts: dict = {}
+        self._jobs.signals: dict = {}
+        self._jobs.dls: dict = {}
+        self._jobs.tracks: dict = {}
         self._merge_plans: dict = {}
         self._redownload_overrides: set = set()
         self._library_claim_overrides: set = set()
@@ -223,7 +227,7 @@ class _JobStub:
         return self.dl
 
     def _release_job_signals(self, qid) -> None:
-        self._job_signals.pop(qid, None)
+        self._jobs.signals.pop(qid, None)
 
     def _gate_reachability(self, retry, media_id) -> bool:
         """The folder does not answer, so the gate stashes the replay and the
@@ -233,10 +237,10 @@ class _JobStub:
         if self._press == "clear":
             self._queue.clear()
             self._queue_index.clear()
-            self._job_aborts[1].set()
+            self._jobs.aborts[1].set()
         elif self._press == "stop":
             self._queue[0]["status"] = "cancelled"
-            self._job_aborts[1].set()
+            self._jobs.aborts[1].set()
         self._pending_downloads.append((media_id, retry))
         return False
 

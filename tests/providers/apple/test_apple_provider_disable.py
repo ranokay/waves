@@ -19,12 +19,14 @@ from types import SimpleNamespace
 from waves.constants import CTX_APPLE
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 
 _REASON = "Apple Music was disabled"
 
 
 def _stop_stub() -> SimpleNamespace:
     stub = SimpleNamespace()
+    stub._jobs = JobRuntime()
     stub._queue_lock = Lock()
     stub._pending_lock = Lock()
     stub._queue = [
@@ -34,9 +36,9 @@ def _stop_stub() -> SimpleNamespace:
     ]
     stub._queue_index = {row["qid"]: row for row in stub._queue}
     stub._qdirty_changed = {}
-    stub._job_specs = {1: "apple-spec", 2: "tidal-spec"}
+    stub._jobs.specs = {1: "apple-spec", 2: "tidal-spec"}
     stub._pending_qids = deque([1, 2])
-    stub._job_aborts = {3: Event()}
+    stub._jobs.aborts = {3: Event()}
     stub._pending_downloads = [("apple:album:held", lambda: None), ("tidal:album:held", lambda: None)]
     stub.stopped_poll = []
     stub._recovery_poll = SimpleNamespace(stop=lambda: stub.stopped_poll.append("stop"))
@@ -64,9 +66,9 @@ def test_disabling_apple_stops_only_apple_work_and_keeps_it_retryable():
     assert tidal["status"] == "queued" and tidal["reason"] == ""
     # A queued row's spec must go with it, or its turn starts it anyway;
     # the running row's abort ends the fetch in place.
-    assert 1 not in stub._job_specs and 2 in stub._job_specs
+    assert 1 not in stub._jobs.specs and 2 in stub._jobs.specs
     assert list(stub._pending_qids) == [2]
-    assert stub._job_aborts[3].is_set()
+    assert stub._jobs.aborts[3].is_set()
     assert [mid for mid, _fn in stub._pending_downloads] == ["tidal:album:held"]
     assert stub.released == ["apple:album:held"]
     assert ("apple:album:a", "") in stub.emitted
@@ -79,9 +81,9 @@ def test_an_empty_provider_queue_stops_nothing_and_emits_nothing():
     stub = _stop_stub()
     stub._queue = [row for row in stub._queue if not str(row["media_id"]).startswith("apple:")]
     stub._queue_index = {row["qid"]: row for row in stub._queue}
-    stub._job_specs = {2: "tidal-spec"}
+    stub._jobs.specs = {2: "tidal-spec"}
     stub._pending_qids = deque([2])
-    stub._job_aborts = {}
+    stub._jobs.aborts = {}
     stub._pending_downloads = [("tidal:album:held", lambda: None)]
 
     assert stub._stop_provider_downloads(CTX_APPLE, _REASON) == 0

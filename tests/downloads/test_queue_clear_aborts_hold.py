@@ -14,10 +14,12 @@ from support.dispatch_stub import _queue_stub, arm_dispatch
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge, _JobSpec
+from waves.desktop.job_runtime import JobRuntime
 
 
 class _Sig:
     def __init__(self):
+        self._jobs = JobRuntime()
         self.emits: list = []
 
     def emit(self, *a):
@@ -43,7 +45,7 @@ def _bind(stub, name):
 def test_clear_all_aborts_the_job_whose_row_it_withdraws():
     s = _queue_stub(["queued", "queued"], running_qid=1)
     abort = Event()
-    s._job_aborts[1] = abort
+    s._jobs.aborts[1] = abort
 
     s.clearQueue()
 
@@ -53,7 +55,7 @@ def test_clear_all_aborts_the_job_whose_row_it_withdraws():
 def test_clear_queued_section_aborts_it_too():
     s = _queue_stub(["queued", "queued"], running_qid=1)
     abort = Event()
-    s._job_aborts[1] = abort
+    s._jobs.aborts[1] = abort
 
     s.clearQueued()
 
@@ -63,7 +65,7 @@ def test_clear_queued_section_aborts_it_too():
 def test_removing_one_row_aborts_it_too():
     s = _queue_stub(["queued", "queued"], running_qid=1)
     abort = Event()
-    s._job_aborts[1] = abort
+    s._jobs.aborts[1] = abort
 
     s.removeQueueItem(1)
 
@@ -75,7 +77,7 @@ def test_a_clear_that_spares_the_running_row_aborts_nothing():
     "running" and it must keep downloading, so nothing may set its abort."""
     s = _queue_stub(["running", "queued"], running_qid=1)
     abort = Event()
-    s._job_aborts[1] = abort
+    s._jobs.aborts[1] = abort
 
     s.clearQueue()
 
@@ -87,7 +89,7 @@ def test_clearing_rows_behind_the_running_one_leaves_it_alone():
     """And a clear that touches only other rows must not abort the job either."""
     s = _queue_stub(["queued", "failed"], running_qid=1)
     abort = Event()
-    s._job_aborts[1] = abort
+    s._jobs.aborts[1] = abort
 
     s.clearFailed()
 
@@ -189,12 +191,13 @@ class _GateStub:
     """One job body, with the gate blocking and the rollup under observation."""
 
     def __init__(self) -> None:
+        self._jobs = JobRuntime()
         self._logged_in = True
         self.providers = {"tidal": SimpleNamespace(get_object=lambda kind, raw_id: _media())}
-        self._job_aborts: dict[int, Event] = {}
-        self._job_signals: dict = {}
-        self._job_dls: dict = {}
-        self._job_tracks: dict = {}
+        self._jobs.aborts: dict[int, Event] = {}
+        self._jobs.signals: dict = {}
+        self._jobs.dls: dict = {}
+        self._jobs.tracks: dict = {}
         self._merge_plans: dict = {}
         self._redownload_overrides: set = set()
         self._library_claim_overrides: set = set()
@@ -237,7 +240,7 @@ class _GateStub:
         return self.dl
 
     def _release_job_signals(self, qid) -> None:
-        self._job_signals.pop(qid, None)
+        self._jobs.signals.pop(qid, None)
 
     def _bump_download_groups(self, media_id, pct, state) -> None:
         self.bumps.append((media_id, pct, state))

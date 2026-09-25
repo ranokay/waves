@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 from tidalapi.media import Track
 
 from waves.desktop import backend
+from waves.desktop.job_runtime import JobRuntime
 from waves.download import Download
 from waves.providers import StreamInfo
 
@@ -60,8 +61,9 @@ class _LifecycleStub:
     cannot re-create per-row state nothing will ever free."""
 
     def __init__(self):
-        self._job_tracks = {}
-        self._job_signals = {}
+        self._jobs = JobRuntime()
+        self._jobs.tracks = {}
+        self._jobs.signals = {}
         self._queue_index = {1: {"qid": 1, "media_id": "m1", "status": "running"}}
         self._outcome_lock = Lock()
         self._qdirty_changed: dict = {}
@@ -96,7 +98,7 @@ def test_note_stage_without_relay_or_media_is_silent():
 def test_stage_events_fill_the_row_and_a_restart_drains_it():
     b = _LifecycleStub()
     b._track_lifecycle(1, {"id": "9", "title": "t", "status": "running"})
-    row = b._job_tracks[1]["9"]
+    row = b._jobs.tracks[1]["9"]
     assert row["fpct"] == 0.0
 
     b._track_lifecycle(1, {"id": "9", "status": "running", "fpct": 40.0})

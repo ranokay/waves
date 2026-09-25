@@ -24,6 +24,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 
 _LIVE_QID = 1
 _GONE_QID = 2
@@ -42,17 +43,18 @@ class _Stub:
     which is the row that has just been withdrawn."""
 
     def __init__(self):
+        self._jobs = JobRuntime()
         self._queue = [{"qid": _LIVE_QID, "media_id": "m1", "status": "running", "type": "album"}]
         self._queue_index = {it["qid"]: it for it in self._queue}
         self._queue_lock = Lock()
         self._qdirty_changed: dict = {}
         self._outcome_lock = Lock()
-        self._job_tracks: dict = {}
+        self._jobs.tracks: dict = {}
         self._job_owned: dict = {}
         self._job_fetched: dict = {}
-        self._job_objs: dict = {}
-        self._job_signals: dict = {}
-        self._job_dls: dict = {}
+        self._jobs.objs: dict = {}
+        self._jobs.signals: dict = {}
+        self._jobs.dls: dict = {}
         self._pct_last: dict = {}
         self._track_poll = SimpleNamespace(stop=lambda: None, isActive=lambda: True, start=lambda: None)
         self.queueTrackState = _Signal()
@@ -81,7 +83,7 @@ def test_a_track_event_for_a_row_that_has_gone_records_nothing():
 
     b._track_lifecycle(_GONE_QID, _event())
 
-    assert _GONE_QID not in b._job_tracks
+    assert _GONE_QID not in b._jobs.tracks
     assert b.queueTrackState.calls == []
 
 
@@ -90,7 +92,7 @@ def test_a_track_event_for_a_live_row_records_as_it_always_did():
 
     b._track_lifecycle(_LIVE_QID, _event())
 
-    assert b._job_tracks[_LIVE_QID]["9"]["status"] == "running"
+    assert b._jobs.tracks[_LIVE_QID]["9"]["status"] == "running"
 
 
 def test_a_job_that_started_keeps_recording_through_its_last_events():
@@ -99,11 +101,11 @@ def test_a_job_that_started_keeps_recording_through_its_last_events():
     the gate is about CREATING state, not about writing to state that is
     already there."""
     b = _Stub()
-    b._job_tracks[_GONE_QID] = {}
+    b._jobs.tracks[_GONE_QID] = {}
 
     b._track_lifecycle(_GONE_QID, _event())
 
-    assert b._job_tracks[_GONE_QID]["9"]["status"] == "running"
+    assert b._jobs.tracks[_GONE_QID]["9"]["status"] == "running"
 
 
 def test_a_prediction_that_lands_after_the_row_went_is_dropped():
@@ -138,23 +140,23 @@ def test_the_idle_sweep_settles_state_left_over_from_a_row_that_is_gone():
     collection download finishes, which is when the app is idle enough to
     afford a full pass."""
     b = _Stub()
-    for store in (b._job_tracks, b._job_owned, b._job_fetched, b._job_objs):
+    for store in (b._jobs.tracks, b._job_owned, b._job_fetched, b._jobs.objs):
         store[_LIVE_QID] = {"kept": True}
         store[_GONE_QID] = {"leaked": True}
 
     b._poll_track_progress()  # no jobs running: the sweep runs and the timer stops
 
-    assert list(b._job_tracks) == [_LIVE_QID]
+    assert list(b._jobs.tracks) == [_LIVE_QID]
     assert list(b._job_owned) == [_LIVE_QID]
     assert list(b._job_fetched) == [_LIVE_QID]
-    assert list(b._job_objs) == [_LIVE_QID]
+    assert list(b._jobs.objs) == [_LIVE_QID]
 
 
 def test_the_sweep_leaves_a_running_jobs_state_alone():
     b = _Stub()
-    b._job_dls[_LIVE_QID] = SimpleNamespace(progress=SimpleNamespace(tasks=[]), row_task_ids=lambda: {})
-    b._job_tracks[_GONE_QID] = {"still": "here"}
+    b._jobs.dls[_LIVE_QID] = SimpleNamespace(progress=SimpleNamespace(tasks=[]), row_task_ids=lambda: {})
+    b._jobs.tracks[_GONE_QID] = {"still": "here"}
 
     b._poll_track_progress()
 
-    assert _GONE_QID in b._job_tracks, "a poll with work in flight is not the moment for a full sweep"
+    assert _GONE_QID in b._jobs.tracks, "a poll with work in flight is not the moment for a full sweep"

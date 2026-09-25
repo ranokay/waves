@@ -28,6 +28,7 @@ from support.dispatch_stub import arm_dispatch
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 from waves.download import Download
 
 
@@ -79,11 +80,12 @@ class _Stub:
     answers "go". Mirrors tests/downloads/test_download_start_readout.py's stand-in."""
 
     def __init__(self, delay: bool) -> None:
+        self._jobs = JobRuntime()
         self._logged_in = True
-        self._job_aborts: dict[int, Event] = {}
-        self._job_signals: dict = {}
-        self._job_dls: dict = {}
-        self._job_tracks: dict = {}
+        self._jobs.aborts: dict[int, Event] = {}
+        self._jobs.signals: dict = {}
+        self._jobs.dls: dict = {}
+        self._jobs.tracks: dict = {}
         self._merge_plans: dict = {}
         self._redownload_overrides: set = set()
         self._library_claim_overrides: set = set()
@@ -147,7 +149,7 @@ class _Stub:
         pass
 
     def _release_job_signals(self, qid) -> None:
-        self._job_signals.pop(qid, None)
+        self._jobs.signals.pop(qid, None)
 
 
 def _media():

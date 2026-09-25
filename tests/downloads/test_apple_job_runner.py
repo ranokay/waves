@@ -15,6 +15,7 @@ import pytest
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
+from waves.desktop.job_runtime import JobRuntime
 from waves.errors import DownloadIncomplete
 from waves.providers import AppleCollectionIncomplete
 from waves.providers.apple import runner
@@ -274,6 +275,7 @@ def _stub(base: Path, provider, **overrides):
     )
     stub._queue_item = lambda qid: stub._queue_index.get(qid)
     stub._job_quality = lambda qid: WavesBridge._job_quality(stub, qid)
+    stub._jobs = JobRuntime()
     for key, value in overrides.items():
         setattr(stub, key, value)
     return stub
@@ -574,12 +576,13 @@ def test_apple_folder_hold_replays_with_the_same_toggle_pins():
         downloadState=_Signal(),
         _set_queue_status=lambda *a, **k: None,
         _bump_download_groups=lambda *a, **k: None,
-        _job_aborts={7: Event()},
+        _jobs=JobRuntime(),
         _release_job_signals=lambda qid: None,
-        _job_dls={7: object()},
         _remove_row=lambda qid: None,
         _emit_queue=lambda: None,
     )
+    stub._jobs.aborts = {7: Event()}
+    stub._jobs.dls = {7: object()}
     for name in ("_finish_job", "_apple_job_hooks"):
         setattr(stub, name, getattr(WavesBridge, name).__get__(stub, SimpleNamespace))
     spec = SimpleNamespace(
@@ -905,8 +908,8 @@ def _entry_stub(base: Path, provider, cookies: Path | None):
     stub._qdirty_added = []
     stub._queue_lock = Lock()
     stub._pending_qids = deque()
-    stub._job_specs = {}
-    stub._job_objs = {}
+    stub._jobs.specs = {}
+    stub._jobs.objs = {}
     stub.statuses = []
     stub._set_status = stub.statuses.append
     stub._enqueue = lambda *a, **k: WavesBridge._enqueue(stub, *a, **k)
@@ -967,7 +970,7 @@ def test_entry_with_cookies_queues_an_apple_job(tmp_path):
     (row,) = stub._queue
     assert row["type"] == "album" and row["status"] == "queued"
     assert row["expected"] == "HIGH" and row["quality"] == "HIGH"
-    qid, spec = next(iter(stub._job_specs.items()))
+    qid, spec = next(iter(stub._jobs.specs.items()))
     assert spec.provider_id == "apple" and spec.object_id == "apple:album-1"
     assert list(stub._pending_qids) == [qid]
 
@@ -1197,7 +1200,7 @@ def test_row_object_falls_back_to_the_provider_cache(tmp_path):
     provider = _FakeProvider()
     provider.cached = lambda kind, raw_id: _album_resource()
     stub = SimpleNamespace(
-        _job_objs={},
+        _jobs=JobRuntime(),
         _objs={"album": {}},
         providers={CTX_APPLE: provider},
     )

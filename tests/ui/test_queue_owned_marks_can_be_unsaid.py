@@ -59,6 +59,8 @@ from types import SimpleNamespace
 import pytest
 from conftest import _InlinePool
 
+from waves.desktop.job_runtime import JobRuntime
+
 pytestmark = pytest.mark.qml
 
 _QID = 7
@@ -103,6 +105,7 @@ def _bridge(track_ids=("t1", "t2"), other_track_ids=("u1",)):
     from waves.desktop import backend as be
 
     b = be.WavesBridge.__new__(be.WavesBridge)
+    b._jobs = JobRuntime()
     QtCore.QObject.__init__(b)
     b._queue_index = {
         _QID: {"qid": _QID, "media_id": "a1", "type": "album", "collection": True},
@@ -112,11 +115,11 @@ def _bridge(track_ids=("t1", "t2"), other_track_ids=("u1",)):
     # The row's own kept object, which _row_object prefers over the
     # search-scoped bucket above. Empty here on purpose: these tests are about
     # the marks, so the bucket is the one that has to answer.
-    b._job_objs = {}
+    b._jobs.objs = {}
     # The fetch runs on the calling thread, so an expansion is finished by the
     # time loadQueueTracks returns.
     b.threadpool = _InlinePool()
-    b._job_tracks = {}
+    b._jobs.tracks = {}
     b._job_owned = {}
     b._job_fetched = {}
     predict = _Prediction()

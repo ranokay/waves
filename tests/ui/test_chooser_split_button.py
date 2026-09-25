@@ -30,6 +30,7 @@ from types import SimpleNamespace
 
 from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.desktop import backend
+from waves.desktop.job_runtime import JobRuntime
 from waves.providers.apple import AppleProvider
 from waves.providers.tidal import TidalProvider
 
@@ -85,6 +86,7 @@ def _settings(**over):
 
 def _bridge(**over):
     b = SimpleNamespace()
+    b._jobs = JobRuntime()
     b._quality_overrides = {}
     b._objs = {"track": {}, "album": {}, "playlist": {}, "mix": {}, "video": {}}
     b._merge_plans = {}
@@ -106,9 +108,9 @@ def _bridge(**over):
     b._ffmpeg_gate_holds = lambda *a, **k: False
     b._library_bulk_skip_on = lambda: False
     b._stash_pending_download = lambda mid, fn: None
-    b._job_tracks = {}
-    b._job_objs = {}
-    b._job_specs = {}
+    b._jobs.tracks = {}
+    b._jobs.objs = {}
+    b._jobs.specs = {}
     b._pending_qids = []
     b._pump_queue = lambda: None
     b._queue_item = lambda qid: b._queue_index.get(qid)
@@ -446,7 +448,7 @@ def test_download_with_chooser_parks_pins_across_a_refetch(monkeypatch):
     b._on_media_refetched("track", "t1")
     assert (b._queue[-1]["askQuality"], b._queue[-1]["quality"]) == ("LOSSLESS", "LOSSLESS")
     assert b._queue[-1]["askToggles"] == {"lyrics_embed": True, "cover_album_file": False}
-    assert b._job_specs[b._queue[-1]["qid"]].chooser_toggles == {"lyrics_embed": True, "cover_album_file": False}
+    assert b._jobs.specs[b._queue[-1]["qid"]].chooser_toggles == {"lyrics_embed": True, "cover_album_file": False}
     assert ("track", "t1") not in b._chooser_refetch_pins
 
 
@@ -514,7 +516,7 @@ def test_download_with_chooser_carries_toggles_into_the_job(monkeypatch):
     )
     row = b._queue[-1]
     assert row["askToggles"] == {"lyrics_embed": True, "lyrics_file": False, "cover_album_file": False}
-    assert b._job_specs[row["qid"]].chooser_toggles == row["askToggles"]
+    assert b._jobs.specs[row["qid"]].chooser_toggles == row["askToggles"]
     assert b._chooser_toggle_pins({"lyrics_embed": True, "bogus": True}) == {"lyrics_embed": True}
     assert b._chooser_toggle_pins("nonsense") == {}
 

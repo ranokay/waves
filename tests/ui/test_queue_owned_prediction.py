@@ -51,6 +51,8 @@ from support.qml import (
 )
 from tidalapi.media import Quality
 
+from waves.desktop.job_runtime import JobRuntime
+
 
 class _Store:
     """The ownership store's one method the prediction uses."""
@@ -70,6 +72,7 @@ def _bridge(*, recs=None, claim=None, quality=Quality.hi_res_lossless, atmos=Fal
     from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
+    b._jobs = JobRuntime()
     b._ownership = _Store(recs or {})
     b._redownload_overrides = set()
     b._library_claim_overrides = set()
@@ -223,7 +226,8 @@ def test_a_live_event_outranks_a_prediction():
     from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
-    b._job_tracks = {1: {"1": {"id": "1", "status": "running", "pct": 40.0, "quality": ""}}}
+    b._jobs = JobRuntime()
+    b._jobs.tracks = {1: {"1": {"id": "1", "status": "running", "pct": 40.0, "quality": ""}}}
     b._job_owned = {1: {"1": {"kind": "own", "tier": "LOSSLESS"}, "2": {"kind": "claim", "tier": "HIGH"}}}
     b._job_fetched = {}
     # The expansion's row: a merge for a row that has gone is dropped now.
@@ -250,7 +254,8 @@ def test_marks_landing_after_the_list_are_merged_into_it():
     from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
-    b._job_tracks = {}
+    b._jobs = JobRuntime()
+    b._jobs.tracks = {}
     b._job_owned = {}
     b._job_fetched = {}
     # The expansion's row: a merge for a row that has gone is dropped now.
@@ -273,7 +278,8 @@ def test_a_prediction_never_reaches_the_collapsed_rows_rollup():
     from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
-    b._job_tracks = {}
+    b._jobs = JobRuntime()
+    b._jobs.tracks = {}
     b._job_owned = {1: {"1": {"kind": "own", "tier": "LOSSLESS"}}}
     b._job_fetched = {}
     # The expansion's row: a merge for a row that has gone is dropped now.
@@ -281,18 +287,19 @@ def test_a_prediction_never_reaches_the_collapsed_rows_rollup():
     b._queue_item = backend.WavesBridge._queue_item.__get__(b, backend.WavesBridge)
     b.queueTracksLoaded = SimpleNamespace(emit=lambda *a: None)
     backend.WavesBridge._merge_queue_tracks(b, 1, [{"id": "1", "num": 1, "title": "a", "duration": "3:00"}])
-    assert backend._delivered_rollup(b._job_tracks.get(1, {})) == ("", [])
+    assert backend._delivered_rollup(b._jobs.tracks.get(1, {})) == ("", [])
 
 
 def test_the_stores_are_dropped_with_the_queue_row():
     from waves.desktop import backend
 
     b = backend.WavesBridge.__new__(backend.WavesBridge)
+    b._jobs = JobRuntime()
     b._queue = [{"qid": 2}]
-    b._job_tracks = {1: {}, 2: {}}
+    b._jobs.tracks = {1: {}, 2: {}}
     b._job_owned = {1: {}, 2: {}}
     b._job_fetched = {1: [], 2: []}
-    b._job_objs = {1: object(), 2: object()}  # the rows' kept live objects
+    b._jobs.objs = {1: object(), 2: object()}  # the rows' kept live objects
     backend.WavesBridge._prune_job_tracks(b)
     assert set(b._job_owned) == {2} and set(b._job_fetched) == {2}
 

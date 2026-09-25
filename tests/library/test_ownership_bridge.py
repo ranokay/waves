@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge, _stream_quality
+from waves.desktop.job_runtime import JobRuntime
 from waves.library.ownership import OwnershipStore
 
 
@@ -52,8 +53,9 @@ class _BridgeStub:
     query touch, with the real bridge methods bound on and a real store."""
 
     def __init__(self, tmp_path, tidal_quality_audio="LOSSLESS", atmos=False):
-        self._job_tracks: dict = {1: {}}
-        self._job_signals: dict = {}
+        self._jobs = JobRuntime()
+        self._jobs.tracks: dict = {1: {}}
+        self._jobs.signals: dict = {}
         self.queueTrackState = _Signal()
         self.ownershipChanged = _Signal()
         self.ownershipChangedBatch = _Signal()
@@ -618,7 +620,7 @@ def test_ownership_of_never_stats_on_the_calling_thread(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_collection_job_learns_membership_from_track_events(tmp_path):
     stub = _BridgeStub(tmp_path)
-    stub._job_signals[1] = SimpleNamespace(_media_id="album1", _collection=True)
+    stub._jobs.signals[1] = SimpleNamespace(_media_id="album1", _collection=True)
     stub._track_lifecycle(1, {"id": "10", "status": "pending"})
     stub._track_lifecycle(1, {"id": "11", "status": "pending"})
     assert sorted(stub.collectionMemberIds("album1")) == ["10", "11"]
@@ -630,14 +632,14 @@ def test_membership_is_learned_regardless_of_track_outcome(tmp_path):
     # whether the download itself succeeded (a failed or skipped track is
     # still a real member, e.g. for an "all owned" rollup elsewhere).
     stub = _BridgeStub(tmp_path)
-    stub._job_signals[1] = SimpleNamespace(_media_id="album1", _collection=True)
+    stub._jobs.signals[1] = SimpleNamespace(_media_id="album1", _collection=True)
     stub._track_lifecycle(1, {"id": "10", "status": "failed"})
     assert stub.collectionMemberIds("album1") == ["10"]
 
 
 def test_non_collection_job_does_not_record_membership(tmp_path):
     stub = _BridgeStub(tmp_path)
-    stub._job_signals[1] = SimpleNamespace(_media_id="track10", _collection=False)
+    stub._jobs.signals[1] = SimpleNamespace(_media_id="track10", _collection=False)
     stub._track_lifecycle(1, {"id": "10", "status": "pending"})
     assert stub.collectionMemberIds("track10") is None
 
@@ -647,7 +649,7 @@ def test_membership_recorded_once_per_track_not_per_event(tmp_path):
     # done); membership is only written on first sight to avoid redundant
     # writes, and repeats are harmless either way (INSERT OR IGNORE).
     stub = _BridgeStub(tmp_path)
-    stub._job_signals[1] = SimpleNamespace(_media_id="album1", _collection=True)
+    stub._jobs.signals[1] = SimpleNamespace(_media_id="album1", _collection=True)
     stub._track_lifecycle(1, {"id": "10", "status": "pending"})
     stub._track_lifecycle(1, {"id": "10", "status": "done"})
     assert stub.collectionMembershipChanged.emits == ["album1"]

@@ -179,7 +179,7 @@ def _run_scenario() -> int:
 
     # 3. A refused track is settled, not still pending: a row left at zero reads
     #    as work in flight for the rest of the job and stalls the album's bar.
-    pcts = [bridge._job_tracks[qid][tid].get("pct") for tid, _t, status in LEDGER if status == "unavailable"]
+    pcts = [bridge._jobs.tracks[qid][tid].get("pct") for tid, _t, status in LEDGER if status == "unavailable"]
     if pcts != [100.0, 100.0, 100.0]:
         bad.append(f"refused tracks did not settle their rows (pct={pcts})")
 
