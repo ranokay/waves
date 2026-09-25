@@ -480,6 +480,33 @@ jobs:
           pattern: sha256-*
           merge-multiple: true
           path: sums
+      - name: Collect Flatpak sidecars from the draft release
+        # The Flatpak bundles build in a separate workflow (flatpak-build.yml),
+        # so their .sha256 sidecars are release assets, not same-run artifacts.
+        # Wait for both arch sidecars, then fold them into sums/ before signing,
+        # so SHA256SUMS covers the .flatpak files. Fail-closed: a release must
+        # never go live with the Flatpak outside the signed manifest.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
+        run: |
+          # 23 attempts x 120s: the flatpak legs do a full Nuitka build plus
+          # runtime install in a parallel workflow run, so give them ~45 min.
+          # A dispatch-created release has no flatpak run on its tag: dispatch
+          # flatpak-build on the same tag first, or signing fails here.
+          for _ in $(seq 1 23); do
+            gh release download "$RELEASE_TAG" --pattern '*.flatpak.sha256' --dir sums --clobber >/dev/null 2>&1 || true
+            if [ -f sums/waves_linux-x64.flatpak.sha256 ] && [ -f sums/waves_linux-arm64.flatpak.sha256 ]; then
+              echo "Flatpak sidecars present:"; ls sums/*.flatpak.sha256
+              break
+            fi
+            echo "waiting for Flatpak sidecars on $RELEASE_TAG ..."
+            sleep 120
+          done
+          [ -f sums/waves_linux-x64.flatpak.sha256 ] && [ -f sums/waves_linux-arm64.flatpak.sha256 ] || {
+            echo "::error::missing Flatpak sidecar(s) on release $RELEASE_TAG after ~45 min; refusing to sign a manifest that excludes them. If this is a dispatch-created release, dispatch flatpak-build on the same tag first."
+            exit 1
+          }
       - name: Build SHA256SUMS manifest
         # Bind the release version INTO the signed manifest (the `# waves-version`
         # line) so the updater's downgrade protection rests on authenticated data,
