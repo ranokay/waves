@@ -10,6 +10,8 @@ alongside the README.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from support.paths import REPO_ROOT
 
@@ -34,7 +36,9 @@ def test_the_install_section_presents_the_windows_assets_as_downloadable():
 def _install_section(text: str) -> str:
     """The `## Install` section, up to the next `## ` heading."""
     lines = text.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.startswith("## ") and "install" in line.lower())
+    starts = [i for i, line in enumerate(lines) if line.startswith("## ") and "install" in line.lower()]
+    assert starts, "no ## Install section in the README"
+    start = starts[0]
     end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
     return "\n".join(lines[start:end])
 
@@ -52,9 +56,11 @@ def _assert_windows_assets_present(text: str) -> None:
     assert any("waves_windows-x64.zip" in line and "waves_windows-arm64.zip" in line for line in rows), (
         "no Windows table row names both Windows assets"
     )
-    run_lines = [line for line in section.splitlines() if "unzip and run" in line.lower()]
-    assert run_lines, "the install section lost its run instructions"
-    clauses = run_lines[0].split(";")
+    run_blocks = [block for block in re.split(r"\n\s*\n", section) if "unzip and run" in block.lower()]
+    assert run_blocks, "the install section lost its run instructions"
+    # The run sentence may wrap across source lines without changing the
+    # rendered clauses, so the paragraph is flattened before splitting.
+    clauses = run_blocks[0].replace("\n", " ").split(";")
     windows_clauses = [clause for clause in clauses if "windows" in clause.lower()]
     assert windows_clauses, "the run instructions name no Windows step"
     assert any("Waves.exe" in clause for clause in windows_clauses), (

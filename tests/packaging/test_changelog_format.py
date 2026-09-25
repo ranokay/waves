@@ -124,11 +124,19 @@ def test_bullets_are_never_wrapped_across_lines():
 def test_no_bullets_live_outside_release_sections():
     """The preamble carries the format contract in prose; bullets live in sections."""
     lines = CHANGELOG.read_text(encoding="utf-8").splitlines()
-    first = next(index for index, line in enumerate(lines) if line.startswith("## "))
+    first = next((index for index, line in enumerate(lines) if line.startswith("## ")), None)
+    assert first is not None, "CHANGELOG.md has no '## ' release sections"
     strays = [
         f"line {lineno}: {line.strip()[:60]}" for lineno, line in enumerate(lines[:first], 1) if line.startswith("- ")
     ]
     assert not strays, "bullets outside any release section:\n" + "\n".join(strays)
+
+
+def test_a_bullet_wrapped_with_an_angle_bracket_continuation_fails_the_guard():
+    """Negative: the old line-pair check exempted any continuation starting with
+    `<`, so a wrapped bullet could pass by opening its second line with markup."""
+    lines = ["## Unreleased", "", "### Fixed", "", "- a bullet", "<wrapped continuation>"]
+    assert _wrapped_bullet_lines(lines) == ["line 6: <wrapped continuation>"]
 
 
 def test_issue_references_are_labelled_links():

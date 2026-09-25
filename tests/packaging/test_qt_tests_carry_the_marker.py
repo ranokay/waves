@@ -112,6 +112,14 @@ def _spawns_child(node: ast.AST) -> bool:
     return False
 
 
+def test_a_bash_spawn_counts_as_a_child_process():
+    """Negative: the old file/interpreter-only check stayed green on
+    `subprocess.run([bash, ...])`, so bash-spawning tests carried no marker."""
+    node = ast.parse("import subprocess\nsubprocess.run([bash, 'tools/build_waves.sh'])\n").body[1].value
+    assert not _uses_this_file(node) and not _uses_this_interpreter(node)
+    assert _spawns_child(node)
+
+
 def _module_helpers(tree: ast.Module) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
     """Module-level functions, by name, so the check can follow a test into
     the helper that really builds the app (e.g. `_qt_app()`)."""

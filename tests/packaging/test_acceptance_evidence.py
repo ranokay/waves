@@ -145,10 +145,18 @@ def _secret_hits(paths) -> list[str]:
     return hits
 
 
+def _assert_no_secrets(root) -> None:
+    """The guard itself, parameterized by directory so the negatives below run
+    the same composition (recursive scan + full pattern set) as the real check.
+    """
+    files = [path for path in root.rglob("*") if path.is_file()]
+    assert files, f"no evidence files found under {root}"
+    hits = _secret_hits(files)
+    assert not hits, "\n".join(hits)
+
+
 def test_no_evidence_file_carries_secrets():
-    files = [path for path in EVIDENCE.rglob("*") if path.is_file()]
-    assert files, f"no evidence files found under {EVIDENCE}"
-    assert not _secret_hits(files), "\n".join(_secret_hits(files))
+    _assert_no_secrets(EVIDENCE)
 
 
 def test_a_fabricated_revision_fails_the_guard():
@@ -165,7 +173,8 @@ def test_a_secret_in_a_subdirectory_fails_the_scan(tmp_path):
     nested.parent.mkdir(parents=True)
     nested.write_text("token ghp_fabricatedsecretfornegative000\n", encoding="utf-8")
     assert list(tmp_path.glob("*.md")) == [], "fixture must escape the old top-level glob"
-    assert _secret_hits([nested])
+    with pytest.raises(AssertionError):
+        _assert_no_secrets(tmp_path)
 
 
 def test_a_secret_in_a_json_artifact_fails_the_scan(tmp_path):
@@ -173,4 +182,5 @@ def test_a_secret_in_a_json_artifact_fails_the_scan(tmp_path):
     artifact = tmp_path / "transcript.json"
     artifact.write_text('{"token": "eyJmYWJy.aWNhdGVk.fG9ybmVnYXRpdmU"}', encoding="utf-8")
     assert list(tmp_path.glob("*.md")) == [], "fixture must escape the old top-level glob"
-    assert _secret_hits([artifact])
+    with pytest.raises(AssertionError):
+        _assert_no_secrets(tmp_path)
