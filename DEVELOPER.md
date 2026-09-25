@@ -134,14 +134,14 @@ timing-sensitive under load. Counts and runtimes below are as of 2026-09-17
 (macOS arm64, offscreen Qt); the budget is the limit the group must stay
 within on this host.
 
-| Group                                                  | Command                                                                         |  Cases |                   Budget (measured) |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------- | -----: | ----------------------------------: |
-| fast (no Qt, ffmpeg, slow, integration or account)     | `mise run test-fast`                                                            | ~4,194 |                      < 1 min (37 s) |
-| quick QML (the heaviest boots skipped)                 | `mise run test-qml`                                                             |    ~91 |                < 5 min (4 min 12 s) |
-| default (all but the live account tests)               | `mise run test-default`                                                         | ~4,354 |               < 10 min (6 min 48 s) |
-| strict (the merge gate; default plus `--require-qml`)  | `mise run test-strict`                                                          | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
-| ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips) | `mise run test-ffmpeg`                                                          |    ~56 |                      < 1 min (11 s) |
-| live account (never in CI; needs credentials)          | `WAVES_ACCOUNT_TESTS=1 uv run --locked --all-extras pytest -q -m account tests` |      4 |                                 n/a |
+| Group                                                  | Command                 |  Cases |                   Budget (measured) |
+| ------------------------------------------------------ | ----------------------- | -----: | ----------------------------------: |
+| fast (no Qt, ffmpeg, slow, integration or account)     | `mise run test-fast`    | ~4,194 |                      < 1 min (37 s) |
+| quick QML (the heaviest boots skipped)                 | `mise run test-qml`     |    ~91 |                < 5 min (4 min 12 s) |
+| default (all but the live account tests)               | `mise run test-default` | ~4,354 |               < 10 min (6 min 48 s) |
+| strict (the merge gate; default plus `--require-qml`)  | `mise run test-strict`  | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
+| ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips) | `mise run test-ffmpeg`  |    ~56 |                      < 1 min (11 s) |
+| live account (never in CI; needs credentials)          | `mise run test-account` |      4 |                                 n/a |
 
 `--require-qml` turns a missing Qt into a failure instead of a silent skip of
 the whole QML half. The `slow` marker names the heaviest QML boots (each case
@@ -150,14 +150,21 @@ GUI surface without them. `integration` tests (nested runners, process
 boundaries) have no quick group of their own; run them through strict.
 `mise run test-fast`, `mise run test-qml`, `mise run test-default`,
 `mise run test-strict` and `mise run test-ffmpeg` wrap the first five groups;
-the live account group has no wrapper and never runs in CI. Every test and
+the live account group has its own wrapper (`mise run test-account`) and never runs in CI. Every test and
 check task runs the command through `uv run --locked --all-extras`, so the
 lockfile is the environment and drift fails the run.
 
-`mise run check` also carries the static gates:
+`mise run check` also carries the static gates. It runs the format hooks
+(ruff format, prettier, qmlformat), so it rewrites unformatted files instead
+of only failing: run `mise run fmt` first on a dirty tree, or re-run check
+until it is clean.
 
-- `mise run lint-qml` — qmllint over `waves/desktop/qml`, also wired as a
-  pre-commit hook for changed QML. Errors fail; the thousands of existing
+- `mise run fmt` — the three formatters check runs (ruff format, qmlformat,
+  prettier) with nothing else attached.
+- `mise run lint-qml` — qmllint over `waves/desktop/qml` for direct use, also wired as a
+  pre-commit hook for changed QML. `mise run check` reaches that same hook through its
+  `pre-commit run -a` (once, over the whole tree), so there is no separate lint pass.
+  Errors fail; the thousands of existing
   `[unqualified]` warnings are counted, not printed (they would bury errors).
 - `mise run format-qml` — qmlformat over `waves/desktop/qml`, styled by the
   root `.qmlformat.ini` (the style is pinned there, not taken from Qt's

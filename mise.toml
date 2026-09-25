@@ -14,9 +14,13 @@ description = "Create/sync the dev environment and install the pre-commit hooks"
 run = "uv sync --locked --all-extras && uv run --locked --all-extras pre-commit install"
 
 [tasks.check]
-description = "Lock drift, static analysis, pre-commit hooks and unused dependencies"
-depends = ["lint-qml", "typecheck"]
+description = "Lock drift, static analysis, pre-commit hooks and unused dependencies (the format hooks rewrite files; run fmt first)"
+depends = ["typecheck"]
 run = "uv lock --check && uv run --locked --all-extras pre-commit run -a && uv run --locked --all-extras deptry ."
+
+[tasks.clean]
+description = "Remove regenerable build and test caches (never .venv, never git clean; idempotent)"
+run = "bash tools/clean.sh"
 
 [tasks.lint-qml]
 description = "qmllint the QML tree (errors fail; warnings are summarized)"
@@ -25,6 +29,10 @@ run = "bash tools/lint_qml.sh"
 [tasks.format-qml]
 description = "Format the QML tree with qmlformat (style pinned by .qmlformat.ini; pass files to format just those)"
 run = "bash tools/format_qml.sh"
+
+[tasks.fmt]
+description = "Format the tree: ruff format (Python), qmlformat (QML), prettier (the rest)"
+run = "uv run --locked --all-extras ruff format --force-exclude && bash tools/format_qml.sh && uv run --locked --all-extras pre-commit run prettier --all-files"
 
 [tasks.typecheck]
 description = "ty over the shipped package (waves/)"
@@ -53,6 +61,10 @@ run = 'uv run --locked --all-extras pytest -rs --require-qml -m "not account" te
 [tasks.test-ffmpeg]
 description = "The ffmpeg group (assumes ffmpeg on PATH; < 1 min)"
 run = 'uv run --locked --all-extras pytest -rs -q -m "ffmpeg and not account" tests'
+
+[tasks.test-account]
+description = "The live account group (needs credentials and WAVES_ACCOUNT_TESTS=1; never runs in CI)"
+run = 'WAVES_ACCOUNT_TESTS=1 uv run --locked --all-extras pytest -q -m account tests'
 
 [tasks.app]
 description = "Run the Waves app from source"
