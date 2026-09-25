@@ -285,9 +285,14 @@ class TestTheSettingsPageOffersOneBoxPerCharacter:
 
 
 class TestThePageCannotSaveARejectedStandIn:
-    """A rejected stand-in is refused on screen, and again on the way to disk."""
+    """A rejected stand-in is refused on screen, and again on the way to disk.
 
-    def test_a_bad_row_turns_red_and_holds_save_changes(self):
+    Wiring pins, not behavior coverage: the launderer itself is proved by the
+    filename-torture and replacement-setting suites; these fence the four QML /
+    save-path call sites so the page cannot silently unwire from the engine.
+    """
+
+    def test_wiring_a_bad_row_turns_red_and_holds_save_changes(self):
         src = (_UI / "qml" / "SettingsPage.qml").read_text()
 
         # Same red-outline / held-save machinery as the general stand-in: the
@@ -295,12 +300,12 @@ class TestThePageCannotSaveARejectedStandIn:
         assert "invalid: page.mapCharDirty(charRow.fieldData, charRow.ch)" in src
         assert "Component.onCompleted: page.sanitizeKeys[modelData.key] = modelData" in src
 
-    def test_the_row_asks_the_engines_own_launderer(self):
+    def test_wiring_the_row_asks_the_engines_own_launderer(self):
         src = (_UI / "qml" / "SettingsPage.qml").read_text()
 
         assert "waves.sanitizeFilenameReplacement(v)" in src
 
-    def test_clearing_a_row_is_not_the_same_as_emptying_it(self):
+    def test_wiring_clearing_a_row_is_not_the_same_as_emptying_it(self):
         # An empty stand-in IS a choice (remove the character outright), so
         # "follow the general stand-in again" needs its own action.
         src = (_UI / "qml" / "SettingsPage.qml").read_text()
@@ -309,7 +314,7 @@ class TestThePageCannotSaveARejectedStandIn:
         assert "onClicked: {\n" in src.replace("\r\n", "\n")
         assert "page.mapClear(charRow.fieldData, charRow.ch)" in src
 
-    def test_the_save_path_stores_a_table_not_its_text(self):
+    def test_wiring_the_save_path_stores_a_table_not_its_text(self):
         src = (_UI / "backend.py").read_text()
 
         assert "elif key in _MAP_FIELDS:" in src

@@ -18,7 +18,8 @@ BRIDGE_MD = (REPO_ROOT / "waves" / "desktop" / "BRIDGE.md").read_text()
 # ------------------------------------------------------- retired bridge API
 
 
-def test_dead_recently_added_pair_removed():
+def test_wiring_dead_recently_added_pair_removed():
+    """The retired recentlyAdded bridge pair stays gone (obsolete-API guard)."""
     assert "recentlyAdded" not in BACKEND_SRC
     assert "loadRecentlyAdded" not in BACKEND_SRC
     assert "recentlyAdded" not in ALL_QML
@@ -28,7 +29,9 @@ def test_dead_recently_added_pair_removed():
 # ------------------------------------------------------- video preview padding
 
 
-def test_video_preview_passes_padding():
+def test_wiring_video_preview_passes_padding():
+    """The video preview passes the same padding downloads use (parity pin: the
+    path template behavior itself is proved by the video-path-template suite)."""
     assert 'format_path_media(template, vid, pad, **kw) + ".mp4"' in BACKEND_SRC
 
 
@@ -46,6 +49,9 @@ def test_artcard_runs_no_unrenderable_collection_rollups():
 # ------------------------------------------------------- QueueStack marching step
 
 
-def test_queuestack_step_is_gated_on_visible():
+def test_wiring_queuestack_step_is_gated_on_visible():
+    """QueueStack's marching step reads `visible` on its defining line, so the
+    animation cannot depend on marchTick while hidden (single QML property: no
+    cheaper seam than reading the line)."""
     line = next(ln for ln in QUEUE_STACK_QML.splitlines() if "readonly property int step:" in ln)
     assert "visible ?" in line, "step must not depend on marchTick while hidden"

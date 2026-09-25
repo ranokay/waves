@@ -211,6 +211,16 @@ writes `waves.json` in `__init__`, so an unsandboxed test overwrites the real
 settings of whoever runs the suite. Patching a loader to return defaults is not
 enough while the writer still knows the real path.
 
+### Source pins are wiring, not behavior coverage
+
+A test that asserts on source or QML text (`inspect.getsource`, file reads) is
+named `test_wiring_*` and carries a comment naming the fenced behavior plus why
+no behavioral seam exists (usually: driving the real call site needs the full
+bridge session or an offscreen render). Wiring pins are never the only test for
+a user-facing feature — the behavior they fence is proved by a behavioral test
+the comment cites. Convert a pin to a behavior test wherever a seam exists;
+rename it where none does.
+
 ## Releases and the publication model
 
 Releases are published from the upstream repository,

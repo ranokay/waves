@@ -30,10 +30,13 @@ from support.paths import REPO_ROOT
 
 RELEASE_SH = REPO_ROOT / "release.sh"
 
-pytestmark = pytest.mark.skipif(
-    not RELEASE_SH.is_file(),
-    reason="release.sh is the maintainer's private, untracked release tool; absent from this checkout",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not RELEASE_SH.is_file(),
+        reason="release.sh is the maintainer's private, untracked release tool; absent from this checkout",
+    ),
+    pytest.mark.integration,
+]
 
 _START = "<!-- star-history:start -->"
 _END = "<!-- star-history:end -->"

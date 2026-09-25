@@ -32,7 +32,15 @@ def _source() -> str:
     return BACKEND_SRC.read_text(encoding="utf-8")
 
 
-def test_dl_pool_is_serial():
+# Source pins, not behavior coverage: these fence the serial-queue wiring in
+# backend.py (constructing a full bridge needs the Qt session, so there is no
+# cheaper seam). The user-facing promise — one item at a time, in order — is
+# proved behaviorally by test_a_one_thread_pool_actually_runs_submissions_in_order
+# below.
+
+
+def test_wiring_dl_pool_is_serial():
+    """backend.py still creates dl_pool with an explicit one-thread cap."""
     src = _source()
     m = re.search(r"self\.dl_pool = QtCore\.QThreadPool\(\).*?setMaxThreadCount\(([^)]*)\)", src, re.DOTALL)
     assert m, "dl_pool must still be created with an explicit thread cap"
@@ -43,14 +51,21 @@ def test_dl_pool_is_serial():
     )
 
 
-def test_settings_save_never_resizes_the_pool():
+def test_wiring_settings_save_never_resizes_the_pool():
+    """The settings save path adds no second setMaxThreadCount: the serial order
+    above must survive a save, and the knob below keeps its meaning through the
+    engine's own executor instead."""
     src = _source()
     assert src.count("dl_pool.setMaxThreadCount") == 1, (
         "a second setMaxThreadCount call would widen the queue back out from under the serial design"
     )
 
 
-def test_the_knob_still_reaches_the_track_executor():
+def test_wiring_the_knob_still_reaches_the_track_executor():
+    """downloads_concurrent_max still sizes the engine's per-collection executor
+    (read live at download time). Behaviorally backed by the held-download and
+    queue-withdrawal suites that drive downloads_concurrent_max; this pins the
+    wiring so the knob cannot be silently dropped from the executor call."""
     """downloads_concurrent_max must keep meaning something: the engine's
     per-collection executor is sized by it, read live at download time."""
     from waves import download as engine_dl

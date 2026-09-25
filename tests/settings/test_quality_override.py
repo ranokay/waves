@@ -280,9 +280,12 @@ def test_the_currency_check_targets_the_choice_so_a_lower_copy_offers_an_upgrade
     assert b._override_target_rank("t404") == quality_rank(Quality.high_lossless.value)
 
 
-def test_ownership_of_uses_the_choice_aware_rank():
+def test_wiring_ownership_of_uses_the_choice_aware_rank():
     """The wiring: ownershipOf's up_to_date is computed against
-    _override_target_rank, not the bare setting."""
+    _override_target_rank, not the bare setting. Wiring pin: driving ownershipOf
+    needs the full bridge cache, so the user-facing currency behavior is proved
+    by the choice-propagation tests in this file (a choice re-asks ownership and
+    moves what the buttons stand on); this fences the call site itself."""
     import inspect
 
     src = inspect.getsource(backend.WavesBridge.ownershipOf)
@@ -290,7 +293,12 @@ def test_ownership_of_uses_the_choice_aware_rank():
     assert "_copy_is_current(rec, self._target_quality_rank()" not in src
 
 
-def test_the_download_reads_the_choice_after_every_gate_and_writes_it_on_the_row():
+def test_wiring_the_download_reads_the_choice_after_every_gate_and_writes_it_on_the_row():
+    """Ordering + no-spend wiring: the choice is read after the gates that may
+    hold the download, lands on the row's quality fields, and no spending helper
+    exists. The queued-row behavior is proved by the retry/choice tests in this
+    file; this fences the _download call-site order, which has no cheaper seam
+    than reading it."""
     import inspect
 
     src = inspect.getsource(backend.WavesBridge._download)
