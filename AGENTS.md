@@ -1,5 +1,9 @@
 # Waves
 
+> Repository precedence: this file, `CONTEXT.md` and `docs/` override any
+> global agent instructions. On a conflict, follow the repo and flag it
+> instead of guessing.
+
 ## Agent skills
 
 ### Issue tracker
