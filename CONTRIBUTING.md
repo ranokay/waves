@@ -9,7 +9,7 @@ You can contribute in many ways:
 
 ## Report Bugs
 
-Report bugs at https://github.com/iamprivacy/Waves/issues
+Report bugs at https://github.com/ranokay/waves/issues
 
 If you are reporting a bug, please include:
 
@@ -33,7 +33,7 @@ Waves could always use more documentation, whether as part of the official docs,
 
 ## Submit Feedback
 
-The best way to send feedback is to file an issue at https://github.com/iamprivacy/Waves/issues.
+The best way to send feedback is to file an issue at https://github.com/ranokay/waves/issues.
 
 If you are proposing a new feature:
 
@@ -91,13 +91,7 @@ Now you can make your changes locally.
 mise run check
 ```
 
-7. Now, validate that all unit tests are passing:
-
-```bash
-mise run test
-```
-
-8. Before raising a pull request, run the merge gate — the strict group,
+7. Before raising a pull request, run the merge gate — the strict group,
    everything but the live account tests:
 
 ```bash
@@ -113,7 +107,7 @@ The manual workflow covers the same group across Python 3.12, 3.13 and
 first (uv keeps the existing interpreter otherwise):
 `uv sync --locked --all-extras --python 3.14 && mise run test-strict`.
 
-9. Commit your changes and push your branch to GitHub:
+8. Commit your changes and push your branch to GitHub:
 
 ```bash
 git add .
@@ -121,7 +115,11 @@ git commit -m "Your detailed description of your changes."
 git push origin name-of-your-bugfix-or-feature
 ```
 
-10. Submit a pull request through the GitHub website.
+9. Submit a pull request through the GitHub website.
+
+The full branch, check, review, and merge loop lives in
+`docs/agents/implementation-workflow.md` — follow it; the steps above are
+its contributor-facing minimum.
 
 # Pull Request Guidelines
 
@@ -130,4 +128,4 @@ Before you submit a pull request, check that it meets these guidelines:
 1. The pull request should include tests.
 
 2. If the pull request adds functionality, the docs should be updated.
-   Put your new functionality into a function with a docstring, and add the feature to the list in `README.md`.
+   Put your new functionality into a function with a docstring, and add the feature to the "What Waves can do" section in `README.md`.
