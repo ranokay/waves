@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // The shared keyboard-activatable tap area: the MouseArea half of the
 // label-plus-tap-area pattern, carrying the metadata a pointer-only MouseArea
@@ -11,7 +12,7 @@ MouseArea {
   id: ta
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   // The spoken name. Every adopted control sets it: a button a reader cannot
   // name is worse than no button.
   property string accessibleLabel: ""

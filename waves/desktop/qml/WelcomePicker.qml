@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "StatusLight.js" as StatusLight
+import "primitives" as Primitives
 
 // Provider welcome surface: the first-run gate, and the same cards
 // re-opened as a non-blocking page from Settings -> Providers (or the
@@ -29,7 +30,7 @@ Rectangle {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property string mono: monoFont    // bundled JetBrains Mono (see app.py)
   readonly property color outline: "#3a3f49"   // strong border (search / qtag / switch)
   readonly property color surface: "#15181d"   // primary card surface

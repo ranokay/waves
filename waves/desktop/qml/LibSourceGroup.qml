@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import "primitives" as Primitives
 
 // One My Music source group: everything one provider's saved
 // shelves need, and nothing provider-specific. The strip, its labels and
@@ -25,7 +26,7 @@ ColumnLayout {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)

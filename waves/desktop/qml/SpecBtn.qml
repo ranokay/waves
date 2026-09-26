@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Hugging outlined button used wherever a surface needs one explicit action
 // (dialog rows, section headers, the queue and logs drawers): one word or one
@@ -10,7 +11,7 @@ Rectangle {
   id: sb
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)

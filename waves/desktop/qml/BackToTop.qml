@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Scroll-edge dressing plus the "back to top" badge, one window-level
 // instance serving whichever view is on screen. Three pieces:
@@ -15,7 +16,7 @@ import QtQuick
 Item {
   id: btt
   property var flick: null
-  readonly property color accent: "#3dff6e"
+  readonly property color accent: Primitives.Palette.accent
   readonly property color accentDim: "#22a64a"
   readonly property color textHi: "#e6e8ec"
   readonly property real btnTrack: 0

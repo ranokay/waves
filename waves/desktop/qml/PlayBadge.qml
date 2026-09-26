@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // The one video-play affordance: a green data-strip along the bottom edge
 // of the art with an ink triangle and PLAY label, like a terminal status
@@ -15,7 +16,7 @@ Item {
   id: pb
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentSoft: "#9dffbe"   // CRT flash / phosphor highlight
   property bool lit: false
   property real radius: 6

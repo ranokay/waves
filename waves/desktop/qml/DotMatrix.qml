@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Old-school LED dot-matrix progress. Dots sit in a fixed grid and brighten
 // (faded → bright) in a bottom-up, left-to-right "stacking" order as pct
@@ -16,7 +17,7 @@ Item {
   property real gap: 2
   property int maxCols: 0
   property bool pulse: true
-  property color onColor: "#3dff6e"
+  property color onColor: Primitives.Palette.accent
   // Required, not defaulted: a missed host binding must fail at load rather
   // than silently freeze the bar at a lone instance's static state.
   required property real ledPulse

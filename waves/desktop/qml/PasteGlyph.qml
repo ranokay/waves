@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Clipboard glyph that "decrypt-fills" on paste. Shared by the search bar and
 // the login redirect field so both get the identical paste affordance.
@@ -8,7 +9,7 @@ Rectangle {
   id: pg
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentDim: "#22a64a"   // terminal-button border

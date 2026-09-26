@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Hover swell: the control's outline turns
 // bright accent and breathes while the pointer is on it. Light only, no
@@ -12,7 +13,7 @@ Rectangle {
   id: hs
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property real btnBorderW: 1.5
   readonly property int btnRad: 8              // button corner radius
 

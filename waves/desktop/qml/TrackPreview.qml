@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Compact ASCII preview toggle for album track rows, where a per-row cover
 // would just repeat the album art. Idle it's a tight mono "[>]"; on play it
@@ -20,7 +21,7 @@ Item {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property string mono: monoFont    // bundled JetBrains Mono (see app.py)
   readonly property color red: "#ff5a52"   // failed / peak / heart

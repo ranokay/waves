@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import "primitives" as Primitives
 
 // Album row + inline expand. Local expanded state so it works in both the
 // search results and inside an artist page.
@@ -18,7 +19,7 @@ Column {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)

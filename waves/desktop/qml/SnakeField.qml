@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // A small snake circling the loading label, used as the waiting surface
 // of the peek card. It laps a ring laid around the plate, eating the
@@ -22,7 +23,7 @@ Item {
   property int head: 0
   property int len: 5
   property int food: -1
-  readonly property color accent: "#3dff6e"
+  readonly property color accent: Primitives.Palette.accent
   readonly property color goldDim: "#b07d18"
 
   function _buildRing() {

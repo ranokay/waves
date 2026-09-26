@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Count badge on a folder's "Download all" button. Idle: the folder's
 // playlist total. Running: playlists remaining, rolling down one tick per
@@ -15,7 +16,7 @@ Rectangle {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
 
   property string folderId: ""

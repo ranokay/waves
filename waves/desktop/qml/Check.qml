@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Small square checkbox.
 // The palette values are local copies of Main.qml's static literals —
@@ -7,7 +8,7 @@ Rectangle {
   id: chk
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentText: "#03210e"   // ink on a green fill
   readonly property color outline: "#3a3f49"   // strong border (search / qtag / switch)
 

@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Queued glyph: a 3-bar list, your
 // item is the bottom bar. The accent highlight ping-pongs down and back
@@ -15,7 +16,7 @@ Column {
   required property int marchTick
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentDim: "#22a64a"   // terminal-button border
 
   property real barW: 12

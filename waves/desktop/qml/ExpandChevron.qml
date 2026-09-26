@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Shapes
+import "primitives" as Primitives
 
 // Expand/collapse indicator: a rounded-cap line chevron that smoothly rotates
 // between a closed and an open angle. Self-contained and resizable so it can be
@@ -22,7 +23,7 @@ Item {
   property bool showTile: true       // soft background tile (off for bare carets)
   property real closedAngle: -90     // glyph rotation while closed
   property real openAngle: 0         // glyph rotation while open
-  property color stroke: "#3dff6e"   // accent
+  property color stroke: Primitives.Palette.accent   // accent
   property color openBg: "#06210f"   // accent container (open tint)
   property color hoverBg: "#1d2128"  // surface3 (hover wash while collapsed)
   implicitWidth: tile

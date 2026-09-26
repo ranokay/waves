@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // ASCII ocean-wave logo (the "Parallax Ocean" mark):
 // six depth layers of wave glyphs - foam specks, small ripples, rolling swell,
@@ -15,7 +16,7 @@ Rectangle {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color green: "#3ef08a"   // LOSSLESS tier + done state

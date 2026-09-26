@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import "primitives" as Primitives
 
 // Section header above every capped or collapsible list: the label
 // (optionally a link that opens the whole set, marked with the same "›"
@@ -13,7 +14,7 @@ Item {
   id: secHead
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color border1: "#262a31"   // default card border (outline-variant)
   readonly property color divider: "#22262d"
   readonly property string mono: monoFont   // bundled JetBrains Mono (see app.py)

@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // CRT-tube nav tab ("Tube C" static-burst). At rest each tab is a dim
 // phosphor-green panel with a grey label. On select it powers on like an old
@@ -11,7 +12,7 @@ Item {
   id: nt
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color accentSoft: "#9dffbe"   // CRT flash / phosphor highlight

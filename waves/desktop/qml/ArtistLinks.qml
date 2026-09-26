@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // A line of comma-separated artist names, each individually clickable.
 // 'host' is Main.qml's root object, bound at every instantiation and
@@ -12,7 +13,7 @@ Row {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color textLo: "#a8acb4"
   property var artists: []
   property string suffix: ""

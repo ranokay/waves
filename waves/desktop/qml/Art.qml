@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Effects
 import QtQuick.Shapes
+import "primitives" as Primitives
 
 // Square cover box: the app's one artwork surface. Decodes once at a
 // fixed size, paints a caller-supplied stand-in beneath the cover while
@@ -23,7 +24,7 @@ Rectangle {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)

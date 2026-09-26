@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Tile for genre / mood / decade entries in the art-first layout. The
 // artwork is a mosaic of real covers sampled from that page (drawn from
@@ -23,7 +24,7 @@ Rectangle {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentDim: "#22a64a"   // terminal-button border

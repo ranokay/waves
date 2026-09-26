@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Console-style Browse card: a framed 156x236 card with the artwork,
 // title, caption and download control. The artwork or the title opens the
@@ -21,7 +22,7 @@ Rectangle {
   required property var host
   // Waves palette (kept local so this file is self-contained, the
   // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)
   readonly property real btnTrack: 0              // label letter-spacing
