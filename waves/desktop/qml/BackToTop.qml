@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Scroll-edge dressing plus the "back to top" badge, one window-level
 // instance serving whichever view is on screen. Three pieces:
@@ -10,12 +11,12 @@ import QtQuick
 //      like a conveyor curling over a drum edge.
 //   3. The INLINE crest pill: appears once the page has been scrolled
 //      about a viewport down, riding the top edge; one click glides back.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: btt
   property var flick: null
-  readonly property color accent: "#3dff6e"
+  readonly property color accent: Primitives.Palette.accent
   readonly property color accentDim: "#22a64a"
   readonly property color textHi: "#e6e8ec"
   readonly property real btnTrack: 0

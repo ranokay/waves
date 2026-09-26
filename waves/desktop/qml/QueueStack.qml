@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Queued glyph: a 3-bar list, your
 // item is the bottom bar. The accent highlight ping-pongs down and back
@@ -7,15 +8,15 @@ import QtQuick
 // state appears. Steps off the host's shared marchTick, no per-frame
 // animation (`marchTick` is required, so a missed binding fails at
 // load).
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 
 Column {
   id: qs
   required property int marchTick
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentDim: "#22a64a"   // terminal-button border
 
   property real barW: 12

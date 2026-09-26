@@ -1,17 +1,18 @@
 import QtQuick
+import "primitives" as Primitives
 
 // CRT-tube nav tab ("Tube C" static-burst). At rest each tab is a dim
 // phosphor-green panel with a grey label. On select it powers on like an old
 // CRT: a burst of scanline static, then the panel strikes in from a collapsed
 // line (x, then y overshoot). Power-off crackles with static and collapses
 // back to a line, leaving a brief afterglow bar. Shared by the nav tabs.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: nt
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color accentSoft: "#9dffbe"   // CRT flash / phosphor highlight

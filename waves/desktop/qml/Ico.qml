@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Shapes
+import "primitives" as Primitives
 
 // Phosphor icon rendered as a tintable, scalable vector. One filled path per
 // glyph (Phosphor uses a 256x256 box); `name` selects it, `color` tints it,
@@ -11,7 +12,7 @@ import QtQuick.Shapes
 Item {
   id: ico
   property string name: "play"
-  property color color: "#3dff6e"
+  property color color: Primitives.Palette.accent
   property real size: 16
   property real bold: 0          // extra outline stroke (256-space) to embolden
   implicitWidth: size

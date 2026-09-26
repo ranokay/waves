@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Effects
+import "primitives" as Primitives
 
 // LED dot-matrix progress pill shared by the Settings updater card and the
 // FFmpeg surfaces (fill past the corners, never show a gap). Cells brighten
@@ -12,8 +13,8 @@ Rectangle {
   property string label: ""   // centered status text ("message · NN%")
   property string mono: ""    // monospace family for the label
 
-  // Waves palette (defaults mirror the app tokens; override if they diverge)
-  property color accent: "#3dff6e"
+  // Waves palette (accent binds to Primitives.Palette; the rest mirror the app tokens, override if they diverge)
+  property color accent: Primitives.Palette.accent
   property color accentCont: "#06210f"
   property color accentDim: "#22a64a"
 

@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // The download buttons' rising dot matrix (Main.qml's inline DotMatrix), as a
 // standalone file so surfaces outside Main.qml (the Settings library scan) can
@@ -15,7 +16,7 @@ Item {
   property real gap: 2
   property int maxCols: 0
   property bool pulse: true
-  property color onColor: "#3dff6e"
+  property color onColor: Primitives.Palette.accent
   readonly property int cols: {
     var c = Math.max(1, Math.floor((width + gap) / (dot + gap)))
     return (maxCols > 0 && c > maxCols) ? maxCols : c

@@ -1,10 +1,11 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import "primitives" as Primitives
 
 // Outlined terminal download button. Idle: ↓ + uppercase label. Running:
 // a monospace ASCII bar (█ filled + ░ dim) + %. Done/failed: colour +
 // glyph.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 // `host` is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load. The button reads through it:
@@ -23,8 +24,8 @@ Rectangle {
   id: db
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentDim: "#22a64a"   // terminal-button border

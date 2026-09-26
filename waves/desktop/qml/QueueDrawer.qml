@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import "primitives" as Primitives
 
 // The download queue drawer: one sectioned ListView over the app's queue
 // model (grouped headers, per-row status/progress/quality, the expanded
@@ -20,15 +21,15 @@ import QtQuick.Layouts
 //     host.qualFg  the row vocabulary helpers
 // Its `queueModel` is the app's queue model, bound at the instantiation and
 // required for the same reason.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Drawer {
   id: queueDrawer
   required property var host
   required property var queueModel
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentSoft: "#9dffbe"   // CRT flash / phosphor highlight
   readonly property color border1: "#262a31"   // default card border (outline-variant)

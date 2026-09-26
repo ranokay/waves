@@ -6,6 +6,7 @@ import QtQuick.Dialogs
 import QtQuick.Shapes
 import "HeartGib.js" as HeartGib
 import "StatusLight.js" as StatusLight
+import "primitives" as Primitives
 
 // Schema-driven settings page. The bridge (`waves`) supplies the grouped field
 // schema; this renders a control per field type and applies only changed keys.
@@ -40,8 +41,8 @@ Item {
     syncLibraryMirrors()
   }
 
-  // Waves palette (kept local so this file is self-contained)
-  readonly property color accent: "#3dff6e"
+  // Waves palette (kept local so this file is self-contained; accent binds to Primitives.Palette)
+  readonly property color accent: Primitives.Palette.accent
   readonly property color accentText: "#03210e"
   readonly property color surface: "#15181d"
   readonly property color surface2: "#191c22"

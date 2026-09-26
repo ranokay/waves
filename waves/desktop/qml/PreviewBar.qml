@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Full-width preview control shaped like DownloadButton. Idle: ▶ + "PREVIEW
 // ARTIST". Once playing it becomes a scrubber: the leading ▶/⏸ glyph toggles
@@ -12,14 +13,14 @@ import QtQuick
 //   host.previewPosition / host.previewScrubbing / host.pvFrac / host.pvSt /
 //   host.queueEdgeHeld / host.scrubPreviewVisual / host.seekPreview /
 //   host.shimmerPhase / host.stopPreview / host.togglePreview
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Rectangle {
   id: pbar
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property real btnBorderW: 1.5
   readonly property int btnPadH: 12             // label padding, left/right

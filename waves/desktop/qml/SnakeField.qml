@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // A small snake circling the loading label, used as the waiting surface
 // of the peek card. It laps a ring laid around the plate, eating the
@@ -8,7 +9,7 @@ import QtQuick
 // along the ring, so the card resizing mid-grow re-lays the path without
 // ever scattering segments. The clock only runs while the field is both
 // visible and armed, so a closed peek costs nothing.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: sf
@@ -22,7 +23,7 @@ Item {
   property int head: 0
   property int len: 5
   property int food: -1
-  readonly property color accent: "#3dff6e"
+  readonly property color accent: Primitives.Palette.accent
   readonly property color goldDim: "#b07d18"
 
   function _buildRing() {

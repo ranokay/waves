@@ -6,6 +6,7 @@ import QtQuick.Shapes
 import QtCore
 import QtMultimedia
 import "StatusLight.js" as StatusLight
+import "primitives" as Primitives
 
 ApplicationWindow {
   id: root
@@ -156,7 +157,7 @@ ApplicationWindow {
   // Console palette (phosphor-green CRT, dark only)
   // Legacy names kept (values repointed) so every existing binding recolours
   // for free; new tokens add the gold / cyan / outline / surface-tier ideas.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentText: "#03210e"   // ink on a green fill
   readonly property color surface: "#15181d"   // primary card surface
   readonly property color surface2: "#191c22"   // hover / nested

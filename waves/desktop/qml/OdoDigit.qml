@@ -1,15 +1,16 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Odometer digit for the folder badge: the next value drops in from above
 // while the old one falls away, clipped to the badge (220ms, OutQuad).
 // The final tick rolls in a checkmark instead of 0.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: od
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property string mono: monoFont    // bundled JetBrains Mono (see app.py)
 
   property string value: "0"

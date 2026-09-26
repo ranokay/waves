@@ -1,18 +1,19 @@
 import QtQuick
+import "primitives" as Primitives
 
 // A line of comma-separated artist names, each individually clickable.
 // 'host' is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load. The row reads through it:
 //   host.onArtistPage(id) / host.onAlbumPage(id)  “already open” checks
 //   host.openAlbumPage(albumId, highlight, title)  the suffix's action
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Row {
   id: al
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color textLo: "#a8acb4"
   property var artists: []
   property string suffix: ""

@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "StatusLight.js" as StatusLight
+import "primitives" as Primitives
 
 // Provider welcome surface: the first-run gate, and the same cards
 // re-opened as a non-blocking page from Settings -> Providers (or the
@@ -22,14 +23,14 @@ import "StatusLight.js" as StatusLight
 //     palette StatusLight.colorFor(host, state) reads for each step card's
 //     state light (read through host, not copied locally, because the
 //     helper takes a palette object)
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Rectangle {
   id: pickCard
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property string mono: monoFont    // bundled JetBrains Mono (see app.py)
   readonly property color outline: "#3a3f49"   // strong border (search / qtag / switch)
   readonly property color surface: "#15181d"   // primary card surface

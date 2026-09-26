@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // The app-wide breadcrumb trail (folder-strip pills over navHistory +
 // the current page as the last, lit pill; see crumbBase for why the trail
@@ -15,14 +16,14 @@ import QtQuick
 // It reads through it:
 //   host.crumbBase / host.crumbLabels / host.crumbSynth /
 //   host.crumbSynthGo / host.crumbTailPending / host.navTo
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: nct
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)

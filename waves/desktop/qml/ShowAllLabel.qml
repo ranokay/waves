@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // SHOW ALL / SHOW LESS label used beneath every capped list (top tracks,
 // search sections, artist strip). Mint green at rest (accentContTx, the
@@ -9,14 +10,14 @@ import QtQuick
 // required so a missed binding fails at load.
 // It reads through it:
 //   host.scrollCollapsedToSection(item)  scroll the page back to the section
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: sa
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentContTx: "#86ffaa"   // text on accent container
 
   property bool expanded: false

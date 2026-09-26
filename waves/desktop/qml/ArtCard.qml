@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // Art-first Browse card (the streaming-service look): the artwork IS the
 // card, no frame, quiet caption beneath, download surfacing only on hover
@@ -12,14 +13,14 @@ import QtQuick
 //   host.openLibraryClaim / host.openRedownloadGate / host.ownAnswers /
 //   host.ownCardForget / host.ownCardRegister / host.ownGen / host.ownKeys /
 //   host.pvSt / host.togglePreview
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: ac
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property real btnBorderW: 1.5
   readonly property int btnRad: 8              // button corner radius

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Effects
 import QtQuick.Shapes
+import "primitives" as Primitives
 
 // Square cover box: the app's one artwork surface. Decodes once at a
 // fixed size, paints a caller-supplied stand-in beneath the cover while
@@ -16,14 +17,14 @@ import QtQuick.Shapes
 //   host.pvSt(kind, id)  the shared preview state a raised cover follows
 //   host.warmArt(url, w, h)  pin a decoded cover in the warm pool
 //   host.onScreen  pause the loading blink while the window is away
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Rectangle {
   id: artRoot
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color accent: "#3dff6e"   // phosphor green (primary)
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)
