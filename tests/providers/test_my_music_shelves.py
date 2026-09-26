@@ -308,6 +308,9 @@ def test_two_sources_loading_their_shelves_in_one_turn_both_land():  # noqa: C90
         loadLibrary = WavesBridge.loadLibrary
         _lib_status = WavesBridge._lib_status
         _lib_count = staticmethod(WavesBridge._lib_count)
+        _LIBRARY_DRESSED = WavesBridge._LIBRARY_DRESSED
+        _dress_library_rows = WavesBridge._dress_library_rows
+        _dress_library_row = WavesBridge._dress_library_row
 
         def __init__(self):
             self._logged_in = True

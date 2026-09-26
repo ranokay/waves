@@ -236,6 +236,7 @@ class _LibraryArtistStub(_StubBase):
     def __init__(self):
         super().__init__()
         self.artistLoaded = _Signal()
+        self.artistLoadFailed = _Signal()
 
     def _get_artist(self, artist_id):
         artist = _Artist()
@@ -263,6 +264,21 @@ def test_a_choking_library_page_clears_busy():
     assert stub.busy == [True, False]
     assert stub.statuses[-1] == "Could not load artist"
     assert stub.artistLoaded.emits == []
+    # A Back onto the scoped page waits on artistLoaded to clear its history
+    # latch; a silent failure left navPush dead until logout. Both failure
+    # exits now tell the QML.
+    assert stub.artistLoadFailed.emits == [("a1",)]
+
+
+def test_an_unresolvable_library_artist_still_reports_failure():
+    stub = _LibraryArtistStub()
+    stub._get_artist = lambda artist_id: None
+
+    stub.loadArtistLibrary("a1")
+
+    assert stub.busy == [True, False]
+    assert stub.statuses[-1] == "Could not load artist"
+    assert stub.artistLoadFailed.emits == [("a1",)]
 
 
 # --------------------------------------------------------------------------- #

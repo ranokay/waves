@@ -44,6 +44,8 @@ class _Stub:
 
     _lib_generation = WavesBridge._lib_generation
     _lib_start = WavesBridge._lib_start
+    _needs_plan_rebind = WavesBridge._needs_plan_rebind
+    _unbind_merge_plans = WavesBridge._unbind_merge_plans
 
     def __init__(self):
         self._jobs = JobRuntime()
@@ -54,6 +56,8 @@ class _Stub:
         self._jobs.dls: dict = {}
         self._jobs.tracks: dict = {}
         self._merge_plans: dict = {}
+        self._merge_plans_unbound: dict = {}
+        self._merge_scanned: set = {}
         self._pending_downloads: list = []
         self._pending_lock = Lock()
         self._queue_lock = Lock()
@@ -236,6 +240,7 @@ def test_logout_bumps_lib_gen_and_clears_cache():
     # ...and the artist/page-cache cleanup added with stale-while-revalidate.
     stub._artist_cache = {"1": {}}
     stub._artist_loading = {"1"}
+    stub._artist_reval_ts = {"1": 1.0}
     stub._page_cache_path = "/nonexistent/page_cache.json"
     # ...and the busy flag it clears for the workers its generation bump
     # orphans (see test_signout_and_rollup_recovery).
@@ -273,6 +278,7 @@ def test_logout_bumps_lib_gen_and_clears_cache():
         "nor a hover-fetched album's rows"
     )
     assert stub._item_fetch_ts == {}, "the next account's pages revalidate from scratch"
+    assert stub._artist_reval_ts == {}, "nor its artist pages"
 
 
 def test_stale_lib_gen_guards_cache_write_semantics():

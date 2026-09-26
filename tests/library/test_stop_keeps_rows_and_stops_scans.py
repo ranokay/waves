@@ -323,6 +323,7 @@ class _QueueStub:
     _remove_rows_where = WavesBridge._remove_rows_where
     _remove_row = WavesBridge._remove_row
     _row_object = WavesBridge._row_object
+    _needs_plan_rebind = WavesBridge._needs_plan_rebind
 
     def __init__(self, statuses):
         self._jobs = JobRuntime()
@@ -489,6 +490,7 @@ class _RetryStub:
     _remove_row = WavesBridge._remove_row
     _row_object = WavesBridge._row_object
     _start_retry = WavesBridge._start_retry
+    _needs_plan_rebind = WavesBridge._needs_plan_rebind
 
     def __init__(self, status):
         self._queue = [

@@ -258,6 +258,9 @@ class _AuthStub:
     """Base stand-in for the auth slots: the guard tidal, the fake provider,
     the inline pool and the signals they touch."""
 
+    _page_path_ok = staticmethod(WavesBridge._page_path_ok)
+    _unbind_merge_plans = WavesBridge._unbind_merge_plans
+
     def __init__(self, provider):
         self.providers = {"tidal": provider}
         self.tidal = _GuardTidal()
@@ -322,6 +325,11 @@ def _seed_session_state(stub) -> None:
         "_item_fetch_ts": {},
         "_artist_cache": {},
         "_artist_loading": {},
+        "_artist_reval_ts": {},
+        "_jobs": SimpleNamespace(objs={}),
+        "_merge_scanned": set(),
+        "_merge_plans": {},
+        "_merge_plans_unbound": {},
         "_album_tracks_cache": {},
         "_edition_tracks_cache": {},
         "_home_cache": {},

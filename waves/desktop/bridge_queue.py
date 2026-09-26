@@ -30,8 +30,9 @@ from threading import current_thread, main_thread
 
 from PySide6 import QtGui
 from PySide6.QtCore import Slot
+from tidalapi.exceptions import ObjectNotFound
 
-from waves.constants import CTX_TIDAL
+from waves.constants import CTX_TIDAL, ITEM_FETCH_FAILED, ITEM_GONE
 from waves.desktop.worker import Worker
 
 logger = logging.getLogger("waves.queue")
@@ -929,16 +930,43 @@ class QueueMixin:
 
         def work() -> None:
             obj = None
+            gone = False
+            plan = None
+            needs_rebind = False
             try:
-                obj = self.providers[CTX_TIDAL].get_object(bucket, media_id)
+                provider = self.providers[CTX_TIDAL]
+                obj = provider.get_object(bucket, media_id)
+                # A merge whose plan died with a sign-out is rebuilt
+                # through this session; if that fails the row stays
+                # failed rather than retrying as a plain album.
+                needs_rebind_fn = getattr(self, "_needs_plan_rebind", None)
+                needs_rebind = bool(needs_rebind_fn(item)) if callable(needs_rebind_fn) else False
+                if needs_rebind:
+                    session = getattr(getattr(provider, "_tidal", None), "session", None)
+                    rebind_fn = getattr(self, "_rebind_merge_plan", None)
+                    if callable(rebind_fn):
+                        plan = rebind_fn(bucket, media_id, session)
+            except ObjectNotFound:
+                gone = True
+                obj = None
+                logger.info("Item %s %s is no longer on TIDAL", bucket, media_id)
             except Exception:
+                obj = None
                 logger.exception("Could not re-fetch %s %s for retry", bucket, media_id)
             if gen != self._browse_gen:
                 self._refetch_inflight.discard(key)
                 return
+            if plan is not None:
+                getattr(self, "_merge_plans", {})[media_id] = plan
+                getattr(self, "_merge_plans_unbound", {}).pop(media_id, None)
+            elif needs_rebind:
+                # The plan was needed but could not be rebuilt: never
+                # degrade a best-of-both retry to a plain album. Fall
+                # through to the fetch-failed branch below.
+                obj = None
             if obj is None:
                 self._refetch_inflight.discard(key)
-                self._set_status("That item is no longer available")
+                self._set_status(ITEM_GONE if gone else ITEM_FETCH_FAILED)
                 return
             self._remember(bucket, media_id, obj)
             self._queueRetryRefetched.emit(bucket, media_id, qid)

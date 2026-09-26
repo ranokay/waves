@@ -23,6 +23,11 @@ def provider_folder_name(provider_id: object) -> str:
 # favorite-id sweep share the window, so a page size change moves both).
 LIBRARY_PAGE: int = 100
 REQUESTS_TIMEOUT_SEC: int = 45
+# A download's re-fetch by id: TIDAL said the item is gone, or the fetch failed.
+# Only TIDAL's own not-found proves delisting; a rate limit or a dropped
+# connection is a fetch to try again (never claim a takedown on weak evidence).
+ITEM_GONE: str = "That item is no longer available"
+ITEM_FETCH_FAILED: str = "Could not fetch that item, try again"
 EXTENSION_LYRICS: str = ".lrc"
 UNIQUIFY_THRESHOLD: int = 99
 FILENAME_SANITIZE_PLACEHOLDER: str = "_"
