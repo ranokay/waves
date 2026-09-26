@@ -515,78 +515,90 @@ class AppleProvider(Provider):
 
     def _artist_row(self, item: dict) -> dict:
         attrs = self._attributes(item)
-        return {
-            "id": self._remember("artist", item),
-            "name": str(attrs.get("name") or ""),
-            "art": self._art(attrs, 320),
-            "roles": "Artist",
-            "popularity": -1,
-        }
+        return validate_row(
+            "artist",
+            {
+                "id": self._remember("artist", item),
+                "name": str(attrs.get("name") or ""),
+                "art": self._art(attrs, 320),
+                "roles": "Artist",
+                "popularity": -1,
+            },
+        )
 
     def _album_row(self, item: dict, artist_ids: dict[str, str]) -> dict:
         attrs = self._attributes(item)
         artist_id, artists = self._artist_credit(item, attrs, artist_ids)
         date = self._date(attrs)
-        return {
-            "id": self._remember("album", item),
-            "title": str(attrs.get("name") or ""),
-            "artist": str(attrs.get("artistName") or ""),
-            "artist_id": artist_id,
-            "artists": artists,
-            "art": self._art(attrs, 320),
-            "year": date[:4],
-            "date": date,
-            "tracks": int(attrs.get("trackCount") or 0),
-            "duration_sec": self._seconds(attrs),
-            "quality": self._quality(attrs),
-            "popularity": -1,
-            "explicit": attrs.get("contentRating") == "explicit",
-            "added": "",
-        }
+        return validate_row(
+            "album",
+            {
+                "id": self._remember("album", item),
+                "title": str(attrs.get("name") or ""),
+                "artist": str(attrs.get("artistName") or ""),
+                "artist_id": artist_id,
+                "artists": artists,
+                "art": self._art(attrs, 320),
+                "year": date[:4],
+                "date": date,
+                "tracks": int(attrs.get("trackCount") or 0),
+                "duration_sec": self._seconds(attrs),
+                "quality": self._quality(attrs),
+                "popularity": -1,
+                "explicit": attrs.get("contentRating") == "explicit",
+                "added": "",
+            },
+        )
 
     def _track_row(self, item: dict, artist_ids: dict[str, str]) -> dict:
         attrs = self._attributes(item)
         artist_id, artists = self._artist_credit(item, attrs, artist_ids)
         date = self._date(attrs)
         seconds = self._seconds(attrs)
-        return {
-            "id": self._remember("track", item),
-            "title": str(attrs.get("name") or ""),
-            "artist": str(attrs.get("artistName") or ""),
-            "artist_id": artist_id,
-            "artists": artists,
-            "album": str(attrs.get("albumName") or ""),
-            "album_id": self._album_id(item, attrs),
-            "num": int(attrs.get("trackNumber") or 0),
-            "vol": int(attrs.get("discNumber") or 1),
-            "art": self._art(attrs, 160),
-            "year": date[:4],
-            "date": date,
-            "duration": self._duration(seconds),
-            "duration_sec": seconds,
-            "quality": self._quality(attrs),
-            "popularity": -1,
-            "explicit": attrs.get("contentRating") == "explicit",
-            "added": "",
-        }
+        return validate_row(
+            "track",
+            {
+                "id": self._remember("track", item),
+                "title": str(attrs.get("name") or ""),
+                "artist": str(attrs.get("artistName") or ""),
+                "artist_id": artist_id,
+                "artists": artists,
+                "album": str(attrs.get("albumName") or ""),
+                "album_id": self._album_id(item, attrs),
+                "num": int(attrs.get("trackNumber") or 0),
+                "vol": int(attrs.get("discNumber") or 1),
+                "art": self._art(attrs, 160),
+                "year": date[:4],
+                "date": date,
+                "duration": self._duration(seconds),
+                "duration_sec": seconds,
+                "quality": self._quality(attrs),
+                "popularity": -1,
+                "explicit": attrs.get("contentRating") == "explicit",
+                "added": "",
+            },
+        )
 
     def _playlist_row(self, item: dict) -> dict:
         attrs = self._attributes(item)
         relationships = item.get("relationships") or {}
         tracks = relationships.get("tracks") or {}
         meta = tracks.get("meta") or {}
-        return {
-            "id": self._remember("playlist", item),
-            "title": str(attrs.get("name") or ""),
-            "art": self._art(attrs, 320),
-            "tracks": int(attrs.get("trackCount") or meta.get("total") or 0),
-            "creator": str(attrs.get("curatorName") or ""),
-            "added": "",
-            "kind": "playlist",
-            "sub": "",
-            "path": "",
-            "plCount": 0,
-        }
+        return validate_row(
+            "playlist",
+            {
+                "id": self._remember("playlist", item),
+                "title": str(attrs.get("name") or ""),
+                "art": self._art(attrs, 320),
+                "tracks": int(attrs.get("trackCount") or meta.get("total") or 0),
+                "creator": str(attrs.get("curatorName") or ""),
+                "added": "",
+                "kind": "playlist",
+                "sub": "",
+                "path": "",
+                "plCount": 0,
+            },
+        )
 
     def login_begin(self) -> str:
         return ""
@@ -1007,13 +1019,13 @@ class AppleProvider(Provider):
     def row_for(self, kind: str, item: dict) -> dict:
         """One catalog resource as the Waves row dict the pages render."""
         if kind == "artist":
-            return validate_row(kind, self._artist_row(item))
+            return self._artist_row(item)
         if kind == "album":
-            return validate_row(kind, self._album_row(item, {}))
+            return self._album_row(item, {})
         if kind == "track":
-            return validate_row(kind, self._track_row(item, {}))
+            return self._track_row(item, {})
         if kind == "playlist":
-            return validate_row(kind, self._playlist_row(item))
+            return self._playlist_row(item)
         raise KeyError(kind)
 
     def user_collections(self) -> dict | None:

@@ -8,6 +8,7 @@ shipped runtime logs once per kind and never alters the row.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -167,3 +168,7 @@ def test_tidal_rows_pass_unchanged():
 def test_the_download_engine_does_not_import_the_validator():
     assert "validate_row" not in vars(waves.download)
     assert "RowValidationError" not in vars(waves.download)
+    # vars() misses a function-local import; the source must not name it at all.
+    source = Path("waves/download.py").read_text(encoding="utf-8")
+    assert "validate_row" not in source
+    assert "RowValidationError" not in source
