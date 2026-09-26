@@ -5451,6 +5451,39 @@ ApplicationWindow {
       m[fid] = remaining
       root.folderRemainMap = m
     }
+    // A My Music shelf finished counting its DOWNLOAD ALL (count known):
+    // the source's group turns the armed tap into the shared bulk confirm.
+    // A count for a source with no group lands nowhere.
+    function onFavoriteTracksResolved(source, count) {
+      var g = root.libGroupFor(source)
+      if (g)
+        g.applyFavResolved("favTracks", count)
+    }
+    function onFavoriteAlbumsResolved(source, count) {
+      var g = root.libGroupFor(source)
+      if (g)
+        g.applyFavResolved("favAlbums", count)
+    }
+    function onFavoriteArtistsResolved(source, count) {
+      var g = root.libGroupFor(source)
+      if (g)
+        g.applyFavResolved("favArtists", count)
+    }
+    function onFavoritePlaylistsResolved(source, count) {
+      var g = root.libGroupFor(source)
+      if (g)
+        g.applyFavResolved("favPlaylists", count)
+    }
+    function onFavoriteMixesResolved(source, count) {
+      var g = root.libGroupFor(source)
+      if (g)
+        g.applyFavResolved("favMixes", count)
+    }
+    function onFavoriteVideosResolved(source, count) {
+      var g = root.libGroupFor(source)
+      if (g)
+        g.applyFavResolved("favVideos", count)
+    }
     // A Browse category finished resolving (count known, list cached):
     // run whichever action the user queued on the tile.
     function onPlaylistCategoryResolved(path, title, count, firstId) {
@@ -9380,7 +9413,7 @@ ApplicationWindow {
           font.pixelSize: 18
           font.bold: true
           wrapMode: Text.WordWrap
-          text: root.catDlPrompt ? "Download " + root.catDlPrompt.count + (root.catDlPrompt.count === 1 ? " playlist?" : " playlists?") : ""
+          text: !root.catDlPrompt ? "" : root.catDlPrompt.kind === "favTracks" ? "Download " + root.catDlPrompt.count + (root.catDlPrompt.count === 1 ? " track?" : " tracks?") : root.catDlPrompt.kind === "favAlbums" ? "Download " + root.catDlPrompt.count + (root.catDlPrompt.count === 1 ? " album?" : " albums?") : root.catDlPrompt.kind === "favArtists" ? "Download " + root.catDlPrompt.count + (root.catDlPrompt.count === 1 ? " artist?" : " artists?") : root.catDlPrompt.kind === "favPlaylists" ? "Download " + root.catDlPrompt.count + (root.catDlPrompt.count === 1 ? " playlist?" : " playlists?") : root.catDlPrompt.kind === "favMixes" ? "Download " + root.catDlPrompt.count + (root.catDlPrompt.count === 1 ? " mix?" : " mixes?") : root.catDlPrompt.kind === "favVideos" ? "Download " + root.catDlPrompt.count + (root.catDlPrompt.count === 1 ? " video?" : " videos?") : "Download " + root.catDlPrompt.count + (root.catDlPrompt.count === 1 ? " playlist?" : " playlists?")
         }
         Text {
           textFormat: Text.PlainText
@@ -9389,7 +9422,7 @@ ApplicationWindow {
           color: root.textLo
           font.pixelSize: 13
           lineHeight: 1.3
-          text: root.catDlPrompt ? "Everything in " + root.catDlPrompt.title + ", each playlist in its own folder. Progress shows in the queue." : ""
+          text: !root.catDlPrompt ? "" : root.catDlPrompt.kind === "favTracks" ? "Every track in My Music, filed by your track path setting. Progress shows in the queue." : root.catDlPrompt.kind === "favAlbums" ? "Every album in My Music, each in its own folder, under your album settings. Progress shows in the queue." : root.catDlPrompt.kind === "favArtists" ? "The full discography of every artist in My Music, under your discography settings. This can be a lot of music. Progress shows in the queue." : root.catDlPrompt.kind === "favPlaylists" ? "Every playlist in My Music, the ones inside folders included, each in its own folder. Progress shows in the queue." : root.catDlPrompt.kind === "favMixes" ? "Every mix in My Music as it is today, each in its own folder. Progress shows in the queue." : root.catDlPrompt.kind === "favVideos" ? "Every video in My Music, filed by your video path setting. Progress shows in the queue." : "Everything in " + root.catDlPrompt.title + ", each playlist in its own folder. Progress shows in the queue."
         }
         Row {
           spacing: 8
@@ -9426,7 +9459,21 @@ ApplicationWindow {
               root.catDlDismiss()
               if (mute)
                 waves.muteCategoryDlConfirm()
-              if (p)
+              if (!p)
+                return
+              if (p.kind === "favTracks")
+                waves.downloadFavoriteTracks(p.source)
+              else if (p.kind === "favAlbums")
+                waves.downloadFavoriteAlbums(p.source)
+              else if (p.kind === "favArtists")
+                waves.downloadFavoriteArtists(p.source)
+              else if (p.kind === "favPlaylists")
+                waves.downloadFavoritePlaylists(p.source)
+              else if (p.kind === "favMixes")
+                waves.downloadFavoriteMixes(p.source)
+              else if (p.kind === "favVideos")
+                waves.downloadFavoriteVideos(p.source)
+              else
                 waves.downloadPlaylistCategory(p.path)
             }
           }

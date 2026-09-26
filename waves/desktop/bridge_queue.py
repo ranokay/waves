@@ -356,6 +356,31 @@ class QueueMixin:
             for key in keys:
                 self.downloadVideo(str(key))
 
+    def _enqueue_artists(self, gen: int, ids) -> None:
+        """Batch counterpart of _enqueue_albums for a shelf's favourite
+        artists: each id starts its own discography download. Same
+        GUI-thread affinity, coalesced queueChanged, and stale-generation
+        refusal (a batch posted before STOP starts no discography after it).
+        The artists' own buttons were never lit, so a stale batch only has
+        to start nothing."""
+        if gen != self._scan_gen:
+            return
+        with self._queue_batch():
+            for artist_id in ids:
+                self.downloadArtist(str(artist_id))
+
+    def _enqueue_collections(self, gen: int, kind: str, keys) -> None:
+        """Batch counterpart of _enqueue_albums for a shelf's favourite
+        playlists or mixes (``kind`` is "playlist" or "mix"). Same
+        GUI-thread affinity, coalesced queueChanged, and stale-generation
+        refusal rationale."""
+        start = self.downloadPlaylist if kind == "playlist" else self.downloadMix
+        if gen != self._scan_gen:
+            return
+        with self._queue_batch():
+            for key in keys:
+                start(str(key))
+
     def _enqueue(
         self,
         name: str,
