@@ -112,7 +112,7 @@ Rectangle {
         libPath = ""
         return
       }
-      var tp = waves.libraryTrackPresence("" + (t.artist || ""), "" + t.title, "" + (t.album || ""), "" + (t.year || ""), t.duration_sec || 0);
+      var tp = waves.libraryTrackPresence("" + (t.artist || ""), "" + t.title, "" + (t.album || ""), "" + (t.year || ""), t.duration_sec || 0, t.explicit === true ? 1 : (t.explicit === false ? 0 : -1));
       // A track has no coverage axis: presence alone is the done
       // shape, and identity alone picks green from gold.
       libPresent = !!(tp && tp.present === true)
@@ -121,7 +121,7 @@ Rectangle {
       libPath = libPresent ? ("" + (tp.local_album_id || "")) : ""
       return
     }
-    var p = waves.libraryAlbumPresence("" + (a.artist || ""), "" + a.title, "" + (a.year || ""), a.tracks || 0, a.duration_sec || 0)
+    var p = waves.libraryAlbumPresence("" + (a.artist || ""), "" + a.title, "" + (a.year || ""), a.tracks || 0, a.duration_sec || 0, a.explicit === true ? 1 : -1)
     libPresent = !!(p && p.present === true && p.full === true)
     libPartial = !!(p && p.present === true && p.full !== true)
     libSure = !!(p && p.sure === true)

@@ -25,7 +25,7 @@ LibraryTag {
   function _resolvePresence() {
     _resolved = true
     var t = tppl.track
-    presence = (t && t.title) ? waves.libraryTrackPresence("" + (t.artist || ""), "" + t.title, "" + (t.album || ""), "" + (t.year || ""), t.duration_sec || 0) : null
+    presence = (t && t.title) ? waves.libraryTrackPresence("" + (t.artist || ""), "" + t.title, "" + (t.album || ""), "" + (t.year || ""), t.duration_sec || 0, t.explicit === true ? 1 : (t.explicit === false ? 0 : -1)) : null
   }
   onTrackChanged: _resolvePresence()
   Component.onCompleted: if (!_resolved)

@@ -479,7 +479,7 @@ Rectangle {
         libPath = ""
         return
       }
-      var tp = waves.libraryTrackPresence("" + (t.artist || ""), "" + t.title, "" + (t.album || ""), "" + (t.year || ""), t.duration_sec || 0);
+      var tp = waves.libraryTrackPresence("" + (t.artist || ""), "" + t.title, "" + (t.album || ""), "" + (t.year || ""), t.duration_sec || 0, t.explicit === true ? 1 : (t.explicit === false ? 0 : -1));
       // No completeness bar to apply: presence alone is the done
       // shape, and identity alone picks green from gold.
       libPresent = !!(tp && tp.present === true)
@@ -488,7 +488,7 @@ Rectangle {
       libPath = libPresent ? ("" + (tp.local_album_id || "")) : ""
       return
     }
-    var p = waves.libraryAlbumPresence("" + (a.artist || ""), "" + a.title, "" + (a.year || ""), a.tracks || 0, a.duration_sec || 0);
+    var p = waves.libraryAlbumPresence("" + (a.artist || ""), "" + a.title, "" + (a.year || ""), a.tracks || 0, a.duration_sec || 0, a.explicit === true ? 1 : -1);
     // Coverage picks the shape (gold claim vs cyan partial), identity
     // picks the gold wording: an apparently complete but unproven
     // match is exactly what MAYBE is for, while a copy short on

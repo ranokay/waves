@@ -372,3 +372,44 @@ def test_the_mp3_cover_names_its_mime_type(tmp_path):
     apic = tags.getall("APIC")[0]
     assert apic.mime == "image/jpeg"
     assert apic.type == mutagen.id3.PictureType.COVER_FRONT
+
+
+# --------------------------------------------------------------------------- #
+# The explicit flag and ISRC travel in every container (UP-01: the scanner
+# reads rtng / ITUNESADVISORY back, so the writer must put them there)
+
+
+def _flac_tags(tmp_path, **kw):
+    stub = _write(_flac_stub(), tmp_path, "t.flac", title="T", artists=["A"], albumartist=["A"], **kw)
+    return stub.tags
+
+
+def test_a_flac_carries_the_itunes_advisory_spelling(tmp_path):
+    assert _flac_tags(tmp_path, explicit=True)["ITUNESADVISORY"] == ["1"]
+    assert _flac_tags(tmp_path, explicit=False)["ITUNESADVISORY"] == ["0"]
+
+
+def test_an_mp3_carries_the_itunes_advisory_frame(tmp_path):
+    assert [str(t) for t in _mp3_tags(tmp_path, explicit=True).getall("TXXX:ITUNESADVISORY")] == ["1"]
+    assert [str(t) for t in _mp3_tags(tmp_path, explicit=False).getall("TXXX:ITUNESADVISORY")] == ["0"]
+
+
+def test_an_m4a_carries_the_isrc_in_the_freeform_readers_map(tmp_path):
+    mp4 = _write(_mp4_stub(), tmp_path, "t.m4a", title="T", artists=["A"], albumartist=["A"], isrc="USRC12345678")
+    assert mp4.tags["----:com.apple.iTunes:ISRC"] == b"USRC12345678"
+    assert mp4.tags["isrc"] == "USRC12345678", "the bare atom stays for older readers"
+
+
+def test_an_existing_but_empty_tag_block_is_left_alone(tmp_path):
+    """An empty-but-present block (a bare ilst, a vendor-only Vorbis comment)
+    is falsy too: treating it as missing called add_tags() on it, which
+    raises, and the track failed."""
+    stub = _mp4_stub()
+    stub.tags = {}
+    file = tmp_path / "t.m4a"
+    file.write_bytes(b"x")
+    with patch("waves.metadata.tags.mutagen.File", return_value=stub):
+        assert (
+            Metadata(path_file=file, target_upc={"FLAC": "UPC", "MP4": "UPC", "MP3": "UPC"}, title="T").save() is True
+        )
+    assert stub.tags["\xa9nam"] == "T"
