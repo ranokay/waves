@@ -7,9 +7,13 @@ from tidalapi.media import Stream, StreamManifest
 
 
 class _Emitter(Protocol):
-    """Anything the engine can ``.emit(...)`` progress through (Qt signal or stand-in)."""
+    """Anything the engine can ``.emit(...)`` progress through (Qt signal or stand-in).
 
-    def emit(self, *args: object) -> None: ...
+    The engine only ever emits percentages (float) and names (str) through
+    these, so the payload is exactly that union, never ``object``.
+    """
+
+    def emit(self, *args: float | str) -> None: ...
 
 
 class ProgressGui(Protocol):

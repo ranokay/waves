@@ -1,11 +1,8 @@
-"""PRV-04: the download engine stays importable without PySide6.
+"""The download engine stays importable without PySide6.
 
-``waves.download`` used to import ``ProgressBars`` from
-``waves.model.gui_data``, which imports ``PySide6.QtCore`` at module scope
-whenever PySide6 is present (and only guarded ``ModuleNotFoundError``, so a
-broken Qt install raised past it). The engine now names only the neutral
-``ProgressGui`` shape from ``waves.model.downloader``; the Qt-backed
-``ProgressBars`` is built in the desktop layer.
+The engine names only the neutral ``ProgressGui`` shape from
+``waves.model.downloader``; the Qt-backed ``ProgressBars`` is built in the
+desktop layer and satisfies that shape structurally.
 """
 
 from __future__ import annotations
@@ -17,6 +14,11 @@ import sys
 from support.paths import REPO_ROOT
 
 import waves.download
+from waves.model.downloader import ProgressGui
+
+
+def _parse(rel: str) -> ast.Module:
+    return ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"))
 
 
 def test_engine_module_binds_no_pyside():
@@ -24,7 +26,7 @@ def test_engine_module_binds_no_pyside():
 
 
 def test_engine_source_names_no_qt_or_gui_data():
-    tree = ast.parse((REPO_ROOT / "waves" / "download.py").read_text(encoding="utf-8"))
+    tree = _parse("waves/download.py")
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -44,6 +46,7 @@ class _B(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, _B())
 import waves.download
 print('PySide6' in sys.modules)
+print('waves.model.gui_data' in sys.modules)
 """
     out = subprocess.run(
         [sys.executable, "-c", probe],
@@ -53,15 +56,15 @@ print('PySide6' in sys.modules)
         timeout=120,
     )
     assert out.returncode == 0, f"engine import failed with PySide6 blocked:\n{out.stderr}"
-    assert out.stdout.strip() == "False"
+    assert out.stdout.split() == ["False", "False"]
 
 
 def test_qt_backed_bars_still_satisfy_the_neutral_shape():
-    tree = ast.parse((REPO_ROOT / "waves" / "model" / "gui_data.py").read_text(encoding="utf-8"))
+    tree = _parse("waves/model/gui_data.py")
     fields = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "ProgressBars":
             for stmt in node.body:
                 if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
                     fields.add(stmt.target.id)
-    assert {"item", "item_name", "list_item", "list_name"} <= fields
+    assert set(ProgressGui.__annotations__) <= fields
