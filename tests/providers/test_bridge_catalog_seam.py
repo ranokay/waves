@@ -550,6 +550,7 @@ def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
 # --------------------------------------------------------------------------- #
 class _OpenUrlStub:
     _open_url = WavesBridge._open_url
+    _fav_artist_dict = WavesBridge._fav_artist_dict
 
     def __init__(self, provider):
         self._objs_lock = Lock()

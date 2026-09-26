@@ -146,6 +146,7 @@ from waves.providers.apple.files import (
     write_text_sidecar,
 )
 from waves.providers.apple.runner import AppleJobHooks, _JobOptions
+from waves.providers.base import validate_row
 from waves.providers.tidal_client import quality_audio_highest
 from waves.providers.tidal_folders import FOLDER_PATH_TOKEN, apply_folder_path
 
@@ -5402,100 +5403,112 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     def _album_dict(self, album) -> dict:
         key = str(getattr(album, "id", id(album)))
         self._remember("album", key, album)
-        return {
-            "id": key,
-            "title": name_builder_title(album),
-            "artist": name_builder_album_artist(album),
-            "artist_id": _artist_id(album),
-            "artists": _artists_list(album),
-            "art": _image(album),
-            "year": _year(album),
-            "date": _release_date(album),
-            # The day a reissue was really listed (see _listed_date), "" for
-            # every other row: date and year stay TIDAL's so tagging and the
-            # library presence match are untouched, the UI prefers this one.
-            "listed": _listed_date_str(album),
-            "tracks": _track_count(album),
-            # The release's total play length in raw seconds (0 when TIDAL
-            # never said), for the presence matcher's duration witness; the
-            # UI's readable form stays a per-view concern.
-            "duration_sec": int(getattr(album, "duration", 0) or 0),
-            "quality": _quality_label(album, self.providers[CTX_TIDAL]),
-            "popularity": _popularity(album),
-            "explicit": bool(getattr(album, "explicit", False)),
-            "added": _date_added(album),
-        }
+        return validate_row(
+            "album",
+            {
+                "id": key,
+                "title": name_builder_title(album),
+                "artist": name_builder_album_artist(album),
+                "artist_id": _artist_id(album),
+                "artists": _artists_list(album),
+                "art": _image(album),
+                "year": _year(album),
+                "date": _release_date(album),
+                # The day a reissue was really listed (see _listed_date), "" for
+                # every other row: date and year stay TIDAL's so tagging and the
+                # library presence match are untouched, the UI prefers this one.
+                "listed": _listed_date_str(album),
+                "tracks": _track_count(album),
+                # The release's total play length in raw seconds (0 when TIDAL
+                # never said), for the presence matcher's duration witness; the
+                # UI's readable form stays a per-view concern.
+                "duration_sec": int(getattr(album, "duration", 0) or 0),
+                "quality": _quality_label(album, self.providers[CTX_TIDAL]),
+                "popularity": _popularity(album),
+                "explicit": bool(getattr(album, "explicit", False)),
+                "added": _date_added(album),
+            },
+        )
 
     def _track_dict(self, track) -> dict:
         key = str(getattr(track, "id", id(track)))
         self._remember("track", key, track)
-        return {
-            "id": key,
-            "title": name_builder_title(track),
-            "artist": name_builder_artist(track),
-            "artist_id": _artist_id(track),
-            "artists": _artists_list(track),
-            "album": getattr(getattr(track, "album", None), "name", ""),
-            "album_id": str(getattr(getattr(track, "album", None), "id", "") or ""),
-            "num": int(getattr(track, "track_num", 0) or 0),
-            "vol": int(getattr(track, "volume_num", 1) or 1),
-            "art": _image(track, 160),
-            "year": _year(track),
-            "date": _release_date(track),
-            "duration": _fmt_duration(getattr(track, "duration", 0)),
-            # And in raw seconds, for the presence matcher's duration witness.
-            "duration_sec": int(getattr(track, "duration", 0) or 0),
-            "quality": _quality_label(track, self.providers[CTX_TIDAL]),
-            "popularity": _popularity(track),
-            "explicit": bool(getattr(track, "explicit", False)),
-            "added": _date_added(track),
-        }
+        return validate_row(
+            "track",
+            {
+                "id": key,
+                "title": name_builder_title(track),
+                "artist": name_builder_artist(track),
+                "artist_id": _artist_id(track),
+                "artists": _artists_list(track),
+                "album": getattr(getattr(track, "album", None), "name", ""),
+                "album_id": str(getattr(getattr(track, "album", None), "id", "") or ""),
+                "num": int(getattr(track, "track_num", 0) or 0),
+                "vol": int(getattr(track, "volume_num", 1) or 1),
+                "art": _image(track, 160),
+                "year": _year(track),
+                "date": _release_date(track),
+                "duration": _fmt_duration(getattr(track, "duration", 0)),
+                # And in raw seconds, for the presence matcher's duration witness.
+                "duration_sec": int(getattr(track, "duration", 0) or 0),
+                "quality": _quality_label(track, self.providers[CTX_TIDAL]),
+                "popularity": _popularity(track),
+                "explicit": bool(getattr(track, "explicit", False)),
+                "added": _date_added(track),
+            },
+        )
 
     def _video_dict(self, video) -> dict:
         key = str(getattr(video, "id", id(video)))
         self._remember("video", key, video)
-        return {
-            "id": key,
-            "title": name_builder_title(video),
-            "artist": name_builder_artist(video),
-            "artists": _artists_list(video),
-            # Video stills are sized as a (width, height) PAIR, and only four
-            # pairs exist: asking for a square dimension the way albums do
-            # raises, and the fallback then hands back the largest one. Every
-            # video thumbnail in the app was therefore a full 1080x720 download,
-            # a row thumb included. Ask for the pair each surface actually
-            # draws: 160x107 for the 78px row thumb...
-            "art": _video_image(video, 160, 107),
-            # ...and 750x500 for the results grid, which shows videos 16:9 at
-            # several hundred pixels wide, where a small thumbnail goes soft.
-            "art_big": _video_image(video, 750, 500),
-            "duration": _fmt_duration(getattr(video, "duration", 0)),
-            "explicit": bool(getattr(video, "explicit", False)),
-            "added": _date_added(video),
-            "date": _release_date(video),
-            "quality": _video_spec(video),
-        }
+        return validate_row(
+            "video",
+            {
+                "id": key,
+                "title": name_builder_title(video),
+                "artist": name_builder_artist(video),
+                "artists": _artists_list(video),
+                # Video stills are sized as a (width, height) PAIR, and only four
+                # pairs exist: asking for a square dimension the way albums do
+                # raises, and the fallback then hands back the largest one. Every
+                # video thumbnail in the app was therefore a full 1080x720 download,
+                # a row thumb included. Ask for the pair each surface actually
+                # draws: 160x107 for the 78px row thumb...
+                "art": _video_image(video, 160, 107),
+                # ...and 750x500 for the results grid, which shows videos 16:9 at
+                # several hundred pixels wide, where a small thumbnail goes soft.
+                "art_big": _video_image(video, 750, 500),
+                "duration": _fmt_duration(getattr(video, "duration", 0)),
+                "explicit": bool(getattr(video, "explicit", False)),
+                "added": _date_added(video),
+                "date": _release_date(video),
+                "quality": _video_spec(video),
+            },
+        )
 
     def _playlist_dict(self, playlist) -> dict:
         key = str(getattr(playlist, "id", id(playlist)))
         self._remember("playlist", key, playlist)
         creator = getattr(playlist, "creator", None)
-        return {
-            "id": key,
-            "title": name_builder_title(playlist),
-            "art": _image(playlist),
-            "tracks": int(getattr(playlist, "num_tracks", 0) or 0),
-            "creator": str(getattr(creator, "name", "") or "") if creator is not None else "",
-            "added": _date_added(playlist),
-            # Folder rows share this model; a QML ListModel freezes its roles
-            # on the first appended row, so every row carries the full key set.
-            "kind": "playlist",
-            "sub": "",
-            "path": "",
-            # plCount, not "count": a QML delegate reads roles through the
-            # `model` context object where "count" is too easy to shadow.
-            "plCount": 0,
-        }
+        return validate_row(
+            "playlist",
+            {
+                "id": key,
+                "title": name_builder_title(playlist),
+                "art": _image(playlist),
+                "tracks": int(getattr(playlist, "num_tracks", 0) or 0),
+                "creator": str(getattr(creator, "name", "") or "") if creator is not None else "",
+                "added": _date_added(playlist),
+                # Folder rows share this model; a QML ListModel freezes its roles
+                # on the first appended row, so every row carries the full key set.
+                "kind": "playlist",
+                "sub": "",
+                "path": "",
+                # plCount, not "count": a QML delegate reads roles through the
+                # `model` context object where "count" is too easy to shadow.
+                "plCount": 0,
+            },
+        )
 
     def _folder_dict(self, node, tree) -> dict:
         """Row for a playlist folder (same key set as _playlist_dict; QML
@@ -5505,31 +5518,37 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             parts.append(f"{node.subfolder_count} folder{'s' if node.subfolder_count != 1 else ''}")
         count = len(node.playlists)
         parts.append(f"{count} playlist{'s' if count != 1 else ''}")
-        return {
-            "id": node.id,
-            "title": node.name,
-            "art": "",
-            "tracks": 0,
-            "creator": "",
-            "added": "",
-            "kind": "folder",
-            "sub": " · ".join(parts),
-            "path": node.path,
-            # Recursive playlist total: what "download all" would queue, and
-            # the badge's idle number.
-            "plCount": len(tree.playlists_under(node.id)),
-        }
+        return validate_row(
+            "playlist",
+            {
+                "id": node.id,
+                "title": node.name,
+                "art": "",
+                "tracks": 0,
+                "creator": "",
+                "added": "",
+                "kind": "folder",
+                "sub": " · ".join(parts),
+                "path": node.path,
+                # Recursive playlist total: what "download all" would queue, and
+                # the badge's idle number.
+                "plCount": len(tree.playlists_under(node.id)),
+            },
+        )
 
     def _mix_dict(self, mix) -> dict:
         key = str(getattr(mix, "id", id(mix)))
         self._remember("mix", key, mix)
-        return {
-            "id": key,
-            "title": name_builder_title(mix),
-            "art": _image(mix),
-            "subtitle": str(getattr(mix, "sub_title", "") or getattr(mix, "short_subtitle", "") or ""),
-            "added": _date_added(mix),
-        }
+        return validate_row(
+            "mix",
+            {
+                "id": key,
+                "title": name_builder_title(mix),
+                "art": _image(mix),
+                "subtitle": str(getattr(mix, "sub_title", "") or getattr(mix, "short_subtitle", "") or ""),
+                "added": _date_added(mix),
+            },
+        )
 
     def _get_artist(self, artist_id: str):
         artist = self._objs["artist"].get(artist_id)
@@ -6062,17 +6081,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 elif kind == "mixes":
                     rows["mixes"] = [self._mix_dict(media)]
                 elif kind == "artists":
-                    key = str(getattr(media, "id", id(media)))
-                    self._remember("artist", key, media)
-                    rows["artists"] = [
-                        {
-                            "id": key,
-                            "name": getattr(media, "name", ""),
-                            "art": _image(media, 320),
-                            "roles": _artist_roles(media),
-                            "popularity": -1,
-                        }
-                    ]
+                    rows["artists"] = [self._fav_artist_dict(media)]
                 payload = {"groups": [_search_group(CTX_TIDAL, self.providers[CTX_TIDAL], rows)]}
             except Exception:
                 # Same latch as search: one malformed row must fail the open
@@ -6228,17 +6237,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # memoized for a day, and runs after the results are on screen.
                 for artist in (results.get("artists") or [])[:60]:
                     key = str(getattr(artist, "id", id(artist)))
-                    self._remember("artist", key, artist)
                     artist_objs.append((key, artist))
-                    artists.append(
-                        {
-                            "id": key,
-                            "name": getattr(artist, "name", ""),
-                            "art": _image(artist, 320),
-                            "roles": _artist_roles(artist),
-                            "popularity": -1,  # enriched in the background below
-                        }
-                    )
+                    artists.append(self._fav_artist_dict(artist))
 
                 albums = [self._album_dict(a) for a in self._dedup_albums((results.get("albums") or [])[:60])[:40]]
                 tracks = [self._track_dict(t) for t in self._dedup_tracks((results.get("tracks") or [])[:80])[:60]]
@@ -7178,13 +7178,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     def _fav_artist_dict(self, artist) -> dict:
         key = str(getattr(artist, "id", id(artist)))
         self._remember("artist", key, artist)
-        return {
-            "id": key,
-            "name": getattr(artist, "name", ""),
-            "art": _image(artist, 320),
-            "roles": _artist_roles(artist),
-            "popularity": -1,
-        }
+        return validate_row(
+            "artist",
+            {
+                "id": key,
+                "name": getattr(artist, "name", ""),
+                "art": _image(artist, 320),
+                "roles": _artist_roles(artist),
+                "popularity": -1,
+            },
+        )
 
     def _sort_local_library(self, items: list, order_spec) -> list:
         """Sort the locally-paged categories (playlists/mixes). Sorts on string

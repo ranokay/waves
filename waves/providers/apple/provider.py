@@ -19,6 +19,7 @@ from waves.providers.base import (
     RefusalKind,
     StatusKind,
     StreamInfo,
+    validate_row,
 )
 
 
@@ -1006,13 +1007,13 @@ class AppleProvider(Provider):
     def row_for(self, kind: str, item: dict) -> dict:
         """One catalog resource as the Waves row dict the pages render."""
         if kind == "artist":
-            return self._artist_row(item)
+            return validate_row(kind, self._artist_row(item))
         if kind == "album":
-            return self._album_row(item, {})
+            return validate_row(kind, self._album_row(item, {}))
         if kind == "track":
-            return self._track_row(item, {})
+            return validate_row(kind, self._track_row(item, {}))
         if kind == "playlist":
-            return self._playlist_row(item)
+            return validate_row(kind, self._playlist_row(item))
         raise KeyError(kind)
 
     def user_collections(self) -> dict | None:
