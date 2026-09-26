@@ -820,7 +820,7 @@ class Metadata:
         """
         if isinstance(value, str | bytes):
             return not value
-        if isinstance(value, list) and value:
+        if isinstance(value, list):
             return all(isinstance(item, str | bytes) and not item for item in value)
         return False
 

@@ -243,6 +243,9 @@ class _OwnershipSpy:
 
 
 class _AlbumTracksStub:
+    def _set_status(self, text):  # a failed fetch now says so
+        pass
+
     loadAlbumTracks = WavesBridge.loadAlbumTracks
     _start_album_tracks_fetch = WavesBridge._start_album_tracks_fetch
     _record_album_members = WavesBridge._record_album_members

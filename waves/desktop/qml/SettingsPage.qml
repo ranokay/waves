@@ -88,6 +88,11 @@ Item {
     interval: 4000
     onTriggered: page.auUpToDate = false
   }
+  Timer {
+    id: auCheckFailedTimer
+    interval: 4000
+    onTriggered: page.auCheckFailed = false
+  }
   // The control tree is expensive to instantiate, but the schema's *shape*
   // never changes, only the persisted values do, and those only when we
   // save. So we build `groups` once and keep the delegates alive; rebuilding
@@ -277,6 +282,7 @@ Item {
   property string auLatest: ""         // latest version tag when available
   property bool auChecking: false      // a user-initiated check is in flight
   property bool auUpToDate: false      // transient "✓ up to date" after a check
+  property bool auCheckFailed: false   // transient "could not check" after a check that never got an answer
   readonly property bool auBusy: auState === "downloading" || auState === "verifying" || auState === "installing"
   readonly property bool auDone: auState === "done"
   function auRefresh() {
@@ -299,6 +305,7 @@ Item {
       return
     page.auChecking = true
     page.auUpToDate = false
+    page.auCheckFailed = false
     waves.checkAppUpdate(true)
   }
 
@@ -406,6 +413,15 @@ Item {
     e[key] = v
     editMap = e
     dirty = true
+  }
+  // A value applied LIVE (the diagnostics toggles push their pref straight
+  // to the backend): shown from the edit map like any other, but never an
+  // unsaved change, so SAVE and CANCEL stay inert for it. Marking it dirty
+  // made CANCEL promise an undo it could not deliver.
+  function setLive(key, v) {
+    var e = Object.assign({}, editMap)
+    e[key] = v
+    editMap = e
   }
   // Fields whose value the engine launders before use (the illegal-character
   // stand-in), by key. Their delegates register themselves here so the save
@@ -756,10 +772,17 @@ Item {
       page.auUpdate = available
       page.auLatest = latest
       // Only flash "up to date" for a user-initiated check, never the
-      // silent startup one.
+      // silent startup one. A check that threw (offline, API error)
+      // arrives as available=false with an EMPTY latest: that is not
+      // "up to date", it is "could not check", and says so instead.
       if (!available && wasManual) {
-        page.auUpToDate = true
-        auUpToDateTimer.restart()
+        if (latest === "") {
+          page.auCheckFailed = true
+          auCheckFailedTimer.restart()
+        } else {
+          page.auUpToDate = true
+          auUpToDateTimer.restart()
+        }
       }
     }
     function onDiagnosticsExported(path) {
@@ -1592,7 +1615,7 @@ Item {
                   visible: page.ff.lifeState === "failed"
                   Layout.fillWidth: true
                   wrapMode: Text.WordWrap
-                  text: "Install failed: " + page.ff.message
+                  text: page.ff.failPrefix + page.ff.message
                   color: page.red
                   font.pixelSize: 12
                 }
@@ -1893,7 +1916,7 @@ Item {
                   visible: page.ff.lifeState === "failed"
                   Layout.fillWidth: true
                   wrapMode: Text.WordWrap
-                  text: "Install failed: " + page.ff.message
+                  text: page.ff.failPrefix + page.ff.message
                   color: page.red
                   font.pixelSize: 12
                 }
@@ -1984,6 +2007,13 @@ Item {
                     visible: page.ff.upToDate && !page.ff.updateAvailable && !page.ff.checking
                     text: "✓ Up to date"
                     color: page.green
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
+                  }
+                  Text {
+                    visible: page.ff.checkFailed && !page.ff.updateAvailable && !page.ff.checking
+                    text: "✗ Could not check"
+                    color: page.red
                     font.pixelSize: 12
                     Layout.alignment: Qt.AlignVCenter
                   }
@@ -2134,6 +2164,17 @@ Item {
                   color: page.red
                   font.pixelSize: 12
                 }
+                // The last restart did not land (the helper could not
+                // swap the install folder) and was re-armed once: the
+                // restart prompt says why instead of repeating itself.
+                Text {
+                  visible: page.auDone && (page.appUp.swap_failure || "") !== ""
+                  Layout.fillWidth: true
+                  wrapMode: Text.WordWrap
+                  text: (page.appUp.swap_failure || "") + " Restart to try once more."
+                  color: page.red
+                  font.pixelSize: 12
+                }
 
                 RowLayout {
                   Layout.topMargin: 2
@@ -2214,6 +2255,14 @@ Item {
                     visible: page.auUpToDate && !page.auUpdate && !page.auBusy && !page.auChecking
                     text: "✓ Up to date"
                     color: page.green
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
+                  }
+                  // And the honest word when the check never got an answer.
+                  Text {
+                    visible: page.auCheckFailed && !page.auUpdate && !page.auBusy && !page.auChecking
+                    text: "✗ Could not check"
+                    color: page.red
                     font.pixelSize: 12
                     Layout.alignment: Qt.AlignVCenter
                   }
@@ -2507,7 +2556,7 @@ Item {
                       cursorShape: Qt.PointingHandCursor
                       onClicked: {
                         var v = !dgCard.vbOn
-                        page.setv("verbose_diagnostics", v)
+                        page.setLive("verbose_diagnostics", v)
                         // Applies live: the watchdog and detail level flip now,
                         // not on Save, so "turn on, reproduce, export" just works.
                         waves.setWavesPref("verbose_diagnostics", v)
@@ -2552,7 +2601,7 @@ Item {
                       cursorShape: Qt.PointingHandCursor
                       onClicked: {
                         var v = !dgCard.rdOn
-                        page.setv("diagnostics_redact_content", v)
+                        page.setLive("diagnostics_redact_content", v)
                         waves.setWavesPref("diagnostics_redact_content", v)
                         page.needsRefresh = true
                       }

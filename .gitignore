@@ -203,3 +203,9 @@ cookies.txt
 /flatpak-repo/
 # Added by code-review-graph
 .code-review-graph/
+
+# Local audit / review reports (working notes, never part of the shipped app).
+# Root-scoped on purpose: the tracked tests/ files that mention "audit" in their
+# names are real source and must stay tracked.
+/*audit*.md
+/notes/*audit*.md

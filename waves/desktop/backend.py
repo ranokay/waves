@@ -17878,7 +17878,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
     @Slot()
     def removeFfmpeg(self) -> None:
-        self._ffmpeg.remove()
+        status = self._ffmpeg.remove()
+        if isinstance(status, dict) and status.get("remove_error"):
+            # On Windows a running ffmpeg.exe cannot be unlinked; say so
+            # rather than doing nothing silently. Its own state, so the card
+            # reads "Remove failed", not "Install failed".
+            self.ffmpegStateChanged.emit("remove_failed", str(status["remove_error"]))
         # The managed binary is gone; a prior _resolve_ffmpeg may have injected
         # its dangling path in-memory. Reset the live value to the user's
         # real override (empty when none), so downloads/previews don't keep

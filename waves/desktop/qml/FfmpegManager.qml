@@ -11,10 +11,14 @@ QtObject {
   property var status: ({})        // last waves.ffmpegStatus()
   property string lifeState: ""    // "" | downloading | verifying | installing | done | failed | cancelled
   property string message: ""      // last lifecycle message
+  // What a "failed" lifeState failed at, as the failure line's lead-in: a
+  // Remove that could not land is not an install failure.
+  property string failPrefix: "Install failed: "
   property real pct: 0             // download/extract progress
   property bool updateAvailable: false
   property bool checking: false    // a user-initiated update check is in flight
   property bool upToDate: false    // transient "✓ up to date" after a check
+  property bool checkFailed: false // transient "could not check" after a check that got no answer
 
   readonly property string stateKey: status.state ? status.state : "missing"
   readonly property bool busy: lifeState === "downloading" || lifeState === "verifying" || lifeState === "installing"
@@ -38,6 +42,7 @@ QtObject {
       return
     mgr.checking = true
     mgr.upToDate = false
+    mgr.checkFailed = false
     waves.checkFfmpegUpdate()
   }
 
@@ -46,9 +51,17 @@ QtObject {
     onTriggered: mgr.upToDate = false
   }
 
+  property Timer checkFailedTimer: Timer {
+    interval: 4000
+    onTriggered: mgr.checkFailed = false
+  }
+
   property Connections conn: Connections {
     target: waves
     function onFfmpegStateChanged(state, msg) {
+      mgr.failPrefix = state === "remove_failed" ? "Remove failed: " : "Install failed: "
+      if (state === "remove_failed")
+        state = "failed"
       mgr.lifeState = state
       mgr.message = msg
       if (state === "done" || state === "failed" || state === "cancelled")
@@ -68,7 +81,15 @@ QtObject {
     function onFfmpegUpdateChecked(available, current, latest) {
       mgr.checking = false
       mgr.updateAvailable = available
-      if (!available) {
+      // A check that threw (offline, API error) arrives as
+      // available=false with an EMPTY latest: "could not check",
+      // never "up to date".
+      if (available)
+        return
+      if (latest === "") {
+        mgr.checkFailed = true
+        mgr.checkFailedTimer.restart()
+      } else {
         mgr.upToDate = true
         mgr.upToDateTimer.restart()
       }

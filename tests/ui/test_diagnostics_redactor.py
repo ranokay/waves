@@ -36,8 +36,25 @@ IDENTITY_CORPUS = [
     ("could not open /Users/carol.smith/Music/waves/track.flac", ["carol.smith"]),
     ("scan found /home/dave_99/library", ["dave_99"]),
     (r"error at C:\Users\Eve Adams\AppData\Local\Waves\settings.json", ["Eve Adams"]),
+    # each half of a spaced profile name, not just the joined string
+    (r"error at C:\Users\Eve Adams\AppData\Local\Waves\settings.json", ["Eve", "Adams"]),
+    ("opened /home/Ann Lee Park/Music/a.flac", ["Ann", "Lee", "Park"]),
     (r"share path \\SERVER01\Users\frank\music unreachable", ["frank"]),
     ("mixed style C:/Users/gina.h/Downloads failed", ["gina.h"]),
+    # a network share named by its host: Windows UNC (both slash spellings,
+    # and the doubled form a repr produces) and a GNOME gvfs mount segment.
+    # None of these goes through the /Volumes mount-point registration, so the
+    # shape itself has to be scrubbed.
+    (r"File operation failed (move a.flac -> \\nas01\mediashare\Artist\01.flac)", ["nas01", "mediashare"]),
+    ("dialog gave //nas01/mediashare/Artist/01.flac as the folder", ["nas01", "mediashare"]),
+    (r"OSError: [Errno 13] Permission denied: '\\\\nas01\\mediashare\\a.flac'", ["nas01", "mediashare"]),
+    ("//nas01.local/mediashare on /mnt/music type cifs (rw)", ["nas01", "mediashare"]),
+    (
+        "folder /run/user/1000/gvfs/smb-share:server=nas01.local,share=mediashare/Artist/a.flac",
+        ["nas01", "mediashare"],
+    ),
+    ("mount sftp:host=nas01.local,user=carol.s/Music unreachable", ["nas01", "carol.s"]),
+    ("gvfs domain=WORKGROUP1,server=nas01,share=mediashare listed", ["WORKGROUP1", "nas01", "mediashare"]),
     # network identifiers
     ("connected from 192.168.1.44 to peer", ["192.168.1.44"]),
     ("listening on fe80::1c2a:3bff:fe4d:5e6f%en0", ["fe80::1c2a:3bff:fe4d:5e6f"]),
@@ -91,6 +108,10 @@ KEEP_CORPUS = [
     ("downloading Auth Mode by Cipher", ["Auth Mode"]),
     ("skipped Password Kids single", ["Password Kids"]),
     ("track: Secret Song", ["track: Secret Song"]),
+    # The UNC rule must not eat a URL's scheme separator or a doubled slash
+    # inside an ordinary path.
+    ("GET https://api.tidal.com/v1/tracks/123 -> 200", ["https://api.tidal.com/v1/tracks/123"]),
+    ("scanning /Music//Artist/Album took 2s", ["/Music//Artist/Album"]),
 ]
 
 
@@ -232,3 +253,24 @@ def test_redacting_filter_scrubs_formatted_records(redactor):
     rec = logging.LogRecord("waves.t", logging.INFO, "", 0, "path %s hit", ("/Users/nina/a.flac",), None)
     assert redactor._RedactingFilter().filter(rec) is True
     assert "nina" not in rec.getMessage()
+
+
+def test_content_markers_inside_a_title_cannot_end_the_span(redactor):
+    """A title carrying a marker character ended the span early, and one over
+    400 characters matched nothing, so the content switch left them readable."""
+    for needle in ("Nothing » Everything", "Je t'aime «moi non plus", "x" * 900):
+        line = f"queued {redactor.content(needle)} n=1"
+        full = redactor.scrub(line, redact_content=True)
+        assert "Everything" not in full and "moi non plus" not in full and "xxxx" not in full, needle
+        assert "n=1" in full
+
+
+def test_a_share_mount_point_never_survives(redactor):
+    """The download folder on a NAS is /Volumes/<ShareName>/...: outside the
+    home folder the redactor folds, so every path under it carried the share
+    name until the bridge registered the mount point where it notes the share
+    origin."""
+    redactor.register_secret("/Volumes/CarolsMediaShare", "‹mount-point›")
+    out = redactor.scrub("could not write /Volumes/CarolsMediaShare/Music/Artist/Album/01 Song.flac")
+    assert "CarolsMediaShare" not in out
+    assert "‹mount-point›" in out

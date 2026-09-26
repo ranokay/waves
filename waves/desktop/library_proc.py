@@ -23,6 +23,7 @@ import sys
 import threading
 
 from waves.library.index import READ_GAUGE, WALK_GAUGE
+from waves.redaction import content as _content
 
 from . import proc
 
@@ -155,7 +156,7 @@ class LibraryWorker:
                     continue
                 said += 1
                 if said <= _STDERR_LINE_CAP:
-                    logger.warning("[scanner] %s", line)
+                    logger.warning("[scanner] %s", _content(line))
                 elif said == _STDERR_LINE_CAP + 1:
                     logger.warning("[scanner] further output suppressed")
         except (OSError, ValueError):

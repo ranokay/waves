@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -165,11 +166,13 @@ def _run_scenario() -> int:
     # The page builder never touches the network here: a canned page whose
     # covers are the local files. "slow" holds its payload so the skeleton
     # header can be observed while the page is "on the wire".
+    # The scenario releases it once the skeleton has been observed, so the
+    # check never races a fixed sleep on a loaded machine.
+    slow_payload_gate = threading.Event()
+
     def build(kind, media_id, key, *, record=True):
         if media_id == "slow":
-            import time
-
-            time.sleep(1.2)
+            slow_payload_gate.wait(30)
 
         # "discs": half the rows point at a cover that cannot resolve, half
         # have none at all, so every disc state but "ready" is on one page.
@@ -454,6 +457,7 @@ def _run_scenario() -> int:
         print("the loading hint must still show under the skeleton", file=sys.stderr)
         return EXIT_REGRESSED
     grab("2-skeleton-while-loading")
+    slow_payload_gate.set()
     if not pump(lambda: q("browsePageLoading") is False and q("bihArt.artState") == "ready", 4000):
         print("the slow page never landed", file=sys.stderr)
         return EXIT_REGRESSED
