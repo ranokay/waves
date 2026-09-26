@@ -9,7 +9,7 @@ import "primitives" as Primitives
 // along the ring, so the card resizing mid-grow re-lays the path without
 // ever scattering segments. The clock only runs while the field is both
 // visible and armed, so a closed peek costs nothing.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: sf

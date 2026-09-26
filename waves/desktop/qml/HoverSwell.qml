@@ -6,13 +6,13 @@ import "primitives" as Primitives
 // travel: the line keeps its resting weight, exit is a fade in place.
 // Scoped to the clickable region, so on the two-up pills each half lights
 // by itself (outer corners rounded, square edge on the divider side).
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 
 Rectangle {
   id: hs
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property real btnBorderW: 1.5
   readonly property int btnRad: 8              // button corner radius

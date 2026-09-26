@@ -17,13 +17,13 @@ import "primitives" as Primitives
 //   host.pvSt(kind, id)  the shared preview state a raised cover follows
 //   host.warmArt(url, w, h)  pin a decoded cover in the warm pool
 //   host.onScreen  pause the loading blink while the window is away
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Rectangle {
   id: artRoot
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentDim: "#22a64a"   // terminal-button border

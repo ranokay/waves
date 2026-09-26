@@ -25,7 +25,7 @@ import "primitives" as Primitives
 // redirect drives. `index` is the Repeater's delegate index: the caller's
 // `groupData: root.searchGroups[index]` picks this group's payload entry with
 // it.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Column {
   id: group
@@ -33,7 +33,7 @@ Column {
   required property Flickable resultsPane
   required property int index
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)

@@ -41,7 +41,7 @@ Item {
     syncLibraryMirrors()
   }
 
-  // Waves palette (kept local so this file is self-contained)
+  // Waves palette (kept local so this file is self-contained; accent binds to Primitives.Palette)
   readonly property color accent: Primitives.Palette.accent
   readonly property color accentText: "#03210e"
   readonly property color surface: "#15181d"

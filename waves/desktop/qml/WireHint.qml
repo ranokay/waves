@@ -36,7 +36,7 @@ Item {
   property color tint: "#a8acb4"        // root.textLo
   property real topPad: 96
   property bool onScreen: true
-  // The palette default mirrors the app token, like ExpandChevron and LedBar
+  // The palette default binds to Primitives.Palette, like ExpandChevron and LedBar
   // do, so the component stands alone without a root to read.
   property color accent: Primitives.Palette.accent
 

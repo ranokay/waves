@@ -6,12 +6,12 @@ import "primitives" as Primitives
 // lacks. The host draws the label and passes its spoken name; the pointer,
 // the reader's press action and Return/Enter/Space all run the one
 // `triggered` handler, so no path can drift from another.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 MouseArea {
   id: ta
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   // The spoken name. Every adopted control sets it: a button a reader cannot
   // name is worse than no button.

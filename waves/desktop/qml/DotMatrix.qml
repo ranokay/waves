@@ -4,7 +4,7 @@ import "primitives" as Primitives
 // Old-school LED dot-matrix progress. Dots sit in a fixed grid and brighten
 // (faded → bright) in a bottom-up, left-to-right "stacking" order as pct
 // rises, each dot is a precise fraction of the whole.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes. `ledPulse` / `shimmerPhase` stay host-bound
 // (Main.qml's one shared 20 Hz pair), and `queueEdgeHeld` lets a drawer-edge
 // drag defer the column-count settle; all three are required, so a missed

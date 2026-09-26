@@ -8,12 +8,12 @@ import "primitives" as Primitives
 // state the caller owns, a rule out to an optional count badge, and an
 // optional trailing control (the artist VIDEOS download-all button) that
 // sits above the header's own collapse target.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: secHead
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color border1: "#262a31"   // default card border (outline-variant)
   readonly property color divider: "#22262d"
