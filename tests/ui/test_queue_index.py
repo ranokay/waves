@@ -55,6 +55,9 @@ def _stub():
     # test_queue_row_pins_the_library_skip.py).
     stub._library_bulk_skip_on = lambda: True
     stub._jobs.aborts = {}
+    stub._merge_plans = {}
+    stub._merge_plans_unbound = {}
+    stub._needs_plan_rebind = WavesBridge._needs_plan_rebind.__get__(stub, type(stub))
     # A withdrawn row gives up its REDOWNLOAD force (test_queue_withdrawal_rollup).
     stub._redownload_overrides = set()
     stub._library_claim_overrides = set()
