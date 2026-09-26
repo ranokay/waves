@@ -849,6 +849,14 @@ class Provider(ABC):
         entry's "refetch before queueing" check). The neutral answer is no."""
         return False
 
+    def favorites_count(self, kind: str) -> int | None:
+        """How many favorites of ``kind`` the signed-in user holds, or None
+        when the engine offers no count. The bulk DOWNLOAD ALL pager refuses
+        a None rather than paging on a short window: a limit-N window can
+        return fewer than N rows (unavailable items dropped inside it), so a
+        short window alone would silently truncate the set."""
+        return None
+
     def has_atmos(self, item) -> bool:
         """Whether one catalog item carries a Dolby Atmos delivery. The
         neutral answer is no: a missing fact never promises a Version."""

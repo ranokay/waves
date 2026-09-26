@@ -490,6 +490,12 @@ class TidalProvider(Provider):
         more = offset + limit < total if total is not None else len(raw) > 0
         return list(raw), more
 
+    def favorites_count(self, kind: str) -> int | None:
+        # The count half of _favorites_parts: None when the engine offers
+        # no count (the bulk pager refuses that rather than guessing).
+        _method, total = self._favorites_parts(kind)
+        return total
+
     def favorite_ids(self, kind: str) -> set[str]:
         """The user's favourite ids of ``kind``, paged to exhaustion.
 

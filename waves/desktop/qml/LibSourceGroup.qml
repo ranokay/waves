@@ -67,6 +67,15 @@ ColumnLayout {
   // tree is the provider's own read.
   property var folderStack: []
   property string currentFolder: ""
+  // Shelf DOWNLOAD ALL: one pending count per shelf kind. Armed by the
+  // header button's tap, disarmed when the backend's count lands (or the
+  // account flips, via clearPanes), so a stale count opens nothing.
+  property bool favTracksPending: false
+  property bool favAlbumsPending: false
+  property bool favArtistsPending: false
+  property bool favPlaylistsPending: false
+  property bool favMixesPending: false
+  property bool favVideosPending: false
 
   Layout.fillWidth: true
   Layout.fillHeight: true
@@ -130,6 +139,82 @@ ColumnLayout {
       if (String(group.categories[i].id) === String(cat))
         return true
     return false
+  }
+  // Whether this shelf kind carries a DOWNLOAD ALL button (every shelf
+  // but the Home landing).
+  function favHasBulk(cat) {
+    return cat === "tracks" || cat === "albums" || cat === "artists" || cat === "playlists" || cat === "mixes" || cat === "videos"
+  }
+  // The confirm-prompt kind for a shelf category (the catDlGate dispatch
+  // reads it back to call the matching download slot).
+  function favKind(cat) {
+    return cat === "tracks" ? "favTracks" : cat === "albums" ? "favAlbums" : cat === "artists" ? "favArtists" : cat === "playlists" ? "favPlaylists" : cat === "mixes" ? "favMixes" : cat === "videos" ? "favVideos" : ""
+  }
+  // A shelf DOWNLOAD ALL tap: arm the pending count and ask the backend
+  // for it. One function so the six header buttons and the scenario
+  // coverage drive the same path.
+  function favTap(cat) {
+    if (cat === "tracks") {
+      group.favTracksPending = true
+      waves.resolveFavoriteTracks(group.sourceId)
+    } else if (cat === "albums") {
+      group.favAlbumsPending = true
+      waves.resolveFavoriteAlbums(group.sourceId)
+    } else if (cat === "artists") {
+      group.favArtistsPending = true
+      waves.resolveFavoriteArtists(group.sourceId)
+    } else if (cat === "playlists") {
+      group.favPlaylistsPending = true
+      waves.resolveFavoritePlaylists(group.sourceId)
+    } else if (cat === "mixes") {
+      group.favMixesPending = true
+      waves.resolveFavoriteMixes(group.sourceId)
+    } else if (cat === "videos") {
+      group.favVideosPending = true
+      waves.resolveFavoriteVideos(group.sourceId)
+    }
+  }
+  // A shelf's count landed: if its button armed the ask, disarm it and run
+  // the confirm (or the download itself when the confirm is muted). A
+  // count with nothing armed is stale and opens nothing.
+  function applyFavResolved(kind, count) {
+    var armed = kind === "favTracks" ? group.favTracksPending : kind === "favAlbums" ? group.favAlbumsPending : kind === "favArtists" ? group.favArtistsPending : kind === "favPlaylists" ? group.favPlaylistsPending : kind === "favMixes" ? group.favMixesPending : kind === "favVideos" ? group.favVideosPending : false
+    if (!armed)
+      return
+    if (kind === "favTracks")
+      group.favTracksPending = false
+    else if (kind === "favAlbums")
+      group.favAlbumsPending = false
+    else if (kind === "favArtists")
+      group.favArtistsPending = false
+    else if (kind === "favPlaylists")
+      group.favPlaylistsPending = false
+    else if (kind === "favMixes")
+      group.favMixesPending = false
+    else if (kind === "favVideos")
+      group.favVideosPending = false
+    if (count <= 0)
+      // the backend already set the status line
+      return
+    if (waves.confirmCategoryDl) {
+      host.catDlPrompt = {
+        kind: kind,
+        count: count,
+        source: group.sourceId
+      }
+    } else if (kind === "favTracks") {
+      waves.downloadFavoriteTracks(group.sourceId)
+    } else if (kind === "favAlbums") {
+      waves.downloadFavoriteAlbums(group.sourceId)
+    } else if (kind === "favArtists") {
+      waves.downloadFavoriteArtists(group.sourceId)
+    } else if (kind === "favPlaylists") {
+      waves.downloadFavoritePlaylists(group.sourceId)
+    } else if (kind === "favMixes") {
+      waves.downloadFavoriteMixes(group.sourceId)
+    } else if (kind === "favVideos") {
+      waves.downloadFavoriteVideos(group.sourceId)
+    }
   }
   function isMedia(cat) {
     return cat === "albums" || cat === "tracks" || cat === "videos"
@@ -272,11 +357,13 @@ ColumnLayout {
       v.pendingY = keepY
       v.applyRestore()
     } else if (v) {
-      // A restarted list (fresh load, new sort order) begins at the
-      // top. Explicit, because a clear+refill leaves the old
-      // contentY in place when the new content is just as tall.
+      // A restarted list (fresh load, new sort order) begins at the top:
+      // the 8px header inside the scroll area puts the top at originY,
+      // not contentY 0 (a raw 0 opens every tab 8px down). Explicit,
+      // because a clear+refill leaves the old contentY in place when the
+      // new content is just as tall.
       v.pendingY = -1
-      v.contentY = 0
+      v.contentY = v.originY
     }
   }
   function applyMore(cat, items, more) {
@@ -314,6 +401,14 @@ ColumnLayout {
     group.pinRefill = false
     group.folderStack = []
     group.currentFolder = ""
+    // An armed DOWNLOAD ALL count belongs to the previous account: the
+    // backend's generation bump already threw its answer away.
+    group.favTracksPending = false
+    group.favAlbumsPending = false
+    group.favArtistsPending = false
+    group.favPlaylistsPending = false
+    group.favMixesPending = false
+    group.favVideosPending = false
   }
   // The playlist-folder drill-in (the playlists pane's own view).
   function openFolder(fid, title) {
@@ -511,6 +606,142 @@ ColumnLayout {
         onClicked: {
           var g = group.sortGet(group.category)
           group.applySort(group.category, g.key, !g.asc)
+        }
+      }
+    }
+    // Shelf DOWNLOAD ALL: one button per shelf kind, each on its own tab
+    // only. The tap arms the pending count; the backend's answer opens the
+    // shared bulk confirm (or downloads directly when it is muted). The
+    // button's bar and badge ride the fixed fav:<kind> rollup id.
+    Row {
+      id: favDlRow
+      Layout.alignment: Qt.AlignVCenter
+      spacing: 0
+      visible: group.favHasBulk(group.category)
+      Row {
+        id: favTracksRow
+        spacing: 8
+        visible: group.category === "tracks"
+        DownloadButton {
+          id: favTracksDlBtn
+          objectName: "favTracksBtn"
+          host: group.host
+          mediaId: "fav:tracks"
+          label: "Download all"
+          onTap: function () {
+            group.favTap("tracks")
+          }
+        }
+        FolderBadge {
+          host: group.host
+          folderId: "fav:tracks"
+          total: 0
+          st: favTracksDlBtn.st
+        }
+      }
+      Row {
+        id: favAlbumsRow
+        spacing: 8
+        visible: group.category === "albums"
+        DownloadButton {
+          id: favAlbumsDlBtn
+          objectName: "favAlbumsBtn"
+          host: group.host
+          mediaId: "fav:albums"
+          label: "Download all"
+          onTap: function () {
+            group.favTap("albums")
+          }
+        }
+        FolderBadge {
+          host: group.host
+          folderId: "fav:albums"
+          total: 0
+          st: favAlbumsDlBtn.st
+        }
+      }
+      Row {
+        id: favArtistsRow
+        spacing: 8
+        visible: group.category === "artists"
+        DownloadButton {
+          id: favArtistsDlBtn
+          objectName: "favArtistsBtn"
+          host: group.host
+          mediaId: "fav:artists"
+          label: "Download all"
+          onTap: function () {
+            group.favTap("artists")
+          }
+        }
+        FolderBadge {
+          host: group.host
+          folderId: "fav:artists"
+          total: 0
+          st: favArtistsDlBtn.st
+        }
+      }
+      Row {
+        id: favPlaylistsRow
+        spacing: 8
+        visible: group.category === "playlists"
+        DownloadButton {
+          id: favPlaylistsDlBtn
+          objectName: "favPlaylistsBtn"
+          host: group.host
+          mediaId: "fav:playlists"
+          label: "Download all"
+          onTap: function () {
+            group.favTap("playlists")
+          }
+        }
+        FolderBadge {
+          host: group.host
+          folderId: "fav:playlists"
+          total: 0
+          st: favPlaylistsDlBtn.st
+        }
+      }
+      Row {
+        id: favMixesRow
+        spacing: 8
+        visible: group.category === "mixes"
+        DownloadButton {
+          id: favMixesDlBtn
+          objectName: "favMixesBtn"
+          host: group.host
+          mediaId: "fav:mixes"
+          label: "Download all"
+          onTap: function () {
+            group.favTap("mixes")
+          }
+        }
+        FolderBadge {
+          host: group.host
+          folderId: "fav:mixes"
+          total: 0
+          st: favMixesDlBtn.st
+        }
+      }
+      Row {
+        id: favVideosRow
+        spacing: 8
+        visible: group.category === "videos"
+        DownloadButton {
+          id: favVideosDlBtn
+          objectName: "favVideosBtn"
+          host: group.host
+          mediaId: "fav:videos"
+          label: "Download all"
+          onTap: function () {
+            group.favTap("videos")
+          }
+        }
+        FolderBadge {
+          host: group.host
+          folderId: "fav:videos"
+          total: 0
+          st: favVideosDlBtn.st
         }
       }
     }

@@ -1257,6 +1257,21 @@ _VIDEOS_GROUP_PREFIX = "vids:"
 # from the bare playlist id that "Download playlist" owns.
 _PLAYLIST_ALBUMS_GROUP_PREFIX = "albums:"
 
+# Group ids for the My Music shelves' DOWNLOAD ALL buttons: one fixed id per
+# shelf kind, shared by the header button's mediaId and the backend rollup.
+# Shared, not per-source: only providers declaring FAVORITES render shelves
+# (Apple declares none), so a second writer cannot exist today; namespace per
+# source if one ever does.
+_FAV_TRACKS_GROUP_ID = "fav:tracks"
+_FAV_ALBUMS_GROUP_ID = "fav:albums"
+_FAV_ARTISTS_GROUP_ID = "fav:artists"
+_FAV_PLAYLISTS_GROUP_ID = "fav:playlists"
+_FAV_MIXES_GROUP_ID = "fav:mixes"
+_FAV_VIDEOS_GROUP_ID = "fav:videos"
+# Member key prefix inside the fav:artists rollup: an artist id must never
+# collide with an album or track id when the bumps fan out.
+_ARTIST_ROLLUP_MEMBER = "artist:"
+
 # The silent download-folder default older installs carry. A blank path
 # means "unset" (fresh installs); an install that never changed the folder
 # still holds this exact value, which triggers the one-time "choose a folder"
@@ -3063,6 +3078,12 @@ class _ScanStopped(Exception):
     album's edition scan) was still gathering on the scan pool."""
 
 
+class _FavRefused(Exception):
+    """A shelf bulk scan refused: no provider behind the shelf, no count to
+    page against, or a folder walk cut short. The caller queues nothing (the
+    partial-scan rule)."""
+
+
 def _bulk_gate_artist_names(albums, plans) -> list[str]:
     """Every artist a bulk download is about to ask the library gate about.
 
@@ -3076,6 +3097,20 @@ def _bulk_gate_artist_names(albums, plans) -> list[str]:
         if name:
             out.append(name)
     return out
+
+
+def _credit_fav_artist(bridge, artist_id: str, pct, state) -> None:
+    """Settle one artist inside the fav:artists rollup: progress while its
+    discography runs, done/failed when its group does (a discography that
+    queued nothing settles here directly, since no bump will ever come). A
+    no-op when no fav rollup is live.
+
+    A module function like _stop_check_for, so the partial test stubs that
+    drive the discography paths reach it without the folder-rollup half."""
+
+    credit = getattr(bridge, "_bump_folder_group", None)
+    if callable(credit):
+        credit(_ARTIST_ROLLUP_MEMBER + str(artist_id), pct, state)
 
 
 def _stop_check_for(bridge) -> Callable[[], None]:
@@ -4030,6 +4065,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     # on every member completion (and once at start), under the folder id.
     folderRemaining = Signal(str, int, int)  # folder_id, remaining, total
     playlistCategoryResolved = Signal(str, str, int, str)  # api_path, title, count, first playlist id
+    # A shelf's DOWNLOAD ALL count is known (source, count; -1 when the count
+    # failed): the shelf's pending flag turns it into the shared bulk confirm.
+    favoriteTracksResolved = Signal(str, int)
+    favoriteAlbumsResolved = Signal(str, int)
+    favoriteArtistsResolved = Signal(str, int)
+    favoritePlaylistsResolved = Signal(str, int)
+    favoriteMixesResolved = Signal(str, int)
+    favoriteVideosResolved = Signal(str, int)
     confirmCategoryDlChanged = Signal()
     skipExistingChanged = Signal()
     # A backend path persisted schema-backed settings without applySettings
@@ -4167,6 +4210,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     # Internal: same batch marshalling for an artist's music videos (queued by
     # 'Download discography' when the Music videos source is on).
     _videosQueued = Signal(int, "QVariantList")
+    # Internal: same batch marshalling for a shelf's favourite artists (each
+    # id starts its own discography download on the GUI thread).
+    _artistsQueued = Signal(int, "QVariantList")
+    # Internal: same batch marshalling for a shelf's favourite playlists or
+    # mixes (kind is "playlist" or "mix").
+    _collectionsQueued = Signal(int, str, "QVariantList")
     # Internal: a download was requested for an id whose live object had been
     # evicted from _objs (a new search clears every bucket). The object is
     # re-fetched by id on a worker, then this queued hop re-dispatches the
@@ -4871,6 +4920,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._albumsQueued.connect(self._enqueue_albums)
         self._tracksQueued.connect(self._enqueue_tracks)
         self._videosQueued.connect(self._enqueue_videos)
+        self._artistsQueued.connect(self._enqueue_artists)
+        self._collectionsQueued.connect(self._enqueue_collections)
         self._waves_prefs_path = os.path.join(os.path.dirname(self.settings.file_path), "waves.json")
         self._waves_prefs = self._load_waves_prefs()
         self._migrate_video_flag()
@@ -14959,6 +15010,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             else:
                 self.downloadProgress.emit(aid, float(agg))
                 self.downloadState.emit(aid, "running" if started else "queued")
+            # Settle this artist inside a live fav:artists rollup as its
+            # discography does (a no-op when no rollup is live): progress
+            # while it runs, done/failed when its group does.
+            if finished:
+                _credit_fav_artist(self, aid, None, "failed" if any_failed else "done")
+            else:
+                _credit_fav_artist(self, aid, float(agg), None)
 
     def _reap_stranded_groups(self) -> None:
         """Safety net for the rollups: delete any group none of whose members
@@ -14999,6 +15057,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # followed had no group left to report into, so the run showed no
             # progress, no completion and no failure.
             live |= {str(mid) for mid, _fn in self._pending_downloads if mid}
+        # A fav:artists rollup counts whole artists (members keyed
+        # "artist:<id>"), and no queue row ever carries such an id: the
+        # member is live while its discography's own group is. Without this
+        # the net eats the rollup two ticks after its artists' downloads
+        # start, while their groups are still settling it.
+        with self._artist_lock:
+            live |= {_ARTIST_ROLLUP_MEMBER + aid for aid in self._artist_groups}
         reset: list[str] = []
         marks: set[str] = set()
         for lock, groups in ((self._artist_lock, self._artist_groups), (self._folder_lock, self._folder_groups)):
@@ -16468,6 +16533,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # time: the probe can cost seconds against a stale network mount.
             if not self._gate_reachability(lambda: self.downloadArtist(artist_id), artist_id):
                 self.downloadState.emit(artist_id, "")
+                # A fav:artists rollup waiting on this artist must not wait
+                # forever: settle its member (a no-op when no rollup is live).
+                _credit_fav_artist(self, artist_id, None, "failed")
                 return
             stop_check()
             # Resolve on the worker, never in the slot body: on an _objs miss
@@ -16478,6 +16546,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             artist = self._get_artist(artist_id)
             if artist is None:
                 self.downloadState.emit(artist_id, "")
+                _credit_fav_artist(self, artist_id, None, "failed")
                 self._set_status("Could not load that artist")
                 return
             stop_check()
@@ -16489,6 +16558,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # downloads a truncated discography that completes as a clean
                 # success. Fail visibly; the next click is the retry.
                 self.downloadState.emit(artist_id, "")
+                _credit_fav_artist(self, artist_id, None, "failed")
                 self._set_status("Could not load the full discography, try again")
                 return
             if not wants_both_default(self.settings):
@@ -16582,6 +16652,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         # spots from a download that then reports clean success.
                         logger.exception("Could not load tracks for a guest release")
                         self.downloadState.emit(artist_id, "")
+                        _credit_fav_artist(self, artist_id, None, "failed")
                         self._set_status("Could not load the full discography, try again")
                         return
                 for t in self._dedup_tracks(gtracks):
@@ -16610,6 +16681,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # download that then reports clean success.
                     _video_log.exception("Could not load the artist's music videos")
                     self.downloadState.emit(artist_id, "")
+                    _credit_fav_artist(self, artist_id, None, "failed")
                     self._set_status("Could not load the full discography, try again")
                     return
                 if not vids_complete:
@@ -16618,6 +16690,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # never saw. Refuse, same as the fetch-failure path.
                     _video_log.warning("Artist videography exceeded the scan ceiling, refusing a partial discography")
                     self.downloadState.emit(artist_id, "")
+                    _credit_fav_artist(self, artist_id, None, "failed")
                     self._set_status("Could not load the full discography, try again")
                     return
                 stop_check()
@@ -16628,6 +16701,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 devlog.event("discography_videos", videos=len(video_keys))
             if not keys and not track_keys and not video_keys:
                 self.downloadState.emit(artist_id, "")
+                # A discography that queued nothing still settles its artist
+                # in a live fav:artists rollup, or that button waits forever.
+                _credit_fav_artist(self, artist_id, None, "done")
                 # An all-claimed discography is a success story, not an empty
                 # artist; say which of the two happened.
                 self._set_status("Everything here is already in your library" if skipped else "No albums to download")
@@ -16708,6 +16784,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # the whole session with nothing left to reset it.
                 logger.exception("Discography scan failed")
                 self.downloadState.emit(artist_id, "")
+                _credit_fav_artist(self, artist_id, None, "failed")
                 self._set_status("Could not load the full discography, try again")
 
         # Serialised scan pool: queueing several artists scans them one at a time
@@ -17484,6 +17561,552 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._set_status("Could not load the playlist's albums, try again")
 
         self._scan_pool.start(Worker(_counted_scan(self, work)))
+
+    # ----- My Music shelf DOWNLOAD ALL (favourites bulk) -----
+
+    def _all_favorites(self, source: str, kind: str, stop_check) -> list:
+        """Every favourite object of ``kind`` from one source's provider.
+
+        Pages the provider's own ``favorites_page`` windows to the
+        provider-owned count (``favorites_count``): a short window alone
+        would silently truncate the set (unavailable items drop inside the
+        window), and without a count the bulk raises :class:`_FavRefused`
+        rather than guessing. Any failure raises, and the caller queues
+        nothing (the partial-scan rule). ``stop_check`` is required: a STOP
+        mid-scan raises :class:`_ScanStopped` instead of leaking a partial
+        list."""
+        provider = _source_provider(self, source)
+        if provider is None:
+            raise _FavRefused
+        total = provider.favorites_count(kind)
+        if total is None:
+            raise _FavRefused
+        out: list = []
+        offset = 0
+        while True:
+            stop_check()
+            raw, _more = provider.favorites_page(kind, offset, _LIBRARY_PAGE, None)
+            out.extend(o for o in (raw or []) if o is not None)
+            offset += _LIBRARY_PAGE
+            if offset >= int(total) or not raw:
+                break
+        return out
+
+    def _favorite_playlist_keys(self, source: str, stop_check, refresh: bool) -> tuple[list, dict]:
+        """Every playlist id on one source's shelves with its track weight.
+
+        Root playlists in sweep order, then every folder at any depth
+        (``playlists_under`` is recursive), deduplicated: the same set My
+        Music lists. A folder walk cut short (rate limit) raises
+        :class:`_FavRefused` rather than queueing a truncated set."""
+        lists, tree = self._media_lists(source, refresh=refresh, walk=True)
+        if tree is not None and getattr(tree, "partial", False):
+            raise _FavRefused
+        seen: dict[str, None] = {}
+        weights: dict[str, int] = {}
+        for playlist in lists.get("playlists", []):
+            if hasattr(playlist, "num_tracks"):
+                key = str(getattr(playlist, "id", id(playlist)))
+                if key not in seen:
+                    seen[key] = None
+                    weights[key] = max(1, _track_count(playlist))
+                    self._remember("playlist", key, playlist)
+        nodes = tree.nodes if tree is not None else []
+        for node in sorted((n for n in nodes if n.parent_id == "root"), key=lambda n: n.name.lower()):
+            stop_check()
+            for playlist in tree.playlists_under(node.id):
+                key = str(getattr(playlist, "id", id(playlist)))
+                if key not in seen:
+                    seen[key] = None
+                    weights[key] = max(1, _track_count(playlist))
+                    self._remember("playlist", key, playlist)
+        return list(seen), weights
+
+    def _favorite_mix_keys(self, source: str, refresh: bool) -> list:
+        """Every mix id on one source's shelves, in listed order."""
+        lists, _tree = self._media_lists(source, refresh=refresh, walk=False)
+        keys: list[str] = []
+        for mix in lists.get("mixes", []):
+            key = str(getattr(mix, "id", id(mix)))
+            self._remember("mix", key, mix)
+            keys.append(key)
+        return keys
+
+    def _resolve_favorite_count(self, source: str, kind: str, gid: str, signal, counter) -> None:
+        """The count behind a shelf's DOWNLOAD ALL confirm.
+
+        ``counter`` answers the total (playlists/mixes count the cached
+        sweep, the rest ask the provider); a failure emits -1, and a count
+        from before an account flip is dropped. The in-flight key always
+        clears, so a dropped count never wedges the button."""
+        load_key = f"{source}:{gid}"
+        if load_key in self._browse_loading or not self._logged_in:
+            return
+        if _source_provider(self, source) is None:
+            return
+        self._browse_loading.add(load_key)
+        gen = self._browse_gen
+
+        def work() -> None:
+            try:
+                total = counter()
+            except Exception:
+                total = -1
+            finally:
+                self._browse_loading.discard(load_key)
+            if gen != self._browse_gen:
+                return  # signed out mid-count
+            if total is None or int(total) < 0:
+                total = -1
+            if total == 0:
+                self._set_status(f"No favourite {kind} yet")
+            elif total < 0:
+                self._set_status(f"Could not count your {kind}, try again")
+            signal.emit(source, int(total))
+
+        self.threadpool.start(Worker(work))
+
+    @Slot(str)
+    def resolveFavoriteTracks(self, source: str) -> None:
+        """Count a shelf's favourite tracks for the bulk confirm."""
+        provider = _source_provider(self, source)
+        self._resolve_favorite_count(
+            source,
+            "tracks",
+            _FAV_TRACKS_GROUP_ID,
+            self.favoriteTracksResolved,
+            lambda: provider.favorites_count("tracks") if provider is not None else -1,
+        )
+
+    @Slot(str)
+    def resolveFavoriteAlbums(self, source: str) -> None:
+        """Count a shelf's favourite albums for the bulk confirm."""
+        provider = _source_provider(self, source)
+        self._resolve_favorite_count(
+            source,
+            "albums",
+            _FAV_ALBUMS_GROUP_ID,
+            self.favoriteAlbumsResolved,
+            lambda: provider.favorites_count("albums") if provider is not None else -1,
+        )
+
+    @Slot(str)
+    def resolveFavoriteArtists(self, source: str) -> None:
+        """Count a shelf's favourite artists for the bulk confirm."""
+        provider = _source_provider(self, source)
+        self._resolve_favorite_count(
+            source,
+            "artists",
+            _FAV_ARTISTS_GROUP_ID,
+            self.favoriteArtistsResolved,
+            lambda: provider.favorites_count("artists") if provider is not None else -1,
+        )
+
+    @Slot(str)
+    def resolveFavoritePlaylists(self, source: str) -> None:
+        """Count a shelf's playlists (folders at any depth included)."""
+        self._resolve_favorite_count(
+            source,
+            "playlists",
+            _FAV_PLAYLISTS_GROUP_ID,
+            self.favoritePlaylistsResolved,
+            lambda: len(self._favorite_playlist_keys(source, lambda: None, refresh=False)[0]),
+        )
+
+    @Slot(str)
+    def resolveFavoriteMixes(self, source: str) -> None:
+        """Count a shelf's mixes for the bulk confirm."""
+        self._resolve_favorite_count(
+            source,
+            "mixes",
+            _FAV_MIXES_GROUP_ID,
+            self.favoriteMixesResolved,
+            lambda: len(self._favorite_mix_keys(source, refresh=False)),
+        )
+
+    @Slot(str)
+    def resolveFavoriteVideos(self, source: str) -> None:
+        """Count a shelf's favourite videos for the bulk confirm."""
+        provider = _source_provider(self, source)
+        self._resolve_favorite_count(
+            source,
+            "videos",
+            _FAV_VIDEOS_GROUP_ID,
+            self.favoriteVideosResolved,
+            lambda: provider.favorites_count("videos") if provider is not None else -1,
+        )
+
+    def _fav_gates(self, source: str, gid: str, retry) -> bool:
+        """The download-folder and FFmpeg gates for a shelf bulk download.
+
+        False means the scan must not start (blocked, or stashed for replay
+        behind the folder nudge / FFmpeg setup)."""
+        if self._dl is None or not self._logged_in or _source_provider(self, source) is None:
+            return False
+        gate = self._download_gate()
+        if gate == "block":
+            return False
+        if gate == "nudge":
+            self._stash_pending_download(gid, retry)
+            return False
+        return not self._ffmpeg_gate_holds(gid, retry)
+
+    def _fav_refuse(self, gid: str, kind: str) -> None:
+        """Refuse a shelf bulk visibly: nothing queued, the button back to
+        idle, the status line saying the retry is the next click."""
+        self.downloadState.emit(gid, "")
+        self._set_status(f"Could not load all your {kind}, try again")
+
+    def _fav_scan_work(self, gid: str, kind: str, scan) -> None:
+        """Run a shelf bulk ``scan`` on the serial scan pool with the STOP
+        and failure handling every bulk path shares: a stop hands the button
+        back, any other death fails visibly, never a lit button with nothing
+        left to reset it."""
+
+        def work() -> None:
+            try:
+                scan()
+            except _ScanStopped:
+                self.downloadState.emit(gid, "")
+                devlog.event("favorites", kind=kind, stopped=True)
+            except Exception:
+                logger.exception("Favourite %s scan failed", kind)
+                self.downloadState.emit(gid, "")
+                self._set_status(f"Could not load all your {kind}, try again")
+
+        self._scan_pool.start(Worker(_counted_scan(self, work)))
+
+    @Slot(str)
+    def downloadFavoriteTracks(self, source: str) -> None:
+        """Queue every favourite track on one source's shelf.
+
+        Pages the whole list (a short window never truncates it), applies
+        the library claim like every other bulk action, registers a
+        folder-style rollup under the fixed ``fav:tracks`` id, and hands the
+        keys to the GUI thread in one ``_tracksQueued`` batch."""
+        gid = _FAV_TRACKS_GROUP_ID
+        if not self._fav_gates(source, gid, lambda: self.downloadFavoriteTracks(source)):
+            return
+        self._set_status("Loading favourite tracks…")
+        self.downloadProgress.emit(gid, 0.0)
+        self.downloadState.emit(gid, "running")
+        stop_check = _stop_check_for(self)
+        gen = self._scan_gen
+
+        def scan() -> None:
+            if not self._gate_reachability(lambda: self.downloadFavoriteTracks(source), gid):
+                self.downloadState.emit(gid, "")
+                return
+            try:
+                objects = self._all_favorites(source, "tracks", stop_check)
+            except _ScanStopped:
+                raise
+            except Exception:
+                logger.exception("Could not load every favourite track")
+                self._fav_refuse(gid, "tracks")
+                return
+            stop_check()
+            skipped = 0
+            keys: list[str] = []
+            for track in objects:
+                if self._library_bulk_skip_on() and self._library_claim_media(track):
+                    skipped += 1
+                    continue
+                key = str(getattr(track, "id", id(track)))
+                self._remember("track", key, track)
+                keys.append(key)
+            stop_check()
+            if not keys:
+                self.downloadState.emit(gid, "")
+                self._set_status("Everything here is already in your library" if skipped else "No tracks to download")
+                return
+            with self._folder_lock:
+                # Checked under the same lock stopAll's sweep takes: a scan
+                # that lost the race to STOP must not register a group behind
+                # the sweep (it would strand at "running" with nothing left
+                # to settle it).
+                stop_check()
+                self._folder_groups[gid] = {
+                    "keys": set(keys),
+                    "done": set(),
+                    "failed": set(),
+                    "prog": {},
+                    "weights": dict.fromkeys(keys, 1),
+                    "total": len(keys),
+                }
+            self.downloadProgress.emit(gid, 0.0)
+            # Badge first: it reads the remaining map as soon as the state
+            # flips, so the count must land before QUEUED.
+            self.folderRemaining.emit(gid, len(keys), len(keys))
+            # QUEUED, not running: nothing has been picked up by a download
+            # slot yet (see downloadArtist for the full rationale).
+            self.downloadState.emit(gid, "queued")
+            self._tracksQueued.emit(gen, keys)
+            note = f" ({skipped} already in your library)" if skipped else ""
+            self._set_status(f"Downloading {len(keys)} tracks…" + note)
+            # The scan's last word: a STOP in this tail routes to the handler
+            # below, whose "" is posted after any stale state above.
+            stop_check()
+
+        self._fav_scan_work(gid, "tracks", scan)
+
+    @Slot(str)
+    def downloadFavoriteAlbums(self, source: str) -> None:
+        """Queue every favourite album on one source's shelf.
+
+        Pages every album, then runs the sweep the playlist page's "Download
+        full albums" runs (Atmos twin drop, dedup, 'Most-complete edition
+        only', library bulk-skip), and queues one batch under the
+        ``fav:albums`` rollup."""
+        gid = _FAV_ALBUMS_GROUP_ID
+        if not self._fav_gates(source, gid, lambda: self.downloadFavoriteAlbums(source)):
+            return
+        self._set_status("Loading favourite albums…")
+        self.downloadProgress.emit(gid, 0.0)
+        self.downloadState.emit(gid, "running")
+        stop_check = _stop_check_for(self)
+        gen = self._scan_gen
+
+        def scan() -> None:
+            if not self._gate_reachability(lambda: self.downloadFavoriteAlbums(source), gid):
+                self.downloadState.emit(gid, "")
+                return
+            try:
+                objects = self._all_favorites(source, "albums", stop_check)
+            except _ScanStopped:
+                raise
+            except Exception:
+                logger.exception("Could not load every favourite album")
+                self._fav_refuse(gid, "albums")
+                return
+            stop_check()
+            # From here the sweep is the discography's, minus guest tracks
+            # and videos; see downloadArtist for the why of each step.
+            albums = list(objects)
+            if not wants_both_default(self.settings):
+                albums, _guest, left_out = _drop_spatial_editions(albums, [])
+                if left_out:
+                    devlog.event("favorite_albums", atmos_editions_left_out=left_out)
+            deduped = self._dedup_albums(albums)
+            plans: list = []
+            if self._waves_pref_bool("collapse_editions"):
+                self._set_status("Scanning editions…")
+                if self._merge_pref_on():
+                    deduped, plans = self._merge_editions(deduped, stop_check=stop_check)
+                else:
+                    deduped = self._collapse_editions(deduped, stop_check=stop_check)
+            skipped = 0
+            if self._library_bulk_skip_on():
+                # getattr, like the per-album gate below: partial test stubs
+                # bind the gate without the probe family.
+                probe_all = getattr(self, "_library_probe_sync_many", None)
+                if probe_all is not None:
+                    probe_all(_bulk_gate_artist_names(deduped, plans))
+                kept_albums = [a for a in deduped if not self._library_claims_album(a)]
+                kept_plans = [(i, p) for i, p in plans if not self._library_claims_album(i)]
+                skipped = (len(deduped) - len(kept_albums)) + (len(plans) - len(kept_plans))
+                deduped, plans = kept_albums, kept_plans
+                if skipped:
+                    devlog.event("library", f"favorite albums skipped {skipped} claimed albums")
+            keys: list[str] = []
+            for album in deduped:
+                key = str(getattr(album, "id", id(album)))
+                self._remember("album", key, album)
+                # A plan an earlier run stashed for this album and never
+                # consumed (a STOP, a failure) must not turn this plain
+                # sweep into a merge: downloadAlbum peeks the stash
+                # unconditionally, so it is cleared here.
+                self._merge_plans.pop(key, None)
+                keys.append(key)
+            for identity, plan in plans:
+                key = str(getattr(identity, "id", id(identity)))
+                self._remember("album", key, identity)
+                self._merge_plans[key] = plan
+                keys.append(key)
+            stop_check()
+            if not keys:
+                self.downloadState.emit(gid, "")
+                note = f" ({skipped} already in your library)" if skipped else ""
+                self._set_status("No albums to download" + note)
+                return
+            with self._folder_lock:
+                stop_check()
+                self._folder_groups[gid] = {
+                    "keys": set(keys),
+                    "done": set(),
+                    "failed": set(),
+                    "prog": {},
+                    "weights": dict.fromkeys(keys, 1),
+                    "total": len(keys),
+                }
+            self.downloadProgress.emit(gid, 0.0)
+            self.folderRemaining.emit(gid, len(keys), len(keys))
+            self.downloadState.emit(gid, "queued")
+            # Edition handling already ran in the sweep; downloadAlbum must
+            # not divert these into its own scan, which never bumps the
+            # rollup (see _enqueue_albums for the stale-batch twin).
+            self._merge_scanned.update(keys)
+            self._albumsQueued.emit(gen, keys)
+            note = f" ({skipped} already in your library)" if skipped else ""
+            self._set_status(f"Downloading {len(keys)} albums…" + note)
+            stop_check()
+
+        self._fav_scan_work(gid, "albums", scan)
+
+    @Slot(str)
+    def downloadFavoriteArtists(self, source: str) -> None:
+        """Queue one discography download per favourite artist on one
+        source's shelf. The ``fav:artists`` rollup counts whole artists
+        (members keyed ``artist:<id>`` so an artist id is never mistaken for
+        an album or track id), settling each as its discography does."""
+        gid = _FAV_ARTISTS_GROUP_ID
+        if not self._fav_gates(source, gid, lambda: self.downloadFavoriteArtists(source)):
+            return
+        self._set_status("Loading favourite artists…")
+        self.downloadProgress.emit(gid, 0.0)
+        self.downloadState.emit(gid, "running")
+        stop_check = _stop_check_for(self)
+        gen = self._scan_gen
+
+        def scan() -> None:
+            if not self._gate_reachability(lambda: self.downloadFavoriteArtists(source), gid):
+                self.downloadState.emit(gid, "")
+                return
+            try:
+                objects = self._all_favorites(source, "artists", stop_check)
+            except _ScanStopped:
+                raise
+            except Exception:
+                logger.exception("Could not load every favourite artist")
+                self._fav_refuse(gid, "artists")
+                return
+            stop_check()
+            ids: list[str] = []
+            for artist in objects:
+                key = str(getattr(artist, "id", id(artist)))
+                if key not in ids:
+                    ids.append(key)
+                    self._remember("artist", key, artist)
+            stop_check()
+            if not ids:
+                self.downloadState.emit(gid, "")
+                self._set_status("No artists to download")
+                return
+            members = [_ARTIST_ROLLUP_MEMBER + i for i in ids]
+            with self._folder_lock:
+                stop_check()
+                self._folder_groups[gid] = {
+                    "keys": set(members),
+                    "done": set(),
+                    "failed": set(),
+                    "prog": {},
+                    "weights": dict.fromkeys(members, 1),
+                    "total": len(members),
+                }
+            self.downloadProgress.emit(gid, 0.0)
+            self.folderRemaining.emit(gid, len(members), len(members))
+            self.downloadState.emit(gid, "queued")
+            self._artistsQueued.emit(gen, ids)
+            self._set_status(f"Downloading {len(ids)} artists…")
+            stop_check()
+
+        self._fav_scan_work(gid, "artists", scan)
+
+    def _download_favorite_collections(self, source: str, gid: str, noun: str, gather, queue_kind: str) -> None:
+        """The shared shape of the playlists/mixes/videos shelf bulks:
+        gather the keys (raising refuses the whole set), register a
+        track-weighted (playlists) or flat folder rollup, and queue one
+        batch on the GUI thread."""
+        if not self._fav_gates(
+            source, gid, lambda: self._download_favorite_collections(source, gid, noun, gather, queue_kind)
+        ):
+            return
+        self._set_status(f"Loading favourite {noun}…")
+        self.downloadProgress.emit(gid, 0.0)
+        self.downloadState.emit(gid, "running")
+        stop_check = _stop_check_for(self)
+        gen = self._scan_gen
+
+        def scan() -> None:
+            if not self._gate_reachability(
+                lambda: self._download_favorite_collections(source, gid, noun, gather, queue_kind), gid
+            ):
+                self.downloadState.emit(gid, "")
+                return
+            try:
+                keys, weights = gather(stop_check)
+            except _ScanStopped:
+                raise
+            except Exception:
+                logger.exception("Could not load every favourite %s", noun)
+                self._fav_refuse(gid, noun)
+                return
+            stop_check()
+            if not keys:
+                self.downloadState.emit(gid, "")
+                self._set_status(f"No {noun} to download")
+                return
+            with self._folder_lock:
+                stop_check()
+                self._folder_groups[gid] = {
+                    "keys": set(keys),
+                    "done": set(),
+                    "failed": set(),
+                    "prog": {},
+                    "weights": weights,
+                    "total": len(keys),
+                }
+            self.downloadProgress.emit(gid, 0.0)
+            self.folderRemaining.emit(gid, len(keys), len(keys))
+            self.downloadState.emit(gid, "queued")
+            if queue_kind == "video":
+                self._videosQueued.emit(gen, keys)
+            else:
+                self._collectionsQueued.emit(gen, queue_kind, keys)
+            self._set_status(f"Downloading {len(keys)} {noun}…")
+            stop_check()
+
+        self._fav_scan_work(gid, noun, scan)
+
+    @Slot(str)
+    def downloadFavoritePlaylists(self, source: str) -> None:
+        """Queue every playlist on one source's shelf, the ones inside
+        folders at any depth included. Refuses a folder walk a rate limit
+        cut short."""
+        gid = _FAV_PLAYLISTS_GROUP_ID
+
+        def gather(stop_check):
+            keys, weights = self._favorite_playlist_keys(source, stop_check, refresh=True)
+            return keys, weights
+
+        self._download_favorite_collections(source, gid, "playlists", gather, "playlist")
+
+    @Slot(str)
+    def downloadFavoriteMixes(self, source: str) -> None:
+        """Queue every mix on one source's shelf as it is today."""
+        gid = _FAV_MIXES_GROUP_ID
+
+        def gather(stop_check):
+            keys = self._favorite_mix_keys(source, refresh=True)
+            return keys, dict.fromkeys(keys, 1)
+
+        self._download_favorite_collections(source, gid, "mixes", gather, "mix")
+
+    @Slot(str)
+    def downloadFavoriteVideos(self, source: str) -> None:
+        """Queue every favourite video on one source's shelf."""
+        gid = _FAV_VIDEOS_GROUP_ID
+
+        def gather(stop_check):
+            objects = self._all_favorites(source, "videos", stop_check)
+            keys: list[str] = []
+            for video in self._dedup_videos(objects):
+                key = str(getattr(video, "id", id(video)))
+                self._remember("video", key, video)
+                keys.append(key)
+            return keys, dict.fromkeys(keys, 1)
+
+        self._download_favorite_collections(source, gid, "videos", gather, "video")
 
     @Slot()
     def stopAll(self) -> None:
