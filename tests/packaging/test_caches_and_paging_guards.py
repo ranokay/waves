@@ -58,6 +58,7 @@ class _HeldPool:
 
 class _LogoutStub:
     logout = WavesBridge.logout
+    _unbind_merge_plans = WavesBridge._unbind_merge_plans
 
     def __init__(self):
         self.events: list = []
@@ -65,6 +66,12 @@ class _LogoutStub:
         self.stopAll = lambda: self.events.append("stopAll")
         self.tidal = SimpleNamespace(logout=lambda: None)
         self._reset_tidal_session = lambda: None
+        # logout() drops the dead session's kept objects and scan marks, and
+        # unbinds best-of-both plans to catalog ids for the next account.
+        self._jobs = SimpleNamespace(objs={})
+        self._merge_scanned = set()
+        self._merge_plans = {}
+        self._merge_plans_unbound = {}
         self._lib_cache: dict = {}
         self._lib_loading: set = set()
         self._lib_sort: dict = {}
@@ -88,6 +95,7 @@ class _LogoutStub:
         self._item_fetch_ts: dict = {}
         self._artist_cache: dict = {}
         self._artist_loading: set = set()
+        self._artist_reval_ts: dict = {}
         self._album_tracks_cache: dict = {}
         self._edition_tracks_cache: dict = {}
         self._home_cache: dict = {}
@@ -119,8 +127,12 @@ class _LogoutStub:
 
 def test_logout_clears_the_old_accounts_live_objects():
     stub = _LogoutStub()
+    stub._jobs.objs = {"7": object()}
+    stub._merge_scanned = {"7"}
     stub.logout()
     assert stub._objs == {"album": {}, "track": {}}, "revisited ids must re-fetch through the NEW session"
+    assert stub._jobs.objs == {}, "a RETRY on the next account would download under the old token"
+    assert stub._merge_scanned == set(), "the next account must re-scan"
 
 
 def test_logout_flips_the_flag_before_deleting_the_snapshot():
@@ -230,6 +242,9 @@ def test_own_cache_is_bounded():
 class _MoreStub:
     loadMoreLibrary = WavesBridge.loadMoreLibrary
     _lib_generation = WavesBridge._lib_generation
+    _LIBRARY_DRESSED = WavesBridge._LIBRARY_DRESSED
+    _dress_library_rows = WavesBridge._dress_library_rows
+    _dress_library_row = WavesBridge._dress_library_row
 
     def __init__(self):
         self._logged_in = True

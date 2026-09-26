@@ -101,6 +101,7 @@ def _logout_stub(tmp_path):
         "_item_fetch_ts",
         "_artist_cache",
         "_artist_loading",
+        "_artist_reval_ts",
         "_album_tracks_cache",
         "_edition_tracks_cache",
         "_lib_reval_ts",
@@ -127,6 +128,11 @@ def _logout_stub(tmp_path):
     stub._tree_warm_waiting = []
     stub._search_gen = 0
     stub._objs = {"album": {}, "track": {}, "artist": {}, "playlist": {}, "video": {}, "mix": {}}
+    stub._jobs = SimpleNamespace(objs={})
+    stub._merge_scanned = set()
+    stub._merge_plans = {}
+    stub._merge_plans_unbound = {}
+    stub._unbind_merge_plans = WavesBridge._unbind_merge_plans.__get__(stub, type(stub))
     stub._page_cache_path = str(tmp_path / "page_cache.json")
     return stub
 

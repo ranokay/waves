@@ -664,6 +664,8 @@ def test_a_failed_artist_resolution_answers_none():
 # --------------------------------------------------------------------------- #
 class _AlbumTracksStub:
     _start_album_tracks_fetch = WavesBridge._start_album_tracks_fetch
+    _dress_panel_rows = WavesBridge._dress_panel_rows
+    _dress_library_row = WavesBridge._dress_library_row
 
     def __init__(self, provider):
         base = _stub_base({"tidal": provider})
@@ -714,6 +716,8 @@ def test_a_failed_album_refetch_emits_no_rows():
 
 class _PlaylistTracksStub:
     loadPlaylistTracks = WavesBridge.loadPlaylistTracks
+    _dress_panel_rows = WavesBridge._dress_panel_rows
+    _dress_library_row = WavesBridge._dress_library_row
 
     def __init__(self, provider):
         base = _stub_base({"tidal": provider})

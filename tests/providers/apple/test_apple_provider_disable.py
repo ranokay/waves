@@ -98,6 +98,7 @@ def _retry_stub(item: dict) -> SimpleNamespace:
     stub.removed = []
     stub._queue_item = WavesBridge._queue_item.__get__(stub, SimpleNamespace)
     stub._row_object = lambda it: object()
+    stub._needs_plan_rebind = WavesBridge._needs_plan_rebind.__get__(stub, SimpleNamespace)
     # The provider's download surface: the bridge implements Apple's and binds
     # it where the providers are wired, so a retry stub binds it too.
     stub.providers = {"apple": SimpleNamespace(downloads=backend._AppleDownloads(stub))}
@@ -152,6 +153,7 @@ def test_retry_all_keeps_rows_a_refused_provider_did_not_requeue():
         _emit_queue=lambda: None,
     )
     stub._reindex_queue = lambda: None
+    stub._needs_plan_rebind = WavesBridge._needs_plan_rebind.__get__(stub, SimpleNamespace)
     stub._remove_rows_where = WavesBridge._remove_rows_where.__get__(stub, SimpleNamespace)
     stub._queue_batch = WavesBridge._queue_batch.__get__(stub, SimpleNamespace)
     stub._retry_all_with_status = WavesBridge._retry_all_with_status.__get__(stub, SimpleNamespace)

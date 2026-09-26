@@ -181,15 +181,17 @@ def _adopted(q, object_name: str):
 
     The host is the control itself for a direct adoption, or the component
     instance (a ``GateAction``/``GateCard``/``Check``) whose inner tap area
-    carries the contract. Reached by objectName, so a hidden copy of the same
-    control on another surface can never answer for it. The host counts only
+    carries the contract. Reached by objectName under the scene root and, as
+    a fallback, under the window overlay (the full-screen gates live there,
+    above any open Drawer), so a hidden copy of the same control on another
+    surface can never answer for it. The host counts only
     when it carries an accessible role itself: a component like ``Check``
     declares ``accessibleLabel`` without adopting the primitive, so returning
     the host there would read the wrong object.
     """
     return q(
         scene_js(
-            f'var host = findObject(root, "{object_name}");'
+            f'var host = findObject(root, "{object_name}") || findObject(Overlay.overlay, "{object_name}");'
             " if (!host) return null;"
             " if (host.accessibleLabel !== undefined && Number(host.Accessible.role) !== 0) return host;"
             " return findFirst(host, function (o) { return o.accessibleLabel !== undefined && Number(o.Accessible.role) !== 0; });"
@@ -1131,7 +1133,11 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     settle(300)
     _check_buttons(
         problems,
-        _buttons(q, "function (o) { return o.accessibleLabel === 'Continue anyway'; }"),
+        _buttons(
+            q,
+            "function (o) { return o.accessibleLabel === 'Continue anyway'; }",
+            scope="[root.contentItem, Overlay.overlay]",
+        ),
         "the FFmpeg block gate's CONTINUE action",
     )
     continue_anyway = _adopted(q, "ffmpegGateContinue")
@@ -1149,7 +1155,11 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     settle(300)
     _check_buttons(
         problems,
-        _buttons(q, "function (o) { return o.accessibleLabel === 'Not now'; }"),
+        _buttons(
+            q,
+            "function (o) { return o.accessibleLabel === 'Not now'; }",
+            scope="[root.contentItem, Overlay.overlay]",
+        ),
         "the folder gate's Not now action",
     )
     not_now = _adopted(q, "folderGateNotNow")
