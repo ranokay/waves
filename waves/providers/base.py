@@ -14,6 +14,9 @@ orthogonal to it.
 
 from __future__ import annotations
 
+import logging
+import os
+import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -103,6 +106,145 @@ from typing import NamedTuple
 # interface speaks it in its signatures; implementations and callers import
 # the ladder (and its rank/fold helpers) from waves.constants directly.
 from waves.constants import QualityTier
+
+logger = logging.getLogger(__name__)
+
+
+class RowValidationError(ValueError):
+    """A row dict that breaks the schema above; names the kind and the key."""
+
+
+# Required keys per row kind, in schema order. Extra keys (the album row's
+# "listed") are allowed: rows are never partial-keyed, but a view may carry
+# more than QML needs.
+_ROW_REQUIRED: dict[str, tuple[str, ...]] = {
+    "artist": ("id", "name", "art", "roles", "popularity"),
+    "album": (
+        "id",
+        "title",
+        "artist",
+        "artist_id",
+        "artists",
+        "art",
+        "year",
+        "date",
+        "tracks",
+        "duration_sec",
+        "quality",
+        "popularity",
+        "explicit",
+        "added",
+    ),
+    "track": (
+        "id",
+        "title",
+        "artist",
+        "artist_id",
+        "artists",
+        "album",
+        "album_id",
+        "num",
+        "vol",
+        "art",
+        "year",
+        "date",
+        "duration",
+        "duration_sec",
+        "quality",
+        "popularity",
+        "explicit",
+        "added",
+    ),
+    "video": (
+        "id",
+        "title",
+        "artist",
+        "artists",
+        "art",
+        "art_big",
+        "duration",
+        "explicit",
+        "added",
+        "date",
+        "quality",
+    ),
+    # Playlist folders share this exact key set (kind "folder"), so a QML
+    # ListModel never sees a new role mid-list.
+    "playlist": (
+        "id",
+        "title",
+        "art",
+        "tracks",
+        "creator",
+        "added",
+        "kind",
+        "sub",
+        "path",
+        "plCount",
+    ),
+    "mix": ("id", "title", "art", "subtitle", "added"),
+}
+
+_INT_KEYS = frozenset({"popularity", "tracks", "duration_sec", "num", "vol", "plCount"})
+_BOOL_KEYS = frozenset({"explicit"})
+
+_warned_kinds: set[str] = set()
+
+
+def _strict_rows() -> bool:
+    """Raise under pytest and CI; the shipped app only logs (behavior freeze)."""
+    return "pytest" in sys.modules or bool(os.environ.get("CI"))
+
+
+def _key_problem(kind: str, key: str, value: object) -> str | None:
+    """One present key's type verdict, or None when it passes."""
+    if key in _BOOL_KEYS:
+        if not isinstance(value, bool):
+            return f"row {kind!r} key {key!r} must be bool, got {type(value).__name__}"
+    elif key in _INT_KEYS:
+        if not isinstance(value, int) or isinstance(value, bool):
+            return f"row {kind!r} key {key!r} must be int, got {type(value).__name__}"
+    elif key == "artists":
+        if not (
+            isinstance(value, list)
+            and all(isinstance(item, dict) and "id" in item and "name" in item for item in value)
+        ):
+            return f"row {kind!r} key 'artists' must be a list of {{id, name}} dicts"
+    elif not isinstance(value, str):
+        return f"row {kind!r} key {key!r} must be str, got {type(value).__name__}"
+    return None
+
+
+def validate_row(kind: str, row: dict, *, strict: bool | None = None) -> dict:
+    """Check one row dict against the schema above; return it unchanged.
+
+    A deliberately key-dropped row fails naming the missing key (and a
+    mistyped value names the key and the expected type). Tests and CI raise
+    :class:`RowValidationError`; shipped runtime logs once per kind and
+    never alters the row. ``strict`` overrides the automatic mode, which the
+    log-once test uses; every other caller takes the default.
+    """
+    required = _ROW_REQUIRED.get(kind)
+    problems: list[str] = []
+    if required is None:
+        problems.append(f"unknown row kind {kind!r}")
+    elif not isinstance(row, dict):
+        problems.append(f"row {kind!r} is {type(row).__name__}, not a dict")
+    else:
+        for key in required:
+            if key not in row:
+                problems.append(f"row {kind!r} missing key {key!r}")
+            elif (problem := _key_problem(kind, key, row[key])) is not None:
+                problems.append(problem)
+    if not problems:
+        return row
+    message = "; ".join(problems)
+    if strict if strict is not None else _strict_rows():
+        raise RowValidationError(message)
+    if kind not in _warned_kinds:
+        _warned_kinds.add(kind)
+        logger.warning("invalid %s row: %s", kind, message)
+    return row
 
 
 class AudioType(StrEnum):
