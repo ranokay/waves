@@ -732,7 +732,12 @@ def test_resolve_needs_a_login():
         ),
     ],
 )
-def test_the_shelf_button_is_wired(cat, btn, suffix, resolve, slot, kind):
+def test_wiring_shelf_buttons(cat, btn, suffix, resolve, slot, kind):
+    # Wiring pin (DEVELOPER.md): the per-tab button objectName, the shared
+    # per-source group id on the button and its badge, the tap path, and the
+    # confirm-gate dispatch have no behavioral seam (a real tap needs an
+    # offscreen render). The behavior is proved by
+    # tests/ui/test_my_music_download_all_qml.py.
     gid = _fav_group_id(SOURCE, suffix)
     assert f'objectName: "{btn}"' in QML_GROUP, f"the {cat} DOWNLOAD ALL button is missing"
     assert f'mediaId: "fav:" + group.sourceId + ":{suffix}"' in QML_GROUP, (
@@ -748,7 +753,11 @@ def test_the_shelf_button_is_wired(cat, btn, suffix, resolve, slot, kind):
     assert gate and f'p.kind === "{kind}"' in gate.group(0) and f"waves.{slot}(p.source)" in gate.group(0)
 
 
-def test_the_logout_clears_every_armed_count():
+def test_wiring_logout_disarms_counts():
+    # Wiring pin (DEVELOPER.md): clearPanes disarming every pending count on
+    # an account flip has no behavioral seam short of a full sign-out
+    # render; the armed-count lifecycle itself is proved by
+    # tests/ui/test_my_music_download_all_qml.py.
     for flag in (
         "favTracksPending",
         "favAlbumsPending",

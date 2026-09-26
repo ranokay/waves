@@ -14,6 +14,9 @@ and its five twins). On the real Main.qml, with a signed-in TIDAL source:
 5. A failed count (-1) while armed disarms and opens nothing.
 6. Albums, Artists, Playlists, Mixes and Videos behave the same, each
    titled for its kind.
+7. A fresh shelf load lands at its true top (ports upstream's
+   test_my_tidal_list_top_scenario.py): the 8px header inside the scroll
+   area puts a list's top at originY, not contentY 0.
 
 The count is answered by the real ``resolveFavoriteX`` slots against a
 count stubbed on the TIDAL provider, so the tap-to-confirm path is the

@@ -17604,6 +17604,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         seen: dict[str, None] = {}
         weights: dict[str, int] = {}
         for playlist in lists.get("playlists", []):
+            stop_check()
             if hasattr(playlist, "num_tracks"):
                 key = str(getattr(playlist, "id", id(playlist)))
                 if key not in seen:
@@ -17621,11 +17622,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     self._remember("playlist", key, playlist)
         return list(seen), weights
 
-    def _favorite_mix_keys(self, source: str, refresh: bool) -> list:
+    def _favorite_mix_keys(self, source: str, stop_check, refresh: bool) -> list:
         """Every mix id on one source's shelves, in listed order."""
         lists, _tree = self._media_lists(source, refresh=refresh, walk=False)
         keys: list[str] = []
         for mix in lists.get("mixes", []):
+            stop_check()
             key = str(getattr(mix, "id", id(mix)))
             self._remember("mix", key, mix)
             keys.append(key)
@@ -17721,7 +17723,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "mixes",
             _fav_group_id(source, "mixes"),
             self.favoriteMixesResolved,
-            lambda: len(self._favorite_mix_keys(source, refresh=False)),
+            lambda: len(self._favorite_mix_keys(source, lambda: None, refresh=False)),
         )
 
     @Slot(str)
@@ -18066,7 +18068,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         gid = _fav_group_id(source, "mixes")
 
         def gather(stop_check):
-            keys = self._favorite_mix_keys(source, refresh=True)
+            keys = self._favorite_mix_keys(source, stop_check, refresh=True)
             return keys, dict.fromkeys(keys, 1)
 
         self._download_favorite_collections(source, gid, "mixes", gather, "mix")
