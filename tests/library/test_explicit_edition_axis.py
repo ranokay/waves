@@ -955,6 +955,48 @@ def test_a_failed_scan_releases_the_veil():
         assert LibraryMixin.libraryIndexReady(s) is ready, status
 
 
+# ---- the ownership store's atmos_only/adopt ------------------------------------------------
+
+
+def _own_store(tmp_path):
+    from waves.library.ownership import OwnershipStore
+
+    return OwnershipStore(str(tmp_path / "own.db"))
+
+
+def _own_file(tmp_path, name="song.flac"):
+    path = str(tmp_path / name)
+    with open(path, "wb") as fh:
+        fh.write(b"data")
+    return path
+
+
+def test_adopt_records_a_found_file_once_and_never_overwrites_a_measured_row(tmp_path):
+    store = _own_store(tmp_path)
+    path = _own_file(tmp_path)
+    assert store.adopt("101", path) is True
+    assert store.adopt("101", path) is False
+    assert store.ownership_of("101")["path"] == path
+    # A measured copy lands later: the unknown tier must not clobber it.
+    store.record("101", path, "LOSSLESS")
+    assert store.adopt("101", path) is False
+    assert store.ownership_of("101")["quality_tier"] == "LOSSLESS"
+
+
+def test_record_carries_atmos_only_and_stamp_marks_it_once(tmp_path):
+    store = _own_store(tmp_path)
+    path = _own_file(tmp_path)
+    store.record("102", path, "LOSSLESS", audio_mode="DOLBY_ATMOS", atmos_only=True)
+    assert store.ownership_of("102")["atmos_only"] is True
+    store.record("103", _own_file(tmp_path, "other.flac"), "LOSSLESS", audio_mode="DOLBY_ATMOS")
+    assert store.ownership_of("103")["atmos_only"] is False
+    assert store.stamp_atmos_only("103", str(tmp_path / "other.flac")) is True
+    assert store.ownership_of("103")["atmos_only"] is True
+    assert store.stamp_atmos_only("103", str(tmp_path / "other.flac")) is False
+    store.record("104", _own_file(tmp_path, "stereo.flac"), "LOSSLESS", audio_mode="STEREO")
+    assert store.stamp_atmos_only("104", str(tmp_path / "stereo.flac")) is False
+
+
 # ---- reveal, do not open ----------------------------------------------------
 
 

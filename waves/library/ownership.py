@@ -689,6 +689,8 @@ class OwnershipStore:
         Returns:
             bool: Whether a row was added.
         """
+        # One spelling on the row, like record(): a bare id is tidal's.
+        track_id = namespaced_id(track_id)
         with self._lock:
             cur = self._conn.execute(
                 """INSERT INTO downloads (track_id, path, recorded_at) VALUES (?, ?, ?)
@@ -738,6 +740,8 @@ class OwnershipStore:
         Returns:
             bool: Whether a row was changed.
         """
+        # One spelling on the row, like stamp_ceiling: a bare id is tidal's.
+        track_id = namespaced_id(track_id)
         with self._lock:
             cur = self._conn.execute(
                 """UPDATE downloads SET atmos_only = 1
