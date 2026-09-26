@@ -42,6 +42,7 @@ from PySide6.QtCore import Property, QEvent, QObject, Qt, QTimer, Signal, Slot
 from tidalapi import page as tidal_page
 from tidalapi.album import Album
 from tidalapi.artist import Artist, Role
+from tidalapi.exceptions import ObjectNotFound
 from tidalapi.media import AudioMode, Track, Video
 from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
@@ -53,6 +54,8 @@ from waves.constants import (
     CTX_APPLE,
     CTX_TIDAL,
     DEFAULT_ILLEGAL_MAP,
+    ITEM_FETCH_FAILED,
+    ITEM_GONE,
     LIBRARY_PAGE,
     CoverDimensions,
     DefaultAudio,
@@ -193,7 +196,7 @@ from .bridge_surfaces import (
 from .ffmpeg_manager import FfmpegCancelled, FfmpegManager
 from .job_runtime import JobRuntime
 from .library_proc import LibraryWorker
-from .updater import AppUpdater, UpdateCancelled
+from .updater import AppUpdater, UpdateCancelled, user_facing_error
 
 logger = logging.getLogger("waves")
 # Window geometry persistence. Its own child logger so restore/save
@@ -2683,6 +2686,29 @@ def _album_card_flag(card: dict) -> int:
     return 1 if card.get("explicit") is True else -1
 
 
+def _track_row_flag(row: dict) -> int:
+    """A track dict's explicit flag as the presence slot takes it: 1, 0, or
+    -1 when the row carries none. A track's own flag is always parsed, so
+    False here does mean clean (the QML track rows read it the same way)."""
+    flag = row.get("explicit")
+    return 1 if flag is True else 0 if flag is False else -1
+
+
+def _user_error(exc: BaseException, fallback: str, plain: tuple[type, ...] = (), **nouns: str) -> str:
+    """Fixed wording for a gate or toast the user reads.
+
+    Installer and updater failures carry OS and HTTP error text, which names
+    the staging path (a home directory), the host, or a library's own
+    phrasing (HTTPSConnectionPool, 404 Client Error). The log keeps the raw
+    exception; the UI gets a plain sentence for the failure's kind (see
+    updater.user_facing_error), scrubbed once more, and an empty message
+    falls back to the caller's wording. ``plain`` names exception classes
+    whose own message is written for the user and passes through, and
+    ``nouns`` (server, folder) name what the failing installer reached.
+    """
+    return redaction.scrub(user_facing_error(exc, fallback, plain, **nouns)).strip() or fallback
+
+
 def _popularity(obj) -> int:
     try:
         return max(0, min(100, int(getattr(obj, "popularity", 0) or 0)))
@@ -4657,9 +4683,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._category_pl: dict[str, tuple[float, list]] = {}
         # Artist pages, cached for the session like browse pages so revisits
         # render instantly; every visit still revalidates in the background
-        # (stale-while-revalidate) so a new release shows up on return.
+        # (stale-while-revalidate) so a new edition shows up on return.
         self._artist_cache: dict[str, dict] = {}
         self._artist_loading: set[str] = set()
+        self._artist_reval_ts: dict[str, float] = {}
         # The one artist page a hover may be building (see prefetchArtist),
         # and whether a click has since claimed it; both under _prefetch_lock.
         self._artist_prefetch: str | None = None
@@ -4852,6 +4879,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # behind a silent reconnect. Off-thread and self-collapsing, so a
         # genuinely hung share costs nothing but a skipped tick.
         self._keepwarm_inflight = False
+        self._window_shown = True
+        self._keepwarm_hidden_ticks = 0
         self._keepwarm_poll = QTimer(self)
         self._keepwarm_poll.setInterval(60_000)
         self._keepwarm_poll.timeout.connect(self._keepwarm_tick)
@@ -4891,6 +4920,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # Best-of-both merge plans awaiting download, keyed by the synthetic album
         # key that downloadAlbum() will route through _download(merge_plan=…).
         self._merge_plans: dict[str, list] = {}
+        self._merge_plans_unbound: dict[str, list] = {}
         # Album ids already run through (or exempt from) the automatic
         # best-of-both scan, so downloadAlbum never scans the same id twice.
         self._merge_scanned: set[str] = set()
@@ -5778,6 +5808,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # spec), so the rows stay in the Stopped section and RETRY ALL picks
         # them up on whichever account signs in next.
         self.stopAll()
+        # The live objects belong to the old account's session; a RETRY on the
+        # next account must re-fetch by id and rebind, never download through
+        # the dead session. Same for the best-of-both scan marks.
+        self._jobs.objs.clear()
+        self._merge_scanned.clear()
+        self._unbind_merge_plans()
         try:
             self.providers[CTX_TIDAL].logout()
             # the engine's logout() deletes the session object; the provider
@@ -5820,6 +5856,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._item_fetch_ts.clear()
         self._artist_cache.clear()
         self._artist_loading.clear()
+        self._artist_reval_ts.clear()
         self._album_tracks_cache.clear()
         self._edition_tracks_cache.clear()
         self._home_cache.clear()
@@ -5863,6 +5900,50 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # for itself, so this is the only bump that has to clear it.
         self._set_busy(False)
         self._set_status("Signed out")
+
+    def _unbind_merge_plans(self) -> None:
+        """On sign-out, keep each best-of-both plan as catalog ids and drop its
+        Track objects, which are bound to the dead session (a RETRY through
+        them would download under the account just signed out of)."""
+        plans = getattr(self, "_merge_plans", {})
+        unbound = getattr(self, "_merge_plans_unbound", None)
+        if unbound is not None:
+            for mid, plan in plans.items():
+                unbound[mid] = [
+                    (str(getattr(e.src, "id", "") or ""), e.track_num, e.volume_num, e.identity_id) for e in plan
+                ]
+        plans.clear()
+
+    def _needs_plan_rebind(self, item: dict) -> bool:
+        return item.get("type") == "album" and item.get("media_id") in getattr(self, "_merge_plans_unbound", {})
+
+    def _rebind_merge_plan(self, bucket: str, media_id: str, session) -> list | None:
+        """Rebuild an unbound plan's Track objects through ``session``.
+
+        A borrowed track TIDAL no longer serves (issue #25) takes the identity
+        edition's own cut, the same rescue the fan-out makes for a refused
+        slot. Raises when a slot cannot be rebuilt either way, and never as
+        ObjectNotFound: the caller reads that as the album itself being gone,
+        which it is not."""
+        ids = getattr(self, "_merge_plans_unbound", {}).get(media_id) if bucket == "album" else None
+        if not ids:
+            return None
+        plan = []
+        for src, num, vol, ident in ids:
+            try:
+                try:
+                    track = session.track(int(src))
+                except ObjectNotFound:
+                    if not ident or str(ident) == str(src):
+                        raise
+                    logger.info(
+                        "Best of both: a borrowed track is gone from TIDAL, the retry takes the album's own cut"
+                    )
+                    track = session.track(int(ident))
+            except ObjectNotFound as exc:
+                raise LookupError from exc  # anything but ObjectNotFound, see above
+            plan.append(_PlanEntry(track, num, vol, ident))
+        return plan
 
     _ARTIST_CACHE_MAX = 60  # ~30-80 KB each, worst case a few MB on disk
     # Browse drill-ins (editorial pages, pl: grids, item: pages) can each hold
@@ -6510,7 +6591,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # against the ownership store, behind a lock the download
                 # workers take too), exactly as openBrowseItem does its page.
                 self.threadpool.start(Worker(lambda: self._record_album_members(album_id, cached)))
-            self.albumTracksLoaded.emit(album_id, cached)
+            self.albumTracksLoaded.emit(album_id, self._dress_panel_rows(cached))
             return
         with self._prefetch_lock:
             if album_id in self._album_tracks_inflight:
@@ -6573,7 +6654,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 if watched:
                     self._record_album_members(album_id, out)
             if watched:
-                self.albumTracksLoaded.emit(album_id, out)
+                self.albumTracksLoaded.emit(album_id, self._dress_panel_rows(out))
 
         def work() -> None:
             t0 = devlog.clock()
@@ -6665,7 +6746,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if str(playlist_id).startswith(f"{CTX_APPLE}:"):
                 rows = self._apple_playlist_expansion_rows(str(playlist_id))
                 if gen == self._browse_gen:
-                    self.playlistTracksLoaded.emit(playlist_id, rows)
+                    self.playlistTracksLoaded.emit(playlist_id, self._dress_panel_rows(rows))
                     devlog.done("playlist", f"tracks id={playlist_id}", devlog.clock() - t0, n=len(rows))
                 return
             obj = pl
@@ -6708,7 +6789,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 )
             if gen != self._browse_gen:
                 return  # logged out mid-fetch; the rows belong to the dead session
-            self.playlistTracksLoaded.emit(playlist_id, out)
+            self.playlistTracksLoaded.emit(playlist_id, self._dress_panel_rows(out))
             devlog.done("playlist", f"tracks id={playlist_id}", devlog.clock() - t0, n=len(out))
 
         self.threadpool.start(Worker(work))
@@ -6914,6 +6995,33 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._start_artist_build(artist_id, cached, collapse, silent=False)
 
     @Slot(str)
+    def refreshArtist(self, artist_id: str) -> None:
+        """Silently revalidate an artist page the UI is still showing.
+
+        loadArtist revalidates only on entry and Back restores from memory, so
+        an artist page the user PARKED on never learned of a release that
+        landed since. The QML calls this on a max-age timer while the page is
+        the view. A cached page under the current edition rule is rebuilt
+        silently and re-emitted, flagged ``refresh``, only if it changed;
+        a page fetched within the minute, or one already building, is left
+        alone; a page not cached is not this slot's to load."""
+        artist_id = str(artist_id or "")
+        if not self._logged_in or not artist_id:
+            return
+        collapse = self._artist_page_collapses_editions()
+        cached = self._artist_cache.get(artist_id)
+        if cached is None or bool(cached.get("editions_collapsed", False)) != collapse:
+            return
+        stamp = self._artist_reval_ts.get(artist_id)
+        if stamp is not None and time.monotonic() - stamp < 60.0:
+            return
+        with self._prefetch_lock:
+            if artist_id in self._artist_loading:
+                return
+            self._artist_loading.add(artist_id)
+        self._start_artist_build(artist_id, cached, collapse, silent=True)
+
+    @Slot(str)
     def prefetchArtist(self, artist_id: str) -> None:
         """Build an artist page on HOVER, so the click that usually follows
         paints from the cache instead of "Loading artist…".
@@ -7089,6 +7197,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         self.artistLoadFailed.emit(artist_id)
             if gen != self._browse_gen:
                 return  # logged out mid-fetch, see loadBrowse's work()
+            # The floor refreshArtist keeps: a page fetched now, by any path,
+            # is not re-fetched for a minute. (A partial bridge without the
+            # dict, the tests' stubs, keeps no floor.)
+            reval_ts = getattr(self, "_artist_reval_ts", None)
+            if isinstance(reval_ts, dict):
+                reval_ts[artist_id] = time.monotonic()
             changed = payload != cached
             # A page with a failed or empty-everywhere fetch is more likely a
             # transient failure than a real artist with no catalogue, show it
@@ -7169,6 +7283,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if artist is None:
                 self._set_status("Could not load artist")
                 self._set_busy(False)
+                if gen == self._browse_gen:
+                    self.artistLoadFailed.emit(artist_id)
                 return
             try:
                 bio = _clean_bio(artist.get_bio() or "")
@@ -7212,10 +7328,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             except Exception:
                 # Same latch as search: one malformed row must fail the load
                 # visibly instead of leaving busy turning for good.
+                # A Back onto the scoped page waits on artistLoaded to clear
+                # its history latch; a silent failure left navPush dead until
+                # logout. Both failure exits tell the QML explicitly.
                 logger.exception("Library artist page build failed")
                 if gen == self._browse_gen:
                     self._set_status("Could not load artist")
                     self._set_busy(False)
+                    self.artistLoadFailed.emit(artist_id)
                 return
             if gen != self._browse_gen:
                 return  # logged out mid-fetch
@@ -7574,7 +7694,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if not quiet:
                 self._set_busy(False)
                 devlog.event("library", f"{category} from cache", n=len(cached["items"]))
-                self.libraryLoaded.emit(key[0], key[1], cached["items"], cached["more"])
+                self.libraryLoaded.emit(
+                    key[0], key[1], self._dress_library_rows(category, cached["items"]), cached["more"]
+                )
                 self._set_status(self._lib_status(category, self._lib_count(category, cached["items"]), cached["more"]))
             # Stale-while-revalidate, but only while the user is still on the
             # first page: re-emitting a fresh first page after infinite scroll
@@ -7617,7 +7739,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 ):
                     self._lib_cache[key] = {"items": items, "offset": _LIBRARY_PAGE, "more": more}
                     self._save_page_cache()
-                    self.libraryLoaded.emit(key[0], key[1], items, more)
+                    self.libraryLoaded.emit(key[0], key[1], self._dress_library_rows(category, items), more)
                     self._set_status(self._lib_status(category, self._lib_count(category, items), more))
                 devlog.done("library", f"{category} revalidate", devlog.clock() - t0, n=len(items))
                 return
@@ -7628,13 +7750,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     # reads as a complete, empty library and disables the
                     # infinite-scroll retry. Leave the cache alone so the next
                     # tab visit takes the cold path and retries the fetch.
-                    self.libraryLoaded.emit(key[0], key[1], items, more)
+                    self.libraryLoaded.emit(key[0], key[1], self._dress_library_rows(category, items), more)
                     self._set_status("Could not load your library, reopen the tab to retry")
                     self._set_busy(False)
                 else:
                     self._lib_cache[key] = {"items": items, "offset": _LIBRARY_PAGE, "more": more}
                     self._save_page_cache()
-                    self.libraryLoaded.emit(key[0], key[1], items, more)
+                    self.libraryLoaded.emit(key[0], key[1], self._dress_library_rows(category, items), more)
                     self._set_status(self._lib_status(category, self._lib_count(category, items), more))
                     self._set_busy(False)
             devlog.done("library", category, devlog.clock() - t0, n=len(items), more=more)
@@ -7694,7 +7816,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             else:
                 shown = self._lib_count(category, items)
             self._lib_loading.discard(key)
-            self.libraryMore.emit(key[0], key[1], items, more)
+            self.libraryMore.emit(key[0], key[1], self._dress_library_rows(category, items), more)
             self._set_status(self._lib_status(category, shown, more))
             devlog.done("library", f"{category} page@{offset}", devlog.clock() - t0, n=len(items), more=more)
 
@@ -8032,7 +8154,24 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         the shared-parser serialization, and the raw paging handle each
         parsed category carries) all live behind the seam. The bridge
         renders the parsed categories the page comes back with."""
+        if not self._page_path_ok(api_path):
+            raise ValueError("Refused a page path that leaves TIDAL's API")  # noqa: TRY003
         return self.providers[CTX_TIDAL].browse_page(title, api_path)
+
+    @staticmethod
+    def _page_path_ok(path: str) -> bool:
+        """Whether an editorial page path from a TIDAL payload is a relative
+        ``pages/...`` path with no scheme or host. The QML-facing slots refuse
+        anything else already; the internal fetches (the Explore quick
+        links, the tile-art crawl, a category's DOWNLOAD ALL) take paths from
+        the same payloads and must refuse the same way, because tidalapi
+        joins the path onto its base URL and an absolute URL would carry the
+        bearer token to whatever host it names."""
+        text = str(path or "")
+        if not text.startswith("pages/") or "//" in text or "\\" in text:
+            return False
+        parts = urlsplit(text)
+        return not parts.scheme and not parts.netloc
 
     @staticmethod
     def _chips_from_explore(explore) -> tuple[dict, dict]:
@@ -8209,11 +8348,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         card = dict(card)
         try:
             if card["kind"] == "album" and card.get("title"):
+                # Read the stamp before the verdict: a publish landing in
+                # between then leaves an OLD stamp on a new verdict, and the
+                # card asks live. The other order baked an old verdict under
+                # the new stamp, which the card trusted and never re-asked.
+                stamp = int(getattr(self, "_library_stamp", 0))
                 card["lib"] = self.libraryAlbumPresence(
                     str(card.get("artist") or ""),
                     str(card["title"]),
                     str(card.get("year") or ""),
-                    int(card.get("tracks") or 0),
+                    int(card.get("audio_tracks", card.get("tracks")) or 0),
                     int(card.get("duration_sec") or 0),
                     _album_card_flag(card),
                 )
@@ -8223,9 +8367,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # LIVE card re-ask cannot reach a card that does not exist
                 # yet, and without this the card kept the stale answer until
                 # the next publish, which for a settled library never comes.
-                card["libStamp"] = int(getattr(self, "_library_stamp", 0))
-            card["ownGen"] = int(getattr(self, "_own_generation", 0))
-            card["own"] = self.collectionOwnership(str(card.get("id") or ""))
+                card["libStamp"] = stamp
+            own_gen = int(getattr(self, "_own_generation", 0))
+            own = self.collectionOwnership(str(card.get("id") or ""))
+            # A "pending" rollup is not an answer, it is a promise: the cold
+            # members are being answered on the pool and the batch announcing
+            # them fires ~80ms later, to the cards registered BY THEN. A card
+            # incubated after that batch would trust the baked "pending" (same
+            # ownGen) and never hear the answer, so it printed DOWNLOAD over
+            # an album already on disk. Undressed, it asks live at creation,
+            # which registers it before any batch can fire.
+            if not (isinstance(own, dict) and own.get("verdict") == "pending"):
+                card["ownGen"] = own_gen
+                card["own"] = own
         except Exception:
             # Undressed keys make the card ask live, exactly as before.
             logger.debug("card dressing failed", exc_info=True)
@@ -8265,6 +8419,76 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if gen != self._browse_gen:
             return
         signal.emit(dressed)
+
+    # A My Tidal category row wears the same baked answer. A category page is
+    # one flat list, not a browse page's sections, and its rows carry no
+    # `kind` (the category is the kind), so this is keyed by category: an
+    # album row and a track row bake the pill's verdict, an artist row the
+    # strip's rollup. Without it every row asked the bridge at creation, one
+    # QML->Python call per pill on the GUI thread, for a page whose answers
+    # were all knowable before it was emitted. Ownership is not baked here:
+    # nothing in a row asks for it at creation. The cached page stays
+    # undressed for the reason _dress_card gives (it is persisted).
+    _LIBRARY_DRESSED = frozenset({"albums", "tracks", "artists"})
+
+    def _dress_library_row(self, category: str, row):
+        if not isinstance(row, dict):
+            return row
+        # Stamp first, verdict second, for the reason _dress_card gives.
+        stamp = int(getattr(self, "_library_stamp", 0))
+        try:
+            if category == "albums" and row.get("title"):
+                lib = self.libraryAlbumPresence(
+                    str(row.get("artist") or ""),
+                    str(row["title"]),
+                    str(row.get("year") or ""),
+                    int(row.get("audio_tracks", row.get("tracks")) or 0),
+                    int(row.get("duration_sec") or 0),
+                    _album_card_flag(row),
+                )
+            elif category == "tracks" and row.get("title"):
+                lib = self.libraryTrackPresence(
+                    str(row.get("artist") or ""),
+                    str(row["title"]),
+                    str(row.get("album") or ""),
+                    str(row.get("year") or ""),
+                    int(row.get("duration_sec") or 0),
+                    _track_row_flag(row),
+                )
+            elif category == "artists" and row.get("name"):
+                lib = self.artistLibraryPresence(str(row["name"]))
+            else:
+                return row
+        except Exception:
+            # An undressed row asks live, exactly as before.
+            logger.debug("library row dressing failed", exc_info=True)
+            return row
+        row = dict(row)
+        row["lib"] = lib
+        row["libStamp"] = stamp
+        return row
+
+    def _dress_library_rows(self, category: str, rows):
+        """A copy of one category page whose rows carry their ``lib`` verdict
+        and the publish it came from (``libStamp``, compared by the row's
+        pill before it trusts the answer, see libraryStamp). Other categories
+        (playlists, mixes, videos) come back as they are."""
+        if category not in self._LIBRARY_DRESSED or not isinstance(rows, list):
+            return rows
+        return [self._dress_library_row(category, r) for r in rows]
+
+    def _dress_panel_rows(self, rows):
+        """The track rows of an expanded album or playlist panel, dressed the
+        way a My Tidal track row is: each carries the verdict its download
+        control would otherwise ask for at creation. A video row is left as it
+        is, the scan only ever holds audio. The session cache behind the album
+        panel keeps the undressed rows, same rule as the category cache."""
+        if not isinstance(rows, list):
+            return rows
+        return [
+            r if not isinstance(r, dict) or r.get("kind") == "video" else self._dress_library_row("tracks", r)
+            for r in rows
+        ]
 
     def _load_browse_root(self, emit_cached: bool) -> None:
         if not self._logged_in:
@@ -8355,7 +8579,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         emit the new cards. Every cached copy of the row (landing + drilled
         pages share data paths) is extended too, so revisits keep the growth."""
         data_path = str(data_path or "")
-        if not self._logged_in or not data_path.startswith("pages/data/"):
+        if not self._logged_in or not data_path.startswith("pages/data/") or not self._page_path_ok(data_path):
             return
         load_key = "more:" + data_path
         if load_key in self._browse_loading:
@@ -8415,7 +8639,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """Drill into one editorial page (a genre / mood / decade chip)."""
         api_path = str(api_path or "")
         title = str(title or "")
-        if not self._logged_in or not api_path.startswith("pages/"):
+        if not self._logged_in or not self._page_path_ok(api_path):
             return
         cached = self._browse_pages.get(api_path)
         if cached is not None:
@@ -8899,6 +9123,62 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if has_items:
                 self._save_page_cache()
             devlog.done("browse", key, devlog.clock() - t0)
+
+        self.threadpool.start(Worker(work))
+
+    @Slot(str, str)
+    def refreshBrowseItem(self, kind: str, media_id: str) -> None:
+        """Silently revalidate an item page the UI is still showing.
+
+        openBrowseItem revalidates only on entry, so a playlist page the user
+        PARKED on (an editorial list TIDAL rebuilds weekly) stayed at the
+        payload of its open for as long as it was up. The QML calls this on a
+        max-age timer while the page is the view; it is the entry
+        revalidate without the entry: nothing is re-emitted unless the page
+        changed, busy and the status line are never touched, and a page
+        fetched within the minute (the entry's own floor) is left alone."""
+        kind = str(kind or "")
+        media_id = str(media_id or "")
+        if not self._logged_in or kind not in ("playlist", "mix", "album"):
+            return
+        key = f"item:{kind}:{media_id}"
+        cached = self._browse_pages.get(key)
+        if cached is None:
+            return
+        stamp = self._item_fetch_ts.get(key)
+        if stamp is not None and time.monotonic() - stamp < self._ITEM_FRESH_S:
+            return
+        with self._prefetch_lock:
+            if key in self._browse_loading:
+                return
+            self._browse_loading.add(key)
+        if kind == "mix":
+            # A remembered Mix answers items() from the list it parsed at its
+            # open and never asks again, so a revalidate built on it always
+            # equalled the cached page. Forget it: the build fetches a fresh
+            # one and remembers that.
+            with self._objs_lock:
+                self._objs["mix"].pop(media_id, None)
+        gen = self._browse_gen
+
+        def work() -> None:
+            t0 = devlog.clock()
+            payload: dict
+            try:
+                payload = self._build_browse_item(kind, media_id, key)
+            except Exception:
+                logger.exception("Could not open browse item %s", key)
+                payload = {"key": key, "title": "", "sections": [], "error": True}
+            if gen != self._browse_gen:
+                return
+            self._browse_loading.discard(key)
+            has_items = not payload["error"] and any(s["items"] for s in payload["sections"])
+            if has_items and payload != cached:
+                self._remember_capped(self._browse_pages, key, payload, self._BROWSE_PAGES_MAX)
+                self._item_fetch_ts[key] = time.monotonic()
+                self._emit_dressed(self.browsePageLoaded, payload, gen)
+                self._save_page_cache()
+            devlog.done("browse", f"{key} revalidate", devlog.clock() - t0)
 
         self.threadpool.start(Worker(work))
 
@@ -12572,6 +12852,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         base = self.settings.data.download_base_path or ""
         if not base.startswith("/Volumes/") or self._keepwarm_inflight:
             return
+        if not getattr(self, "_window_shown", True) and not self._downloads_running():
+            ticks = getattr(self, "_keepwarm_hidden_ticks", 0) + 1
+            self._keepwarm_hidden_ticks = ticks
+            if ticks % self._KEEPWARM_HIDDEN_EVERY:
+                return
         self._keepwarm_inflight = True
 
         def touch() -> None:
@@ -12595,6 +12880,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     # answers nothing before declaring it wedged and force-remounting it. A
     # cold share reconnecting answers well inside this; a zombie never does.
     _WEDGE_FORCE_SEC = 9.0
+    # While the window is hidden or minimized (and nothing downloads), the
+    # share keep-warm slows to every tenth tick so a NAS gets an idle
+    # stretch; re-show resets the count.
+    _KEEPWARM_HIDDEN_EVERY = 10
+
+    @Slot(bool)
+    def windowShown(self, shown: bool) -> None:
+        """The QML window's on-screen state (visible, not minimized). With
+        nobody looking and nothing downloading, the share keep-warm slows
+        down; re-show resets its hidden count so the next tick touches."""
+        self._window_shown = bool(shown)
+        self._keepwarm_hidden_ticks = 0
 
     def _start_recovery_watch(self) -> None:
         """GUI thread: begin watching for the unreachable folder to come back.
@@ -15841,8 +16138,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         def work() -> None:
             obj = None
+            gone = False
             try:
                 obj = self.providers[CTX_TIDAL].get_object(bucket, media_id)
+            except ObjectNotFound:
+                gone = True
+                logger.info("Item %s %s is no longer on TIDAL", bucket, media_id)
             except Exception:
                 logger.exception("Could not re-fetch %s %s for download", bucket, media_id)
             if gen != self._browse_gen:
@@ -15857,7 +16158,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._refetch_inflight.discard(key)
                 self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "failed")
-                self._set_status("That item is no longer available")
+                # Only TIDAL's own not-found proves delisting; a rate limit or
+                # a dropped connection is a fetch to try again (issue #25:
+                # never claim a takedown on weak evidence).
+                self._set_status(ITEM_GONE if gone else ITEM_FETCH_FAILED)
                 # A group member that never re-materialised must still be
                 # accounted for: without this bump a discography whose video
                 # or track was evicted from _objs and then failed its refetch
@@ -16949,7 +17253,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 return
             if count is None:
                 self.downloadState.emit(media_id, "failed")
-                self._set_status("That item is no longer available")
+                self._set_status(ITEM_GONE)
             elif count == 0:
                 self.downloadState.emit(media_id, "failed")
                 self._set_status(f"No {'lyrics' if mode == 'lyrics' else 'artwork'} found")
@@ -18482,7 +18786,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     return
                 except Exception as exc:
                     logger.exception("FFmpeg install failed")
-                    self.ffmpegStateChanged.emit("failed", str(exc) or "Install failed")
+                    self.ffmpegStateChanged.emit("failed", _user_error(exc, "Install failed"))
                     return
                 # ffmpeg is available, undo any in-memory feature disabling
                 # and rebuild the Download so the new binary is used immediately.
@@ -18700,7 +19004,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     return
                 except Exception as exc:
                     _update_log.exception("App update failed")
-                    self.appUpdateStateChanged.emit("failed", str(exc) or "Update failed")
+                    self.appUpdateStateChanged.emit("failed", _user_error(exc, "Update failed"))
                     return
                 # A managed upgrade may not know the version tag (offline resolve);
                 # "Updated to . Restart" reads broken, so degrade the message whole.
@@ -18813,10 +19117,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # rows behind it.
                 logger.exception("queue: could not read the kept object of a retried row")
                 continue
-            if obj is None:
+            if obj is None or self._needs_plan_rebind(item):
                 # No object to download from (an old row from before the
-                # queue kept them, and the search buckets have moved on):
-                # the per-row path re-fetches it and retries on its own.
+                # queue kept them, and the search buckets have moved on), or
+                # a merge whose plan died with a sign-out while the album
+                # itself is back in _objs: the per-row path re-fetches it,
+                # rebinds the plan, and retries on its own, the same test
+                # retryQueueItem makes.
                 _refetch_retry(self, item)
                 continue
             retries.append((item, obj))
@@ -18896,7 +19203,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if item is None or item["status"] not in _RETRYABLE:
             return
         obj = self._row_object(item)
-        if obj is None:
+        if obj is None or self._needs_plan_rebind(item):
             # A row from before the queue kept its object, after a new search
             # cleared every _objs bucket; a silent return here makes the row's
             # RETRY a dead control for the session. Re-fetch by id (same
@@ -19326,7 +19633,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     )
                 except Exception as exc:
                     logger.exception("Apple runtime install failed")
-                    self.appleRuntimeStateChanged.emit("failed", str(exc) or "Install failed")
+                    self.appleRuntimeStateChanged.emit("failed", _user_error(exc, "Install failed"))
                     # Refresh the wizard card too, so the failed step is
                     # visible where the user clicked, not only on the signal.
                     try:
@@ -19545,7 +19852,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     )
                 except Exception as exc:
                     logger.exception("Apple wrapper image pull failed")
-                    self.appleRuntimeStateChanged.emit("failed", str(exc) or "Pull failed")
+                    self.appleRuntimeStateChanged.emit("failed", _user_error(exc, "Pull failed"))
                     try:
                         self.appleRuntimeStatusChanged.emit()
                     except Exception:

@@ -99,6 +99,19 @@ QtObject {
     if (glyph)
       glyph.play()
   }
+  // Enter mid-decode (issue #41): settle at once and hand back the real
+  // text, so the caller submits what was pasted, not the glyphs on
+  // screen. decoded() is NOT emitted: the caller is the submit.
+  function finish() {
+    if (!decoding)
+      return field.text
+    _timer.stop()
+    decoding = false
+    _shown = _final
+    field.text = _final
+    _prevLen = _final.length
+    return _final
+  }
   property Timer _timer: Timer {
     interval: 26
     repeat: true

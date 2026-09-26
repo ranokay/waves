@@ -58,6 +58,8 @@ class _AlbumTracksStub:
     loadAlbumTracks = WavesBridge.loadAlbumTracks
     _start_album_tracks_fetch = WavesBridge._start_album_tracks_fetch
     _record_album_members = WavesBridge._record_album_members
+    _dress_panel_rows = WavesBridge._dress_panel_rows
+    _dress_library_row = WavesBridge._dress_library_row
 
     def __init__(self, session_album=None):
         self._album_tracks_cache = {}
@@ -165,6 +167,7 @@ class _RetryStub:
     _remove_row = WavesBridge._remove_row
     _row_object = WavesBridge._row_object
     _start_retry = WavesBridge._start_retry
+    _needs_plan_rebind = WavesBridge._needs_plan_rebind
 
     def __init__(self, session_track=None):
         self._queue = [
@@ -233,6 +236,23 @@ def test_a_failed_retry_refetch_leaves_the_row_retryable():
     assert stub.downloads == []
     assert stub._queue and stub._queue[0]["status"] == "failed", "the row keeps its RETRY"
     assert stub._refetch_inflight == set(), "a later click may try again"
+    assert "Could not fetch that item, try again" in stub.statuses
+
+
+def test_a_delisted_retry_refetch_says_so():
+    """Only TIDAL's own not-found proves delisting; a rate limit or a
+    dropped connection is a fetch to try again (issue #25: never claim a
+    takedown on weak evidence)."""
+    from tidalapi.exceptions import ObjectNotFound
+
+    def gone(tid):
+        raise ObjectNotFound("not there")
+
+    stub = _RetryStub(session_track=gone)
+    stub.retryQueueItem(5)
+
+    assert stub.downloads == []
+    assert stub._queue and stub._queue[0]["status"] == "failed"
     assert "That item is no longer available" in stub.statuses
 
 
@@ -281,6 +301,7 @@ def test_settings_page_listens_for_external_persists():
 
 class _BrowsePageStub:
     openBrowsePage = WavesBridge.openBrowsePage
+    _page_path_ok = staticmethod(WavesBridge._page_path_ok)
 
     def __init__(self, cached, fresh_sections):
         self._logged_in = True

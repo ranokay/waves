@@ -1127,8 +1127,70 @@ ApplicationWindow {
     id: browseLandingFreshTimer
     interval: 5 * 60 * 1000    // max-age: editorial rows move a few times a day
     repeat: true
-    running: root.signedIn && root.browseOpen && root.browsePageKey === "" && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
+    running: root.signedIn && root.windowUp && root.browseOpen && root.browsePageKey === "" && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
     onTriggered: waves.refreshBrowse()   // silent, throttled; repaints only on change
+  }
+  // A drilled Browse page (a playlist, mix or album) and an artist page
+  // revalidated only on entry, so one the user parked on stayed at the
+  // payload of its open. Same max-age, same silent path (the backend
+  // re-emits only on change, flagged for an in-place swap that holds the
+  // scroll spot), only while that page is the view.
+  Timer {
+    id: browseItemFreshTimer
+    interval: 5 * 60 * 1000
+    repeat: true
+    running: root.signedIn && root.windowUp && root.browseOpen && root.browsePageKey !== "" && !root.browsePageLoading && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
+    onTriggered: {
+      var parts = root.browsePageKey.split(":")
+      if (parts.length < 3 || parts[0] !== "item")
+        return
+      waves.refreshBrowseItem(parts[1], parts.slice(2).join(":"))
+    }
+  }
+  Timer {
+    id: artistFreshTimer
+    interval: 5 * 60 * 1000
+    repeat: true
+    running: root.signedIn && root.windowUp && root.artistOpen && !root.settingsOpen && !!root.artistData && !root.artistData.libraryScoped && ("" + (root.artistData.id || "")) !== ""
+    onTriggered: waves.refreshArtist("" + root.artistData.id)
+  }
+  // The library pane revalidates on every visit already (a quiet backend
+  // revalidation that repaints only on change, scroll pinned); this is the
+  // same ceiling for a pane the user parks on. Re-selecting revalidates
+  // every visible source group quietly, so favourites added elsewhere show
+  // up without navigation.
+  Timer {
+    id: libraryFreshTimer
+    interval: 5 * 60 * 1000
+    repeat: true
+    running: root.signedIn && root.windowUp && root.libraryOpen && !root.settingsOpen && !root.artistOpen
+    onTriggered: root.loadLib(root.libraryCategory)
+  }
+  // The four max-age timers stop while the window is hidden or minimized
+  // and restart from zero on re-show, so a window restored after a night
+  // away served the old page for up to another interval. A re-show after
+  // at least one interval down fires each timer that is running once, a
+  // frame later so their running bindings have settled; every refresh is
+  // throttled and repaints only on a change.
+  property double freshDownAt: 0
+  Connections {
+    target: root
+    function onWindowUpChanged() {
+      if (!root.windowUp) {
+        root.freshDownAt = Date.now()
+        return
+      }
+      var away = root.freshDownAt > 0 ? Date.now() - root.freshDownAt : 0
+      root.freshDownAt = 0
+      if (away < browseLandingFreshTimer.interval)
+        return
+      Qt.callLater(function () {
+        var timers = [browseLandingFreshTimer, browseItemFreshTimer, artistFreshTimer, libraryFreshTimer]
+        for (var i = 0; i < timers.length; ++i)
+          if (timers[i].running)
+            timers[i].triggered()
+      })
+    }
   }
   // --- NEW mark on recent releases --------------------------------------
   // A release wears NEW for its first fortnight: two release Fridays, so a
@@ -1607,6 +1669,13 @@ ApplicationWindow {
   // the water freezing the instant the app loses focus (then lurching
   // back on refocus) reads as a glitch.
   readonly property bool onScreen: visibility !== Window.Hidden && visibility !== Window.Minimized && !presentStalled
+  // The max-age freshness timers stop while the window is hidden or
+  // minimized (a backgrounded app makes no requests); the bridge slows its
+  // share keep-warm on the same signal. Guarded so a partial bridge (the
+  // QML labs) is fine.
+  readonly property bool windowUp: visibility !== Window.Hidden && visibility !== Window.Minimized
+  onWindowUpChanged: if (waves && waves.windowShown)
+    waves.windowShown(windowUp)
   Timer {
     running: root.onScreen
     interval: 50
@@ -6566,7 +6635,15 @@ ApplicationWindow {
                     color: "transparent"
                   }
                   onAccepted: {
-                    var qt = root.searchQueryText(text)
+                    // Enter during the paste decode: search the pasted
+                    // text, not the scramble, and drop a glyph arm so the
+                    // settled decode cannot search a second time.
+                    var raw = text
+                    if (searchDecoder.decoding) {
+                      searchDecoder.submitArmed = false
+                      raw = searchDecoder.finish()
+                    }
+                    var qt = root.searchQueryText(raw)
                     if (qt !== text)
                       text = qt
                     // show what is searched
@@ -9235,7 +9312,12 @@ ApplicationWindow {
   Rectangle {
     id: folderGate
     objectName: "folderGate"
+    // Same reason as exitGate: a Drawer paints in the window's overlay
+    // layer, so a gate parented to the page sat under an open queue
+    // drawer whatever its z.
+    parent: Overlay.overlay
     anchors.fill: parent
+    z: 1200
     visible: root.folderGateBlocking
     color: "#f406070e"
     MouseArea {
@@ -9636,7 +9718,12 @@ ApplicationWindow {
   Rectangle {
     id: folderUnreachableGate
     objectName: "folderUnreachableGate"
+    // Same reason as exitGate: a Drawer paints in the window's overlay
+    // layer, so a gate parented to the page sat under an open queue
+    // drawer whatever its z.
+    parent: Overlay.overlay
     anchors.fill: parent
+    z: 1200
     visible: root.folderUnreachable
     color: "#cc06070e"
     MouseArea {
@@ -10224,7 +10311,12 @@ ApplicationWindow {
   Rectangle {
     id: ffmpegBlockGate
     objectName: "ffmpegBlockGate"
+    // Same reason as exitGate: a Drawer paints in the window's overlay
+    // layer, so a gate parented to the page sat under an open queue
+    // drawer whatever its z.
+    parent: Overlay.overlay
     anchors.fill: parent
+    z: 1200
     visible: root.ffmpegBlocked
     color: "#cc06070e"
     MouseArea {

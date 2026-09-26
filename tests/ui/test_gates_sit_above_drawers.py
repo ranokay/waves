@@ -36,7 +36,7 @@ _EXIT_REGRESSED = 1
 _EXIT_NO_QT = 77
 _EXIT_PRECONDITION = 78
 
-GATES = ("exitGate", "updateOptInGate")
+GATES = ("exitGate", "updateOptInGate", "folderGate", "folderUnreachableGate", "ffmpegBlockGate")
 
 
 def test_gates_are_in_the_overlay_layer_not_the_page():

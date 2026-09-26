@@ -167,6 +167,35 @@ at once and revalidates). A click on the hovered card mid-flight claims the
 build (`loadArtist`), which then lands as that click's, status and busy
 included. It shares `_start_artist_build` with the click.
 
+Parked pages revalidate in place: `refreshArtist(artistId)` and
+`refreshBrowseItem(kind, mediaId)` are the max-age timers' silent slots for a
+page the UI is still showing (entry slots revalidate only on entry, and Back
+restores from memory). Nothing is re-emitted unless the rebuilt page differs
+(an artist page carries `refresh: true`), busy and the status line are never
+touched, a page fetched within the minute or already building is left alone,
+and a page with no cache is not their load to make.
+
+While a page is the view, a five-minute ceiling timer re-pokes its silent
+slot (`browseLandingFreshTimer` → `refreshBrowse`,
+`browseItemFreshTimer` → `refreshBrowseItem`,
+`artistFreshTimer` → `refreshArtist`,
+`libraryFreshTimer` → a quiet `loadLib` of the visible pane), so a parked
+page tracks TIDAL instead of freezing at its open. The timers stop while the
+window is hidden or minimized (`windowUp`); a re-show after at least one
+interval down fires each running timer once, and the bridge slows its share
+keep-warm while hidden (`windowShown(up)`, every tenth tick) so a NAS gets
+an idle stretch. Every refresh is throttled backend-side and repaints only
+on a change, with the scroll spot held.
+
+Cards and rows arrive dressed: a browse card carries its library verdict
+(`lib`) and the publish that answered it (`libStamp`, compared before the
+card trusts the answer), plus its ownership rollup (`own`/`ownGen`, except a
+`pending` rollup, which is left to ask live). A shelf category row (albums,
+tracks, artists) carries the same `lib`/`libStamp` pair keyed by category,
+and an expanded album/playlist panel's track rows likewise. The caches behind
+them stay undressed (a persisted verdict would be stale on the next launch),
+and a cross-account emit is dropped by generation.
+
 ## Download queue
 
 | Signal                                                                       | Fires when                                                                                                                                 |

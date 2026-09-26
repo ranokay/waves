@@ -163,6 +163,37 @@ def test_keepwarm_touch_on_a_dead_share_records_nothing(monkeypatch):
     assert b._keepwarm_inflight is False
 
 
+def test_hidden_window_slows_the_keepwarm_to_every_tenth_tick(monkeypatch):
+    """With nobody looking and nothing downloading, a NAS gets an idle
+    stretch: nine hidden ticks skip, the tenth touches."""
+    monkeypatch.setattr(backend_mod.os, "listdir", lambda p: [])
+    monkeypatch.setattr(backend_mod.netmount, "mount_origin", lambda p: ("smbfs", "//u@nas/Media"))
+    monkeypatch.setattr(backend_mod.redaction, "register_secret", lambda v, tag="": None)
+    monkeypatch.setattr(backend_mod, "Thread", _InlineThread)
+    b = _bridge(base_path="/Volumes/Media/Music")
+    b._window_shown = False
+    b._keepwarm_hidden_ticks = 0
+    b._downloads_running = lambda: False
+    for _ in range(9):
+        b._keepwarm_inflight = False
+        b._keepwarm_tick()
+    assert b.settings.data.network_mount_origins == {}, "a hidden window must not listdir every minute"
+    b._keepwarm_inflight = False
+    b._keepwarm_tick()
+    assert b.settings.data.network_mount_origins == {"/Volumes/Media": "smb://u@nas/Media"}
+
+
+def test_reshow_resets_the_hidden_count(monkeypatch):
+    b = _bridge(base_path="/Volumes/Media/Music")
+    b._window_shown = False
+    b._keepwarm_hidden_ticks = 7
+    WavesBridge.windowShown(b, True)
+    assert b._window_shown is True
+    assert b._keepwarm_hidden_ticks == 0
+    WavesBridge.windowShown(b, False)
+    assert b._window_shown is False
+
+
 # ---- the remount decision ----------------------------------------------------
 
 
