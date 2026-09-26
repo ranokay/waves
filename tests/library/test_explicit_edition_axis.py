@@ -941,6 +941,20 @@ def test_only_an_album_page_names_a_release():
     assert payload["header"]["explicit"] is None, "only an album page names a release"
 
 
+# ---- the failed scan is a terminal answer ------------------------------------------------
+
+
+def test_a_failed_scan_releases_the_veil():
+    """A scan that threw publishes nothing: with no index and no root
+    problem, the page must not wait for badges that are never coming."""
+    s = _SlotStub()
+    s._library_root = lambda: "/lib"
+    s._library_index = None
+    for status, ready in (("error", True), ("missing", True), ("unreadable", True), ("unset", False), ("ok", False)):
+        s._library_scan_status = status
+        assert LibraryMixin.libraryIndexReady(s) is ready, status
+
+
 # ---- reveal, do not open ----------------------------------------------------
 
 

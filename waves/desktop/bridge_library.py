@@ -1620,10 +1620,12 @@ class LibraryMixin:
     def libraryScanStatus(self) -> str:
         """The state of the music-library scan behind the ownership badge:
         'scanning' (a build is running now), else the last outcome: 'ok'
-        (scanned), 'unset' (no folder set), 'missing' (folder absent/offline), or
+        (scanned), 'unset' (no folder set), 'missing' (folder absent/offline),
         'unreadable' (exists but the OS denied listing it, e.g. a network or
-        external drive without permission). Lets Settings explain a blank badge
-        and show that a long first scan of a NAS library is making progress."""
+        external drive without permission), or 'error' (the scan threw before
+        it could finish; the last good index, if any, still answers). Lets
+        Settings explain a blank badge and show that a long first scan of a
+        NAS library is making progress."""
         if self._library_index_building:
             return "scanning"
         return self._library_scan_status
@@ -1692,13 +1694,14 @@ class LibraryMixin:
         (refresh returns before it stamps a scan root, so nothing satisfies the
         publish gate), and reading this as "not yet" left every search for the
         rest of the session waiting out the veil's guard for badges that were
-        never on their way. Settings already says so in words; this says the
-        same thing to the page."""
+        never on their way. A scan that threw is the same kind of terminal:
+        the last good index still answers, but no publish is coming. Settings
+        already says so in words; this says the same thing to the page."""
         if not self._library_root():
             return True
         if self._library_index is not None:
             return True
-        return self._library_scan_status in (SCAN_MISSING, SCAN_UNREADABLE)
+        return self._library_scan_status in (SCAN_MISSING, SCAN_UNREADABLE, "error")
 
     @Slot(result=bool)
     def downloadsInsideLibrary(self) -> bool:
