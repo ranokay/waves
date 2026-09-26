@@ -145,11 +145,6 @@ ColumnLayout {
   function favHasBulk(cat) {
     return cat === "tracks" || cat === "albums" || cat === "artists" || cat === "playlists" || cat === "mixes" || cat === "videos"
   }
-  // The confirm-prompt kind for a shelf category (the catDlGate dispatch
-  // reads it back to call the matching download slot).
-  function favKind(cat) {
-    return cat === "tracks" ? "favTracks" : cat === "albums" ? "favAlbums" : cat === "artists" ? "favArtists" : cat === "playlists" ? "favPlaylists" : cat === "mixes" ? "favMixes" : cat === "videos" ? "favVideos" : ""
-  }
   // A shelf DOWNLOAD ALL tap: arm the pending count and ask the backend
   // for it. One function so the six header buttons and the scenario
   // coverage drive the same path.
@@ -200,7 +195,9 @@ ColumnLayout {
       host.catDlPrompt = {
         kind: kind,
         count: count,
-        source: group.sourceId
+        source: group.sourceId,
+        path: "",
+        title: ""
       }
     } else if (kind === "favTracks") {
       waves.downloadFavoriteTracks(group.sourceId)
@@ -626,7 +623,10 @@ ColumnLayout {
           id: favTracksDlBtn
           objectName: "favTracksBtn"
           host: group.host
-          mediaId: "fav:tracks"
+          mediaId: "fav:" + group.sourceId + ":tracks"
+          // Bulk sweeps keep Settings: no per-click Chooser chevron (an
+          // empty kind disables it outright, never a provider probe).
+          chooserKind: ""
           label: "Download all"
           onTap: function () {
             group.favTap("tracks")
@@ -634,7 +634,7 @@ ColumnLayout {
         }
         FolderBadge {
           host: group.host
-          folderId: "fav:tracks"
+          folderId: "fav:" + group.sourceId + ":tracks"
           total: 0
           st: favTracksDlBtn.st
         }
@@ -647,7 +647,10 @@ ColumnLayout {
           id: favAlbumsDlBtn
           objectName: "favAlbumsBtn"
           host: group.host
-          mediaId: "fav:albums"
+          mediaId: "fav:" + group.sourceId + ":albums"
+          // Bulk sweeps keep Settings: no per-click Chooser chevron (an
+          // empty kind disables it outright, never a provider probe).
+          chooserKind: ""
           label: "Download all"
           onTap: function () {
             group.favTap("albums")
@@ -655,7 +658,7 @@ ColumnLayout {
         }
         FolderBadge {
           host: group.host
-          folderId: "fav:albums"
+          folderId: "fav:" + group.sourceId + ":albums"
           total: 0
           st: favAlbumsDlBtn.st
         }
@@ -668,7 +671,10 @@ ColumnLayout {
           id: favArtistsDlBtn
           objectName: "favArtistsBtn"
           host: group.host
-          mediaId: "fav:artists"
+          mediaId: "fav:" + group.sourceId + ":artists"
+          // Bulk sweeps keep Settings: no per-click Chooser chevron (an
+          // empty kind disables it outright, never a provider probe).
+          chooserKind: ""
           label: "Download all"
           onTap: function () {
             group.favTap("artists")
@@ -676,7 +682,7 @@ ColumnLayout {
         }
         FolderBadge {
           host: group.host
-          folderId: "fav:artists"
+          folderId: "fav:" + group.sourceId + ":artists"
           total: 0
           st: favArtistsDlBtn.st
         }
@@ -689,7 +695,10 @@ ColumnLayout {
           id: favPlaylistsDlBtn
           objectName: "favPlaylistsBtn"
           host: group.host
-          mediaId: "fav:playlists"
+          mediaId: "fav:" + group.sourceId + ":playlists"
+          // Bulk sweeps keep Settings: no per-click Chooser chevron (an
+          // empty kind disables it outright, never a provider probe).
+          chooserKind: ""
           label: "Download all"
           onTap: function () {
             group.favTap("playlists")
@@ -697,7 +706,7 @@ ColumnLayout {
         }
         FolderBadge {
           host: group.host
-          folderId: "fav:playlists"
+          folderId: "fav:" + group.sourceId + ":playlists"
           total: 0
           st: favPlaylistsDlBtn.st
         }
@@ -710,7 +719,10 @@ ColumnLayout {
           id: favMixesDlBtn
           objectName: "favMixesBtn"
           host: group.host
-          mediaId: "fav:mixes"
+          mediaId: "fav:" + group.sourceId + ":mixes"
+          // Bulk sweeps keep Settings: no per-click Chooser chevron (an
+          // empty kind disables it outright, never a provider probe).
+          chooserKind: ""
           label: "Download all"
           onTap: function () {
             group.favTap("mixes")
@@ -718,7 +730,7 @@ ColumnLayout {
         }
         FolderBadge {
           host: group.host
-          folderId: "fav:mixes"
+          folderId: "fav:" + group.sourceId + ":mixes"
           total: 0
           st: favMixesDlBtn.st
         }
@@ -731,7 +743,10 @@ ColumnLayout {
           id: favVideosDlBtn
           objectName: "favVideosBtn"
           host: group.host
-          mediaId: "fav:videos"
+          mediaId: "fav:" + group.sourceId + ":videos"
+          // Bulk sweeps keep Settings: no per-click Chooser chevron (an
+          // empty kind disables it outright, never a provider probe).
+          chooserKind: ""
           label: "Download all"
           onTap: function () {
             group.favTap("videos")
@@ -739,7 +754,7 @@ ColumnLayout {
         }
         FolderBadge {
           host: group.host
-          folderId: "fav:videos"
+          folderId: "fav:" + group.sourceId + ":videos"
           total: 0
           st: favVideosDlBtn.st
         }

@@ -1257,18 +1257,17 @@ _VIDEOS_GROUP_PREFIX = "vids:"
 # from the bare playlist id that "Download playlist" owns.
 _PLAYLIST_ALBUMS_GROUP_PREFIX = "albums:"
 
-# Group ids for the My Music shelves' DOWNLOAD ALL buttons: one fixed id per
-# shelf kind, shared by the header button's mediaId and the backend rollup.
-# Shared, not per-source: only providers declaring FAVORITES render shelves
-# (Apple declares none), so a second writer cannot exist today; namespace per
-# source if one ever does.
-_FAV_TRACKS_GROUP_ID = "fav:tracks"
-_FAV_ALBUMS_GROUP_ID = "fav:albums"
-_FAV_ARTISTS_GROUP_ID = "fav:artists"
-_FAV_PLAYLISTS_GROUP_ID = "fav:playlists"
-_FAV_MIXES_GROUP_ID = "fav:mixes"
-_FAV_VIDEOS_GROUP_ID = "fav:videos"
-# Member key prefix inside the fav:artists rollup: an artist id must never
+
+# Group ids for the My Music shelves' DOWNLOAD ALL buttons: fixed per source
+# and shelf kind, shared by the header button's mediaId and the backend
+# rollup. Per-source (not one id per kind) so two FAVORITES sources never
+# mirror each other's progress through the id-global dlSt/dlPct and
+# folderRemainMap bindings.
+def _fav_group_id(source: str, kind: str) -> str:
+    return f"fav:{source}:{kind}"
+
+
+# Member key prefix inside a fav:artists rollup: an artist id must never
 # collide with an album or track id when the bumps fan out.
 _ARTIST_ROLLUP_MEMBER = "artist:"
 
@@ -17639,7 +17638,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         sweep, the rest ask the provider); a failure emits -1, and a count
         from before an account flip is dropped. The in-flight key always
         clears, so a dropped count never wedges the button."""
-        load_key = f"{source}:{gid}"
+        load_key = gid  # the group id already names the source
         if load_key in self._browse_loading or not self._logged_in:
             return
         if _source_provider(self, source) is None:
@@ -17651,6 +17650,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             try:
                 total = counter()
             except Exception:
+                logger.exception("Could not count favourite %s", kind)
                 total = -1
             finally:
                 self._browse_loading.discard(load_key)
@@ -17673,7 +17673,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._resolve_favorite_count(
             source,
             "tracks",
-            _FAV_TRACKS_GROUP_ID,
+            _fav_group_id(source, "tracks"),
             self.favoriteTracksResolved,
             lambda: provider.favorites_count("tracks") if provider is not None else -1,
         )
@@ -17685,7 +17685,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._resolve_favorite_count(
             source,
             "albums",
-            _FAV_ALBUMS_GROUP_ID,
+            _fav_group_id(source, "albums"),
             self.favoriteAlbumsResolved,
             lambda: provider.favorites_count("albums") if provider is not None else -1,
         )
@@ -17697,7 +17697,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._resolve_favorite_count(
             source,
             "artists",
-            _FAV_ARTISTS_GROUP_ID,
+            _fav_group_id(source, "artists"),
             self.favoriteArtistsResolved,
             lambda: provider.favorites_count("artists") if provider is not None else -1,
         )
@@ -17708,7 +17708,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._resolve_favorite_count(
             source,
             "playlists",
-            _FAV_PLAYLISTS_GROUP_ID,
+            _fav_group_id(source, "playlists"),
             self.favoritePlaylistsResolved,
             lambda: len(self._favorite_playlist_keys(source, lambda: None, refresh=False)[0]),
         )
@@ -17719,7 +17719,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._resolve_favorite_count(
             source,
             "mixes",
-            _FAV_MIXES_GROUP_ID,
+            _fav_group_id(source, "mixes"),
             self.favoriteMixesResolved,
             lambda: len(self._favorite_mix_keys(source, refresh=False)),
         )
@@ -17731,7 +17731,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._resolve_favorite_count(
             source,
             "videos",
-            _FAV_VIDEOS_GROUP_ID,
+            _fav_group_id(source, "videos"),
             self.favoriteVideosResolved,
             lambda: provider.favorites_count("videos") if provider is not None else -1,
         )
@@ -17756,6 +17756,33 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         idle, the status line saying the retry is the next click."""
         self.downloadState.emit(gid, "")
         self._set_status(f"Could not load all your {kind}, try again")
+
+    def _register_fav_group(self, gid: str, keys, weights, stop_check, queue) -> None:
+        """Register a shelf bulk rollup and hand its members to the GUI thread.
+
+        ``queue`` carries the keys there in one batch emit (the queue appears
+        at once, and each member's progress relay keeps GUI-thread
+        affinity). The registration runs under the same lock stopAll's sweep
+        takes: a scan that lost the race to STOP must not register a group
+        behind the sweep (it would strand at "running" with nothing left to
+        settle it). The badge count lands before QUEUED because the badge
+        reads the remaining map as soon as the state flips."""
+        with self._folder_lock:
+            stop_check()
+            self._folder_groups[gid] = {
+                "keys": set(keys),
+                "done": set(),
+                "failed": set(),
+                "prog": {},
+                "weights": weights,
+                "total": len(keys),
+            }
+        self.downloadProgress.emit(gid, 0.0)
+        self.folderRemaining.emit(gid, len(keys), len(keys))
+        # QUEUED, not running: nothing has been picked up by a download
+        # slot yet (see downloadArtist for the full rationale).
+        self.downloadState.emit(gid, "queued")
+        queue()
 
     def _fav_scan_work(self, gid: str, kind: str, scan) -> None:
         """Run a shelf bulk ``scan`` on the serial scan pool with the STOP
@@ -17784,7 +17811,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         the library claim like every other bulk action, registers a
         folder-style rollup under the fixed ``fav:tracks`` id, and hands the
         keys to the GUI thread in one ``_tracksQueued`` batch."""
-        gid = _FAV_TRACKS_GROUP_ID
+        gid = _fav_group_id(source, "tracks")
         if not self._fav_gates(source, gid, lambda: self.downloadFavoriteTracks(source)):
             return
         self._set_status("Loading favourite tracks…")
@@ -17820,28 +17847,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.downloadState.emit(gid, "")
                 self._set_status("Everything here is already in your library" if skipped else "No tracks to download")
                 return
-            with self._folder_lock:
-                # Checked under the same lock stopAll's sweep takes: a scan
-                # that lost the race to STOP must not register a group behind
-                # the sweep (it would strand at "running" with nothing left
-                # to settle it).
-                stop_check()
-                self._folder_groups[gid] = {
-                    "keys": set(keys),
-                    "done": set(),
-                    "failed": set(),
-                    "prog": {},
-                    "weights": dict.fromkeys(keys, 1),
-                    "total": len(keys),
-                }
-            self.downloadProgress.emit(gid, 0.0)
-            # Badge first: it reads the remaining map as soon as the state
-            # flips, so the count must land before QUEUED.
-            self.folderRemaining.emit(gid, len(keys), len(keys))
-            # QUEUED, not running: nothing has been picked up by a download
-            # slot yet (see downloadArtist for the full rationale).
-            self.downloadState.emit(gid, "queued")
-            self._tracksQueued.emit(gen, keys)
+            self._register_fav_group(
+                gid, keys, dict.fromkeys(keys, 1), stop_check, lambda: self._tracksQueued.emit(gen, keys)
+            )
             note = f" ({skipped} already in your library)" if skipped else ""
             self._set_status(f"Downloading {len(keys)} tracks…" + note)
             # The scan's last word: a STOP in this tail routes to the handler
@@ -17858,7 +17866,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         full albums" runs (Atmos twin drop, dedup, 'Most-complete edition
         only', library bulk-skip), and queues one batch under the
         ``fav:albums`` rollup."""
-        gid = _FAV_ALBUMS_GROUP_ID
+        gid = _fav_group_id(source, "albums")
         if not self._fav_gates(source, gid, lambda: self.downloadFavoriteAlbums(source)):
             return
         self._set_status("Loading favourite albums…")
@@ -17929,24 +17937,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 note = f" ({skipped} already in your library)" if skipped else ""
                 self._set_status("No albums to download" + note)
                 return
-            with self._folder_lock:
-                stop_check()
-                self._folder_groups[gid] = {
-                    "keys": set(keys),
-                    "done": set(),
-                    "failed": set(),
-                    "prog": {},
-                    "weights": dict.fromkeys(keys, 1),
-                    "total": len(keys),
-                }
-            self.downloadProgress.emit(gid, 0.0)
-            self.folderRemaining.emit(gid, len(keys), len(keys))
-            self.downloadState.emit(gid, "queued")
-            # Edition handling already ran in the sweep; downloadAlbum must
-            # not divert these into its own scan, which never bumps the
-            # rollup (see _enqueue_albums for the stale-batch twin).
-            self._merge_scanned.update(keys)
-            self._albumsQueued.emit(gen, keys)
+
+            def queue_albums() -> None:
+                # Edition handling already ran in the sweep; downloadAlbum
+                # must not divert these into its own scan, which never bumps
+                # the rollup (see _enqueue_albums for the stale-batch twin).
+                self._merge_scanned.update(keys)
+                self._albumsQueued.emit(gen, keys)
+
+            self._register_fav_group(gid, keys, dict.fromkeys(keys, 1), stop_check, queue_albums)
             note = f" ({skipped} already in your library)" if skipped else ""
             self._set_status(f"Downloading {len(keys)} albums…" + note)
             stop_check()
@@ -17959,7 +17958,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         source's shelf. The ``fav:artists`` rollup counts whole artists
         (members keyed ``artist:<id>`` so an artist id is never mistaken for
         an album or track id), settling each as its discography does."""
-        gid = _FAV_ARTISTS_GROUP_ID
+        gid = _fav_group_id(source, "artists")
         if not self._fav_gates(source, gid, lambda: self.downloadFavoriteArtists(source)):
             return
         self._set_status("Loading favourite artists…")
@@ -17993,20 +17992,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._set_status("No artists to download")
                 return
             members = [_ARTIST_ROLLUP_MEMBER + i for i in ids]
-            with self._folder_lock:
-                stop_check()
-                self._folder_groups[gid] = {
-                    "keys": set(members),
-                    "done": set(),
-                    "failed": set(),
-                    "prog": {},
-                    "weights": dict.fromkeys(members, 1),
-                    "total": len(members),
-                }
-            self.downloadProgress.emit(gid, 0.0)
-            self.folderRemaining.emit(gid, len(members), len(members))
-            self.downloadState.emit(gid, "queued")
-            self._artistsQueued.emit(gen, ids)
+            self._register_fav_group(
+                gid, members, dict.fromkeys(members, 1), stop_check, lambda: self._artistsQueued.emit(gen, ids)
+            )
             self._set_status(f"Downloading {len(ids)} artists…")
             stop_check()
 
@@ -18046,23 +18034,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self.downloadState.emit(gid, "")
                 self._set_status(f"No {noun} to download")
                 return
-            with self._folder_lock:
-                stop_check()
-                self._folder_groups[gid] = {
-                    "keys": set(keys),
-                    "done": set(),
-                    "failed": set(),
-                    "prog": {},
-                    "weights": weights,
-                    "total": len(keys),
-                }
-            self.downloadProgress.emit(gid, 0.0)
-            self.folderRemaining.emit(gid, len(keys), len(keys))
-            self.downloadState.emit(gid, "queued")
-            if queue_kind == "video":
-                self._videosQueued.emit(gen, keys)
-            else:
-                self._collectionsQueued.emit(gen, queue_kind, keys)
+
+            def queue_collections() -> None:
+                if queue_kind == "video":
+                    self._videosQueued.emit(gen, keys)
+                else:
+                    self._collectionsQueued.emit(gen, queue_kind, keys)
+
+            self._register_fav_group(gid, keys, weights, stop_check, queue_collections)
             self._set_status(f"Downloading {len(keys)} {noun}…")
             stop_check()
 
@@ -18073,7 +18052,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         """Queue every playlist on one source's shelf, the ones inside
         folders at any depth included. Refuses a folder walk a rate limit
         cut short."""
-        gid = _FAV_PLAYLISTS_GROUP_ID
+        gid = _fav_group_id(source, "playlists")
 
         def gather(stop_check):
             keys, weights = self._favorite_playlist_keys(source, stop_check, refresh=True)
@@ -18084,7 +18063,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     @Slot(str)
     def downloadFavoriteMixes(self, source: str) -> None:
         """Queue every mix on one source's shelf as it is today."""
-        gid = _FAV_MIXES_GROUP_ID
+        gid = _fav_group_id(source, "mixes")
 
         def gather(stop_check):
             keys = self._favorite_mix_keys(source, refresh=True)
@@ -18095,7 +18074,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     @Slot(str)
     def downloadFavoriteVideos(self, source: str) -> None:
         """Queue every favourite video on one source's shelf."""
-        gid = _FAV_VIDEOS_GROUP_ID
+        gid = _fav_group_id(source, "videos")
 
         def gather(stop_check):
             objects = self._all_favorites(source, "videos", stop_check)

@@ -32,14 +32,9 @@ from support.paths import QML_DIR, QML_MAIN
 
 from waves.desktop.backend import (
     _ARTIST_ROLLUP_MEMBER,
-    _FAV_ALBUMS_GROUP_ID,
-    _FAV_ARTISTS_GROUP_ID,
-    _FAV_MIXES_GROUP_ID,
-    _FAV_PLAYLISTS_GROUP_ID,
-    _FAV_TRACKS_GROUP_ID,
-    _FAV_VIDEOS_GROUP_ID,
     _LIBRARY_PAGE,
     WavesBridge,
+    _fav_group_id,
     _ScanStopped,
 )
 
@@ -47,6 +42,12 @@ QML_GROUP = (QML_DIR / "LibSourceGroup.qml").read_text(encoding="utf-8")
 QML_MAIN_TEXT = QML_MAIN.read_text(encoding="utf-8")
 
 SOURCE = "tidal"
+_FAV_TRACKS_GROUP_ID = _fav_group_id(SOURCE, "tracks")
+_FAV_ALBUMS_GROUP_ID = _fav_group_id(SOURCE, "albums")
+_FAV_ARTISTS_GROUP_ID = _fav_group_id(SOURCE, "artists")
+_FAV_PLAYLISTS_GROUP_ID = _fav_group_id(SOURCE, "playlists")
+_FAV_MIXES_GROUP_ID = _fav_group_id(SOURCE, "mixes")
+_FAV_VIDEOS_GROUP_ID = _fav_group_id(SOURCE, "videos")
 
 
 class _Signal:
@@ -163,6 +164,7 @@ class _Stub:
     _resolve_favorite_count = WavesBridge._resolve_favorite_count
     _fav_gates = WavesBridge._fav_gates
     _fav_refuse = WavesBridge._fav_refuse
+    _register_fav_group = WavesBridge._register_fav_group
     _fav_scan_work = WavesBridge._fav_scan_work
     _download_favorite_collections = WavesBridge._download_favorite_collections
     _favorite_playlist_keys = WavesBridge._favorite_playlist_keys
@@ -685,12 +687,12 @@ def test_resolve_needs_a_login():
 
 
 @pytest.mark.parametrize(
-    ("cat", "btn", "gid", "resolve", "slot", "kind"),
+    ("cat", "btn", "suffix", "resolve", "slot", "kind"),
     [
         (
             "tracks",
             "favTracksBtn",
-            _FAV_TRACKS_GROUP_ID,
+            "tracks",
             "resolveFavoriteTracks",
             "downloadFavoriteTracks",
             "favTracks",
@@ -698,7 +700,7 @@ def test_resolve_needs_a_login():
         (
             "albums",
             "favAlbumsBtn",
-            _FAV_ALBUMS_GROUP_ID,
+            "albums",
             "resolveFavoriteAlbums",
             "downloadFavoriteAlbums",
             "favAlbums",
@@ -706,7 +708,7 @@ def test_resolve_needs_a_login():
         (
             "artists",
             "favArtistsBtn",
-            _FAV_ARTISTS_GROUP_ID,
+            "artists",
             "resolveFavoriteArtists",
             "downloadFavoriteArtists",
             "favArtists",
@@ -714,26 +716,30 @@ def test_resolve_needs_a_login():
         (
             "playlists",
             "favPlaylistsBtn",
-            _FAV_PLAYLISTS_GROUP_ID,
+            "playlists",
             "resolveFavoritePlaylists",
             "downloadFavoritePlaylists",
             "favPlaylists",
         ),
-        ("mixes", "favMixesBtn", _FAV_MIXES_GROUP_ID, "resolveFavoriteMixes", "downloadFavoriteMixes", "favMixes"),
+        ("mixes", "favMixesBtn", "mixes", "resolveFavoriteMixes", "downloadFavoriteMixes", "favMixes"),
         (
             "videos",
             "favVideosBtn",
-            _FAV_VIDEOS_GROUP_ID,
+            "videos",
             "resolveFavoriteVideos",
             "downloadFavoriteVideos",
             "favVideos",
         ),
     ],
 )
-def test_the_shelf_button_is_wired(cat, btn, gid, resolve, slot, kind):
+def test_the_shelf_button_is_wired(cat, btn, suffix, resolve, slot, kind):
+    gid = _fav_group_id(SOURCE, suffix)
     assert f'objectName: "{btn}"' in QML_GROUP, f"the {cat} DOWNLOAD ALL button is missing"
-    assert f'mediaId: "{gid}"' in QML_GROUP, "the button and the backend must share one group id"
-    assert f'folderId: "{gid}"' in QML_GROUP, "the badge must count down the same rollup"
+    assert f'mediaId: "fav:" + group.sourceId + ":{suffix}"' in QML_GROUP, (
+        "the button and the backend must share one per-source group id"
+    )
+    assert f'folderId: "fav:" + group.sourceId + ":{suffix}"' in QML_GROUP, "the badge must count down the same rollup"
+    assert gid == f"fav:{SOURCE}:{suffix}", "the backend group id names the same source and kind"
     assert f'group.favTap("{cat}")' in QML_GROUP, "the button must drive the shared tap path"
     assert f"waves.{resolve}(group.sourceId)" in QML_GROUP
     assert f"waves.{slot}(group.sourceId)" in QML_GROUP, "the muted-confirm path must call the slot"
