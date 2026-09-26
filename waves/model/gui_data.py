@@ -7,12 +7,14 @@ try:
 
     @dataclass
     class ProgressBars:
+        """Qt-backed progress emitters; satisfies ``ProgressGui`` structurally."""
+
         item: QtCore.SignalInstance
         item_name: QtCore.SignalInstance
         list_item: QtCore.SignalInstance
         list_name: QtCore.SignalInstance
 
-except ModuleNotFoundError:
+except (ImportError, OSError):
     # Qt-less imports (the engine side): same shape so call sites type-check
     # against either branch (the values are only emitted where Qt exists).
     @dataclass

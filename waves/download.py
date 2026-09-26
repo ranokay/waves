@@ -72,8 +72,7 @@ from waves.metadata.tags import (
     read_item_id,
 )
 from waves.model.cfg import metadata_tag_write, provider_setting
-from waves.model.downloader import DownloadSegmentResult, TrackStreamInfo
-from waves.model.gui_data import ProgressBars
+from waves.model.downloader import DownloadSegmentResult, ProgressGui, TrackStreamInfo
 from waves.paths import (
     check_file_exists,
     format_path_media,
@@ -450,7 +449,7 @@ class Download:
     session: Session
     skip_existing: bool = False
     fn_logger: Callable
-    progress_gui: ProgressBars
+    progress_gui: ProgressGui
     progress: Progress
     progress_overall: Progress
     event_abort: Event
@@ -462,7 +461,7 @@ class Download:
         path_base: str,
         fn_logger: Callable,
         skip_existing: bool = False,
-        progress_gui: ProgressBars | None = None,
+        progress_gui: ProgressGui | None = None,
         progress: Progress | None = None,
         progress_overall: Progress | None = None,
         event_abort: Event | None = None,
@@ -483,7 +482,7 @@ class Download:
             path_base (str): Base path for downloads.
             fn_logger (Callable): Logger function or object.
             skip_existing (bool, optional): Whether to skip existing files. Defaults to False.
-            progress_gui (ProgressBars | None, optional): GUI progress bars. Defaults to None.
+            progress_gui (ProgressGui | None, optional): GUI progress bars. Defaults to None.
             progress (Progress | None, optional): GUI progress task table. Defaults to None.
             progress_overall (Progress | None, optional): Overall progress table. Defaults to None.
             event_abort (Event | None, optional): Abort event. Defaults to None.
