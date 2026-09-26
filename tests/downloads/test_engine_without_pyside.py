@@ -11,6 +11,7 @@ import ast
 import subprocess
 import sys
 
+import pytest
 from support.paths import REPO_ROOT
 
 import waves.download
@@ -37,6 +38,7 @@ def test_engine_source_names_no_qt_or_gui_data():
             assert node.module != "waves.model.gui_data"
 
 
+@pytest.mark.integration
 def test_engine_imports_with_pyside_blocked():
     probe = """import importlib.abc, sys
 class _B(importlib.abc.MetaPathFinder):
