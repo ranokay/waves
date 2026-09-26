@@ -322,6 +322,9 @@ ignore = [
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
 "tests/library/test_library_bridge.py" = ["S603"]
+# Imports the download engine with PySide6 blocked to prove it stays Qt-free
+# (S603, fixed argv: sys.executable -c with a literal probe).
+"tests/downloads/test_engine_without_pyside.py" = ["S603"]
 # The startup picker scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).
 "tests/ui/test_startup_provider_picker_qml.py" = ["S603"]
