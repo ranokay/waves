@@ -1335,7 +1335,7 @@ ApplicationWindow {
   onBrowsePageChanged: root._resolveLibraryPresence()
   function _resolveLibraryPresence() {
     var ph = (root.browsePage && root.browsePage.header) ? root.browsePage.header : null
-    root.libraryPresence = (ph && ph.kind === "album") ? waves.libraryAlbumPresence(ph.artist || "", ph.title || "", "" + (ph.year || ""), ph.num_tracks || 0, ph.duration_sec || 0) : null
+    root.libraryPresence = (ph && ph.kind === "album") ? waves.libraryAlbumPresence(ph.artist || "", ph.title || "", "" + (ph.year || ""), ph.num_tracks || 0, ph.duration_sec || 0, ph.explicit === true ? 1 : -1) : null
   }
   property var browseStack: []           // pages beneath the current one (Back pops)
   property string browseHighlightId: ""  // track to highlight + scroll to on an album page

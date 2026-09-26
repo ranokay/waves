@@ -28,6 +28,7 @@ import os
 import sqlite3
 import sys
 import time
+import unicodedata
 import weakref
 from threading import Lock, local
 
@@ -233,7 +234,12 @@ def path_under(path: str, root: str) -> bool:
     except Exception:
         return False
     if sys.platform == "darwin":
-        p, r = p.lower(), r.lower()
+        # Case AND composition: an HFS+ external or a share reports a folder
+        # named with an accent in decomposed form, the keyboard and the API
+        # produce the composed one, and a root re-picked through the dialog
+        # respelled that way put every recorded copy outside every root.
+        p = unicodedata.normalize("NFC", p).casefold()
+        r = unicodedata.normalize("NFC", r).casefold()
     # A drive or volume root already ends in its separator ("N:\\", "/").
     prefix = r if r.endswith(os.sep) else r + os.sep
     return p == r or p.startswith(prefix)
@@ -277,6 +283,10 @@ _ADDED_COLUMNS = (
     # after a couple of honest attempts. Reset to 0 by any delivery that lands
     # at or above the ceiling, so a master TIDAL really does fix is taken.
     ("degraded_tries", "INTEGER NOT NULL DEFAULT 0"),
+    # TIDAL offers this track as Dolby Atmos and nothing else, so the engine
+    # fetched Atmos whatever the setting said. The button path holds only the
+    # record, and without this it ranked such a copy stale with Atmos off.
+    ("atmos_only", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -285,7 +295,7 @@ _ADDED_COLUMNS = (
 # select it in this order, so the batch answer is the single answer.
 _OWNERSHIP_COLUMNS = (
     "path, quality_tier, quality_rank, audio_mode, audio_type, bit_depth,"
-    " sample_rate, codecs, recorded_at, requested_rank, ceiling_rank, degraded_tries"
+    " sample_rate, codecs, recorded_at, requested_rank, ceiling_rank, degraded_tries, atmos_only"
 )
 
 
@@ -307,7 +317,7 @@ def _best_surviving(rows, roots: list[str] | None = None) -> dict | None:
     width."""
     for row in rows:
         path, tier, rank, mode, atype = row[:5]
-        depth, rate, codecs, recorded_at, requested, ceiling, degraded = row[-7:]
+        depth, rate, codecs, recorded_at, requested, ceiling, degraded, atmos_only = row[-8:]
         if not path:
             continue
         if roots is not None and not any(path_under(path, r) for r in roots):
@@ -327,6 +337,7 @@ def _best_surviving(rows, roots: list[str] | None = None) -> dict | None:
                 "requested_rank": requested,
                 "ceiling_rank": ceiling,
                 "degraded_tries": degraded,
+                "atmos_only": bool(atmos_only),
             }
     return None
 
@@ -401,6 +412,7 @@ class OwnershipStore:
                        requested_rank INTEGER NOT NULL DEFAULT -1,
                        ceiling_rank   INTEGER NOT NULL DEFAULT -1,
                        degraded_tries INTEGER NOT NULL DEFAULT 0,
+                       atmos_only   INTEGER NOT NULL DEFAULT 0,
                        PRIMARY KEY (track_id, path)
                    )""")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_downloads_track ON downloads(track_id)")
@@ -582,6 +594,7 @@ class OwnershipStore:
         requested_rank: int = -1,
         ceiling_rank: int = -1,
         degraded: bool = False,
+        atmos_only: bool = False,
     ) -> int:
         """Record that ``track_id`` was written to ``path`` at ``quality_tier``.
 
@@ -627,14 +640,15 @@ class OwnershipStore:
             int(requested_rank),
             int(ceiling_rank),
             1 if degraded else 0,
+            1 if atmos_only else 0,
         )
         with self._lock:
             self._conn.execute(
                 """INSERT INTO downloads
                        (track_id, path, quality_tier, quality_rank, audio_mode, audio_type,
                         bit_depth, sample_rate, codecs, user_id, recorded_at,
-                        requested_rank, ceiling_rank, degraded_tries)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        requested_rank, ceiling_rank, degraded_tries, atmos_only)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(track_id, path) DO UPDATE SET
                        quality_tier = excluded.quality_tier,
                        quality_rank = excluded.quality_rank,
@@ -647,6 +661,7 @@ class OwnershipStore:
                        recorded_at  = excluded.recorded_at,
                        requested_rank = excluded.requested_rank,
                        ceiling_rank   = excluded.ceiling_rank,
+                       atmos_only     = excluded.atmos_only,
                        degraded_tries = CASE
                            WHEN excluded.degraded_tries > 0 THEN downloads.degraded_tries + 1
                            ELSE 0
@@ -663,6 +678,25 @@ class OwnershipStore:
                 (str(track_id), str(path)),
             ).fetchone()
         return int(got[0]) if got else 0
+
+    def adopt(self, track_id: str, path: str) -> bool:
+        """Record a file the engine found already on disk (no stream was
+        fetched, so no tier is known), only where no row for (track_id, path)
+        exists yet. A row already there describes a measured copy, often the
+        very file a twin occurrence of this track wrote moments ago, and an
+        unknown tier must never overwrite it.
+
+        Returns:
+            bool: Whether a row was added.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                """INSERT INTO downloads (track_id, path, recorded_at) VALUES (?, ?, ?)
+                   ON CONFLICT(track_id, path) DO NOTHING""",
+                (str(track_id), str(path), int(time.time())),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0) > 0
 
     def stamp_ceiling(self, track_id: str, path: str, ceiling_rank: int) -> bool:
         """Write the best rank TIDAL advertises for ``track_id`` onto the row
@@ -689,6 +723,27 @@ class OwnershipStore:
                 """UPDATE downloads SET ceiling_rank = ?
                    WHERE track_id = ? AND path = ? AND (ceiling_rank IS NULL OR ceiling_rank < 0)""",
                 (rank, str(track_id), str(path)),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0) > 0
+
+    def stamp_atmos_only(self, track_id: str, path: str) -> bool:
+        """Mark the Dolby Atmos row for ``path`` as a copy of a track TIDAL
+        offers in Atmos and nothing else, where the row does not say so yet (a
+        copy recorded before the column existed). Like stamp_ceiling, a fact
+        the download gate reads off the track, written once so every id-only
+        reader (the button, the album card) ranks the copy the way the gate
+        does instead of offering a download the gate will skip.
+
+        Returns:
+            bool: Whether a row was changed.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                """UPDATE downloads SET atmos_only = 1
+                   WHERE track_id = ? AND path = ? AND atmos_only = 0
+                     AND UPPER(COALESCE(audio_mode, '')) = 'DOLBY_ATMOS'""",
+                (str(track_id), str(path)),
             )
             self._conn.commit()
             return int(cur.rowcount or 0) > 0

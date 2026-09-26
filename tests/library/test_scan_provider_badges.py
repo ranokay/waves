@@ -643,6 +643,7 @@ def test_maybe_proof_and_arbiter_inputs_unchanged(tmp_path):
         "local_year": "",
         "local_declared": 0,
         "local_runtime": 0,
+        "local_explicit": -1,
         "local_quality": "",
         "local_codec": "",
         "local_lossless": False,

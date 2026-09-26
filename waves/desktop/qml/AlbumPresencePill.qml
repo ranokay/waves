@@ -24,7 +24,7 @@ LibraryTag {
   function _resolvePresence() {
     _resolved = true
     var a = appl.album
-    presence = (a && a.title) ? waves.libraryAlbumPresence("" + (a.artist || ""), "" + a.title, "" + (a.year || ""), a.tracks || 0, a.duration_sec || 0) : null
+    presence = (a && a.title) ? waves.libraryAlbumPresence("" + (a.artist || ""), "" + a.title, "" + (a.year || ""), a.tracks || 0, a.duration_sec || 0, a.explicit === true ? 1 : -1) : null
   }
   onAlbumChanged: _resolvePresence()
   // Only if the binding above has not already answered: an unconditional

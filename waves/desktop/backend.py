@@ -2661,6 +2661,14 @@ def _track_count(obj) -> int:
     return int(getattr(obj, "num_tracks", 0) or 0) + int(getattr(obj, "num_videos", 0) or 0)
 
 
+def _album_card_flag(card: dict) -> int:
+    """An album dict's explicit flag as the presence slot takes it: 1 when
+    TIDAL said explicit, else -1 (unknown), never 0. The dict turns a missing
+    flag into False, so False is not proof of a clean release. QML reads a
+    card the same way, so the baked verdict and a live ask agree."""
+    return 1 if card.get("explicit") is True else -1
+
+
 def _popularity(obj) -> int:
     try:
         return max(0, min(100, int(getattr(obj, "popularity", 0) or 0)))
@@ -8157,6 +8165,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     str(card.get("year") or ""),
                     int(card.get("tracks") or 0),
                     int(card.get("duration_sec") or 0),
+                    _album_card_flag(card),
                 )
                 # Which index that verdict came from. A card built after a
                 # later publish compares this against the bridge's own count
@@ -8607,6 +8616,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         album_year = ""
         album_date = ""
         album_quality = ""
+        album_explicit = None
         if kind == "mix":
             raw = self.providers[CTX_TIDAL].collection_items(obj, include_videos=True)
             tracks = [t for t in raw if isinstance(t, Track | Video)]
@@ -8630,6 +8640,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # TIDAL's original, the same preference the album rows make.
             album_date = _listed_date_str(obj) or _release_date(obj)
             album_quality = _quality_label(obj, self.providers[CTX_TIDAL])  # TIDAL's best tier, static album metadata
+            # The release's advisory flag exactly as the album gate reads it
+            # (True or False only when TIDAL said, else None), so the page's
+            # IN LIBRARY answer and a click on its Download agree.
+            album_explicit = LibraryMixin._release_explicit(obj)
             # The full day, as the album cards show it; the year only when
             # TIDAL gives no date.
             when = album_date or album_year
@@ -8732,6 +8746,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # witness compares like with like. Album pages only.
                 "duration_sec": total if kind == "album" else 0,
                 "quality": album_quality,
+                "explicit": album_explicit,
                 # The CARD size, explicitly: the card that led here already
                 # fetched this exact URL, so the hero paints from the disk
                 # cache. A 480 here was a cold download on every playlist
@@ -12060,12 +12075,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             return False
         artist = _primary_artist_name(media) or name_builder_artist(media)
         release = album if album is not None else getattr(media, "album", None)
+        # The track's own advisory flag (reliable per track, unlike the
+        # release-wide one): a clean copy on disk must not prove the explicit
+        # cut, or the reverse.
+        explicit = getattr(media, "explicit", None)
         claim = self._library_track_claim(
             artist,
             name_builder_title(media),
             str(getattr(release, "name", "") or ""),
             str(getattr(release, "year", "") or ""),
             int(getattr(media, "duration", 0) or 0),
+            explicit if isinstance(explicit, bool) else None,
         )
         return claim or False
 

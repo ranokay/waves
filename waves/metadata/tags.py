@@ -545,7 +545,10 @@ class Metadata:
             # item explicitly so a single bad file doesn't abort the whole collection.
             raise MetadataUnreadable(self.path_file)
 
-        if not self.m.tags:
+        # Only a file with NO tag block gets one. An existing but empty block
+        # (a VORBIS_COMMENT with the vendor string alone, an empty ilst) is
+        # falsy too, and add_tags() raises on it, which failed the track.
+        if self.m.tags is None:
             self.m.add_tags()
 
         if isinstance(self.m, mutagen.flac.FLAC):
@@ -627,6 +630,10 @@ class Metadata:
         self.m.tags["UNSYNCEDLYRICS"] = self.lyrics_unsynced
         self.m.tags["URL"] = self.url_share
         self.m.tags["RELEASETYPE"] = self.release_type
+        # The Vorbis spelling of the explicit flag (Picard, MusicBee and
+        # foobar read it), so a FLAC says what the same track's M4A says
+        # through rtng.
+        self.m.tags["ITUNESADVISORY"] = "1" if self.explicit else "0"
         self.m.tags[ITEM_ID_TAG] = self.item_id
         self.m.tags[GENERIC_ITEM_ID_TAG] = self.namespaced_item_id
         if self.audio_type:
@@ -683,6 +690,7 @@ class Metadata:
         # other keyword: WOAS(text=...) wrote an empty URL and dropped its value.
         self.m.tags.add(WOAS(url=self.url_share))
         self.m.tags.add(TXXX(encoding=3, desc="MusicBrainz Album Type", text=self.release_type))
+        self.m.tags.add(TXXX(encoding=3, desc="ITUNESADVISORY", text="1" if self.explicit else "0"))
         self._set_mp3_ids()
 
         if self.replay_gain_write:
@@ -721,6 +729,10 @@ class Metadata:
             self.m.tags["\xa9wrt"] = self.composer
         if self.write_isrc:
             self.m.tags["isrc"] = self.isrc
+            # The freeform atom is the one mainstream readers (Picard, beets,
+            # Mp3tag) map to ISRC; the bare atom stays for files and tools that
+            # already read the old spelling.
+            self.m.tags["----:com.apple.iTunes:ISRC"] = self.isrc.encode("utf-8")
         if self.write_upc:
             self.m.tags[f"----:com.apple.iTunes:{self.target_upc['MP4']}"] = self.upc.encode("utf-8")
         if self.bpm > 0 and self.write_bpm:

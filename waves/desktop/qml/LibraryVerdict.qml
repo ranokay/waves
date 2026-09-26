@@ -30,7 +30,7 @@ QtObject {
       presence = null
       return
     }
-    presence = (!live && ("lib" in c) && c.libStamp === host.libStamp) ? c.lib : waves.libraryAlbumPresence("" + (c.artist || ""), "" + c.title, "" + (c.year || ""), c.tracks || 0, c.duration_sec || 0)
+    presence = (!live && ("lib" in c) && c.libStamp === host.libStamp) ? c.lib : waves.libraryAlbumPresence("" + (c.artist || ""), "" + c.title, "" + (c.year || ""), c.tracks || 0, c.duration_sec || 0, c.explicit === true ? 1 : -1)
   }
   onCardChanged: resolve(false)
   // Only if the binding above has not already answered: an unconditional
