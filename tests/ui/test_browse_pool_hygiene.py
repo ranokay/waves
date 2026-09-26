@@ -111,6 +111,7 @@ class _WatchedDict(dict):
 # --------------------------------------------------------------------------- #
 class _SearchStub:
     search = WavesBridge.search
+    _fav_artist_dict = WavesBridge._fav_artist_dict
     _search_total = staticmethod(WavesBridge._search_total)
     _pop_cached = WavesBridge._pop_cached
     _remember_capped = WavesBridge._remember_capped

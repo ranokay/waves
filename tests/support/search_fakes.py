@@ -23,6 +23,7 @@ from waves.providers import Capability
 
 class SearchStub:
     search = WavesBridge.search
+    _fav_artist_dict = WavesBridge._fav_artist_dict
     _search_total = staticmethod(WavesBridge._search_total)
     _search_artist_meters = staticmethod(WavesBridge._search_artist_meters)
     _pop_cached = WavesBridge._pop_cached
