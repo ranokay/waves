@@ -132,6 +132,18 @@ def _set_aside(path: str, error: Exception) -> bool:
     return True
 
 
+def _same_config(left: str, right: str) -> bool:
+    """True when two config JSON texts carry the same structure.
+
+    Unparseable input is never equal: a corrupt file must flow through the
+    set-aside path, not be mistaken for an unchanged one.
+    """
+    try:
+        return json.loads(left) == json.loads(right)
+    except ValueError:
+        return False
+
+
 class BaseConfig[TModel: (ModelSettings, ModelToken)]:
     """The shared read/save skin over one config file.
 
@@ -154,8 +166,11 @@ class BaseConfig[TModel: (ModelSettings, ModelToken)]:
     def save(self, config_to_compare: str | None = None) -> None:
         data_json = self.data.to_json()
 
-        # If old and current config is equal, skip the write operation.
-        if config_to_compare == data_json:
+        # If old and current config is equal, skip the write operation. The
+        # comparison is over parsed structures, not text: the writer
+        # pretty-prints (indent=4) while to_json() is single-line, so raw
+        # text never matches a file this app wrote.
+        if config_to_compare is not None and _same_config(config_to_compare, data_json):
             return
 
         self.write_serialized(data_json)
