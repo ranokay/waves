@@ -324,7 +324,10 @@ class Download:
     progress_gui: ProgressGui
     progress: Progress
     progress_overall: Progress
-    event_abort: Event
+    # Shared never-set abort stand-in so a Download reached without __init__
+    # reads "no abort in force" rather than raising (the _pace_holds pattern).
+    # Real instances get their own in __init__ below; this one is only read.
+    event_abort: Event = Event()
     event_run: Event
 
     def __init__(
@@ -357,7 +360,8 @@ class Download:
             progress_gui (ProgressGui | None, optional): GUI progress bars. Defaults to None.
             progress (Progress | None, optional): GUI progress task table. Defaults to None.
             progress_overall (Progress | None, optional): Overall progress table. Defaults to None.
-            event_abort (Event | None, optional): Abort event. Defaults to None.
+            event_abort (Event | None, optional): Abort event. Defaults to None,
+                which becomes a fresh never-set event (no abort in force).
             event_run (Event | None, optional): Run event. Defaults to None.
             provider (Provider | None, optional): The Provider this download is
                 composed with (the seam: stream resolution, track facts and
@@ -410,7 +414,7 @@ class Download:
         self.progress = progress
         self.progress_overall = progress_overall
         self.path_base = path_base
-        self.event_abort = event_abort
+        self.event_abort = event_abort if event_abort is not None else Event()
         self.event_run = event_run
         self._album_artist_tag_clean = album_artist_tag_clean or (lambda: False)
         # Per-click Chooser pins for this job's lyrics/art options; empty for
