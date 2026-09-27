@@ -240,6 +240,29 @@ def test_failed_signature_leaves_existing_binary_untouched(tmp_path, monkeypatch
     assert mgr._read_manifest() == good_manifest
 
 
+def test_verified_signature_install_promotes_through_the_real_gate(tmp_path, monkeypatch):
+    # The good path must exercise _macos_verify, not stub it: codesign passes.
+    rel, session = _session_for(_zip_bytes({"ffmpeg": b"SIGNEDBINARY"}))
+    monkeypatch.setattr(fm, "_probe_version", lambda p: "n9.9")
+    mgr = fm.FfmpegManager(tmp_path)
+    monkeypatch.setattr(mgr, "os_key", "macos", raising=False)
+
+    def fake_run(argv, *a, **kw):
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr(fm.subprocess, "run", fake_run)
+
+    st = mgr.install(release=rel, session=session)
+
+    assert mgr.binary_path.read_bytes() == b"SIGNEDBINARY"
+    assert st["state"] == "managed" and st["version"] == "n9.9"
+
+
 # --------------------------------------------------------------------------- #
 # _probe_version is memoized and uses a bounded timeout so status()
 # on the GUI thread cannot re-fork a subprocess per call.

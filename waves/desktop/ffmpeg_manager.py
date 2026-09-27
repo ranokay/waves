@@ -625,8 +625,10 @@ class FfmpegManager:
             # Fail-closed: a signature we cannot verify never promotes. The
             # caller leaves the existing binary in place. We deliberately do
             # NOT re-sign to make it "work".
+            detail = (verify.stderr or "").strip() or "codesign returned non-zero"
             raise ValueError(
-                "refusing to install FFmpeg: macOS code signature verification failed, keeping the existing binary"
+                "refusing to install FFmpeg: macOS code signature verification failed "
+                f"({detail}), keeping the existing binary"
             )
         # Gatekeeper assessment is best-effort: `spctl` may be unavailable or
         # decline in headless/CI contexts; a failure here is logged, not fatal.
