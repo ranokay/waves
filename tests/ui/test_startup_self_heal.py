@@ -212,3 +212,97 @@ def test_no_breadcrumb_when_nothing_was_migrated(monkeypatch):
     monkeypatch.setattr(path_helper, "CONFIG_MIGRATION", "")
 
     assert _breadcrumbs(waves_app._log_config_migration) == []
+
+
+def test_the_config_folder_is_owner_only_on_posix(tmp_path, monkeypatch):
+    """Secrets live there (sign-in, logs, cover cache); the process umask
+    often leaves files world-readable, so the folder itself keeps others out."""
+    import os
+    import stat
+
+    if os.name != "posix":
+        pytest.skip("POSIX-only guard")
+    folder = tmp_path / "config"
+    folder.mkdir()
+    folder.chmod(0o755)
+    monkeypatch.setattr(os, "getuid", lambda: folder.stat().st_uid)
+
+    waves_app._make_private(folder)
+
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o700
+
+
+def test_make_private_leaves_a_tight_folder_and_foreign_owners_alone(tmp_path, monkeypatch):
+    import os
+
+    if os.name != "posix":
+        pytest.skip("POSIX-only guard")
+    tight = tmp_path / "tight"
+    tight.mkdir()
+    tight.chmod(0o700)
+    monkeypatch.setattr(os, "getuid", lambda: tight.stat().st_uid)
+    waves_app._make_private(tight)
+    assert tight.stat().st_mode & 0o077 == 0
+
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    foreign.chmod(0o755)
+    monkeypatch.setattr(os, "getuid", lambda: foreign.stat().st_uid + 1)
+    before = foreign.stat().st_mode
+    waves_app._make_private(foreign)
+    assert foreign.stat().st_mode == before, "never chmod a folder owned by someone else"
+
+
+def test_icon_debug_is_scrubbed_and_kept_beside_the_app_log(tmp_path, monkeypatch, capsys):
+    """The icon root is an absolute path with the account name: scrubbed, and
+    written beside the app log (where bundles are read from), never ~."""
+    # Patched where app.py reads it: other tests re-import the diagnostics
+    # module behind sys.modules, so the name this test imports can be a
+    # different object than the one waves_activate sees.
+    monkeypatch.setattr(waves_app.diagnostics, "_log_dir", tmp_path)
+    monkeypatch.setattr(waves_app, "_icon_debug_pending", [])
+    home = str(pathlib.Path.home())
+
+    waves_app._icon_debug(f"WAVES icon: root={home}/Library/Application Support/Waves/icons boom")
+    waves_app._icon_debug("WAVES window: ok")
+
+    logged = (tmp_path / "waves-icon-debug.log").read_text(encoding="utf-8")
+    assert home not in logged, "the account name must not reach the file"
+    assert logged.count("\n") == 2, "the pre-bridge line is held, then flushed with the first post-bridge one"
+    assert waves_app._icon_debug_pending == []
+    assert (pathlib.Path.home() / "waves-icon-debug.log").exists() is False
+
+
+def test_icon_debug_before_diagnostics_install_holds_its_lines(monkeypatch, capsys):
+    monkeypatch.setattr(waves_app.diagnostics, "_log_dir", None)
+    monkeypatch.setattr(waves_app, "_icon_debug_pending", [])
+
+    waves_app._icon_debug("WAVES aumid: set Waves.Waves")
+
+    assert waves_app._icon_debug_pending == ["WAVES aumid: set Waves.Waves"]
+
+
+def test_boot_threads_start_through_the_one_function():
+    """Structural: the TLS warm-up runs through _start_boot_threads so the
+    quiet-window guard sees the same launch the user gets."""
+    source = inspect.getsource(waves_app.waves_activate)
+
+    assert "_start_boot_threads()" in source
+    assert "threading.Thread(target=_warm_tls" not in source
+    boot_source = inspect.getsource(waves_app._start_boot_threads)
+    assert "_warm_tls" in boot_source
+
+
+def test_a_qml_load_failure_shuts_down_and_flushes(monkeypatch):
+    """Structural: app.exec never runs, so aboutToQuit never fires. The
+    failure path must drain the pools, abort the bridge's login/sweep, and
+    give the disk log its bounded chance to land the tail."""
+    source = inspect.getsource(waves_app.waves_activate)
+    fail_arm = source[source.index("if not root_objects:") :]
+    fail_arm = fail_arm[: fail_arm.index("# The macOS back-swipe filter")]
+
+    assert "bridge.shutdown()" in fail_arm
+    assert "wait_for_disk_log()" in fail_arm
+
+    exit_arm = source[source.index("os._exit(rc)") - 400 : source.index("os._exit(rc)")]
+    assert "wait_for_disk_log()" in exit_arm, "os._exit skips atexit, so the writer never gets its stop"

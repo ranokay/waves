@@ -284,4 +284,51 @@ def _playlist_entries(
         # file the way the filesystem actually stores it.
         ordered.append(here[key])
 
-    return ordered if len(ordered) == len(path_tracks) else path_tracks
+    # When the folder holds more than this run landed, some of that can be
+    # OTHER COPIES of the very files that landed: a stereo FLAC beside
+    # the Atmos .m4a of the same album (both deliberately kept), or the
+    # old 320k .m4a beside its FLAC upgrade (nothing is ever deleted).
+    # Listing both plays every song twice, alternating formats. A copy
+    # of a landed file is dropped; a file this run cannot account for
+    # (a skipped, failed or cancelled track) stays, and the folder
+    # listing stands as before.
+    kept = path_tracks if len(ordered) == len(path_tracks) else _without_other_copies(path_tracks, ordered)
+
+    return ordered if len(ordered) == len(kept) else kept
+
+
+def _without_other_copies(path_tracks: list[pathlib.Path], landed: list[pathlib.Path]) -> list[pathlib.Path]:
+    """``path_tracks`` minus every file that is another copy of a landed
+    one: same item id (read off the tags), or the same stem under a
+    different audio extension (an untagged file from an older release
+    can only be told apart by its name)."""
+    from waves.metadata.tags import read_item_id
+
+    landed_keys: set[str] = {name_comparison_key(str(p)) for p in landed}
+    landed_stems: set[str] = {name_comparison_key(p.stem) for p in landed}
+    landed_ids: set[str] = set()
+
+    for p in landed:
+        item_id = read_item_id(p)
+
+        if item_id:
+            landed_ids.add(item_id)
+
+    kept: list[pathlib.Path] = []
+
+    for p in path_tracks:
+        if name_comparison_key(str(p)) in landed_keys:
+            kept.append(p)
+            continue
+
+        item_id = read_item_id(p)
+
+        if item_id and item_id in landed_ids:
+            continue
+
+        if name_comparison_key(p.stem) in landed_stems:
+            continue
+
+        kept.append(p)
+
+    return kept

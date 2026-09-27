@@ -280,3 +280,119 @@ def test_move_file_interrupted_cross_filesystem_copy_leaves_no_partial(
     assert not destination_path.exists()
     assert source_path.read_bytes() == b"hi-res-audio"
     assert list(tmp_path.glob(".*.tmp")) == []
+
+
+class TestSourceIsThisItem:
+    """The playlist-folder file is replaced only on positive evidence it is this item."""
+
+    def _media(self, item_id="42"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(id=item_id)
+
+    def test_a_symlink_is_always_this_step_s_own(self, download_instance, tmp_path):
+        link = tmp_path / "link.flac"
+        target = tmp_path / "real.flac"
+        target.write_bytes(b"x")
+        link.symlink_to(target)
+        assert download_instance._source_is_this_item(link, self._media()) is True
+
+    def test_a_missing_source_has_nothing_to_protect(self, download_instance, tmp_path):
+        assert download_instance._source_is_this_item(tmp_path / "gone.flac", self._media()) is True
+
+    def test_a_file_this_run_wrote_counts(self, download_instance, tmp_path):
+        src = tmp_path / "src.flac"
+        src.write_bytes(b"x")
+        download_instance._names_written[str(src)] = "42"
+        assert download_instance._source_is_this_item(src, self._media("42")) is True
+
+    def test_a_stranger_s_file_does_not_count(self, download_instance, tmp_path):
+        from unittest.mock import patch as _patch
+
+        src = tmp_path / "src.flac"
+        src.write_bytes(b"x")
+        with _patch("waves.download.read_item_id", return_value="99"):
+            assert download_instance._source_is_this_item(src, self._media("42")) is False
+
+    def test_an_untagged_file_is_never_evidence_for_a_deletion(self, download_instance, tmp_path):
+        from unittest.mock import patch as _patch
+
+        src = tmp_path / "src.flac"
+        src.write_bytes(b"x")
+        with _patch("waves.download.read_item_id", return_value=""):
+            assert download_instance._source_is_this_item(src, self._media("42")) is False
+
+    def test_an_unreadable_occupant_is_not_this_item(self, download_instance, tmp_path):
+        from unittest.mock import patch as _patch
+
+        src = tmp_path / "src.flac"
+        src.write_bytes(b"x")
+        with _patch("waves.download.read_item_id", side_effect=OSError("gone")):
+            assert download_instance._source_is_this_item(src, self._media("42")) is False
+
+
+class TestSymlinkFallbackCopy:
+    """Where links are refused, the playlist folder keeps a real copy."""
+
+    def test_a_refused_symlink_falls_back_to_a_copy(self, download_instance, tmp_path):
+        from types import SimpleNamespace
+
+        src_dir = tmp_path / "playlist"
+        src_dir.mkdir()
+        src = src_dir / "song.flac"
+        src.write_bytes(b"audio")
+        download_instance.path_base = str(tmp_path)
+        download_instance.skip_existing = False
+        download_instance.settings = MagicMock()
+        download_instance._note_dir_filled = MagicMock()
+        download_instance.fn_logger = MagicMock()
+        media = SimpleNamespace(id="42", name="Song", artists=[], full_name=None)
+
+        def refuse(self, target):
+            raise OSError("symlink privilege missing")
+
+        with (
+            patch("waves.download.format_path_media", return_value="track/song"),
+            patch.object(pathlib.Path, "symlink_to", refuse),
+            patch("waves.download.read_item_id", return_value="42"),
+            patch("waves.download._waves_item_id", return_value="42"),
+            patch("waves.download._waves_owned_ids", return_value={"42"}),
+        ):
+            out = download_instance.media_move_and_symlink(media, src, ".flac")
+
+        assert out == tmp_path / "track" / "song.flac"
+        assert src.read_bytes() == b"audio", "the playlist folder keeps a real copy, not an empty name"
+        assert download_instance._note_dir_filled.called
+
+    def test_a_stranger_s_file_is_left_where_it_is(self, download_instance, tmp_path):
+        from types import SimpleNamespace
+
+        src_dir = tmp_path / "playlist"
+        src_dir.mkdir()
+        src = src_dir / "song.flac"
+        src.write_bytes(b"someone else's file")
+        download_instance.path_base = str(tmp_path)
+        download_instance.skip_existing = False
+        download_instance.settings = MagicMock()
+        download_instance.fn_logger = MagicMock()
+        media = SimpleNamespace(id="42", name="Song", artists=[], full_name=None)
+
+        with (
+            patch("waves.download.format_path_media", return_value="track/song"),
+            patch("waves.download.read_item_id", return_value="99"),
+            patch("waves.download._waves_item_id", return_value="42"),
+            patch("waves.download._waves_owned_ids", return_value={"42"}),
+        ):
+            out = download_instance.media_move_and_symlink(media, src, ".flac")
+
+        assert out == src
+        assert src.read_bytes() == b"someone else's file"
+
+
+class TestTmpWriteMode:
+    """The open mode decides the encoding, never the content type."""
+
+    def test_a_str_for_a_binary_mode_is_encoded(self, download_instance, tmp_path):
+        out = download_instance.write_to_tmp_file(tmp_path, mode="xb", content="lyrics text")
+        assert out != ""
+        assert pathlib.Path(out).read_bytes() == b"lyrics text"

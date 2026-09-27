@@ -223,3 +223,22 @@ def test_converted_videos_are_tagged_and_raw_ts_is_left_alone(tmp_path):
     raw = tmp_path / "0d1f4c9a2b634a1c9d2e8f7a6b5c4d3e"
     dl._handle_metadata_and_extras(video, raw, tmp_path / "out.ts", False, None)
     dl.metadata_write_video.assert_not_called()
+
+
+def test_a_video_whose_container_wont_open_still_lands():
+    """The Metadata construction opens the file through mutagen, which can
+    raise on a malformed atom: it sits inside the try, so a complete,
+    playable video is never failed by its tags."""
+    from mutagen import MutagenError
+
+    dl = _make_download()
+    dl.settings.data.mark_explicit = False
+    dl.settings.data.metadata_cover_embed = False
+    dl.settings.data.metadata_write_url = False
+    dl.settings.data.metadata_target_upc = "UPC"
+
+    def _wont_open(**kw):
+        raise MutagenError("malformed atom")
+
+    with patch("waves.download.Metadata", _wont_open):
+        assert dl.metadata_write_video(_video(), pathlib.Path("v.mp4")) is False

@@ -954,6 +954,7 @@ Item {
         implicitWidth: seg.seg1W
         Text {
           id: segT1
+          textFormat: Text.PlainText
           anchors.centerIn: parent
           text: seg.opts.length > 0 ? String(seg.opts[0].label).toUpperCase() : ""
           font.family: page.uiFont
@@ -978,6 +979,7 @@ Item {
         implicitWidth: seg.seg2W
         Text {
           id: segT2
+          textFormat: Text.PlainText
           anchors.centerIn: parent
           text: seg.opts.length > 1 ? String(seg.opts[1].label).toUpperCase() : ""
           font.family: page.uiFont
@@ -1035,6 +1037,7 @@ Item {
         Layout.fillWidth: true
         spacing: 3
         Text {
+          textFormat: Text.PlainText
           text: act.autoField ? act.autoField.label : ""
           color: page.textHi
           font.pixelSize: 14
@@ -1117,6 +1120,7 @@ Item {
       color: page.surface2
       border.color: page.outline
       Text {
+        textFormat: Text.PlainText
         anchors.centerIn: parent
         text: parent.parent.value.toFixed(parent.parent.decimals)
         color: page.textHi
@@ -1156,6 +1160,7 @@ Item {
       border.color: cb.pressed || cb.popup.visible ? page.accent : page.outline
     }
     contentItem: Text {
+      textFormat: Text.PlainText
       text: cb.displayText
       color: page.textHi
       font.pixelSize: 14
@@ -1178,6 +1183,7 @@ Item {
     delegate: ItemDelegate {
       width: cb.width
       contentItem: Text {
+        textFormat: Text.PlainText
         text: (modelData && modelData.label !== undefined) ? modelData.label : modelData
         color: page.textHi
         font.pixelSize: 14
@@ -1532,6 +1538,7 @@ Item {
                     color: page.ff.stateKey === "managed" ? page.green : page.ff.stateKey === "path" ? page.gold : page.red
                   }
                   Text {
+                    textFormat: Text.PlainText
                     text: "FFMPEG"
                     color: page.textHi
                     font.pixelSize: 13
@@ -1613,6 +1620,7 @@ Item {
 
                 // Failure message
                 Text {
+                  textFormat: Text.PlainText
                   visible: page.ff.lifeState === "failed"
                   Layout.fillWidth: true
                   wrapMode: Text.WordWrap
@@ -1840,6 +1848,7 @@ Item {
                     color: page.green
                   }
                   Text {
+                    textFormat: Text.PlainText
                     text: "FFMPEG"
                     color: page.textHi
                     font.pixelSize: 13
@@ -1914,6 +1923,7 @@ Item {
 
                 // Failure message
                 Text {
+                  textFormat: Text.PlainText
                   visible: page.ff.lifeState === "failed"
                   Layout.fillWidth: true
                   wrapMode: Text.WordWrap
@@ -1936,6 +1946,7 @@ Item {
                     border.color: page.accentDim
                     Text {
                       id: ffPrimTxt
+                      textFormat: Text.PlainText
                       anchors.centerIn: parent
                       text: ffPrimary.label.toUpperCase()
                       color: page.accent
@@ -2103,6 +2114,7 @@ Item {
                     color: page.auUpdate ? page.gold : (auCard.st === "ready" ? page.green : page.textDim)
                   }
                   Text {
+                    textFormat: Text.PlainText
                     text: "Waves " + (auCard.cur || "")
                     color: page.textHi
                     font.pixelSize: 14
@@ -2158,6 +2170,7 @@ Item {
 
                 // Failure message
                 Text {
+                  textFormat: Text.PlainText
                   visible: page.auState === "failed"
                   Layout.fillWidth: true
                   wrapMode: Text.WordWrap
@@ -2169,6 +2182,7 @@ Item {
                 // swap the install folder) and was re-armed once: the
                 // restart prompt says why instead of repeating itself.
                 Text {
+                  textFormat: Text.PlainText
                   visible: page.auDone && (page.appUp.swap_failure || "") !== ""
                   Layout.fillWidth: true
                   wrapMode: Text.WordWrap
@@ -2201,6 +2215,7 @@ Item {
                     border.color: auPrimary.accent ? page.accentDim : page.outline
                     Text {
                       id: auPrimTxt
+                      textFormat: Text.PlainText
                       anchors.centerIn: parent
                       text: auPrimary.label.toUpperCase()
                       color: auPrimary.accent ? page.accent : page.textLo
@@ -2427,6 +2442,7 @@ Item {
                     color: dgCard.vbOn ? page.green : page.textDim
                   }
                   Text {
+                    textFormat: Text.PlainText
                     text: "Diagnostic report"
                     color: page.textHi
                     font.pixelSize: 14
@@ -2460,6 +2476,7 @@ Item {
                     border.color: page.accentDim
                     Text {
                       id: dgPrimTxt
+                      textFormat: Text.PlainText
                       anchors.centerIn: parent
                       text: (page.diagBusy ? "Exporting…" : "Export report").toUpperCase()
                       color: page.accent
@@ -2572,6 +2589,7 @@ Item {
                     Layout.fillWidth: true
                     spacing: 3
                     Text {
+                      textFormat: Text.PlainText
                       text: dgCard.dfVerbose ? dgCard.dfVerbose.label : ""
                       color: page.textHi
                       font.pixelSize: 14
@@ -2612,6 +2630,7 @@ Item {
                     Layout.fillWidth: true
                     spacing: 3
                     Text {
+                      textFormat: Text.PlainText
                       text: dgCard.dfRedact ? dgCard.dfRedact.label : ""
                       color: page.textHi
                       font.pixelSize: 14
@@ -2744,6 +2763,7 @@ Item {
                   Layout.fillWidth: true
                   spacing: 2
                   Text {
+                    textFormat: Text.PlainText
                     text: card.modelData.group
                     color: page.textHi
                     font.pixelSize: 15
@@ -2752,6 +2772,7 @@ Item {
                     elide: Text.ElideRight
                   }
                   Text {
+                    textFormat: Text.PlainText
                     visible: text !== ""
                     text: card.modelData.desc !== undefined ? card.modelData.desc : ""
                     color: page.textDim
@@ -2769,6 +2790,7 @@ Item {
                   Layout.alignment: Qt.AlignVCenter
                   Text {
                     id: cntT
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: card.modelData.providers !== undefined ? page.providerFieldCount(card.modelData) : card.modelData.fields.length
                     color: page.textDim
@@ -3032,6 +3054,7 @@ Item {
                         spacing: 10
                         Text {
                           id: mapLabel
+                          textFormat: Text.PlainText
                           text: mapCard.modelData.label
                           color: page.textHi
                           font.pixelSize: 14
@@ -3066,6 +3089,7 @@ Item {
                         }
                       }
                       Text {
+                        textFormat: Text.PlainText
                         visible: modelData.help !== ""
                         width: parent.width
                         text: modelData.help
@@ -3429,6 +3453,7 @@ Item {
                             spacing: 10
                             Text {
                               id: inlineLabel
+                              textFormat: Text.PlainText
                               text: modelData.label
                               color: page.textHi
                               font.pixelSize: 14
@@ -3466,6 +3491,7 @@ Item {
                             }
                           }
                           Text {
+                            textFormat: Text.PlainText
                             visible: modelData.help !== ""
                             text: modelData.help
                             color: page.textDim
@@ -4083,12 +4109,14 @@ Item {
                             Layout.fillWidth: true
                             spacing: 2
                             Text {
+                              textFormat: Text.PlainText
                               text: modelData.label
                               color: page.textHi
                               font.pixelSize: 14
                               font.weight: Font.Medium
                             }
                             Text {
+                              textFormat: Text.PlainText
                               visible: modelData.help !== ""
                               text: modelData.help
                               color: page.textDim
@@ -4124,6 +4152,7 @@ Item {
                             Layout.fillWidth: true
                             spacing: 2
                             Text {
+                              textFormat: Text.PlainText
                               text: modelData.file_label ? modelData.file_label : "Separate cover.jpg size"
                               color: page.textHi
                               font.pixelSize: 13
@@ -4291,6 +4320,7 @@ Item {
                           // and replacing a copy is what a re-download with
                           // skip-existing off is FOR.
                           Text {
+                            textFormat: Text.PlainText
                             visible: modelData.help !== ""
                             text: modelData.help
                             color: page.textDim
@@ -4429,6 +4459,7 @@ Item {
                               opacity: libraryCol.scannable ? 1 : 0.55
                               Text {
                                 id: startTxt
+                                textFormat: Text.PlainText
                                 anchors.centerIn: parent
                                 text: libraryCol.scanning ? "Scanning…" : "Rescan"
                                 color: libraryCol.scannable ? page.accent : page.textLo
@@ -4608,6 +4639,7 @@ Item {
                           spacing: 10
                           Text {
                             id: strLabel
+                            textFormat: Text.PlainText
                             text: modelData.label
                             color: page.textHi
                             font.pixelSize: 14
@@ -4660,6 +4692,7 @@ Item {
                           }
                         }
                         Text {
+                          textFormat: Text.PlainText
                           visible: modelData.help !== ""
                           text: modelData.help
                           color: page.textDim
@@ -5102,6 +5135,7 @@ Item {
                             Layout.fillWidth: true
                           }
                           Text {
+                            textFormat: Text.PlainText
                             visible: flagTile.depBlocked && !flagTile.ffBlocked
                             text: flagTile.modelData.requires_hint !== undefined ? flagTile.modelData.requires_hint : "Requires another option"
                             color: page.gold
@@ -5154,6 +5188,7 @@ Item {
                                 }
                               }
                               Text {
+                                textFormat: Text.PlainText
                                 text: flagTile.modelData.child_label !== undefined ? flagTile.modelData.child_label : ""
                                 color: page.textLo
                                 font.pixelSize: 12
@@ -5450,6 +5485,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               spacing: 0
               Text {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: "made with ".substring(0, footer.visFor(0, 10))
                 color: page.accent
@@ -5524,6 +5560,7 @@ Item {
                 }
               }
               Text {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: " by ".substring(0, footer.visFor(11, 4))
                 color: page.accent
@@ -5536,6 +5573,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 Text {
                   id: fGh
+                  textFormat: Text.PlainText
                   text: "iamprivacy".substring(0, footer.visFor(15, 10))
                   color: fGhMA.containsMouse ? page.textHi : page.gold
                   font.family: page.mono
