@@ -101,6 +101,9 @@ from waves.providers.shared import (
     pooled_session,
 )
 from waves.providers.shared import (
+    _SharedContextAdapter as _SharedContextAdapter,
+)
+from waves.providers.shared import (
     _tidal_refuses_asset as _tidal_refuses_asset,
 )
 from waves.providers.tidal_client import instantiate_media, items_results_all

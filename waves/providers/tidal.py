@@ -616,16 +616,15 @@ class TidalProvider(Provider):
         the restore is fenced here, beside the track resolve's own session
         work. None restores the caller's historical limp-on: a failed restore
         answers nothing and the pipeline fails the item at URL-fetch time.
+        Errors propagate: the engine's handler classifies them (throttled,
+        unavailable, failure) exactly as it did when this body lived there.
         """
         with self._tidal.stream_lock:
-            try:
-                if not self._tidal.restore_normal_session():
-                    logger.error(f"Failed to restore normal session for video: {getattr(video, 'id', '')}")
-                    return None
-                return StreamInfo(file_extension=file_extension, media_kind=MediaType.VIDEO)
-            except Exception:
-                logger.exception("Could not resolve video stream")
+            # Videos always require the normal session
+            if not self._tidal.restore_normal_session():
+                logger.error(f"Failed to restore normal session for video: {getattr(video, 'id', '')}")
                 return None
+            return StreamInfo(file_extension=file_extension, media_kind=MediaType.VIDEO)
 
     def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
         """One resolve through the engine fetch bound around this call.
