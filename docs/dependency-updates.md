@@ -151,7 +151,7 @@ minutes locally. Two trees make that cost disappear from later runs:
 
 The `build` job restores both with `actions/cache`, keyed per leg, on the
 lockfile and on the build inputs that change the compiled objects (the
-build script, `mise.toml`, `pyproject.toml` and the workflow file), so a flag or toolchain
+build script, `mise.toml`, `pyproject.toml` and the leg matrix), so a flag or toolchain
 change does not silently reuse a tree built by a different configuration. The
 restore-key fallback is salted the same way and warms the first build after a
 dependency bump, with unchanged modules still skipping. `CCACHE_MAXSIZE=2G`

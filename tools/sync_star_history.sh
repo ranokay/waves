@@ -8,7 +8,7 @@
 # mirror meters Actions minutes, and the workflow guards on the repository
 # name, so it can only ever run on public). That makes public the source of
 # truth for these files and this tree a copy that goes stale between runs.
-# Re-run this whenever you want the dev README to match; nothing depends on it being current, and release.sh takes the public
+# Re-run this whenever you want the dev README to match; nothing depends on it being current, and the release procedure takes the public
 # tip's copy regardless of what is here.
 #
 # Leaves the changes in the working tree. Review and commit them yourself.
@@ -64,7 +64,7 @@ if [ -s "$BLOCK" ]; then
        index($0,e){skip=0} !skip' \
       README.md > "$BLOCK.readme"
   # Refuse to write a README that lost the end marker: without it the next run
-  # (and release.sh) would have no block to replace.
+  # (and the release procedure) would have no block to replace.
   grep -q "$SH_END" "$BLOCK.readme" \
     || { echo "error: spliced README lost the '$SH_END' marker; leaving README.md alone." >&2; exit 1; }
   mv "$BLOCK.readme" README.md

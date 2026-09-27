@@ -77,6 +77,8 @@ def main() -> int:
         pruned += 1
 
     print(f"Pruned {pruned} static-only QML module(s).")
+    if pruned:
+        print("Restore the PySide6 tree with: uv sync --reinstall-package pyside6")
     return 0
 
 

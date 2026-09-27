@@ -252,7 +252,7 @@ jobs:
       # whose generated C is unchanged, so a warm cache turns a routine
       # release into a relink. Keyed per leg, on the lockfile and on the build
       # inputs that change the objects (the build script, mise.toml,
-      # pyproject.toml and this workflow), so a flag or toolchain change never
+      # pyproject.toml and the leg matrix), so a flag or toolchain change never
       # reuses a tree built by
       # another configuration; the restore-key fallback is salted the same
       # way. The policy and the size budget live in docs/dependency-updates.md.
@@ -264,9 +264,9 @@ jobs:
             ~/.cache/Nuitka
             ~/Library/Caches/Nuitka
             ~/AppData/Local/Nuitka/Nuitka/Cache
-          key: nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml', '.github/workflows/build-legs.json') }}-${{ hashFiles('uv.lock') }}
+          key: nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/build-legs.json') }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/release-or-test-build.yml', '.github/workflows/build-legs.json') }}-
+            nuitka-v3-${{ matrix.leg.os_arch }}-${{ hashFiles('mise.toml', 'tools/build_waves.sh', 'pyproject.toml', '.github/workflows/build-legs.json') }}-
       - name: Build Waves for ${{matrix.leg.target}}
         run: ${{matrix.leg.cmd_build}}
       # Smoke-launch the freshly built+trimmed bundle headlessly BEFORE it is
