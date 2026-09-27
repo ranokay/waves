@@ -368,8 +368,8 @@ def root_comparison_key(root: str) -> str:
 
 
 def _normalize_root(root: str) -> str:
-    """A library root ready to probe and walk: expanduser, one trailing
-    separator dropped, except a bare volume root keeps its separator.
+    """A library root ready to probe and walk: expanduser, trailing separators
+    dropped, except a bare volume root keeps its separator.
 
     ``"/".rstrip("/")`` is ``""``, which the probe reports as SCAN_UNSET, so
     an unmodified strip turns a configured filesystem root into "no library".
