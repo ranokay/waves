@@ -126,5 +126,96 @@ def _run_scenario() -> int:
     return _EXIT_OK
 
 
+# Pin the sweep: these components must stay covered by the directory
+# enumeration below; the membership assertion fails if one drops out.
+_UNREFERENCED = ("DotBar.qml", "ExpandChevron.qml", "FfmpegManager.qml", "LedBar.qml")
+
+
+def test_all_qml_components_compile():
+    """Every QML file under QML_DIR compiles; a syntax error anywhere fails this.
+
+    Compile-only (no create()): several components carry `required` properties
+    whose absence fails instantiation, and bindings against the Main.qml host
+    warn without it, so a create()/warnings gate on the full tree is noise.
+    The Main.qml warning assertion above stays the strict one.
+    Runs in a SUBPROCESS like the Main.qml case: the bridge installs
+    process-global handlers that must not leak into the suite."""
+    names = sorted(p.name for p in QML_DIR.rglob("*.qml"))
+    for pinned in _UNREFERENCED:
+        assert pinned in names, f"{pinned} must stay in the directory sweep"
+    env = dict(os.environ)
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="waves-qml-all-load-test-")
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(TESTS_ROOT), str(REPO_ROOT), env.get("PYTHONPATH", "")) if p)
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--run-all-components"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    report = (proc.stdout + proc.stderr).strip()
+    if proc.returncode == _EXIT_NO_QT:
+        from support.qml import require_qt
+
+        require_qt()
+    assert proc.returncode == _EXIT_OK, (
+        "a QML component did not compile. Every scenario test boots Main.qml, "
+        "so a component nothing references breaks silently:\n" + report
+    )
+
+
+def _run_all_components() -> int:
+    sys.path.insert(0, str(REPO_ROOT))
+    sys.path.insert(0, str(TESTS_ROOT))
+    try:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQml import QQmlComponent, QQmlEngine
+    except Exception as exc:
+        print(f"Qt unavailable: {exc}", file=sys.stderr)
+        return _EXIT_NO_QT
+
+    from support.offline import patch_offline
+
+    patch_offline()
+
+    app = QGuiApplication.instance() or QGuiApplication([])
+    app.setApplicationName("Waves")
+    app.setOrganizationName("Waves")
+    app.setOrganizationDomain("waves")
+    try:
+        from waves.desktop.backend import WavesBridge
+    except Exception as exc:
+        print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
+        return _EXIT_NO_QT
+
+    engine = QQmlEngine()
+    bridge = WavesBridge(tidal=None)
+    engine.rootContext().setContextProperty("waves", bridge)
+    engine.rootContext().setContextProperty("monoFont", "JetBrains Mono")
+    engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
+
+    files = sorted(QML_DIR.rglob("*.qml"))
+    if not files:
+        print(f"no QML files in {QML_DIR}", file=sys.stderr)
+        return _EXIT_BROKEN
+    broken: list[str] = []
+    for path in files:
+        component = QQmlComponent(engine, QUrl.fromLocalFile(str(path)))
+        if component.isError():
+            broken.append(path.name)
+            print(f"{path.name} FAILED to compile", file=sys.stderr)
+            for e in component.errors():
+                print(f"  {e.toString()}", file=sys.stderr)
+    if broken:
+        print(f"{len(broken)} of {len(files)} QML files failed to compile", file=sys.stderr)
+        return _EXIT_BROKEN
+    print(f"ok: {len(files)} QML components compiled", flush=True)
+    return _EXIT_OK
+
+
 if __name__ == "__main__":
+    if "--run-all-components" in sys.argv:
+        raise SystemExit(_run_all_components())
     raise SystemExit(_run_scenario())
