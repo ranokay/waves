@@ -53,7 +53,11 @@ behavior; do not repeat a lower-layer claim with pixel automation.
 
 ## Gate evidence
 
-The PR body carries the raw output of the exact gate commands (`mise run
-check`, `mise run test-strict`), pasted verbatim — never summarized or
-rewritten. Screenshots and recordings are evidence
+The PR body carries a compact gate record: the exact gate commands, the
+frozen SHA they ran on, exit statuses, and result counts — plus one link
+per gate log to its full raw output, pasted verbatim (a gist or an
+attached artifact). Raw evidence stays available byte-for-byte; the body
+stays readable. GitHub caps bodies at 65,536 characters and the check log
+alone can exceed that, so full logs live behind links, never summarized
+away without a raw source. Screenshots and recordings are evidence
 only for native claims the offscreen layers cannot prove.
