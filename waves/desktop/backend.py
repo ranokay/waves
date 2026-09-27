@@ -659,6 +659,8 @@ _FACTORY_WIPE_FILES = (
     # pattern below). The fixed names stay listed so a leftover from an older
     # build still falls to the reset.
     "settings.json.tmp",
+    "settings-migrations.json",
+    "settings-migrations.json.tmp",
     "token.json",
     "token.json.bak",
     "token.json.tmp",
@@ -710,7 +712,8 @@ _FACTORY_WIPE_LOG_PATTERNS = (
     # promises to remove. Anchored on both ends to the exact files Waves
     # stages, so it can only ever match a file Waves itself named.
     re.compile(
-        r"(settings\.json|token\.json|waves\.json|page_cache\.json|browse_tile_art\.json)" r"\.[0-9A-Za-z_-]+\.tmp\Z"
+        r"(settings\.json|settings-migrations\.json|token\.json|waves\.json|page_cache\.json|browse_tile_art\.json)"
+        r"\.[0-9A-Za-z_-]+\.tmp\Z"
     ),
 )
 # Waves-created subdirectories and the exact files Waves puts in them,

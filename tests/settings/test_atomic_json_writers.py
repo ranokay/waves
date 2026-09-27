@@ -104,7 +104,14 @@ def test_a_mkstemp_staging_leftover_is_wiped_by_a_factory_reset():
     # promises to remove.
     from waves.desktop.backend import _FACTORY_WIPE_LOG_PATTERNS
 
-    for base in ("settings.json", "token.json", "waves.json", "page_cache.json", "browse_tile_art.json"):
+    for base in (
+        "settings.json",
+        "settings-migrations.json",
+        "token.json",
+        "waves.json",
+        "page_cache.json",
+        "browse_tile_art.json",
+    ):
         stray = f"{base}.k3j9x2ab.tmp"
         assert any(p.match(stray) for p in _FACTORY_WIPE_LOG_PATTERNS), stray
 

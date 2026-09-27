@@ -346,9 +346,21 @@ def _remember_migrations(completed: set[str]) -> None:
     steps = sorted(completed | set(_MIGRATION_STEPS))
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps({"completed": steps}, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(str(path)) or ".",
+            prefix=f"{os.path.basename(str(path))}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, mode="w", encoding="utf-8") as f:
+                f.write(json.dumps({"completed": steps}, indent=2))
+                f.flush()
+                os.fsync(f.fileno())
+            _replace_with_retry(tmp_path, str(path))
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
+            raise
     except OSError:
         logger.warning("Could not record the completed settings migrations beside the settings file")
 
