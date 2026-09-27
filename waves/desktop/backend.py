@@ -4001,7 +4001,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
       warm; the file is account-tagged and deleted on logout.
     * Threading: slots that hit the network wrap the work in ``Worker`` and
       run it on ``threadpool`` (search/metadata) or ``dl_pool`` (downloads,
-      sized by the concurrency setting), then hand results back to the GUI
+      fixed at one thread: the queue is serial by design), then hand results back to the GUI
       thread by emitting signals (Qt auto-queues cross-thread emissions).
       Nothing below ever touches QML state from a worker thread.
     """

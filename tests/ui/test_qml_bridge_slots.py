@@ -15,9 +15,10 @@ reference, and asserts each one is a real member of the bridge's meta object.
 
 from __future__ import annotations
 
+import ast
 import re
 
-from support.paths import QML_DIR
+from support.paths import QML_DIR, REPO_ROOT
 
 from waves.desktop.backend import WavesBridge
 
@@ -95,3 +96,51 @@ def test_the_hover_prefetch_slots_are_the_ones_that_regressed():
     members = _bridge_members()
     for name in ("prefetchArtist", "prefetchAlbumTracks", "prefetchBrowseItem"):
         assert name in members, f"{name} is not reachable from QML"
+
+
+def _declared_public_signals() -> set[str]:
+    """Public ``Signal`` names declared on public bridge classes.
+
+    Read from source, not the meta object: the meta object also carries
+    Qt's own signals (``objectNameChanged``) and inherited thread-hop
+    relays. Only public classes count -- ``_ProgressSignals`` is a
+    per-download thread relay whose members are internal by construction,
+    the same category BRIDGE.md's internal-signals section exempts.
+    """
+    names = set()
+    for path in (REPO_ROOT / "waves/desktop/backend.py", REPO_ROOT / "waves/desktop/bridge_library.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef) or node.name.startswith("_"):
+                continue
+            for item in node.body:
+                if not isinstance(item, ast.Assign):
+                    continue
+                if not (
+                    isinstance(item.value, ast.Call)
+                    and isinstance(item.value.func, ast.Name)
+                    and item.value.func.id == "Signal"
+                ):
+                    continue
+                for target in item.targets:
+                    if isinstance(target, ast.Name) and not target.id.startswith("_"):
+                        names.add(target.id)
+    return names
+
+
+def test_every_public_signal_appears_in_the_contract_doc():
+    """BRIDGE.md is the seam map the bridge split reads: a public signal with
+    no row leaves the next extraction guessing at its contract. Deleting one
+    row fails this; so does declaring a new public signal without one.
+
+    Rows only, not prose: several signals are also named in the surrounding
+    text, and a row deleted while its prose mention survives must still fail.
+    """
+    lines = (REPO_ROOT / "waves/desktop/BRIDGE.md").read_text(encoding="utf-8").splitlines()
+    rows = "\n".join(line for line in lines if line.startswith("|"))
+    missing = [
+        name
+        for name in sorted(_declared_public_signals())
+        if not re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", rows)
+    ]
+    assert not missing, f"public bridge signals missing from BRIDGE.md: {missing!r}"
