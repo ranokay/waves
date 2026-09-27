@@ -175,7 +175,7 @@ def test_macos_verify_never_resigns_or_strips_quarantine(tmp_path, monkeypatch):
     assert not any(c[0] == "xattr" for c in calls)
 
 
-def test_macos_verify_failure_is_not_fatal_and_does_not_resign(tmp_path, monkeypatch):
+def test_macos_verify_failure_refuses_promotion_and_does_not_resign(tmp_path, monkeypatch):
     calls: list[list[str]] = []
 
     def fake_run(argv, *a, **kw):
@@ -195,12 +195,49 @@ def test_macos_verify_failure_is_not_fatal_and_does_not_resign(tmp_path, monkeyp
     staged = tmp_path / "ffmpeg.new"
     staged.write_bytes(b"UNSIGNED")
 
-    # A verification failure must not raise here (the smoke test gates promotion)
+    # A verification failure must refuse promotion (fail-closed)
     # and must not trigger a re-sign.
-    mgr._macos_verify(staged)
+    with pytest.raises(ValueError, match="signature"):
+        mgr._macos_verify(staged)
     resigns = [c for c in calls if c[0] == "codesign" and "--sign" in c]
     assert resigns == []
     assert not any(c[0] == "xattr" for c in calls)
+
+
+def test_failed_signature_leaves_existing_binary_untouched(tmp_path, monkeypatch):
+    # First install a working managed copy (linux path avoids codesign).
+    rel, session = _session_for(_zip_bytes({"ffmpeg": b"GOODBINARY"}))
+    monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
+    mgr = fm.FfmpegManager(tmp_path)
+    monkeypatch.setattr(mgr, "os_key", "linux", raising=False)
+    mgr.install(release=rel, session=session)
+    assert mgr.binary_path.read_bytes() == b"GOODBINARY"
+    good_manifest = mgr._read_manifest()
+
+    # A new macOS release whose signature does not verify must not promote,
+    # even though the staged binary would pass the smoke test.
+    rel2, session2 = _session_for(_zip_bytes({"ffmpeg": b"UNSIGNEDBINARY"}))
+    rel2 = fm.Release(
+        source="martin-riedl", version="999_9.9", label="9.9", url=rel2.url, sha256_url=rel2.url + ".sha256"
+    )
+    monkeypatch.setattr(mgr, "os_key", "macos", raising=False)
+    monkeypatch.setattr(fm, "_probe_version", lambda p: "n9.9")
+
+    def fake_run(argv, *a, **kw):
+        class _R:
+            returncode = 1 if argv[0] == "codesign" else 0
+            stdout = ""
+            stderr = "not signed"
+
+        return _R()
+
+    monkeypatch.setattr(fm.subprocess, "run", fake_run)
+
+    with pytest.raises(ValueError, match="signature"):
+        mgr.install(release=rel2, session=session2)
+
+    assert mgr.binary_path.read_bytes() == b"GOODBINARY"
+    assert mgr._read_manifest() == good_manifest
 
 
 # --------------------------------------------------------------------------- #

@@ -196,6 +196,9 @@ def _install_fixture(tmp_path, monkeypatch, exe="ffmpeg"):
     rel = fm.Release(source="martin-riedl", version="123_8.1.1", label="8.1.1", url=url, sha256_url=url + ".sha256")
     # The dummy binary can't actually run, so fake the smoke test.
     monkeypatch.setattr(fm, "_probe_version", lambda p: "n8.1.1")
+    # The dummy binary is also unsigned, so fake the platform signature:
+    # the signature seam itself is owned by test_ffmpeg_install_rollback.py.
+    monkeypatch.setattr(fm.FfmpegManager, "_macos_verify", lambda self, path: None)
     return rel, session
 
 
