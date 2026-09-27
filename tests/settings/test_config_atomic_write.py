@@ -53,3 +53,53 @@ def test_save_is_atomic_original_survives_a_failed_replace(tmp_path, monkeypatch
         cfg.save()
 
     assert target.read_text() == original, "a failed write must leave the original file intact"
+
+
+def _counting_replace(monkeypatch):
+    """Count os.replace calls while still performing them."""
+    replaces = []
+    real_replace = os.replace
+
+    def _count(src, dst):
+        replaces.append((src, dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", _count)
+    return replaces
+
+
+def test_unchanged_reread_performs_no_replace(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    cfg.cls_model = ModelSettings
+    cfg.save()
+    target = tmp_path / "settings.json"
+    before = target.read_text()
+
+    replaces = _counting_replace(monkeypatch)
+    assert cfg.read(str(target)) is True
+    assert replaces == [], "an unchanged re-read must skip the write"
+    assert target.read_text() == before
+
+
+def test_changed_model_still_writes(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    cfg.cls_model = ModelSettings
+    cfg.save()
+    target = tmp_path / "settings.json"
+    raw = target.read_text()
+
+    replaces = _counting_replace(monkeypatch)
+    cfg.data.download_base_path = "/waves/changed/marker"
+    cfg.save(raw)
+    assert len(replaces) == 1, "a changed model must still write"
+    assert json.loads(target.read_text())["download_base_path"] == "/waves/changed/marker"
+
+
+def test_corrupt_compare_is_never_unchanged(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    cfg.cls_model = ModelSettings
+    cfg.save()
+
+    replaces = _counting_replace(monkeypatch)
+    cfg.save("not json{{{")
+    assert len(replaces) == 1, "unparseable input must write, never count as unchanged"
