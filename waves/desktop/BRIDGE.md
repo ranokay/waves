@@ -13,24 +13,27 @@ feature.
 
 ## Session and status
 
-| Signal                                                                                             | Fires when                                                                                                    |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `loggedInChanged`                                                                                  | Login/logout completes (property `loggedIn`)                                                                  |
-| `sessionResolvedChanged`                                                                           | The restored session finishes resolving (property `sessionResolved`)                                          |
-| `statusChanged`                                                                                    | The status-bar text changes                                                                                   |
-| `busyChanged`                                                                                      | A blocking operation starts/ends                                                                              |
-| `loginUrlReady(url)`                                                                               | The browser-login URL is ready to open                                                                        |
-| `backRequested`                                                                                    | The platform back gesture (macOS trackpad swipe) asks to navigate back                                        |
-| `motionBgChanged`                                                                                  | The motion-background preference flipped; Main.qml re-reads it                                                |
-| `confirmCategoryDlChanged`                                                                         | The "confirm DOWNLOAD ALL on a Browse category" preference flipped (property `confirmCategoryDl`)             |
-| `settingsPersistedExternally`                                                                      | Settings were saved by something other than the Settings page (a dialog, a recovery); the page re-reads       |
-| `forwardRequested`                                                                                 | The mouse forward button asks to navigate forward (the back button fires `backRequested`)                     |
-| `hoverMotionChanged` / `artHoverTiltChanged` / `videoHoverPeekChanged`                             | The matching motion preference flipped (`setWavesPref`); the surfaces re-read it                              |
-| `diagnosticsExported(path)`                                                                        | A diagnostics export finished (`""` = failed)                                                                 |
-| `appleStatusChanged`                                                                               | A save moved `apple_enabled` or the session; Settings re-reads `appleStatus()`; search clears when off        |
-| `appleSetupRequested(reason)`                                                                      | Apple needs setup (`setup` on enable, `cookies` on a pre-setup download click); Main deep-links to the wizard |
-| `setupRequested()`                                                                                 | Settings -> Providers -> "Set up providers" asks to re-open the provider welcome surface as a page            |
-| `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull and sign-out lifecycle; Settings re-reads `appleSetupState()`          |
+| Signal                                                                                             | Fires when                                                                                                       |
+| -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `loggedInChanged`                                                                                  | Login/logout completes (property `loggedIn`)                                                                     |
+| `sessionResolvedChanged`                                                                           | The restored session finishes resolving (property `sessionResolved`)                                             |
+| `statusChanged`                                                                                    | The status-bar text changes                                                                                      |
+| `busyChanged`                                                                                      | A blocking operation starts/ends                                                                                 |
+| `loginUrlReady(url)`                                                                               | The browser-login URL is ready to open                                                                           |
+| `backRequested`                                                                                    | The platform back gesture (macOS trackpad swipe) asks to navigate back                                           |
+| `motionBgChanged`                                                                                  | The motion-background preference flipped; Main.qml re-reads it                                                   |
+| `confirmCategoryDlChanged`                                                                         | The "confirm DOWNLOAD ALL on a Browse category" preference flipped (property `confirmCategoryDl`)                |
+| `skipExistingChanged`                                                                              | The "Skip existing" download setting flipped (property `skipExistingFiles`); the claim gate re-reads its copy    |
+| `settingsPersistedExternally`                                                                      | Settings were saved by something other than the Settings page (a dialog, a recovery); the page re-reads          |
+| `forwardRequested`                                                                                 | The mouse forward button asks to navigate forward (the back button fires `backRequested`)                        |
+| `hoverMotionChanged` / `artHoverTiltChanged` / `videoHoverPeekChanged`                             | The matching motion preference flipped (`setWavesPref`); the surfaces re-read it                                 |
+| `diagnosticsExported(path)`                                                                        | A diagnostics export finished (`""` = failed)                                                                    |
+| `appleStatusChanged`                                                                               | A save moved `apple_enabled` or the session; Settings re-reads `appleStatus()`; search clears when off           |
+| `appleWrapperAuthChanged`                                                                          | The wrapper guest auth snapshot moved (login, logout, 2FA, probe); the wizard form re-reads `appleWrapperAuth()` |
+| `appleSetupRequested(reason)`                                                                      | Apple needs setup (`setup` on enable, `cookies` on a pre-setup download click); Main deep-links to the wizard    |
+| `setupRequested()`                                                                                 | Settings -> Providers -> "Set up providers" asks to re-open the provider welcome surface as a page               |
+| `signInRequested(providerId)`                                                                      | A provider card asked for sign-in; the welcome surface opens that provider's steps (or its cards)                |
+| `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull and sign-out lifecycle; Settings re-reads `appleSetupState()`             |
 
 The provider cards' action pills dispatch through one slot, not per-provider
 handlers: `providerAction(providerId, actionKey)` runs the key the schema
@@ -212,6 +215,9 @@ and a cross-account emit is dropped by generation.
 | `downloadProgress(mediaId, pct)` / `downloadState(mediaId, state)`           | Per-media progress/state, drives the buttons and card controls outside the queue                                                           |
 | `ownershipChanged(trackId)`                                                  | A track's ownership or delivered quality changed; QML re-queries `ownershipOf`                                                             |
 | `ownershipChangedBatch(ids)`                                                 | First ownership answers, collected for a moment and announced once; `ids` is `,id,id,`-delimited so QML can `indexOf("," + id + ",")`      |
+| `qualityOverridesChanged`                                                    | A per-item quality choice was set or cleared; QML re-reads `qualityOverrides`                                                              |
+| `qualityChoiceChanged(scope)`                                                | The media ids whose download standing a choice moves (the item, every track for an album); buttons re-ask ownership                        |
+| `targetTierChanged`                                                          | The Settings quality tier moved; the DEFAULT mark in every badge's quality menu follows it                                                 |
 | `collectionMembershipChanged(id)`                                            | A collection learned its member track ids; its cards re-ask `collectionOwnership`/`collectionOwnershipDetail` in place                     |
 | `downloadFolderMissing` / `downloadFolderDefault`                            | The download folder is invalid (blocking) / still the historical default (nudge)                                                           |
 | `downloadFolderUnreachable(path)`                                            | The folder is an unreachable network share; queued work held for "Try again"                                                               |
@@ -386,10 +392,11 @@ documented 30-second clip URL directly (no remux).
 
 ## FFmpeg manager and self-updater
 
-| Signal                                                                                                              | Fires when                                                      |
-| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `ffmpegStatusChanged` / `ffmpegProgress(pct)` / `ffmpegStateChanged(state, msg)` / `ffmpegUpdateChecked(...)`       | The managed-FFmpeg install/update lifecycle (ffmpeg_manager.py) |
-| `appUpdateStatusChanged` / `appUpdateProgress(pct)` / `appUpdateStateChanged(state, msg)` / `appUpdateChecked(...)` | The self-updater lifecycle (updater.py)                         |
+| Signal                                                                                                              | Fires when                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `ffmpegStatusChanged` / `ffmpegProgress(pct)` / `ffmpegStateChanged(state, msg)` / `ffmpegUpdateChecked(...)`       | The managed-FFmpeg install/update lifecycle (ffmpeg_manager.py)                                    |
+| `appUpdateStatusChanged` / `appUpdateProgress(pct)` / `appUpdateStateChanged(state, msg)` / `appUpdateChecked(...)` | The self-updater lifecycle (updater.py)                                                            |
+| `appUpdatePending(version)`                                                                                         | A staged update from an earlier session was re-armed at boot; Main shows the restart pill outright |
 
 ## Internal signals (thread hops)
 
