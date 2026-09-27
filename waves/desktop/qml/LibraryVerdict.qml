@@ -6,12 +6,13 @@ import QtQuick
 // card on a shelf of them (the economy AlbumPresencePill's single-object
 // property exists for). Albums only: a playlist or a mix has no album
 // identity to ask about, and must never wear one's badge.
-// `host` is Main.qml's root object, bound at every instantiation and
-// required so a missed binding fails at load. It reads host.libStamp; the
-// verdict itself comes from the payload's baked answer or the bridge.
+// `libStamp` is the window's library stamp (Main.qml's libStamp, refreshed
+// on every library publish), bound at every instantiation and required so a
+// missed binding fails at load. The verdict itself comes from the payload's
+// baked answer or the bridge.
 QtObject {
   id: verdict
-  required property var host
+  required property int libStamp
   property var card: ({})
   property var presence: null
   property bool _resolved: false
@@ -30,7 +31,7 @@ QtObject {
       presence = null
       return
     }
-    presence = (!live && ("lib" in c) && c.libStamp === host.libStamp) ? c.lib : waves.libraryAlbumPresence("" + (c.artist || ""), "" + c.title, "" + (c.year || ""), c.tracks || 0, c.duration_sec || 0, c.explicit === true ? 1 : -1)
+    presence = (!live && ("lib" in c) && c.libStamp === verdict.libStamp) ? c.lib : waves.libraryAlbumPresence("" + (c.artist || ""), "" + c.title, "" + (c.year || ""), c.tracks || 0, c.duration_sec || 0, c.explicit === true ? 1 : -1)
   }
   onCardChanged: resolve(false)
   // Only if the binding above has not already answered: an unconditional
