@@ -9,9 +9,10 @@ behind the walk, so the launch window drops frames for the whole sweep.
 Deferring the sweep until after the launch look only moves the stutter later.
 
 Here the scan runs in a child process with an interpreter of its own. The
-app's process only ever READS the cache (see LibraryIndex.presence_facts);
-this process is the one writer. The two talk over pipes, one JSON object per
-line:
+app's process never scans: it reads the cache for presence answers (see
+LibraryIndex.presence_facts), while opening the cache still applies its
+schema migrations. Scan rows are written only by this process. The two talk
+over pipes, one JSON object per line:
 
   in  {"op": "scan", "id": N, "cache": PATH, "root": DIR, "force_full": B,
        "root_is_local": B|null, "config_dir": DIR, "recover": B, "lock_wait": S}

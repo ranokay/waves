@@ -297,6 +297,16 @@ def test_folder_names_under_respects_its_limit(tmp_path):
     assert len(store.folder_names_under(base, limit=3)) == 3
 
 
+def test_folder_names_under_uses_a_recorded_at_index(tmp_path):
+    """folder_names_under sorts the append-forever table on every launch; the
+    plan must use the recorded_at index, not a full scan plus sort."""
+    store = _store(tmp_path)
+    plan = store._conn.execute(
+        "EXPLAIN QUERY PLAN SELECT path FROM downloads WHERE path IS NOT NULL ORDER BY recorded_at DESC"
+    ).fetchall()
+    assert any("idx_downloads_recorded" in str(row) for row in plan), f"full scan plus sort: {plan}"
+
+
 # --------------------------------------------------------------------------- #
 # The store lets go of its file
 # --------------------------------------------------------------------------- #

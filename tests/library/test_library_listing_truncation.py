@@ -726,3 +726,27 @@ def test_one_folder_under_two_spellings_still_retires_the_stored_row(tmp_path):
     assert li._is_one_folder(real, _mk(tmp_path, "lib/Oasis", [])) is False
     # A stored spelling that is gone retires rather than lingering forever.
     assert li._is_one_folder(os.path.join(lib, "Vanished"), real) is True
+
+
+def test_a_per_parent_map_stats_no_foreign_parent(tmp_path, monkeypatch):
+    """Recovery knows which fresh listing named each folder, so a name
+    recovered from parent A is never stat'd under parent B: one network stat
+    per name, not one per parent per name."""
+    lib, _a, _b, tags = _two_artists(tmp_path)
+    idx = _index(tmp_path, tags)
+    assert idx.refresh(lib) == 2
+    a_dir, b_dir = os.path.join(lib, "A"), os.path.join(lib, "B")
+    _rows(idx, "UPDATE dirs SET unreliable = 1 WHERE path IN (?, ?)", a_dir, b_dir)
+    os.makedirs(os.path.join(a_dir, "X"))
+    stats: list[str] = []
+    real_stat = os.stat
+
+    def counting(path, *args, **kwargs):
+        stats.append(os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(li.os, "stat", counting)
+    idx.probe_folders(lib, ["X"], lambda: True, candidates=lambda n: [n], names_by_parent={a_dir: ["X"]})
+    idx.close()
+    foreign = [p for p in stats if p.startswith(b_dir + os.sep)]
+    assert foreign == [], f"a name from A was stat'd under B: {foreign}"

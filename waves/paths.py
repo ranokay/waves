@@ -869,9 +869,9 @@ def _format_durations(
         return f"{m:01d}:{s:02d}"
 
     # Format playlist durations
-    elif name == "playlist_duration_seconds" and isinstance(media, Album):
+    elif name == "playlist_duration_seconds" and isinstance(media, Playlist | UserPlaylist):
         return str(media.duration)
-    elif name == "playlist_duration_minutes" and isinstance(media, Album):
+    elif name == "playlist_duration_minutes" and isinstance(media, Playlist | UserPlaylist):
         m, s = divmod(media.duration or 0, 60)
         return f"{m:01d}:{s:02d}"
 

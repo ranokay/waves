@@ -393,6 +393,11 @@ def _name_key(name: str) -> str:
     return unicodedata.normalize("NFC", str(name or "")).casefold()
 
 
+def _nonblank_strs(values: Iterable[str]) -> list[str]:
+    """A name batch as text, blanks dropped."""
+    return [str(n) for n in values if str(n or "").strip()]
+
+
 def _is_one_folder(stored: str, listed: str) -> bool:
     """True when two spellings name ONE folder on disk.
 
@@ -1734,6 +1739,7 @@ class LibraryIndex:
         timeout: float = 0.0,
         on_progress: Callable[[dict], None] | None = None,
         progress_interval: float = 0.15,
+        names_by_parent: dict[str, Iterable[str]] | None = None,
     ) -> int | None:
         """Look for artist folders BY NAME under every folder whose listing could
         not be trusted, and index whatever is found. Returns how many FOLDERS
@@ -1780,9 +1786,18 @@ class LibraryIndex:
         count across every folder found so far, so the numbers only climb.
         A badge's one-name probe passes nothing and stays silent."""
         root = _normalize_root(root)
-        wanted = [str(n) for n in names if str(n or "").strip()]
+        wanted = _nonblank_strs(names)
         if not wanted:
             return 0
+        # Recovery knows which fresh listing named each folder: ask each name
+        # only under its own parent (one network stat per name) instead of
+        # under every unreliable parent. Badge batches have no such mapping
+        # and keep the shared list.
+        by_parent: dict[str, list[str]] | None = None
+        if names_by_parent is not None:
+            by_parent = {str(p): _nonblank_strs(ns) for p, ns in names_by_parent.items()}
+            if not any(by_parent.values()):
+                return 0
         if not self._scan_busy.acquire(timeout=max(0.0, float(timeout))):
             return None
         try:
@@ -1829,7 +1844,8 @@ class LibraryIndex:
 
             for parent in parents:
                 taken = {_name_key(os.path.basename(c)) for c in children.get(parent, ())}
-                for name in wanted:
+                own = by_parent.get(parent, []) if by_parent is not None else wanted
+                for name in own:
                     for spelling in candidates(name):
                         spelling = str(spelling or "").strip()
                         if not spelling or spelling in (".", "..") or os.sep in spelling:
