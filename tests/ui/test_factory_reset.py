@@ -158,6 +158,8 @@ def test_factory_reset_wipes_waves_files_and_keeps_install_channel(tmp_path, mon
     for name in (
         "settings.json",
         "settings.json.bak",
+        "settings-migrations.json",
+        "settings-migrations.json.tmp",
         "token.json",
         "waves.json",
         "waves.json.tmp",

@@ -167,3 +167,11 @@ def test_record_off_leaves_the_sidecar_alone(tmp_path):
     assert _completed_migrations() == set(given), "record=False wrote the sidecar"
     _remember_migrations(_completed_migrations())
     assert _completed_migrations() == set(_MIGRATION_STEPS)
+
+
+def test_sidecar_write_leaves_no_fixed_tmp_sibling(tmp_path):
+    _remember_migrations(set(_MIGRATION_STEPS))
+
+    assert (tmp_path / "settings-migrations.json").exists()
+    assert not (tmp_path / "settings-migrations.json.tmp").exists()
+    assert list(tmp_path.glob("*.tmp")) == []
