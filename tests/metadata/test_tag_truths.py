@@ -13,8 +13,8 @@ The tag writer states only what the download actually knows:
 * The MP3 branch is unreachable today (no download can produce an .mp3), and
   every frame in it is pinned correct anyway: the album artist goes into the
   album artist frame, the share URL frame gets a real URL rather than the ISRC
-  through a keyword mutagen discards, the synced-lyrics frame gets a shape
-  that renders (a raising shape would abort the whole save), and the cover is
+  through a keyword mutagen discards, synced LRC rides the unsynchronized
+  frame instead of a single 0 ms SYLT blob of raw markup, and the cover is
   added with a mime type.
 """
 
@@ -355,11 +355,16 @@ def test_the_mp3_share_url_frame_carries_a_url(tmp_path):
     assert [str(t) for t in tags.getall("TSRC")] == ["USRC12345678"]  # the ISRC's own frame
 
 
-def test_synced_lyrics_do_not_abort_the_mp3_save(tmp_path):
+def test_synced_lrc_writes_no_sylt_blob(tmp_path):
+    tags = _mp3_tags(tmp_path, lyrics="[00:12.00]a line\n[00:15.00]next", lyrics_unsynced="plain words")
+    assert tags.getall("SYLT") == []
+    assert [str(t) for t in tags.getall("USLT")] == ["plain words"]
+
+
+def test_synced_lrc_without_unsynced_rides_the_text_frame(tmp_path):
     tags = _mp3_tags(tmp_path, lyrics="[00:12.00]a line")
-    frame = tags.getall("SYLT")[0]
-    assert frame.text == [("[00:12.00]a line", 0)]
-    frame._writeData()  # the old plain-string shape raised here, killing the save
+    assert tags.getall("SYLT") == []
+    assert [str(t) for t in tags.getall("USLT")] == ["[00:12.00]a line"]
 
 
 def test_an_mp3_with_no_synced_lyrics_writes_no_empty_frame(tmp_path):
