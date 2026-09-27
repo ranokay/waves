@@ -94,6 +94,12 @@ ApplicationWindow {
   function qualTint(q) {
     return (q === "HI-RES" || q === "VIDEO") ? goldCont : q === "LOSSLESS" ? greenCont : q === "HIGH" ? cyanCont : surface3
   }
+  // Escape for StyledText interpolations: attribution values are app-composed
+  // local data, but escaping at the composition site keeps a future disk- or
+  // network-read value from breaking out of the anchor or injecting markup.
+  function escHtml(s) {
+    return ("" + (s || "")).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+  }
   // Chooser split button (spec §7.2)
   // Mirrored once: with Apple disabled every DownloadButton keeps today's
   // single-face behavior; with Apple enabled each gains its chevron face.
@@ -1490,7 +1496,8 @@ ApplicationWindow {
     // Settings > Advanced > "Motion background". An empty source (off)
     // tears down the whole decode pipeline, so disabled means zero cost.
     property bool motionOn: waves.wavesPref("motion_background") !== false
-    visible: motionOn
+    property bool decodeFailed: false
+    visible: motionOn && !decodeFailed
     // Launch opens on the flat dark frame (wordmark and version only) and
     // the water fades in slowly underneath during the opening hold, timed
     // to be fully present as the zoom begins; the pipeline's first-frame
@@ -1516,7 +1523,8 @@ ApplicationWindow {
     muted: true
     fillMode: VideoOutput.PreserveAspectCrop
     autoPlay: true
-    onErrorOccurred: visible = false   // missing/undecodable asset: fall back to flat bg
+    onSourceChanged: decodeFailed = false   // a new stream gets its own chance; a toggle off/on restores via this
+    onErrorOccurred: decodeFailed = true   // missing/undecodable asset: fall back to flat bg
     // Presentation continuity: the position of the last frame that
     // actually reached the glass (recorded per swap by onFrameSwapped).
     // While macOS holds presentation, the media clock keeps running, so
@@ -1536,8 +1544,6 @@ ApplicationWindow {
       target: waves
       function onMotionBgChanged() {
         bgWave.motionOn = waves.wavesPref("motion_background") !== false
-        bgWave.visible = bgWave.motionOn
-        // undo a hide from a stale onErrorOccurred
         if (bgWave.motionOn)
           bgWave.play()
       }
@@ -10022,7 +10028,7 @@ ApplicationWindow {
           linkColor: root.cyan
           color: root.textDim
           font.pixelSize: 11
-          text: "Managed builds for " + (appFfmpeg.status.os || "") + "/" + (appFfmpeg.status.arch || "") + " come from <a href=\"" + (appFfmpeg.status.source_url || "") + "\">" + (appFfmpeg.status.source || "") + "</a>" + (appFfmpeg.status.source_license ? " · " + appFfmpeg.status.source_license : "") + ". Thank you to the maintainers. FFmpeg © the FFmpeg project (ffmpeg.org)."
+          text: "Managed builds for " + escHtml(appFfmpeg.status.os) + "/" + escHtml(appFfmpeg.status.arch) + " come from <a href=\"" + escHtml(appFfmpeg.status.source_url) + "\">" + escHtml(appFfmpeg.status.source) + "</a>" + (appFfmpeg.status.source_license ? " · " + escHtml(appFfmpeg.status.source_license) : "") + ". Thank you to the maintainers. FFmpeg © the FFmpeg project (ffmpeg.org)."
           onLinkActivated: function (link) {
             Qt.openUrlExternally(link)
           }
