@@ -36,13 +36,14 @@ import logging
 import pathlib
 import threading
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from tidalapi import Album, Track
 
 from waves.constants import PLAYLIST_EXTENSION, PLAYLIST_EXTENSION_LEGACY, PLAYLIST_PREFIX
 from waves.download import Download
+from waves.providers import TidalProvider
 
 _TITLE = "Album X"
 _M3U8 = f"{PLAYLIST_PREFIX}{_TITLE}{PLAYLIST_EXTENSION}"
@@ -70,6 +71,9 @@ def _engine(playlist_create: bool = True) -> Download:
     dl.fn_logger = logging.getLogger("test.playlist.scope")
     dl._dirs_filled = set()
     dl._dirs_filled_lock = threading.Lock()
+    # The item gate keys downloadable-vs-unknown off the provider answer now;
+    # a real provider over a stub session answers it with no I/O.
+    dl.provider = TidalProvider(MagicMock())
     return dl
 
 
