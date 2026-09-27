@@ -30,8 +30,21 @@ ApplicationWindow {
   // Never allow a width that clips the header: the top bar's content
   // (logo, wordmark, nav tabs, queue, provider lights) sets the
   // real floor. headerRow reports 0 until it is laid out, hence the max.
-  minimumWidth: Math.max(880, Math.ceil(headerRow.implicitWidth) + 44)
-  minimumHeight: 560
+  // Both floors are then capped by the window's own screen (x 0.9, which
+  // absorbs taskbars) so the frame fits small high-DPI displays a fixed
+  // minimum would overflow; on such a screen header content may compress
+  // while the content panes keep their existing scroll behavior and the
+  // status bar stays on screen because the frame fits. Screen.width/height
+  // -- not desktopAvailableWidth/Height,
+  // which span the whole virtual desktop across monitors -- so the cap
+  // tracks the screen holding this window. A non-positive size (no screen
+  // reported at all) means no cap and keeps the floors.
+  readonly property int widthFloor: Math.max(880, Math.ceil(headerRow.implicitWidth) + 44)
+  readonly property int heightFloor: 560
+  readonly property int screenCapWidth: Screen.width > 0 ? Math.floor(Screen.width * 0.9) : widthFloor
+  readonly property int screenCapHeight: Screen.height > 0 ? Math.floor(Screen.height * 0.9) : heightFloor
+  minimumWidth: Math.min(widthFloor, screenCapWidth)
+  minimumHeight: Math.min(heightFloor, screenCapHeight)
   title: "Waves"
   color: bg
 
