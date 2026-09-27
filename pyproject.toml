@@ -63,7 +63,6 @@ dev = [
   # lint with one version; Dependabot may bump it like any other dev tool.
   "ruff==0.16.8",
   "pyupgrade>=3.21.2,<4",
-  "pillow>=12.0.0,<13",
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
   # bump invalidates it (docs/dependency-updates.md). 4.x is AGPL-3.0-only, a
   # license accepted for this build-only tool; 4.x is also what supports
