@@ -18,9 +18,10 @@ the four missing layers:
   into the on-disk log so even a first-ever failure arrives with leading
   context. Costs memory only; nothing extra is written during normal runs.
 * **Verbose mode, off by default.** The user-facing "Verbose diagnostics"
-  toggle raises the on-disk level from WARNING to DEBUG and starts the freeze
-  watchdog and the perf sampler. The ``WAVES_DEBUG`` env var still force
-  enables it for developers.
+  toggle raises the on-disk level from WARNING to DEBUG, narrows the freeze
+  watchdog to its debugging thresholds and starts the perf sampler. The
+  watchdog itself is always armed (a 15s dump-only mode off verbose). The
+  ``WAVES_DEBUG`` env var still force enables verbose for developers.
 * **A shareable export.** :func:`export_bundle` concatenates crash.log and the
   rotating app log, prepends a redacted system header and the current
   breadcrumb trail, re-scrubs every line (idempotent), optionally hashes
@@ -86,6 +87,12 @@ _WATCHDOG_TICK_MS = 2_000
 _WATCHDOG_STALL_TARGET_SEC = 2.5
 _WATCHDOG_DUMP_SEC = _WATCHDOG_STALL_TARGET_SEC + _WATCHDOG_TICK_MS / 1000.0
 _WATCHDOG_WARN_GAP_SEC = 2.5
+
+#: Always-on freeze watchdog: every install arms the dump, verbose or not, at
+#: a threshold far above ordinary jank. Stacks only, no message content, so a
+#: hang report without one names nothing; crash.log rotates at process start
+#: and ships only through an explicit export, and the disk log stays WARNING.
+_WATCHDOG_ALWAYS_DUMP_SEC = 15.0
 
 _SAMPLER_INTERVAL_MS = 5_000
 
@@ -174,27 +181,34 @@ def _install_qt_handler() -> None:
 
 
 class _Watchdog:
-    """GUI-thread freeze detector, active only in verbose mode.
+    """GUI-thread freeze detector: always armed, verbose narrows it.
 
     A QTimer on the GUI thread re-arms ``faulthandler.dump_traceback_later``
     on every tick; each re-arm resets the countdown, so the dump (all-thread
     tracebacks into crash.log) fires only when the event loop is genuinely
-    stuck past the timeout. Stalls that recover before the dump still show as
-    a WARNING with the observed gap.
+    stuck past the timeout. The always-on mode arms only the dump at a high
+    threshold; verbose additionally reports recovered stalls as WARNINGs at a
+    debugging threshold.
     """
 
     def __init__(self) -> None:
         self._timer = None
         self._last_tick = 0.0
+        self._dump_sec = _WATCHDOG_DUMP_SEC
+        self._warn_gap_sec: float | None = _WATCHDOG_WARN_GAP_SEC
 
-    def start(self, crash_file) -> None:
+    def start(self, crash_file, *, dump_sec=_WATCHDOG_DUMP_SEC, warn_gap_sec=_WATCHDOG_WARN_GAP_SEC) -> None:
         if self._timer is not None:
-            return
+            if (dump_sec, warn_gap_sec) == (self._dump_sec, self._warn_gap_sec):
+                return
+            self.stop()
         try:
             from PySide6.QtCore import QTimer
         except Exception:
             return
         self._crash_file = crash_file
+        self._dump_sec = dump_sec
+        self._warn_gap_sec = warn_gap_sec
         self._timer = QTimer()
         self._timer.setInterval(_WATCHDOG_TICK_MS)
         self._timer.timeout.connect(self._tick)
@@ -214,11 +228,11 @@ class _Watchdog:
         now = time.monotonic()
         gap = now - self._last_tick
         self._last_tick = now
-        if gap > _WATCHDOG_WARN_GAP_SEC:
+        if self._warn_gap_sec is not None and gap > self._warn_gap_sec:
             logger.warning("[freeze] event loop blocked ~%.1fs (recovered)", gap)
         with contextlib.suppress(Exception):  # a failed re-arm only skips one tick
             kwargs = {"file": self._crash_file} if self._crash_file else {}
-            faulthandler.dump_traceback_later(_WATCHDOG_DUMP_SEC, repeat=False, **kwargs)
+            faulthandler.dump_traceback_later(self._dump_sec, repeat=False, **kwargs)
 
 
 def _occ_bucket(ratio: float) -> str:
@@ -504,14 +518,13 @@ def install(log_dir: str) -> Path | None:
 def set_verbose(on: bool) -> None:
     """Flip verbose diagnostics at runtime (the Advanced Settings toggle).
 
-    Verbose raises the disk level to DEBUG and runs the freeze watchdog and
-    perf sampler; off returns to WARNING-plus-breadcrumb-dumps. Must be called
-    from the GUI thread (it owns QTimers).
+    Verbose narrows the freeze watchdog to its debugging thresholds, raises
+    the disk level to DEBUG and runs the perf sampler; off returns to
+    WARNING-plus-breadcrumb-dumps while the watchdog stays armed at its
+    always-on threshold. Must be called from the GUI thread (it owns QTimers).
     """
     global _verbose
     on = bool(on) or FORCED_VERBOSE
-    if on == _verbose:
-        return
     _verbose = on
     if _disk_handler is not None:
         _disk_handler.setLevel(logging.DEBUG if on else logging.WARNING)
@@ -520,7 +533,7 @@ def set_verbose(on: bool) -> None:
         _watchdog.start(_crash_file)
         _sampler.start()
     else:
-        _watchdog.stop()
+        _watchdog.start(_crash_file, dump_sec=_WATCHDOG_ALWAYS_DUMP_SEC, warn_gap_sec=None)
         _sampler.stop()
         logger.warning("[init] verbose diagnostics OFF")
 

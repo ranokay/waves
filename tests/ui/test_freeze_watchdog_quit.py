@@ -45,21 +45,44 @@ def _qt_app():
     return QCoreApplication.instance() or QCoreApplication([])
 
 
-def _armed_watchdog(tmp_path, monkeypatch):
+def _armed_watchdog(tmp_path, dump_sec=0.25):
     """Start the real watchdog against a temp crash file, armed to fire fast."""
     _qt_app()
-    monkeypatch.setattr(diagnostics, "_WATCHDOG_DUMP_SEC", 0.25)
     crash = tmp_path / "crash.log"
     handle = crash.open("a")
-    diagnostics._watchdog.start(handle)  # start() ticks once, which arms the dump
+    diagnostics._watchdog.start(handle, dump_sec=dump_sec)  # start() ticks once, which arms the dump
     return crash, handle
 
 
 @pytest.mark.qml
-def test_a_pending_dump_fires_when_the_thread_blocks(tmp_path, monkeypatch):
+def test_set_verbose_off_arms_the_always_on_dump(tmp_path, monkeypatch):
+    """The boot path with default prefs: set_verbose(False) must leave a dump
+    armed at the always-on threshold, not stop the watchdog. Without this the
+    freeze record exists only on verbose installs."""
+    _qt_app()
+    # Short arm for test speed; set_verbose reads the constant at call time.
+    # raising=False so this test fails (not errors) before the constant exists.
+    monkeypatch.setattr(diagnostics, "_WATCHDOG_ALWAYS_DUMP_SEC", 0.25, raising=False)
+    crash = tmp_path / "crash.log"
+    handle = crash.open("a")
+    old_crash = diagnostics._crash_file
+    diagnostics.set_crash_file(handle)
+    try:
+        diagnostics.set_verbose(False)
+        time.sleep(0.6)  # stand in for a frozen event loop
+    finally:
+        diagnostics._watchdog.stop()
+        faulthandler.cancel_dump_traceback_later()
+        diagnostics.set_crash_file(old_crash)
+        handle.close()
+    assert "Timeout" in crash.read_text(), "default prefs left no freeze dump armed"
+
+
+@pytest.mark.qml
+def test_a_pending_dump_fires_when_the_thread_blocks(tmp_path):
     """The control. Without this the test below proves nothing: it would pass
     just as happily if the watchdog never armed anything in the first place."""
-    crash, handle = _armed_watchdog(tmp_path, monkeypatch)
+    crash, handle = _armed_watchdog(tmp_path)
     try:
         time.sleep(0.6)  # stand in for shutdown()'s pool drain
     finally:
@@ -70,8 +93,8 @@ def test_a_pending_dump_fires_when_the_thread_blocks(tmp_path, monkeypatch):
 
 
 @pytest.mark.qml
-def test_stopping_the_watchdog_cancels_the_pending_dump(tmp_path, monkeypatch):
-    crash, handle = _armed_watchdog(tmp_path, monkeypatch)
+def test_stopping_the_watchdog_cancels_the_pending_dump(tmp_path):
+    crash, handle = _armed_watchdog(tmp_path)
     try:
         diagnostics.stop_freeze_watchdog()
         time.sleep(0.6)  # the same block, now with the watchdog stopped

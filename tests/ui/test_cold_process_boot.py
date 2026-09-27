@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -124,3 +125,43 @@ def test_a_cold_launch_boots_persists_and_rehydrates(tmp_path):
     prefs = _load(config / "waves.json")
     assert prefs["search_sort"] == _SEEDED_PREF, "a later boot re-defaulted a saved pref"
     assert (prefs["win_w"], prefs["win_h"]) == _SEEDED_FRAME, "a later boot dropped the saved frame"
+
+
+def test_a_default_install_arms_the_freeze_watchdog(tmp_path):
+    """A non-verbose launch still records a freeze: the always-on watchdog
+    fires exactly one dump into crash.log on a synthetic 20s GUI block, while
+    the disk log stays quiet (WARNING, no sampler, no recovered warnings).
+
+    WHAT THIS FENCES OFF
+    --------------------
+    The watchdog used to start only through the verbose toggle, so a hang on
+    a release build left no stack. This proves the shipped default -- real
+    entry point, default prefs, no WAVES_DEBUG -- arms the 15s dump, and that
+    always-on means dump-only: the sampler stays off and no [freeze] warning
+    accompanies the recovered block.
+    """
+    config = tmp_path / "config" / _CONFIG_DIR
+    config.mkdir(parents=True)
+    env = _isolated_env(tmp_path)
+    env.pop("WAVES_DEBUG", None)  # default prefs: verbose off, disk WARNING
+    env["WAVES_BLOCK_GUI_MS"] = "20000"
+
+    proc = _launch(env)
+    assert proc.returncode == 0, f"the blocked launch did not exit clean:\n{_wrong(proc, tmp_path)}"
+    crash = config / "crash.log"
+    assert crash.exists(), "the launch wrote no crash log at all"
+    dumps = crash.read_text(encoding="utf-8")
+    assert "Timeout (0:00:15)" in dumps, f"no 15s watchdog dump in crash.log:\n{dumps[-800:]}"
+    assert dumps.count("Timeout") == 1, f"the 20s block fired more than one dump:\n{dumps[-800:]}"
+    log_path = config / "waves_dev.log"
+    assert log_path.exists(), "the launch wrote no dev log at all"
+    log = log_path.read_text(encoding="utf-8")
+    assert "[sys]" not in log, "the perf sampler ran on a non-verbose launch"
+    assert "[freeze]" not in log, "always-on is dump-only: a recovered block must not warn"
+    # The disk level itself: every timestamped record is WARNING or above.
+    # Continuation lines (traceback text) carry no level column and are skipped.
+    levels = {
+        m.group(1) for line in log.splitlines() for m in [re.match(r"^\d{2}:\d{2}:\d{2}\.\d{3}  ([A-Z]+)", line)] if m
+    }
+    assert levels, "no parseable log lines at all"
+    assert levels <= {"WARN", "ERROR", "CRITICAL"}, f"disk log carries sub-WARNING records: {sorted(levels)}"

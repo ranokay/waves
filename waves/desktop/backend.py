@@ -5191,7 +5191,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._seed_library_badges()
         self._rebuild_library_index(force_full=self._library.due_for_full_scan(_LIBRARY_DEEP_SWEEP_MS / 1000.0))
         # Now that the pref is known, raise diagnostics to verbose if asked
-        # (starts the freeze watchdog + perf sampler; GUI thread required).
+        # (verbose watchdog thresholds + perf sampler; the watchdog stays
+        # armed at its always-on threshold either way; GUI thread required).
         diagnostics.set_verbose(self._waves_pref_bool("verbose_diagnostics"))
         self._try_token_login()
 

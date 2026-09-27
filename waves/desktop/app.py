@@ -628,6 +628,19 @@ def _install_test_quit(app: QGuiApplication) -> None:
         QTimer.singleShot(int(quit_after_ms), app.quit)
 
 
+def _block_gui_for_test() -> None:
+    """Test seam: freeze the GUI thread before the event loop starts, so the
+    watchdog integration test can prove the always-on dump fires on a real
+    default install. ``WAVES_BLOCK_GUI_MS`` is that freeze; like the quit
+    seam above it only fires when ``WAVES_TEST_SEAM=1`` is also set, so a
+    normal launch never blocks."""
+    if os.environ.get("WAVES_TEST_SEAM") != "1":
+        return
+    block_ms = os.environ.get("WAVES_BLOCK_GUI_MS", "")
+    if block_ms.isdigit() and int(block_ms) > 0:
+        time.sleep(int(block_ms) / 1000.0)
+
+
 def _start_boot_threads() -> None:
     """Every thread the app itself (not the bridge) starts before the reveal.
 
@@ -763,6 +776,7 @@ def waves_activate(tidal: Tidal | None = None) -> int:
         )
 
     _install_test_quit(app)  # WAVES_QUIT_AFTER_BOOT_MS, the integration tests' seam
+    _block_gui_for_test()  # WAVES_BLOCK_GUI_MS, the watchdog integration test's freeze
 
     rc = app.exec()
     if owns_app:
