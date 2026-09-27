@@ -39,173 +39,29 @@ from pathlib import Path
 
 from support.paths import QML_DIR
 
-# Files in scope, and (per file) whether `model.`/`modelData.` denote *remote*
-# (attacker-controllable TIDAL) data.
+# Files in scope: every `.qml` in the directory is scanned, except the
+# LOCAL_ONLY set below. A new component with a dynamic remote text binding
+# fails the guard with no list edit.
 #
-#   Main.qml         renders TIDAL search/library/queue/artist results, so its
-#                    `model.`/`modelData.`/`artistData.`/`db.label` bindings are
-#                    attacker-controllable → remote.
-#   DownloadButton.qml  the download control and its Chooser:
-#                    `db.label` carries a remote artist
-#                    name and the provider chip carries the bridge
-#                    descriptor's name.
-#   Art.qml          the VideoCell closure:
-#   PlayBadge.qml    Art renders every cover (titles/names ride its callers),
-#   BigVideoThumb.qml  BigVideoThumb/VideoCell render a video result's title,
-#   VideoCell.qml    artist, date and spec, ArtistLinks renders remote artist
-#   ArtistLinks.qml  names (and marks them), so all six ride the TIDAL set even
-#   ExplicitMark.qml where the element is local chrome today.
-#   BackToTop.qml    local-chrome components. They render local
-#   DotMatrix.qml    chrome only, so no remote marker matches today; they ride
-#   SnakeField.qml   the TIDAL set anyway so the STRUCTURAL PlainText rule
-#   HoverSwell.qml   (`test_dynamic_text_is_plaintext`) scans their Text elements,
-#   QueueStack.qml   and a future binding there cannot go unchecked.
-#   RetryMark.qml
-#   QueueDrawer.qml  the drawer closure:
-#   LogsDrawer.qml   the queue rows render TIDAL titles/artists/status words,
-#   QualTag.qml      QualTag renders the catalog's tier words, DecryptText's
-#   DecryptText.qml  target is the ledger's status cell, and LogsDrawer/SpecBtn
-#                    are local chrome that ride the set for the same structural
-#                    reason.
+#   Main.qml and every other non-local file render (or may render) TIDAL
+#   search/library/queue/artist results, so dynamic `text:` there must be
+#   PlainText (or a RemoteText, or an audited rich-text spot). Local-chrome
+#   components ride the same set for the same structural reason: a future
+#   binding there cannot go unchecked.
 #   SettingsPage.qml renders only LOCAL data: the app's own settings schema
-#                    (`modelData.label/.group/.desc/.help/.fields`, defined in our
-#                    Python, never from TIDAL) and our own ffmpeg/updater status.
-#                    So `model.`/`modelData.` there are NOT remote. It is still
-#                    scanned so its deliberate StyledText spots stay deliberate and
-#                    can't quietly start binding a TIDAL string.
-#   TrackRow.qml     the TrackRow cluster:
-#   PreviewArt.qml   TrackRow renders search/artist/library rows (remote titles,
-#   QualPick.qml     artists, albums), PreviewArt renders a track's cover and the
-#   QualPickRow.qml  player's words, QualPick/QualPickRow render the catalog's
-#   LibraryTag.qml   tier vocabulary, and LibraryTag/NewTag/PopMeter/
-#   NewTag.qml       TrackPresencePill/StandalonePair/ProviderBadge are local
-#   PopMeter.qml     chrome that ride the set for the same structural reason as
-#   TrackPresencePill.qml  the earlier split files: the PlainText rule scans
-#   StandalonePair.qml     every Text element they hold.
-#   ProviderBadge.qml
-#   AlbumBlock.qml   the LibSourceGroup closure:
-#   AlbumPresencePill.qml  AlbumBlock/TrackPreview render TIDAL
-#   ArtCard.qml      albums and tracks, ArtCard/LibPlaylistRow/ArtistBadges/
-#   ArtistBadges.qml CardCaption render catalog titles, artists, dates and
-#   CardCaption.qml  playlist names, LibSourceGroup renders the saved-shelf
-#   Check.qml        panes, and the rest (Check, DownIcon, FolderBadge,
-#   DownIcon.qml     FolderTile, LibChip, LibList, OdoDigit, PreviewBar, RiseIn,
-#   FolderBadge.qml  RollSwap, ShelfEdgeFades, ShelfWheelRedirect, VideoThumb)
-#   FolderTile.qml   are local chrome that ride the set for the same structural
-#   LibChip.qml      reason.
-#   LibList.qml
-#   LibPlaylistRow.qml
-#   LibSourceGroup.qml
-#   OdoDigit.qml
-#   PreviewBar.qml
-#   RiseIn.qml
-#   RollSwap.qml
-#   ShelfEdgeFades.qml
-#   ShelfWheelRedirect.qml
-#   TrackPreview.qml
-#   VideoThumb.qml
-#   SectionHeader.qml  the SearchProviderGroup closure:
-#   ShowAllLabel.qml   SearchProviderGroup renders the provider
-#   SearchSectionMore.qml  heads and every search section (remote names and
-#   SearchProviderGroup.qml  titles), PlaylistBlock and ArtistSearchCard render
-#   PlaylistBlock.qml  remote playlist/artist rows, and the rest (SectionHeader,
-#   ArtistSearchCard.qml  ShowAllLabel, SearchSectionMore) are local chrome that
-#                      ride the set for the same structural reason.
-#   BrowseSection.qml  the browse closure:
-#   BrowseCard.qml     BrowseSection/BrowseCard/BrowseTile render remote section
-#   BrowseTile.qml     titles, album/track names and genre labels; MosaicCell
-#   MosaicCell.qml     holds no Text of its own but rides the set for the same
-#   LibraryVerdict.qml structural reason as the other split files; the shared
-#                      library verdict holds no Text of its own and rides for
-#                      the same reason.
-#   WelcomePicker.qml  the welcome closure:
-#   WelcomeBanner.qml  WelcomePicker renders provider names/status words and the
-#   PasteGlyph.qml     inline sign-in steps, WelcomeBanner renders the app's own
-#   GateAction.qml     welcome chrome, and the rest (PasteGlyph, GateAction,
-#   DecodeController.qml  DecodeController) are local chrome that ride the set
-#                      for the same structural reason.
-#   WaveMark.qml       the last inline components:
-#   GateCard.qml       LibLibrarySection renders the scanned library
-#   NavTab.qml         (its rows carry file names and provider labels); the
-#   NavCrumbTrail.qml  rest (WaveMark, GateCard, NavTab, NavCrumbTrail,
-#   BrowseScroll.qml   BrowseScroll) are local chrome that ride the set for the
-#   LibLibrarySection.qml  same structural reason as the other split files.
-TIDAL_DATA_FILES = {
-    "Main.qml",
-    "DownloadButton.qml",
-    "Art.qml",
-    "PlayBadge.qml",
-    "BigVideoThumb.qml",
-    "VideoCell.qml",
-    "ArtistLinks.qml",
-    "ExplicitMark.qml",
-    "BackToTop.qml",
-    "DotMatrix.qml",
-    "SnakeField.qml",
-    "HoverSwell.qml",
-    "QueueStack.qml",
-    "RetryMark.qml",
-    "QueueDrawer.qml",
-    "LogsDrawer.qml",
-    "SpecBtn.qml",
-    "QualTag.qml",
-    "DecryptText.qml",
-    "TrackRow.qml",
-    "PreviewArt.qml",
-    "QualPick.qml",
-    "QualPickRow.qml",
-    "LibraryTag.qml",
-    "NewTag.qml",
-    "PopMeter.qml",
-    "TrackPresencePill.qml",
-    "StandalonePair.qml",
-    "ProviderBadge.qml",
-    "AlbumBlock.qml",
-    "AlbumPresencePill.qml",
-    "ArtCard.qml",
-    "ArtistBadges.qml",
-    "CardCaption.qml",
-    "Check.qml",
-    "DownIcon.qml",
-    "FolderBadge.qml",
-    "FolderTile.qml",
-    "LibChip.qml",
-    "LibList.qml",
-    "LibPlaylistRow.qml",
-    "LibSourceGroup.qml",
-    "OdoDigit.qml",
-    "PreviewBar.qml",
-    "RiseIn.qml",
-    "RollSwap.qml",
-    "ShelfEdgeFades.qml",
-    "ShelfWheelRedirect.qml",
-    "TrackPreview.qml",
-    "VideoThumb.qml",
-    "SectionHeader.qml",
-    "ShowAllLabel.qml",
-    "SearchSectionMore.qml",
-    "SearchProviderGroup.qml",
-    "PlaylistBlock.qml",
-    "ArtistSearchCard.qml",
-    "BrowseSection.qml",
-    "BrowseCard.qml",
-    "BrowseTile.qml",
-    "MosaicCell.qml",
-    "LibraryVerdict.qml",
-    "WelcomePicker.qml",
-    "WelcomeBanner.qml",
-    "PasteGlyph.qml",
-    "GateAction.qml",
-    "DecodeController.qml",
-    "WaveMark.qml",
-    "GateCard.qml",
-    "NavTab.qml",
-    "NavCrumbTrail.qml",
-    "BrowseScroll.qml",
-    "LibLibrarySection.qml",
-}
+#   (`modelData.label/.group/.desc/.help/.fields`, defined in our
+#   Python, never from TIDAL) and our own ffmpeg/updater status.
+#   So `model.`/`modelData.` there are NOT remote. It is still
+#   scanned so its deliberate StyledText spots stay deliberate and
+#   can't quietly start binding a TIDAL string.
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
-FILES = sorted(TIDAL_DATA_FILES | LOCAL_ONLY_FILES)
+# RemoteText.qml defines the safe component itself: its PlainText pin is covered
+# by test_remotetext_component_is_plaintext, and its prose comments name the
+# forbidden `RemoteText { textFormat:` pattern as an anti-example, which the
+# instance scanners would match as code. It stays out of the enumeration.
+_GUARD_OWN_FILES = {"RemoteText.qml"}
+FILES = sorted(p.name for p in QML_DIR.glob("*.qml") if p.name not in _GUARD_OWN_FILES)
+TIDAL_DATA_FILES = set(FILES) - LOCAL_ONLY_FILES
 
 # Remote markers: substrings that, inside a `text:` binding *in a TIDAL_DATA_FILE*,
 # mean the rendered string is (or may be) attacker-controllable. We match a DOTTED

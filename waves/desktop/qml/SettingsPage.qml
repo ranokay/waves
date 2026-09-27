@@ -40,6 +40,12 @@ Item {
     refreshSchema()
     syncLibraryMirrors()
   }
+  // Escape for StyledText interpolations: attribution values are app-composed
+  // local data, but escaping at the composition site keeps a future disk- or
+  // network-read value from breaking out of the anchor or injecting markup.
+  function escHtml(s) {
+    return ("" + (s || "")).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+  }
 
   // Waves palette (kept local so this file is self-contained; accent binds to Primitives.Palette)
   readonly property color accent: Primitives.Palette.accent
@@ -1813,7 +1819,7 @@ Item {
                   linkColor: page.cyan
                   color: page.textDim
                   font.pixelSize: 11
-                  text: "Managed builds for " + (page.ff.status.os || "") + "/" + (page.ff.status.arch || "") + " come from <a href=\"" + (page.ff.status.source_url || "") + "\">" + (page.ff.status.source || "") + "</a>" + (page.ff.status.source_license ? " · " + page.ff.status.source_license : "") + ". Thank you to the maintainers. FFmpeg © the FFmpeg project (ffmpeg.org)."
+                  text: "Managed builds for " + escHtml(page.ff.status.os) + "/" + escHtml(page.ff.status.arch) + " come from <a href=\"" + escHtml(page.ff.status.source_url) + "\">" + escHtml(page.ff.status.source) + "</a>" + (page.ff.status.source_license ? " · " + escHtml(page.ff.status.source_license) : "") + ". Thank you to the maintainers. FFmpeg © the FFmpeg project (ffmpeg.org)."
                   onLinkActivated: function (link) {
                     Qt.openUrlExternally(link)
                   }
@@ -2041,7 +2047,7 @@ Item {
                   linkColor: page.cyan
                   color: page.textDim
                   font.pixelSize: 11
-                  text: "Managed builds for " + (page.ff.status.os || "") + "/" + (page.ff.status.arch || "") + " come from <a href=\"" + (page.ff.status.source_url || "") + "\">" + (page.ff.status.source || "") + "</a>" + (page.ff.status.source_license ? " · " + page.ff.status.source_license : "") + ". Thank you to the maintainers. FFmpeg © the FFmpeg project (ffmpeg.org)."
+                  text: "Managed builds for " + escHtml(page.ff.status.os) + "/" + escHtml(page.ff.status.arch) + " come from <a href=\"" + escHtml(page.ff.status.source_url) + "\">" + escHtml(page.ff.status.source) + "</a>" + (page.ff.status.source_license ? " · " + escHtml(page.ff.status.source_license) : "") + ". Thank you to the maintainers. FFmpeg © the FFmpeg project (ffmpeg.org)."
                   onLinkActivated: function (link) {
                     Qt.openUrlExternally(link)
                   }
@@ -2291,7 +2297,7 @@ Item {
                     linkColor: page.cyan
                     color: page.textDim
                     font.pixelSize: 11
-                    text: "<a href=\"" + (page.appUp.releases_url || "") + "\">releases &amp; changelog</a>"
+                    text: "<a href=\"" + escHtml(page.appUp.releases_url) + "\">releases &amp; changelog</a>"
                     onLinkActivated: function (link) {
                       Qt.openUrlExternally(link)
                     }
