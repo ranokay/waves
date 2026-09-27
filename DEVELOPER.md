@@ -127,6 +127,17 @@ mise run app                          # run the app from source
 mise run build                        # Nuitka build -> dist/waves.app
 ```
 
+`mise run build` compiles for the current host only (Nuitka emits
+host-native binaries, no cross-compilation). The full 8-leg matrix in
+`.github/workflows/build-legs.json` is CI-only: macOS Intel + Apple
+silicon, their `_legacy` twins (PySide6 6.9.3 overlay, macOS floor 12.0),
+Linux x64 + arm64, Windows x64 + arm64. A container/OrbStack Linux host
+can build the Linux leg matching its arch, not the macOS/Windows legs.
+
+`tools/prune_static_qml_plugins.py` deletes static-only QML plugin
+directories inside the build venv's PySide6 tree before Nuitka walks it.
+Restore with `uv sync --reinstall-package pyside6`.
+
 ### Test groups
 
 The suite splits into groups with their own commands. Do not run groups

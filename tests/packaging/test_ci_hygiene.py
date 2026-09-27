@@ -96,8 +96,9 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
 
     # One cache per matrix leg (the legacy macOS flavors build different Qt
     # bindings), invalidated by the lockfile and by the build inputs that
-    # change the objects. The fallback prefix spans dependency bumps but not
-    # recipe changes.
+    # change the objects. The workflow file itself is excluded: a comment-only
+    # workflow edit must restore the exact key. The fallback prefix spans
+    # dependency bumps but not recipe changes.
     key = str(with_block["key"])
     restore_keys = str(with_block["restore-keys"])
     for part in (
@@ -105,11 +106,12 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
         "mise.toml",
         "tools/build_waves.sh",
         "pyproject.toml",
-        "release-or-test-build.yml",
         "build-legs.json",
     ):
         assert part in key, part
         assert part in restore_keys, part
+    assert "release-or-test-build.yml" not in key
+    assert "release-or-test-build.yml" not in restore_keys
     assert "uv.lock" in key
     assert key == restore_keys.strip() + "${{ hashFiles('uv.lock') }}"
 
