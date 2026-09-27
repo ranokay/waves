@@ -162,6 +162,49 @@ class TestMetadataUnreadableGuard:
                 m.save()
 
 
+class TestUntaggableFileIsAnItemFailure:
+    """An untagged file is never filed as owned: a failed tag write raises."""
+
+    def test_a_failed_tag_write_raises_untaggable(self, tmp_path):
+        from types import SimpleNamespace
+
+        from waves.download import UntaggableFile
+
+        dl = _make_download()
+        tmp = tmp_path / "t.flac"
+        tmp.write_bytes(b"x")
+        dl.metadata_write = MagicMock(return_value=(False, None, ".lrc", None))
+        media = SimpleNamespace(id="42", name="Song", artists=[], full_name=None)
+        stream = SimpleNamespace(delivered={}, replay_gain={})
+
+        with pytest.raises(UntaggableFile):
+            dl._handle_metadata_and_extras(media, tmp, tmp_path / "d.flac", False, stream)
+
+    def test_retry_after_is_honoured_but_capped(self):
+        session = Download._shared_http()
+        adapter = session.get_adapter("https://cdn.tidal.com/x")
+        retry = adapter.max_retries
+        assert retry.respect_retry_after_header is True
+        assert retry.retry_after_max == Download._RETRY_AFTER_CAP == 10
+
+    def test_size_probe_logs_the_class_never_the_url(self, tmp_path):
+        dl = _make_download()
+        dl.progress = MagicMock()
+        dl.progress.add_task = MagicMock(return_value=0)
+        blew = RuntimeError("https://stream.tidal.com/secret-token-abc")
+        session = MagicMock()
+        head = MagicMock()
+        head.raise_for_status.side_effect = blew
+        session.head.return_value = head
+
+        with patch.object(Download, "_shared_http", classmethod(lambda cls: session)):
+            dl._setup_progress("media", ["https://stream.tidal.com/secret-token-abc"], True)
+
+        logged = " ".join(str(call.args[0]) for call in dl.fn_logger.error.call_args_list)
+        assert "secret-token-abc" not in logged
+        assert "RuntimeError" in logged
+
+
 class TestPlaylistLineEndings:
     """Playlist entries must not use os.linesep (Windows double-translation)."""
 

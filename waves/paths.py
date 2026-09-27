@@ -1322,7 +1322,7 @@ def staging_path(path_destination: pathlib.Path) -> pathlib.Path:
     budget_name: int = FILENAME_LENGTH_MAX - STAGING_NAME_OVERHEAD
     budget_path: int = (
         PATH_LENGTH_MAX
-        - len(os.fsencode(str(path_destination.parent)))
+        - _text_length(str(path_destination.parent))
         - 1  # the separator between parent and name
         - STAGING_NAME_OVERHEAD
     )

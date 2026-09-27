@@ -64,7 +64,8 @@ def test_a_backup_move_that_raises_warns_and_still_reads_as_defaults(tmp_path, m
 def test_a_bak_that_cannot_be_removed_still_reads_as_defaults(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text("[]", encoding="utf-8")
-    # A directory in the .bak slot: os.remove raises OSError on every platform.
+    # A directory in the .bak slot: the old code removed it; the ported
+    # set-aside never deletes an older backup and timestamps instead.
     bak = tmp_path / "settings.json.bak"
     bak.mkdir()
     cfg = _cfg(tmp_path)
@@ -73,5 +74,63 @@ def test_a_bak_that_cannot_be_removed_still_reads_as_defaults(tmp_path):
         assert cfg.read(str(path)) is False
 
     assert [record.levelno for record in records] == [logging.WARNING]
-    assert list(bak.iterdir()) == [], "the corrupt file was not moved into the .bak either"
+    assert list(bak.iterdir()) == [], "the older backup is never deleted or filled"
     assert cfg.data == ModelSettings()
+    assert cfg._keep_file_untouched is False, "the corrupt file was set aside, so defaults may persist"
+    stamped = list(tmp_path.glob("settings.json.*.bak"))
+    assert len(stamped) == 1, "the unusable file is kept under a timestamped backup"
+
+
+def test_a_set_aside_that_fails_leaves_the_file_alone(tmp_path, monkeypatch):
+    path = tmp_path / "settings.json"
+    path.write_text("[]", encoding="utf-8")
+    cfg = _cfg(tmp_path)
+
+    def refuse(src, dst):
+        raise PermissionError("the config folder is not writable")
+
+    monkeypatch.setattr(shutil, "move", refuse)
+
+    with _config_log_records():
+        assert cfg.read(str(path)) is False
+
+    assert cfg._keep_file_untouched is True
+    assert path.read_text(encoding="utf-8") == "[]", "the only copy must not be overwritten"
+    cfg.write_serialized(cfg.data.to_json())
+    assert path.read_text(encoding="utf-8") == "[]", "later saves must not overwrite it either"
+
+
+def test_an_unreadable_file_runs_on_defaults_without_touching_it(tmp_path):
+    path = tmp_path / "settings.json"
+    path.mkdir()  # a folder under that name: open() raises OSError
+    cfg = _cfg(tmp_path)
+
+    with _config_log_records():
+        assert cfg.read(str(path)) is False
+
+    assert cfg._keep_file_untouched is True
+    assert cfg.data == ModelSettings()
+    assert path.is_dir(), "nothing is written over a file that may be fine"
+
+
+def test_unusable_fields_are_dropped_and_the_rest_survives(tmp_path):
+    from waves.config import _drop_unusable_fields
+
+    good = ModelSettings().to_json()
+    import json as _json
+
+    raw = _json.loads(good)
+    raw["skip_existing"] = None  # a null from a hand edit or half-merged sync
+    raw["quality_video"] = "NO_SUCH_TIER"  # a rollback past a newer enum member
+    witness = raw.get("download_delay_sec_min")
+    dropped = _drop_unusable_fields(_json.dumps(raw), ModelSettings)
+    kept = _json.loads(dropped)
+    assert "skip_existing" not in kept
+    assert "quality_video" not in kept
+    assert kept["download_delay_sec_min"] == witness, "every usable field survives"
+
+    path = tmp_path / "settings.json"
+    path.write_text(_json.dumps(raw), encoding="utf-8")
+    cfg = _cfg(tmp_path)
+    assert cfg.read(str(path)) is True
+    assert cfg.data.download_delay_sec_min == witness

@@ -131,3 +131,26 @@ class TestTheM3uNameFollowsTheStandIns:
         written = dl.playlist_populate({directory}, "Live. ", is_album=False, sort_alphabetically=True)
 
         assert [p.name for p in written] == ["_Live.m3u8"]
+
+
+class TestAnotherCopyOfALandedFileIsNotListedTwice:
+    def test_an_upgrade_beside_its_old_copy_plays_once(self, tmp_path):
+        from unittest.mock import patch
+
+        dl = _make_download(tmp_path)
+        directory = tmp_path / "Artist" / "Album"
+        directory.mkdir(parents=True)
+        (directory / "01 One.flac").write_bytes(b"the upgrade")
+        (directory / "01 One.m4a").write_bytes(b"the old 320k copy, never deleted")
+        (directory / "02 Two.flac").write_bytes(b"this run cannot account for it")
+
+        with patch("waves.playlists.AudioExtensionsValid", [".flac", ".m4a"]):
+            written = dl.playlist_populate(
+                {directory},
+                "Album",
+                is_album=True,
+                sort_alphabetically=True,
+                paths_ordered=[directory / "01 One.flac"],
+            )
+
+        assert written[0].read_text(encoding="utf-8").splitlines() == ["01 One.flac", "02 Two.flac"]

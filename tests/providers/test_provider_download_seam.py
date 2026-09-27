@@ -521,6 +521,143 @@ class TestTrackFactsConsumption:
         assert captured["track_replay_gain"] == -8.12
         assert captured["track_peak_amplitude"] == 0.99
 
+    def _facts(self, **over):
+        facts = {
+            "item_id": "tidal:42",
+            "artist_ids": [],
+            "album_artist_ids": [],
+            "artists": [],
+            "album_artists": [],
+            "copyright": "",
+            "isrc": "",
+            "explicit": False,
+            "bpm": 0,
+            "key": None,
+            "key_scale": None,
+            "share_url": "",
+            "volume_num": 1,
+            "track_num": 1,
+            "release_date": "",
+            "release_type": "",
+            "album": {"name": "", "num_tracks": None, "num_volumes": None, "upc": "", "type": ""},
+        }
+        facts.update(over)
+        return facts
+
+    def _recorded(self, tmp_path, monkeypatch, provider, data, track, gains):
+        import waves.download as download_mod
+
+        dl = _make_download(provider, tmp_path)
+        dl.settings = SimpleNamespace(data=data)
+        captured = {}
+
+        class _RecordingMetadata:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                self.save = MagicMock()
+
+        monkeypatch.setattr(download_mod, "Metadata", _RecordingMetadata)
+        dl.metadata_write(track, tmp_path / "s.flac", False, gains)
+        return captured
+
+    def test_an_unknown_volume_count_writes_nothing_not_one(self, tmp_path, monkeypatch):
+        provider = _StubProvider()
+        provider.facts = self._facts()
+        captured = self._recorded(tmp_path, monkeypatch, provider, self._settings(), self._track(), self._no_gains())
+        assert captured["totaldisc"] == 0, "0 is how both containers spell unknown"
+        assert captured["totaltrack"] == 0
+
+    def _no_gains(self):
+        return {
+            "album_replay_gain": None,
+            "album_peak_amplitude": None,
+            "track_replay_gain": None,
+            "track_peak_amplitude": None,
+        }
+
+    def test_lyrics_are_embedded_only_when_asked(self, tmp_path, monkeypatch):
+        provider = _StubProvider()
+        provider.facts = self._facts()
+        data = self._settings()
+        data.lyrics_file = True  # sidecars on ...
+        data.lyrics_embed = False  # ... but embedding off
+        dl_provider = provider
+
+        import waves.download as download_mod
+
+        dl = _make_download(dl_provider, tmp_path)
+        dl.settings = SimpleNamespace(data=data)
+        dl._retrieve_lyrics = MagicMock(return_value=("all", "synced words", "unsynced words"))
+        dl.lyrics_to_file = MagicMock(return_value=None)
+        captured = {}
+
+        class _RecordingMetadata:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                self.save = MagicMock()
+
+        monkeypatch.setattr(download_mod, "Metadata", _RecordingMetadata)
+        dl.metadata_write(self._track(), tmp_path / "s.flac", False, self._no_gains())
+
+        assert captured["lyrics"] == "", "fetched for the sidecar, never embedded"
+        assert captured["lyrics_unsynced"] == ""
+
+    def test_a_borrowed_edition_keeps_only_its_own_track_gain(self, tmp_path, monkeypatch):
+        provider = _StubProvider()
+        provider.facts = self._facts()
+        track = self._track()
+        track.waves_identity_id = "tidal:99"  # a best-of-both member from another edition
+        captured = self._recorded(
+            tmp_path,
+            monkeypatch,
+            provider,
+            self._settings(),
+            track,
+            {
+                "album_replay_gain": -7.89,
+                "album_peak_amplitude": 0.98,
+                "track_replay_gain": -8.12,
+                "track_peak_amplitude": 0.99,
+            },
+        )
+        assert captured["album_replay_gain"] is None, "the source album's gain must not ride along"
+        assert captured["album_peak_amplitude"] is None
+        assert captured["track_replay_gain"] == -8.12, "track gain describes this audio and stays"
+        assert captured["track_peak_amplitude"] == 0.99
+
+    def test_a_failed_cover_fetch_lands_the_track_without_cover_jpg(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace as _NS
+
+        provider = _StubProvider()
+        provider.facts = self._facts(album={"name": "Album", "num_tracks": 1, "num_volumes": 1, "upc": "", "type": ""})
+        data = self._settings()
+        data.metadata_cover_embed = True
+        data.cover_album_file = True
+
+        import waves.download as download_mod
+
+        dl = _make_download(provider, tmp_path)
+        dl.settings = _NS(data=data)
+        dl.provider = provider
+        track = self._track()
+        track.album = _NS(image=lambda dim: "http://cover/1280")
+        dl.cover_data_cached = MagicMock(return_value=b"embedded-bytes")
+        dl._album_cover_file_data = MagicMock(return_value="")  # the file-size fetch failed
+        dl.cover_to_file = MagicMock()
+        captured = {}
+
+        class _RecordingMetadata:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                self.save = MagicMock()
+
+        monkeypatch.setattr(download_mod, "Metadata", _RecordingMetadata)
+        ok, _lyr, _suf, cover = dl.metadata_write(track, tmp_path / "s.flac", True, self._no_gains())
+
+        assert ok is True
+        assert dl.cover_to_file.call_count == 0
+        assert cover is None
+
 
 # ------------------------------------------------------------ the job spec
 
