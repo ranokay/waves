@@ -367,6 +367,24 @@ def root_comparison_key(root: str) -> str:
     return unicodedata.normalize("NFC", norm).casefold()
 
 
+def _normalize_root(root: str) -> str:
+    """A library root ready to probe and walk: expanduser, one trailing
+    separator dropped, except a bare volume root keeps its separator.
+
+    ``"/".rstrip("/")`` is ``""``, which the probe reports as SCAN_UNSET, so
+    an unmodified strip turns a configured filesystem root into "no library".
+    On Windows the same strip turns ``"D:\\"`` into drive-relative ``"D:"``.
+    Empty stays empty so a blank folder still reports unset, never the disk.
+    """
+    expanded = os.path.expanduser(str(root or ""))
+    stripped = expanded.rstrip(os.sep)
+    if not stripped:
+        return expanded
+    if os.sep == "\\" and len(stripped) == 2 and stripped[1] == ":" and expanded != stripped:
+        return stripped + os.sep
+    return stripped
+
+
 def _name_key(name: str) -> str:
     """One folder NAME as a case- and normalisation-folding filesystem compares
     it (the same fold as waves.paths.name_comparison_key, kept local so
@@ -1322,7 +1340,7 @@ class LibraryIndex:
         an SMB share; True or None (unknown, e.g. a direct caller) keeps the
         full-size pools.
         """
-        root = os.path.expanduser(str(root or "")).rstrip(os.sep)
+        root = _normalize_root(root)
         # Sized per scan, before the walk AND before the probe: only a POSITIVE
         # network verdict throttles (unknown keeps full speed, matching the
         # classifier's "confidently local" framing in reverse: only confidence
@@ -1761,7 +1779,7 @@ class LibraryIndex:
         instead of leaving it parked on the scan's last count. The walk events
         count across every folder found so far, so the numbers only climb.
         A badge's one-name probe passes nothing and stays silent."""
-        root = os.path.expanduser(str(root or "")).rstrip(os.sep)
+        root = _normalize_root(root)
         wanted = [str(n) for n in names if str(n or "").strip()]
         if not wanted:
             return 0
@@ -3269,7 +3287,7 @@ class LibraryIndex:
         the new mtime, the refresh it triggers would see stored == current and
         skip re-listing, silently dropping the very change just detected.
         """
-        root = os.path.expanduser(str(root or "")).rstrip(os.sep)
+        root = _normalize_root(root)
         if self._probe_root(root) != SCAN_OK:
             return None
         with self._lock:

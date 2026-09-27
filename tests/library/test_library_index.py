@@ -338,6 +338,59 @@ def test_scan_status_unset_for_blank_root(tmp_path):
     assert idx.last_scan_status == SCAN_UNSET
 
 
+def test_bare_separator_root_reaches_walk_not_unset(tmp_path, monkeypatch):
+    # A bare volume root ("/") is a configured library, not a missing one:
+    # normalization must keep the separator so the probe walks instead of
+    # reporting SCAN_UNSET. Hermetic: the readability probe sees a fake
+    # root, and the walk itself is stubbed so the real disk is never listed.
+    import waves.library.index as li
+
+    idx = _index(tmp_path, {})
+    real_isdir = os.path.isdir
+    real_scandir = os.scandir
+
+    class _EmptyScan:
+        def __enter__(self):
+            return iter(())
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(os.path, "isdir", lambda p: True if p == os.sep else real_isdir(p))
+    monkeypatch.setattr(os, "scandir", lambda p: _EmptyScan() if p == os.sep else real_scandir(p))
+    calls: dict = {}
+
+    def _fake_scan(self, root, *args, **kwargs):
+        calls["root"] = root
+        return 0
+
+    monkeypatch.setattr(li.LibraryIndex, "_refresh_scan", _fake_scan)
+    assert idx.refresh(os.sep) == 0
+    assert idx.last_scan_status == SCAN_OK
+    assert calls.get("root") == os.sep
+
+
+def test_normalize_root_keeps_bare_separator_but_strips_trailing():
+    from waves.library.index import _normalize_root
+
+    assert _normalize_root(os.sep) == os.sep
+    assert _normalize_root("") == ""
+    assert _normalize_root("a" + os.sep) == "a"
+
+
+def test_bare_windows_drive_root_keeps_separator(monkeypatch):
+    import ntpath
+
+    from waves.library.index import _normalize_root
+
+    monkeypatch.setattr(os, "sep", "\\")
+    assert _normalize_root("D:\\") == "D:\\"
+    assert _normalize_root("D:") == "D:"
+    assert _normalize_root("") == ""
+    assert ntpath.join("D:\\", "Album") == "D:\\Album"
+    assert ntpath.join("D:", "Album") == "D:Album"
+
+
 def test_scan_status_missing_for_absent_root(tmp_path):
     lib = _mk(tmp_path, "lib", [])
     d = _mk(tmp_path, "lib/A/Album", ["1.flac"])
