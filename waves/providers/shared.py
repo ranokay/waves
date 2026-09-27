@@ -10,6 +10,13 @@ Qualifying contents: a helper the engine used to own that a provider also
 needs (item identity, refusal parsing, HTTP pooling). Provider-specific
 bodies and engine-only policy stay where they are.
 
+Allowed import direction, one way: providers import the neutral vocabulary
+(``waves.providers.base``), shared metadata helpers (``waves.metadata``) and
+this module -- never the engine (``waves.download``), the bridge, or another
+provider. The engine imports this module and the seam; nothing here imports
+either of them back, which is what keeps every provider importable without
+the engine.
+
 ``waves.download`` re-exports these names (``from waves.providers.shared
 import ...``), so the suite's existing ``waves.download.<name>`` patch and
 import targets keep resolving to the same objects.

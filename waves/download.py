@@ -251,7 +251,7 @@ class RequestsClient:
 
 # TODO: Use pathlib.Path everywhere
 class Download:
-    """Main class for managing downloads, segment merging, file operations, and metadata for TIDAL media."""
+    """Main class for managing downloads, segment merging, file operations, and metadata for provider media."""
 
     _FILE_OPERATION_RETRIES: int = 5
     _FILE_OPERATION_RETRY_DELAY_SEC: float = 0.5
