@@ -134,3 +134,23 @@ def test_unusable_fields_are_dropped_and_the_rest_survives(tmp_path):
     cfg = _cfg(tmp_path)
     assert cfg.read(str(path)) is True
     assert cfg.data.download_delay_sec_min == witness
+
+
+def test_nulls_a_field_allows_survive(tmp_path):
+    import json as _json
+
+    from waves.config import _drop_unusable_fields
+    from waves.model.cfg import Token as ModelToken
+
+    # A logged-out token.json: nulls the model itself declares. Dropping them
+    # would rewrite the file and warn on every launch over a healthy sign-out.
+    raw = {"token_type": None, "access_token": None, "refresh_token": None, "expiry_time": 0.0}
+    assert _drop_unusable_fields(_json.dumps(raw), ModelToken) == _json.dumps(raw)
+
+    path = tmp_path / "settings.json"
+    path.write_text(_json.dumps(raw), encoding="utf-8")
+    cfg = _cfg(tmp_path)
+    cfg.cls_model = ModelToken
+    with _config_log_records() as records:
+        assert cfg.read(str(path)) is True
+    assert [r for r in records if "unusable field" in r.getMessage()] == []

@@ -594,9 +594,12 @@ def api_waits_wake_for(event) -> None:
 
 
 def _field_unusable(hint, value) -> bool:
-    """A null, or a value that is not a member of the enum the field holds."""
+    """A null the field does not allow, or a value that is not a member of the enum the field holds."""
     if value is None:
-        return True
+        # Unlike upstream, this fork's models have legitimate nulls (Token's
+        # logged-out credentials, the quality split's migration carriers):
+        # only a null the field's own type forbids is unusable.
+        return type(None) not in typing.get_args(hint)
     if isinstance(hint, type) and issubclass(hint, enum.Enum):
         try:
             hint(value)
