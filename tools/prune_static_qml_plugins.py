@@ -71,7 +71,10 @@ def main() -> int:
         return 0
 
     pruned = 0
-    for directory in static_only_dirs(root):
+    targets = static_only_dirs(root)
+    if targets:
+        print("Warning: deleting static-only QML dirs inside the build venv's PySide6 tree.")
+    for directory in targets:
         print(f"Pruning static-only QML module: {directory.relative_to(root)}")
         shutil.rmtree(directory)
         pruned += 1
