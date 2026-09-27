@@ -17,11 +17,13 @@ from __future__ import annotations
 import os
 from threading import Event, Lock, local
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge, _stream_quality
 from waves.desktop.job_runtime import JobRuntime
 from waves.library.ownership import OwnershipStore
+from waves.providers import TidalProvider
 
 
 class _Signal:
@@ -158,6 +160,9 @@ def _new_tracked():
     # ownership tests exercise the ownership gate alone.
     td._library_claim = None
     td._force_redownload = False
+    # The URL hook keys video-vs-track off the provider answer now; a real
+    # provider over a stub session answers it with no I/O.
+    td.provider = TidalProvider(MagicMock())
     return td
 
 

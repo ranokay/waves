@@ -7,6 +7,7 @@ most complete edition, presenting them all under the complete edition's identity
 
 import threading
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from tidalapi.media import Quality
@@ -658,6 +659,9 @@ def _gate_dl(records: dict, tmp_path) -> _TrackedDownload:
     dl.settings = _GateSettings()
     dl.path_base = str(tmp_path)
     dl._force_redownload = False
+    # The destination probe keys video-vs-track off the provider answer now;
+    # a real provider over a stub session answers it with no I/O.
+    dl.provider = TidalProvider(MagicMock())
     return dl
 
 

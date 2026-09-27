@@ -105,7 +105,7 @@ from typing import NamedTuple
 # store and the bridge -- none of which may import a provider package. This
 # interface speaks it in its signatures; implementations and callers import
 # the ladder (and its rank/fold helpers) from waves.constants directly.
-from waves.constants import QualityTier
+from waves.constants import MediaType, QualityTier
 
 logger = logging.getLogger(__name__)
 
@@ -431,6 +431,13 @@ class StreamInfo:
     # can replay). The pipeline stages this file instead of fetching ``urls``;
     # empty on providers whose deliveries are fetched as streams.
     local_file: str = ""
+    # Which item kind this delivery describes. The pipeline keys its
+    # track-vs-video behavior off this field -- never off the provider SDK's
+    # own types -- so a delivery's kind always comes from the provider answer.
+    # The default is TRACK: every existing constructor (track resolves,
+    # previews, the no-stream answer) describes a track delivery or no
+    # delivery at all; only a video resolve stamps VIDEO.
+    media_kind: MediaType = MediaType.TRACK
 
 
 class DownloadAdapter:
@@ -773,6 +780,16 @@ class Provider(ABC):
 
     # ----- per-track delivery
 
+    def media_kind(self, obj) -> MediaType | None:
+        """Which downloadable kind ``obj`` is, or None when it is not one.
+
+        The pipeline keys its track-vs-video behavior off this answer (and
+        off ``StreamInfo.media_kind`` once a stream is resolved) -- never off
+        a provider SDK's own types, which only the provider that speaks them
+        may touch. A collection or an unknown object answers None.
+        """
+        return None
+
     @abstractmethod
     def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
         """Resolve a track to a streamable delivery at the requested tier and
@@ -784,6 +801,18 @@ class Provider(ABC):
         the stored defaults). The per-job request never travels as shared
         mutable state.
         """
+
+    def resolve_video(self, video, file_extension: str) -> StreamInfo | None:
+        """Resolve a video to an extension-only delivery, or None when the
+        provider cannot serve it.
+
+        Videos carry no per-job tier or Version (the pipeline picks the
+        variant at URL-fetch time); the caller passes the extension it chose
+        from its own settings, and the provider answers whether its session
+        can serve a video at all. The inherited default is None: a provider
+        that serves no videos needs no override.
+        """
+        return None
 
     @abstractmethod
     def fetch_lyrics(self, track) -> tuple[str, str]:

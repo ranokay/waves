@@ -27,7 +27,7 @@ from tidalapi.media import Track
 from waves.desktop import backend
 from waves.desktop.job_runtime import JobRuntime
 from waves.download import Download
-from waves.providers import StreamInfo
+from waves.providers import StreamInfo, TidalProvider
 
 
 def _tracked(relay):
@@ -216,6 +216,9 @@ def _run_item(tmp_path, *, success):
     dl = Download.__new__(Download)
     dl.event_abort = Event()
     dl.settings = SimpleNamespace(data=SimpleNamespace(default_audio_type="both"))
+    # The item gate keys downloadable-vs-unknown off the provider answer now;
+    # a real provider over a stub session answers it with no I/O.
+    dl.provider = TidalProvider(MagicMock())
     media = Track.__new__(Track)
     media.audio_modes = None
     calls: list[str] = []

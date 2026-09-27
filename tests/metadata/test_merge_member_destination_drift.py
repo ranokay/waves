@@ -43,6 +43,7 @@ from tidalapi import Album, Track
 
 from waves.desktop.backend import _as_member_of, _TrackedDownload
 from waves.download import Download
+from waves.providers import TidalProvider
 
 _TITLE = "The Better Life : Dead Love"  # the colon is stripped on disk
 _LEGACY_DIR = "[2011] The Better Life  Dead Love"  # doubled space, pre-0.1.17
@@ -112,6 +113,9 @@ def _gate(base: pathlib.Path, records: dict) -> _TrackedDownload:
     dl.path_base = str(base)
     dl.skip_existing = True
     dl._force_redownload = False
+    # The destination probe keys video-vs-track off the provider answer now;
+    # a real provider over a stub session answers it with no I/O.
+    dl.provider = TidalProvider(MagicMock())
     return dl
 
 

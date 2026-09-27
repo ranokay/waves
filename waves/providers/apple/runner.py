@@ -266,9 +266,9 @@ def _data(hooks: AppleJobHooks) -> Any:
 
 
 def _pooled_session():
-    """The engine's shared keep-alive HTTP session (lazy: pulls no engine at
+    """The shared keep-alive HTTP session (lazy: pulls no engine at
     import time)."""
-    from waves.download import pooled_session
+    from waves.providers.shared import pooled_session
 
     return pooled_session()
 
