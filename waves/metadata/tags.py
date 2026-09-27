@@ -6,7 +6,6 @@ import mutagen.mp4
 from mutagen import flac, id3, mp4
 from mutagen.id3 import (
     APIC,
-    SYLT,
     TALB,
     TBPM,
     TCOM,
@@ -681,11 +680,12 @@ class Metadata:
         self._set_mp3_custom_tags()
         self.m.tags.add(TRCK(encoding=3, text=str(self.tracknumber)))
         self.m.tags.add(TDRC(encoding=3, text=self.date))
-        if self.lyrics:
-            # SYLT is a list of (text, timestamp) pairs; handed a plain string
-            # mutagen raises while rendering, which would abort the whole save.
-            self.m.tags.add(SYLT(encoding=3, desc="text", text=[(self.lyrics, 0)]))
-        self.m.tags.add(USLT(encoding=3, desc="text", text=self.lyrics_unsynced))
+        # No SYLT: every synced source here is LRC text, and one
+        # (whole-blob, 0) entry reads as a single 0:00 line of raw markup.
+        # The LRC rides the unsynchronized frame instead (the text-field
+        # shape the other containers already use), falling back to it only
+        # when no unsynced text exists.
+        self.m.tags.add(USLT(encoding=3, desc="text", text=self.lyrics_unsynced or self.lyrics))
         # A URL frame has one field, "url", and mutagen silently discards every
         # other keyword: WOAS(text=...) wrote an empty URL and dropped its value.
         self.m.tags.add(WOAS(url=self.url_share))
