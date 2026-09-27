@@ -612,23 +612,24 @@ class FfmpegManager:
         The martin-riedl macOS builds are signed + notarized; we verify that
         rather than laundering an unverified download past Gatekeeper. If the
         platform's own tools confirm the signature (``codesign --verify`` and,
-        when available, ``spctl --assess``) we trust it; otherwise we leave the
-        staged binary in place and let the smoke test / caller decide, but we
-        never ad-hoc re-sign or strip quarantine to force it to run.
+        when available, ``spctl --assess``) we trust it; otherwise promotion is
+        refused (fail-closed) so an unverified binary never replaces the
+        working copy. We never ad-hoc re-sign or strip quarantine to force it
+        to run.
         """
         p = str(path)
         verify = subprocess.run(
             ["codesign", "--verify", "--deep", "--strict", p], capture_output=True, text=True, check=False
         )
         if verify.returncode != 0:
-            # Not fatal here, the smoke test still gates promotion, but record
-            # that the signature could not be verified so we make no false trust
-            # claim. We deliberately do NOT re-sign to make it "work".
-            logger.warning(
-                "ffmpeg-manager: could not verify code signature of downloaded binary (%s)",
-                (verify.stderr or "").strip() or "codesign returned non-zero",
+            # Fail-closed: a signature we cannot verify never promotes. The
+            # caller leaves the existing binary in place. We deliberately do
+            # NOT re-sign to make it "work".
+            detail = (verify.stderr or "").strip() or "codesign returned non-zero"
+            raise ValueError(
+                "refusing to install FFmpeg: macOS code signature verification failed "
+                f"({detail}), keeping the existing binary"
             )
-            return
         # Gatekeeper assessment is best-effort: `spctl` may be unavailable or
         # decline in headless/CI contexts; a failure here is logged, not fatal.
         subprocess.run(["spctl", "--assess", "--type", "execute", p], capture_output=True, check=False)
