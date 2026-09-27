@@ -17,7 +17,7 @@ A denylist of "which bindings are remote" is fragile: it leaks via bare
 component props, bracket access (``model['x']``), local aliases, and
 ``RichText``. So the guard is STRUCTURAL, with ZERO false negatives by design:
 
-* ``test_dynamic_text_is_plaintext``: in Main.qml (the TIDAL render surface) EVERY
+* ``test_dynamic_text_is_plaintext``: in every scanned file, EVERY
   ``Text``/``Label`` whose ``text:`` is a *dynamic* (non-literal) expression must be
   ``PlainText`` (or a ``RemoteText``, or an audited rich-text spot). No
   remote-vs-local guess, so a brand-new remote binding can't beacon however it is
@@ -39,9 +39,10 @@ from pathlib import Path
 
 from support.paths import QML_DIR
 
-# Files in scope: every `.qml` in the directory is scanned, except the
+# Files in scope: every `.qml` under the directory tree is scanned, except the
 # LOCAL_ONLY set below. A new component with a dynamic remote text binding
-# fails the guard with no list edit.
+# fails the guard with no list edit. Paths are relative to the QML directory,
+# so a future subdirectory file is covered by construction.
 #
 #   Main.qml and every other non-local file render (or may render) TIDAL
 #   search/library/queue/artist results, so dynamic `text:` there must be
@@ -60,7 +61,7 @@ LOCAL_ONLY_FILES = {"SettingsPage.qml"}
 # forbidden `RemoteText { textFormat:` pattern as an anti-example, which the
 # instance scanners would match as code. It stays out of the enumeration.
 _GUARD_OWN_FILES = {"RemoteText.qml"}
-FILES = sorted(p.name for p in QML_DIR.glob("*.qml") if p.name not in _GUARD_OWN_FILES)
+FILES = sorted(p.relative_to(QML_DIR).as_posix() for p in QML_DIR.rglob("*.qml") if p.name not in _GUARD_OWN_FILES)
 TIDAL_DATA_FILES = set(FILES) - LOCAL_ONLY_FILES
 
 # Remote markers: substrings that, inside a `text:` binding *in a TIDAL_DATA_FILE*,
