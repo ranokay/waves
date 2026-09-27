@@ -126,13 +126,13 @@ def _run_scenario() -> int:
     return _EXIT_OK
 
 
-# The four components no test referenced (QML-08): the directory sweep covers
-# them, and this pin fails if anyone carves them back out of the sweep.
+# Pin the sweep: these components must stay covered by the directory
+# enumeration below; the membership assertion fails if one drops out.
 _UNREFERENCED = ("DotBar.qml", "ExpandChevron.qml", "FfmpegManager.qml", "LedBar.qml")
 
 
 def test_all_qml_components_compile():
-    """Every top-level QML file compiles; a syntax error anywhere fails this.
+    """Every QML file under QML_DIR compiles; a syntax error anywhere fails this.
 
     Compile-only (no create()): several components carry `required` properties
     whose absence fails instantiation, and bindings against the Main.qml host
@@ -140,7 +140,7 @@ def test_all_qml_components_compile():
     The Main.qml warning assertion above stays the strict one.
     Runs in a SUBPROCESS like the Main.qml case: the bridge installs
     process-global handlers that must not leak into the suite."""
-    names = sorted(p.name for p in QML_DIR.glob("*.qml"))
+    names = sorted(p.name for p in QML_DIR.rglob("*.qml"))
     for pinned in _UNREFERENCED:
         assert pinned in names, f"{pinned} must stay in the directory sweep"
     env = dict(os.environ)
@@ -196,7 +196,7 @@ def _run_all_components() -> int:
     engine.rootContext().setContextProperty("monoFont", "JetBrains Mono")
     engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
 
-    files = sorted(QML_DIR.glob("*.qml"))
+    files = sorted(QML_DIR.rglob("*.qml"))
     if not files:
         print(f"no QML files in {QML_DIR}", file=sys.stderr)
         return _EXIT_BROKEN
