@@ -618,8 +618,11 @@ def _install_test_quit(app: QGuiApplication) -> None:
     Integration tests need the real entry point (settings load, migrations,
     the geometry restore, the quit flush) to run in a subprocess and exit
     cleanly. ``WAVES_QUIT_AFTER_BOOT_MS`` is that request, timed from
-    ``run()`` so the boot sequence has certainly run; a real launch never
-    sets it."""
+    ``run()`` so the boot sequence has certainly run; it only fires when
+    ``WAVES_TEST_SEAM=1`` is also set, so a normal launch inheriting the
+    delay never quits itself."""
+    if os.environ.get("WAVES_TEST_SEAM") != "1":
+        return
     quit_after_ms = os.environ.get("WAVES_QUIT_AFTER_BOOT_MS", "")
     if quit_after_ms.isdigit() and int(quit_after_ms) > 0:
         QTimer.singleShot(int(quit_after_ms), app.quit)
