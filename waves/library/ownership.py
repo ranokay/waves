@@ -416,6 +416,7 @@ class OwnershipStore:
                        PRIMARY KEY (track_id, path)
                    )""")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_downloads_track ON downloads(track_id)")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_downloads_recorded ON downloads(recorded_at DESC)")
             self._conn.execute("""CREATE TABLE IF NOT EXISTS collection_members (
                        collection_id TEXT    NOT NULL,
                        track_id      TEXT    NOT NULL,

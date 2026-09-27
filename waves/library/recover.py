@@ -38,10 +38,12 @@ def recover_untrusted(
 
     The names go to probe_folders as their own spellings, because they came
     off the disk: no naming-settings guesswork is needed for a name the
-    filesystem just handed over. That call stats each one under every flagged
-    folder, skipping the ones the cache already holds, walks the subtree of
-    each hit and writes it under the flagged folder as parent, which is
-    exactly what the scan would have done had the listing named them.
+    filesystem just handed over. That call stats each name only under the
+    parent whose fresh listing named it (one network stat per name, not one
+    per parent per name), skipping the ones the cache already holds, walks
+    the subtree of each hit and writes it under the flagged folder as parent,
+    which is exactly what the scan would have done had the listing named
+    them.
     ``on_progress`` is the scan's own progress sink: a share's worth of
     recovered artists is minutes of reading, and the bar must keep moving
     through it."""
@@ -73,6 +75,7 @@ def recover_untrusted(
             candidates=lambda name: (name,),
             timeout=lock_wait,
             on_progress=on_progress,
+            names_by_parent=recovered,
         )
     except Exception:
         logger.debug("Recovering an untrusted listing failed; leaving the scan as it was", exc_info=True)

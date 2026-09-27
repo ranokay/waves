@@ -147,6 +147,20 @@ def test_a_mount_point_a_crash_left_behind_is_swept(tmp_path):
     assert smb_relist.sweep_stale(str(tmp_path), unmount=lambda p: True) == 0
 
 
+def test_a_mount_point_whose_process_is_still_alive_is_left_alone(tmp_path):
+    # A second Waves instance's private mount must survive our sweep: only
+    # the crashed (pid gone) point is unmounted. (macOS path is autouse.)
+    base = smb_relist.mounts_dir(str(tmp_path))
+    live = os.path.join(base, f"pid-{os.getpid()}")
+    dead = os.path.join(base, "pid-999999999")
+    os.makedirs(live)
+    os.makedirs(dead)
+    unmounted = []
+    assert smb_relist.sweep_stale(str(tmp_path), unmount=lambda p: unmounted.append(p) or True) == 1
+    assert unmounted == [dead]
+    assert os.path.isdir(live) and not os.path.exists(dead)
+
+
 # ---- relist_folders ------------------------------------------------------------
 
 

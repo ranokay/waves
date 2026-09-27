@@ -305,10 +305,33 @@ def _drop_point(point: str) -> None:
             logger.debug("could not remove a private mount point (%s)", type(exc).__name__)
 
 
+def _pid_alive(name: str) -> bool:
+    """Whether a mount-point directory belongs to a still-running process.
+
+    Points are named ``pid-<n>`` after the process that made them. A name
+    that does not parse as ours reads as dead: the directory only ever holds
+    our points, so an odd name is a leftover, not someone else's mount. An
+    unprovable pid (an unexpected kill error) reads as alive: sweeping it
+    could unmount a live second instance's private mount.
+    """
+    pid_text = name.removeprefix("pid-")
+    if not pid_text.isdigit() or pid_text == name:
+        return False
+    try:
+        os.kill(int(pid_text), 0)
+    except ProcessLookupError:
+        return False
+    except OSError as exc:
+        logger.debug("leaving %s alone (could not prove pid %s dead: %s)", name, pid_text, type(exc).__name__)
+        return True
+    return True
+
+
 def sweep_stale(config_dir: str, *, unmount: Callable[[str], bool] | None = None) -> int:
     """Unmount and remove mount points a previous run left behind (a crash, a
     force quit, a power cut). Returns how many were cleaned up. Safe to call at
-    every startup: with nothing left behind it does nothing."""
+    every startup: with nothing left behind it does nothing. A point whose
+    process is still alive (a live second instance) is left alone."""
     if not _on_macos():
         return 0
     unmount = unmount or unmount_share
@@ -321,6 +344,8 @@ def sweep_stale(config_dir: str, *, unmount: Callable[[str], bool] | None = None
     for name in leftovers:
         point = os.path.join(base, name)
         if not os.path.isdir(point):
+            continue
+        if _pid_alive(name):
             continue
         unmount(point)
         _drop_point(point)
