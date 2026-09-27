@@ -40,6 +40,7 @@ import os
 import pathlib
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from tidalapi import Album, Track
@@ -47,6 +48,7 @@ from tidalapi import Album, Track
 from waves.desktop.backend import _as_member_of, _TrackedDownload
 from waves.download import Download
 from waves.paths import format_path_media, path_file_sanitize
+from waves.providers import TidalProvider
 
 _ARTIST = "Bright Eyes"
 # 300 characters: over the 255-byte component cap on its own, and the default
@@ -115,6 +117,9 @@ def _gate(base: pathlib.Path, records: dict) -> _TrackedDownload:
     dl.path_base = str(base)
     dl.skip_existing = True
     dl._force_redownload = False
+    # The destination probe keys video-vs-track off the provider answer now;
+    # a real provider over a stub session answers it with no I/O.
+    dl.provider = TidalProvider(MagicMock())
     return dl
 
 
@@ -169,6 +174,9 @@ def test_premise_the_engine_writes_the_sanitized_path(tmp_path):
     engine = Download.__new__(Download)
     engine.settings = _Settings()
     engine.path_base = str(tmp_path)
+    # The destination probe keys video-vs-track off the provider answer now;
+    # a real provider over a stub session answers it with no I/O.
+    engine.provider = TidalProvider(MagicMock())
     dst, _ext = engine._destination_path(member, _TEMPLATE, None)
     assert _same(dst, _written(tmp_path, member)), "the engine's destination is not the sanitized recipe"
 

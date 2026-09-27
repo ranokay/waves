@@ -1683,7 +1683,7 @@ class _TrackedDownload(Download):
         raised it and to no other. A refused COLLECTION never reaches item()
         (the engine returns before the track loop), so it is recorded on the
         job instead."""
-        if isinstance(media, Track | Video):
+        if self.provider.media_kind(media) in (MediaType.TRACK, MediaType.VIDEO):
             self._tls.unavailable = True
         else:
             self.list_unavailable = True
@@ -1788,7 +1788,7 @@ class _TrackedDownload(Download):
         tier stays None: TIDAL reports no delivered quality for videos."""
         urls = super()._get_media_urls(media, stream_info)
         mid = getattr(media, "id", None)
-        if urls and mid is not None and isinstance(media, Video):
+        if urls and mid is not None and self.provider.media_kind(media) == MediaType.VIDEO:
             with self._delivered_lock:
                 self._delivered[self._delivered_key(media)] = {"tier": None}
         return urls

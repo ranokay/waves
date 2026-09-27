@@ -22,13 +22,12 @@ from concurrent import futures
 from threading import Event, Lock
 from uuid import uuid4
 
-import certifi
 import m3u8
 import requests
 from ffmpeg import FFmpeg
 from mutagen import MutagenError
 from mutagen.flac import FLAC
-from requests.adapters import HTTPAdapter, Retry
+from requests.adapters import Retry
 from requests.exceptions import HTTPError
 from tidalapi import Album, Mix, Playlist, Session, Track, UserPlaylist, Video
 from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvailable
@@ -38,7 +37,6 @@ from tidalapi.media import (
     Quality,
     VideoExtensions,
 )
-from urllib3.util.ssl_ import create_urllib3_context
 
 from waves.config import ApiCallStopped, Settings, Tidal, api_waits_wake_for, tidal_quality_for_tier
 from waves.constants import (
@@ -92,6 +90,19 @@ from waves.playlists import populate_playlists
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress, TaskID
 from waves.providers.base import AudioType, Provider, Refusal, RefusalKind, StreamInfo
+
+# Provider-shared implementation this engine used to own (identity, refusal
+# parsing, HTTP pooling). Imported for use here and re-exported by name, so
+# the suite's existing ``waves.download.<name>`` targets keep resolving.
+from waves.providers.shared import (
+    _artist_ids,
+    _waves_item_id,
+    _waves_owned_ids,
+    pooled_session,
+)
+from waves.providers.shared import (
+    _tidal_refuses_asset as _tidal_refuses_asset,
+)
 from waves.providers.tidal_client import instantiate_media, items_results_all
 from waves.redaction import content as log_content
 
@@ -106,51 +117,6 @@ logger = logging.getLogger("waves.download")
 # defaults; limit() records each job's real cap when its pool is built.
 SEGMENT_GAUGE = PoolGauge(10)
 COLLECTION_GAUGE = PoolGauge(3)
-
-# TIDAL's subStatus family for "your session, not the content": 11001 user not
-# authorised, 11002 invalid token, 11003 expired token. A 401 carrying one of
-# these is a login problem and must never be read as "this track is gone".
-_TIDAL_SUBSTATUS_AUTH_MIN: int = 11000
-_TIDAL_SUBSTATUS_AUTH_MAX: int = 11999
-
-
-def _tidal_refuses_asset(error: HTTPError) -> str | None:
-    """TIDAL's own words when it refuses to serve an item, or None if this is
-    something else (a network hiccup, a dead session, a server error).
-
-    The playback-info endpoint answers a track the account cannot play with a
-    401 or 403 whose body says why (observed: ``subStatus 4005 "Asset is not
-    ready for playback"`` for tracks greyed out in the official apps). The
-    same 401 status also announces an expired or invalid token, so the body is
-    the only way to tell "TIDAL will not give you this track" from "TIDAL does
-    not know who you are"; tidalapi already retried the expired-token case
-    once with a refresh, so what reaches here is whatever survived that.
-
-    Args:
-        error (HTTPError): The requests error raised for the playback request.
-
-    Returns:
-        str | None: TIDAL's user message (or a generic one) when this is a
-            refusal of the asset itself, None otherwise.
-    """
-    response = getattr(error, "response", None)
-    status = getattr(response, "status_code", None)
-    if status not in (401, 403):
-        return None
-    body: dict = {}
-    try:
-        parsed = response.json()
-        if isinstance(parsed, dict):
-            body = parsed
-    except Exception:  # noqa: S110  # a body that is not JSON is still a refusal
-        pass
-    message = str(body.get("userMessage") or "")
-    if message.startswith("The token has expired"):
-        return None
-    sub_status = body.get("subStatus")
-    if isinstance(sub_status, int) and _TIDAL_SUBSTATUS_AUTH_MIN <= sub_status <= _TIDAL_SUBSTATUS_AUTH_MAX:
-        return None
-    return message or f"HTTP {status}"
 
 
 class UntaggableFile(OSError):
@@ -214,44 +180,6 @@ def _os_error_text(error: BaseException | None) -> str:
     return f"{head}: {' -> '.join(names)}" if names else head
 
 
-def _waves_item_id(media) -> str:
-    """The id a downloaded file is filed under, which is not always ``media.id``.
-
-    A Waves 'best of both' merge fetches a track from one edition and lands it in
-    another edition's folder, so it carries ``waves_identity_id``: the id the
-    whole app (queue rows, ownership, collection membership) keys that download
-    by, while ``media.id`` stays the source stream being fetched. Stamping the
-    source id into the file meant a later plain job over the same folder asked
-    about the identity id, failed to recognise Waves' own file, and wrote a
-    ``_01`` duplicate beside it instead of replacing it.
-
-    Args:
-        media: The track or video being written.
-
-    Returns:
-        str: The identity id when the item carries one, else its own id, else "".
-    """
-    return str(getattr(media, "waves_identity_id", "") or getattr(media, "id", "") or "")
-
-
-def _artist_ids(media) -> list[str]:
-    """TIDAL ids for the artists credited on ``media``, in credited order.
-
-    The identity half of the artist NAMES written beside them. Two artists can
-    share a name, so a file tagged only with the name cannot later say which of
-    them it belongs to (and neither can the folder it sits in). Id-less stubs
-    are dropped rather than written blank: a missing id means unknown, and
-    unknown must never read as somebody else.
-
-    Args:
-        media: The track or video being written.
-
-    Returns:
-        list[str]: The credited artists' ids, possibly empty.
-    """
-    return [str(a.id) for a in getattr(media, "artists", None) or [] if getattr(a, "id", None)]
-
-
 def clean_album_artists(names: list) -> list:
     """Reduce an album-artist list to only the primary (first) artist.
 
@@ -263,27 +191,6 @@ def clean_album_artists(names: list) -> list:
     a different binding and are never collapsed.
     """
     return [names[0]] if names else names
-
-
-def _waves_owned_ids(media) -> set[str]:
-    """Every item id a file on disk may legitimately carry for ``media``.
-
-    Normally just its own id. A best-of-both member is filed under the identity
-    edition (see :func:`_waves_item_id`), but every build up to v0.1.21 wrote the
-    SOURCE edition's id into that same file, so libraries assembled by an older
-    Waves are full of merged tracks tagged the other way. Recognising both means
-    a forced re-save replaces its own file, and re-tags it with the identity id
-    on the way, instead of leaving a numbered duplicate beside it that the app
-    will never delete.
-
-    Args:
-        media: The track or video being written.
-
-    Returns:
-        set[str]: The ids this download may treat as its own copy.
-    """
-    ids = (getattr(media, "waves_identity_id", ""), getattr(media, "id", ""))
-    return {str(i) for i in ids if i}
 
 
 def _file_audio_mode_is_atmos(path_file: pathlib.Path) -> bool | None:
@@ -340,63 +247,6 @@ class RequestsClient:
         o.raise_for_status()
 
         return o.text, o.url
-
-
-class _SharedContextAdapter(HTTPAdapter):
-    """HTTPAdapter that gives every pooled connection one shared, preloaded
-    SSLContext.
-
-    requests' default cert_verify hands urllib3 a CA bundle *path* per
-    connection, and urllib3 then builds a fresh SSLContext and re-parses the
-    whole certifi PEM corpus (~150 certificates) on every TLS connect. That
-    work runs GIL-free in OpenSSL, so a burst of cold connections saturates
-    every core (the CPU spike at download start, worst on modest Windows
-    boxes). Loading certifi once and sharing the context leaves only the
-    handshake itself per connection, which is a few milliseconds.
-    """
-
-    def __init__(self, ssl_context, **kwargs) -> None:
-        self._ssl_context = ssl_context
-        super().__init__(**kwargs)
-
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        pool_kwargs["ssl_context"] = self._ssl_context
-        return super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
-
-    def cert_verify(self, conn, url, verify, cert) -> None:
-        # For the default verify=True case, do NOT set conn.ca_certs: that is
-        # what triggers urllib3's per-connection load_verify_locations(). The
-        # shared context already carries certifi and CERT_REQUIRED, so
-        # verification stays fully on. Custom verify paths or client certs
-        # fall back to the stock (slower, per-connection) behaviour.
-        if verify is True and cert is None:
-            return
-        super().cert_verify(conn, url, verify, cert)
-
-
-def pooled_session(
-    pool_connections: int = 10,
-    pool_maxsize: int = 10,
-    pool_block: bool = False,
-    max_retries: Retry | int = 0,
-) -> requests.Session:
-    """Build a keep-alive session whose connections share one preloaded
-    SSLContext (see _SharedContextAdapter). Callers own the pool and retry
-    policy; the download engine's process-wide instance lives in
-    Download._shared_http()."""
-    ssl_context = create_urllib3_context()
-    ssl_context.load_verify_locations(certifi.where())
-    session = requests.Session()
-    adapter = _SharedContextAdapter(
-        ssl_context,
-        pool_connections=pool_connections,
-        pool_maxsize=pool_maxsize,
-        pool_block=pool_block,
-        max_retries=max_retries,
-    )
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
 
 
 # TODO: Use pathlib.Path everywhere
@@ -728,12 +578,15 @@ class Download:
         Returns:
             list[str]: List of URLs for the media segments.
         """
-        # Get urls for media.
-        if isinstance(media, Track):
+        # Get urls for media. The kind comes from the provider's answer --
+        # the resolved StreamInfo when there is one, else the provider's own
+        # reading of the object -- never from the SDK types behind it.
+        kind = stream_info.media_kind if stream_info is not None else self.provider.media_kind(media)
+        if kind == MediaType.TRACK:
             if stream_info is None:
                 return []
             return list(stream_info.urls)
-        elif isinstance(media, Video):
+        elif kind == MediaType.VIDEO:
             quality_video = self.settings.data.quality_video
             m3u8_variant: m3u8.M3U8 = m3u8.load(media.get_url(), http_client=RequestsClient())
             # Find the desired video resolution or the next best one.
@@ -998,7 +851,7 @@ class Download:
                 self.fn_logger.error(
                     f"Something went wrong while writing to {log_content(media.name)}. File is corrupt!"
                 )
-            elif isinstance(media, Track) and stream_info is not None and stream_info.encrypted:
+            elif stream_info is not None and stream_info.media_kind == MediaType.TRACK and stream_info.encrypted:
                 # Waves does not process encrypted streams. TIDAL serves plain
                 # MPEG-DASH for every quality Waves requests, so this branch is
                 # not reached in normal operation. Should a stream ever arrive
@@ -1357,7 +1210,7 @@ class Download:
 
         # Step 1: Validate and prepare media
         validated_media = self._validate_and_prepare_media(media, media_id, media_type, video_download, keep_album)
-        if validated_media is None or not isinstance(validated_media, Track | Video):
+        if validated_media is None or self.provider.media_kind(validated_media) is None:
             return False, ""
 
         media = validated_media
@@ -1486,7 +1339,7 @@ class Download:
             return None
 
         # If video download is not allowed and this is a video, return None
-        if not video_download and isinstance(media, Video):
+        if not video_download and self.provider.media_kind(media) == MediaType.VIDEO:
             self.fn_logger.info(
                 f"Video downloads are deactivated (see settings). Skipping video: {log_content(name_builder_item(media))}"
             )
@@ -1513,7 +1366,8 @@ class Download:
             # If no media instance is provided, we need to create the media instance.
             # Throws `tidalapi.exceptions.ObjectNotFound` if item is not available anymore.
             return instantiate_media(self.session, media_type, media_id)
-        if isinstance(media, Track | Video):
+        kind = self.provider.media_kind(media)
+        if kind in (MediaType.TRACK, MediaType.VIDEO):
             # Deliberately NOT gated on media.allow_streaming here. That flag
             # is a false negative for our client: TIDAL serves editions like
             # "ALICIA (With Commentary)" with allowStreaming=false on every
@@ -1524,7 +1378,7 @@ class Download:
             # fetched (_get_stream_info), and a real refusal becomes the
             # UNAVAILABLE outcome there. Gating on the flag here refused
             # tracks the account could play and painted whole albums red.
-            if isinstance(media, Track) and not keep_album:
+            if kind == MediaType.TRACK and not keep_album:
                 # Re-create media instance with full album information.
                 # Skipped when keep_album is set: a best-of-both merge passes a
                 # track deliberately re-tagged under another edition's album and
@@ -1738,11 +1592,10 @@ class Download:
         list as refused on that evidence would settle every sibling track as
         refused too, so a missing object records nothing instead.
         """
-        if isinstance(media, Track | Video):
+        if self.provider.media_kind(media) in (MediaType.TRACK, MediaType.VIDEO):
             self._note_unavailable(media)
 
-    @staticmethod
-    def _media_label(media, media_id: str | None = None) -> str:
+    def _media_label(self, media, media_id: str | None = None) -> str:
         """The best name a log line can give ``media``, whatever survived.
 
         The preparation gate fails on half-built items (the re-fetch raised,
@@ -1750,7 +1603,7 @@ class Download:
         just an id, and a log line about a track the user asked for is worth
         nothing if it cannot say which track.
         """
-        if isinstance(media, Track | Video):
+        if self.provider.media_kind(media) in (MediaType.TRACK, MediaType.VIDEO):
             return name_builder_item(media)
         if media is not None and (getattr(media, "name", None) or getattr(media, "title", None)):
             return name_builder_title(media)
@@ -2366,13 +2219,14 @@ class Download:
             tuple[pathlib.Path, str]: (path_media_dst, file_extension_dummy)
         """
         # Create file name and path
-        metadata_tags = [] if isinstance(media, Video) else (media.media_metadata_tags or [])
+        is_video = self.provider.media_kind(media) == MediaType.VIDEO
+        metadata_tags = [] if is_video else (media.media_metadata_tags or [])
         quality_for_extension = quality_audio if quality_audio is not None else Quality.high_lossless
 
         file_extension_dummy: str = self.extension_guess(
             quality_for_extension,
             metadata_tags=metadata_tags,
-            is_video=isinstance(media, Video),
+            is_video=is_video,
         )
 
         def build(
@@ -2474,7 +2328,7 @@ class Download:
             if path_media_found is not None:
                 path_media_dst = path_media_found
 
-            if self.settings.data.symlink_to_track and not isinstance(media, Video):
+            if self.settings.data.symlink_to_track and self.provider.media_kind(media) != MediaType.VIDEO:
                 # Compute symlink tracks path, sanitize and check if file exists
                 file_name_track_dir_relative: str = format_path_media(
                     self.settings.data.format_track,
@@ -2567,7 +2421,7 @@ class Download:
         stream_info = self._get_stream_info(media)
 
         if stream_info is None:
-            if isinstance(media, Track):
+            if self.provider.media_kind(media) == MediaType.TRACK:
                 return False, path_media_dst
             # A non-track answered nothing: limp on exactly as before, into
             # the URL fetch that fails it.
@@ -2625,6 +2479,12 @@ class Download:
     def _get_stream_info(self, media: Track | Video) -> StreamInfo | None:
         """Resolve a stream for media through the Provider seam.
 
+        The kind comes from the provider's own reading of the object; each
+        arm then resolves through the seam method that owns its session
+        work (tracks through ``resolve_stream`` with the job's pinned
+        request, videos through ``resolve_video`` with the caller's
+        extension choice).
+
         Args:
             media (Track | Video): Media item.
 
@@ -2659,7 +2519,9 @@ class Download:
         # DO NOT "OPTIMIZE" THIS by making the lock more granular.
         # Correctness > Performance.
 
-        if isinstance(media, Track):
+        kind = self.provider.media_kind(media)
+
+        if kind == MediaType.TRACK:
             with self.tidal.stream_lock:
                 try:
                     # The job's request -- the Waves rung it was queued at and
@@ -2686,20 +2548,15 @@ class Download:
                 return None
             return stream_info
 
-        elif isinstance(media, Video):
-            with self.tidal.stream_lock:
-                try:
-                    # Videos always require the normal session
-                    if not self.tidal.restore_normal_session():
-                        self.fn_logger.error(f"Failed to restore normal session for video: {media.id}")
-                        return None
-
-                    file_extension = AudioExtensions.MP4 if self.settings.data.video_convert_mp4 else VideoExtensions.TS
-                    return StreamInfo(file_extension=file_extension)
-
-                except Exception as error:
-                    self._note_stream_info_failure(media, error)
-                    return None
+        elif kind == MediaType.VIDEO:
+            try:
+                # The extension is the caller's choice from its own settings;
+                # the session restore that gates it is the provider's work.
+                file_extension = AudioExtensions.MP4 if self.settings.data.video_convert_mp4 else VideoExtensions.TS
+                return self.provider.resolve_video(media, file_extension)
+            except Exception as error:
+                self._note_stream_info_failure(media, error)
+                return None
 
         else:
             self.fn_logger.error(f"Unknown media type for stream info: {type(media)}")
@@ -2910,7 +2767,6 @@ class Download:
 
     def _finalize_plan(
         self,
-        media: Track | Video,
         path_media_dst: pathlib.Path,
         do_flac_extract: bool,
         stream_info: StreamInfo,
@@ -2923,15 +2779,15 @@ class Download:
         library) was squeezed into the last quarter. The weights are rough
         step costs; a step predicted here but skipped at runtime just passes
         its share through instantly, which is invisible."""
-        will_convert = isinstance(media, Video) and self.settings.data.video_convert_mp4
-        will_extract = isinstance(media, Track) and self.settings.data.extract_flac and do_flac_extract
+        will_convert = stream_info.media_kind == MediaType.VIDEO and self.settings.data.video_convert_mp4
+        will_extract = stream_info.media_kind == MediaType.TRACK and self.settings.data.extract_flac and do_flac_extract
         will_downsample = (
-            isinstance(media, Track)
+            stream_info.media_kind == MediaType.TRACK
             and self.settings.data.downsample_enabled
             and (will_extract or path_media_dst.suffix == AudioExtensions.FLAC)
         )
         will_remux = (
-            isinstance(media, Track)
+            stream_info.media_kind == MediaType.TRACK
             and path_media_dst.suffix in (AudioExtensions.M4A, AudioExtensions.MP4)
             and not stream_info.single_file
             and bool(self.settings.data.path_binary_ffmpeg)
@@ -3001,17 +2857,21 @@ class Download:
             if not result_download:
                 return False, path_media_dst
 
-            cum = self._finalize_plan(media, path_media_dst, stream_info.requires_flac_extraction, stream_info)
+            cum = self._finalize_plan(path_media_dst, stream_info.requires_flac_extraction, stream_info)
             self._note_stage(media, 0)
 
             # Convert video from TS to MP4
-            if isinstance(media, Video) and self.settings.data.video_convert_mp4:
+            if stream_info.media_kind == MediaType.VIDEO and self.settings.data.video_convert_mp4:
                 tmp_path_file = self._video_convert(tmp_path_file)
 
             self._note_stage(media, cum["convert"])
 
             # Extract FLAC from MP4 container using ffmpeg
-            if isinstance(media, Track) and self.settings.data.extract_flac and stream_info.requires_flac_extraction:
+            if (
+                stream_info.media_kind == MediaType.TRACK
+                and self.settings.data.extract_flac
+                and stream_info.requires_flac_extraction
+            ):
                 # Lossless arrives as FLAC-in-MP4 (stream copy); scope "all"
                 # re-encodes lossy sources instead.
                 transcode = str(stream_info.codecs or "").upper() != Codec.FLAC
@@ -3021,7 +2881,7 @@ class Download:
 
             # Downsample FLAC to the configured target rate/depth (no-op for low-res sources)
             if (
-                isinstance(media, Track)
+                stream_info.media_kind == MediaType.TRACK
                 and self.settings.data.downsample_enabled
                 and tmp_path_file.suffix == AudioExtensions.FLAC
             ):
@@ -3040,7 +2900,7 @@ class Download:
             # bare merge output (a uuid with no extension), the true .m4a/.mp4 is only
             # known on path_media_dst.
             if (
-                isinstance(media, Track)
+                stream_info.media_kind == MediaType.TRACK
                 and path_media_dst.suffix in (AudioExtensions.M4A, AudioExtensions.MP4)
                 and not stream_info.single_file
                 and self.settings.data.path_binary_ffmpeg
@@ -3221,7 +3081,8 @@ class Download:
                 lyrics path, its extension, and the temp cover path. None for a
                 video, which has no sidecars.
         """
-        if isinstance(media, Video):
+        kind = stream_info.media_kind if stream_info is not None else self.provider.media_kind(media)
+        if kind == MediaType.VIDEO:
             # A converted music video carries tags (metadata_write_video); a
             # raw .ts cannot, MPEG-TS has no tag atoms mutagen can write.
             # Lyrics and cover sidecars stay track/album concepts either way.
@@ -3354,7 +3215,7 @@ class Download:
             event_stop (Event | None, optional): Event to stop the download. Defaults to None.
         """
         # If files needs to be symlinked, do postprocessing here.
-        if self.settings.data.symlink_to_track and not isinstance(media, Video):
+        if self.settings.data.symlink_to_track and self.provider.media_kind(media) != MediaType.VIDEO:
             # Determine file extension for symlink
             file_extension = path_media_dst.suffix
             self.media_move_and_symlink(media, path_media_dst, file_extension)
@@ -4597,7 +4458,9 @@ class Download:
         # template's opening {artist_name} (a track's question) survives as
         # literal text, and a folder tested with that in it never exists. The
         # folders compared have to be the ones items actually land in.
-        sample = next((item for item in items if isinstance(item, Track | Video)), None)
+        sample = next(
+            (item for item in items if self.provider.media_kind(item) in (MediaType.TRACK, MediaType.VIDEO)), None
+        )
 
         def build_probe(
             tidy: bool, replacement: str = "", mapping: dict[str, str] | None = None, provider: bool = True

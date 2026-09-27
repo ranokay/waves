@@ -168,14 +168,14 @@ class TestUntaggableFileIsAnItemFailure:
     def test_a_failed_tag_write_raises_untaggable(self, tmp_path):
         from types import SimpleNamespace
 
-        from waves.download import UntaggableFile
+        from waves.download import StreamInfo, UntaggableFile
 
         dl = _make_download()
         tmp = tmp_path / "t.flac"
         tmp.write_bytes(b"x")
         dl.metadata_write = MagicMock(return_value=(False, None, ".lrc", None))
         media = SimpleNamespace(id="42", name="Song", artists=[], full_name=None)
-        stream = SimpleNamespace(delivered={}, replay_gain={})
+        stream = StreamInfo(delivered={}, replay_gain={})
 
         with pytest.raises(UntaggableFile):
             dl._handle_metadata_and_extras(media, tmp, tmp_path / "d.flac", False, stream)

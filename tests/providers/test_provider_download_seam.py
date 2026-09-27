@@ -107,6 +107,11 @@ class _StubProvider:
             raise self.stream_info
         return self.stream_info
 
+    def media_kind(self, obj):
+        # The fakes are built to pass the real dispatch (spec=Track mocks),
+        # so the stub answers with the real rule, never a script.
+        return TidalProvider.media_kind(self, obj)
+
     def classify_refusal(self, exc):
         return self.refusal or Refusal(RefusalKind.FAILURE, str(exc))
 

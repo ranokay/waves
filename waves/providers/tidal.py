@@ -2,7 +2,7 @@
 
 Every method hands the work to the body that has always done it --
 ``waves.providers.tidal_client``'s catalog adapters, ``waves.config``'s session, and the
-engine's own normalizers in ``waves.download``. The bridge routes every TIDAL
+shared normalizers in ``waves.providers.shared``. The bridge routes every TIDAL
 session, catalog and editorial read through this module (the seam's contract
 half); the only tidal-object touches left in the bridge are the
 engine hand-off and the config layer's credential-event wiring.
@@ -23,12 +23,11 @@ import tidalapi
 from requests import HTTPError
 from tidalapi import page as tidal_page
 from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvailable, TooManyRequests
-from tidalapi.media import AudioMode, Track
+from tidalapi.media import AudioMode, Track, Video
 from tidalapi.mix import Mix
 
 from waves.config import ATMOS_REQUEST_QUALITY, Tidal, harden_api_session, session_quality_from_word
 from waves.constants import CTX_TIDAL, LIBRARY_PAGE, MediaType, QualityTier, quality_rank, tier_from_word
-from waves.download import _artist_ids, _tidal_refuses_asset, _waves_item_id
 from waves.metadata.naming import get_album_artist_ids, get_album_artists
 from waves.providers.base import (
     AudioType,
@@ -43,6 +42,7 @@ from waves.providers.base import (
     StatusKind,
     StreamInfo,
 )
+from waves.providers.shared import _artist_ids, _tidal_refuses_asset, _waves_item_id
 from waves.providers.tidal_client import (
     get_tidal_media_id,
     get_tidal_media_type,
@@ -598,6 +598,35 @@ class TidalProvider(Provider):
 
     # ----- per-track delivery
 
+    def media_kind(self, obj) -> MediaType | None:
+        # The one place that names the SDK's types: this provider speaks
+        # tidalapi, so it translates its own Track/Video into the seam's
+        # MediaType. Everything above the seam keys off this answer.
+        if isinstance(obj, Track):
+            return MediaType.TRACK
+        if isinstance(obj, Video):
+            return MediaType.VIDEO
+        return None
+
+    def resolve_video(self, video, file_extension: str) -> StreamInfo | None:
+        """Answer whether the session can serve this video, with the extension
+        the caller chose from its own settings.
+
+        Videos always require the normal session (no Atmos credentials), so
+        the restore is fenced here, beside the track resolve's own session
+        work. None restores the caller's historical limp-on: a failed restore
+        answers nothing and the pipeline fails the item at URL-fetch time.
+        """
+        with self._tidal.stream_lock:
+            try:
+                if not self._tidal.restore_normal_session():
+                    logger.error(f"Failed to restore normal session for video: {getattr(video, 'id', '')}")
+                    return None
+                return StreamInfo(file_extension=file_extension, media_kind=MediaType.VIDEO)
+            except Exception:
+                logger.exception("Could not resolve video stream")
+                return None
+
     def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
         """One resolve through the engine fetch bound around this call.
 
@@ -631,7 +660,7 @@ class TidalProvider(Provider):
         manifest = getattr(info, "stream_manifest", None)
 
         if manifest is None:
-            return StreamInfo()
+            return StreamInfo(media_kind=MediaType.TRACK)
 
         urls: list = []
         try:
@@ -654,6 +683,7 @@ class TidalProvider(Provider):
             file_extension=getattr(info, "file_extension", "") or "",
             codecs=codecs or "",
             requires_flac_extraction=bool(getattr(info, "requires_flac_extraction", False)),
+            media_kind=MediaType.TRACK,
             delivered={
                 "tier": _enum_value(getattr(stream, "audio_quality", None)),
                 "audio_type": str(AudioType.ATMOS if str(audio_mode) == _ATMOS_MODE else AudioType.STEREO),
