@@ -9,8 +9,8 @@ restore, the quit flush -- is fenced here: a change that breaks a true restart
 cannot stay green.
 
 The child runs the packaged entry point (``waves.py``) offscreen against an
-isolated XDG config, asks it to quit after its boot (``WAVES_QUIT_AFTER_BOOT_MS``,
-the test seam in app.py) and must exit 0. A second launch over the files the
+isolated XDG config, asks it to quit after its boot (``WAVES_TEST_SEAM=1`` plus
+``WAVES_QUIT_AFTER_BOOT_MS``, the test seam in app.py) and must exit 0. A second launch over the files the
 first one wrote then proves that state is a valid launch state: the settings
 file the first boot created is read back, a pref and a setting changed between
 the runs survive (no re-default, no re-migration), and the saved window frame
@@ -59,6 +59,7 @@ def _isolated_env(tmp_path: Path) -> dict[str, str]:
     env.update(
         {
             "QT_QPA_PLATFORM": "offscreen",
+            "WAVES_TEST_SEAM": "1",
             "WAVES_QUIT_AFTER_BOOT_MS": "3000",
             "WAVES_DEBUG": "1",
             "XDG_CONFIG_HOME": str(tmp_path / "config"),
