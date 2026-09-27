@@ -65,7 +65,7 @@ Rectangle {
   // public surface (what the control line and the scenarios read).
   LibraryVerdict {
     id: bcVerdict
-    host: bc.host
+    libStamp: bc.host.libStamp
     card: bc.card
   }
   readonly property var libPresence: bcVerdict.presence

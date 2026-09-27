@@ -181,7 +181,7 @@ def test_the_cards_in_the_qml_compare_the_stamp_before_trusting_the_answer():
     main = QML_MAIN.read_text(encoding="utf-8")
     uses = re.findall(r'\(!live && \("lib" in c\)[^)]*\)', verdict)
     assert len(uses) == 1, f"expected the shared verdict to read the baked answer once, found {len(uses)}"
-    assert "c.libStamp === host.libStamp" in uses[0], f"the verdict trusts an answer it cannot date: {uses[0]}"
+    assert "c.libStamp === verdict.libStamp" in uses[0], f"the verdict trusts an answer it cannot date: {uses[0]}"
     for name, src in (("ArtCard.qml", art), ("BrowseCard.qml", console)):
         assert '(!live && ("lib" in c)' not in src, f"{name} re-reads the baked verdict instead of delegating"
         assert "LibraryVerdict" in src, f"{name} no longer delegates to the shared verdict"

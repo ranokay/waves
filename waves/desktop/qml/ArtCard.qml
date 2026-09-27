@@ -59,7 +59,7 @@ Item {
   // public surface (what the strip, the pill and the scenarios read).
   LibraryVerdict {
     id: acVerdict
-    host: ac.host
+    libStamp: ac.host.libStamp
     card: ac.card
   }
   readonly property var libPresence: acVerdict.presence
