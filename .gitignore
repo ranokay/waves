@@ -177,10 +177,9 @@ scratchpad/
 packaging/aur/
 packaging/winget/
 
-# AUDIT.md at the root is the durable production-readiness audit. Dated audit
-# working notes and their captured evidence (screenshots, logs, JSON dumps) are
-# local analysis artifacts, not product documentation; promote one deliberately
-# if it should become durable.
+# Dated audit working notes and their captured evidence (screenshots, logs,
+# JSON dumps) are local analysis artifacts, not product documentation; promote
+# one deliberately if it should become durable.
 docs/audits/
 
 # macOS Finder metadata and the local Apple cookies export used for manual
