@@ -641,6 +641,19 @@ def _block_gui_for_test() -> None:
         time.sleep(int(block_ms) / 1000.0)
 
 
+def _log_after_shutdown_probe() -> None:
+    """Test seam: log one line after the bridge shutdown routine has run, so
+    the cold-boot test can prove the post-shutdown tail reaches the dev log
+    before the standalone ``os._exit``. Like the quit seam above it only fires
+    when ``WAVES_TEST_SEAM=1`` is also set, so a normal launch never logs it.
+    ``WAVES_PROBE_AFTER_SHUTDOWN`` carries the marker text."""
+    if os.environ.get("WAVES_TEST_SEAM") != "1":
+        return
+    marker = os.environ.get("WAVES_PROBE_AFTER_SHUTDOWN", "")
+    if marker:
+        logging.getLogger("waves").warning("%s", marker)
+
+
 def _start_boot_threads() -> None:
     """Every thread the app itself (not the bridge) starts before the reveal.
 
@@ -779,6 +792,7 @@ def waves_activate(tidal: Tidal | None = None) -> int:
     _block_gui_for_test()  # WAVES_BLOCK_GUI_MS, the watchdog integration test's freeze
 
     rc = app.exec()
+    _log_after_shutdown_probe()
     if owns_app:
         # Standalone launch: background workers (e.g. the search popularity
         # enrichment that fires a request per artist, or a download) may still
