@@ -414,11 +414,8 @@ def _raw_health(port: int, http_get=None, timeout: int = 5):
         return False, None
 
 
-def probe_health(port: int, http_get=None, timeout: int = 5) -> dict | None:
-    """GET the wrapper /health endpoint, or None when it does not answer."""
-    answered, resp = _raw_health(port, http_get=http_get, timeout=timeout)
-    if not answered:
-        return None
+def _health_body(resp) -> dict | None:
+    """The JSON object in a /health reply, or None for an unreadable one."""
     try:
         if getattr(resp, "status_code", 200) != 200:
             return None
@@ -429,9 +426,19 @@ def probe_health(port: int, http_get=None, timeout: int = 5) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-# The upstream supervisor's /health self-description: these keys are the
-# wrapper's own, and they are present whether or not the guest is ready to
-# play back.
+def probe_health(port: int, http_get=None, timeout: int = 5) -> dict | None:
+    """GET the wrapper /health endpoint, or None when it does not answer."""
+    answered, resp = _raw_health(port, http_get=http_get, timeout=timeout)
+    if not answered:
+        return None
+    return _health_body(resp)
+
+
+# The upstream supervisor's /health self-description, observed on the pinned
+# 0.2.4 image as {"mode": "rust-supervisor", "status": "ok", "version": ...,
+# "worker": {...}, "worker_ipc": ...}; other builds report readiness under
+# `runtime`. These keys are the wrapper's own and are present whether or not
+# the guest is ready to play back.
 _WRAPPER_REPLY_KEYS = ("mode", "worker", "worker_ipc", "runtime")
 
 
@@ -466,13 +473,7 @@ def wrapper_port_owner(port: int, http_get=None, timeout: int = 5) -> str:
     if number <= 0:
         return "free"
     answered, resp = _raw_health(number, http_get=http_get, timeout=timeout)
-    payload = None
-    if answered and getattr(resp, "status_code", 200) == 200:
-        try:
-            body = resp.json() if hasattr(resp, "json") else None
-        except Exception:
-            body = None
-        payload = body if isinstance(body, dict) else None
+    payload = _health_body(resp) if answered else None
     if _wrapper_reply(payload):
         return "wrapper"
     if not _port_accepts(number):
