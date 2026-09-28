@@ -2299,7 +2299,7 @@ def test_nothing_can_look_up_the_rows_the_scanner_left_keyless(tmp_path):
 # --- the cache lets go of its file ------------------------------------------
 
 
-def test_close_takes_every_thread_s_read_connection_not_just_its_own(tmp_path):
+def test_close_takes_every_thread_s_read_connection_not_just_its_own_from_the_scan_cache(tmp_path):
     """Presence lookups read on a connection per thread, and the thread-local
     holding them only ever reaches the CALLING thread. Left to close with
     their threads, a pool thread that had answered one badge question kept a

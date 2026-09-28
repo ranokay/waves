@@ -29,33 +29,10 @@ from collections import defaultdict
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from support.download_fakes import make_download as _make_download
+from support.download_fakes import make_track as _track
+
 from waves.download import Download, StreamInfo
-
-
-def _make_download(tmp_path: pathlib.Path, *, skip_existing: bool = True) -> Download:
-    dl = Download(
-        tidal_obj=MagicMock(),
-        skip_existing=skip_existing,
-        path_base=str(tmp_path),
-        fn_logger=MagicMock(),
-        progress=MagicMock(),
-    )
-    dl.settings = MagicMock()
-    dl.settings.data.filename_illegal_replacement = ""
-    dl.settings.data.filename_illegal_map = None
-    dl.settings.data.extract_flac = False
-    dl.settings.data.downsample_enabled = False
-    dl.settings.data.video_convert_mp4 = False
-    dl.settings.data.path_binary_ffmpeg = ""
-    dl.event_abort = threading.Event()
-    dl.event_run = threading.Event()
-    dl.event_run.set()
-
-    return dl
-
-
-def _track(item_id: str):
-    return SimpleNamespace(id=item_id, name="Song", artist=SimpleNamespace(name="Artist"), artists=[], duration=200)
 
 
 def _lines(logged) -> list[str]:

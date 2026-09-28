@@ -567,7 +567,7 @@ class _EditionGateStub(_DiscoStub):
         return [albums[1]]
 
 
-def test_with_the_switch_off_every_edition_downloads_whole_even_with_best_of_both_on():
+def test_with_the_switch_off_every_edition_downloads_whole_even_with_best_of_both_on_for_a_discography():
     stub = _EditionGateStub(collapse=False, merge=True)
     stub.downloadArtist("art1")
     assert stub.calls == [], "the sweep merged or collapsed with 'Most-complete edition only' off"
@@ -575,14 +575,14 @@ def test_with_the_switch_off_every_edition_downloads_whole_even_with_best_of_bot
     assert stub._merge_plans == {}
 
 
-def test_with_the_switch_off_and_best_of_both_off_nothing_is_scanned_either():
+def test_with_the_switch_off_and_best_of_both_off_nothing_is_scanned_either_for_a_discography():
     stub = _EditionGateStub(collapse=False, merge=False)
     stub.downloadArtist("art1")
     assert stub.calls == []
     assert stub._albumsQueued.emits == [(0, ["std", "dlx"])]
 
 
-def test_a_plan_an_earlier_run_left_behind_does_not_merge_with_the_switch_off():
+def test_a_plan_an_earlier_run_left_behind_does_not_merge_with_the_switch_off_for_a_discography():
     # A 'best of both' run with the switch on stashes its plan under the
     # complete edition's key, and only a SUCCESSFUL download pops it (so a
     # failed merge can be retried as a merge). Stopped or failed, the plan
@@ -610,7 +610,7 @@ def test_a_plan_an_earlier_run_left_behind_survives_a_sweep_that_merges_again():
     assert stub._merge_plans == {"dlx": [("plan",)]}
 
 
-def test_with_the_switch_on_best_of_both_builds_the_one_edition():
+def test_with_the_switch_on_best_of_both_builds_the_one_edition_for_a_discography():
     stub = _EditionGateStub(collapse=True, merge=True)
     stub.downloadArtist("art1")
     assert stub.calls == ["merge"]
@@ -618,7 +618,7 @@ def test_with_the_switch_on_best_of_both_builds_the_one_edition():
     assert "dlx" in stub._merge_plans
 
 
-def test_with_the_switch_on_and_best_of_both_off_the_plain_collapse_runs():
+def test_with_the_switch_on_and_best_of_both_off_the_plain_collapse_runs_for_a_discography():
     stub = _EditionGateStub(collapse=True, merge=False)
     stub.downloadArtist("art1")
     assert stub.calls == ["collapse"]

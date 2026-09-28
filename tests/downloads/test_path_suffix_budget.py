@@ -68,7 +68,7 @@ def test_a_stem_is_trimmed_to_fit_both_caps(monkeypatch):
     assert got.name.endswith("_01.flac"), "the part that makes it unique is never trimmed"
 
 
-def test_an_ordinary_name_is_untouched():
+def test_an_ordinary_name_is_untouched_by_the_unique_suffix():
     from waves import paths as path_mod
 
     got = path_mod._path_with_unique_suffix(pathlib.Path("/music/Artist/Album/Song.flac"), "_01")

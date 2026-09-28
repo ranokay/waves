@@ -78,7 +78,7 @@ def test_discography_queues_videos_when_the_source_is_on():
     assert any("2 videos" in s for s in stub.statuses)
 
 
-def test_a_long_videography_is_paged_through_not_truncated():
+def test_a_long_videography_is_paged_through_not_truncated_from_the_discography_sweep():
     """One window is what the artist PAGE shows; a download that stopped there
     would queue 50 of 120 videos and still report clean success, which is the
     partial-scan rule's whole objection."""

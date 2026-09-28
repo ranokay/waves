@@ -77,7 +77,7 @@ class TestTheM3uKeepsItsOldName:
         assert not (tmp_path / "_Best of- 2010.m3u").exists(), "no second m3u appears"
         assert not (tmp_path / "_Best of- 2010.m3u8").exists(), "no m3u8 sibling appears either"
 
-    def test_a_fresh_library_gets_the_preferred_spelling(self, tmp_path):
+    def test_a_fresh_library_gets_the_preferred_m3u_spelling(self, tmp_path):
         dl = _make_download(tmp_path)
         dl.settings.data.filename_illegal_replacement = "-"
 
@@ -107,7 +107,7 @@ class TestTheFolderPathKeepsItsOldSpelling:
 
         assert out == "Playlists/Best of 2010/{playlist_name}"
 
-    def test_a_fresh_library_gets_the_preferred_spelling(self, tmp_path):
+    def test_a_fresh_library_gets_the_preferred_folder_path_spelling(self, tmp_path):
         out = apply_folder_path(self.TEMPLATE, "Best of: 2010", "-", base_path=str(tmp_path))
 
         assert out == "Playlists/Best of- 2010/{playlist_name}"

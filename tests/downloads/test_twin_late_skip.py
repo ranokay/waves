@@ -7,38 +7,17 @@ the second entry on the first one's file while a stranger never skips.
 from __future__ import annotations
 
 import pathlib
-import threading
 from collections import defaultdict
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+
+from support.download_fakes import make_download as _make_download
+from support.download_fakes import make_track as _track
 
 from waves.download import Download, StreamInfo
 
 
-def _make_download(tmp_path: pathlib.Path, *, skip_existing: bool = True) -> Download:
-    dl = Download(
-        tidal_obj=MagicMock(),
-        skip_existing=skip_existing,
-        path_base=str(tmp_path),
-        fn_logger=MagicMock(),
-        progress=MagicMock(),
-    )
-    dl.settings = MagicMock()
-    dl.settings.data.filename_illegal_replacement = ""
-    dl.settings.data.filename_illegal_map = None
-    dl.settings.data.extract_flac = False
-    dl.settings.data.downsample_enabled = False
-    dl.settings.data.video_convert_mp4 = False
-    dl.settings.data.path_binary_ffmpeg = ""
-    dl.event_abort = threading.Event()
-    dl.event_run = threading.Event()
-    dl.event_run.set()
-
-    return dl
-
-
 def test_the_claim_alone_still_steps_the_twin_aside_on_disk(tmp_path):
-    """The control case, and the reason the guard above it has to exist: with a
+    """The control case, and the reason the guard below it has to exist: with a
     file actually on disk the claim answers "occupied" for the item's OWN copy.
     The existing claim tests never create the file, so this arm was untested."""
     dl = _make_download(tmp_path)
@@ -86,10 +65,6 @@ def _twin_run(dl: Download, dst: pathlib.Path, media) -> tuple[bool, pathlib.Pat
             stream_info=StreamInfo(),
             is_parent_album=False,
         )
-
-
-def _track(item_id: str):
-    return SimpleNamespace(id=item_id, name="Song", artist=SimpleNamespace(name="Artist"), artists=[], duration=200)
 
 
 def test_the_second_entry_skips_onto_the_file_the_first_one_landed(tmp_path):

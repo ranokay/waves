@@ -49,7 +49,7 @@ class TestFolderNamesAreNeverRestructured:
 
         assert chosen.parent.name == _LEGACY_DIR
 
-    def test_a_fresh_library_gets_the_tidy_folder(self, tmp_path):
+    def test_a_fresh_library_gets_the_tidy_album_folder(self, tmp_path):
         dl = _make_download(tmp_path)
 
         chosen = dl._keep_existing_layout(

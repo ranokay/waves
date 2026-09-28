@@ -40,7 +40,7 @@ def test_customized_template_is_never_touched():
     assert data.format_playlist_folder_migrated is True
 
 
-def test_marker_stops_a_second_rewrite():
+def test_marker_stops_a_second_rewrite_of_the_playlist_folder():
     # The user removed {folder_path} again after the upgrade: their choice,
     # and it happens to equal the old default. The marker keeps it.
     data = _pre_folder_settings()
