@@ -4581,7 +4581,7 @@ Item {
                                 anchors.rightMargin: 12
                                 anchors.verticalCenter: parent.verticalCenter
                               }
-                              DotBar {
+                              DotMatrix {
                                 id: scanDots
                                 anchors.left: parent.left
                                 anchors.leftMargin: 12
@@ -4590,6 +4590,27 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 onColor: page.accent
                                 pct: page.libScanReading ? 100 * page.libraryScanProgress.done / Math.max(1, page.libraryScanProgress.total) : 0
+                                rows: 4
+                                dot: 3
+                                gap: 2
+                                maxCols: 0
+                                // Local pulse feed: outside Main.qml there is no
+                                // shared 20 Hz clock, so this bar breathes off
+                                // its own 50 ms timer.
+                                property real scanPulse: 0.85
+                                ledPulse: scanPulse
+                                shimmerPhase: 0
+                                queueEdgeHeld: false
+                                Timer {
+                                  running: page.libScanReading && scanDots.pulse && scanDots.pct < 100
+                                  interval: 50
+                                  repeat: true
+                                  property real phase: 0
+                                  onTriggered: {
+                                    phase = (phase + 0.05 / 1.04) % 1
+                                    scanDots.scanPulse = 0.28 + 0.57 * (0.5 + 0.5 * Math.cos(2 * Math.PI * phase))
+                                  }
+                                }
                               }
                             }
                           }

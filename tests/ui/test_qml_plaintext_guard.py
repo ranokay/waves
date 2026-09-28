@@ -19,15 +19,14 @@ component props, bracket access (``model['x']``), local aliases, and
 
 * ``test_dynamic_text_is_plaintext``: in every scanned file, EVERY
   ``Text``/``Label`` whose ``text:`` is a *dynamic* (non-literal) expression must be
-  ``PlainText`` (or a ``RemoteText``, or an audited rich-text spot). No
+  ``PlainText`` (or an audited rich-text spot). No
   remote-vs-local guess, so a brand-new remote binding can't beacon however it is
   bound. Pure string/char literals are exempt: they can't carry a remote string.
 * ``test_richtext_is_only_the_deliberate_local_spots``: the StyledText/RichText set
   must equal exactly the audited ``DELIBERATE_RICHTEXT`` spots (all bind LOCAL data),
   closing the other two rich-text paths.
-* ``RemoteText.qml`` is the ergonomic shared default for new remote strings; its own
-  test pins ``PlainText``. The ``REMOTE_MARKERS`` below are used only to flag a
-  deliberate rich-text spot that *starts* binding remote data.
+* The ``REMOTE_MARKERS`` below are used only to flag a deliberate rich-text
+  spot that *starts* binding remote data.
 
 See ``ALGORITHM`` below for the exact detection rules.
 """
@@ -46,7 +45,7 @@ from support.paths import QML_DIR
 #
 #   Main.qml and every other non-local file render (or may render) TIDAL
 #   search/library/queue/artist results, so dynamic `text:` there must be
-#   PlainText (or a RemoteText, or an audited rich-text spot). Local-chrome
+#   PlainText (or an audited rich-text spot). Local-chrome
 #   components ride the same set for the same structural reason: a future
 #   binding there cannot go unchecked.
 #   SettingsPage.qml renders only LOCAL data: the app's own settings schema
@@ -56,12 +55,7 @@ from support.paths import QML_DIR
 #   scanned so its deliberate StyledText spots stay deliberate and
 #   can't quietly start binding a TIDAL string.
 LOCAL_ONLY_FILES = {"SettingsPage.qml"}
-# RemoteText.qml defines the safe component itself: its PlainText pin is covered
-# by test_remotetext_component_is_plaintext, and its prose comments name the
-# forbidden `RemoteText { textFormat:` pattern as an anti-example, which the
-# instance scanners would match as code. It stays out of the enumeration.
-_GUARD_OWN_FILES = {"RemoteText.qml"}
-FILES = sorted(p.relative_to(QML_DIR).as_posix() for p in QML_DIR.rglob("*.qml") if p.name not in _GUARD_OWN_FILES)
+FILES = sorted(p.relative_to(QML_DIR).as_posix() for p in QML_DIR.rglob("*.qml"))
 TIDAL_DATA_FILES = set(FILES) - LOCAL_ONLY_FILES
 
 # Remote markers: substrings that, inside a `text:` binding *in a TIDAL_DATA_FILE*,
@@ -112,7 +106,7 @@ SAFE_PLAINTEXT = "textFormat: Text.PlainText"
 # StyledText/RichText, and that none has started binding remote data. (StyledText
 # AND RichText both parse HTML and auto-fetch <img>; AutoText is closed by the
 # structural test. There are NO allowlisted *TIDAL* spots: every TIDAL string is
-# PlainText/RemoteText, including the WaveMark/WelcomeBanner ASCII tiles, which are
+# PlainText, including the WaveMark/WelcomeBanner ASCII tiles, which are
 # local glyphs but get PlainText so the rule needs no exceptions.)
 DELIBERATE_RICHTEXT: set[tuple[str, str]] = {
     ("Main.qml", "ffmpeg-attribution"),  # FFmpeg source attribution link (appFfmpeg.status.*)
@@ -136,9 +130,7 @@ DELIBERATE_MARKER = re.compile(r"guard:deliberate-richtext\s+([A-Za-z0-9_-]+)")
 #       (optional `contentItem:`/`delegate:` prefix is irrelevant: we just match
 #        the type name) `Text {` or `Label {`, via a regex whose leading negative
 #       lookbehind `(?<![A-Za-z0-9_.])` rejects `TextField`, `TextInput`,
-#       `TextMetrics`, `TextArea`, and `Foo.Text` enum reads. `RemoteText {` is
-#       matched separately and treated as INHERENTLY SAFE (it bakes in PlainText),
-#       so it is never flagged.
+#       `TextMetrics`, `TextArea`, and `Foo.Text` enum reads.
 #
 # 2. CAPTURE THE BRACE SPAN. From each open `{`, walk forward counting `{`/`}`
 #    depth (skipping string literals and // and /* */ comments) until depth returns
@@ -169,8 +161,7 @@ DELIBERATE_MARKER = re.compile(r"guard:deliberate-richtext\s+([A-Za-z0-9_-]+)")
 #    and the multi-line form where `textFormat` sits on its own line either before
 #    or after `text:` (we search the whole span, so order/placement is irrelevant;
 #    e.g. the queue label at Main.qml:2132 declares PlainText one line ABOVE its
-#    multi-line `text:` block, and the bio at 1732 declares it BELOW). RemoteText
-#    elements are safe by construction (step 1).
+#    multi-line `text:` block, and the bio at 1732 declares it BELOW).
 #
 # 6. ASSERT every dynamic element is safe, unless it carries a
 #    `guard:deliberate-richtext <slug>` marker (open line or the line directly
@@ -191,7 +182,6 @@ DELIBERATE_MARKER = re.compile(r"guard:deliberate-richtext\s+([A-Za-z0-9_-]+)")
 #    close every path to rendering attacker HTML.
 # ===========================================================================
 
-_SAFE_TYPE_OPEN = re.compile(r"(?<![A-Za-z0-9_.])RemoteText\s*\{")
 _AUDIT_TYPE_OPEN = re.compile(r"(?<![A-Za-z0-9_.])(Text|Label)\s*\{")
 
 
@@ -357,7 +347,7 @@ def _find_own_text_value(span: str) -> str | None:
 def _iter_audit_elements(src: str):
     """Yield (line_no, type_name, span, slug) for every Text/Label element open.
 
-    RemoteText is skipped (inherently safe). line_no is the 1-based line of the
+    line_no is the 1-based line of the
     element's open token (for diagnostics only); slug is the element's
     `guard:deliberate-richtext <slug>` marker (taken from the open line or the
     line directly above) or None. The allowlist keys on (file, slug), so it
@@ -377,18 +367,6 @@ def _iter_audit_elements(src: str):
                     slug = mk.group(1)
                     break
         yield line_no, m.group(1), span, slug
-
-
-def _iter_remotetext_elements(src: str):
-    """Yield (line_no, span) for every RemoteText element open. RemoteText bakes in
-    PlainText, but an instantiation can re-declare `textFormat:`, so instances are
-    scanned to catch one that re-enables rich text."""
-    for m in _SAFE_TYPE_OPEN.finditer(src):
-        open_idx = m.end() - 1
-        end_idx = _brace_span(src, open_idx)
-        span = src[open_idx : end_idx + 1]
-        line_no = src.count("\n", 0, m.start()) + 1
-        yield line_no, span
 
 
 def _strip_string_literals(expr: str) -> str:
@@ -441,7 +419,7 @@ def _is_literal_only(text_value: str) -> bool:
 # imperatively from local literals keeps them from beaconing, but the guard is
 # fail-OPEN there: binding remote data through one, or adding a new
 # `component FooText: Text`, sails past CI. Derived components are held to
-# exactly what RemoteText is held to, and found by pattern rather than by
+# the pinned-PlainText rule, and found by pattern rather than by
 # name, so the next one is covered the day it is written. A component
 # whose root element is the Text is the same component in a different shape,
 # and both are matched below.
@@ -468,8 +446,8 @@ def _derived_text_components() -> dict[str, tuple[str, int]]:
 
 
 def test_a_text_derived_component_pins_plaintext():
-    """The same rule RemoteText lives by: bake PlainText in, so every instance
-    is safe by construction whatever it is later fed."""
+    """Bake PlainText in, so every instance is safe by construction whatever
+    it is later fed."""
     derived = _derived_text_components()
     assert derived, "the scanner found no `component X: Text`; has the spelling changed?"
 
@@ -488,8 +466,8 @@ def test_a_text_derived_component_pins_plaintext():
 
 
 def test_a_text_derived_instance_does_not_reenable_richtext():
-    """And the instance half, exactly as for RemoteText: an instantiation can
-    re-declare textFormat and undo what the component pinned."""
+    """And the instance half: an instantiation can re-declare textFormat and
+    undo what the component pinned."""
     derived = _derived_text_components()
     violations: list[str] = []
     for name, (decl_file, decl_idx) in derived.items():
@@ -512,47 +490,10 @@ def test_a_text_derived_instance_does_not_reenable_richtext():
     assert not violations, "Text-derived instance(s) re-enabling rich text:\n" + "\n".join(violations)
 
 
-def test_remotetext_component_is_plaintext():
-    """The shared safe component itself must actually pin PlainText; otherwise
-    every `RemoteText { … }` the guard trusts would be a beacon."""
-    rt = (QML_DIR / "RemoteText.qml").read_text(encoding="utf-8")
-    # Strip // and /* */ comments so the prose explanation (which names StyledText/
-    # AutoText) doesn't fool the assertion: we care only about the actual code.
-    code = re.sub(r"//[^\n]*", "", rt)
-    code = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
-    assert SAFE_PLAINTEXT in code, "RemoteText.qml must set textFormat: Text.PlainText"
-    # It must not also assign a rich-text format that would defeat the purpose.
-    assert "Text.StyledText" not in code and "Text.AutoText" not in code
-
-
-def test_remotetext_instances_do_not_reenable_richtext():
-    """The guard trusts every `RemoteText { … }` as PlainText-by-construction and
-    never flags it, but an instantiation can re-declare `textFormat:` and re-enable
-    rich text (`RemoteText { textFormat: Text.StyledText; text: model.bio }` would beacon
-    on TIDAL data). So any RemoteText instance that overrides `textFormat` to anything
-    other than PlainText is a violation."""
-    violations: list[str] = []
-    for fname in FILES:
-        src = (QML_DIR / fname).read_text(encoding="utf-8")
-        for line_no, span in _iter_remotetext_elements(src):
-            tf = _find_own_prop_value(span, "textFormat")
-            if tf is None:
-                continue  # inherits the component's PlainText: safe
-            if tf.strip() != "Text.PlainText":
-                violations.append(
-                    f"{fname}:{line_no}: RemoteText overrides textFormat to "
-                    f"{tf.strip()!r}: re-enables rich text (auto-<img>) on remote data"
-                )
-    assert not violations, (
-        "RemoteText instance(s) re-enabling rich text; drop the override or set "
-        "Text.PlainText:\n" + "\n".join(violations)
-    )
-
-
 def test_dynamic_text_is_plaintext():
     """STRUCTURAL guard (the real anti-regression rule). In Main.qml and every
     component file, EVERY Text/Label whose ``text:`` is a dynamic
-    (non-literal) expression must render as PlainText, be a RemoteText, or be one of
+    (non-literal) expression must render as PlainText or be one of
     the audited intentional-StyledText spots. No remote-vs-local guessing: any
     dynamic string, however it reaches ``text:`` (``model.x``, a bare component prop
     like ``title``/``duration``, ``model['x']`` bracket access, a local alias, a
@@ -581,7 +522,7 @@ def test_dynamic_text_is_plaintext():
             note = " (binds a remote marker!)" if _matches_remote(tv) else ""
             violations.append(
                 f"{fname}:{line_no}: dynamic {type_name} is not textFormat: "
-                f"Text.PlainText (and not RemoteText / not an audited rich-text spot)"
+                f"Text.PlainText (and not an audited rich-text spot)"
                 f"{note}\n        text value: {tv.strip()[:80]!r}"
             )
 
@@ -592,8 +533,8 @@ def test_dynamic_text_is_plaintext():
     )
     assert not violations, (
         "Dynamic strings rendered on the rich-text-capable AutoText default: a "
-        "zero-click image-beacon could regress through any of these. Use RemoteText "
-        "or add `textFormat: Text.PlainText` (or, for deliberate links, StyledText + "
+        "zero-click image-beacon could regress through any of these. Add "
+        "`textFormat: Text.PlainText` (or, for deliberate links, StyledText + "
         "a DELIBERATE_RICHTEXT entry):\n\n" + "\n".join(violations)
     )
 
@@ -631,7 +572,7 @@ def test_richtext_is_only_the_deliberate_local_spots():
         "HTML (auto-fetch <img>/<a>). Confirm the source is LOCAL, add a\n"
         "`// guard:deliberate-richtext <slug>` marker on the element's open line, "
         "and list (file, slug) in DELIBERATE_RICHTEXT, or switch to "
-        "PlainText/RemoteText:\n  " + "\n  ".join(str(u) for u in unexpected)
+        "PlainText:\n  " + "\n  ".join(str(u) for u in unexpected)
     )
     assert not missing, (
         "DELIBERATE_RICHTEXT references marker slugs with no matching "
