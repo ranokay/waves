@@ -353,7 +353,7 @@ def _two_editions():
     return playlist, [_album("1", "Album"), _album("2", "Album (Deluxe)")]
 
 
-def test_with_the_switch_off_every_edition_downloads_whole_even_with_best_of_both_on():
+def test_with_the_switch_off_every_edition_downloads_whole_even_with_best_of_both_on_for_a_playlist():
     stub = _EditionStub(*_two_editions(), collapse=False, merge=True)
     stub.downloadPlaylistAlbums("pl1")
     assert stub.calls == [], "the sweep merged or collapsed with 'Most-complete edition only' off"
@@ -361,14 +361,14 @@ def test_with_the_switch_off_every_edition_downloads_whole_even_with_best_of_bot
     assert stub._merge_plans == {}
 
 
-def test_with_the_switch_off_and_best_of_both_off_nothing_is_scanned_either():
+def test_with_the_switch_off_and_best_of_both_off_nothing_is_scanned_either_for_a_playlist():
     stub = _EditionStub(*_two_editions(), collapse=False, merge=False)
     stub.downloadPlaylistAlbums("pl1")
     assert stub.calls == []
     assert stub._albumsQueued.emits == [(0, ["1", "2"])]
 
 
-def test_with_the_switch_on_best_of_both_builds_the_one_edition():
+def test_with_the_switch_on_best_of_both_builds_the_one_edition_for_a_playlist():
     stub = _EditionStub(*_two_editions(), collapse=True, merge=True)
     stub.downloadPlaylistAlbums("pl1")
     assert stub.calls == ["merge"]
@@ -377,7 +377,7 @@ def test_with_the_switch_on_best_of_both_builds_the_one_edition():
     assert any("Scanning editions" in s for s in stub.statuses)
 
 
-def test_with_the_switch_on_and_best_of_both_off_the_plain_collapse_runs():
+def test_with_the_switch_on_and_best_of_both_off_the_plain_collapse_runs_for_a_playlist():
     stub = _EditionStub(*_two_editions(), collapse=True, merge=False)
     stub.downloadPlaylistAlbums("pl1")
     assert stub.calls == ["collapse"]
@@ -385,7 +385,7 @@ def test_with_the_switch_on_and_best_of_both_off_the_plain_collapse_runs():
     assert stub._merge_plans == {}
 
 
-def test_a_plan_an_earlier_run_left_behind_does_not_merge_with_the_switch_off():
+def test_a_plan_an_earlier_run_left_behind_does_not_merge_with_the_switch_off_for_a_playlist():
     # The same stale-plan rule the discography sweep has: a plan a stopped or
     # failed 'Best of both' run stashed must not turn a switch-off sweep's
     # plain album into a merge (downloadAlbum peeks the stash unconditionally).

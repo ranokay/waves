@@ -151,7 +151,7 @@ class TestTheShippedTemplateFindsTheOldFolder:
         assert landed != pathlib.Path(_ARTIST, _TIDY_DIR)
         assert not (tmp_path / _ARTIST / _TIDY_DIR).exists()
 
-    def test_a_fresh_library_gets_the_tidy_folder(self, tmp_path, monkeypatch):
+    def test_a_fresh_library_gets_the_tidy_default_template_folder(self, tmp_path, monkeypatch):
         (tmp_path / _ARTIST).mkdir()
 
         assert _first_item_folder(tmp_path, _DEFAULT_ALBUM_TEMPLATE, monkeypatch) == pathlib.Path(

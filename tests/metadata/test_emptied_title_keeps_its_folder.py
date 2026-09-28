@@ -142,7 +142,7 @@ class TestTheCollectionFolderIsChosenTheSameWay:
 
         assert dl._keep_existing_collection_layout(tidy, legacy) == legacy
 
-    def test_a_fresh_library_gets_the_preferred_spelling(self, tmp_path):
+    def test_a_fresh_library_gets_the_stand_in_collection_spelling(self, tmp_path):
         dl = _make_download(tmp_path)
 
         assert dl._keep_existing_collection_layout(self._STANDIN, self._DROPPED) == self._STANDIN

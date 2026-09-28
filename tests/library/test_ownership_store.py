@@ -310,7 +310,7 @@ def test_folder_names_under_uses_a_recorded_at_index(tmp_path):
 # --------------------------------------------------------------------------- #
 # The store lets go of its file
 # --------------------------------------------------------------------------- #
-def test_close_takes_every_thread_s_read_connection_not_just_its_own(tmp_path):
+def test_close_takes_every_thread_s_read_connection_not_just_its_own_from_the_ownership_store(tmp_path):
     """Reads run on a connection per thread, and the thread-local holding them
     only ever reaches the CALLING thread. Left to close with their threads, a
     pool thread that had answered one ownership question kept a handle on the

@@ -90,7 +90,7 @@ def test_no_empty_components_survive_anywhere_in_the_path(artist_name):
     assert all(part for part in relative.split("/")), relative
 
 
-def test_an_ordinary_name_is_untouched():
+def test_an_ordinary_name_is_untouched_by_formatting():
     """Control: normal formatting keeps every component it always did."""
     relative = format_path_media(Settings().format_track, _track("Aphex Twin"), 2, 0, 0)
 

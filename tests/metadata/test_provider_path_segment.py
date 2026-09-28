@@ -173,7 +173,7 @@ def test_customized_templates_are_never_touched():
     assert data.format_provider_segment_migrated is True
 
 
-def test_marker_stops_a_second_rewrite():
+def test_marker_stops_a_second_rewrite_of_the_provider_segment():
     # The user removed {provider_name} again after the upgrade: their choice,
     # and it happens to equal the old default. The marker keeps it.
     data = _pre_segment_settings()
