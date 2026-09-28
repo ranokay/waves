@@ -1,6 +1,6 @@
 """Behavioral coverage for the bridge slots and signals no test named.
 
-Source: AUDIT.md TEST-03 (28 slots, 13 signals). Each test below binds the
+Source: issue #455 (TEST-03: 28 slots, 13 signals). Each test below binds the
 real ``WavesBridge``/``_ProgressSignals`` method onto a minimal stub (the
 ``tests/conftest.py`` ``_Signal``/``_InlinePool`` pattern) and asserts the
 method's observable contract: return value, emitted signal payload, or state
