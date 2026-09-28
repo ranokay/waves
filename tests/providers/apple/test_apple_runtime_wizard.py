@@ -470,6 +470,8 @@ def _bind_wrapper_login(stub) -> None:
     """Bind the wrapper sign-in path onto a stub bridge, Qt-free."""
     for name in (
         "_apple_wrapper_login_url",
+        "_apple_wrapper_port_for_job",
+        "_apple_wrapper_port_for_start",
         "_apple_wrapper_ensure_running",
         "_apple_sidecar_guard",
         "_apple_wrapper_login_call",
@@ -484,7 +486,6 @@ def test_login_provisions_the_wrapper_port_when_none_is_set(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     provider = SimpleNamespace(wrapper_url="")
     stub.providers["apple"] = provider
-    stub._apple_wrapper_base = lambda: ""
     stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: 51234)
     _bind_wrapper_login(stub)
 
@@ -496,15 +497,23 @@ def test_login_provisions_the_port_then_posts_with_that_url(tmp_path, monkeypatc
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     provider = SimpleNamespace(wrapper_url="")
     stub.providers["apple"] = provider
-    stub._apple_wrapper_base = lambda: ""
     events = []
 
-    def ensure_port(preferred=0):
-        events.append("ensure_port")
-        return 51234
+    class _FreshManager:
+        """A fresh tier: no persisted port until ensure_port picks one."""
 
-    stub._apple_runtime = SimpleNamespace(ensure_port=ensure_port)
-    stub._apple_wrapper_port_for_job = lambda: 51234
+        def __init__(self):
+            self.port = 0
+
+        def ensure_port(self, preferred=0):
+            events.append("ensure_port")
+            self.port = 51234
+            return self.port
+
+        def read_port(self):
+            return self.port
+
+    stub._apple_runtime = _FreshManager()
     stub._apple_supervisor_for_job = lambda: SimpleNamespace(is_ready=lambda port: True)
     stub._refresh_apple_wrapper_auth = lambda: None
     _bind_wrapper_login(stub)
@@ -529,11 +538,70 @@ def test_login_provisions_the_port_then_posts_with_that_url(tmp_path, monkeypatc
     assert stub._apple_wrapper_login_result["provider_url"] == "http://127.0.0.1:51234"
 
 
+def test_start_port_keeps_the_effective_port_when_free_or_serving(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    calls = []
+    stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: calls.append(preferred) or 51235)
+    stub._apple_wrapper_port_for_job = lambda: 51234
+    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub, SimpleNamespace)
+
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "free")
+    assert stub._apple_wrapper_port_for_start() == 51234
+
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "wrapper")
+    assert stub._apple_wrapper_port_for_start() == 51234
+
+    assert calls == [], "a usable port is never re-provisioned"
+
+
+def test_start_port_repicks_a_port_another_app_holds(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_url="http://127.0.0.1:49152")
+    stub.providers["apple"] = provider
+    calls = []
+    stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: calls.append(preferred) or 51235)
+    stub._apple_wrapper_port_for_job = lambda: 49152
+    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub, SimpleNamespace)
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "foreign")
+
+    assert stub._apple_wrapper_port_for_start() == 51235
+    assert calls == [0], "the stolen port gives way to a fresh pick, persisted"
+    assert provider.wrapper_url == "http://127.0.0.1:51235", (
+        "the provider follows the move, or its fetch stack keeps the old port"
+    )
+
+
+def test_start_port_keeps_the_port_when_ownership_cannot_be_told(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    calls = []
+    stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: calls.append(preferred) or 51235)
+    stub._apple_wrapper_port_for_job = lambda: 51234
+    stub._apple_wrapper_port_for_start = WavesBridge._apple_wrapper_port_for_start.__get__(stub, SimpleNamespace)
+
+    def _probe_fails(port):
+        raise ConnectionError("probe failed")
+
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", _probe_fails)
+    assert stub._apple_wrapper_port_for_start() == 51234
+    assert calls == [], "a probe that cannot tell must not churn a working sidecar"
+
+
+def test_login_url_follows_a_repicked_port(tmp_path, monkeypatch):
+    stub = _bridge_stub(tmp_path, enabled=True, cookies="")
+    provider = SimpleNamespace(wrapper_url="")
+    stub.providers["apple"] = provider
+    stub._apple_wrapper_port_for_job = lambda: 49152
+    stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: 51235)
+    _bind_wrapper_login(stub)
+    monkeypatch.setattr("waves.providers.apple.supervision.wrapper_port_owner", lambda port: "foreign")
+
+    assert stub._apple_wrapper_login_url() == "http://127.0.0.1:51235"
+    assert provider.wrapper_url == "http://127.0.0.1:51235"
+
+
 def test_login_starts_the_guest_then_posts(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.providers["apple"] = SimpleNamespace(wrapper_url="http://127.0.0.1:51234")
-    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
-    stub._apple_wrapper_port_for_job = lambda: 51234
     events = []
 
     class _Sup:
@@ -547,6 +615,7 @@ def test_login_starts_the_guest_then_posts(tmp_path):
 
     stub._apple_supervisor_for_job = lambda: _Sup()
     _bind_wrapper_login(stub)
+    stub._apple_wrapper_port_for_job = lambda: 51234
 
     result = stub._apple_wrapper_login_call(
         lambda url: events.append("post") or {"ok": True, "needs_2fa": False, "error": "", "url": url}
@@ -559,8 +628,6 @@ def test_login_starts_the_guest_then_posts(tmp_path):
 def test_login_keeps_probing_a_guest_that_starts_slowly(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.providers["apple"] = SimpleNamespace(wrapper_url="http://127.0.0.1:51234")
-    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
-    stub._apple_wrapper_port_for_job = lambda: 51234
     probes = []
 
     class _Sup:
@@ -573,6 +640,7 @@ def test_login_keeps_probing_a_guest_that_starts_slowly(tmp_path):
 
     stub._apple_supervisor_for_job = lambda: _Sup()
     _bind_wrapper_login(stub)
+    stub._apple_wrapper_port_for_job = lambda: 51234
 
     result = stub._apple_wrapper_login_call(
         lambda url: {"ok": True, "needs_2fa": False, "error": "", "url": url}, timeout=5.0
@@ -585,12 +653,11 @@ def test_login_keeps_probing_a_guest_that_starts_slowly(tmp_path):
 def test_login_reports_a_guest_that_will_not_start(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.providers["apple"] = SimpleNamespace(wrapper_url="http://127.0.0.1:51234")
-    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
-    stub._apple_wrapper_port_for_job = lambda: 51234
     stub._apple_supervisor_for_job = lambda: SimpleNamespace(
         is_ready=lambda port: False, ensure_started=lambda **k: False
     )
     _bind_wrapper_login(stub)
+    stub._apple_wrapper_port_for_job = lambda: 51234
 
     called = []
     result = stub._apple_wrapper_login_call(
@@ -604,7 +671,6 @@ def test_login_reports_a_guest_that_will_not_start(tmp_path):
 def test_login_names_a_port_provisioning_failure(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.providers["apple"] = SimpleNamespace(wrapper_url="")
-    stub._apple_wrapper_base = lambda: ""
 
     def _refuse(preferred=0):
         raise OSError("permission denied")

@@ -13919,7 +13919,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             download_failed_with_folder=lambda *args, **kwargs: self._download_failed_with_folder(*args, **kwargs),
             supervisor=lambda: self._apple_supervisor_for_job(),
             runtime=lambda: getattr(self, "_apple_runtime", None),
-            wrapper_port=lambda: self._apple_wrapper_port_for_job(),
+            wrapper_port=lambda: self._apple_wrapper_port_for_start(),
             sidecar_guard=lambda: self._apple_sidecar_guard(),
             note_activity=lambda: self._apple_note_activity(),
             refresh_wrapper_auth=lambda timeout=5: self._refresh_apple_wrapper_auth(timeout=timeout),
@@ -14107,6 +14107,54 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         except Exception:
             persisted = 0
         return persisted if 1 <= persisted <= 65535 else 0
+
+    def _apple_wrapper_port_for_start(self) -> int:
+        """The port a sidecar start should use: the effective one, re-picked when stolen.
+
+        The persisted pick was free when chosen; an unrelated app can take it
+        later, and then the host side of the container's mapping belongs to
+        that app, so a start (or an unhealthy-container recreation) on the
+        port can never answer the health probe. Such a port is replaced by a
+        fresh pick and persisted -- the session volume lives on the host, so
+        the recreation that lands the sidecar on the new port preserves the
+        session. Every other case keeps the effective port: the wrapper
+        answers, the port is free, or ownership cannot be told (a probe must
+        not churn a working sidecar).
+        """
+        port = self._apple_wrapper_port_for_job()
+        if not port:
+            return 0
+        try:
+            from waves.providers.apple.supervision import wrapper_port_owner
+
+            owner = wrapper_port_owner(port)
+        except Exception:
+            logger.debug("Apple wrapper port ownership probe failed", exc_info=True)
+            return port
+        if owner != "foreign":
+            return port
+        manager = getattr(self, "_apple_runtime", None)
+        if manager is None:
+            return port
+        try:
+            picked = int(manager.ensure_port(0) or 0)
+        except Exception:
+            logger.debug("Apple wrapper port re-pick failed", exc_info=True)
+            return port
+        if picked and picked != port:
+            # Consumers that snapshot the URL when a job session opens (the
+            # provider's fetch stack) must follow the move, or the next track
+            # would speak to the old port's owner.
+            from waves.providers.apple.runtime import wrapper_url
+
+            provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
+            if provider is not None:
+                with contextlib.suppress(Exception):
+                    provider.wrapper_url = wrapper_url(picked)
+            # The one line a diagnostics bundle needs: which port gave way,
+            # and to which one, with no user details.
+            logger.warning("Apple wrapper port %s is held by another app; moving the sidecar to %s", port, picked)
+        return picked or port
 
     def _apple_sidecar_guard(self):
         """The lock serializing sidecar starts/probes against the idle stop."""
@@ -21138,21 +21186,23 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     lock.release()
 
     def _apple_wrapper_login_url(self) -> str:
-        """The sign-in URL, provisioning the wrapper port when none is set.
+        """The sign-in URL, re-provisioning a stolen port and provisioning a missing one.
 
         A port that cannot be provisioned raises so the form names that
         failure; an empty return means no wrapper tier exists on this machine.
         """
-        url = self._apple_wrapper_base()
-        if url:
-            return url
         manager = getattr(self, "_apple_runtime", None)
         if manager is None:
             return ""
         from waves.providers.apple.runtime import wrapper_url
 
-        data = getattr(getattr(self, "settings", None), "data", None)
-        url = wrapper_url(_apple_provision_port(data, manager))
+        port = self._apple_wrapper_port_for_start()
+        if not port:
+            data = getattr(getattr(self, "settings", None), "data", None)
+            port = _apple_provision_port(data, manager)
+        if not port:
+            return ""
+        url = wrapper_url(port)
         provider = (getattr(self, "providers", {}) or {}).get(CTX_APPLE)
         if provider is not None:
             with contextlib.suppress(Exception):
@@ -21168,7 +21218,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         True only when its own probe answered; a False result still gets the
         bounded grace window because those probes are point-in-time.
         """
-        port = self._apple_wrapper_port_for_job()
+        port = self._apple_wrapper_port_for_start()
         if not port:
             return False
         sup = self._apple_supervisor_for_job()

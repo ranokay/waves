@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
 import time
 from pathlib import Path
 
@@ -394,8 +395,12 @@ def is_health_ok(payload) -> bool:
     return status in ("ok", "healthy", "ready", "up") or "version" in payload or "runtime" in payload
 
 
-def probe_health(port: int, http_get=None, timeout: int = 5) -> dict | None:
-    """GET the wrapper /health endpoint, or None when it does not answer."""
+def _raw_health(port: int, http_get=None, timeout: int = 5):
+    """GET /health once; returns ``(answered, response)`` and never raises.
+
+    "Answered" is true whenever a response came back at all, whatever its
+    status; callers that need the body or the status read the response.
+    """
     get = http_get
     if get is None:
         import requests
@@ -404,9 +409,13 @@ def probe_health(port: int, http_get=None, timeout: int = 5) -> dict | None:
             return requests.get(url, timeout=timeout)
 
     try:
-        resp = get(health_url(port), timeout=timeout)
+        return True, get(health_url(port), timeout=timeout)
     except Exception:
-        return None
+        return False, None
+
+
+def _health_body(resp) -> dict | None:
+    """The JSON object in a /health reply, or None for an unreadable one."""
     try:
         if getattr(resp, "status_code", 200) != 200:
             return None
@@ -415,6 +424,70 @@ def probe_health(port: int, http_get=None, timeout: int = 5) -> dict | None:
         logger.debug("Wrapper health probe returned no JSON", exc_info=True)
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def probe_health(port: int, http_get=None, timeout: int = 5) -> dict | None:
+    """GET the wrapper /health endpoint, or None when it does not answer."""
+    answered, resp = _raw_health(port, http_get=http_get, timeout=timeout)
+    if not answered:
+        return None
+    return _health_body(resp)
+
+
+# The upstream supervisor's /health self-description, observed on the pinned
+# 0.2.4 image as {"mode": "rust-supervisor", "status": "ok", "version": ...,
+# "worker": {...}, "worker_ipc": ...}; other builds report readiness under
+# `runtime`. These keys are the wrapper's own and are present whether or not
+# the guest is ready to play back.
+_WRAPPER_REPLY_KEYS = ("mode", "worker", "worker_ipc", "runtime")
+
+
+def _wrapper_reply(payload) -> bool:
+    """Whether a /health body is the wrapper's own, ready or warming."""
+    if not isinstance(payload, dict):
+        return False
+    if any(key in payload for key in _WRAPPER_REPLY_KEYS):
+        return True
+    return is_health_ok(payload)
+
+
+def wrapper_port_owner(port: int, http_get=None, timeout: int = 5) -> str:
+    """Who owns a wrapper port: ``"wrapper"``, ``"free"``, ``"foreign"`` or ``"unknown"``.
+
+    The persisted pick was free when chosen; an unrelated app can take it
+    later. Such a port must not be reused: the health probe would read the
+    stranger and a fresh container cannot publish on it (the host side is
+    already bound), which the user meets as "the wrapper runtime did not
+    start". ``"foreign"`` therefore needs an HTTP answer that is not the
+    wrapper's -- a 405 from another app, a JSON body without its markers.
+    A wrapper that answers while still warming is ``"wrapper"`` (ownership,
+    not readiness: the start path's probe decides readiness). A port that
+    accepts but answers nothing -- our own forwarder while the guest boots,
+    or a silent service -- is ``"unknown"`` and must never churn the
+    sidecar.
+    """
+    try:
+        number = int(port)
+    except (TypeError, ValueError):
+        return "free"
+    if number <= 0:
+        return "free"
+    answered, resp = _raw_health(number, http_get=http_get, timeout=timeout)
+    payload = _health_body(resp) if answered else None
+    if _wrapper_reply(payload):
+        return "wrapper"
+    if not _port_accepts(number):
+        return "free"
+    return "foreign" if answered else "unknown"
+
+
+def _port_accepts(port: int, timeout: float = 1.0) -> bool:
+    """Whether a loopback TCP connection to the port is accepted at all."""
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def container_run_args(

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import http.server
 import json
+import threading
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -12,6 +14,7 @@ import pytest
 from waves.constants import CTX_APPLE
 from waves.desktop.backend import WavesBridge
 from waves.model.cfg import HelpSettings, Settings
+from waves.providers.apple.runtime import pick_free_high_port
 from waves.providers.apple.supervision import (
     HELD_POLL_SEC,
     HELD_START_FAILURES,
@@ -35,6 +38,7 @@ from waves.providers.apple.supervision import (
     probe_health,
     throttle_delay,
     throttled_message,
+    wrapper_port_owner,
 )
 
 
@@ -218,6 +222,78 @@ def test_health_probe_shape():
         raise ConnectionError("down")
 
     assert probe_health(1, http_get=_boom) is None
+
+
+def test_wrapper_port_owner_classifies_wrapper_free_and_foreign():
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    # A wrapper reply that is only warming is still the wrapper's own port:
+    # ownership is the reply's shape, not playback readiness.
+    warming = {"status": "ok", "runtime": {"playback_ready": False}}
+    assert wrapper_port_owner(51234, http_get=lambda url, timeout=5: _Resp(warming)) == "wrapper"
+    assert wrapper_port_owner(51234, http_get=lambda url, timeout=5: _Resp({"status": "ok"})) == "wrapper"
+    assert wrapper_port_owner(0) == "free"
+
+    free = pick_free_high_port()
+    assert wrapper_port_owner(free) == "free"
+
+    # A foreign app that took the port answers without the wrapper payload.
+    class _Foreign(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(405)
+            self.end_headers()
+            self.wfile.write(b'{"error":"method not allowed"}')
+
+        def log_message(self, *args):
+            return None
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Foreign)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert wrapper_port_owner(int(server.server_address[1])) == "foreign"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_wrapper_port_owner_keeps_a_silent_listener_unknown():
+    # A port that accepts but never answers could be our own forwarder with
+    # the guest still booting; it must not read as foreign (no churn).
+    import socket
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(2)
+    port = int(listener.getsockname()[1])
+    release = threading.Event()
+
+    def _hold():
+        conn, _ = listener.accept()
+        try:
+            conn.recv(1024)
+            release.wait(timeout=5)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    thread = threading.Thread(target=_hold, daemon=True)
+    thread.start()
+    try:
+        assert wrapper_port_owner(port, timeout=1) == "unknown"
+    finally:
+        release.set()
+        listener.close()
+        thread.join(timeout=5)
 
 
 def test_supervisor_idles_and_stops_only_when_truly_idle():
@@ -516,6 +592,7 @@ def _bridge_stub(**settings_overrides):
         "_apple_needs_wrapper",
         "_apple_supervisor_for_job",
         "_apple_wrapper_port_for_job",
+        "_apple_wrapper_port_for_start",
         "_apple_ensure_sidecar",
         "_apple_sidecar_guard",
         "_apple_note_activity",

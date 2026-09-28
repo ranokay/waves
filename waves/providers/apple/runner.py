@@ -1678,8 +1678,11 @@ def ensure_sidecar(hooks: AppleJobHooks, qid: int, job_abort, *, need_wrapper: b
     heal, so the row is HELD with the setup words and re-probed; a runtime
     that fails to start repeatedly cannot come back on its own, so the
     row stops waiting, setup opens, and the job fails with those words
-    (RETRY is the way back once the runtime works). Never re-provisions:
-    the runtime is the setup wizard's artifact.
+    (RETRY is the way back once the runtime works). Never provisions the
+    tier itself -- no image pull, no port choice on a fresh machine. The
+    port hook does move the sidecar off a port another app has taken (a
+    fresh pick and persist), because no start on that port could ever
+    answer and the pick is a persisted artifact, not a provision.
     """
     if not need_wrapper:
         return True
