@@ -9,7 +9,7 @@ import "primitives" as Primitives
 //
 // The words hold still and the motion moves underneath: a swell travels along
 // a row of LED cells, bright at its head with a long wake behind it, in the
-// cell language the download buttons and queue rows already speak (DotBar:
+// cell language the download buttons and queue rows already speak (DotMatrix:
 // sharp cells, unlit ones left at a low glow rather than removed). A depth
 // sounder's ping, which is what a page fetch is.
 //

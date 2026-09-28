@@ -128,7 +128,7 @@ def _run_scenario() -> int:
 
 # Pin the sweep: these components must stay covered by the directory
 # enumeration below; the membership assertion fails if one drops out.
-_UNREFERENCED = ("DotBar.qml", "ExpandChevron.qml", "FfmpegManager.qml", "LedBar.qml")
+_UNREFERENCED = ("ExpandChevron.qml", "FfmpegManager.qml", "LedBar.qml")
 
 
 def test_all_qml_components_compile():
