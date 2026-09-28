@@ -852,9 +852,9 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
                 if os.path.exists(self.file_path):
                     os.remove(self.file_path)
 
-                print(
-                    "Either there is something wrong with your credentials / account or some server problems on TIDALs "
-                    "side. Anyway... Try to login again by re-starting this app."
+                logger.warning(
+                    "Either there is something wrong with your credentials / account or some server problems on "
+                    "TIDALs side. Anyway... Try to login again by re-starting this app."
                 )
 
         return result

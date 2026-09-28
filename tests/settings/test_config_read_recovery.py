@@ -154,3 +154,44 @@ def test_nulls_a_field_allows_survive(tmp_path):
     with _config_log_records() as records:
         assert cfg.read(str(path)) is True
     assert [r for r in records if "unusable field" in r.getMessage()] == []
+
+
+def test_a_failed_cached_sign_in_warns_and_prints_nothing(tmp_path, capfd):
+    """The base-class sign-in failure reaches the redacted log, not stdout.
+
+    WHAT THIS FENCES OFF
+    --------------------
+    Log scrubbing is installed only on logging handlers, so a ``print`` of the
+    sign-in failure bypasses redaction. The failure must go through the module
+    logger at WARNING (which the redacting handlers scrub) and write nothing
+    to stdout, while still reporting False and removing the dead token file.
+    """
+    import types
+
+    from waves.config import Tidal
+
+    tidal = Tidal.__new__(Tidal)
+    tidal.token_from_storage = True
+    # Dummy fixture values, not real credentials (bandit S106 false positive).
+    tidal.data = types.SimpleNamespace(
+        token_type="Bearer",  # noqa: S106
+        access_token="a",  # noqa: S106
+        refresh_token="r",  # noqa: S106
+        expiry_time=0,
+    )
+    token_file = tmp_path / "token.json"
+    token_file.write_text("{}")
+    tidal.file_path = str(token_file)
+
+    def _refused(*_args, **_kwargs):
+        raise RuntimeError("TIDAL refused the sign-in")
+
+    tidal.session = types.SimpleNamespace(load_oauth_session=_refused)
+
+    with _config_log_records() as records:
+        assert tidal.login_token() is False
+
+    assert not token_file.exists(), "a refused sign-in must still remove the dead token file"
+    assert [record.levelno for record in records] == [logging.WARNING]
+    out, _err = capfd.readouterr()
+    assert out == "", "the sign-in failure must not reach stdout past the redacting handlers"
