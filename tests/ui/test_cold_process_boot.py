@@ -165,3 +165,30 @@ def test_a_default_install_arms_the_freeze_watchdog(tmp_path):
     }
     assert levels, "no parseable log lines at all"
     assert levels <= {"WARN", "ERROR", "CRITICAL"}, f"disk log carries sub-WARNING records: {sorted(levels)}"
+
+
+def test_a_line_logged_after_shutdown_still_reaches_the_dev_log(tmp_path):
+    """The post-shutdown tail survives the standalone exit path.
+
+    WHAT THIS FENCES OFF
+    --------------------
+    Standalone launch ends in ``os._exit``, which skips the interpreter-exit
+    hooks that otherwise stop the disk-log writer thread. The entry point
+    gives the queued tail a bounded chance to land before that exit; without
+    it, a line logged after the bridge shutdown routine (the quit flush, the
+    shutdown breadcrumbs) is still in the writer queue when the process dies.
+    A marker logged at WARNING (the default disk level) after shutdown must be
+    in the file after exit.
+    """
+    config = tmp_path / "config" / _CONFIG_DIR
+    config.mkdir(parents=True)
+    env = _isolated_env(tmp_path)
+    env["WAVES_PROBE_AFTER_SHUTDOWN"] = "shutdown tail probe"
+
+    proc = _launch(env)
+    assert proc.returncode == 0, f"the probed launch did not exit clean:\n{_wrong(proc, tmp_path)}"
+    log_path = config / "waves_dev.log"
+    assert log_path.exists(), "the launch wrote no dev log at all"
+    assert "shutdown tail probe" in log_path.read_text(encoding="utf-8"), (
+        "a line logged after shutdown never reached the dev log; the pre-exit flush did not land the tail"
+    )
