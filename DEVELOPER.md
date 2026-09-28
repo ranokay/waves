@@ -140,16 +140,17 @@ Restore with `uv sync --reinstall-package pyside6`.
 
 ### Dock entry on macOS
 
-A from-source run (`mise run app`) gets no Waves tile in the macOS Dock when a
-terminal or editor launches it: the venv's `python` ships no app bundle, so
-LaunchServices attributes the process to the app that launched it, and no tile
-of its own appears. Launched detached (for instance `launchctl submit`) a tile
-does appear, but named after the interpreter (`python3.13`) rather than Waves.
-No in-process call brands it — on macOS 27 with Qt 6.11 the activation policy is
-already `Regular`, `TransformProcessType` returns `paramErr`, and
-`NSProcessInfo.processName` adds no tile. A branded entry (the Waves name and
-icon) is a property of the packaged bundle: `mise run build` writes
-`dist/waves.app`, whose Info.plist carries `CFBundleName`/`CFBundleIconFile`.
+A from-source run (`mise run app`) shows no Waves tile in the macOS Dock when a
+terminal or editor launches it. The venv's `python` ships no app bundle, so
+LaunchServices attributes the process to the app that launched it rather than
+giving it a branded tile of its own. Launched detached (for instance
+`launchctl submit`) a tile does appear, but named after the interpreter
+(`python3.13`) rather than Waves. No in-process call brands it — on macOS 27
+with Qt 6.11 the activation policy is already `Regular`, `TransformProcessType`
+returns `paramErr`, and `NSProcessInfo.processName` adds no tile. A branded
+entry (the Waves name and icon) is a property of the packaged bundle:
+`mise run build` writes `dist/waves.app`, whose Info.plist carries
+`CFBundleName`/`CFBundleIconFile`.
 
 ### Test groups
 
