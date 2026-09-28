@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
 import time
 from pathlib import Path
 
@@ -415,6 +416,39 @@ def probe_health(port: int, http_get=None, timeout: int = 5) -> dict | None:
         logger.debug("Wrapper health probe returned no JSON", exc_info=True)
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def wrapper_port_owner(port: int, http_get=None, timeout: int = 5) -> str:
+    """Who owns a wrapper port: ``"wrapper"``, ``"free"`` or ``"foreign"``.
+
+    The persisted pick was free when chosen; an unrelated app can take it
+    later. Such a port must not be reused: the health probe would read the
+    stranger and a fresh container cannot publish on it (the host side is
+    already bound), which the user meets as "the wrapper runtime did not
+    start". An endpoint that answers without a valid wrapper payload counts
+    as foreign -- the sidecar's /health always answers the wrapper's JSON.
+    """
+    try:
+        number = int(port)
+    except (TypeError, ValueError):
+        return "free"
+    if number <= 0:
+        return "free"
+    payload = probe_health(number, http_get=http_get, timeout=timeout)
+    if payload is not None and is_health_ok(payload):
+        return "wrapper"
+    if _port_accepts(number):
+        return "foreign"
+    return "free"
+
+
+def _port_accepts(port: int, timeout: float = 1.0) -> bool:
+    """Whether a loopback TCP connection to the port is accepted at all."""
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def container_run_args(
