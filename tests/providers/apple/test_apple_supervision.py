@@ -228,11 +228,17 @@ def test_wrapper_port_owner_classifies_wrapper_free_and_foreign():
     class _Resp:
         status_code = 200
 
-        def json(self):
-            return {"status": "ok", "version": "1"}
+        def __init__(self, payload):
+            self._payload = payload
 
-    # A valid wrapper payload wins even when nothing else is asked of the port.
-    assert wrapper_port_owner(51234, http_get=lambda url, timeout=5: _Resp()) == "wrapper"
+        def json(self):
+            return self._payload
+
+    # A wrapper reply that is only warming is still the wrapper's own port:
+    # ownership is the reply's shape, not playback readiness.
+    warming = {"status": "ok", "runtime": {"playback_ready": False}}
+    assert wrapper_port_owner(51234, http_get=lambda url, timeout=5: _Resp(warming)) == "wrapper"
+    assert wrapper_port_owner(51234, http_get=lambda url, timeout=5: _Resp({"status": "ok"})) == "wrapper"
     assert wrapper_port_owner(0) == "free"
 
     free = pick_free_high_port()
@@ -256,6 +262,37 @@ def test_wrapper_port_owner_classifies_wrapper_free_and_foreign():
     finally:
         server.shutdown()
         server.server_close()
+        thread.join(timeout=5)
+
+
+def test_wrapper_port_owner_keeps_a_silent_listener_unknown():
+    # A port that accepts but never answers could be our own forwarder with
+    # the guest still booting; it must not read as foreign (no churn).
+    import socket
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(2)
+    port = int(listener.getsockname()[1])
+    release = threading.Event()
+
+    def _hold():
+        conn, _ = listener.accept()
+        try:
+            conn.recv(1024)
+            release.wait(timeout=5)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    thread = threading.Thread(target=_hold, daemon=True)
+    thread.start()
+    try:
+        assert wrapper_port_owner(port, timeout=1) == "unknown"
+    finally:
+        release.set()
+        listener.close()
         thread.join(timeout=5)
 
 

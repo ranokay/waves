@@ -486,7 +486,6 @@ def test_login_provisions_the_wrapper_port_when_none_is_set(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     provider = SimpleNamespace(wrapper_url="")
     stub.providers["apple"] = provider
-    stub._apple_wrapper_base = lambda: ""
     stub._apple_runtime = SimpleNamespace(ensure_port=lambda preferred=0: 51234)
     _bind_wrapper_login(stub)
 
@@ -603,7 +602,6 @@ def test_login_url_follows_a_repicked_port(tmp_path, monkeypatch):
 def test_login_starts_the_guest_then_posts(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.providers["apple"] = SimpleNamespace(wrapper_url="http://127.0.0.1:51234")
-    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
     events = []
 
     class _Sup:
@@ -630,7 +628,6 @@ def test_login_starts_the_guest_then_posts(tmp_path):
 def test_login_keeps_probing_a_guest_that_starts_slowly(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.providers["apple"] = SimpleNamespace(wrapper_url="http://127.0.0.1:51234")
-    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
     probes = []
 
     class _Sup:
@@ -656,7 +653,6 @@ def test_login_keeps_probing_a_guest_that_starts_slowly(tmp_path):
 def test_login_reports_a_guest_that_will_not_start(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.providers["apple"] = SimpleNamespace(wrapper_url="http://127.0.0.1:51234")
-    stub._apple_wrapper_base = lambda: "http://127.0.0.1:51234"
     stub._apple_supervisor_for_job = lambda: SimpleNamespace(
         is_ready=lambda port: False, ensure_started=lambda **k: False
     )
@@ -675,7 +671,6 @@ def test_login_reports_a_guest_that_will_not_start(tmp_path):
 def test_login_names_a_port_provisioning_failure(tmp_path):
     stub = _bridge_stub(tmp_path, enabled=True, cookies="")
     stub.providers["apple"] = SimpleNamespace(wrapper_url="")
-    stub._apple_wrapper_base = lambda: ""
 
     def _refuse(preferred=0):
         raise OSError("permission denied")
