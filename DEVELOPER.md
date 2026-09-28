@@ -138,6 +138,20 @@ can build the Linux leg matching its arch, not the macOS/Windows legs.
 directories inside the build venv's PySide6 tree before Nuitka walks it.
 Restore with `uv sync --reinstall-package pyside6`.
 
+### Dock entry on macOS
+
+A from-source run (`mise run app`) shows no Waves tile in the macOS Dock when a
+terminal or editor launches it. The venv's `python` ships no app bundle, so
+LaunchServices attributes the process to the app that launched it rather than
+giving it a branded tile of its own. Launched detached (for instance
+`launchctl submit`) a tile does appear, but named after the interpreter
+(`python3.13`) rather than Waves. No in-process call brands it — on macOS 27
+with Qt 6.11 the activation policy is already `Regular`, `TransformProcessType`
+returns `paramErr`, and `NSProcessInfo.processName` adds no tile. A branded
+entry (the Waves name and icon) is a property of the packaged bundle:
+`mise run build` writes `dist/waves.app`, whose Info.plist carries
+`CFBundleName`/`CFBundleIconFile`.
+
 ### Test groups
 
 The suite splits into groups with their own commands. Do not run groups
