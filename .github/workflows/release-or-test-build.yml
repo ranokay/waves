@@ -284,11 +284,11 @@ jobs:
       # trim on each OS.
       # The trimmed bundle links the system's GL stack (Nuitka does not bundle
       # it); desktop installs have it, but GitHub's headless runner images may
-      # not (ubuntu-24.04 dropped libEGL). Install just enough to launch
+      # not. Install just enough to launch
       # offscreen; this mirrors a user's desktop, it is not shipped.
       - name: Install Linux GL runtime for smoke-launch
         if: ${{ runner.os == 'Linux' && !endsWith(matrix.leg.os_arch, '-arm64') }}
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon0 libfontconfig1 libpulse0 libasound2t64
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libegl1 libgl1 libopengl0 libxkbcommon0 libfontconfig1 libpulse0 libasound2
       - name: Smoke-launch trimmed bundle
         if: ${{ !endsWith(matrix.leg.os_arch, '-arm64') }}
         env:
