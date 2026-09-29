@@ -57,8 +57,8 @@ def test_due_only_after_the_warn_gap(tmp_path, monkeypatch):
     monitor = _armed(tmp_path, monkeypatch)
     try:
         monitor.heartbeat(100.0)
-        assert not monitor._due(102.0), "below the warn gap is not a stall"
-        assert monitor._due(102.6), "past the warn gap is a stall"
+        assert not monitor._due(102.0, monitor._stop), "below the warn gap is not a stall"
+        assert monitor._due(102.6, monitor._stop), "past the warn gap is a stall"
     finally:
         monitor.stop()
 
@@ -69,7 +69,7 @@ def test_capture_runs_sample_and_files_the_stack(tmp_path, monkeypatch, caplog):
         runs: list[list[str]] = []
         monkeypatch.setattr(diagnostics.subprocess, "run", _fake_run(runs))
         with caplog.at_level(logging.WARNING, logger="waves.diag"):
-            monitor._capture()
+            monitor._capture(monitor._stop)
 
         assert len(runs) == 1
         argv = runs[0]
@@ -88,7 +88,7 @@ def test_a_failed_capture_is_a_noop(tmp_path, monkeypatch, caplog):
         runs: list[list[str]] = []
         monkeypatch.setattr(diagnostics.subprocess, "run", _fake_run(runs, fail=FileNotFoundError("no sample")))
         with caplog.at_level(logging.WARNING, logger="waves.diag"):
-            monitor._capture()  # must not raise
+            monitor._capture(monitor._stop)  # must not raise
         assert "[freeze] native stack capture failed" in caplog.text
     finally:
         monitor.stop()
@@ -100,10 +100,10 @@ def test_the_session_budget_caps_captures(tmp_path, monkeypatch):
         runs: list[list[str]] = []
         monkeypatch.setattr(diagnostics.subprocess, "run", _fake_run(runs))
         for _ in range(diagnostics._STALL_SAMPLE_MAX_PER_SESSION):
-            monitor._capture()
+            monitor._capture(monitor._stop)
         assert len(runs) == diagnostics._STALL_SAMPLE_MAX_PER_SESSION
         monitor.heartbeat(100.0)
-        assert not monitor._due(10_000.0), "the capture budget must end the session's captures"
+        assert not monitor._due(10_000.0, monitor._stop), "the capture budget must end the session's captures"
     finally:
         monitor.stop()
 
@@ -112,4 +112,16 @@ def test_stop_disarms(tmp_path, monkeypatch):
     monitor = _armed(tmp_path, monkeypatch)
     monitor.heartbeat(100.0)
     monitor.stop()
-    assert not monitor._due(10_000.0), "a stopped monitor must never capture"
+    assert not monitor._due(10_000.0, monitor._stop), "a stopped monitor must never capture"
+
+
+def test_a_restart_retires_the_previous_run(tmp_path, monkeypatch):
+    monitor = _armed(tmp_path, monkeypatch)
+    first_stop = monitor._stop
+    monitor.stop()
+    monitor.start(tmp_path, 2.5)
+    try:
+        assert first_stop.is_set(), "a restart must not clear the retired run's stop event"
+        assert monitor._stop is not first_stop, "each run needs its own stop event"
+    finally:
+        monitor.stop()

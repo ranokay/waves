@@ -280,8 +280,10 @@ class _StallMonitor:
         self._log_dir = log_dir
         self._sample = sample
         self._warn_gap = float(warn_gap_sec)
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, name="waves-stall-sample", daemon=True)
+        # A fresh Event per run: a stop/start while the old loop is inside a
+        # capture must retire that loop, not hand it the new run's Event.
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, args=(self._stop,), name="waves-stall-sample", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -291,23 +293,24 @@ class _StallMonitor:
     def heartbeat(self, at: float) -> None:
         self._last_tick = at
 
-    def _due(self, now: float) -> bool:
+    def _due(self, now: float, stop: threading.Event) -> bool:
         return (
-            self._thread is not None
+            not stop.is_set()
+            and self._thread is not None
             and self._warn_gap is not None
             and self._last_tick > 0.0
             and self._captures < _STALL_SAMPLE_MAX_PER_SESSION
             and now - self._last_tick > self._warn_gap
         )
 
-    def _loop(self) -> None:
-        while not self._stop.wait(_STALL_MONITOR_TICK_SEC):
-            if self._due(time.monotonic()):
-                self._capture()
+    def _loop(self, stop: threading.Event) -> None:
+        while not stop.wait(_STALL_MONITOR_TICK_SEC):
+            if self._due(time.monotonic(), stop):
+                self._capture(stop)
 
-    def _capture(self) -> None:
+    def _capture(self, stop: threading.Event) -> None:
         log_dir, sample = self._log_dir, self._sample
-        if log_dir is None or sample is None:  # not armed (see start/_due)
+        if stop.is_set() or log_dir is None or sample is None:  # not armed (see start/_due)
             return
         self._captures += 1
         # This capture covers the current stall; the next one needs a fresh gap.
