@@ -115,13 +115,24 @@ def sandbox_app_config() -> str:
     that child resolves the developer's real config directory: the bridge's
     ``__init__`` adopts the real settings and installs the dev log there, so
     the run's Qt warnings land in the user's ``waves_dev.log``. First caller
-    wins; a later call returns the directory already in place. Qt-free, so it
-    may run before (or without) a QCoreApplication or PySide6.
+    wins; a later call returns the directory already in place.
+
+    A test module that imported an app module at module scope has already
+    resolved ``BaseConfig.path_base`` against the real directory by the time
+    any runner can sandbox (``waves.config`` reads it at import); the class
+    attribute is re-pointed at the sandbox so even that shape cannot
+    ``makedirs()`` the real config directory on a save. Qt-free, so it may
+    run before (or without) a QCoreApplication or PySide6.
     """
     base = os.environ.get("XDG_CONFIG_HOME")
     if not base:
         base = tempfile.mkdtemp(prefix="waves-qml-config-")
         os.environ["XDG_CONFIG_HOME"] = base
+    config = sys.modules.get("waves.config")
+    if config is not None:
+        from waves import __config_dirname__
+
+        config.BaseConfig.path_base = os.path.join(base, __config_dirname__)
     return base
 
 

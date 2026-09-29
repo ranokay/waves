@@ -28,9 +28,10 @@ Two gates, one per launch path:
   scenario is iterated on -- there is no parent runner to hand one over, so
   the scenario sandboxes itself: ``support.qml.sandbox_app_config()`` routes
   the app's config to a throwaway directory when the process has none, and
-  ``patch_offline()`` -- the harness's last moment before any app import --
-  calls it, because ``waves.config`` resolves ``BaseConfig.path_base`` at
-  import time. ``sandbox_qml_settings()`` wraps it too.
+  re-points ``BaseConfig.path_base`` when a module-level app import already
+  resolved it against the real one. The harness calls it from
+  ``patch_offline()`` (the pre-bridge step every runner takes) and from
+  ``sandbox_qml_settings()``.
 
 ``path_config_base()`` honours the variable first on every platform, so a
 scenario given one can only ever touch a temporary directory.
@@ -63,7 +64,10 @@ _SANDBOX_TOKENS = (
 # behavioral half is the direct-run regression below.
 def test_wiring_every_offscreen_bridge_scenario_declares_its_config_sandbox():
     unsandboxed = []
+    own_file = Path(__file__).resolve()
     for path in sorted(TESTS_ROOT.rglob("test_*.py")):
+        if path.resolve() == own_file:
+            continue  # this guard names the literals below; it builds no bridge
         src = path.read_text()
         builds_bridge = "WavesBridge(" in src and "QQmlApplicationEngine" in src
         if not builds_bridge:
@@ -84,10 +88,13 @@ def test_wiring_every_offscreen_bridge_scenario_declares_its_config_sandbox():
 _CONFIG_PROBE = """
 import os
 
+# The shape a test module has when it imports an app module at module scope:
+# waves.config resolves BaseConfig.path_base before any runner can sandbox.
+from waves.config import BaseConfig
+
 from support.offline import patch_offline
 
 patch_offline()
-from waves.config import BaseConfig
 
 print("XDG", os.environ.get("XDG_CONFIG_HOME", ""))
 print("BASE", BaseConfig.path_base)
@@ -95,17 +102,18 @@ print("BASE", BaseConfig.path_base)
 
 
 @pytest.mark.integration
-def test_patch_offline_sandboxes_before_the_first_app_import(tmp_path):
+def test_patch_offline_sandboxes_before_the_first_app_import(tmp_path, monkeypatch):
     """``waves.config`` resolves ``BaseConfig.path_base()`` at import, and
-    ``patch_offline`` is the harness call that precedes every bridge: its own
-    import chain must already have a sandbox, or a direct run pins -- and even
-    a sandboxed bridge then ``makedirs()`` into -- the real config dir."""
-    env = scenario_env(None)
-    env["HOME"] = str(tmp_path)
+    ``patch_offline`` is the harness call that precedes every bridge: it must
+    leave the base sandboxed -- laying the sandbox down, or re-pointing a base
+    a module-level app import already resolved -- or a direct run even
+    ``makedirs()`` into the real config dir."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a literal probe)
         [sys.executable, "-c", _CONFIG_PROBE],
         cwd=str(REPO_ROOT),
-        env=env,
+        env=scenario_env(None),
         capture_output=True,
         text=True,
         timeout=60,
@@ -113,7 +121,7 @@ def test_patch_offline_sandboxes_before_the_first_app_import(tmp_path):
     assert proc.returncode == 0, proc.stderr[-800:]
     values = dict(line.split(" ", 1) for line in proc.stdout.splitlines() if line.startswith(("XDG ", "BASE ")))
     xdg = values.get("XDG", "")
-    assert xdg, "patch_offline left no XDG_CONFIG_HOME; the first app import would resolve the real config dir"
+    assert xdg, "patch_offline left no XDG_CONFIG_HOME; the app would resolve the real config dir"
     assert values.get("BASE") == str(Path(xdg) / "Waves"), (
         f"BaseConfig.path_base resolved to {values.get('BASE')!r}, outside the sandbox {xdg!r}"
     )
@@ -126,23 +134,27 @@ def test_a_direct_scenario_run_never_writes_the_native_config(tmp_path, monkeypa
     That is how a single scenario is iterated on, and before this pin the
     bridge resolved the developer's real config directory: settings, token and
     ``waves_dev.log`` were written there, so the run's Qt warnings reached the
-    user's diagnostics. The scenario must sandbox itself. The named scenario
-    calls ``patch_offline`` before its settings sandbox, so this also pins
-    that order.
+    user's diagnostics. The named scenario imports an app module at module
+    scope and boots through ``boot_main_qml``, so the config base is resolved
+    before any runner can sandbox -- the shape the patch_offline repair exists
+    for.
     """
     from waves import paths
 
     # What the child's own platform-native config path would be with no XDG
-    # set: the directory a scenario without a sandbox writes into.
+    # set: the directory a scenario without a sandbox writes into. APPDATA (and
+    # the HOMEDRIVE/HOMEPATH pair) are sandboxed too: Windows anchors the
+    # native base on %APPDATA%, not on HOME.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+    monkeypatch.delenv("HOMEDRIVE", raising=False)
+    monkeypatch.delenv("HOMEPATH", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     native = Path(paths.path_config_base())
 
-    env = scenario_env(None)
-    env["HOME"] = str(tmp_path)
     proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a repo scenario file)
-        [sys.executable, str(TESTS_ROOT / "ui" / "test_search_query_collapse_qml.py"), "--run-scenario"],
-        env=env,
+        [sys.executable, str(TESTS_ROOT / "ui" / "test_search_sort_pref.py"), "--run-scenario"],
+        env=scenario_env(None),
         capture_output=True,
         text=True,
         timeout=180,
