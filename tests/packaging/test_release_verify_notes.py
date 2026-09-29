@@ -67,6 +67,7 @@ def test_the_workflow_appends_the_footer_after_signing():
     assert wf.index("tools/release_verify_notes.py") < wf.index("name: Set release notes body")
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(not _openssl3(), reason="needs bash and OpenSSL 3 on PATH")
 def test_the_readme_commands_verify_a_signed_manifest_with_openssl(tmp_path):
     """Run the README's exact commands against a manifest signed with a throwaway

@@ -24,7 +24,12 @@ ApplicationWindow {
   // no jump from the default frame. On a fresh install there is nothing to
   // restore and it shows at the default (4:3, 1040x780), centered on the
   // screen by onCompleted.
-  visible: false
+  //
+  // Hidden/Windowed/Maximized all ride `visibility`, never `visible`: setting
+  // both on one Window makes Qt treat the pair as ambiguous and warn
+  // "Conflicting properties 'visible' and 'visibility'" at component level.
+  // The window-state and geometry-persist logic read `visibility` too.
+  visibility: Window.Hidden
   width: 1040
   height: 780
   // Never allow a width that clips the header: the top bar's content
@@ -487,7 +492,7 @@ ApplicationWindow {
     if (showMax)
       root.visibility = Window.Maximized
     else
-      root.visible = true
+      root.visibility = Window.Windowed
     root._geomReady = true
     try {
       root.refreshAppleEnabled()
