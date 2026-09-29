@@ -67,7 +67,7 @@ def test_wiring_every_offscreen_bridge_scenario_declares_its_config_sandbox():
     own_file = Path(__file__).resolve()
     for path in sorted(TESTS_ROOT.rglob("test_*.py")):
         if path.resolve() == own_file:
-            continue  # this guard names the literals below; it builds no bridge
+            continue  # it builds no bridge, and its own text names the tokens above
         src = path.read_text()
         builds_bridge = "WavesBridge(" in src and "QQmlApplicationEngine" in src
         if not builds_bridge:
@@ -85,7 +85,20 @@ def test_wiring_every_offscreen_bridge_scenario_declares_its_config_sandbox():
     )
 
 
-_CONFIG_PROBE = """
+_CONFIG_PROBES = {
+    "fresh-import": """
+import os
+
+from support.offline import patch_offline
+
+patch_offline()
+
+from waves.config import BaseConfig
+
+print("XDG", os.environ.get("XDG_CONFIG_HOME", ""))
+print("BASE", BaseConfig.path_base)
+""",
+    "pre-imported": """
 import os
 
 # The shape a test module has when it imports an app module at module scope:
@@ -98,20 +111,22 @@ patch_offline()
 
 print("XDG", os.environ.get("XDG_CONFIG_HOME", ""))
 print("BASE", BaseConfig.path_base)
-"""
+""",
+}
 
 
 @pytest.mark.integration
-def test_patch_offline_sandboxes_before_the_first_app_import(tmp_path, monkeypatch):
+@pytest.mark.parametrize("probe", list(_CONFIG_PROBES.values()), ids=list(_CONFIG_PROBES.keys()))
+def test_patch_offline_sandboxes_the_config_base(probe, tmp_path, monkeypatch):
     """``waves.config`` resolves ``BaseConfig.path_base()`` at import, and
     ``patch_offline`` is the harness call that precedes every bridge: it must
-    leave the base sandboxed -- laying the sandbox down, or re-pointing a base
-    a module-level app import already resolved -- or a direct run even
-    ``makedirs()`` into the real config dir."""
+    leave the base sandboxed whether the app import comes after it (fresh
+    import) or already happened at module scope (pre-imported), or a direct
+    run would ``makedirs()`` the real config dir on a save."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a literal probe)
-        [sys.executable, "-c", _CONFIG_PROBE],
+        [sys.executable, "-c", probe],
         cwd=str(REPO_ROOT),
         env=scenario_env(None),
         capture_output=True,

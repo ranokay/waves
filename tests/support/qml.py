@@ -130,9 +130,9 @@ def sandbox_app_config() -> str:
         os.environ["XDG_CONFIG_HOME"] = base
     config = sys.modules.get("waves.config")
     if config is not None:
-        from waves import __config_dirname__
+        from waves.paths import path_config_base
 
-        config.BaseConfig.path_base = os.path.join(base, __config_dirname__)
+        config.BaseConfig.path_base = path_config_base()
     return base
 
 
