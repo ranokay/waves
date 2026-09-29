@@ -45,6 +45,8 @@ import logging
 import os
 import platform
 import queue as _queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -95,6 +97,18 @@ _WATCHDOG_WARN_GAP_SEC = 2.5
 _WATCHDOG_ALWAYS_DUMP_SEC = 15.0
 
 _SAMPLER_INTERVAL_MS = 5_000
+
+# Native stall capture (macOS, verbose only): the faulthandler dump names
+# Python frames, and a block inside Qt/QML has none -- crash.log shows
+# `app.exec()` with nothing under it. A watchdog thread runs `sample` on this
+# process while the GUI loop is still stuck, so the stall's native stack
+# lands next to crash.log and a future report can name the culprit.
+_STALL_SAMPLE_SEC = 2
+_STALL_SAMPLE_INTERVAL_MS = 1
+# One capture per stall, at most this many per session: a pathological run
+# must not spawn a sampler on every check.
+_STALL_SAMPLE_MAX_PER_SESSION = 3
+_STALL_MONITOR_TICK_SEC = 0.25
 
 # Event-loop occupancy probe: a fast GUI-thread timer whose own lateness reveals
 # how saturated the main loop is (a coarse 2s watchdog tick cannot). Verbose
@@ -228,11 +242,99 @@ class _Watchdog:
         now = time.monotonic()
         gap = now - self._last_tick
         self._last_tick = now
+        _stall_monitor.heartbeat(now)
         if self._warn_gap_sec is not None and gap > self._warn_gap_sec:
             logger.warning("[freeze] event loop blocked ~%.1fs (recovered)", gap)
         with contextlib.suppress(Exception):  # a failed re-arm only skips one tick
             kwargs = {"file": self._crash_file} if self._crash_file else {}
             faulthandler.dump_traceback_later(self._dump_sec, repeat=False, **kwargs)
+
+
+class _StallMonitor:
+    """Record the GUI thread's native stack while it is stalled (verbose, macOS).
+
+    The always-on faulthandler dump proves *that* the loop stopped, not what
+    stopped it: a block inside Qt/QML leaves the Python stack at `app.exec()`.
+    This thread watches the same heartbeat the watchdog QTimer writes; the
+    first check that finds it overdue by the warn gap runs macOS's `sample`
+    on this process and files the output beside crash.log. Best-effort by
+    design: a missing `sample`, a refused attach, or the session's capture
+    budget is a no-op, and each stall is captured at most once.
+    """
+
+    def __init__(self) -> None:
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._log_dir: Path | None = None
+        self._sample: str | None = None
+        self._warn_gap: float | None = None
+        self._last_tick = 0.0
+        self._captures = 0
+
+    def start(self, log_dir: Path | None, warn_gap_sec: float | None) -> None:
+        if self._thread is not None or log_dir is None or not warn_gap_sec:
+            return
+        sample = shutil.which("sample")
+        if sys.platform != "darwin" or sample is None:
+            return
+        self._log_dir = log_dir
+        self._sample = sample
+        self._warn_gap = float(warn_gap_sec)
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, name="waves-stall-sample", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread = None
+
+    def heartbeat(self, at: float) -> None:
+        self._last_tick = at
+
+    def _due(self, now: float) -> bool:
+        return (
+            self._thread is not None
+            and self._warn_gap is not None
+            and self._last_tick > 0.0
+            and self._captures < _STALL_SAMPLE_MAX_PER_SESSION
+            and now - self._last_tick > self._warn_gap
+        )
+
+    def _loop(self) -> None:
+        while not self._stop.wait(_STALL_MONITOR_TICK_SEC):
+            if self._due(time.monotonic()):
+                self._capture()
+
+    def _capture(self) -> None:
+        log_dir, sample = self._log_dir, self._sample
+        if log_dir is None or sample is None:  # not armed (see start/_due)
+            return
+        self._captures += 1
+        # This capture covers the current stall; the next one needs a fresh gap.
+        self._last_tick = time.monotonic()
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        path = log_dir / f"freeze-{stamp}.sample.txt"
+        try:
+            done = subprocess.run(  # noqa: S603 (resolved binary, fixed argv)
+                [
+                    sample,
+                    str(os.getpid()),
+                    str(_STALL_SAMPLE_SEC),
+                    str(_STALL_SAMPLE_INTERVAL_MS),
+                    "-file",
+                    str(path),
+                ],
+                capture_output=True,
+                timeout=_STALL_SAMPLE_SEC + 5,
+                check=False,
+            )
+        except Exception:  # a failed capture must never take the app down
+            logger.warning("[freeze] native stack capture failed", exc_info=True)
+            return
+        if done.returncode == 0 and path.exists():
+            logger.warning("[freeze] native stack captured -> %s", path.name)
+        else:
+            logger.warning("[freeze] native stack capture produced nothing (sample exit %s)", done.returncode)
 
 
 def _occ_bucket(ratio: float) -> str:
@@ -375,6 +477,7 @@ _disk_listener: QueueListener | None = None
 _stream_handler: logging.StreamHandler | None = None
 _crumbs = _BreadcrumbHandler()
 _watchdog = _Watchdog()
+_stall_monitor = _StallMonitor()
 _sampler = _PerfSampler()
 # A countdown still armed when the interpreter exits fires from inside
 # Py_FinalizeEx, where faulthandler walks frames that are already being torn
@@ -531,9 +634,11 @@ def set_verbose(on: bool) -> None:
     if on:
         logger.warning("[init] verbose diagnostics ON (session=%s, v%s)", SESSION_ID, _app_version())
         _watchdog.start(_crash_file)
+        _stall_monitor.start(_log_dir, _WATCHDOG_WARN_GAP_SEC)
         _sampler.start()
     else:
         _watchdog.start(_crash_file, dump_sec=_WATCHDOG_ALWAYS_DUMP_SEC, warn_gap_sec=None)
+        _stall_monitor.stop()
         _sampler.stop()
         logger.warning("[init] verbose diagnostics OFF")
 
@@ -553,6 +658,7 @@ def stop_freeze_watchdog() -> None:
 
     Idempotent, and safe to call when the watchdog was never started."""
     _watchdog.stop()
+    _stall_monitor.stop()
 
 
 def detach_disk_log() -> None:
@@ -567,6 +673,7 @@ def detach_disk_log() -> None:
     if _file_handler is None:
         return
     _watchdog.stop()
+    _stall_monitor.stop()
     _sampler.stop()
     for target in (logging.getLogger("waves"), logging.getLogger()):
         for handler in list(target.handlers):
