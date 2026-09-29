@@ -296,9 +296,12 @@ class TestThePageCannotSaveARejectedStandIn:
         src = (_UI / "qml" / "SettingsPage.qml").read_text()
 
         # Same red-outline / held-save machinery as the general stand-in: the
-        # table registers itself in sanitizeKeys, which hasInvalidEdits walks.
+        # table is collected from the schema into sanitizeKeys (a delegate
+        # cannot register it now that a collapsed section builds no rows), and
+        # hasInvalidEdits walks that map.
         assert "invalid: page.mapCharDirty(charRow.fieldData, charRow.ch)" in src
-        assert "Component.onCompleted: page.sanitizeKeys[modelData.key] = modelData" in src
+        assert 'f.type === "char_map"' in src
+        assert "sanitizeKeys = collectSanitizeKeys()" in src
 
     def test_wiring_the_row_asks_the_engines_own_launderer(self):
         src = (_UI / "qml" / "SettingsPage.qml").read_text()
