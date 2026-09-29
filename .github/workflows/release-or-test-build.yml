@@ -194,7 +194,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Create the Release (empty draft, assets attached by the matrix)
-        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
         with:
@@ -447,7 +447,7 @@ jobs:
         # unambiguous Release by tag and just appends its two files, instead
         # of racing to create it themselves.
         if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
-        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
         with:
@@ -591,7 +591,7 @@ jobs:
             gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --notes-file RELEASE_NOTES.md
           fi
       - name: Publish manifest + signature
-        uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
         with:
