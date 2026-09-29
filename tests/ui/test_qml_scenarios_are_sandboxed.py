@@ -115,6 +115,33 @@ print("BASE", BaseConfig.path_base)
 }
 
 
+def _sandboxed_home(monkeypatch, tmp_path) -> Path:
+    """Sandbox HOME and APPDATA (Windows anchors the native config base on
+    ``%APPDATA%``, not HOME) and drop XDG_CONFIG_HOME; return the native config
+    dir that leaves -- the directory a scenario without a sandbox writes
+    into."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+    monkeypatch.delenv("HOMEDRIVE", raising=False)
+    monkeypatch.delenv("HOMEPATH", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    from waves import paths
+
+    return Path(paths.path_config_base())
+
+
+def _run_probe(script: str) -> subprocess.CompletedProcess[str]:
+    """Run a literal probe in a child the scenario must sandbox itself."""
+    return subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a literal probe)
+        [sys.executable, "-c", script],
+        cwd=str(REPO_ROOT),
+        env=scenario_env(None),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("probe", list(_CONFIG_PROBES.values()), ids=list(_CONFIG_PROBES.keys()))
 def test_patch_offline_sandboxes_the_config_base(probe, tmp_path, monkeypatch):
@@ -123,16 +150,8 @@ def test_patch_offline_sandboxes_the_config_base(probe, tmp_path, monkeypatch):
     leave the base sandboxed whether the app import comes after it (fresh
     import) or already happened at module scope (pre-imported), or a direct
     run would ``makedirs()`` the real config dir on a save."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a literal probe)
-        [sys.executable, "-c", probe],
-        cwd=str(REPO_ROOT),
-        env=scenario_env(None),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    _sandboxed_home(monkeypatch, tmp_path)
+    proc = _run_probe(probe)
     assert proc.returncode == 0, proc.stderr[-800:]
     values = dict(line.split(" ", 1) for line in proc.stdout.splitlines() if line.startswith(("XDG ", "BASE ")))
     xdg = values.get("XDG", "")
@@ -143,7 +162,8 @@ def test_patch_offline_sandboxes_the_config_base(probe, tmp_path, monkeypatch):
 
 
 _IMPORT_PROBE = """
-import waves.desktop.backend  # noqa: F401 -- the app import a module-scope test performs
+import waves.desktop.app  # noqa: F401 -- the app entry module a test may import at module scope
+import waves.desktop.backend  # noqa: F401 -- the bridge module
 from waves.config import Settings, SingletonMeta
 from waves.desktop.session import WavesTidal
 
@@ -160,21 +180,14 @@ def test_importing_the_app_constructs_no_config_singleton(tmp_path, monkeypatch)
     the cached ``BaseConfig.path_base``, not a built instance's ``file_path``
     (and therefore its dev log directory)."""
     require_qt()
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.delenv("HOMEDRIVE", raising=False)
-    monkeypatch.delenv("HOMEPATH", raising=False)
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a literal probe)
-        [sys.executable, "-c", _IMPORT_PROBE],
-        cwd=str(REPO_ROOT),
-        env=scenario_env(None),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    native = _sandboxed_home(monkeypatch, tmp_path)
+    proc = _run_probe(_IMPORT_PROBE)
     assert proc.returncode == 0, proc.stderr[-800:]
     assert proc.stdout.split() == ["SETTINGS", "False", "TIDAL", "False"], proc.stdout
+    assert not native.exists(), (
+        f"importing the app created the native config dir {native}: "
+        f"{sorted(str(p.relative_to(native)) for p in native.rglob('*'))[:8]}"
+    )
 
 
 @pytest.mark.qml
@@ -189,19 +202,7 @@ def test_a_direct_scenario_run_never_writes_the_native_config(tmp_path, monkeypa
     before any runner can sandbox -- the shape the patch_offline repair exists
     for.
     """
-    from waves import paths
-
-    # What the child's own platform-native config path would be with no XDG
-    # set: the directory a scenario without a sandbox writes into. APPDATA (and
-    # the HOMEDRIVE/HOMEPATH pair) are sandboxed too: Windows anchors the
-    # native base on %APPDATA%, not on HOME.
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.delenv("HOMEDRIVE", raising=False)
-    monkeypatch.delenv("HOMEPATH", raising=False)
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    native = Path(paths.path_config_base())
-
+    native = _sandboxed_home(monkeypatch, tmp_path)
     proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a repo scenario file)
         [sys.executable, str(TESTS_ROOT / "ui" / "test_search_sort_pref.py"), "--run-scenario"],
         env=scenario_env(None),
