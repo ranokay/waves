@@ -81,6 +81,7 @@ def _bridge_for_fetch(monkeypatch):
     watchdog = be.diagnostics._watchdog
     assert watchdog._timer is not None, "the always-on watchdog is the default prefs' contract (issue #515)"
     assert watchdog._dump_sec == be.diagnostics._WATCHDOG_ALWAYS_DUMP_SEC, "default prefs must not arm the verbose dump"
+    assert watchdog._warn_gap_sec is None, "default prefs must not arm the verbose stall warning"
 
     class _Inline:
         def start(self, w):

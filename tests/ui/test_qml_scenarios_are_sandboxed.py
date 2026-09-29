@@ -127,6 +127,9 @@ def _sandboxed_home(monkeypatch, tmp_path) -> Path:
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     from waves import paths
 
+    # A "failed" migration left by another test would answer with the legacy
+    # dir instead, and the assertions below would check the wrong directory.
+    monkeypatch.setattr(paths, "CONFIG_MIGRATION", "")
     return Path(paths.path_config_base())
 
 
@@ -180,14 +183,12 @@ def test_importing_the_app_constructs_no_config_singleton(tmp_path, monkeypatch)
     the cached ``BaseConfig.path_base``, not a built instance's ``file_path``
     (and therefore its dev log directory)."""
     require_qt()
-    native = _sandboxed_home(monkeypatch, tmp_path)
+    _sandboxed_home(monkeypatch, tmp_path)
     proc = _run_probe(_IMPORT_PROBE)
     assert proc.returncode == 0, proc.stderr[-800:]
     assert proc.stdout.split() == ["SETTINGS", "False", "TIDAL", "False"], proc.stdout
-    assert not native.exists(), (
-        f"importing the app created the native config dir {native}: "
-        f"{sorted(str(p.relative_to(native)) for p in native.rglob('*'))[:8]}"
-    )
+    stray = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    assert not stray, f"importing the app wrote into the sandboxed home: {stray[:8]}"
 
 
 @pytest.mark.qml
