@@ -26,9 +26,11 @@ Two gates, one per launch path:
   subprocess env.
 * Run directly -- ``python tests/ui/<file>.py --run-scenario``, how a single
   scenario is iterated on -- there is no parent runner to hand one over, so
-  the scenario sandboxes itself: ``support.qml.sandbox_app_config()`` (and
-  the settings sandbox that wraps it, ``sandbox_qml_settings``) routes the
-  app's config to a throwaway directory when the process has none.
+  the scenario sandboxes itself: ``support.qml.sandbox_app_config()`` routes
+  the app's config to a throwaway directory when the process has none, and
+  ``patch_offline()`` -- the harness's last moment before any app import --
+  calls it, because ``waves.config`` resolves ``BaseConfig.path_base`` at
+  import time. ``sandbox_qml_settings()`` wraps it too.
 
 ``path_config_base()`` honours the variable first on every platform, so a
 scenario given one can only ever touch a temporary directory.
@@ -36,20 +38,30 @@ scenario given one can only ever touch a temporary directory.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 from support.paths import REPO_ROOT, TESTS_ROOT
-from support.qml import EXIT_NO_QT, require_qt
+from support.qml import EXIT_NO_QT, require_qt, scenario_env
 
-# One sanctioned sandbox call each, or an env of the scenario's own.
-_SANDBOX_TOKENS = ("XDG_CONFIG_HOME", "sandbox_app_config", "sandbox_qml_settings", "boot_main_qml")
+# A declared sandbox: an env of the scenario's own, or a harness call that
+# establishes one before the bridge (patch_offline underneath them all).
+_SANDBOX_TOKENS = (
+    "XDG_CONFIG_HOME",
+    "patch_offline(",
+    "sandbox_app_config(",
+    "sandbox_qml_settings(",
+    "boot_main_qml(",
+)
 
 
-def test_every_offscreen_bridge_scenario_declares_its_config_sandbox():
+# Wiring, not behavior coverage: the corpus is every test file, and the absence
+# it asserts -- no bridge-building file without a sandbox -- has no behavioral
+# seam. Proving it per file would mean running every scenario once; the
+# behavioral half is the direct-run regression below.
+def test_wiring_every_offscreen_bridge_scenario_declares_its_config_sandbox():
     unsandboxed = []
     for path in sorted(TESTS_ROOT.rglob("test_*.py")):
         src = path.read_text()
@@ -69,15 +81,54 @@ def test_every_offscreen_bridge_scenario_declares_its_config_sandbox():
     )
 
 
+_CONFIG_PROBE = """
+import os
+
+from support.offline import patch_offline
+
+patch_offline()
+from waves.config import BaseConfig
+
+print("XDG", os.environ.get("XDG_CONFIG_HOME", ""))
+print("BASE", BaseConfig.path_base)
+"""
+
+
+@pytest.mark.integration
+def test_patch_offline_sandboxes_before_the_first_app_import(tmp_path):
+    """``waves.config`` resolves ``BaseConfig.path_base()`` at import, and
+    ``patch_offline`` is the harness call that precedes every bridge: its own
+    import chain must already have a sandbox, or a direct run pins -- and even
+    a sandboxed bridge then ``makedirs()`` into -- the real config dir."""
+    env = scenario_env(None)
+    env["HOME"] = str(tmp_path)
+    proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a literal probe)
+        [sys.executable, "-c", _CONFIG_PROBE],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr[-800:]
+    values = dict(line.split(" ", 1) for line in proc.stdout.splitlines() if line.startswith(("XDG ", "BASE ")))
+    xdg = values.get("XDG", "")
+    assert xdg, "patch_offline left no XDG_CONFIG_HOME; the first app import would resolve the real config dir"
+    assert values.get("BASE") == str(Path(xdg) / "Waves"), (
+        f"BaseConfig.path_base resolved to {values.get('BASE')!r}, outside the sandbox {xdg!r}"
+    )
+
+
 @pytest.mark.qml
 def test_a_direct_scenario_run_never_writes_the_native_config(tmp_path, monkeypatch):
     """The file's own ``__main__`` path hands the child no XDG_CONFIG_HOME.
 
-    That is how a single scenario is iterated on, and before this pin it
-    resolved the developer's real config directory: the bridge wrote
-    ``settings.json``, ``waves.json`` and its ``waves_dev.log`` there, so the
-    run's Qt warnings reached the user's diagnostics. The scenario must
-    sandbox itself; this is the regression test for the leak.
+    That is how a single scenario is iterated on, and before this pin the
+    bridge resolved the developer's real config directory: settings, token and
+    ``waves_dev.log`` were written there, so the run's Qt warnings reached the
+    user's diagnostics. The scenario must sandbox itself. The named scenario
+    calls ``patch_offline`` before its settings sandbox, so this also pins
+    that order.
     """
     from waves import paths
 
@@ -87,12 +138,10 @@ def test_a_direct_scenario_run_never_writes_the_native_config(tmp_path, monkeypa
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     native = Path(paths.path_config_base())
 
-    env = {key: value for key, value in os.environ.items() if key != "XDG_CONFIG_HOME"}
+    env = scenario_env(None)
     env["HOME"] = str(tmp_path)
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(TESTS_ROOT), str(REPO_ROOT), env.get("PYTHONPATH", "")) if p)
     proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a repo scenario file)
-        [sys.executable, str(TESTS_ROOT / "ui" / "test_hover_swell_fade.py"), "--run-scenario"],
+        [sys.executable, str(TESTS_ROOT / "ui" / "test_search_query_collapse_qml.py"), "--run-scenario"],
         env=env,
         capture_output=True,
         text=True,
@@ -102,9 +151,8 @@ def test_a_direct_scenario_run_never_writes_the_native_config(tmp_path, monkeypa
         require_qt()
     assert proc.returncode == 0, (proc.stdout + proc.stderr)[-1200:]
 
-    stray = sorted(str(p.relative_to(native)) for p in native.rglob("*") if p.is_file())
-    assert not stray, (
-        f"a direct scenario run wrote into the native config dir {native}: {stray}. "
-        "The scenario must route the app's config to a throwaway directory "
-        "(support.qml.sandbox_app_config) before building the bridge."
+    assert not native.exists(), (
+        f"a direct scenario run created the native config dir {native}: "
+        f"{sorted(str(p.relative_to(native)) for p in native.rglob('*'))[:8]}. The scenario "
+        "must route the app's config to a throwaway directory before its first app import."
     )

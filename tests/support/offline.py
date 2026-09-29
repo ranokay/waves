@@ -20,7 +20,19 @@ from __future__ import annotations
 
 
 def patch_offline() -> None:
-    """Make the bridge's cached-token login resolve instantly, offline."""
+    """Make the bridge's cached-token login resolve instantly, offline.
+
+    Also the harness's last moment before any app import: it lays down the
+    config sandbox first (see :func:`support.qml.sandbox_app_config`), because
+    ``waves.config`` resolves ``BaseConfig.path_base`` at import time and a
+    direct scenario run (``python tests/ui/<file>.py --run-scenario``) has no
+    parent runner to hand it an ``XDG_CONFIG_HOME``. Without that order a
+    direct run's first app import pins the real config dir and even a
+    sandboxed bridge ``makedirs()`` into it.
+    """
+    from support.qml import sandbox_app_config
+
+    sandbox_app_config()
     from waves.desktop.session import WavesTidal
 
     WavesTidal.login_token = lambda self: False  # type: ignore[method-assign]

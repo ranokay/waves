@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import run_scenario, sandbox_app_config
+from support.qml import run_scenario
 
 
 def _album(media_id: str) -> dict:
@@ -99,7 +99,6 @@ def _scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     from support.offline import PARK_LOGIN_QML, patch_offline
 
-    sandbox_app_config()
     patch_offline()
     from waves.desktop.app import _load_mono
     from waves.desktop.backend import WavesBridge

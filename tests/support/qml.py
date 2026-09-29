@@ -152,12 +152,20 @@ def sandbox_qml_settings() -> None:
     QSettings().clear()
 
 
-def scenario_env(sandbox: str) -> dict[str, str]:
+def scenario_env(sandbox: str | None) -> dict[str, str]:
     """The environment one scenario child runs with: offscreen Qt, a private
-    config directory, and the repo plus tests root importable from any depth."""
+    config directory, and the repo plus tests root importable from any depth.
+
+    ``None`` drops ``XDG_CONFIG_HOME`` entirely, for a child whose scenario
+    sandboxes itself (see :func:`sandbox_app_config`) -- the direct-run
+    regression test drives exactly that shape.
+    """
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
-    env["XDG_CONFIG_HOME"] = sandbox
+    if sandbox is None:
+        env.pop("XDG_CONFIG_HOME", None)
+    else:
+        env["XDG_CONFIG_HOME"] = sandbox
     parts = [str(TESTS_ROOT), str(REPO_ROOT), env.get("PYTHONPATH", "")]
     env["PYTHONPATH"] = os.pathsep.join(part for part in parts if part)
     return env
