@@ -59,21 +59,26 @@ def _bridge_for_fetch(monkeypatch):
 
     QGuiApplication.instance() or QGuiApplication([])
     from waves.desktop import backend as be
-    from waves.desktop import diagnostics
     from waves.desktop.session import WavesTidal
 
     # This bridge lives in the pytest process, so it must not read the
     # developer's real waves.json: with verbose diagnostics on there, __init__
-    # started the real freeze watchdog, whose QTimer re-armed a faulthandler
+    # started the verbose freeze watchdog, whose QTimer re-armed a faulthandler
     # countdown from every later in-process event loop, and the one still
     # pending at exit fired inside interpreter teardown and spun forever
     # (the suite printed its summary and never exited). Default prefs, no live
-    # login, and a check that the watchdog stayed off.
+    # login, and a check that the watchdog state is the always-on one, not the
+    # verbose thresholds a real waves.json would bring. Read through `be`: a
+    # test that re-imported waves.desktop.diagnostics leaves a different module
+    # in sys.modules than the one the bridge armed.
     monkeypatch.setattr(WavesTidal, "login_token", lambda self: False)
     monkeypatch.setattr(be.WavesBridge, "_load_waves_prefs", lambda self: self._default_waves_prefs())
     monkeypatch.setattr(be, "name_builder_title", lambda t: getattr(t, "name", ""))
     bridge = be.WavesBridge(tidal=None)
-    assert diagnostics._watchdog._timer is None, "a bridge built with default prefs must not start the freeze watchdog"
+    watchdog = be.diagnostics._watchdog
+    assert watchdog._timer is not None, "the always-on watchdog is the default prefs' contract (issue #515)"
+    assert watchdog._dump_sec == be.diagnostics._WATCHDOG_ALWAYS_DUMP_SEC, "default prefs must not arm the verbose dump"
+    assert watchdog._warn_gap_sec is None, "default prefs must not arm the verbose stall warning"
 
     class _Inline:
         def start(self, w):

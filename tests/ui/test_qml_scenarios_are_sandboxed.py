@@ -142,6 +142,41 @@ def test_patch_offline_sandboxes_the_config_base(probe, tmp_path, monkeypatch):
     )
 
 
+_IMPORT_PROBE = """
+import waves.desktop.backend  # noqa: F401 -- the app import a module-scope test performs
+from waves.config import Settings, SingletonMeta
+from waves.desktop.session import WavesTidal
+
+print("SETTINGS", Settings in SingletonMeta._instances)
+print("TIDAL", WavesTidal in SingletonMeta._instances)
+"""
+
+
+@pytest.mark.qml
+def test_importing_the_app_constructs_no_config_singleton(tmp_path, monkeypatch):
+    """An app import must not build Settings/Tidal: construction reads the
+    config file and can persist migrations, so a module-scope import that built
+    one would escape every later sandbox -- ``sandbox_app_config`` re-points
+    the cached ``BaseConfig.path_base``, not a built instance's ``file_path``
+    (and therefore its dev log directory)."""
+    require_qt()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+    monkeypatch.delenv("HOMEDRIVE", raising=False)
+    monkeypatch.delenv("HOMEPATH", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a literal probe)
+        [sys.executable, "-c", _IMPORT_PROBE],
+        cwd=str(REPO_ROOT),
+        env=scenario_env(None),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert proc.stdout.split() == ["SETTINGS", "False", "TIDAL", "False"], proc.stdout
+
+
 @pytest.mark.qml
 def test_a_direct_scenario_run_never_writes_the_native_config(tmp_path, monkeypatch):
     """The file's own ``__main__`` path hands the child no XDG_CONFIG_HOME.
