@@ -37,6 +37,16 @@ issue. A test enforces it.
 
 - 🔊 With "Download Dolby Atmos" on, one click now saves both the stereo and Dolby Atmos versions as separate queue rows (the Atmos row is badged ATMOS and lands in the new "Dolby Atmos files" subfolder by default, blank places it alongside), each with its own ownership, progress, cancel and retry, and the button settles only when every enabled version is owned; Atmos-only tracks still fetch Atmos alone, and every file now carries a WAVES_AUDIO_TYPE tag so recognition never sniffs codecs ([issue #29](https://github.com/ranokay/waves/issues/29)).
 
+## 🗂️ v0.1.32 (2026-09-28)
+
+### ✨ Added
+
+- 🔐 The release page now prints every download's expected SHA-256 next to it, together with the release public key and copyable verification steps; the README has a Verify a download section with the same steps for macOS, Linux and Windows.
+
+### 🐛 Fixed
+
+- 📋 My Tidal > Playlists lists each playlist once, and playlists that were missing from the list are back ([issue #46](https://github.com/iamprivacy/Waves/issues/46)).
+
 ## 🗂️ v0.1.31 (2026-09-24)
 
 ### ✨ Added

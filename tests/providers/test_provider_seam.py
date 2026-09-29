@@ -360,7 +360,10 @@ class TestCatalog:
         provider, tidal = _provider()
         playlist, folder, mix = Mock(name="pl"), Mock(name="folder"), Mock(name="mix")
         favorites = tidal.session.user.favorites
-        favorites.playlists_paginated.return_value = [playlist]
+        favorites.playlists.side_effect = lambda limit, offset, order, order_direction: (
+            [playlist] if offset == 0 else []
+        )
+        favorites.get_playlists_count.return_value = 1
         favorites.playlist_folders.side_effect = lambda limit, offset, parent_folder_id: [folder] if offset == 0 else []
         category = Mock()
         category.items = [mix]

@@ -133,7 +133,7 @@ Grab the build for your platform from the [**latest release**](https://github.co
 | Windows             | `waves_windows-x64.zip`        | `waves_windows-arm64.zip`              |
 | Linux               | `waves_linux-x64.zip`          | `waves_linux-arm64.zip`                |
 
-Unzip and run: on macOS drag `waves.app` to Applications (first launch needs a one‑time approval in System Settings, see the note below); on Windows run `Waves.exe` from the unzipped folder; on Linux run `Waves` from the unzipped folder. Every asset ships with a SHA‑256 checksum, and the release carries a signed `SHA256SUMS` manifest.
+Unzip and run: on macOS drag `waves.app` to Applications (first launch needs a one‑time approval in System Settings, see the note below); on Windows run `Waves.exe` from the unzipped folder; on Linux run `Waves` from the unzipped folder. Every asset ships with a SHA‑256 checksum, and the release carries a signed `SHA256SUMS` manifest; the expected hash of every asset is printed on the release page, and [Verify a download](#verify-a-download) has the copyable steps.
 
 **macOS via Homebrew:**
 
@@ -167,6 +167,36 @@ Waves is GUI‑first and does not ship a command‑line interface. If you prefer
 > **A note on macOS Gatekeeper:** the builds are not yet Apple‑notarized, so macOS quarantines a freshly downloaded `waves.app`. On first launch macOS shows a warning with no way to proceed; click **Done**, then go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the Waves entry. Confirm once and macOS remembers the choice from then on. (The old right‑click → Open shortcut no longer works on macOS 15 Sequoia and later.)
 >
 > **A note on Windows SmartScreen:** the builds are not yet code‑signed, so the first launch may show a Microsoft Defender SmartScreen prompt ("Windows protected your PC"). Click **More info**, then **Run anyway**. SmartScreen is a reputation check on new, unsigned software, not a malware detection; it fades on its own as a release accumulates clean installs.
+
+## Verify a download
+
+Optional, for anyone who wants to check a download before the first launch. Every release carries two small files next to the builds: `SHA256SUMS`, one line per asset with its SHA‑256, and `SHA256SUMS.sig`, an Ed25519 signature over that file made with the Waves release key. The release page also prints each asset's hash in its **Verify** section. The public half of the release key, compiled into every build and checked by the in‑app updater before it installs anything:
+
+```
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAcetggrhiqyMN5HsBCi/f2gJL75FVPOYGU/sd4dI5b+0=
+-----END PUBLIC KEY-----
+```
+
+**macOS or Linux**, from a folder holding the zip, `SHA256SUMS` and `SHA256SUMS.sig`. The signature step needs OpenSSL 3: most current Linux distributions ship it, and on macOS the built-in `openssl` is LibreSSL, which cannot check it, so install OpenSSL 3 with `brew install openssl@3` and run the third command with `$(brew --prefix openssl@3)/bin/openssl` in place of `openssl`:
+
+```bash
+printf '%s\n' '-----BEGIN PUBLIC KEY-----' 'MCowBQYDK2VwAyEAcetggrhiqyMN5HsBCi/f2gJL75FVPOYGU/sd4dI5b+0=' '-----END PUBLIC KEY-----' > waves-release.pem
+base64 --decode < SHA256SUMS.sig > SHA256SUMS.sig.bin
+openssl pkeyutl -verify -pubin -inkey waves-release.pem -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig.bin
+grep -v '^#' SHA256SUMS | tr -d '\r' | shasum -a 256 --ignore-missing -c -
+```
+
+The third command must print `Signature Verified Successfully` and the last one `<asset>: OK` for the zip you downloaded (on a system without `shasum`, use `sha256sum` in its place). Any other output means the file does not match this release: delete it and download again.
+
+**Windows** (PowerShell), from the same folder, with `waves_windows-x64.zip` replaced by the zip you downloaded:
+
+```powershell
+(Get-FileHash .\waves_windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+Select-String -Path SHA256SUMS -Pattern waves_windows-x64.zip
+```
+
+The two hashes must be identical. To also check the signature on Windows, run the macOS/Linux commands in Git Bash, which ships OpenSSL.
 
 **Waves is open source, and that means you can check the code for yourself. If reading the source is not something you are capable of doing, you can upload the downloaded zip to [VirusTotal](https://www.virustotal.com) and have it checked for viruses before you even extract it. Your privacy and security are important to me. Trust, but verify.**
 
