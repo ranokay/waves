@@ -206,6 +206,11 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario, four legs)
         )
     )
     settle(400)
+    # The Apple switch lives in the Providers card, which starts collapsed;
+    # an open section is what builds its rows now, so open it the way a
+    # user does before looking for the switch.
+    q("settingsPage.setSectionOpen('providers', true)")
+    settle(300)
     if not opened or not bool(q("root.settingsOpen")):
         problems.append("the Settings tab did not open the Settings page")
     elif not bool(q(scene_js(_FIND_SWITCH + "return sw ? true : false;"))):

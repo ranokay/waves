@@ -3440,105 +3440,119 @@ Item {
                       x: 14
                       width: parent.width - 28
                       y: modelData.third === true ? Math.max(10, (parent.height - implicitHeight) / 2) : 10
-                      implicitHeight: modelData.type === "str" && modelData.inline !== true ? strCol.implicitHeight : modelData.type === "cover_sizes" ? coverCol.implicitHeight : modelData.type === "library" ? libraryLoader.implicitHeight : modelData.type === "status" ? statusCol.implicitHeight : modelData.type === "apple_setup" ? setupCol.implicitHeight : modelData.type === "action" ? actionCol.implicitHeight : inlineRow.implicitHeight
+                      implicitHeight: modelData.type === "str" && modelData.inline !== true ? strColLoader.implicitHeight : modelData.type === "cover_sizes" ? coverColLoader.implicitHeight : modelData.type === "library" ? libraryLoader.implicitHeight : modelData.type === "status" ? statusColLoader.implicitHeight : modelData.type === "apple_setup" ? setupColLoader.implicitHeight : modelData.type === "action" ? actionColLoader.implicitHeight : inlineRowLoader.implicitHeight
 
+                      // The row's variants are Loaders activated by the field's
+                      // own type AND the section being open, so a row builds
+                      // exactly the control it needs. Instantiating a variant
+                      // and hiding it still costs its scene-graph sync on the
+                      // first Settings open, and the hidden variants were ~90%
+                      // of the page's items. The library card below established
+                      // the pattern; the active loader is what body.implicitHeight
+                      // measures.
                       // Enum / int / float / short str: label + help on
                       // the left, control on the right. A str field
                       // flagged "inline" holds a value of a character or
                       // two, so it gets a small box here instead of a
                       // full-width one under the help.
-                      RowLayout {
-                        id: inlineRow
-                        visible: (modelData.type !== "str" || modelData.inline === true) && modelData.type !== "cover_sizes" && modelData.type !== "library" && modelData.type !== "status" && modelData.type !== "apple_setup" && modelData.type !== "action"
+                      Loader {
+                        id: inlineRowLoader
+                        active: card.open && (modelData.type !== "str" || modelData.inline === true) && modelData.type !== "cover_sizes" && modelData.type !== "library" && modelData.type !== "status" && modelData.type !== "apple_setup" && modelData.type !== "action"
+                        visible: active
                         width: parent.width
-                        spacing: 14
-                        ColumnLayout {
-                          Layout.fillWidth: true
-                          spacing: 2
-                          Row {
-                            spacing: 10
-                            Text {
-                              id: inlineLabel
-                              textFormat: Text.PlainText
-                              text: modelData.label
-                              color: page.textHi
-                              font.pixelSize: 14
-                              font.weight: Font.Medium
-                            }
-                            // Same per-field Restore default link as the
-                            // full-width str rows (see strDefaultLink).
-                            Text {
-                              id: inlineDefaultLink
-                              readonly property bool changed: modelData.default_value !== undefined && String(page.val(modelData)) !== String(modelData.default_value)
-                              visible: modelData.inline === true && modelData.default_value !== undefined
-                              anchors.verticalCenter: inlineLabel.verticalCenter
-                              textFormat: Text.PlainText
-                              text: changed ? "Restore default" : "Default"
-                              color: !changed ? page.textDim : inlineDefaultMa.containsMouse ? page.accent : page.accentDim
-                              opacity: changed ? 1 : 0.5
-                              font.pixelSize: 12
-                              font.underline: changed && inlineDefaultMa.containsMouse
-                              MouseArea {
-                                id: inlineDefaultMa
-                                anchors.fill: parent
-                                anchors.margins: -4
-                                enabled: inlineDefaultLink.changed
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                // Re-bind rather than write, for the same
-                                // binding-preservation reasons as strDefaultMa.
-                                onClicked: {
-                                  page.setv(modelData.key, modelData.default_value)
-                                  inlineStr.text = Qt.binding(function () {
-                                    return page.val(modelData)
-                                  })
+                        sourceComponent: RowLayout {
+                          id: inlineRow
+                          visible: (modelData.type !== "str" || modelData.inline === true) && modelData.type !== "cover_sizes" && modelData.type !== "library" && modelData.type !== "status" && modelData.type !== "apple_setup" && modelData.type !== "action"
+                          width: parent.width
+                          spacing: 14
+                          ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            Row {
+                              spacing: 10
+                              Text {
+                                id: inlineLabel
+                                textFormat: Text.PlainText
+                                text: modelData.label
+                                color: page.textHi
+                                font.pixelSize: 14
+                                font.weight: Font.Medium
+                              }
+                              // Same per-field Restore default link as the
+                              // full-width str rows (see strDefaultLink).
+                              Text {
+                                id: inlineDefaultLink
+                                readonly property bool changed: modelData.default_value !== undefined && String(page.val(modelData)) !== String(modelData.default_value)
+                                visible: modelData.inline === true && modelData.default_value !== undefined
+                                anchors.verticalCenter: inlineLabel.verticalCenter
+                                textFormat: Text.PlainText
+                                text: changed ? "Restore default" : "Default"
+                                color: !changed ? page.textDim : inlineDefaultMa.containsMouse ? page.accent : page.accentDim
+                                opacity: changed ? 1 : 0.5
+                                font.pixelSize: 12
+                                font.underline: changed && inlineDefaultMa.containsMouse
+                                MouseArea {
+                                  id: inlineDefaultMa
+                                  anchors.fill: parent
+                                  anchors.margins: -4
+                                  enabled: inlineDefaultLink.changed
+                                  hoverEnabled: true
+                                  cursorShape: Qt.PointingHandCursor
+                                  // Re-bind rather than write, for the same
+                                  // binding-preservation reasons as strDefaultMa.
+                                  onClicked: {
+                                    page.setv(modelData.key, modelData.default_value)
+                                    inlineStr.text = Qt.binding(function () {
+                                      return page.val(modelData)
+                                    })
+                                  }
                                 }
                               }
                             }
+                            Text {
+                              textFormat: Text.PlainText
+                              visible: modelData.help !== ""
+                              text: modelData.help
+                              color: page.textDim
+                              font.pixelSize: 12
+                              wrapMode: Text.WordWrap
+                              Layout.fillWidth: true
+                            }
                           }
-                          Text {
-                            textFormat: Text.PlainText
-                            visible: modelData.help !== ""
-                            text: modelData.help
-                            color: page.textDim
-                            font.pixelSize: 12
-                            wrapMode: Text.WordWrap
-                            Layout.fillWidth: true
+                          SCombo {
+                            visible: modelData.type === "enum"
+                            Layout.alignment: Qt.AlignVCenter
+                            model: modelData.type === "enum" ? modelData.options : []
+                            currentIndex: modelData.type === "enum" ? page.enumIndex(modelData.options, page.val(modelData)) : 0
+                            onActivated: page.setv(modelData.key, modelData.options[currentIndex].value)
                           }
-                        }
-                        SCombo {
-                          visible: modelData.type === "enum"
-                          Layout.alignment: Qt.AlignVCenter
-                          model: modelData.type === "enum" ? modelData.options : []
-                          currentIndex: modelData.type === "enum" ? page.enumIndex(modelData.options, page.val(modelData)) : 0
-                          onActivated: page.setv(modelData.key, modelData.options[currentIndex].value)
-                        }
-                        SText {
-                          id: inlineStr
-                          visible: modelData.type === "str" && modelData.inline === true
-                          Layout.alignment: Qt.AlignVCenter
-                          // The stepper's value-box scale, so the short-value
-                          // rows share one control vocabulary.
-                          Layout.preferredWidth: 64
-                          Layout.preferredHeight: 32
-                          text: page.val(modelData)
-                          invalid: page.sanitizeDirty(modelData)
-                          Component.onCompleted: if (modelData.sanitize === true)
-                            page.sanitizeKeys[modelData.key] = modelData
-                          onEdited: function (t) {
-                            page.setv(modelData.key, t)
+                          SText {
+                            id: inlineStr
+                            visible: modelData.type === "str" && modelData.inline === true
+                            Layout.alignment: Qt.AlignVCenter
+                            // The stepper's value-box scale, so the short-value
+                            // rows share one control vocabulary.
+                            Layout.preferredWidth: 64
+                            Layout.preferredHeight: 32
+                            text: page.val(modelData)
+                            invalid: page.sanitizeDirty(modelData)
+                            Component.onCompleted: if (modelData.sanitize === true)
+                              page.sanitizeKeys[modelData.key] = modelData
+                            onEdited: function (t) {
+                              page.setv(modelData.key, t)
+                            }
                           }
-                        }
-                        SStepper {
-                          visible: modelData.type === "int" || modelData.type === "float"
-                          Layout.alignment: Qt.AlignVCenter
-                          value: (modelData.type === "int" || modelData.type === "float") ? page.val(modelData) : 0
-                          minimum: modelData.minimum !== undefined ? modelData.minimum : 1
-                          maximum: modelData.maximum !== undefined ? modelData.maximum : 9999
-                          step: modelData.step !== undefined ? modelData.step : 1
-                          decimals: modelData.decimals !== undefined ? modelData.decimals : 0
-                          onChanged: function (v) {
-                            page.setv(modelData.key, v)
+                          SStepper {
+                            visible: modelData.type === "int" || modelData.type === "float"
+                            Layout.alignment: Qt.AlignVCenter
+                            value: (modelData.type === "int" || modelData.type === "float") ? page.val(modelData) : 0
+                            minimum: modelData.minimum !== undefined ? modelData.minimum : 1
+                            maximum: modelData.maximum !== undefined ? modelData.maximum : 9999
+                            step: modelData.step !== undefined ? modelData.step : 1
+                            decimals: modelData.decimals !== undefined ? modelData.decimals : 0
+                            onChanged: function (v) {
+                              page.setv(modelData.key, v)
+                            }
                           }
                         }
                       }
@@ -3553,183 +3567,189 @@ Item {
                       // page's live mirror
                       // (refreshed on appleStatusChanged) over the value baked
                       // into the schema, so a save flips it at once.
-                      Column {
-                        id: statusCol
-                        visible: modelData.type === "status"
+                      Loader {
+                        id: statusColLoader
+                        active: card.open && modelData.type === "status"
+                        visible: active
                         width: parent.width
-                        spacing: 8
-                        // The row's own descriptor data, named so the
-                        // action pills below can reach it from their
-                        // inner delegate (modelData is the delegate's).
-                        readonly property var row: modelData
-                        readonly property var live: (modelData.live === "apple_status" && page.appleStatusLive) ? page.appleStatusLive : null
-                        readonly property string stateKey: live ? String(live.state) : String(modelData.value || "")
-                        readonly property string word: live ? String(live.word) : String(modelData.word || "")
-                        readonly property bool hasSwitch: modelData.enabled_key !== undefined
-                        readonly property bool switchOn: statusCol.hasSwitch && (page.editMap[modelData.enabled_key] !== undefined ? page.editMap[modelData.enabled_key] : modelData.switch_value === true)
-                        RowLayout {
+                        sourceComponent: Column {
+                          id: statusCol
+                          visible: modelData.type === "status"
                           width: parent.width
-                          spacing: 10
-                          Item {
-                            id: swItem
-                            objectName: "appleEnableSwitch"
-                            visible: statusCol.hasSwitch
-                            Layout.alignment: Qt.AlignVCenter
-                            implicitWidth: swRow.width
-                            implicitHeight: swRow.height
-                            // The page hides as a whole; a tab stop that
-                            // follows its own visibility drops out with it.
-                            activeFocusOnTab: visible
-                            Accessible.role: Accessible.CheckBox
-                            Accessible.name: modelData.label
-                            Accessible.checkable: true
-                            Accessible.checked: statusCol.switchOn
-                            Accessible.onPressAction: swItem.toggle()
-                            Accessible.onToggleAction: swItem.toggle()
-                            function toggle() {
-                              page.setv(modelData.enabled_key, !statusCol.switchOn)
-                            }
-                            Keys.onPressed: function (event) {
-                              if (!event.isAutoRepeat && (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
-                                swItem.toggle()
-                                event.accepted = true
+                          spacing: 8
+                          // The row's own descriptor data, named so the
+                          // action pills below can reach it from their
+                          // inner delegate (modelData is the delegate's).
+                          readonly property var row: modelData
+                          readonly property var live: (modelData.live === "apple_status" && page.appleStatusLive) ? page.appleStatusLive : null
+                          readonly property string stateKey: live ? String(live.state) : String(modelData.value || "")
+                          readonly property string word: live ? String(live.word) : String(modelData.word || "")
+                          readonly property bool hasSwitch: modelData.enabled_key !== undefined
+                          readonly property bool switchOn: statusCol.hasSwitch && (page.editMap[modelData.enabled_key] !== undefined ? page.editMap[modelData.enabled_key] : modelData.switch_value === true)
+                          RowLayout {
+                            width: parent.width
+                            spacing: 10
+                            Item {
+                              id: swItem
+                              objectName: "appleEnableSwitch"
+                              visible: statusCol.hasSwitch
+                              Layout.alignment: Qt.AlignVCenter
+                              implicitWidth: swRow.width
+                              implicitHeight: swRow.height
+                              // The page hides as a whole; a tab stop that
+                              // follows its own visibility drops out with it.
+                              activeFocusOnTab: visible
+                              Accessible.role: Accessible.CheckBox
+                              Accessible.name: modelData.label
+                              Accessible.checkable: true
+                              Accessible.checked: statusCol.switchOn
+                              Accessible.onPressAction: swItem.toggle()
+                              Accessible.onToggleAction: swItem.toggle()
+                              function toggle() {
+                                page.setv(modelData.enabled_key, !statusCol.switchOn)
                               }
-                            }
-                            Row {
-                              id: swRow
-                              spacing: 10
-                              SToggle {
-                                anchors.verticalCenter: parent.verticalCenter
-                                checked: statusCol.switchOn
-                              }
-                              Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: modelData.label
-                                color: page.textHi
-                                textFormat: Text.PlainText
-                                font.pixelSize: 14
-                                font.weight: Font.Medium
-                              }
-                            }
-                            Rectangle {
-                              anchors.fill: parent
-                              anchors.margins: -4
-                              radius: 6
-                              color: "transparent"
-                              border.color: swItem.activeFocus ? page.accent : "transparent"
-                            }
-                            MouseArea {
-                              anchors.fill: parent
-                              cursorShape: Qt.PointingHandCursor
-                              onClicked: swItem.toggle()
-                            }
-                          }
-                          Text {
-                            visible: !statusCol.hasSwitch
-                            text: modelData.label
-                            color: page.textHi
-                            textFormat: Text.PlainText
-                            font.pixelSize: 14
-                            font.weight: Font.Medium
-                            Layout.alignment: Qt.AlignVCenter
-                          }
-                          Item {
-                            Layout.fillWidth: true
-                          }
-                          Row {
-                            spacing: 6
-                            Layout.alignment: Qt.AlignVCenter
-                            Rectangle {
-                              width: 8
-                              height: 8
-                              radius: 4
-                              anchors.verticalCenter: parent.verticalCenter
-                              // The shared status-light vocabulary
-                              // (StatusLight.js), so this dot and the
-                              // header's provider marks agree.
-                              color: StatusLight.colorFor(page, statusCol.stateKey)
-                              Behavior on color {
-                                ColorAnimation {
-                                  duration: 220
+                              Keys.onPressed: function (event) {
+                                if (!event.isAutoRepeat && (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                                  swItem.toggle()
+                                  event.accepted = true
                                 }
+                              }
+                              Row {
+                                id: swRow
+                                spacing: 10
+                                SToggle {
+                                  anchors.verticalCenter: parent.verticalCenter
+                                  checked: statusCol.switchOn
+                                }
+                                Text {
+                                  anchors.verticalCenter: parent.verticalCenter
+                                  text: modelData.label
+                                  color: page.textHi
+                                  textFormat: Text.PlainText
+                                  font.pixelSize: 14
+                                  font.weight: Font.Medium
+                                }
+                              }
+                              Rectangle {
+                                anchors.fill: parent
+                                anchors.margins: -4
+                                radius: 6
+                                color: "transparent"
+                                border.color: swItem.activeFocus ? page.accent : "transparent"
+                              }
+                              MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: swItem.toggle()
                               }
                             }
                             Text {
-                              anchors.verticalCenter: parent.verticalCenter
-                              text: statusCol.word
-                              color: page.textLo
-                              font.pixelSize: 12
+                              visible: !statusCol.hasSwitch
+                              text: modelData.label
+                              color: page.textHi
                               textFormat: Text.PlainText
+                              font.pixelSize: 14
+                              font.weight: Font.Medium
+                              Layout.alignment: Qt.AlignVCenter
                             }
-                          }
-                        }
-                        Text {
-                          visible: modelData.help !== ""
-                          width: parent.width
-                          text: modelData.help
-                          color: page.textDim
-                          font.pixelSize: 12
-                          wrapMode: Text.WordWrap
-                          textFormat: Text.PlainText
-                        }
-                        Flow {
-                          visible: modelData.actions !== undefined && modelData.actions.length > 0
-                          width: parent.width
-                          spacing: 8
-                          Repeater {
-                            // Actions come from the live status payload when one
-                            // exists (its actions are built by the same helper as
-                            // the schema's, so they flip with the light), and from
-                            // the baked schema otherwise. No provider is special-cased
-                            // here: a provider contributes its action list, the page
-                            // renders it.
-                            model: (statusCol.live && statusCol.live.actions !== undefined) ? statusCol.live.actions : (modelData.actions !== undefined ? modelData.actions : [])
-                            delegate: Rectangle {
-                              id: actPill
-                              required property var modelData
-                              readonly property string actKey: modelData.action !== undefined ? String(modelData.action) : ""
-                              // The provider the status row belongs to, carried by the
-                              // schema field. Action pills dispatch through the
-                              // bridge's one provider-action slot by (provider, key);
-                              // a provider's card renders with no QML branch. Only
-                              // TIDAL's sign-in is re-routed: its flow is hosted by
-                              // the welcome surface, not a provider verb.
-                              readonly property string providerId: statusCol.row.provider !== undefined ? String(statusCol.row.provider) : ""
-                              // A pill without an action key stays inert.
-                              readonly property bool actLive: actPill.actKey !== ""
-                              width: actTxt.implicitWidth + page.btnPadH * 2
-                              height: actTxt.implicitHeight + page.btnPadV * 2
-                              radius: page.btnRad
-                              color: "transparent"
-                              border.color: page.border1
-                              opacity: actPill.actLive ? 1.0 : 0.45
-                              function runAction() {
-                                if (actPill.actKey === "" || actPill.providerId === "")
-                                  return
-                                // One generic slot for every provider
-                                // action. Sign in comes back as the
-                                // bridge's signInRequested signal, which
-                                // Main routes into the welcome surface's
-                                // inline steps -- the page
-                                // holds no provider-specific branch.
-                                waves.providerAction(actPill.providerId, actPill.actKey)
+                            Item {
+                              Layout.fillWidth: true
+                            }
+                            Row {
+                              spacing: 6
+                              Layout.alignment: Qt.AlignVCenter
+                              Rectangle {
+                                width: 8
+                                height: 8
+                                radius: 4
+                                anchors.verticalCenter: parent.verticalCenter
+                                // The shared status-light vocabulary
+                                // (StatusLight.js), so this dot and the
+                                // header's provider marks agree.
+                                color: StatusLight.colorFor(page, statusCol.stateKey)
+                                Behavior on color {
+                                  ColorAnimation {
+                                    duration: 220
+                                  }
+                                }
                               }
                               Text {
-                                id: actTxt
-                                anchors.centerIn: parent
-                                text: actPill.modelData.label.toUpperCase()
-                                textFormat: Text.PlainText
-                                color: actPill.actLive ? page.textHi : page.textDim
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: statusCol.word
+                                color: page.textLo
                                 font.pixelSize: 12
-                                font.family: page.uiFont
-                                font.bold: true
-                                font.letterSpacing: page.btnTrack
+                                textFormat: Text.PlainText
                               }
-                              MouseArea {
-                                visible: actPill.actLive
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: actPill.runAction()
+                            }
+                          }
+                          Text {
+                            visible: modelData.help !== ""
+                            width: parent.width
+                            text: modelData.help
+                            color: page.textDim
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                          }
+                          Flow {
+                            visible: modelData.actions !== undefined && modelData.actions.length > 0
+                            width: parent.width
+                            spacing: 8
+                            Repeater {
+                              // Actions come from the live status payload when one
+                              // exists (its actions are built by the same helper as
+                              // the schema's, so they flip with the light), and from
+                              // the baked schema otherwise. No provider is special-cased
+                              // here: a provider contributes its action list, the page
+                              // renders it.
+                              model: (statusCol.live && statusCol.live.actions !== undefined) ? statusCol.live.actions : (modelData.actions !== undefined ? modelData.actions : [])
+                              delegate: Rectangle {
+                                id: actPill
+                                required property var modelData
+                                readonly property string actKey: modelData.action !== undefined ? String(modelData.action) : ""
+                                // The provider the status row belongs to, carried by the
+                                // schema field. Action pills dispatch through the
+                                // bridge's one provider-action slot by (provider, key);
+                                // a provider's card renders with no QML branch. Only
+                                // TIDAL's sign-in is re-routed: its flow is hosted by
+                                // the welcome surface, not a provider verb.
+                                readonly property string providerId: statusCol.row.provider !== undefined ? String(statusCol.row.provider) : ""
+                                // A pill without an action key stays inert.
+                                readonly property bool actLive: actPill.actKey !== ""
+                                width: actTxt.implicitWidth + page.btnPadH * 2
+                                height: actTxt.implicitHeight + page.btnPadV * 2
+                                radius: page.btnRad
+                                color: "transparent"
+                                border.color: page.border1
+                                opacity: actPill.actLive ? 1.0 : 0.45
+                                function runAction() {
+                                  if (actPill.actKey === "" || actPill.providerId === "")
+                                    return
+                                  // One generic slot for every provider
+                                  // action. Sign in comes back as the
+                                  // bridge's signInRequested signal, which
+                                  // Main routes into the welcome surface's
+                                  // inline steps -- the page
+                                  // holds no provider-specific branch.
+                                  waves.providerAction(actPill.providerId, actPill.actKey)
+                                }
+                                Text {
+                                  id: actTxt
+                                  anchors.centerIn: parent
+                                  text: actPill.modelData.label.toUpperCase()
+                                  textFormat: Text.PlainText
+                                  color: actPill.actLive ? page.textHi : page.textDim
+                                  font.pixelSize: 12
+                                  font.family: page.uiFont
+                                  font.bold: true
+                                  font.letterSpacing: page.btnTrack
+                                }
+                                MouseArea {
+                                  visible: actPill.actLive
+                                  anchors.fill: parent
+                                  cursorShape: Qt.PointingHandCursor
+                                  onClicked: actPill.runAction()
+                                }
                               }
                             }
                           }
@@ -3740,45 +3760,51 @@ Item {
                       // no edit. The page maps the schema's action
                       // name to its bridge slot; a second action adds
                       // one line here.
-                      Column {
-                        id: actionCol
-                        visible: modelData.type === "action"
+                      Loader {
+                        id: actionColLoader
+                        active: card.open && modelData.type === "action"
+                        visible: active
                         width: parent.width
-                        spacing: 6
-                        Rectangle {
-                          width: actionTxt.implicitWidth + page.btnPadH * 2
-                          height: actionTxt.implicitHeight + page.btnPadV * 2
-                          radius: page.btnRad
-                          color: "transparent"
-                          border.color: page.border1
-                          Text {
-                            id: actionTxt
-                            anchors.centerIn: parent
-                            text: String(modelData.label).toUpperCase()
-                            textFormat: Text.PlainText
-                            color: page.textHi
-                            font.pixelSize: 12
-                            font.family: page.uiFont
-                            font.bold: true
-                            font.letterSpacing: page.btnTrack
-                          }
-                          MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                              if (String(modelData.action) === "show_setup")
-                                waves.showSetup()
+                        sourceComponent: Column {
+                          id: actionCol
+                          visible: modelData.type === "action"
+                          width: parent.width
+                          spacing: 6
+                          Rectangle {
+                            width: actionTxt.implicitWidth + page.btnPadH * 2
+                            height: actionTxt.implicitHeight + page.btnPadV * 2
+                            radius: page.btnRad
+                            color: "transparent"
+                            border.color: page.border1
+                            Text {
+                              id: actionTxt
+                              anchors.centerIn: parent
+                              text: String(modelData.label).toUpperCase()
+                              textFormat: Text.PlainText
+                              color: page.textHi
+                              font.pixelSize: 12
+                              font.family: page.uiFont
+                              font.bold: true
+                              font.letterSpacing: page.btnTrack
+                            }
+                            MouseArea {
+                              anchors.fill: parent
+                              cursorShape: Qt.PointingHandCursor
+                              onClicked: {
+                                if (String(modelData.action) === "show_setup")
+                                  waves.showSetup()
+                              }
                             }
                           }
-                        }
-                        Text {
-                          visible: modelData.help !== ""
-                          width: parent.width
-                          text: modelData.help
-                          color: page.textDim
-                          font.pixelSize: 12
-                          wrapMode: Text.WordWrap
-                          textFormat: Text.PlainText
+                          Text {
+                            visible: modelData.help !== ""
+                            width: parent.width
+                            text: modelData.help
+                            color: page.textDim
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                          }
                         }
                       }
 
@@ -3788,312 +3814,318 @@ Item {
                       // the card re-reads the live mirror whenever the
                       // light or the runtime moves, so a landed step
                       // ticks over at once.
-                      Column {
-                        id: setupCol
-                        visible: modelData.type === "apple_setup"
+                      Loader {
+                        id: setupColLoader
+                        active: card.open && modelData.type === "apple_setup"
+                        visible: active
                         width: parent.width
-                        spacing: 8
-                        // Whether a download can start from the live
-                        // state (the bridge's own verdict, never a
-                        // re-derivation of tier words here): once one
-                        // can, there is nothing left for "skip for
-                        // now" to defer.
-                        readonly property bool skippable: !(page.appleSetupLive && page.appleSetupLive.light && page.appleSetupLive.light.downloads_ready === true)
-                        Component.onCompleted: {
-                          if (modelData.type === "apple_setup")
-                            page.appleSetupLive = waves.appleSetupState()
-                        }
-                        function stepColor(state) {
-                          if (state === "done")
-                            return page.accent
-                          if (state === "attention")
-                            return page.red
-                          return page.gold
-                        }
-                        function runStepAction(actKey) {
-                          // Acting on the marked step retires the
-                          // mark: it pointed at what a blocked
-                          // click was missing, and that click's
-                          // job is now the user's.
-                          if (String(actKey) === page.appleFocusStep)
-                            page.appleFocusStep = ""
-                          if (actKey === "apple_update_runtime")
-                            waves.installAppleRuntime()
-                          else if (actKey === "apple_remove_runtime")
-                            waves.removeAppleRuntime()
-                          else if (actKey === "apple_pull_image")
-                            waves.installAppleImage()
-                          else
-                          // Fire-and-forget on purpose: the start
-                          // runs on a worker and the card re-reads
-                          // the live mirror off its signals.
-                          if (actKey === "apple_start_container")
-                            waves.appleStartContainer()
-                          else if (actKey === "apple_ensure_port") {
-                            waves.appleEnsurePort()
-                            page.appleSetupLive = waves.appleSetupState()
-                          } else if (actKey === "apple_import_cookies") {
-                            // The wizard's own import action: the
-                            // same file picker the path field uses,
-                            // aimed at the cookies setting.
-                            fileDlg.targetKey = "apple_cookies_path"
-                            var cv = String(page.val({
-                              key: "apple_cookies_path"
-                            }) || "")
-                            var cu = page.dirUrlOf(cv)
-                            if (cu !== "")
-                              fileDlg.currentFolder = cu
-                            fileDlg.open()
-                          } else if (actKey === "apple_wrapper_login") {
-                            page.appleLoginOpen = !page.appleLoginOpen
-                            page.appleWrapperLive = waves.appleWrapperAuth()
-                          }
-                        }
-                        Text {
-                          text: modelData.label
-                          color: page.textHi
-                          textFormat: Text.PlainText
-                          font.pixelSize: 14
-                          font.weight: Font.Medium
-                        }
-                        Text {
-                          visible: modelData.help !== ""
+                        sourceComponent: Column {
+                          id: setupCol
+                          visible: modelData.type === "apple_setup"
                           width: parent.width
-                          text: modelData.help
-                          color: page.textDim
-                          font.pixelSize: 12
-                          wrapMode: Text.WordWrap
-                          textFormat: Text.PlainText
-                        }
-                        Repeater {
-                          model: (page.appleSetupLive && page.appleSetupLive.steps) ? page.appleSetupLive.steps : []
-                          delegate: Column {
-                            required property var modelData
-                            // The step the last setup request named (a
-                            // pre-setup download click): marked so the
-                            // eye lands where the click was blocked.
-                            // The host clears it when the page closes,
-                            // so a later visit starts unmarked.
-                            readonly property bool focused: page.appleFocusStep !== "" && String(modelData.key) === page.appleFocusStep
+                          spacing: 8
+                          // Whether a download can start from the live
+                          // state (the bridge's own verdict, never a
+                          // re-derivation of tier words here): once one
+                          // can, there is nothing left for "skip for
+                          // now" to defer.
+                          readonly property bool skippable: !(page.appleSetupLive && page.appleSetupLive.light && page.appleSetupLive.light.downloads_ready === true)
+                          Component.onCompleted: {
+                            if (modelData.type === "apple_setup")
+                              page.appleSetupLive = waves.appleSetupState()
+                          }
+                          function stepColor(state) {
+                            if (state === "done")
+                              return page.accent
+                            if (state === "attention")
+                              return page.red
+                            return page.gold
+                          }
+                          function runStepAction(actKey) {
+                            // Acting on the marked step retires the
+                            // mark: it pointed at what a blocked
+                            // click was missing, and that click's
+                            // job is now the user's.
+                            if (String(actKey) === page.appleFocusStep)
+                              page.appleFocusStep = ""
+                            if (actKey === "apple_update_runtime")
+                              waves.installAppleRuntime()
+                            else if (actKey === "apple_remove_runtime")
+                              waves.removeAppleRuntime()
+                            else if (actKey === "apple_pull_image")
+                              waves.installAppleImage()
+                            else
+                            // Fire-and-forget on purpose: the start
+                            // runs on a worker and the card re-reads
+                            // the live mirror off its signals.
+                            if (actKey === "apple_start_container")
+                              waves.appleStartContainer()
+                            else if (actKey === "apple_ensure_port") {
+                              waves.appleEnsurePort()
+                              page.appleSetupLive = waves.appleSetupState()
+                            } else if (actKey === "apple_import_cookies") {
+                              // The wizard's own import action: the
+                              // same file picker the path field uses,
+                              // aimed at the cookies setting.
+                              fileDlg.targetKey = "apple_cookies_path"
+                              var cv = String(page.val({
+                                key: "apple_cookies_path"
+                              }) || "")
+                              var cu = page.dirUrlOf(cv)
+                              if (cu !== "")
+                                fileDlg.currentFolder = cu
+                              fileDlg.open()
+                            } else if (actKey === "apple_wrapper_login") {
+                              page.appleLoginOpen = !page.appleLoginOpen
+                              page.appleWrapperLive = waves.appleWrapperAuth()
+                            }
+                          }
+                          Text {
+                            text: modelData.label
+                            color: page.textHi
+                            textFormat: Text.PlainText
+                            font.pixelSize: 14
+                            font.weight: Font.Medium
+                          }
+                          Text {
+                            visible: modelData.help !== ""
                             width: parent.width
-                            spacing: 2
-                            Row {
-                              spacing: 8
+                            text: modelData.help
+                            color: page.textDim
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                          }
+                          Repeater {
+                            model: (page.appleSetupLive && page.appleSetupLive.steps) ? page.appleSetupLive.steps : []
+                            delegate: Column {
+                              required property var modelData
+                              // The step the last setup request named (a
+                              // pre-setup download click): marked so the
+                              // eye lands where the click was blocked.
+                              // The host clears it when the page closes,
+                              // so a later visit starts unmarked.
+                              readonly property bool focused: page.appleFocusStep !== "" && String(modelData.key) === page.appleFocusStep
                               width: parent.width
-                              Rectangle {
-                                width: 8
-                                height: 8
-                                radius: 4
-                                anchors.verticalCenter: parent.verticalCenter
-                                color: setupCol.stepColor(String(modelData.state))
-                              }
-                              Text {
-                                objectName: "appleStepLabel_" + String(modelData.key)
-                                text: modelData.label
-                                color: focused ? page.accent : page.textHi
-                                textFormat: Text.PlainText
-                                font.pixelSize: 13
-                                font.weight: Font.Medium
-                              }
-                              Text {
-                                objectName: "appleStepMark_" + String(modelData.key)
-                                visible: focused
-                                text: "← START HERE"
-                                color: page.accent
-                                textFormat: Text.PlainText
-                                font.pixelSize: 11
-                                font.family: page.mono
-                              }
-                            }
-                            Text {
-                              x: 16
-                              width: parent.width - 16
-                              text: modelData.detail
-                              color: page.textDim
-                              font.pixelSize: 12
-                              wrapMode: Text.WordWrap
-                              textFormat: Text.PlainText
-                            }
-                            Rectangle {
-                              visible: modelData.action !== undefined && String(modelData.action) !== ""
-                              x: 16
-                              width: stepTxt.implicitWidth + page.btnPadH * 2
-                              height: stepTxt.implicitHeight + page.btnPadV * 2
-                              radius: page.btnRad
-                              color: "transparent"
-                              border.color: parent.focused ? page.accentDim : page.border1
-                              Text {
-                                id: stepTxt
-                                anchors.centerIn: parent
-                                // The button says what it does (Remove,
-                                // Pull image…), never a bare Continue.
-                                text: (modelData.action_label !== undefined && String(modelData.action_label) !== "" ? String(modelData.action_label) : "CONTINUE").toUpperCase()
-                                textFormat: Text.PlainText
-                                color: page.textHi
-                                font.pixelSize: 12
-                                font.family: page.uiFont
-                                font.bold: true
-                                font.letterSpacing: page.btnTrack
-                              }
-                              MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: setupCol.runStepAction(String(modelData.action))
-                              }
-                            }
-                            // The full tier's sign-in form: the
-                            // login step's button toggles it, the
-                            // bridge makes the call and the guest
-                            // owns the session.
-                            Column {
-                              id: appleLoginForm
-                              visible: String(modelData.key) === "login" && page.appleLoginOpen
-                              x: 16
-                              width: parent.width - 16
-                              spacing: 6
-                              readonly property bool busy: page.appleWrapperLive.busy === true
-                              readonly property bool needs2fa: page.appleWrapperLive.needs_2fa === true
-                              readonly property bool signedIn: page.appleWrapperLive.logged_in === true
-                              // The guest answers "authenticated"; the bridge folds
-                              // that to logged_in. A signed-in form drops the
-                              // typed secret from its local fields.
-                              onSignedInChanged: if (signedIn) {
-                                page.appleLoginPass = ""
-                                page.appleLogin2fa = ""
-                              }
-                              Text {
-                                visible: appleLoginForm.signedIn
+                              spacing: 2
+                              Row {
+                                spacing: 8
                                 width: parent.width
-                                text: "Signed in" + (String(page.appleWrapperLive.account || "") !== "" ? " as " + page.appleWrapperLive.account : "") + "."
-                                color: page.accent
+                                Rectangle {
+                                  width: 8
+                                  height: 8
+                                  radius: 4
+                                  anchors.verticalCenter: parent.verticalCenter
+                                  color: setupCol.stepColor(String(modelData.state))
+                                }
+                                Text {
+                                  objectName: "appleStepLabel_" + String(modelData.key)
+                                  text: modelData.label
+                                  color: focused ? page.accent : page.textHi
+                                  textFormat: Text.PlainText
+                                  font.pixelSize: 13
+                                  font.weight: Font.Medium
+                                }
+                                Text {
+                                  objectName: "appleStepMark_" + String(modelData.key)
+                                  visible: focused
+                                  text: "← START HERE"
+                                  color: page.accent
+                                  textFormat: Text.PlainText
+                                  font.pixelSize: 11
+                                  font.family: page.mono
+                                }
+                              }
+                              Text {
+                                x: 16
+                                width: parent.width - 16
+                                text: modelData.detail
+                                color: page.textDim
                                 font.pixelSize: 12
                                 wrapMode: Text.WordWrap
                                 textFormat: Text.PlainText
                               }
-                              SText {
-                                visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
-                                width: parent.width
-                                text: page.appleLoginUser
-                                placeholderText: "Apple ID"
-                                onEdited: function (t) {
-                                  page.appleLoginUser = t
-                                }
-                              }
-                              SText {
-                                visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
-                                width: parent.width
-                                text: page.appleLoginPass
-                                placeholderText: "Password"
-                                echoMode: TextInput.Password
-                                onEdited: function (t) {
-                                  page.appleLoginPass = t
-                                }
-                              }
-                              SText {
-                                visible: !appleLoginForm.signedIn && appleLoginForm.needs2fa
-                                width: parent.width
-                                text: page.appleLogin2fa
-                                placeholderText: "Two-factor code"
-                                onEdited: function (t) {
-                                  page.appleLogin2fa = t
-                                }
-                              }
                               Rectangle {
-                                visible: !appleLoginForm.signedIn
-                                width: appleSignTxt.width + page.btnPadH * 2
-                                height: appleSignTxt.height + page.btnPadV * 2
+                                visible: modelData.action !== undefined && String(modelData.action) !== ""
+                                x: 16
+                                width: stepTxt.implicitWidth + page.btnPadH * 2
+                                height: stepTxt.implicitHeight + page.btnPadV * 2
                                 radius: page.btnRad
-                                color: page.accentCont
-                                border.color: page.accentDim
-                                border.width: 1
-                                opacity: appleLoginForm.busy ? 0.45 : 1.0
+                                color: "transparent"
+                                border.color: parent.focused ? page.accentDim : page.border1
                                 Text {
-                                  id: appleSignTxt
+                                  id: stepTxt
                                   anchors.centerIn: parent
-                                  text: appleLoginForm.busy ? "SIGNING IN…" : (appleLoginForm.needs2fa ? "VERIFY CODE" : "SIGN IN")
+                                  // The button says what it does (Remove,
+                                  // Pull image…), never a bare Continue.
+                                  text: (modelData.action_label !== undefined && String(modelData.action_label) !== "" ? String(modelData.action_label) : "CONTINUE").toUpperCase()
                                   textFormat: Text.PlainText
-                                  color: page.accent
-                                  font.family: page.uiFont
+                                  color: page.textHi
                                   font.pixelSize: 12
+                                  font.family: page.uiFont
                                   font.bold: true
                                   font.letterSpacing: page.btnTrack
                                 }
                                 MouseArea {
                                   anchors.fill: parent
                                   cursorShape: Qt.PointingHandCursor
-                                  enabled: !appleLoginForm.busy
-                                  onClicked: {
-                                    if (appleLoginForm.needs2fa)
-                                      waves.appleWrapperSubmit2fa(page.appleLogin2fa)
-                                    else
-                                      waves.appleWrapperLogin(page.appleLoginUser, page.appleLoginPass)
-                                  }
+                                  onClicked: setupCol.runStepAction(String(modelData.action))
                                 }
                               }
-                              Text {
-                                visible: String(page.appleWrapperLive.login_error || "") !== ""
-                                width: parent.width
-                                text: String(page.appleWrapperLive.login_error || "")
-                                color: page.red
-                                font.pixelSize: 12
-                                wrapMode: Text.WordWrap
-                                textFormat: Text.PlainText
+                              // The full tier's sign-in form: the
+                              // login step's button toggles it, the
+                              // bridge makes the call and the guest
+                              // owns the session.
+                              Column {
+                                id: appleLoginForm
+                                visible: String(modelData.key) === "login" && page.appleLoginOpen
+                                x: 16
+                                width: parent.width - 16
+                                spacing: 6
+                                readonly property bool busy: page.appleWrapperLive.busy === true
+                                readonly property bool needs2fa: page.appleWrapperLive.needs_2fa === true
+                                readonly property bool signedIn: page.appleWrapperLive.logged_in === true
+                                // The guest answers "authenticated"; the bridge folds
+                                // that to logged_in. A signed-in form drops the
+                                // typed secret from its local fields.
+                                onSignedInChanged: if (signedIn) {
+                                  page.appleLoginPass = ""
+                                  page.appleLogin2fa = ""
+                                }
+                                Text {
+                                  visible: appleLoginForm.signedIn
+                                  width: parent.width
+                                  text: "Signed in" + (String(page.appleWrapperLive.account || "") !== "" ? " as " + page.appleWrapperLive.account : "") + "."
+                                  color: page.accent
+                                  font.pixelSize: 12
+                                  wrapMode: Text.WordWrap
+                                  textFormat: Text.PlainText
+                                }
+                                SText {
+                                  visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
+                                  width: parent.width
+                                  text: page.appleLoginUser
+                                  placeholderText: "Apple ID"
+                                  onEdited: function (t) {
+                                    page.appleLoginUser = t
+                                  }
+                                }
+                                SText {
+                                  visible: !appleLoginForm.signedIn && !appleLoginForm.needs2fa
+                                  width: parent.width
+                                  text: page.appleLoginPass
+                                  placeholderText: "Password"
+                                  echoMode: TextInput.Password
+                                  onEdited: function (t) {
+                                    page.appleLoginPass = t
+                                  }
+                                }
+                                SText {
+                                  visible: !appleLoginForm.signedIn && appleLoginForm.needs2fa
+                                  width: parent.width
+                                  text: page.appleLogin2fa
+                                  placeholderText: "Two-factor code"
+                                  onEdited: function (t) {
+                                    page.appleLogin2fa = t
+                                  }
+                                }
+                                Rectangle {
+                                  visible: !appleLoginForm.signedIn
+                                  width: appleSignTxt.width + page.btnPadH * 2
+                                  height: appleSignTxt.height + page.btnPadV * 2
+                                  radius: page.btnRad
+                                  color: page.accentCont
+                                  border.color: page.accentDim
+                                  border.width: 1
+                                  opacity: appleLoginForm.busy ? 0.45 : 1.0
+                                  Text {
+                                    id: appleSignTxt
+                                    anchors.centerIn: parent
+                                    text: appleLoginForm.busy ? "SIGNING IN…" : (appleLoginForm.needs2fa ? "VERIFY CODE" : "SIGN IN")
+                                    textFormat: Text.PlainText
+                                    color: page.accent
+                                    font.family: page.uiFont
+                                    font.pixelSize: 12
+                                    font.bold: true
+                                    font.letterSpacing: page.btnTrack
+                                  }
+                                  MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    enabled: !appleLoginForm.busy
+                                    onClicked: {
+                                      if (appleLoginForm.needs2fa)
+                                        waves.appleWrapperSubmit2fa(page.appleLogin2fa)
+                                      else
+                                        waves.appleWrapperLogin(page.appleLoginUser, page.appleLoginPass)
+                                    }
+                                  }
+                                }
+                                Text {
+                                  visible: String(page.appleWrapperLive.login_error || "") !== ""
+                                  width: parent.width
+                                  text: String(page.appleWrapperLive.login_error || "")
+                                  color: page.red
+                                  font.pixelSize: 12
+                                  wrapMode: Text.WordWrap
+                                  textFormat: Text.PlainText
+                                }
                               }
                             }
                           }
-                        }
-                        // Runtime operation readout: progress while a
-                        // download or pull runs, the failure in red
-                        // when one lands. Driven by the bridge's
-                        // lifecycle signals, not the step list.
-                        Text {
-                          visible: page.appleRuntimeState !== ""
-                          width: parent.width
-                          text: page.appleRuntimeState === "downloading" && page.appleRuntimePct > 0 ? page.appleRuntimeMsg + " " + Math.round(page.appleRuntimePct) + "%" : page.appleRuntimeMsg
-                          color: page.appleRuntimeState === "failed" ? page.red : page.appleRuntimeState === "done" ? page.accent : page.textLo
-                          font.pixelSize: 12
-                          wrapMode: Text.WordWrap
-                          textFormat: Text.PlainText
-                        }
-                        // The published-image workflow carries
-                        // the guest libraries, so the wizard has no
-                        // APK extraction block; the sign-in note
-                        // stays as the form's own context.
-                        Text {
-                          readonly property string hint: (page.appleSetupLive && page.appleSetupLive.wrapper && page.appleSetupLive.wrapper.login_hint) ? String(page.appleSetupLive.wrapper.login_hint) : ""
-                          visible: hint !== "" && !page.appleLoginOpen
-                          width: parent.width
-                          text: "Sign-in: " + hint
-                          color: page.textDim
-                          font.pixelSize: 12
-                          wrapMode: Text.WordWrap
-                          textFormat: Text.PlainText
-                        }
-                        // "Skip for now" (the onboarding spec):
-                        // leave the remaining steps for
-                        // later without undoing the choice.
-                        // Apple stays enabled, so search and
-                        // previews keep working; the status row
-                        // above still reports the truth, and
-                        // Settings (or any empty state) is the
-                        // way back.
-                        Text {
-                          objectName: "appleSetupSkip"
-                          visible: setupCol.skippable
-                          text: "SKIP FOR NOW"
-                          color: skipMa.containsMouse ? page.accent : page.textDim
-                          textFormat: Text.PlainText
-                          font.pixelSize: 12
-                          font.letterSpacing: 0.85
-                          Accessible.role: Accessible.Button
-                          Accessible.name: "Skip Apple Music setup for now"
-                          MouseArea {
-                            id: skipMa
-                            anchors.fill: parent
-                            anchors.margins: -6
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: page.appleSetupSkipped()
+                          // Runtime operation readout: progress while a
+                          // download or pull runs, the failure in red
+                          // when one lands. Driven by the bridge's
+                          // lifecycle signals, not the step list.
+                          Text {
+                            visible: page.appleRuntimeState !== ""
+                            width: parent.width
+                            text: page.appleRuntimeState === "downloading" && page.appleRuntimePct > 0 ? page.appleRuntimeMsg + " " + Math.round(page.appleRuntimePct) + "%" : page.appleRuntimeMsg
+                            color: page.appleRuntimeState === "failed" ? page.red : page.appleRuntimeState === "done" ? page.accent : page.textLo
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                          }
+                          // The published-image workflow carries
+                          // the guest libraries, so the wizard has no
+                          // APK extraction block; the sign-in note
+                          // stays as the form's own context.
+                          Text {
+                            readonly property string hint: (page.appleSetupLive && page.appleSetupLive.wrapper && page.appleSetupLive.wrapper.login_hint) ? String(page.appleSetupLive.wrapper.login_hint) : ""
+                            visible: hint !== "" && !page.appleLoginOpen
+                            width: parent.width
+                            text: "Sign-in: " + hint
+                            color: page.textDim
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            textFormat: Text.PlainText
+                          }
+                          // "Skip for now" (the onboarding spec):
+                          // leave the remaining steps for
+                          // later without undoing the choice.
+                          // Apple stays enabled, so search and
+                          // previews keep working; the status row
+                          // above still reports the truth, and
+                          // Settings (or any empty state) is the
+                          // way back.
+                          Text {
+                            objectName: "appleSetupSkip"
+                            visible: setupCol.skippable
+                            text: "SKIP FOR NOW"
+                            color: skipMa.containsMouse ? page.accent : page.textDim
+                            textFormat: Text.PlainText
+                            font.pixelSize: 12
+                            font.letterSpacing: 0.85
+                            Accessible.role: Accessible.Button
+                            Accessible.name: "Skip Apple Music setup for now"
+                            MouseArea {
+                              id: skipMa
+                              anchors.fill: parent
+                              anchors.margins: -6
+                              hoverEnabled: true
+                              cursorShape: Qt.PointingHandCursor
+                              onClicked: page.appleSetupSkipped()
+                            }
                           }
                         }
                       }
@@ -4102,81 +4134,87 @@ Item {
                       // progressively-disclosed size for the saved cover.jpg, so a
                       // second size is available with no extra settings row for
                       // everyone who doesn't want it.
-                      Column {
-                        id: coverCol
-                        visible: modelData.type === "cover_sizes"
+                      Loader {
+                        id: coverColLoader
+                        active: card.open && modelData.type === "cover_sizes"
+                        visible: active
                         width: parent.width
-                        spacing: 10
-                        property bool expanded: page.val2(modelData) !== "follow"
-                        RowLayout {
+                        sourceComponent: Column {
+                          id: coverCol
+                          visible: modelData.type === "cover_sizes"
                           width: parent.width
-                          spacing: 14
-                          ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-                            Text {
-                              textFormat: Text.PlainText
-                              text: modelData.label
-                              color: page.textHi
-                              font.pixelSize: 14
-                              font.weight: Font.Medium
-                            }
-                            Text {
-                              textFormat: Text.PlainText
-                              visible: modelData.help !== ""
-                              text: modelData.help
-                              color: page.textDim
-                              font.pixelSize: 12
-                              wrapMode: Text.WordWrap
+                          spacing: 10
+                          property bool expanded: page.val2(modelData) !== "follow"
+                          RowLayout {
+                            width: parent.width
+                            spacing: 14
+                            ColumnLayout {
                               Layout.fillWidth: true
+                              spacing: 2
+                              Text {
+                                textFormat: Text.PlainText
+                                text: modelData.label
+                                color: page.textHi
+                                font.pixelSize: 14
+                                font.weight: Font.Medium
+                              }
+                              Text {
+                                textFormat: Text.PlainText
+                                visible: modelData.help !== ""
+                                text: modelData.help
+                                color: page.textDim
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                              }
+                            }
+                            SCombo {
+                              Layout.alignment: Qt.AlignVCenter
+                              model: modelData.options ? modelData.options : []
+                              currentIndex: page.enumIndex(modelData.options, page.val(modelData))
+                              onActivated: page.setv(modelData.key, modelData.options[currentIndex].value)
                             }
                           }
-                          SCombo {
-                            Layout.alignment: Qt.AlignVCenter
-                            model: modelData.options ? modelData.options : []
-                            currentIndex: page.enumIndex(modelData.options, page.val(modelData))
-                            onActivated: page.setv(modelData.key, modelData.options[currentIndex].value)
-                          }
-                        }
-                        Text {
-                          textFormat: Text.PlainText
-                          text: (coverCol.expanded ? "▾  " : "▸  ") + "Separate cover.jpg size"
-                          color: page.accent
-                          font.pixelSize: 12
-                          MouseArea {
-                            anchors.fill: parent
-                            anchors.margins: -4
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: coverCol.expanded = !coverCol.expanded
-                          }
-                        }
-                        RowLayout {
-                          visible: coverCol.expanded
-                          width: parent.width
-                          spacing: 14
-                          ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-                            Text {
-                              textFormat: Text.PlainText
-                              text: modelData.file_label ? modelData.file_label : "Separate cover.jpg size"
-                              color: page.textHi
-                              font.pixelSize: 13
-                              font.weight: Font.Medium
+                          Text {
+                            textFormat: Text.PlainText
+                            text: (coverCol.expanded ? "▾  " : "▸  ") + "Separate cover.jpg size"
+                            color: page.accent
+                            font.pixelSize: 12
+                            MouseArea {
+                              anchors.fill: parent
+                              anchors.margins: -4
+                              cursorShape: Qt.PointingHandCursor
+                              onClicked: coverCol.expanded = !coverCol.expanded
                             }
-                            Text {
-                              text: "Size of the saved cover.jpg. \"Same as embedded\" matches the size above."
-                              color: page.textDim
-                              font.pixelSize: 12
-                              wrapMode: Text.WordWrap
+                          }
+                          RowLayout {
+                            visible: coverCol.expanded
+                            width: parent.width
+                            spacing: 14
+                            ColumnLayout {
                               Layout.fillWidth: true
+                              spacing: 2
+                              Text {
+                                textFormat: Text.PlainText
+                                text: modelData.file_label ? modelData.file_label : "Separate cover.jpg size"
+                                color: page.textHi
+                                font.pixelSize: 13
+                                font.weight: Font.Medium
+                              }
+                              Text {
+                                text: "Size of the saved cover.jpg. \"Same as embedded\" matches the size above."
+                                color: page.textDim
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                              }
                             }
-                          }
-                          SCombo {
-                            Layout.alignment: Qt.AlignVCenter
-                            model: modelData.file_options ? modelData.file_options : []
-                            currentIndex: page.enumIndex(modelData.file_options, page.val2(modelData))
-                            onActivated: page.setv(modelData.file_key, modelData.file_options[currentIndex].value)
+                            SCombo {
+                              Layout.alignment: Qt.AlignVCenter
+                              model: modelData.file_options ? modelData.file_options : []
+                              currentIndex: page.enumIndex(modelData.file_options, page.val2(modelData))
+                              onActivated: page.setv(modelData.file_key, modelData.file_options[currentIndex].value)
+                            }
                           }
                         }
                       }
@@ -4200,7 +4238,7 @@ Item {
                       // switching to Settings feel laggy.
                       Loader {
                         id: libraryLoader
-                        active: modelData.type === "library"
+                        active: card.open && modelData.type === "library"
                         visible: active
                         width: parent.width
                         sourceComponent: Column {
@@ -4656,149 +4694,155 @@ Item {
                       }
 
                       // String / path: label + help, then text field (+ browse) below
-                      Column {
-                        id: strCol
-                        visible: modelData.type === "str" && modelData.inline !== true
+                      Loader {
+                        id: strColLoader
+                        active: card.open && modelData.type === "str" && modelData.inline !== true
+                        visible: active
                         width: parent.width
-                        spacing: 6
-                        Row {
+                        sourceComponent: Column {
+                          id: strCol
+                          visible: modelData.type === "str" && modelData.inline !== true
                           width: parent.width
-                          spacing: 10
-                          Text {
-                            id: strLabel
-                            textFormat: Text.PlainText
-                            text: modelData.label
-                            color: page.textHi
-                            font.pixelSize: 14
-                            font.weight: Font.Medium
-                          }
-                          // Puts just THIS field back to what a fresh install
-                          // ships with, so a mangled template doesn't cost you
-                          // every other setting. Always shown (otherwise nobody
-                          // discovers it), but inert and faded while the field
-                          // already matches: it reads as the field's status.
-                          Text {
-                            id: strDefaultLink
-                            readonly property bool changed: modelData.default_value !== undefined && String(page.val(modelData)) !== String(modelData.default_value)
-                            visible: modelData.default_value !== undefined
-                            anchors.verticalCenter: strLabel.verticalCenter
-                            textFormat: Text.PlainText
-                            text: changed ? "Restore default" : "Default"
-                            color: !changed ? page.textDim : strDefaultMa.containsMouse ? page.accent : page.accentDim
-                            opacity: changed ? 1 : 0.5
-                            font.pixelSize: 12
-                            font.underline: changed && strDefaultMa.containsMouse
-                            MouseArea {
-                              id: strDefaultMa
-                              anchors.fill: parent
-                              anchors.margins: -4
-                              enabled: strDefaultLink.changed
-                              hoverEnabled: true
-                              cursorShape: Qt.PointingHandCursor
-                              // Set the edit map, then RE-BIND the box rather than
-                              // writing its text. (Typing alone does NOT break a
-                              // TextField's text binding on this Qt, verified with
-                              // real key events; only an imperative JS write to
-                              // `text` destroys it, permanently.) setv alone would
-                              // not repaint a field the user had edited (val()
-                              // reads the edit map only on re-evaluation), and a
-                              // plain write would kill the binding while delegates
-                              // stay alive across close/reopen (refreshSchema only
-                              // runs after a save), so Restore default followed by
-                              // Cancel could leave the box showing the default
-                              // while the config still used the custom value.
-                              // Qt.binding shows the default now and keeps the
-                              // display live afterwards.
-                              onClicked: {
-                                page.setv(modelData.key, modelData.default_value)
-                                strField.text = Qt.binding(function () {
-                                  return page.val(modelData)
-                                })
-                              }
-                            }
-                          }
-                        }
-                        Text {
-                          textFormat: Text.PlainText
-                          visible: modelData.help !== ""
-                          text: modelData.help
-                          color: page.textDim
-                          font.pixelSize: 12
-                          width: parent.width
-                          wrapMode: Text.WordWrap
-                        }
-                        Row {
-                          width: parent.width
-                          spacing: 8
-                          SText {
-                            id: strField
-                            width: modelData.browse ? parent.width - browseBtn.width - 8 : parent.width
-                            text: page.val(modelData)
-                            onEdited: function (t) {
-                              page.setv(modelData.key, t)
-                            }
-                          }
-                          Rectangle {
-                            id: browseBtn
-                            visible: modelData.browse !== ""
-                            // SAVE CHANGES button vocabulary: accent-container fill,
-                            // accentDim border, uppercase accent label. Always full
-                            // strength: an earlier fade-once-set read as disabled,
-                            // and re-picking the folder is a legitimate action at any
-                            // time (it is also how macOS re-grants network-volume
-                            // access), so the button must always look clickable.
-                            width: browseTxt.width + page.btnPadH * 2
-                            height: browseTxt.height + page.btnPadV * 2
-                            radius: page.btnRad
-                            anchors.verticalCenter: parent.verticalCenter
-                            color: page.accentCont
-                            border.color: page.accentDim
-                            border.width: 1
+                          spacing: 6
+                          Row {
+                            width: parent.width
+                            spacing: 10
                             Text {
-                              id: browseTxt
-                              anchors.centerIn: parent
-                              text: "BROWSE"
-                              color: page.accent
-                              font.pixelSize: 13
-                              font.family: page.uiFont
-                              font.bold: true
-                              font.letterSpacing: page.btnTrack
+                              id: strLabel
+                              textFormat: Text.PlainText
+                              text: modelData.label
+                              color: page.textHi
+                              font.pixelSize: 14
+                              font.weight: Font.Medium
                             }
-                            MouseArea {
-                              anchors.fill: parent
-                              cursorShape: Qt.PointingHandCursor
-                              onClicked: {
-                                // Open the picker where the field already points: a dir
-                                // field's value IS the folder, a file field opens beside
-                                // the binary it names.
-                                var v = page.val(modelData)
-                                if (modelData.browse === "dir") {
-                                  folderDlg.targetKey = modelData.key
-                                  // A folder that is gone right now (an unmounted
-                                  // share) opens at its nearest existing ancestor
-                                  // instead of wherever the picker last was.
-                                  var live = waves.existingFolder(v)
-                                  var du = page.pathUrl(live !== "" ? live : v)
-                                  if (du !== "")
-                                    folderDlg.currentFolder = du
-                                  folderDlg.open()
-                                } else {
-                                  fileDlg.targetKey = modelData.key
-                                  var fu = page.dirUrlOf(v)
-                                  if (fu !== "")
-                                    fileDlg.currentFolder = fu
-                                  fileDlg.open()
+                            // Puts just THIS field back to what a fresh install
+                            // ships with, so a mangled template doesn't cost you
+                            // every other setting. Always shown (otherwise nobody
+                            // discovers it), but inert and faded while the field
+                            // already matches: it reads as the field's status.
+                            Text {
+                              id: strDefaultLink
+                              readonly property bool changed: modelData.default_value !== undefined && String(page.val(modelData)) !== String(modelData.default_value)
+                              visible: modelData.default_value !== undefined
+                              anchors.verticalCenter: strLabel.verticalCenter
+                              textFormat: Text.PlainText
+                              text: changed ? "Restore default" : "Default"
+                              color: !changed ? page.textDim : strDefaultMa.containsMouse ? page.accent : page.accentDim
+                              opacity: changed ? 1 : 0.5
+                              font.pixelSize: 12
+                              font.underline: changed && strDefaultMa.containsMouse
+                              MouseArea {
+                                id: strDefaultMa
+                                anchors.fill: parent
+                                anchors.margins: -4
+                                enabled: strDefaultLink.changed
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                // Set the edit map, then RE-BIND the box rather than
+                                // writing its text. (Typing alone does NOT break a
+                                // TextField's text binding on this Qt, verified with
+                                // real key events; only an imperative JS write to
+                                // `text` destroys it, permanently.) setv alone would
+                                // not repaint a field the user had edited (val()
+                                // reads the edit map only on re-evaluation), and a
+                                // plain write would kill the binding while delegates
+                                // stay alive across close/reopen (refreshSchema only
+                                // runs after a save), so Restore default followed by
+                                // Cancel could leave the box showing the default
+                                // while the config still used the custom value.
+                                // Qt.binding shows the default now and keeps the
+                                // display live afterwards.
+                                onClicked: {
+                                  page.setv(modelData.key, modelData.default_value)
+                                  strField.text = Qt.binding(function () {
+                                    return page.val(modelData)
+                                  })
                                 }
                               }
                             }
                           }
-                        }
-                        // Path-template fields get a live example of the
-                        // final file location, re-resolved on every edit.
-                        PathPreviewLine {
-                          visible: modelData.key.indexOf("format_") === 0
-                          width: parent.width
-                          path: visible ? waves.previewPathTemplate(modelData.key.substring(7), String(page.val(modelData))) : ""
+                          Text {
+                            textFormat: Text.PlainText
+                            visible: modelData.help !== ""
+                            text: modelData.help
+                            color: page.textDim
+                            font.pixelSize: 12
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                          }
+                          Row {
+                            width: parent.width
+                            spacing: 8
+                            SText {
+                              id: strField
+                              width: modelData.browse ? parent.width - browseBtn.width - 8 : parent.width
+                              text: page.val(modelData)
+                              onEdited: function (t) {
+                                page.setv(modelData.key, t)
+                              }
+                            }
+                            Rectangle {
+                              id: browseBtn
+                              visible: modelData.browse !== ""
+                              // SAVE CHANGES button vocabulary: accent-container fill,
+                              // accentDim border, uppercase accent label. Always full
+                              // strength: an earlier fade-once-set read as disabled,
+                              // and re-picking the folder is a legitimate action at any
+                              // time (it is also how macOS re-grants network-volume
+                              // access), so the button must always look clickable.
+                              width: browseTxt.width + page.btnPadH * 2
+                              height: browseTxt.height + page.btnPadV * 2
+                              radius: page.btnRad
+                              anchors.verticalCenter: parent.verticalCenter
+                              color: page.accentCont
+                              border.color: page.accentDim
+                              border.width: 1
+                              Text {
+                                id: browseTxt
+                                anchors.centerIn: parent
+                                text: "BROWSE"
+                                color: page.accent
+                                font.pixelSize: 13
+                                font.family: page.uiFont
+                                font.bold: true
+                                font.letterSpacing: page.btnTrack
+                              }
+                              MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                  // Open the picker where the field already points: a dir
+                                  // field's value IS the folder, a file field opens beside
+                                  // the binary it names.
+                                  var v = page.val(modelData)
+                                  if (modelData.browse === "dir") {
+                                    folderDlg.targetKey = modelData.key
+                                    // A folder that is gone right now (an unmounted
+                                    // share) opens at its nearest existing ancestor
+                                    // instead of wherever the picker last was.
+                                    var live = waves.existingFolder(v)
+                                    var du = page.pathUrl(live !== "" ? live : v)
+                                    if (du !== "")
+                                      folderDlg.currentFolder = du
+                                    folderDlg.open()
+                                  } else {
+                                    fileDlg.targetKey = modelData.key
+                                    var fu = page.dirUrlOf(v)
+                                    if (fu !== "")
+                                      fileDlg.currentFolder = fu
+                                    fileDlg.open()
+                                  }
+                                }
+                              }
+                            }
+                          }
+                          // Path-template fields get a live example of the
+                          // final file location, re-resolved on every edit.
+                          PathPreviewLine {
+                            visible: modelData.key.indexOf("format_") === 0
+                            width: parent.width
+                            path: visible ? waves.previewPathTemplate(modelData.key.substring(7), String(page.val(modelData))) : ""
+                          }
                         }
                       }
                     }
