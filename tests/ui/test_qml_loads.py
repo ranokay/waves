@@ -86,11 +86,16 @@ def _run_scenario() -> int:
     # identifiers. Mirror what app.py sets, plus the organization domain QML
     # Settings additionally requires on Linux: without it the offscreen run
     # reports "Failed to initialize QSettings instance" and the suite fails
-    # for harness reasons, not QML ones. XDG_CONFIG_HOME above is throwaway,
-    # so nothing persists outside this scenario.
+    # for harness reasons, not QML ones.
     app.setApplicationName("Waves")
     app.setOrganizationName("Waves")
     app.setOrganizationDomain("waves")
+    from support.qml import sandbox_app_config
+
+    # The parent test hands this child XDG_CONFIG_HOME; a direct run of this
+    # file has none, and without one the bridge adopts the real config and
+    # writes waves_dev.log into it.
+    sandbox_app_config()
     try:
         from waves.desktop.backend import WavesBridge
     except Exception as exc:
@@ -184,6 +189,11 @@ def _run_all_components() -> int:
     app.setApplicationName("Waves")
     app.setOrganizationName("Waves")
     app.setOrganizationDomain("waves")
+    from support.qml import sandbox_app_config
+
+    # Same direct-run hole as _run_scenario above: the compile sweep builds a
+    # bridge too, so it needs the throwaway config when nothing set one.
+    sandbox_app_config()
     try:
         from waves.desktop.backend import WavesBridge
     except Exception as exc:

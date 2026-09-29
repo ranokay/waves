@@ -106,6 +106,25 @@ def missing_qt() -> bool:
         return False
 
 
+def sandbox_app_config() -> str:
+    """Point the app's config directory at a throwaway path, and return it.
+
+    ``run_scenario`` gives every child an ``XDG_CONFIG_HOME``, but a scenario
+    file is also runnable on its own (``python tests/ui/<file>.py
+    --run-scenario``, how a single scenario is iterated on). With no sandbox
+    that child resolves the developer's real config directory: the bridge's
+    ``__init__`` adopts the real settings and installs the dev log there, so
+    the run's Qt warnings land in the user's ``waves_dev.log``. First caller
+    wins; a later call returns the directory already in place. Qt-free, so it
+    may run before (or without) a QCoreApplication or PySide6.
+    """
+    base = os.environ.get("XDG_CONFIG_HOME")
+    if not base:
+        base = tempfile.mkdtemp(prefix="waves-qml-config-")
+        os.environ["XDG_CONFIG_HOME"] = base
+    return base
+
+
 def sandbox_qml_settings() -> None:
     """Start a scenario from a clean QSettings slate, off the app's own domain.
 
@@ -117,14 +136,16 @@ def sandbox_qml_settings() -> None:
     test-owned state only -- never the app's own domain -- and keeps a
     scenario idempotent across runs. Call it once the child has a QCore
     application, before any QML engine or bridge exists.
-    """
-    import tempfile
 
+    The app's own config directory lands in the same throwaway base (see
+    :func:`sandbox_app_config`), so settings, token and dev log cannot outlive
+    the scenario even when nothing handed the process an XDG directory.
+    """
     from PySide6.QtCore import QCoreApplication, QSettings
 
     if QCoreApplication.applicationName() == "Waves":
         raise RuntimeError("sandbox_qml_settings must run before the real app configures QSettings")
-    base = os.environ.get("XDG_CONFIG_HOME") or tempfile.mkdtemp(prefix="waves-qml-settings-")
+    base = sandbox_app_config()
     Path(base).mkdir(parents=True, exist_ok=True)
     QSettings.setPath(QSettings.NativeFormat, QSettings.UserScope, base)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, base)

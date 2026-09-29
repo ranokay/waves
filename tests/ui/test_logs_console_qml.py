@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 from support.paths import QML_MAIN
-from support.qml import run_scenario, scoped_q
+from support.qml import run_scenario, sandbox_app_config, scoped_q
 
 # The heaviest QML boot: excluded from the quick QML pass.
 pytestmark = pytest.mark.slow
@@ -102,6 +102,7 @@ def _scenario() -> int:
     app = QGuiApplication.instance() or QGuiApplication([])
     from support.offline import PARK_LOGIN_QML, patch_offline
 
+    sandbox_app_config()
     patch_offline()
     from waves.desktop import diagnostics
     from waves.desktop.app import _load_mono
