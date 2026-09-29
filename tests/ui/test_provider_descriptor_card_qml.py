@@ -183,6 +183,10 @@ def _run_scenario() -> int:
     q("scrollDressing.visible = false")  # the page's scroll overlay swallows synthetic clicks
     settle(300)
     q("settingsPage.refreshSchema()")
+    # The Providers card starts collapsed, and a collapsed section builds no
+    # rows now (only an open section instantiates its controls), so open it
+    # the way a user does before looking for the rendered card.
+    q("settingsPage.setSectionOpen('providers', true)")
     settle(300)
 
     # The card and its generated action render in the live page, on screen.

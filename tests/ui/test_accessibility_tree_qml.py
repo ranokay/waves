@@ -949,6 +949,11 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     if not _open_settings(q, settle):
         problems.append("the Settings tab did not open the Settings page for the commit actions")
     else:
+        # The Apple switch lives in the Providers card, collapsed by default,
+        # and a collapsed section builds no rows now: open it the way a user
+        # does before driving its controls.
+        q("settingsPage.setSectionOpen('providers', true)")
+        settle(300)
         before = bool(q("waves.appleEnabled"))
         saved = before
         staged = bool(q(scene_js(_APPLE_SWITCH + "if (!sw) return false; sw.toggle(); return true;")))
