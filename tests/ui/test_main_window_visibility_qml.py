@@ -46,6 +46,10 @@ def _scenario(maximized: bool) -> int:
             json.dump({"win_x": 130, "win_y": 140, "win_w": 900, "win_h": 700, "win_max": True}, fh)
 
     engine = QQmlApplicationEngine()
+    # Neither a library scan nor a Browse fetch is what this scenario is about,
+    # and both reach outside the sandbox; same isolation as boot_main_qml.
+    WavesBridge._library_root = lambda self: ""  # type: ignore[method-assign]
+    WavesBridge.loadBrowse = lambda self, *a: None  # type: ignore[method-assign]
     bridge = WavesBridge(tidal=None)
     engine.rootContext().setContextProperty("waves", bridge)
     engine.rootContext().setContextProperty("monoFont", _load_mono())
@@ -85,22 +89,12 @@ def _scenario(maximized: bool) -> int:
 
 
 @pytest.mark.qml
-def test_a_restored_maximized_frame_opens_maximized_without_the_conflict_warning():
+@pytest.mark.parametrize("maximized", [True, False], ids=["restored-maximized", "fresh-windowed"])
+def test_the_main_window_opens_without_the_conflict_warning(maximized):
     run_scenario(
         Path(__file__),
         "--run-scenario",
-        "--maximized",
-        timeout=120,
-        sandbox_prefix="waves-window-visibility-test-",
-        failure_message="the main window conflicted on visible/visibility",
-    )
-
-
-@pytest.mark.qml
-def test_a_fresh_launch_opens_windowed_without_the_conflict_warning():
-    run_scenario(
-        Path(__file__),
-        "--run-scenario",
+        *(["--maximized"] if maximized else []),
         timeout=120,
         sandbox_prefix="waves-window-visibility-test-",
         failure_message="the main window conflicted on visible/visibility",

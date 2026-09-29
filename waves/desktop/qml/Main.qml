@@ -28,7 +28,7 @@ ApplicationWindow {
   // Hidden/Windowed/Maximized all ride `visibility`, never `visible`: setting
   // both on one Window makes Qt treat the pair as ambiguous and warn
   // "Conflicting properties 'visible' and 'visibility'" at component level.
-  // The maximize toggle and the geometry persist logic read `visibility` too.
+  // The window-state and geometry-persist logic read `visibility` too.
   visibility: Window.Hidden
   width: 1040
   height: 780
