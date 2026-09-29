@@ -431,9 +431,22 @@ Item {
     editMap = e
   }
   // Fields whose value the engine launders before use (the illegal-character
-  // stand-in), by key. Their delegates register themselves here so the save
-  // gate can find them without the page walking the whole schema.
+  // stand-in), by key. Collected from the schema, not from the delegates:
+  // a collapsed section builds no rows, and the save gate must still see a
+  // red-value in a card the user has not opened this visit.
   property var sanitizeKeys: ({})
+  function collectSanitizeKeys() {
+    var out = ({})
+    for (var g = 0; g < groups.length; g++) {
+      var fields = groups[g].fields
+      for (var i = 0; i < fields.length; i++) {
+        var f = fields[i]
+        if (f.key !== undefined && (f.sanitize === true || f.type === "char_map"))
+          out[f.key] = f
+      }
+    }
+    return out
+  }
   // True while the field holds something the laundering would strip, which is
   // what turns its box red. A per-character table is red while ANY of its
   // stand-ins is, so one bad row still holds the save.
@@ -653,6 +666,7 @@ Item {
   }
   function refreshSchema() {
     groups = waves.settingsSchema()
+    sanitizeKeys = collectSanitizeKeys()
     needsRefresh = false
   }
 
@@ -2899,7 +2913,7 @@ Item {
 
                 // FFmpeg manager card, Processing section only.
                 Loader {
-                  active: card.modelData.card === "ffmpeg"
+                  active: card.open && card.modelData.card === "ffmpeg"
                   visible: active
                   width: inner.width
                   height: (active && item) ? item.implicitHeight : 0
@@ -2908,7 +2922,7 @@ Item {
 
                 // In-app updater card, Updates section only.
                 Loader {
-                  active: card.modelData.card === "updates"
+                  active: card.open && card.modelData.card === "updates"
                   visible: active
                   width: inner.width
                   height: (active && item) ? item.implicitHeight : 0
@@ -2917,7 +2931,7 @@ Item {
 
                 // Diagnostics card, Diagnostics section only.
                 Loader {
-                  active: card.modelData.card === "diagnostics"
+                  active: card.open && card.modelData.card === "diagnostics"
                   visible: active
                   width: inner.width
                   height: (active && item) ? item.implicitHeight : 0
@@ -3404,7 +3418,6 @@ Item {
                         }
                       }
                     }
-                    Component.onCompleted: page.sanitizeKeys[modelData.key] = modelData
                   }
                 }
 
@@ -3446,10 +3459,11 @@ Item {
                       // own type AND the section being open, so a row builds
                       // exactly the control it needs. Instantiating a variant
                       // and hiding it still costs its scene-graph sync on the
-                      // first Settings open, and the hidden variants were ~90%
-                      // of the page's items. The library card below established
-                      // the pattern; the active loader is what body.implicitHeight
-                      // measures.
+                      // first Settings open, and the variants a row does not use
+                      // are most of the page's items: loading only the active
+                      // one keeps the first open under budget. The library card
+                      // below established the pattern; the active loader is
+                      // what body.implicitHeight measures.
                       // Enum / int / float / short str: label + help on
                       // the left, control on the right. A str field
                       // flagged "inline" holds a value of a character or
@@ -3536,8 +3550,6 @@ Item {
                             Layout.preferredHeight: 32
                             text: page.val(modelData)
                             invalid: page.sanitizeDirty(modelData)
-                            Component.onCompleted: if (modelData.sanitize === true)
-                              page.sanitizeKeys[modelData.key] = modelData
                             onEdited: function (t) {
                               page.setv(modelData.key, t)
                             }

@@ -26,7 +26,10 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
+
+pytestmark = pytest.mark.qml
 
 # Open/close every section through the page's own persisted-state API.
 _SET_ALL = """(function () {
@@ -71,7 +74,7 @@ def test_settings_rows_build_only_their_own_variant():
     )
 
 
-def _run_scenario() -> int:
+def _run_scenario() -> int:  # noqa: C901 (one straight scenario, five checks)
     booted = boot_main_qml()
     if isinstance(booted, int):
         return booted
@@ -86,6 +89,17 @@ def _run_scenario() -> int:
     # plus at most one loader. Before the variant loaders it was ~15,300.
     if closed["total"] > 3000:
         problems.append(f"the collapsed page instantiates {closed['total']} items (cap 3000)")
+
+    # The save gate's fields come from the schema, so a laundered value in a
+    # card that is still collapsed keeps SAVE CHANGES blocked; delegate-run
+    # registration would have missed it until the card was opened.
+    registered = bool(q('settingsPage.sanitizeKeys["filename_illegal_replacement"] !== undefined'))
+    if not registered:
+        problems.append("the sanitized field is missing from the save gate's schema walk")
+    q('settingsPage.editMap = {filename_illegal_replacement: "a/b"}')
+    if q("settingsPage.hasInvalidEdits()") is not True:
+        problems.append("a laundered value in a collapsed card no longer blocks save")
+    q("settingsPage.editMap = ({})")
 
     opened = int(q(_SET_ALL % "true"))
     settle(600)
