@@ -125,3 +125,17 @@ def test_a_restart_retires_the_previous_run(tmp_path, monkeypatch):
         assert monitor._stop is not first_stop, "each run needs its own stop event"
     finally:
         monitor.stop()
+
+
+def test_the_export_carries_the_native_sample_scrubbed(tmp_path, monkeypatch):
+    """The one artifact that names a native stall must reach the shared export."""
+    monkeypatch.setattr(diagnostics, "_log_dir", tmp_path)
+    sample = tmp_path / "freeze-20260101-000000-000.sample.txt"
+    sample.write_text("Call graph:\n+ 1 start (in dyld)\n  /Users/testuser/Music/Album/01 track.flac\n")
+
+    out = diagnostics.export_bundle()
+
+    body = Path(out).read_text(encoding="utf-8")
+    assert "NATIVE STALL SAMPLE (freeze-20260101-000000-000.sample.txt)" in body
+    assert "testuser" not in body, "the sample's home paths must be scrubbed like every other section"
+    assert "Call graph:" in body

@@ -109,6 +109,8 @@ _STALL_SAMPLE_INTERVAL_MS = 1
 # must not spawn a sampler on every check.
 _STALL_SAMPLE_MAX_PER_SESSION = 3
 _STALL_MONITOR_TICK_SEC = 0.25
+#: How many native samples the diagnostic export carries (newest first).
+_STALL_SAMPLE_EXPORT_MAX = 3
 
 # Event-loop occupancy probe: a fast GUI-thread timer whose own lateness reveals
 # how saturated the main loop is (a coarse 2s watchdog tick cannot). Verbose
@@ -781,6 +783,14 @@ def export_bundle(redact_content: bool = False) -> str:
     sections.append(("RECENT ACTIVITY (this session, newest last)", "\n".join(_crumbs.ring) or "(none)"))
 
     crash = _log_dir / "crash.log"
+    # Native stall samples (the verbose freeze watchdog's macOS captures) are
+    # the one artifact that names a GUI stall the Python traceback cannot, so
+    # the bundle carries the newest few, bounded like every other section and
+    # re-scrubbed on the way out like the rest.
+    for sample_path in sorted(_log_dir.glob("freeze-*.sample.txt"), reverse=True)[:_STALL_SAMPLE_EXPORT_MAX]:
+        body = _read_tail(sample_path, 256_000)
+        if body.strip():
+            sections.append((f"NATIVE STALL SAMPLE ({sample_path.name})", body))
     for path, cap, title in [
         (crash.with_suffix(".log.1"), 256_000, "CRASH LOG (previous)"),
         (crash, 512_000, "CRASH LOG"),
