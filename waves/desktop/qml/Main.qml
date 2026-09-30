@@ -10,6 +10,27 @@ import "primitives" as Primitives
 
 ApplicationWindow {
   id: root
+  // Custom controls in Flickables need the same visible focus behavior as
+  // native controls, including horizontal artwork shelves.
+  onActiveFocusItemChanged: Qt.callLater(root.revealKeyboardFocus)
+  function revealKeyboardFocus() {
+    var item = root.activeFocusItem
+    if (!item)
+      return
+    if (settingsPage && settingsPage.active && item.activeFocusOnTab)
+      settingsPage.cancelJump()
+    for (var pane = item.parent; pane; pane = pane.parent) {
+      if (pane.contentY === undefined || pane.contentHeight === undefined || pane.height <= 0)
+        continue
+      var pos = item.mapToItem(pane, 0, 0)
+      var dy = pos.y < 0 ? pos.y : pos.y + item.height > pane.height ? pos.y + item.height - pane.height : 0
+      var dx = pos.x < 0 ? pos.x : pos.x + item.width > pane.width ? pos.x + item.width - pane.width : 0
+      if (dy !== 0)
+        pane.contentY = Math.max(0, Math.min(pane.contentY + dy, pane.contentHeight - pane.height))
+      if (dx !== 0)
+        pane.contentX = Math.max(0, Math.min(pane.contentX + dx, pane.contentWidth - pane.width))
+    }
+  }
   // The bridge's signed-in flag, mirrored ONCE here. Every binding in this
   // file reads root.signedIn instead of waves.loggedIn: a read of a bridge
   // property is a call into Python (the interpreter must be taken, and at

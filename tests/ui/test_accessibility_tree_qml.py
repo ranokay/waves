@@ -970,6 +970,30 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         next_stop = json.loads(q(scene_js(_TAB_STOP_BODY)))
         if not next_stop["name"].startswith("Downloads settings"):
             problems.append(f"Tab entered a collapsed Settings body: {next_stop}")
+        # At minimum size, focusing a section below the viewport must reveal
+        # its whole focus target without requiring a separate mouse scroll.
+        prior_size = (root.width(), root.height())
+        root.resize(880, 560)
+        q("settingsPage.setSectionOpen('providers', true)")
+        settle(300)
+        last_header = (
+            "findFirst(settingsPage, function (o) { return o.objectName === 'settingsSectionHeader' "
+            "&& o.visible && o.accessibleLabel.indexOf('Processing') === 0; })"
+        )
+        _focus(q, last_header)
+        settle(250)
+        revealed = q(
+            scene_js(
+                f"var c = {last_header}; var pane = settingsPage.scrollViewport; "
+                "if (!c) return false; var y = c.mapToItem(pane, 0, 0).y; "
+                "return y >= -1 && y + c.height <= pane.height + 1;"
+            )
+        )
+        if not revealed:
+            problems.append("keyboard focus did not reveal the Settings section at minimum size")
+        root.resize(*prior_size)
+        q("settingsPage.jumpToCard('providers')")
+        settle(250)
         # The Apple switch lives in the Providers card, collapsed by default,
         # and a collapsed section builds no rows now: open it the way a user
         # does before driving its controls.

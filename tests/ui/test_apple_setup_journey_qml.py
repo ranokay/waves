@@ -346,8 +346,9 @@ def _run_scenario() -> int:  # noqa: C901 (one straight journey)
         failures.append(f"the pre-setup click did not name the cookies step: {q('settingsPage.appleFocusStep')}")
     if not q(_visible("settingsPage", "appleStepMark_cookies")):
         failures.append("the cookies step is not marked for the pre-setup click")
-    if q(_point("settingsPage", "appleEnableSwitch")) in ("", None):
-        failures.append("the gated download did not land at the Apple provider band")
+    apple_switch_point = q(_point("settingsPage", "appleEnableSwitch"))
+    if apple_switch_point in ("", None) or json.loads(apple_switch_point)[1] > float(root.height()) / 2:
+        failures.append(f"the gated download did not anchor the Apple band near the top: {apple_switch_point}")
     if q(_visible("settingsPage", "appleStepMark_runtime")):
         failures.append("an unrelated step is marked for the pre-setup click")
 

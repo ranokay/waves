@@ -335,17 +335,40 @@ Item {
         // An explicit destination outranks the remembered spot, which
         // would otherwise be re-applied on the same open and fight it.
         page.pendingY = -1
+        page.cancelJump()
+        page.jumpCard = it
+        page.jumpProvider = providerId
         it.instantOpen = true
         page.setSectionOpen(it.modelData.id, true)
-        Qt.callLater(function () {
-          var bandY = providerId !== "" ? it.providerBandY(providerId) : -1
-          var targetY = bandY >= 0 ? bandY - 10 : it.y
-          settingsFlick.contentY = Math.max(0, Math.min(targetY, settingsFlick.contentHeight - settingsFlick.height))
-          it.instantOpen = false
-        })
+        Qt.callLater(page._positionJump)
         return
       }
     }
+  }
+
+  // Keep a deep link attached to its band while lazy controls finish sizing.
+  // Real pointer, scrolling or keyboard focus takes ownership of the view.
+  property var jumpCard: null
+  property string jumpProvider: ""
+  function cancelJump() {
+    if (jumpCard)
+      jumpCard.instantOpen = false
+    jumpCard = null
+    jumpProvider = ""
+  }
+  function _positionJump() {
+    if (!jumpCard || !active || settingsFlick.height <= 0)
+      return false
+    var bandY = jumpProvider !== "" ? jumpCard.providerBandY(jumpProvider) : -1
+    var targetY = bandY >= 0 ? bandY - 10 : jumpCard.y
+    settingsFlick.contentY = Math.max(0, Math.min(targetY, settingsFlick.contentHeight - settingsFlick.height))
+    return true
+  }
+  PointHandler {
+    enabled: page.active
+    acceptedButtons: Qt.AllButtons
+    onActiveChanged: if (active)
+      page.cancelJump()
   }
 
   // Holding your place across tabs
@@ -388,6 +411,8 @@ Item {
   property alias scrollY: settingsFlick.contentY
   property alias scrollViewport: settingsFlick
   function _restoreScroll() {
+    if (_positionJump())
+      return
     if (pendingY < 0 || settingsFlick.height <= 0)
       return
     var most = Math.max(0, settingsFlick.contentHeight - settingsFlick.height)
@@ -665,6 +690,7 @@ Item {
     return cut > 0 ? pathUrl(s.substring(0, cut)) : ""
   }
   function refreshSchema() {
+    cancelJump()
     groups = waves.settingsSchema()
     sanitizeKeys = collectSanitizeKeys()
     needsRefresh = false
@@ -729,6 +755,8 @@ Item {
   }
 
   onActiveChanged: {
+    if (!active)
+      cancelJump()
     if (active) {
       // Arm before anything else: a schema refresh below can re-measure
       // the column, and the restore rides the layout pass that follows.
@@ -1527,7 +1555,10 @@ Item {
       // The user taking over cancels a partially-applied restore, so a
       // later re-measure can't yank the view away from where they
       // scrolled to.
-      onMovementStarted: page.pendingY = -1
+      onMovementStarted: {
+        page.pendingY = -1
+        page.cancelJump()
+      }
 
       Column {
         id: col
@@ -2904,6 +2935,7 @@ Item {
                   // Toggling re-measures the page; a still-armed
                   // restore must not ride that and jump the view.
                   page.pendingY = -1
+                  page.cancelJump()
                   page.setSectionOpen(card.modelData.id, !card.open)
                 }
               }
