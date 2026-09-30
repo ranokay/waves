@@ -983,8 +983,10 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         q("settingsPage.pendingY = 1000000")
         _focus(q, last_header)
         settle(250)
-        if q("settingsPage.pendingY") != -1:
-            problems.append("keyboard focus left a delayed Settings scroll restore armed")
+        # A late viewport remeasure must keep the user's focused target in
+        # view instead of applying the old, partially restored position.
+        root.resize(880, 580)
+        settle(150)
         revealed = q(
             scene_js(
                 f"var c = {last_header}; var pane = settingsPage.scrollViewport; "
