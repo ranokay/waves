@@ -10,6 +10,27 @@ import "primitives" as Primitives
 
 ApplicationWindow {
   id: root
+  // Custom controls in Flickables need the same visible focus behavior as
+  // native controls, including horizontal artwork shelves.
+  onActiveFocusItemChanged: Qt.callLater(root.revealKeyboardFocus)
+  function revealKeyboardFocus() {
+    var item = root.activeFocusItem
+    if (!item)
+      return
+    if (settingsPage && settingsPage.active && item.activeFocusOnTab)
+      settingsPage.takeScrollOwnership()
+    for (var pane = item.parent; pane; pane = pane.parent) {
+      if (pane.contentY === undefined || pane.contentHeight === undefined || pane.height <= 0)
+        continue
+      var pos = item.mapToItem(pane, 0, 0)
+      var dy = pos.y < 0 ? pos.y : pos.y + item.height > pane.height ? pos.y + item.height - pane.height : 0
+      var dx = pos.x < 0 ? pos.x : pos.x + item.width > pane.width ? pos.x + item.width - pane.width : 0
+      if (dy !== 0)
+        pane.contentY = Math.max(0, Math.min(pane.contentY + dy, pane.contentHeight - pane.height))
+      if (dx !== 0)
+        pane.contentX = Math.max(0, Math.min(pane.contentX + dx, pane.contentWidth - pane.width))
+    }
+  }
   // The bridge's signed-in flag, mirrored ONCE here. Every binding in this
   // file reads root.signedIn instead of waves.loggedIn: a read of a bridge
   // property is a call into Python (the interpreter must be taken, and at
@@ -189,7 +210,7 @@ ApplicationWindow {
   readonly property color line1: "#22262d"   // row dividers
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   // New Console tokens
   readonly property color bg: "#0d0f12"
   readonly property color surface0: "#121418"   // topbar / statusbar / expand panel
@@ -523,17 +544,21 @@ ApplicationWindow {
   property var searchGroups: []
   // Rows a payload's groups hold (the pinned top included): one sum for the
   // empty-state gate, the build veil's total and the page count.
-  function searchRowTotal(groups) {
+  function searchRowTotal(groups, type) {
     var total = 0
     for (var i = 0; i < (groups || []).length; ++i) {
       var g = groups[i]
-      total += (g.artists || []).length + (g.albums || []).length + (g.tracks || []).length + (g.videos || []).length + (g.playlists || []).length + (g.mixes || []).length + (g.top ? 1 : 0)
+      if (type && type !== "all")
+        total += (g[type] || []).length
+      else
+        total += (g.artists || []).length + (g.albums || []).length + (g.tracks || []).length + (g.videos || []).length + (g.playlists || []).length + (g.mixes || []).length + (g.top ? 1 : 0)
     }
     return total
   }
   // True once a search has populated any result model. Gates the filter chips
   // and the empty-state hint, so the chips materialize only after a search.
   readonly property bool hasResults: root.searchRowTotal(root.searchGroups) > 0
+  readonly property int filteredResultCount: root.searchRowTotal(root.searchGroups, root.filterType)
   // True only while a payload's groups are applied in place (a refresh):
   // each group's data handler picks reconcile over rebuild from this.
   property bool searchRefreshMode: false
@@ -1163,7 +1188,7 @@ ApplicationWindow {
     id: browseItemFreshTimer
     interval: 5 * 60 * 1000
     repeat: true
-    running: root.signedIn && root.windowUp && root.browseOpen && root.browsePageKey !== "" && !root.browsePageLoading && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
+    running: root.windowUp && root.browseOpen && root.browsePageKey !== "" && !root.browsePageLoading && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
     onTriggered: {
       var parts = root.browsePageKey.split(":")
       if (parts.length < 3 || parts[0] !== "item")
@@ -2914,7 +2939,7 @@ ApplicationWindow {
           if (!pageLoaded) {
             fillMedia(artistAlbumsModel, s.artistData.albums || [])
             fillMedia(artistEpModel, s.artistData.eps || [])
-            fillMedia(artistTracksModel, s.artistData.tracks || [])
+            fillArtistTracks(s.artistData.tracks || [])
             fillMedia(artistVideosModel, s.artistData.videos || [])
           }
           resetExpandedAlbums(s.expandedAlbums)
@@ -4184,12 +4209,13 @@ ApplicationWindow {
             color: root.accent
             font.family: root.mono
             font.pixelSize: 14
-            MouseArea {
+            TapAction {
+              accessibleLabel: root.vPlayer.playbackState === MediaPlayer.PlayingState ? "Pause video" : "Play video"
               anchors.fill: parent
               anchors.margins: -6
               cursorShape: Qt.PointingHandCursor
               enabled: !root.videoLoading && !root.videoError
-              onClicked: root.vPlayer.playbackState === MediaPlayer.PlayingState ? root.vPlayer.pause() : root.vPlayer.play()
+              onTriggered: root.vPlayer.playbackState === MediaPlayer.PlayingState ? root.vPlayer.pause() : root.vPlayer.play()
             }
           }
           // Seek bar: click or drag anywhere on the track.
@@ -4239,13 +4265,14 @@ ApplicationWindow {
             color: vpTitleMa.containsMouse && vpTitle.linkable ? "#ffffff" : root.textHi
             font.pixelSize: 12
             elide: Text.ElideRight
-            MouseArea {
+            TapAction {
               id: vpTitleMa
+              accessibleLabel: "Open album for " + vpTitle.text
               anchors.fill: parent
               hoverEnabled: true
               enabled: vpTitle.linkable
               cursorShape: vpTitle.linkable ? Qt.PointingHandCursor : Qt.ArrowCursor
-              onClicked: {
+              onTriggered: {
                 // Highlight the matching track when the album was
                 // found via the song lookup, else the video id.
                 var a = root.videoNow.albumId
@@ -4275,13 +4302,14 @@ ApplicationWindow {
             font.family: root.mono
             font.pixelSize: 11
             font.underline: vqMa.containsMouse || vqMenu.visible
-            MouseArea {
+            TapAction {
               id: vqMa
+              accessibleLabel: "Choose video quality"
               anchors.fill: parent
               anchors.margins: -6
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: vqMenu.visible = !vqMenu.visible
+              onTriggered: vqMenu.visible = !vqMenu.visible
             }
           }
           Text {
@@ -4291,13 +4319,14 @@ ApplicationWindow {
             color: vpCloseMa.containsMouse ? "#ff7b74" : root.red
             font.family: root.mono
             font.pixelSize: 14
-            MouseArea {
+            TapAction {
               id: vpCloseMa
+              accessibleLabel: "Close video"
               anchors.fill: parent
               anchors.margins: -6
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: root.closeVideo()
+              onTriggered: root.closeVideo()
             }
           }
         }
@@ -4336,13 +4365,14 @@ ApplicationWindow {
               color: root.videoNow && root.videoNow.res === modelData ? root.accent : vqOptMa.containsMouse ? root.textHi : root.textLo
               font.family: root.mono
               font.pixelSize: 12
-              MouseArea {
+              TapAction {
                 id: vqOptMa
+                accessibleLabel: "Use " + vqOpt.modelData + "p video"
                 anchors.fill: parent
                 anchors.margins: -3
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: {
+                onTriggered: {
                   vqMenu.visible = false
                   root.changeVideoQuality(vqOpt.modelData)
                 }
@@ -4474,8 +4504,6 @@ ApplicationWindow {
   // dwell defaults to the card rest; a caller can ask for a longer one where
   // the pointer sits by accident more often than on purpose (track rows).
   function hoverPrefetch(card, dwell) {
-    if (!root.signedIn)
-      return
     var k = _cardPrefetchKey(card)
     if (k === "" || root.browsePageKey === "item:" + k)
       // not a page, or already on it
@@ -4814,6 +4842,9 @@ ApplicationWindow {
   }
   ListModel {
     id: artistTracksModel
+  }
+  ListModel {
+    id: artistTracksPreviewModel
   }
   // folder_id -> playlists remaining in its "download all" (badge digit).
   // Pane-wide: folder ids are the library's, and the badge rides the folder
@@ -5378,6 +5409,11 @@ ApplicationWindow {
   function fillMedia(model, arr) {
     model.clear()
     appendMedia(model, arr)
+  }
+  function fillArtistTracks(tracks) {
+    var rows = tracks || []
+    fillMedia(artistTracksPreviewModel, rows.slice(0, 5))
+    fillMedia(artistTracksModel, rows)
   }
 
   // In-place refill keyed by id, for the search page's stale-then-refresh.
@@ -5999,7 +6035,7 @@ ApplicationWindow {
         root.artistData = p
         root.fillMedia(artistAlbumsModel, p.albums)
         root.fillMedia(artistEpModel, p.eps)
-        root.fillMedia(artistTracksModel, p.tracks)
+        root.fillArtistTracks(p.tracks)
         root.fillMedia(artistVideosModel, p.videos || [])
         return
       }
@@ -6028,7 +6064,7 @@ ApplicationWindow {
       root.libraryOpen = false
       root.fillMedia(artistAlbumsModel, p.albums)
       root.fillMedia(artistEpModel, p.eps)
-      root.fillMedia(artistTracksModel, p.tracks)
+      root.fillArtistTracks(p.tracks)
       root.fillMedia(artistVideosModel, p.videos || [])
     }
     // The whole queue (a full resync); updateQueueCounts, at the end of
@@ -6342,10 +6378,11 @@ ApplicationWindow {
               font.bold: true
               font.letterSpacing: 1.0
             }
-            MouseArea {
+            TapAction {
+              accessibleLabel: "Open provider setup"
               anchors.fill: parent
               cursorShape: Qt.PointingHandCursor
-              onClicked: root.openSetupPage()
+              onTriggered: root.openSetupPage()
             }
           }
           Rectangle {
@@ -6361,11 +6398,12 @@ ApplicationWindow {
               color: root.textDim
               font.pixelSize: 11
             }
-            MouseArea {
+            TapAction {
+              accessibleLabel: "Dismiss setup notice"
               objectName: "setupChipDismissArea"
               anchors.fill: parent
               cursorShape: Qt.PointingHandCursor
-              onClicked: root.dismissSetupChip()
+              onTriggered: root.dismissSetupChip()
             }
           }
         }
@@ -7214,10 +7252,11 @@ ApplicationWindow {
                             font.pixelSize: 13
                           }
                         }
-                        MouseArea {
+                        TapAction {
+                          accessibleLabel: "Open " + bchip.modelData.title
                           anchors.fill: parent
                           cursorShape: Qt.PointingHandCursor
-                          onClicked: bchip.modelData.pl ? root.openPlaylistsFolder(bchip.modelData.path, bchip.modelData.title) : root.openBrowseLink(bchip.modelData.path, bchip.modelData.title)
+                          onTriggered: bchip.modelData.pl ? root.openPlaylistsFolder(bchip.modelData.path, bchip.modelData.title) : root.openBrowseLink(bchip.modelData.path, bchip.modelData.title)
                         }
                       }
                     }
@@ -7292,15 +7331,16 @@ ApplicationWindow {
                     width: parent.width
                     elide: Text.ElideRight
                     topPadding: 6
-                    MouseArea {
+                    TapAction {
                       id: cloudTitleMa
+                      accessibleLabel: "Open " + tileGroup.modelData[0]
                       anchors.left: parent.left
                       anchors.top: parent.top
                       anchors.bottom: parent.bottom
                       width: Math.min(parent.width, parent.implicitWidth)
                       hoverEnabled: true
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: tileGroup.modelData[0] === "All Playlists" ? root.openPlaylistsRoot() : root.openBrowseCloud(tileGroup.modelData[0], tileGroup.modelData[1])
+                      onTriggered: tileGroup.modelData[0] === "All Playlists" ? root.openPlaylistsRoot() : root.openBrowseCloud(tileGroup.modelData[0], tileGroup.modelData[1])
                     }
                   }
                   ListView {
@@ -7568,11 +7608,12 @@ ApplicationWindow {
                   font.pixelSize: 14
                   width: parent.width
                   elide: Text.ElideRight
-                  MouseArea {
+                  TapAction {
+                    accessibleLabel: "Open artist " + bihSubtitle.text
                     anchors.fill: parent
                     enabled: bihSubtitle.linked
                     cursorShape: bihSubtitle.linked ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: waves.loadArtist(browseItemHeader.hd.artist_id)
+                    onTriggered: waves.loadArtist(browseItemHeader.hd.artist_id)
                   }
                 }
                 Text {
@@ -7653,7 +7694,7 @@ ApplicationWindow {
           // The shared loading hint (WireHint.qml owns the look).
           WireHint {
             id: browseDrillHint
-            active: root.signedIn && root.browsePageLoading
+            active: root.browsePageLoading
             width: parent.width
             tint: root.textLo
             onScreen: root.onScreen
@@ -7663,7 +7704,7 @@ ApplicationWindow {
           }
 
           Column {
-            visible: root.signedIn && root.browsePageError
+            visible: root.browsePageError
             width: parent.width
             spacing: 12
             Text {
@@ -7691,10 +7732,11 @@ ApplicationWindow {
                 font.bold: true
                 font.letterSpacing: root.btnTrack
               }
-              MouseArea {
+              TapAction {
+                accessibleLabel: "Retry loading page"
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.retryBrowsePage()
+                onTriggered: root.retryBrowsePage()
               }
             }
           }
@@ -7704,7 +7746,7 @@ ApplicationWindow {
           // page with no music). Better than a blank page below
           // the back bar.
           Text {
-            visible: root.signedIn && root.browsePageKey !== "" && root.browsePage && !root.browsePageLoading && !root.browsePageError && ((root.browsePage.sections || []).length === 0)
+            visible: root.browsePageKey !== "" && root.browsePage && !root.browsePageLoading && !root.browsePageError && ((root.browsePage.sections || []).length === 0)
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
             textFormat: Text.PlainText
@@ -7799,7 +7841,7 @@ ApplicationWindow {
           // The invitation is provider-agnostic: an Apple-only
           // signed-out search reaches it too. The
           // actions below carry whichever provider can fill it.
-          visible: !root.hasResults
+          visible: !root.hasResults || (root.filterType !== "all" && root.filteredResultCount === 0)
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
           textFormat: Text.PlainText
@@ -7808,7 +7850,7 @@ ApplicationWindow {
           // FAILED says that instead: the group's own message
           // carries the words, so the page
           // never invites a first search it already ran.
-          text: root.searchNoResultsFor !== "" ? "No results for “" + root.searchNoResultsFor + "”" : (root.searchGroupError !== "" ? "Search failed" : "Search for an artist, album, or track to begin")
+          text: root.hasResults ? "No " + root.filterType + " among " + root.searchRowTotal(root.searchGroups) + " results" : root.searchNoResultsFor !== "" ? "No results for “" + root.searchNoResultsFor + "”" : (root.searchGroupError !== "" ? "Search failed" : "Search for an artist, album, or track to begin")
           color: root.textLo
           font.pixelSize: 22
           topPadding: 96
@@ -7837,7 +7879,7 @@ ApplicationWindow {
         // itself the moment its provider is set up.
         Item {
           objectName: "emptySetupCtas"
-          visible: emptyHint.visible && (!root.appleEnabled || !root.signedIn)
+          visible: !root.hasResults && emptyHint.visible && (!root.appleEnabled || !root.signedIn)
           width: parent.width
           height: emptyCtaCol.height
           Column {
@@ -8103,10 +8145,11 @@ ApplicationWindow {
                   color: root.textLo
                   font.pixelSize: 13
                   anchors.verticalCenter: parent.verticalCenter
-                  MouseArea {
+                  TapAction {
+                    accessibleLabel: "Copy artist link"
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: waves.copyShareUrl("artist", root.artistData.id || "")
+                    onTriggered: waves.copyShareUrl("artist", root.artistData.id || "")
                   }
                 }
               }
@@ -8129,10 +8172,11 @@ ApplicationWindow {
                 color: root.accent
                 font.pixelSize: 12
                 font.letterSpacing: 0.8
-                MouseArea {
+                TapAction {
+                  accessibleLabel: root.bioExpanded ? "Collapse biography" : "Expand biography"
                   anchors.fill: parent
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.bioExpanded = !root.bioExpanded
+                  onTriggered: root.bioExpanded = !root.bioExpanded
                 }
               }
             }
@@ -8161,14 +8205,14 @@ ApplicationWindow {
             onToggled: root.toggleArtistSection("tracks")
           }
           Repeater {
+            id: artistTopTracksRep
             // null model while collapsed: no delegates exist at all,
             // cheaper than count instances with visible: false.
-            model: root.artistTracksCollapsed ? null : artistTracksModel
+            model: root.artistTracksCollapsed ? null : root.topTracksExpanded ? artistTracksModel : artistTracksPreviewModel
             delegate: TrackRow {
               host: root
               required property var model
               required property int index
-              visible: index < 5 || root.topTracksExpanded
               width: artistCol.width
               tId: model.id
               title: model.title
@@ -8517,37 +8561,11 @@ ApplicationWindow {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 16
-        MouseArea {
+        PreviewSeekArea {
           id: bottomSeekMa
+          host: root
           anchors.fill: parent
           hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
-          preventStealing: true
-          property bool scrubbing: false
-          function frac(mx) {
-            return width > 0 ? Math.max(0, Math.min(1, mx / width)) : 0
-          }
-          onPressed: function (m) {
-            m.accepted = true
-            scrubbing = true
-            root.previewScrubbing = true
-            root.scrubPreviewVisual(frac(m.x))
-          }
-          onPositionChanged: function (m) {
-            if (scrubbing)
-              root.scrubPreviewVisual(frac(m.x))
-          }
-          onReleased: function (m) {
-            if (scrubbing) {
-              scrubbing = false
-              root.previewScrubbing = false
-              root.seekPreview(frac(m.x))
-            }
-          }
-          onCanceled: {
-            scrubbing = false
-            root.previewScrubbing = false
-          }
         }
         // aim tick + time flag under the cursor
         Rectangle {
@@ -8618,12 +8636,16 @@ ApplicationWindow {
                 font.bold: true
                 font.letterSpacing: root.btnTrack
               }
-              MouseArea {
+              TapAction {
                 id: scMa
+                accessibleLabel: "Use " + schip.modelData[1] + " browse style"
+                role: Accessible.RadioButton
+                checkable: true
+                checked: schip.on
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.setBrowseStyle(schip.modelData[0])
+                onTriggered: root.setBrowseStyle(schip.modelData[0])
               }
             }
           }
@@ -8688,13 +8710,14 @@ ApplicationWindow {
               duration: 140
             }
           }
-          MouseArea {
+          TapAction {
             id: logsBtnMa
+            accessibleLabel: "Open logs"
             anchors.fill: parent
             anchors.margins: -4
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: logsDrawer.open()
+            onTriggered: logsDrawer.open()
           }
         }
         // Update notice: the right slot goes gold when a newer release is
@@ -8733,8 +8756,9 @@ ApplicationWindow {
             font.family: root.mono
             font.pixelSize: 11
             font.letterSpacing: 0.5
-            MouseArea {
+            TapAction {
               id: statusUpdMa
+              accessibleLabel: "Open available update"
               anchors.fill: parent
               anchors.margins: -4
               hoverEnabled: true
@@ -8743,7 +8767,7 @@ ApplicationWindow {
               // (already auto-expanded while an update waits);
               // callLater so the jump lands after the page's
               // onActiveChanged refresh has run.
-              onClicked: {
+              onTriggered: {
                 root.navPush()
                 root.markNav("settings")
                 root.setupOpen = false
@@ -8799,8 +8823,10 @@ ApplicationWindow {
                 duration: 140
               }
             }
-            MouseArea {
+            TapAction {
               id: verMa
+              accessibleLabel: "Check for application updates"
+              enabled: statusMark.verState !== "checking"
               anchors.fill: parent
               anchors.margins: -4
               hoverEnabled: true
@@ -8808,7 +8834,7 @@ ApplicationWindow {
               // The same check the Settings card runs. Not marked
               // manual: the user is nowhere near the updater, so a
               // found update should still raise its toast.
-              onClicked: {
+              onTriggered: {
                 if (statusMark.verState === "checking")
                   return
                 statusMark.verState = "checking"
@@ -8934,11 +8960,12 @@ ApplicationWindow {
               }
             }
           }
-          MouseArea {
+          TapAction {
+            accessibleLabel: "Play or pause preview"
             anchors.fill: parent
             anchors.margins: -4
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.nowToggle()
+            onTriggered: root.nowToggle()
           }
         }
         Art {
@@ -8996,14 +9023,16 @@ ApplicationWindow {
               elide: Text.ElideRight
               width: Math.min(implicitWidth, npInfo.titleW)
               font.underline: npTitleMa.containsMouse && root.previewNowAlbumId !== ""
-              MouseArea {
+              TapAction {
                 id: npTitleMa
+                enabled: root.previewNowAlbumId !== ""
+                accessibleLabel: "Open current album"
                 anchors.fill: parent
                 anchors.topMargin: -6
                 anchors.bottomMargin: -6
                 hoverEnabled: true
                 cursorShape: root.previewNowAlbumId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onClicked: root.nowOpenAlbum()
+                onTriggered: root.nowOpenAlbum()
               }
             }
             Text {
@@ -9049,14 +9078,17 @@ ApplicationWindow {
                       font.family: root.mono
                       font.pixelSize: 11
                       font.underline: npArtMa.containsMouse && linkable
-                      MouseArea {
+                      TapAction {
                         id: npArtMa
+                        accessibleLabel: "Open artist " + npArtName.text
+                        enabled: npArtName.linkable
+                        activeFocusOnTab: enabled && npArtName.parent.x < npArtist.width
                         anchors.fill: parent
                         anchors.topMargin: -6
                         anchors.bottomMargin: -6
                         hoverEnabled: true
                         cursorShape: npArtName.linkable ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: if (npArtName.linkable)
+                        onTriggered: if (npArtName.linkable)
                           waves.loadArtist(modelData.id)
                       }
                     }
@@ -9098,12 +9130,13 @@ ApplicationWindow {
             font.bold: true
             font.pixelSize: (npBarHover.hovered || npStopMa.containsMouse) ? 11 : 12
           }
-          MouseArea {
+          TapAction {
             id: npStopMa
+            accessibleLabel: "Stop preview"
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.nowStop()
+            onTriggered: root.nowStop()
           }
         }
       }

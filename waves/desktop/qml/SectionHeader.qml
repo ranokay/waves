@@ -8,17 +8,17 @@ import "primitives" as Primitives
 // state the caller owns, a rule out to an optional count badge, and an
 // optional trailing control (the artist VIDEOS download-all button) that
 // sits above the header's own collapse target.
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: secHead
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color border1: "#262a31"   // default card border (outline-variant)
   readonly property color divider: "#22262d"
   readonly property string mono: monoFont   // bundled JetBrains Mono (see app.py)
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
 
@@ -37,9 +37,9 @@ Item {
   signal opened
   // Optional trailing control (the VIDEOS download-all button), sits
   // between the rule and the count badge. The row takes z 1 so the
-  // control's own MouseArea receives clicks above the whole-header
+  // control's own tap area receives clicks above the whole-header
   // collapse target; nothing else in the row accepts mouse events (the
-  // openable label's MouseArea is disabled outside openable mode), so
+  // openable label's TapAction is disabled outside openable mode), so
   // header and label clicks fall through to secMa exactly as before.
   property Component trailing: null
   anchors.left: parent ? parent.left : undefined
@@ -70,13 +70,12 @@ Item {
       font.pixelSize: 12
       font.bold: true
       font.letterSpacing: 1.9
-      MouseArea {
+      TapAction {
         id: secOpenMa
         anchors.fill: parent
         enabled: secHead.openable
-        hoverEnabled: secHead.openable
-        cursorShape: secHead.openable ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: secHead.opened()
+        accessibleLabel: "Open " + secHead.label.toLowerCase()
+        onTriggered: secHead.opened()
       }
     }
     Rectangle {
@@ -108,12 +107,11 @@ Item {
       }
     }
   }
-  MouseArea {
+  TapAction {
     id: secMa
     anchors.fill: parent
     enabled: secHead.collapsible
-    hoverEnabled: secHead.collapsible
-    cursorShape: secHead.collapsible ? Qt.PointingHandCursor : Qt.ArrowCursor
-    onClicked: secHead.toggled()
+    accessibleLabel: (secHead.collapsed ? "Expand " : "Collapse ") + secHead.label.toLowerCase()
+    onTriggered: secHead.toggled()
   }
 }

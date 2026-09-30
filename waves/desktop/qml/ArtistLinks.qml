@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import "primitives" as Primitives
 
 // A line of comma-separated artist names, each individually clickable.
@@ -20,6 +21,17 @@ Row {
   property string albumId: ""      // set -> the suffix (album name) links to the album page
   property int px: 12
   clip: true
+  readonly property var namedArtists: artists.filter(function (artist) {
+    return !!artist.name
+  })
+  readonly property string fullText: namedArtists.map(function (artist) {
+    return artist.name
+  }).join(", ") + (suffix ? (namedArtists.length ? " · " : "") + suffix : "")
+  ToolTip.visible: alHover.hovered && implicitWidth > width + 1
+  ToolTip.text: fullText
+  HoverHandler {
+    id: alHover
+  }
   // A Row has no baseline of its own; publish the name text's so callers
   // can baseline-align a date or tag sitting beside it (centring two
   // fonts with different descents reads crooked).
@@ -29,7 +41,7 @@ Row {
   }
   baselineOffset: alFm.ascent
   Repeater {
-    model: al.artists
+    model: al.namedArtists
     delegate: Row {
       required property var modelData
       required property int index
@@ -43,17 +55,17 @@ Row {
         color: accent
         font.pixelSize: al.px
         font.underline: alMa.containsMouse && linkable
-        MouseArea {
+        TapAction {
           id: alMa
           anchors.fill: parent
-          hoverEnabled: true
-          cursorShape: alName.linkable ? Qt.PointingHandCursor : Qt.ArrowCursor
-          onClicked: if (alName.linkable)
-            waves.loadArtist(modelData.id)
+          enabled: alName.linkable
+          activeFocusOnTab: enabled && alName.parent.x < al.width
+          accessibleLabel: "Open artist " + modelData.name
+          onTriggered: waves.loadArtist(modelData.id)
         }
       }
       Text {
-        visible: index < al.artists.length - 1
+        visible: index < al.namedArtists.length - 1
         text: ", "
         color: textLo
         font.pixelSize: al.px
@@ -61,7 +73,7 @@ Row {
     }
   }
   Text {
-    visible: al.suffix !== ""
+    visible: al.suffix !== "" && al.namedArtists.length > 0
     textFormat: Text.PlainText
     text: " · "
     color: textLo
@@ -76,13 +88,13 @@ Row {
     color: alSfMa.containsMouse && linkable ? "#ffffff" : textLo
     font.pixelSize: al.px
     font.underline: alSfMa.containsMouse && linkable
-    MouseArea {
+    TapAction {
       id: alSfMa
       anchors.fill: parent
       enabled: alSuffix.linkable
-      hoverEnabled: enabled
-      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-      onClicked: host.openAlbumPage(al.albumId, "", al.suffix)
+      activeFocusOnTab: enabled && alSuffix.x < al.width
+      accessibleLabel: "Open album " + al.suffix
+      onTriggered: host.openAlbumPage(al.albumId, "", al.suffix)
     }
   }
 }

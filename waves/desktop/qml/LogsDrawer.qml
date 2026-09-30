@@ -11,13 +11,13 @@ import "primitives" as Primitives
 // 'host' is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load; the drawer reads the window
 // bounds through it.
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Drawer {
   id: logsDrawer
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
@@ -27,7 +27,7 @@ Drawer {
   readonly property string mono: monoFont   // bundled JetBrains Mono (see app.py)
   readonly property color red: "#ff5a52"   // failed / peak / heart
   readonly property color surface: "#15181d"   // primary card surface
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
   edge: Qt.RightEdge

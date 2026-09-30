@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 from support.qml import EXIT_OK, boot_main_qml, run_scenario
 
-_REASON = "6 of 501 tracks failed"
+_REASON = "6 of 501 tracks failed after the provider stopped returning audio for this playlist"
 
 
 def _row_reason(q, qid: int) -> str:
@@ -85,8 +85,23 @@ def _scenario() -> int:
             "})()"
         )
     )
-    if _REASON not in said:
-        problems.append(f"the failed row still does not say why: {said!r}")
+    tooltip = q(
+        "(function(){"
+        " function walk(it){"
+        "  if (!it) return null;"
+        "  if (it.objectName === 'queueReason') return it;"
+        "  for (var i = 0; i < it.children.length; i++) {"
+        "   var hit = walk(it.children[i].item || it.children[i]);"
+        "   if (hit) return hit;"
+        "  }"
+        "  return null;"
+        " }"
+        " var hit = walk(queueDrawer.contentItem);"
+        " return hit ? JSON.stringify({truncated: hit.truncated, words: hit.ToolTip.text}) : '';"
+        "})()"
+    )
+    if _REASON not in said or '"truncated":true' not in tooltip or _REASON not in tooltip:
+        problems.append(f"the failed row does not expose its full reason: row={said!r}, tooltip={tooltip!r}")
 
     # The full-resync path is a SEPARATE writer from the per-row delta, and a
     # rebuild (or a STOP over a big queue) is delivered that way. Poke the row

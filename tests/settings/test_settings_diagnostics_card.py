@@ -40,9 +40,9 @@ def _source() -> str:
 
 
 def _handler_body(source: str, anchor: str) -> str:
-    """The braces-balanced ``onClicked: { ... }`` block containing ``anchor``."""
+    """The braces-balanced ``onTriggered: { ... }`` block containing ``anchor``."""
     index = source.index(anchor)
-    start = source.rindex("onClicked: {", 0, index)
+    start = source.rindex("onTriggered: {", 0, index)
     depth = 0
     for offset, char in enumerate(source[start:], start):
         if char == "{":
@@ -51,7 +51,7 @@ def _handler_body(source: str, anchor: str) -> str:
             depth -= 1
             if depth == 0:
                 return source[start : offset + 1]
-    raise AssertionError("unbalanced onClicked block")
+    raise AssertionError("unbalanced onTriggered block")
 
 
 def test_export_does_not_rewrite_diagnostics_prefs_from_a_stale_schema():

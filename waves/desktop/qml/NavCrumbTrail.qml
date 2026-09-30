@@ -16,19 +16,19 @@ import "primitives" as Primitives
 // It reads through it:
 //   host.crumbBase / host.crumbLabels / host.crumbSynth /
 //   host.crumbSynthGo / host.crumbTailPending / host.navTo
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: nct
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)
   readonly property color surface2: "#191c22"   // hover / nested
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
 
@@ -180,12 +180,12 @@ Item {
                 font.pixelSize: 12
               }
             }
-            MouseArea {
+            TapAction {
               id: ncFoldMa
               anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: nct.unfolded = !nct.unfolded
+              accessibleLabel: nct.unfolded ? "Fold navigation history" : "Expand navigation history"
+              focusRadius: 8
+              onTriggered: nct.unfolded = !nct.unfolded
             }
           }
           // crumb slot
@@ -233,11 +233,11 @@ Item {
                 font.bold: nc.isLast
               }
             }
-            MouseArea {
+            TapAction {
               anchors.fill: parent
-              hoverEnabled: true
               enabled: !nc.isLast && !nc.crumbHidden
-              cursorShape: Qt.PointingHandCursor
+              accessibleLabel: "Back to " + nc.tag
+              focusRadius: 8
               // ord is the pill's place in the TRAIL; navTo
               // indexes the whole history, which the trail is
               // a tail slice of (host.crumbBase). A synthetic
@@ -245,7 +245,7 @@ Item {
               // trail without a history entry behind it: it
               // climbs out of the drill instead, and shifts
               // every later pill's history index by one.
-              onClicked: {
+              onTriggered: {
                 if (host.crumbSynth && nc.ord === 0)
                   host.crumbSynthGo()
                 else

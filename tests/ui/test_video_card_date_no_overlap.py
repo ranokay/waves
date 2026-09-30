@@ -36,7 +36,7 @@ _VIDEO = (
 
 # Enough combined name width to overflow a grid cell several times over.
 _ARTISTS = (
-    "[{id:'a1',name:'Electric Callboy'},{id:'a2',name:'The Offspring'},"
+    "[{id:'empty',name:''},{id:'a1',name:'Electric Callboy'},{id:'a2',name:'The Offspring'},"
     "{id:'a3',name:'A Needlessly Long Touring Ensemble'},"
     "{id:'a4',name:'And Their Extended Orchestra'}]"
 )
@@ -156,6 +156,24 @@ def _run_scenario() -> int:
             f"{date_right}px vs button left edge {button_left}px",
             file=sys.stderr,
         )
+        return EXIT_REGRESSED
+    # Every artist reachable by Tab must have a visible part of its label.
+    credit_focus = q(
+        "(function(){ function walk(o) {"
+        " if (o.visible && o.namedArtists !== undefined) {"
+        "  var bad = []; function links(c) {"
+        "   if (c.activeFocusOnTab && c.accessibleLabel && c.mapToItem(o, 0, 0).x >= o.width) bad.push(c.accessibleLabel);"
+        "   var kids = c.children || []; for (var j=0;j<kids.length;j++) links(kids[j]); }"
+        "  links(o); function words(c) { if(c.text !== undefined) return c.visible ? c.text : '';"
+        "   var out = ''; var kids = c.children || []; for(var k=0;k<kids.length;k++) out += words(kids[k]); return out; }"
+        "  return JSON.stringify({bad:bad, words:words(o)}); }"
+        " var kids = o.children || []; for(var i=0;i<kids.length;i++) { var hit = walk(kids[i]); if(hit !== null) return hit; }"
+        " if(o.item) return walk(o.item); return null; }"
+        " return walk(root.searchGroupFor('tidal').videoGridItem); })()"
+    )
+    credit_report = json.loads(credit_focus) if credit_focus is not None else None
+    if credit_report is None or credit_report["bad"] or credit_report["words"].startswith(", "):
+        print(f"long artist credits have invisible Tab stops: {credit_focus}", file=sys.stderr)
         return EXIT_REGRESSED
     return EXIT_OK
 

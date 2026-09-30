@@ -365,7 +365,7 @@ def _run_configure_cta() -> int:
         q,
         settle,
         _point("libSection", "libConfigureAction"),
-        "root.settingsOpen === true && settingsPage.sectionOpen('library')",
+        "root.settingsOpen === true && settingsPage.openSections.library === true",
     ):
         failures.append("the configure action did not land on the Settings library card")
 

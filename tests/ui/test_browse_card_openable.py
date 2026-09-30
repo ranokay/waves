@@ -29,7 +29,6 @@ into the rest of the suite.
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -89,32 +88,17 @@ def test_both_card_styles_delegate_their_affordance_to_the_verdict():
     assert "readonly property bool openable: host.browseCardOpenable(ac.card)" in _ART_CARD
     assert "|| !!bc.card.artist_id" not in _BROWSE_CARD, "the artist-only gate must not survive beside the verdict"
     assert "|| !!ac.card.artist_id" not in _ART_CARD, "the artist-only gate must not survive beside the verdict"
-    # Both cursor sites and the underline still read it on each card.
-    assert _BROWSE_CARD.count("cursorShape: bc.openable ? Qt.PointingHandCursor : Qt.ArrowCursor") == 2
+    # Both page targets use the same enabled gate; TapAction owns the cursor.
+    assert _BROWSE_CARD.count("enabled: bc.openable") == 2
     assert "font.underline: bcTitleMa.containsMouse && bc.openable" in _BROWSE_CARD
-    assert _ART_CARD.count("cursorShape: ac.openable ? Qt.PointingHandCursor : Qt.ArrowCursor") == 2
+    assert _ART_CARD.count("enabled: ac.openable") == 2
     assert "font.underline: acTitleMa.containsMouse && ac.openable" in _ART_CARD
 
 
 def test_both_headline_styles_hover_their_link():
     before, _, after = _BROWSE_SECTION.partition("id: bsecTitle")
-    assert "hoverEnabled: enabled" in before, "the console headline must hover, like the art one"
-    assert "hoverEnabled: enabled" in after, "the art-style headline must keep hovering"
-
-
-def _flat(text: str) -> str:
-    """Whitespace-insensitive view for pins whose construct qmlformat may
-    re-wrap (it decides line breaks and drops optional semicolons)."""
-    return re.sub(r"\s+", " ", text)
-
-
-def test_the_page_surfaces_hover_their_cursor():
-    # Qt only applies a MouseArea's cursor on hover with hoverEnabled: the
-    # art and the title are the two surfaces that offer the page, so both
-    # carry the flag on both cards (the download/preview controls are a
-    # different promise and keep their own shape).
-    assert _flat(_BROWSE_CARD).count("hoverEnabled: true cursorShape: bc.openable") == 2
-    assert _flat(_ART_CARD).count("hoverEnabled: true cursorShape: ac.openable") == 2
+    assert "openable: bsec.headlinable" in before, "the console headline must use the shared open action"
+    assert "TapAction {" in after, "the art-style headline must use the shared hover/focus action"
 
 
 # ----- the live agreement ----------------------------------------------------
@@ -210,14 +194,16 @@ _HEADLINE_PARK = """
             var k = kids[i]
             if (k && k.openable !== undefined && k.label !== undefined && k.count !== undefined
                 && ("" + k.label).indexOf(label) === 0) {
-                var ck = k.children || []
-                for (var j = 0; j < ck.length; j++) {
-                    var c = ck[j]
-                    if (c && c.enabled && c.hoverEnabled !== undefined && c.cursorShape !== undefined) {
-                        found = c
-                        break
+                function tap(o) {
+                    if (o.enabled && o.accessibleLabel !== undefined && o.cursorShape !== undefined) return o
+                    var kids = o.children || []
+                    for (var j = 0; j < kids.length; j++) {
+                        var hit = tap(kids[j])
+                        if (hit) return hit
                     }
+                    return null
                 }
+                found = tap(k)
                 return
             }
             walk(k)
@@ -430,12 +416,13 @@ def _run_scenario() -> int:
                 var k = kids[i]
                 if (k && k.openable !== undefined && k.label !== undefined && k.count !== undefined) {
                     var mas = []
-                    var ck = k.children || []
-                    for (var j = 0; j < ck.length; j++) {
-                        var c = ck[j]
-                        if (c && c.hoverEnabled !== undefined && c.cursorShape !== undefined)
-                            mas.push({ enabled: !!c.enabled, hover: !!c.hoverEnabled })
+                    function areas(o) {
+                        if (o.hoverEnabled !== undefined && o.cursorShape !== undefined)
+                            mas.push({ enabled: !!o.enabled, hover: !!o.hoverEnabled })
+                        var ck = o.children || []
+                        for (var j = 0; j < ck.length; j++) areas(ck[j])
                     }
+                    areas(k)
                     out.push({ label: "" + k.label, areas: mas })
                 } else {
                     walk(k)
@@ -469,9 +456,8 @@ def _run_scenario() -> int:
             print(f"{style} style: " + "; ".join(bad), file=sys.stderr)
             return EXIT_REGRESSED
 
-        # The console headline's own MouseArea must hover its link exactly
-        # when it is enabled: Qt only applies a MouseArea's cursor on hover
-        # with hoverEnabled, so a missing flag is a missing hand.
+        # Enabled headline tap targets must hover their link. The shared
+        # TapAction also supplies a keyboard path; disabled modes are inert.
         if style == "console":
             try:
                 headers = json.loads(q(headers_probe))
@@ -485,7 +471,7 @@ def _run_scenario() -> int:
                 if not h["areas"]:
                     return fail(f"headline {h['label']!r} has no hoverable area at all")
                 for a in h["areas"]:
-                    if a["hover"] != a["enabled"]:
+                    if a["enabled"] and not a["hover"]:
                         return fail(f"headline {h['label']!r}: hoverEnabled={a['hover']} with enabled={a['enabled']}")
 
             # The hand itself, not just the flag: hover the headline and each
@@ -533,7 +519,7 @@ def _run_scenario() -> int:
                     q("_browseParked.mapToItem(null, _browseParked.width/2, _browseParked.height/2).y"),
                 )
                 settle(60)
-                if not bool(q("_browseParked.containsMouse")):
+                if _want_hand and not bool(q("_browseParked.containsMouse")):
                     print(f"hover probe is dead over {_title!r}", file=sys.stderr)
                     return EXIT_PRECONDITION
                 _want = Qt.PointingHandCursor if _want_hand else Qt.ArrowCursor

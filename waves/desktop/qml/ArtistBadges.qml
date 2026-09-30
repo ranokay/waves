@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // The artist badge: what this artist holds in your library, fed by the
 // artist-level rollup. On artwork it is a full-width STRIP across the
@@ -21,16 +22,16 @@ import QtQuick
 // required so a missed binding fails at load.
 // It reads through it:
 //   host.browseBuilding / host.searchBuilding
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except textDim which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: arb
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — textDim binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color green: "#3ef08a"   // LOSSLESS tier + done state
   readonly property string mono: monoFont    // bundled JetBrains Mono (see app.py)
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
 

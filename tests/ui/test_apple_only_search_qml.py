@@ -178,15 +178,27 @@ def _check_states(bridge, q, settle) -> tuple[bool, bool, bool, bool]:
         chip_click_ok = _settle_until(
             q,
             settle,
-            lambda: q("root.filterType") == "videos" and not bool(q(apple + ".headVisible")),
+            lambda: (
+                q("root.filterType") == "videos"
+                and not bool(q(apple + ".headVisible"))
+                and bool(q("emptyHint.visible"))
+            ),
             timeout_ms=1000,
             step_ms=5,
+        )
+        chip_click_ok = (
+            chip_click_ok
+            and q("root.filteredResultCount") == 0
+            and q("emptyHint.text") == "No videos among 4 results"
+            and not bool(_find_visible(q, "emptySetupCtas"))
         )
         _click_chip(q, "All")
         chip_click_ok = chip_click_ok and _settle_until(
             q,
             settle,
-            lambda: q("root.filterType") == "all" and bool(q(apple + ".headVisible")),
+            lambda: (
+                q("root.filterType") == "all" and bool(q(apple + ".headVisible")) and not bool(q("emptyHint.visible"))
+            ),
             timeout_ms=1000,
             step_ms=5,
         )

@@ -190,7 +190,8 @@ def test_the_finished_page_never_waits_for_the_hint_to_fade():
 
 def test_hover_prefetch_is_one_shared_dwell_that_warms_the_hero_and_asks_the_backend():
     body = _body("    function hoverPrefetch(card, dwell) {")
-    assert "if (!root.signedIn) return" in _flat(body)
+    # Provider eligibility belongs to the backend; accountless catalogs
+    # share the same dwell and artwork warm-up path.
     assert 'root.browsePageKey === "item:" + k' in body, "hovering the page you are on must not refetch it"
     assert "hoverPrefetchTimer.interval = dwell > 0 ? dwell : 200" in body, "a caller may ask for a longer rest"
     timer = MAIN_QML.split("id: hoverPrefetchTimer", 1)[1].split("\n  }", 1)[0]

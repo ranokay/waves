@@ -23,10 +23,10 @@ Row {
     font.bold: true
     font.letterSpacing: 0.8
     anchors.verticalCenter: parent.verticalCenter
-    MouseArea {
+    TapAction {
       anchors.fill: parent
-      cursorShape: Qt.PointingHandCursor
-      onClicked: waves.downloadLyricsOnly(sp.mediaId)
+      accessibleLabel: "Download lyrics"
+      onTriggered: waves.downloadLyricsOnly(sp.mediaId)
     }
   }
   Text {
@@ -36,10 +36,10 @@ Row {
     font.bold: true
     font.letterSpacing: 0.8
     anchors.verticalCenter: parent.verticalCenter
-    MouseArea {
+    TapAction {
       anchors.fill: parent
-      cursorShape: Qt.PointingHandCursor
-      onClicked: waves.downloadArtOnly(sp.mediaId)
+      accessibleLabel: "Download cover artwork"
+      onTriggered: waves.downloadArtOnly(sp.mediaId)
     }
   }
 }

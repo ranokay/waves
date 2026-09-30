@@ -5,8 +5,8 @@ import "primitives" as Primitives
 // would just repeat the album art. Idle it's a tight mono "[>]"; on play it
 // wipes open into the SAME DotMatrix the download buttons use (4 rows,
 // column-major bottom-up, pulsing lead) and fills across the whole track.
-// The entire expanded bar is one hit target, so a click anywhere pauses and
-// collapses it back to "[>]". Loading shows a breathing "[buffering]"; error "[✕]".
+// The live controls provide pause, stop and seeking. Loading shows a
+// breathing "[buffering]"; error "[✕]".
 // `host` is Main.qml's root object, bound at every instantiation and
 // required so a missed binding fails at load.
 // It reads through it:
@@ -29,6 +29,7 @@ Item {
 
   property string kind: "track"
   property string pid: ""
+  property string label: "Preview track"
   readonly property string st: tp.pid !== "" ? host.pvSt(tp.kind, tp.pid) : ""
   readonly property bool playing: tp.st === "playing"
   readonly property bool loading: tp.st === "loading"
@@ -46,11 +47,13 @@ Item {
   implicitWidth: bracketRow.implicitWidth
   implicitHeight: 24
 
-  // Underneath the live controls so their MouseAreas win while expanded.
-  MouseArea {
+  // Underneath the live controls so their tap areas win while expanded.
+  TapAction {
+    objectName: "trackPreviewStart"
     anchors.fill: parent
-    cursorShape: Qt.PointingHandCursor
-    onClicked: host.togglePreview(tp.kind, tp.pid, 0)
+    enabled: !tp.live && tp.pid !== ""
+    accessibleLabel: tp.label
+    onTriggered: host.togglePreview(tp.kind, tp.pid, 0)
   }
   Row {
     id: bracketRow
@@ -133,13 +136,13 @@ Item {
           name: tp.playing ? "pause" : "play"
           color: accent
           size: 11
-          MouseArea {
+          TapAction {
+            objectName: "trackPreviewToggle"
             anchors.fill: parent
             anchors.margins: -4
             enabled: tp.live
-            cursorShape: Qt.PointingHandCursor
-            onClicked: function (m) {
-              m.accepted = true
+            accessibleLabel: tp.st === "playing" ? "Pause preview" : "Resume preview"
+            onTriggered: function () {
               host.togglePreview(tp.kind, tp.pid, 0)
             }
           }
@@ -149,15 +152,15 @@ Item {
           name: "stop"
           color: tpStopMa.containsMouse ? "#ff7d76" : red
           size: 11
-          MouseArea {
+          TapAction {
             id: tpStopMa
+            objectName: "trackPreviewStop"
             anchors.fill: parent
             anchors.margins: -5
             enabled: tp.live
             hoverEnabled: enabled
-            cursorShape: Qt.PointingHandCursor
-            onClicked: function (m) {
-              m.accepted = true
+            accessibleLabel: "Stop preview"
+            onTriggered: function () {
               host.stopPreview()
             }
           }
@@ -176,38 +179,10 @@ Item {
             shimmerPhase: host.shimmerPhase
             queueEdgeHeld: host.queueEdgeHeld
           }
-          MouseArea {
+          PreviewSeekArea {
+            host: tp.host
             anchors.fill: parent
             enabled: tp.live
-            cursorShape: Qt.PointingHandCursor
-            preventStealing: true
-            property bool scrubbing: false
-            // Press/drag only move the fill; the single real seek
-            // fires on release (same gesture as the PreviewBar).
-            function frac(x) {
-              return width > 0 ? x / width : 0
-            }
-            onPressed: function (m) {
-              m.accepted = true
-              scrubbing = true
-              host.previewScrubbing = true
-              host.scrubPreviewVisual(frac(m.x))
-            }
-            onPositionChanged: function (m) {
-              if (scrubbing)
-                host.scrubPreviewVisual(frac(m.x))
-            }
-            onReleased: function (m) {
-              if (scrubbing) {
-                scrubbing = false
-                host.previewScrubbing = false
-                host.seekPreview(frac(m.x))
-              }
-            }
-            onCanceled: {
-              scrubbing = false
-              host.previewScrubbing = false
-            }
           }
         }
         Text {

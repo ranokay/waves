@@ -949,11 +949,69 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     if not _open_settings(q, settle):
         problems.append("the Settings tab did not open the Settings page for the commit actions")
     else:
+        header_finder = (
+            "findFirst(settingsPage, function (o) { return o.objectName === 'settingsSectionHeader' && o.visible; })"
+        )
+        header = _control_facts(q, header_finder)
+        if header is None or not header["focusable"] or not header["name"] or header["role"] != _ROLE_BUTTON:
+            problems.append(f"a Settings section header is not a named keyboard button: {header}")
+        else:
+            _focus(q, header_finder)
+            QTest.keyClick(root, Qt.Key_Space)
+            settle(250)
+            flipped = _control_facts(q, header_finder)
+            if flipped is None or flipped["name"] == header["name"]:
+                problems.append("Space on a Settings section header did not change its disclosure state")
+        q("settingsPage.setSectionOpen('providers', false)")
+        settle(300)
+        _focus(q, header_finder)
+        QTest.keyClick(root, Qt.Key_Tab)
+        settle(80)
+        next_stop = json.loads(q(scene_js(_TAB_STOP_BODY)))
+        if not next_stop["name"].startswith("Downloads settings"):
+            problems.append(f"Tab entered a collapsed Settings body: {next_stop}")
+        # At minimum size, focusing a section below the viewport must reveal
+        # its whole focus target without requiring a separate mouse scroll.
+        prior_size = (root.width(), root.height())
+        root.resize(880, 560)
+        q("settingsPage.setSectionOpen('providers', true)")
+        settle(300)
+        last_header = (
+            "findFirst(settingsPage, function (o) { return o.objectName === 'settingsSectionHeader' "
+            "&& o.visible && o.accessibleLabel.indexOf('Processing') === 0; })"
+        )
+        q("settingsPage.pendingY = 1000000")
+        _focus(q, last_header)
+        settle(250)
+        # A late viewport remeasure must keep the user's focused target in
+        # view instead of applying the old, partially restored position.
+        root.resize(880, 580)
+        settle(150)
+        revealed = q(
+            scene_js(
+                f"var c = {last_header}; var pane = settingsPage.scrollViewport; "
+                "if (!c) return false; var y = c.mapToItem(pane, 0, 0).y; "
+                "return y >= -1 && y + c.height <= pane.height + 1;"
+            )
+        )
+        if not revealed:
+            problems.append("keyboard focus did not reveal the Settings section at minimum size")
+        root.resize(*prior_size)
+        q("settingsPage.jumpToCard('providers')")
+        settle(250)
         # The Apple switch lives in the Providers card, collapsed by default,
         # and a collapsed section builds no rows now: open it the way a user
         # does before driving its controls.
         q("settingsPage.setSectionOpen('providers', true)")
         settle(300)
+        provider_head = _control_facts(q, header_finder)
+        if provider_head is None or provider_head["name"] != "Providers settings, expanded":
+            problems.append(f"opening Providers did not update its disclosure header: {provider_head}")
+        flag = _control_facts(
+            q, "findFirst(settingsPage, function (o) { return o.objectName === 'settingsFlagTile' && o.visible; })"
+        )
+        if flag is None or not flag["focusable"] or not flag["name"] or flag["role"] != _ROLE_CHECKBOX:
+            problems.append(f"a Settings flag tile is not a named keyboard checkbox: {flag}")
         before = bool(q("waves.appleEnabled"))
         saved = before
         staged = bool(q(scene_js(_APPLE_SWITCH + "if (!sw) return false; sw.toggle(); return true;")))

@@ -4,6 +4,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from support.browse_fakes import browse_bridge
 
 from waves.desktop.backend import WavesBridge
 from waves.providers.apple import AppleProvider
@@ -163,6 +164,38 @@ def test_apple_browse_item_matches_the_tidal_payload_shape():
     assert payload["header"]["art"] == "https://img/album/320x320bb.jpg"
     assert payload["sections"][0]["items"][0]["id"] == "apple:song-1"
     assert payload["error"] is False
+
+
+@pytest.mark.parametrize("kind", ["album", "playlist"])
+def test_signed_out_apple_item_opens_and_prefetches(kind):
+    resource = _album() if kind == "album" else _playlist_resource(_song())
+    bridge = browse_bridge(None, kind)
+    bridge._logged_in = False
+    bridge.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
+    bridge.providers["apple"] = _apple_provider(**{kind: resource})
+    item_id = f"apple:{resource['id']}"
+    key = f"item:{kind}:{item_id}"
+
+    bridge.prefetchBrowseItem(kind, item_id)
+    assert bridge._browse_pages[key]["sections"][0]["items"][0]["id"] == "apple:song-1"
+    assert bridge.browsePageLoaded.emits == []
+
+    bridge.openBrowseItem(kind, item_id)
+    assert bridge.browsePageLoaded.emits[0]["header"]["id"] == item_id
+    assert bridge.browsePageLoaded.emits[0]["error"] is False
+
+
+def test_signed_out_item_open_requires_its_provider_enabled():
+    bridge = browse_bridge(None, "album")
+    bridge._logged_in = False
+    bridge.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=False))
+    bridge.providers["apple"] = _apple_provider(album=_album())
+
+    bridge.openBrowseItem("album", "apple:album-1")
+    bridge.openBrowseItem("album", "tidal-album")
+    bridge.prefetchBrowseItem("album", "apple:album-1")
+    assert bridge.browsePageLoaded.emits == []
+    assert bridge._browse_loading == set()
 
 
 def _preview_stub(**resources):
@@ -362,6 +395,7 @@ def _prefetch_stub(**overrides):
     )
     stub._set_status = stub.statuses.append
     stub._set_busy = lambda on: stub.busy.append(bool(on))
+    stub._get_apple_enabled = lambda: True
     stub._remember_artist_page = lambda aid, payload: stub._artist_cache.__setitem__(aid, payload)
     stub._start_apple_artist_build = lambda *a, **k: WavesBridge._start_apple_artist_build(stub, *a, **k)
     for key, value in overrides.items():
@@ -370,7 +404,7 @@ def _prefetch_stub(**overrides):
 
 
 def test_apple_hover_prefetch_warms_the_page_silently():
-    stub = _prefetch_stub()
+    stub = _prefetch_stub(_logged_in=False)
 
     WavesBridge.prefetchArtist(stub, "apple:artist-1")
 
@@ -378,6 +412,35 @@ def test_apple_hover_prefetch_warms_the_page_silently():
     assert stub.busy == [] and stub.statuses == []
     assert stub._artist_cache["apple:artist-1"]["name"] == "Aphex Twin"
     assert stub._artist_loading == set() and stub._artist_prefetch is None
+
+
+def test_signed_out_hover_prefetch_obeys_the_enabled_provider():
+    stub = _prefetch_stub(_logged_in=False)
+    stub._get_apple_enabled = lambda: False
+
+    WavesBridge.prefetchArtist(stub, "apple:artist-1")
+    WavesBridge.prefetchArtist(stub, "tidal-artist-1")
+
+    assert stub._artist_cache == {}
+    assert stub._artist_loading == set()
+
+
+def test_signed_out_apple_album_tracks_prefetch():
+    fetched = []
+    stub = SimpleNamespace(
+        _logged_in=False,
+        _get_apple_enabled=lambda: True,
+        _album_tracks_cache={},
+        _album_tracks_inflight={},
+        _prefetch_lock=Lock(),
+        _start_album_tracks_fetch=fetched.append,
+    )
+
+    WavesBridge.prefetchAlbumTracks(stub, "apple:album-1")
+    WavesBridge.prefetchAlbumTracks(stub, "tidal-album-1")
+
+    assert fetched == ["apple:album-1"]
+    assert stub._album_tracks_inflight == {"apple:album-1": False}
 
 
 def test_apple_click_claims_an_in_flight_hover_prefetch():

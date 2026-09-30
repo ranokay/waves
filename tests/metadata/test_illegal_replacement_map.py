@@ -314,7 +314,7 @@ class TestThePageCannotSaveARejectedStandIn:
         src = (_UI / "qml" / "SettingsPage.qml").read_text()
 
         assert "function mapClear(" in src
-        assert "onClicked: {\n" in src.replace("\r\n", "\n")
+        assert "onTriggered: {\n" in src.replace("\r\n", "\n")
         assert "page.mapClear(charRow.fieldData, charRow.ch)" in src
 
     def test_wiring_the_save_path_stores_a_table_not_its_text(self):

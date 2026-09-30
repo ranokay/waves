@@ -4,17 +4,17 @@ import "primitives" as Primitives
 // One My Music strip chip: a dot, a label and the selected treatment --
 // the shape both the Library section's views and a source group's
 // categories render. The owner supplies the words and handles `picked`.
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Rectangle {
   id: chip
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textLo: "#a8acb4"
 
   property string label: ""
@@ -44,9 +44,13 @@ Rectangle {
       font.pixelSize: 13
     }
   }
-  MouseArea {
+  TapAction {
     anchors.fill: parent
-    cursorShape: Qt.PointingHandCursor
-    onClicked: chip.picked()
+    accessibleLabel: chip.label
+    role: Accessible.RadioButton
+    checkable: true
+    checked: chip.on
+    focusRadius: chip.radius
+    onTriggered: chip.picked()
   }
 }

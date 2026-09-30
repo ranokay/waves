@@ -15,13 +15,13 @@ import "primitives" as Primitives
 //   host.hoverPrefetchCancel / host.openPlaylistPage /
 //   host.playlistTrackCache / host.rememberExpandReturn /
 //   host.scrollCollapsedBack / host.scrollExpandedIntoView
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Column {
   id: pb
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
@@ -36,7 +36,7 @@ Column {
   readonly property color surface: "#15181d"   // primary card surface
   readonly property color surface0: "#121418"   // topbar / statusbar / expand panel
   readonly property color surface2: "#191c22"   // hover / nested
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
   readonly property string uiFont: uiFontFamily   // native system sans (see app.py)
@@ -148,6 +148,7 @@ Column {
     color: pbRowMa.containsMouse ? surface2 : surface
     border.color: expanded ? outline : border1
     RowLayout {
+      z: 1
       anchors.fill: parent
       anchors.leftMargin: 12
       anchors.rightMargin: 14
@@ -187,15 +188,14 @@ Column {
           elide: Text.ElideRight
           Layout.fillWidth: true
           // Title -> the playlist's dedicated page (row click still expands)
-          MouseArea {
+          TapAction {
             id: pbRowTitleMa
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: Math.min(parent.width, parent.implicitWidth)
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: host.openPlaylistPage(plId, title, art)
+            accessibleLabel: "Open playlist " + pb.title
+            onTriggered: host.openPlaylistPage(plId, title, art)
             // Resting on the link: have the page ready (see hoverPrefetch).
             readonly property var prefetchCard: ({
                 kind: "playlist",
@@ -226,13 +226,12 @@ Column {
         }
       }
     }
-    MouseArea {
+    TapAction {
       id: pbRowMa
       anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      z: -1
-      onClicked: toggle()
+      accessibleLabel: (pb.expanded ? "Collapse " : "Expand ") + pb.title + " tracks"
+      focusRadius: 10
+      onTriggered: toggle()
     }
   }
 
@@ -297,15 +296,14 @@ Column {
             font.bold: true
             width: parent.width
             elide: Text.ElideRight
-            MouseArea {
+            TapAction {
               id: pbPanelTitleMa
               anchors.left: parent.left
               anchors.top: parent.top
               anchors.bottom: parent.bottom
               width: Math.min(parent.width, parent.implicitWidth)
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: host.openPlaylistPage(plId, title, art)
+              accessibleLabel: "Open playlist " + pb.title
+              onTriggered: host.openPlaylistPage(plId, title, art)
             }
           }
           Text {
@@ -334,10 +332,10 @@ Column {
               color: textLo
               font.pixelSize: 12
               anchors.verticalCenter: parent.verticalCenter
-              MouseArea {
+              TapAction {
                 anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: waves.copyShareUrl("playlist", plId)
+                accessibleLabel: "Copy link to " + pb.title
+                onTriggered: waves.copyShareUrl("playlist", plId)
               }
             }
           }
@@ -359,6 +357,7 @@ Column {
           height: 40
           spacing: 12
           Check {
+            accessibleLabel: "Select all tracks in " + pb.title
             Layout.alignment: Qt.AlignVCenter
             checked: pb.allSelected
             onToggled: pb.toggleAll()
@@ -408,11 +407,12 @@ Column {
                 anchors.verticalCenter: parent.verticalCenter
               }
             }
-            MouseArea {
+            TapAction {
               anchors.fill: parent
               enabled: pb.selCount > 0
-              cursorShape: pb.selCount > 0 ? Qt.PointingHandCursor : Qt.ArrowCursor
-              onClicked: pb.downloadSelected()
+              accessibleLabel: "Download " + pb.selCount + " selected tracks"
+              focusRadius: btnRad
+              onTriggered: pb.downloadSelected()
             }
           }
         }
@@ -438,6 +438,7 @@ Column {
               anchors.rightMargin: 4
               spacing: 12
               Check {
+                accessibleLabel: "Select " + modelData.title
                 Layout.alignment: Qt.AlignVCenter
                 checked: pb.sel[index] !== undefined
                 onToggled: pb.setSel(index, modelData.kind, pb.sel[index] === undefined)
@@ -455,6 +456,7 @@ Column {
               }
               TrackPreview {
                 host: pb.host
+                label: "Preview " + (modelData.title || "track")
                 kind: modelData.kind
                 pid: modelData.id
                 Layout.alignment: Qt.AlignVCenter
@@ -489,6 +491,7 @@ Column {
                 Layout.preferredWidth: 42
               }
               DownIcon {
+                label: "Download " + modelData.title
                 host: pb.host
                 mediaId: modelData.id
                 // A playlist row carries its own artist but

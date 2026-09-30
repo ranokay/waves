@@ -13,10 +13,8 @@ Rectangle {
   readonly property color outline: "#3a3f49"   // strong border (search / qtag / switch)
 
   property bool checked: false
-  // The spoken name. The gate rows set it; an unnamed checkbox (the album
-  // and playlist selection ticks) keeps out of the tab order, so no silent
-  // stop enters the keyboard chain, while its node stays in the tree as the
-  // checkbox it is, togglable by a reader.
+  // Callers supply the spoken name; unnamed optional checks stay out of
+  // the keyboard chain until they have a meaningful action label.
   property string accessibleLabel: ""
   signal toggled
   width: 18
@@ -35,6 +33,7 @@ Rectangle {
   }
   TapAction {
     anchors.fill: parent
+    anchors.margins: -5
     accessibleLabel: chk.accessibleLabel
     role: Accessible.CheckBox
     checkable: true

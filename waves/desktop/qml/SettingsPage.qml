@@ -55,7 +55,7 @@ Item {
   readonly property color border1: "#262a31"
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   // New Console tokens (mirrors Main.qml)
   readonly property color surface0: "#121418"
   readonly property color surface3: "#1d2128"
@@ -323,10 +323,8 @@ Item {
   // with every section starting collapsed, a deep link to a shut card
   // would otherwise land on a bare header.
   function jumpToCard(cardId) {
-    // Provider deep-links land on the one Providers section: its bands
-    // stay expanded while the section is open, so the TIDAL band's two
-    // rows are the only scroll between the header and Apple.
-    if (cardId === "providers_tidal" || cardId === "providers_apple")
+    var providerId = cardId.indexOf("providers_") === 0 ? cardId : ""
+    if (providerId !== "")
       cardId = "providers"
     for (var i = 0; i < secRep.count; i++) {
       var it = secRep.itemAt(i);
@@ -337,11 +335,44 @@ Item {
         // An explicit destination outranks the remembered spot, which
         // would otherwise be re-applied on the same open and fight it.
         page.pendingY = -1
+        page.cancelJump()
+        page.jumpCard = it
+        page.jumpProvider = providerId
+        it.instantOpen = true
         page.setSectionOpen(it.modelData.id, true)
-        settingsFlick.contentY = Math.max(0, Math.min(it.y, settingsFlick.contentHeight - settingsFlick.height))
+        Qt.callLater(page._positionJump)
         return
       }
     }
+  }
+
+  // Keep a deep link attached to its band while lazy controls finish sizing.
+  // Real pointer, scrolling or keyboard focus takes ownership of the view.
+  property var jumpCard: null
+  property string jumpProvider: ""
+  function cancelJump() {
+    if (jumpCard)
+      jumpCard.instantOpen = false
+    jumpCard = null
+    jumpProvider = ""
+  }
+  function takeScrollOwnership() {
+    pendingY = -1
+    cancelJump()
+  }
+  function _positionJump() {
+    if (!jumpCard || !active || settingsFlick.height <= 0)
+      return false
+    var bandY = jumpProvider !== "" ? jumpCard.providerBandY(jumpProvider) : -1
+    var targetY = bandY >= 0 ? bandY - 10 : jumpCard.y
+    settingsFlick.contentY = Math.max(0, Math.min(targetY, settingsFlick.contentHeight - settingsFlick.height))
+    return true
+  }
+  PointHandler {
+    enabled: page.active
+    acceptedButtons: Qt.AllButtons
+    onActiveChanged: if (active)
+      page.takeScrollOwnership()
   }
 
   // Holding your place across tabs
@@ -373,10 +404,6 @@ Item {
         openSections = m
     } catch (e) { /* a corrupt pref just means default (collapsed) */ }
   }
-  function sectionOpen(id, dflt) {
-    var v = openSections[id]
-    return v === undefined ? dflt : v
-  }
   function setSectionOpen(id, on) {
     var m = Object.assign({}, openSections)
     m[id] = on
@@ -388,6 +415,8 @@ Item {
   property alias scrollY: settingsFlick.contentY
   property alias scrollViewport: settingsFlick
   function _restoreScroll() {
+    if (_positionJump())
+      return
     if (pendingY < 0 || settingsFlick.height <= 0)
       return
     var most = Math.max(0, settingsFlick.contentHeight - settingsFlick.height)
@@ -665,6 +694,7 @@ Item {
     return cut > 0 ? pathUrl(s.substring(0, cut)) : ""
   }
   function refreshSchema() {
+    cancelJump()
     groups = waves.settingsSchema()
     sanitizeKeys = collectSanitizeKeys()
     needsRefresh = false
@@ -729,6 +759,8 @@ Item {
   }
 
   onActiveChanged: {
+    if (!active)
+      cancelJump()
     if (active) {
       // Arm before anything else: a schema refresh below can re-measure
       // the column, and the restore rides the layout pass that follows.
@@ -882,12 +914,16 @@ Item {
     radius: 10
     border.color: page.border1
     color: (ftMouse.containsMouse && ftile.enabled) ? page.surface2 : page.surface
-    MouseArea {
+    TapAction {
       id: ftMouse
+      objectName: "settingsFlagTile"
       anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onClicked: page.setv(ftile.keyName, !ftile.checked)
+      accessibleLabel: ftile.label
+      role: Accessible.CheckBox
+      checkable: true
+      checked: ftile.checked
+      focusRadius: 10
+      onTriggered: page.setv(ftile.keyName, !ftile.checked)
     }
     RowLayout {
       anchors.fill: parent
@@ -987,10 +1023,15 @@ Item {
             }
           }
         }
-        MouseArea {
+        TapAction {
+          accessibleLabel: seg.opts.length > 0 ? String(seg.opts[0].label) : "Cadence"
+          focusRadius: 8
+          role: Accessible.RadioButton
+          checkable: true
+          checked: !seg.onSecond
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
-          onClicked: if (seg.field && seg.opts.length > 0)
+          onTriggered: if (seg.field && seg.opts.length > 0)
             page.setv(seg.field.key, seg.opts[0].value)
         }
       }
@@ -1012,10 +1053,15 @@ Item {
             }
           }
         }
-        MouseArea {
+        TapAction {
+          accessibleLabel: seg.opts.length > 1 ? String(seg.opts[1].label) : "Cadence"
+          focusRadius: 8
+          role: Accessible.RadioButton
+          checkable: true
+          checked: seg.onSecond
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
-          onClicked: if (seg.field && seg.opts.length > 1)
+          onTriggered: if (seg.field && seg.opts.length > 1)
             page.setv(seg.field.key, seg.opts[1].value)
         }
       }
@@ -1046,10 +1092,15 @@ Item {
       SToggle {
         Layout.alignment: Qt.AlignVCenter
         checked: act.autoOn
-        MouseArea {
+        TapAction {
+          accessibleLabel: act.autoField ? act.autoField.label : "Automatic checks"
+          focusRadius: 8
+          role: Accessible.CheckBox
+          checkable: true
+          checked: act.autoOn
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
-          onClicked: if (act.autoField)
+          onTriggered: if (act.autoField)
             page.setv(act.autoField.key, !act.autoOn)
         }
       }
@@ -1098,6 +1149,7 @@ Item {
   // Numeric stepper. Integer by default; set `step`/`decimals` for decimals
   // (e.g. step 0.5 / decimals 1 for the second-scale Advanced delays).
   component SStepper: Row {
+    property string label: "value"
     property real value: 0
     property real minimum: 1
     property real maximum: 9999
@@ -1127,10 +1179,12 @@ Item {
         color: page.accent
         size: 17
       }
-      MouseArea {
+      TapAction {
+        accessibleLabel: "Decrease " + parent.parent.label
+        focusRadius: 8
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
-        onClicked: parent.parent.apply(parent.parent.value - parent.parent.step)
+        onTriggered: parent.parent.apply(parent.parent.value - parent.parent.step)
       }
     }
     Rectangle {
@@ -1161,10 +1215,12 @@ Item {
         color: page.accent
         size: 16
       }
-      MouseArea {
+      TapAction {
+        accessibleLabel: "Increase " + parent.parent.label
+        focusRadius: 8
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
-        onClicked: parent.parent.apply(parent.parent.value + parent.parent.step)
+        onTriggered: parent.parent.apply(parent.parent.value + parent.parent.step)
       }
     }
   }
@@ -1503,7 +1559,7 @@ Item {
       // The user taking over cancels a partially-applied restore, so a
       // later re-measure can't yank the view away from where they
       // scrolled to.
-      onMovementStarted: page.pendingY = -1
+      onMovementStarted: page.takeScrollOwnership()
 
       Column {
         id: col
@@ -1671,10 +1727,12 @@ Item {
                     font.bold: true
                     font.letterSpacing: page.btnTrack
                   }
-                  MouseArea {
+                  TapAction {
+                    accessibleLabel: "Install FFmpeg"
+                    focusRadius: 8
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: page.ff.install()
+                    onTriggered: page.ff.install()
                   }
                 }
 
@@ -1785,10 +1843,12 @@ Item {
                         font.bold: true
                         font.letterSpacing: page.btnTrack
                       }
-                      MouseArea {
+                      TapAction {
+                        accessibleLabel: "Install FFmpeg"
+                        focusRadius: 8
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: page.ff.install()
+                        onTriggered: page.ff.install()
                       }
                     }
                   }
@@ -1814,10 +1874,12 @@ Item {
                     font.bold: true
                     font.letterSpacing: page.btnTrack
                   }
-                  MouseArea {
+                  TapAction {
+                    accessibleLabel: "Cancel FFmpeg installation"
+                    focusRadius: 8
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: page.ff.cancel()
+                    onTriggered: page.ff.cancel()
                   }
                 }
 
@@ -1975,11 +2037,13 @@ Item {
                       font.bold: true
                       font.letterSpacing: page.btnTrack
                     }
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: ffPrimary.label + " FFmpeg"
+                      focusRadius: 8
                       anchors.fill: parent
                       enabled: !page.ff.busy && !page.ff.checking
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: {
+                      onTriggered: {
                         if (page.ff.updateAvailable)
                           page.ff.install()
                         else
@@ -2004,10 +2068,12 @@ Item {
                       font.bold: true
                       font.letterSpacing: page.btnTrack
                     }
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: "Remove managed FFmpeg"
+                      focusRadius: 8
                       anchors.fill: parent
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: page.ff.remove()
+                      onTriggered: page.ff.remove()
                     }
                   }
                   // Cancel while busy
@@ -2028,10 +2094,12 @@ Item {
                       font.bold: true
                       font.letterSpacing: page.btnTrack
                     }
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: "Cancel FFmpeg installation"
+                      focusRadius: 8
                       anchors.fill: parent
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: page.ff.cancel()
+                      onTriggered: page.ff.cancel()
                     }
                   }
                   // Transient confirmation after a check finds nothing new.
@@ -2244,11 +2312,13 @@ Item {
                       font.bold: true
                       font.letterSpacing: page.btnTrack
                     }
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: auPrimary.label + " Waves"
+                      focusRadius: 8
                       anchors.fill: parent
                       enabled: !page.auBusy && !page.auChecking
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: {
+                      onTriggered: {
                         if (auPrimary.restartMode)
                           waves.restartForUpdate()
                         else if (auPrimary.updateMode)
@@ -2279,10 +2349,12 @@ Item {
                       font.bold: true
                       font.letterSpacing: page.btnTrack
                     }
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: "Cancel Waves update"
+                      focusRadius: 8
                       anchors.fill: parent
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: waves.cancelAppUpdate()
+                      onTriggered: waves.cancelAppUpdate()
                     }
                   }
 
@@ -2388,10 +2460,12 @@ Item {
                   font.bold: true
                   font.letterSpacing: page.btnTrack
                 }
-                MouseArea {
+                TapAction {
+                  accessibleLabel: "Reset settings"
+                  focusRadius: 8
                   anchors.fill: parent
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: page.resetSettingsRequested()
+                  onTriggered: page.resetSettingsRequested()
                 }
               }
               Rectangle {
@@ -2411,10 +2485,12 @@ Item {
                   font.bold: true
                   font.letterSpacing: page.btnTrack
                 }
-                MouseArea {
+                TapAction {
+                  accessibleLabel: "Reset application"
+                  focusRadius: 8
                   anchors.fill: parent
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: page.factoryResetRequested()
+                  onTriggered: page.factoryResetRequested()
                 }
               }
             }
@@ -2505,11 +2581,13 @@ Item {
                       font.bold: true
                       font.letterSpacing: page.btnTrack
                     }
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: "Export diagnostics"
+                      focusRadius: 8
                       anchors.fill: parent
                       enabled: !page.diagBusy
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: {
+                      onTriggered: {
                         // Do NOT re-push the two prefs here. Both toggles below
                         // apply live via setWavesPref, so the backend already
                         // holds the truth and there is no unsaved change to
@@ -2544,10 +2622,12 @@ Item {
                       font.bold: true
                       font.letterSpacing: page.btnTrack
                     }
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: "Reveal diagnostics export"
+                      focusRadius: 8
                       anchors.fill: parent
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: waves.revealDiagnostics(page.diagPath)
+                      onTriggered: waves.revealDiagnostics(page.diagPath)
                     }
                   }
                   Text {
@@ -2589,10 +2669,15 @@ Item {
                   SToggle {
                     Layout.alignment: Qt.AlignVCenter
                     checked: dgCard.vbOn
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: "Verbose diagnostics"
+                      focusRadius: 8
+                      role: Accessible.CheckBox
+                      checkable: true
+                      checked: dgCard.vbOn
                       anchors.fill: parent
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: {
+                      onTriggered: {
                         var v = !dgCard.vbOn
                         page.setLive("verbose_diagnostics", v)
                         // Applies live: the watchdog and detail level flip now,
@@ -2635,10 +2720,15 @@ Item {
                   SToggle {
                     Layout.alignment: Qt.AlignVCenter
                     checked: dgCard.rdOn
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: "Redact content from diagnostics"
+                      focusRadius: 8
+                      role: Accessible.CheckBox
+                      checkable: true
+                      checked: dgCard.rdOn
                       anchors.fill: parent
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: {
+                      onTriggered: {
                         var v = !dgCard.rdOn
                         page.setLive("diagnostics_redact_content", v)
                         waves.setWavesPref("diagnostics_redact_content", v)
@@ -2702,7 +2792,19 @@ Item {
             // Processing trigger latches on `ffEverMissing` (not the
             // live state) so a successful install, which flips the
             // state missing to managed, doesn't snap the card shut.
-            property bool open: page.sectionOpen(card.modelData.id, (modelData.card === "ffmpeg" && page.ffEverMissing) || (modelData.card === "updates" && page.auUpdate))
+            property bool open: {
+              var saved = page.openSections[card.modelData.id]
+              return saved === undefined ? (modelData.card === "ffmpeg" && page.ffEverMissing) || (modelData.card === "updates" && page.auUpdate) : saved
+            }
+            property bool instantOpen: false
+            function providerBandY(providerId) {
+              for (var i = 0; i < providerRep.count; i++) {
+                var band = providerRep.itemAt(i)
+                if (band && band.modelData.id === providerId)
+                  return band.mapToItem(col, 0, 0).y
+              }
+              return -1
+            }
 
             // Card header, icon + title + count chip + rotating chevron.
             // The whole row is the click target.
@@ -2824,20 +2926,17 @@ Item {
                   Layout.alignment: Qt.AlignVCenter
                 }
               }
-              MouseArea {
+              TapAction {
                 id: hdHover
+                objectName: "settingsSectionHeader"
                 anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                // Record on the page as well: the click breaks the
-                // binding above, and the next schema refresh would
-                // otherwise rebuild this card back to its default.
-                onClicked: {
+                accessibleLabel: card.modelData.group + " settings, " + (card.open ? "expanded" : "collapsed")
+                focusRadius: 10
+                onTriggered: {
                   // Toggling re-measures the page; a still-armed
                   // restore must not ride that and jump the view.
-                  page.pendingY = -1
-                  card.open = !card.open
-                  page.setSectionOpen(card.modelData.id, card.open)
+                  page.takeScrollOwnership()
+                  page.setSectionOpen(card.modelData.id, !card.open)
                 }
               }
             }
@@ -2851,7 +2950,10 @@ Item {
               anchors.top: hd.bottom
               clip: true
               height: card.open ? inner.implicitHeight + 26 : 0
+              visible: height > 0
+              enabled: card.open
               Behavior on height {
+                enabled: !card.instantOpen
                 NumberAnimation {
                   duration: 220
                   easing.type: Easing.OutCubic
@@ -2952,6 +3054,7 @@ Item {
                   width: inner.width
                   spacing: 10
                   Repeater {
+                    id: providerRep
                     model: card.modelData.providers !== undefined ? card.modelData.providers : []
                     delegate: Rectangle {
                       required property var modelData
@@ -3094,14 +3197,16 @@ Item {
                           opacity: changed ? 1 : 0.5
                           font.pixelSize: 12
                           font.underline: changed && mapDefaultMa.containsMouse
-                          MouseArea {
+                          TapAction {
                             id: mapDefaultMa
+                            accessibleLabel: "Use recommended " + mapCard.modelData.label
+                            focusRadius: 8
                             anchors.fill: parent
                             anchors.margins: -4
                             enabled: mapDefaultLink.changed
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: {
+                            onTriggered: {
                               page.mapStage(mapCard.modelData, mapCard.modelData.default_value)
                               mapCol.expanded = true
                             }
@@ -3233,10 +3338,12 @@ Item {
                                 font.bold: true
                                 font.letterSpacing: page.btnTrack
                               }
-                              MouseArea {
+                              TapAction {
+                                accessibleLabel: "Use recommended stand-ins for " + mapCard.modelData.label
+                                focusRadius: 8
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: {
+                                onTriggered: {
                                   page.mapStage(mapCard.modelData, mapCard.modelData.default_value)
                                   mapCol.expanded = true
                                 }
@@ -3258,13 +3365,15 @@ Item {
                                 font.bold: true
                                 font.letterSpacing: page.btnTrack
                               }
-                              MouseArea {
+                              TapAction {
+                                accessibleLabel: offKeepTxt.text
+                                focusRadius: 8
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
                                 // The only one of the three that decides
                                 // anything on its own, so it is the only one
                                 // that writes the "asked already" stamp.
-                                onClicked: {
+                                onTriggered: {
                                   waves.resolveIllegalMapOffer()
                                   mapCard.offerAnswered = true
                                 }
@@ -3286,13 +3395,15 @@ Item {
                                 font.bold: true
                                 font.letterSpacing: page.btnTrack
                               }
-                              MouseArea {
+                              TapAction {
+                                accessibleLabel: offOwnTxt.text
+                                focusRadius: 8
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
                                 // Opens the table and steps out of the way.
                                 // No stamp: leaving without typing anything
                                 // has decided nothing, so it asks again.
-                                onClicked: {
+                                onTriggered: {
                                   mapCol.expanded = true
                                   mapCard.offerAnswered = true
                                 }
@@ -3307,11 +3418,13 @@ Item {
                         text: (mapCol.expanded ? "▾  " : "▸  ") + "Set one per character"
                         color: page.accent
                         font.pixelSize: 12
-                        MouseArea {
+                        TapAction {
+                          accessibleLabel: (mapCol.expanded ? "Hide " : "Show ") + mapCard.modelData.label + " map"
+                          focusRadius: 8
                           anchors.fill: parent
                           anchors.margins: -4
                           cursorShape: Qt.PointingHandCursor
-                          onClicked: mapCol.expanded = !mapCol.expanded
+                          onTriggered: mapCol.expanded = !mapCol.expanded
                         }
                       }
                       Grid {
@@ -3396,8 +3509,10 @@ Item {
                                 size: 11
                                 color: clearMa.containsMouse ? page.textHi : page.textDim
                               }
-                              MouseArea {
+                              TapAction {
                                 id: clearMa
+                                accessibleLabel: "Clear mapping"
+                                focusRadius: 8
                                 anchors.fill: parent
                                 anchors.margins: -3
                                 hoverEnabled: true
@@ -3406,7 +3521,7 @@ Item {
                                 // Clearing the box cannot mean this: an
                                 // empty stand-in is itself a choice
                                 // (remove the character outright).
-                                onClicked: {
+                                onTriggered: {
                                   page.mapClear(charRow.fieldData, charRow.ch)
                                   charBox.text = Qt.binding(function () {
                                     return page.mapText(charRow.fieldData, charRow.ch)
@@ -3505,8 +3620,10 @@ Item {
                                 opacity: changed ? 1 : 0.5
                                 font.pixelSize: 12
                                 font.underline: changed && inlineDefaultMa.containsMouse
-                                MouseArea {
+                                TapAction {
                                   id: inlineDefaultMa
+                                  accessibleLabel: "Restore default " + String(modelData.label)
+                                  focusRadius: 8
                                   anchors.fill: parent
                                   anchors.margins: -4
                                   enabled: inlineDefaultLink.changed
@@ -3514,7 +3631,7 @@ Item {
                                   cursorShape: Qt.PointingHandCursor
                                   // Re-bind rather than write, for the same
                                   // binding-preservation reasons as strDefaultMa.
-                                  onClicked: {
+                                  onTriggered: {
                                     page.setv(modelData.key, modelData.default_value)
                                     inlineStr.text = Qt.binding(function () {
                                       return page.val(modelData)
@@ -3555,6 +3672,7 @@ Item {
                             }
                           }
                           SStepper {
+                            label: String(modelData.label)
                             visible: modelData.type === "int" || modelData.type === "float"
                             Layout.alignment: Qt.AlignVCenter
                             value: (modelData.type === "int" || modelData.type === "float") ? page.val(modelData) : 0
@@ -3597,7 +3715,7 @@ Item {
                           readonly property string stateKey: live ? String(live.state) : String(modelData.value || "")
                           readonly property string word: live ? String(live.word) : String(modelData.word || "")
                           readonly property bool hasSwitch: modelData.enabled_key !== undefined
-                          readonly property bool switchOn: statusCol.hasSwitch && (page.editMap[modelData.enabled_key] !== undefined ? page.editMap[modelData.enabled_key] : modelData.switch_value === true)
+                          readonly property bool switchOn: statusCol.hasSwitch && (page.editMap[modelData.enabled_key] !== undefined ? page.editMap[modelData.enabled_key] : statusCol.live ? statusCol.stateKey !== "off" : modelData.switch_value === true)
                           RowLayout {
                             width: parent.width
                             spacing: 10
@@ -3756,11 +3874,13 @@ Item {
                                   font.bold: true
                                   font.letterSpacing: page.btnTrack
                                 }
-                                MouseArea {
+                                TapAction {
+                                  accessibleLabel: actPill.modelData.label
+                                  focusRadius: 8
                                   visible: actPill.actLive
                                   anchors.fill: parent
                                   cursorShape: Qt.PointingHandCursor
-                                  onClicked: actPill.runAction()
+                                  onTriggered: actPill.runAction()
                                 }
                               }
                             }
@@ -3799,10 +3919,12 @@ Item {
                               font.bold: true
                               font.letterSpacing: page.btnTrack
                             }
-                            MouseArea {
+                            TapAction {
+                              accessibleLabel: String(modelData.label)
+                              focusRadius: 8
                               anchors.fill: parent
                               cursorShape: Qt.PointingHandCursor
-                              onClicked: {
+                              onTriggered: {
                                 if (String(modelData.action) === "show_setup")
                                   waves.showSetup()
                               }
@@ -3978,10 +4100,12 @@ Item {
                                   font.bold: true
                                   font.letterSpacing: page.btnTrack
                                 }
-                                MouseArea {
+                                TapAction {
+                                  accessibleLabel: String(modelData.label)
+                                  focusRadius: 8
                                   anchors.fill: parent
                                   cursorShape: Qt.PointingHandCursor
-                                  onClicked: setupCol.runStepAction(String(modelData.action))
+                                  onTriggered: setupCol.runStepAction(String(modelData.action))
                                 }
                               }
                               // The full tier's sign-in form: the
@@ -4061,11 +4185,13 @@ Item {
                                     font.bold: true
                                     font.letterSpacing: page.btnTrack
                                   }
-                                  MouseArea {
+                                  TapAction {
+                                    accessibleLabel: "Sign in to Apple Music"
+                                    focusRadius: 8
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
                                     enabled: !appleLoginForm.busy
-                                    onClicked: {
+                                    onTriggered: {
                                       if (appleLoginForm.needs2fa)
                                         waves.appleWrapperSubmit2fa(page.appleLogin2fa)
                                       else
@@ -4130,13 +4256,15 @@ Item {
                             font.letterSpacing: 0.85
                             Accessible.role: Accessible.Button
                             Accessible.name: "Skip Apple Music setup for now"
-                            MouseArea {
+                            TapAction {
                               id: skipMa
+                              accessibleLabel: "Skip Apple Music setup"
+                              focusRadius: 8
                               anchors.fill: parent
                               anchors.margins: -6
                               hoverEnabled: true
                               cursorShape: Qt.PointingHandCursor
-                              onClicked: page.appleSetupSkipped()
+                              onTriggered: page.appleSetupSkipped()
                             }
                           }
                         }
@@ -4192,11 +4320,13 @@ Item {
                             text: (coverCol.expanded ? "▾  " : "▸  ") + "Separate cover.jpg size"
                             color: page.accent
                             font.pixelSize: 12
-                            MouseArea {
+                            TapAction {
+                              accessibleLabel: (coverCol.expanded ? "Hide " : "Show ") + "cover options"
+                              focusRadius: 8
                               anchors.fill: parent
                               anchors.margins: -4
                               cursorShape: Qt.PointingHandCursor
-                              onClicked: coverCol.expanded = !coverCol.expanded
+                              onTriggered: coverCol.expanded = !coverCol.expanded
                             }
                           }
                           RowLayout {
@@ -4332,8 +4462,13 @@ Item {
                                 font.pixelSize: 12
                               }
                             }
-                            MouseArea {
+                            TapAction {
                               id: libTglMouse
+                              accessibleLabel: "Scan a music library"
+                              focusRadius: 8
+                              role: Accessible.CheckBox
+                              checkable: true
+                              checked: libraryCol.enabledE
                               // Sized to the switch + label, not the card: a full-width
                               // hit area would arm the pointer over empty space.
                               width: libTglRow.width
@@ -4341,7 +4476,7 @@ Item {
                               anchors.verticalCenter: parent.verticalCenter
                               hoverEnabled: true
                               cursorShape: Qt.PointingHandCursor
-                              onClicked: page.setv("library_enabled", !libraryCol.enabledE)
+                              onTriggered: page.setv("library_enabled", !libraryCol.enabledE)
                             }
                             Rectangle {
                               anchors.right: parent.right
@@ -4441,10 +4576,15 @@ Item {
                                 font.pixelSize: 13
                                 font.weight: !libraryCol.separate ? Font.DemiBold : Font.Normal
                               }
-                              MouseArea {
+                              TapAction {
+                                accessibleLabel: "Scan download folder"
+                                focusRadius: 8
+                                role: Accessible.RadioButton
+                                checkable: true
+                                checked: libraryCol.sourceE === "download"
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: page.setv("library_source", "download")
+                                onTriggered: page.setv("library_source", "download")
                               }
                             }
                             Rectangle {
@@ -4461,10 +4601,15 @@ Item {
                                 font.pixelSize: 13
                                 font.weight: libraryCol.separate ? Font.DemiBold : Font.Normal
                               }
-                              MouseArea {
+                              TapAction {
+                                accessibleLabel: "Scan separate music folder"
+                                focusRadius: 8
+                                role: Accessible.RadioButton
+                                checkable: true
+                                checked: libraryCol.sourceE === "separate"
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: page.setv("library_source", "separate")
+                                onTriggered: page.setv("library_source", "separate")
                               }
                             }
                             SText {
@@ -4489,10 +4634,12 @@ Item {
                                 color: page.textLo
                                 font.pixelSize: 13
                               }
-                              MouseArea {
+                              TapAction {
+                                accessibleLabel: "Choose music library folder"
+                                focusRadius: 8
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: {
+                                onTriggered: {
                                   var du = page.pathUrl(libraryCol.folderE)
                                   if (du !== "")
                                     libFolderDlg.currentFolder = du
@@ -4522,7 +4669,9 @@ Item {
                                 font.pixelSize: 13
                                 font.weight: Font.DemiBold
                               }
-                              MouseArea {
+                              TapAction {
+                                accessibleLabel: "Rescan music library"
+                                focusRadius: 8
                                 anchors.fill: parent
                                 enabled: libraryCol.scannable
                                 visible: libraryCol.scannable
@@ -4530,7 +4679,7 @@ Item {
                                 // Acts on the SAVED configuration only (scannable gates
                                 // on no staged library edits); the first scan of a new
                                 // configuration belongs to SAVE CHANGES.
-                                onClicked: waves.rescanLibrary()
+                                onTriggered: waves.rescanLibrary()
                               }
                             }
                           }
@@ -4743,8 +4892,10 @@ Item {
                               opacity: changed ? 1 : 0.5
                               font.pixelSize: 12
                               font.underline: changed && strDefaultMa.containsMouse
-                              MouseArea {
+                              TapAction {
                                 id: strDefaultMa
+                                accessibleLabel: "Restore default " + String(modelData.label)
+                                focusRadius: 8
                                 anchors.fill: parent
                                 anchors.margins: -4
                                 enabled: strDefaultLink.changed
@@ -4764,7 +4915,7 @@ Item {
                                 // while the config still used the custom value.
                                 // Qt.binding shows the default now and keeps the
                                 // display live afterwards.
-                                onClicked: {
+                                onTriggered: {
                                   page.setv(modelData.key, modelData.default_value)
                                   strField.text = Qt.binding(function () {
                                     return page.val(modelData)
@@ -4819,10 +4970,12 @@ Item {
                                 font.bold: true
                                 font.letterSpacing: page.btnTrack
                               }
-                              MouseArea {
+                              TapAction {
+                                accessibleLabel: "Choose " + String(modelData.label)
+                                focusRadius: 8
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: {
+                                onTriggered: {
                                   // Open the picker where the field already points: a dir
                                   // field's value IS the folder, a file field opens beside
                                   // the binary it names.
@@ -4883,11 +5036,13 @@ Item {
                     text: (tokRef.expanded ? "▾  " : "▸  ") + "Want to know more about these paths and tags?"
                     color: page.accent
                     font.pixelSize: 12
-                    MouseArea {
+                    TapAction {
+                      accessibleLabel: (tokRef.expanded ? "Hide " : "Show ") + "path template tokens"
+                      focusRadius: 8
                       anchors.fill: parent
                       anchors.margins: -4
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: {
+                      onTriggered: {
                         if (!tokRef.expanded && tokRef.groups.length === 0)
                           tokRef.groups = waves.pathTemplateTokens()
                         tokRef.expanded = !tokRef.expanded
@@ -5036,13 +5191,15 @@ Item {
                                 font.family: page.mono
                                 font.pixelSize: 12
                               }
-                              MouseArea {
+                              TapAction {
                                 id: tokCopyMa
+                                accessibleLabel: "Copy token " + tokRow.modelData.token
+                                focusRadius: 8
                                 anchors.fill: parent
                                 anchors.margins: -4
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: {
+                                onTriggered: {
                                   page.copyText(tokRow.modelData.token)
                                   tokRow.copied = true
                                   tokCopiedTimer.restart()
@@ -5165,13 +5322,18 @@ Item {
 
                       // Whole-tile click toggles the parent flag; the child checkbox
                       // sits above this and swallows its own clicks.
-                      MouseArea {
+                      TapAction {
                         id: tileMouse
+                        accessibleLabel: String(flagTile.modelData.label)
+                        focusRadius: 8
+                        role: Accessible.CheckBox
+                        checkable: true
+                        checked: page.val(flagTile.modelData) === true
                         anchors.fill: parent
                         hoverEnabled: true
                         enabled: !flagTile.blocked
                         cursorShape: flagTile.blocked ? Qt.ArrowCursor : Qt.PointingHandCursor
-                        onClicked: page.setv(flagTile.modelData.key, !page.val(flagTile.modelData))
+                        onTriggered: page.setv(flagTile.modelData.key, !page.val(flagTile.modelData))
                       }
                       RowLayout {
                         anchors.fill: parent
@@ -5232,10 +5394,15 @@ Item {
                             visible: flagTile.childOn
                             Layout.fillWidth: true
                             implicitHeight: childRowL.implicitHeight
-                            MouseArea {
+                            TapAction {
+                              accessibleLabel: String(flagTile.modelData.child_label || "Apply to single tracks")
+                              focusRadius: 8
+                              role: Accessible.CheckBox
+                              checkable: true
+                              checked: page.valChild(flagTile.modelData) === true
                               anchors.fill: parent
                               cursorShape: Qt.PointingHandCursor
-                              onClicked: page.setv(flagTile.modelData.child_key, !(page.valChild(flagTile.modelData) === true))
+                              onTriggered: page.setv(flagTile.modelData.child_key, !(page.valChild(flagTile.modelData) === true))
                             }
                             RowLayout {
                               id: childRowL
@@ -5625,7 +5792,9 @@ Item {
                     }
                   }
                 }
-                MouseArea {
+                TapAction {
+                  accessibleLabel: "Send a heart"
+                  focusRadius: 8
                   anchors.fill: parent
                   anchors.margins: -4
                   hoverEnabled: true
@@ -5639,7 +5808,7 @@ Item {
                     beatAnim.stop()
                     beatReset.start()
                   }
-                  onClicked: footer.gibHeart()
+                  onTriggered: footer.gibHeart()
                 }
               }
               Text {
@@ -5663,13 +5832,15 @@ Item {
                   font.pixelSize: 11
                   font.underline: fGhMA.containsMouse
                 }
-                MouseArea {
+                TapAction {
                   id: fGhMA
+                  accessibleLabel: "Open project author on GitHub"
+                  focusRadius: 8
                   anchors.fill: parent
                   hoverEnabled: true
                   enabled: footer.visFor(15, 10) === 10
                   cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                  onClicked: Qt.openUrlExternally("https://github.com/iamprivacy")
+                  onTriggered: Qt.openUrlExternally("https://github.com/iamprivacy")
                 }
               }
               Rectangle {

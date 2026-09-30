@@ -145,6 +145,7 @@ Rectangle {
         // disc with a play glyph, is the honest face.
         PreviewArt {
           host: trow.host
+          label: "Preview " + trow.title
           visible: trow.kind !== "video" && !trow.local
           anchors.fill: parent
           kind: "track"
@@ -193,16 +194,15 @@ Rectangle {
           rightPadding: (trPill.visible ? trPill.width + 8 : 0) + (trNew.visible ? trNew.width + (trPill.visible ? 6 : 8) : 0)
           // Title -> the track's album page (highlighting this track);
           // for a video row it opens the in-app video player instead.
-          MouseArea {
+          TapAction {
             id: trTitleMa
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: Math.min(parent.width, parent.implicitWidth)
             enabled: trow.revealable || trow.kind === "video" || (albumId !== "" && !host.onAlbumPage(albumId))
-            hoverEnabled: enabled
-            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: trow.revealable ? waves.revealLibraryAlbum(trow.folderPath) : trow.kind === "video" ? host.openVideo(trow.tId, trow.title, trow.artistName) : host.openAlbumPage(albumId, tId, trow.album, trow.art)
+            accessibleLabel: (trow.revealable ? "Reveal " : trow.kind === "video" ? "Play video " : "Open album for ") + trow.title
+            onTriggered: trow.revealable ? waves.revealLibraryAlbum(trow.folderPath) : trow.kind === "video" ? host.openVideo(trow.tId, trow.title, trow.artistName) : host.openAlbumPage(albumId, tId, trow.album, trow.art)
           }
           // Declared after the title's MouseArea so the pill sits
           // on top of it and takes its own click (reveal folder).

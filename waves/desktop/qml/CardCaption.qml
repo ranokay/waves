@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // The card caption line under an art card: title, lead artists and meta.
 // `host` is Main.qml's root object, bound at every instantiation and
@@ -6,14 +7,14 @@ import QtQuick
 // It reads through it:
 //   host.cardLeadArtists / host.cardSubLead / host.cardSubMeta /
 //   host.cardSubtitle / host.isNewRelease
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except textDim which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: cap
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
-  readonly property color textDim: "#6b6f78"
+  // SettingsPage.qml convention) — textDim binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
 
   property var card: ({})
