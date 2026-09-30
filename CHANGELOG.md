@@ -46,7 +46,7 @@ issue. A test enforces it.
 ### 🐛 Fixed
 
 - 📋 My Tidal > Playlists lists each playlist once, and playlists that were missing from the list are back ([issue #46](https://github.com/iamprivacy/Waves/issues/46)).
-- 🐧 The Linux zip and AppImage start on Ubuntu 22.04, Debian 12 and other distributions older than Ubuntu 24.04, where they quit at launch with a GLIBC error.
+- 🐧 The x64 Linux zip and AppImage start on Ubuntu 22.04, Debian 12 and other distributions older than Ubuntu 24.04, where they quit at launch with a GLIBC error.
 
 ## 🗂️ v0.1.31 (2026-09-24)
 

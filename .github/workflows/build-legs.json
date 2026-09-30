@@ -36,8 +36,8 @@
       "cmd_build": "bash tools/build_waves.sh && cd dist && mv waves.dist Waves && zip -9 -ry waves_linux-x64.zip Waves && bash ../tools/build_appimage.sh Waves waves_linux-x64.AppImage && cd .."
     },
     {
-      "os": "ubuntu-22.04-arm",
-      "target": "ubuntu-22.04-arm",
+      "os": "ubuntu-24.04-arm",
+      "target": "ubuntu-24.04-arm",
       "os_arch": "linux-arm64",
       "macos_floor": null,
       "cmd_build": "bash tools/build_waves.sh && cd dist && mv waves.dist Waves && zip -9 -ry waves_linux-arm64.zip Waves && bash ../tools/build_appimage.sh Waves waves_linux-arm64.AppImage && cd .."

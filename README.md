@@ -115,7 +115,7 @@ The log lives at `waves_dev.log`, next to `crash.log`, in the Waves config folde
 
 - A **paid TIDAL plan** and a one‑time sign‑in (Waves walks you through the browser login on first launch and reuses the cached token afterwards).
 - On macOS: **macOS 12 Monterey or newer**, on Intel and Apple silicon alike. The regular macOS builds need **macOS 15 Sequoia**; on Monterey through Sonoma, grab the `legacy` build instead (same app, an older bundled Qt). Homebrew and the in‑app updater pick the right one for your machine automatically.
-- On Linux: **glibc 2.35 or newer** (Ubuntu 22.04, Debian 12, Fedora 36 or anything newer), on x64 and ARM64.
+- On Linux: **glibc 2.35 or newer** (Ubuntu 22.04, Debian 12, Fedora 36 or anything newer) on x64, and **glibc 2.39 or newer** (Ubuntu 24.04, Debian 13, Fedora 40 or anything newer) on ARM64.
 - Python 3.12, 3.13 or 3.14 (if running from source).
 - FFmpeg is used for in‑app previews and a few conversions (e.g. some video / hi‑res cases). Waves can install it for you with one click (see above).
 
