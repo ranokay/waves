@@ -19,13 +19,13 @@ import "primitives" as Primitives
 //   host.libSortLabels / host.libSortOptions / host.libraryCategory /
 //   host.libraryOpen / host.openLibrarySorted / host.openVideo /
 //   host.previewPosition / host.pvSt / host.stopPreview / host.togglePreview
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 ColumnLayout {
   id: group
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
@@ -38,7 +38,7 @@ ColumnLayout {
   readonly property color surface: "#15181d"   // primary card surface
   readonly property color surface2: "#191c22"   // hover / nested
   readonly property color surface3: "#1d2128"   // art bg / unlit meter / inset
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
   readonly property string uiFont: uiFontFamily   // native system sans (see app.py)
@@ -597,10 +597,11 @@ ColumnLayout {
         font.family: mono
         font.pixelSize: 18
       }
-      MouseArea {
+      TapAction {
         anchors.fill: parent
-        cursorShape: Qt.PointingHandCursor
-        onClicked: {
+        accessibleLabel: "Sort " + (group.sortGet(group.category).asc ? "descending" : "ascending")
+        focusRadius: 8
+        onTriggered: {
           var g = group.sortGet(group.category)
           group.applySort(group.category, g.key, !g.asc)
         }
@@ -919,12 +920,12 @@ ColumnLayout {
               horizontalAlignment: Text.AlignHCenter
             }
           }
-          MouseArea {
+          TapAction {
             id: agMa
             anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: waves.loadArtistLibrary(model.id)
+            accessibleLabel: "Open artist " + model.name
+            focusRadius: 12
+            onTriggered: waves.loadArtistLibrary(model.id)
           }
           // compact preview row (the Browse card's control
           // line, shrunk): ▶ PREVIEW -> elapsed + · STOP, playing
@@ -939,10 +940,10 @@ ColumnLayout {
             anchors.bottomMargin: 8
             width: agPvRow.implicitWidth
             height: 16
-            MouseArea {
+            TapAction {
               anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: host.togglePreview("artist", "" + model.id, 0)
+              accessibleLabel: (agPv.pst === "playing" ? "Pause preview of " : "Preview ") + model.name
+              onTriggered: host.togglePreview("artist", "" + model.id, 0)
             }
             Row {
               id: agPvRow
@@ -993,13 +994,12 @@ ColumnLayout {
                 font.bold: true
                 font.letterSpacing: btnTrack
                 anchors.verticalCenter: parent.verticalCenter
-                MouseArea {
+                TapAction {
                   id: agStopMa
                   anchors.fill: parent
                   anchors.margins: -3
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: host.stopPreview()
+                  accessibleLabel: "Stop preview of " + model.name
+                  onTriggered: host.stopPreview()
                 }
               }
             }
@@ -1074,13 +1074,12 @@ ColumnLayout {
                   font.pixelSize: 18
                 }
               }
-              MouseArea {
+              TapAction {
                 id: headMouse
                 anchors.fill: parent
-                hoverEnabled: true
                 enabled: homeSec.target !== ""
-                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onClicked: host.openLibrarySorted(homeSec.modelData.source, homeSec.target)
+                accessibleLabel: "Open " + homeSec.modelData.title
+                onTriggered: host.openLibrarySorted(homeSec.modelData.source, homeSec.target)
               }
             }
             // Card shelf (Recent albums preview).
@@ -1179,10 +1178,11 @@ ColumnLayout {
             color: textLo
             font.pixelSize: 12
           }
-          MouseArea {
+          TapAction {
             anchors.fill: parent
-            cursorShape: Qt.PointingHandCursor
-            onClicked: group.crumbTo(-1)
+            accessibleLabel: "Back to Playlists"
+            focusRadius: 8
+            onTriggered: group.crumbTo(-1)
           }
         }
         Repeater {
@@ -1215,11 +1215,12 @@ ColumnLayout {
                 font.pixelSize: 12
                 font.bold: crumbSeg.last
               }
-              MouseArea {
+              TapAction {
                 anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
                 enabled: !crumbSeg.last
-                onClicked: group.crumbTo(crumbSeg.index)
+                accessibleLabel: "Back to " + crumbSeg.modelData.title
+                focusRadius: 8
+                onTriggered: group.crumbTo(crumbSeg.index)
               }
             }
           }
@@ -1339,6 +1340,7 @@ ColumnLayout {
           color: divider
         }
         RowLayout {
+          z: 1
           anchors.fill: parent
           anchors.leftMargin: 6
           anchors.rightMargin: 6
@@ -1385,11 +1387,10 @@ ColumnLayout {
             }
           }
         }
-        MouseArea {
+        TapAction {
           anchors.fill: parent
-          cursorShape: Qt.PointingHandCursor
-          z: -1
-          onClicked: host.openVideo(model.id, model.title, model.artist)
+          accessibleLabel: "Play video " + model.title
+          onTriggered: host.openVideo(model.id, model.title, model.artist)
         }
       }
     }

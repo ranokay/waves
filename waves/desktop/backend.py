@@ -6616,7 +6616,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         no-op; one hover fetch at a time, a second hover while one runs is
         dropped, never queued (the pool serves real clicks too)."""
         album_id = str(album_id or "")
-        if not self._logged_in or not album_id or album_id in self._album_tracks_cache:
+        if not album_id or album_id in self._album_tracks_cache:
+            return
+        if album_id.startswith(f"{CTX_APPLE}:"):
+            if not self._get_apple_enabled():
+                return
+        elif not self._logged_in:
             return
         with self._prefetch_lock:
             if album_id in self._album_tracks_inflight:
@@ -7041,9 +7046,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         another: with "Most-complete edition only" on, the build compares
         same-titled editions (a track fetch each, cached per session)."""
         artist_id = str(artist_id or "")
-        if not self._logged_in or not artist_id:
+        if not artist_id:
             return
         if artist_id.startswith(f"{CTX_APPLE}:"):
+            if not self._get_apple_enabled():
+                return
             # Apple hover: warm the Apple page silently so the click that
             # usually follows paints from the cache. Without this branch the
             # hover fell into the TIDAL build below and spent a TIDAL lookup
@@ -7062,6 +7069,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._artist_loading.add(artist_id)
             _prefetch_log.debug("prefetch Apple artist %s", artist_id)
             self._start_apple_artist_build(artist_id, silent=True)
+            return
+        if not self._logged_in:
             return
         collapse = self._artist_page_collapses_editions()
         cached = self._artist_cache.get(artist_id)
@@ -9048,7 +9057,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         (album cards route to the artist page instead, see the QML)."""
         kind = str(kind or "")
         media_id = str(media_id or "")
-        if not self._logged_in or kind not in ("playlist", "mix", "album"):
+        if not self._can_open_browse_item(kind, media_id):
             return
         key = f"item:{kind}:{media_id}"
         # A hover prefetch of this very page still in flight is adopted as
@@ -9143,7 +9152,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         fetched within the minute (the entry's own floor) is left alone."""
         kind = str(kind or "")
         media_id = str(media_id or "")
-        if not self._logged_in or kind not in ("playlist", "mix", "album"):
+        if not self._can_open_browse_item(kind, media_id):
             return
         key = f"item:{kind}:{media_id}"
         cached = self._browse_pages.get(key)
@@ -9191,6 +9200,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     # revalidates on every open, as it always did (always-on freshness).
     _ITEM_FRESH_S = 60.0
 
+    def _can_open_browse_item(self, kind: str, media_id: str) -> bool:
+        if kind not in ("playlist", "mix", "album"):
+            return False
+        if media_id.startswith(f"{CTX_APPLE}:"):
+            return kind in ("playlist", "album") and self._get_apple_enabled()
+        return self._logged_in
+
     @Slot(str, str)
     def prefetchBrowseItem(self, kind: str, media_id: str) -> None:
         """Build a playlist / mix / album page on HOVER, so the click that
@@ -9208,7 +9224,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         what bound that growth."""
         kind = str(kind or "")
         media_id = str(media_id or "")
-        if not self._logged_in or kind not in ("playlist", "mix", "album"):
+        if not self._can_open_browse_item(kind, media_id):
             return
         key = f"item:{kind}:{media_id}"
         cached = self._browse_pages.get(key)

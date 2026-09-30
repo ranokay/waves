@@ -6,12 +6,12 @@ import "primitives" as Primitives
 // Used where a gate offers a choice; tapping the card takes the action,
 // so there is no separate confirm button. highlight marks the recommended
 // (accent-tinted) option.
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Rectangle {
   id: gcard
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
@@ -20,7 +20,7 @@ Rectangle {
   readonly property color outline: "#3a3f49"   // strong border (search / qtag / switch)
   readonly property color surface0: "#121418"   // topbar / statusbar / expand panel
   readonly property color surface3: "#1d2128"   // art bg / unlit meter / inset
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
 
   property string title: ""

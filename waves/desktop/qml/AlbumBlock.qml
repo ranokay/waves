@@ -12,13 +12,13 @@ import "primitives" as Primitives
 //   host.onAlbumPage / host.openAlbumPage / host.qualMixList /
 //   host.rememberExpandReturn / host.scrollCollapsedBack /
 //   host.scrollExpandedIntoView / host.trackCache
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Column {
   id: ab
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentCont: "#06210f"   // active chip / nav bg
   readonly property color accentDim: "#22a64a"   // terminal-button border
@@ -33,7 +33,7 @@ Column {
   readonly property color surface: "#15181d"   // primary card surface
   readonly property color surface0: "#121418"   // topbar / statusbar / expand panel
   readonly property color surface2: "#191c22"   // hover / nested
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
   readonly property string uiFont: uiFontFamily   // native system sans (see app.py)
@@ -150,6 +150,7 @@ Column {
     color: rowMa.containsMouse ? surface2 : surface
     border.color: expanded ? outline : border1
     RowLayout {
+      z: 1
       anchors.fill: parent
       anchors.leftMargin: 12
       anchors.rightMargin: 14
@@ -195,7 +196,7 @@ Column {
           Layout.fillWidth: true
           rightPadding: (abRowPill.visible ? abRowPill.width + 8 : 0) + (abRowNew.visible ? abRowNew.width + (abRowPill.visible ? 6 : 8) : 0)
           // Title -> the album's dedicated page (row click still expands)
-          MouseArea {
+          TapAction {
             id: abRowTitleMa
             anchors.left: parent.left
             anchors.top: parent.top
@@ -203,8 +204,8 @@ Column {
             width: Math.min(parent.width, parent.implicitWidth)
             enabled: !host.onAlbumPage(albumId)
             hoverEnabled: enabled
-            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: host.openAlbumPage(albumId, "", title, art)
+            accessibleLabel: "Open album " + ab.title
+            onTriggered: host.openAlbumPage(albumId, "", title, art)
             // Resting on the link: have the page ready (see hoverPrefetch).
             readonly property var prefetchCard: ({
                 kind: "album",
@@ -296,13 +297,13 @@ Column {
         }
       }
     }
-    MouseArea {
+    TapAction {
       id: rowMa
       anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      z: -1
-      onClicked: toggle()
+      accessibleLabel: (ab.expanded ? "Collapse " : "Expand ") + ab.title + " tracks"
+      focusRadius: 10
+      z: 0
+      onTriggered: toggle()
       // Resting on the row: have its tracks fetched before the
       // click expands it (see hoverPrefetch), so the panel opens on
       // its rows instead of "Loading tracks…" and a pop-in. Only
@@ -389,7 +390,7 @@ Column {
             font.bold: true
             width: parent.width
             elide: Text.ElideRight
-            MouseArea {
+            TapAction {
               id: abPanelTitleMa
               anchors.left: parent.left
               anchors.top: parent.top
@@ -397,8 +398,8 @@ Column {
               width: Math.min(parent.width, parent.implicitWidth)
               enabled: !host.onAlbumPage(albumId)
               hoverEnabled: enabled
-              cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-              onClicked: host.openAlbumPage(albumId, "", title, art)
+              accessibleLabel: "Open album " + ab.title
+              onTriggered: host.openAlbumPage(albumId, "", title, art)
             }
           }
           ArtistLinks {
@@ -442,10 +443,10 @@ Column {
               color: textLo
               font.pixelSize: 12
               anchors.verticalCenter: parent.verticalCenter
-              MouseArea {
+              TapAction {
                 anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: waves.copyShareUrl("album", albumId)
+                accessibleLabel: "Copy link to " + ab.title
+                onTriggered: waves.copyShareUrl("album", albumId)
               }
             }
           }
@@ -534,11 +535,12 @@ Column {
                 anchors.verticalCenter: parent.verticalCenter
               }
             }
-            MouseArea {
+            TapAction {
               anchors.fill: parent
               enabled: ab.selCount > 0
-              cursorShape: ab.selCount > 0 ? Qt.PointingHandCursor : Qt.ArrowCursor
-              onClicked: ab.downloadSelected()
+              accessibleLabel: "Download " + ab.selCount + " selected tracks"
+              focusRadius: btnRad
+              onTriggered: ab.downloadSelected()
             }
           }
         }
@@ -579,6 +581,7 @@ Column {
               }
               TrackPreview {
                 host: ab.host
+                label: "Preview " + (modelData.title || "track")
                 kind: "track"
                 pid: modelData.id
                 Layout.alignment: Qt.AlignVCenter

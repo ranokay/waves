@@ -104,12 +104,13 @@ Rectangle {
       }
     }
   }
-  MouseArea {
+  TapAction {
     anchors.fill: parent
-    cursorShape: Qt.PointingHandCursor
     visible: !pbar.live
-    enabled: !pbar.live
-    onClicked: host.togglePreview(pbar.kind, pbar.pid, 0)  // 0 = whole track (scrubbable)
+    enabled: !pbar.live && pbar.pid !== ""
+    accessibleLabel: pbar.label
+    focusRadius: pbar.radius
+    onTriggered: host.togglePreview(pbar.kind, pbar.pid, 0)  // 0 = whole track (scrubbable)
   }
 
   // PLAYING / PAUSED, [⏵/⏸ toggle][DotMatrix scrub track][m:ss / m:ss]
@@ -127,12 +128,11 @@ Rectangle {
       color: accent
       size: 13
       width: 18
-      MouseArea {
+      TapAction {
         anchors.fill: parent
         anchors.margins: -4
-        cursorShape: Qt.PointingHandCursor
-        onClicked: function (m) {
-          m.accepted = true
+        accessibleLabel: pbar.st === "playing" ? "Pause preview" : "Resume preview"
+        onTriggered: function () {
           host.togglePreview(pbar.kind, pbar.pid, 0)
         }
       }
@@ -146,14 +146,13 @@ Rectangle {
       name: "stop"
       color: pbarStopMa.containsMouse ? "#ff7d76" : red
       size: 11
-      MouseArea {
+      TapAction {
         id: pbarStopMa
         anchors.fill: parent
         anchors.margins: -5
         hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: function (m) {
-          m.accepted = true
+        accessibleLabel: "Stop preview"
+        onTriggered: function () {
           host.stopPreview()
         }
       }
@@ -203,39 +202,10 @@ Rectangle {
         shimmerPhase: host.shimmerPhase
         queueEdgeHeld: host.queueEdgeHeld
       }
-      MouseArea {
+      PreviewSeekArea {
         id: pbarScrub
+        host: pbar.host
         anchors.fill: parent
-        cursorShape: Qt.PointingHandCursor
-        preventStealing: true
-        property bool scrubbing: false
-        // Press/drag only move the fill; the single real seek fires
-        // on release, so the backend seeks once and playback resumes
-        // cleanly (no mid-gesture flush pop).
-        function frac(x) {
-          return width > 0 ? x / width : 0
-        }
-        onPressed: function (m) {
-          m.accepted = true
-          scrubbing = true
-          host.previewScrubbing = true
-          host.scrubPreviewVisual(frac(m.x))
-        }
-        onPositionChanged: function (m) {
-          if (scrubbing)
-            host.scrubPreviewVisual(frac(m.x))
-        }
-        onReleased: function (m) {
-          if (scrubbing) {
-            scrubbing = false
-            host.previewScrubbing = false
-            host.seekPreview(frac(m.x))
-          }
-        }
-        onCanceled: {
-          scrubbing = false
-          host.previewScrubbing = false
-        }
       }
     }
   }

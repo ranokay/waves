@@ -107,6 +107,14 @@ def _step_y(key: str) -> str:
     )
 
 
+_APPLE_SWITCH_STATE = scene_js("""
+    var sw = findFirst(settingsPage, function (o) {
+        return o.objectName === 'appleEnableSwitch' && o.visible === true;
+    });
+    return sw ? sw.Accessible.checked : null;
+""")
+
+
 def _download_tap_point(media_id: str) -> str:
     """Scene coordinates of one rendered row's real download tap area."""
     return scene_js(
@@ -255,6 +263,10 @@ def _run_scenario() -> int:  # noqa: C901 (one straight journey)
         failures.append("choosing Apple did not open the setup wizard")
     if q("settingsPage.appleFocusStep") != "":
         failures.append("the enable path marked a step instead of the wizard top")
+    if q(_point("settingsPage", "appleEnableSwitch")) in ("", None):
+        failures.append("the Apple setup link did not land on the Apple provider band")
+    if q(_APPLE_SWITCH_STATE) is not True:
+        failures.append("the Apple enable switch did not reflect the live provider state")
 
     # The wizard's tiers walk cookies first, then the full tier's steps; the
     # steps are the bridge's contract, rendered in order.
@@ -334,6 +346,8 @@ def _run_scenario() -> int:  # noqa: C901 (one straight journey)
         failures.append(f"the pre-setup click did not name the cookies step: {q('settingsPage.appleFocusStep')}")
     if not q(_visible("settingsPage", "appleStepMark_cookies")):
         failures.append("the cookies step is not marked for the pre-setup click")
+    if q(_point("settingsPage", "appleEnableSwitch")) in ("", None):
+        failures.append("the gated download did not land at the Apple provider band")
     if q(_visible("settingsPage", "appleStepMark_runtime")):
         failures.append("an unrelated step is marked for the pre-setup click")
 

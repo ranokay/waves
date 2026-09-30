@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // The quality badge: a tier word, its spec and a coloured dot in the tier's
 // own colours (ATMOS wears an outline, not a rung), and the MIXED variant for
@@ -7,17 +8,17 @@ import QtQuick
 // required so a missed binding fails at load; the tier palette maps come
 // through it (host.qualBg / host.qualFg / host.qualBorder / host.qualDot /
 // host.qualSpec / host.qualSpecFg).
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except textDim which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Row {
   id: qt
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — textDim binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property string mono: monoFont   // bundled JetBrains Mono (see app.py)
   readonly property color outline: "#3a3f49"   // strong border (search / qtag / switch)
   readonly property color surface2: "#191c22"   // hover / nested
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   property string q: ""
   // Set (via qualMixList) when the album mixes tiers, replaces the

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import "primitives" as Primitives
 
 // A line of comma-separated artist names, each individually clickable.
@@ -20,6 +21,18 @@ Row {
   property string albumId: ""      // set -> the suffix (album name) links to the album page
   property int px: 12
   clip: true
+  readonly property string fullText: {
+    var names = []
+    for (var i = 0; i < artists.length; ++i)
+      if (artists[i].name)
+        names.push(artists[i].name)
+    return names.join(", ") + (suffix ? (names.length ? " · " : "") + suffix : "")
+  }
+  ToolTip.visible: alHover.hovered && implicitWidth > width + 1
+  ToolTip.text: fullText
+  HoverHandler {
+    id: alHover
+  }
   // A Row has no baseline of its own; publish the name text's so callers
   // can baseline-align a date or tag sitting beside it (centring two
   // fonts with different descents reads crooked).
@@ -43,13 +56,12 @@ Row {
         color: accent
         font.pixelSize: al.px
         font.underline: alMa.containsMouse && linkable
-        MouseArea {
+        TapAction {
           id: alMa
           anchors.fill: parent
-          hoverEnabled: true
-          cursorShape: alName.linkable ? Qt.PointingHandCursor : Qt.ArrowCursor
-          onClicked: if (alName.linkable)
-            waves.loadArtist(modelData.id)
+          enabled: alName.linkable
+          accessibleLabel: "Open artist " + modelData.name
+          onTriggered: waves.loadArtist(modelData.id)
         }
       }
       Text {
@@ -76,13 +88,12 @@ Row {
     color: alSfMa.containsMouse && linkable ? "#ffffff" : textLo
     font.pixelSize: al.px
     font.underline: alSfMa.containsMouse && linkable
-    MouseArea {
+    TapAction {
       id: alSfMa
       anchors.fill: parent
       enabled: alSuffix.linkable
-      hoverEnabled: enabled
-      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-      onClicked: host.openAlbumPage(al.albumId, "", al.suffix)
+      accessibleLabel: "Open album " + al.suffix
+      onTriggered: host.openAlbumPage(al.albumId, "", al.suffix)
     }
   }
 }

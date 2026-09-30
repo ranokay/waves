@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // One art-first video result cell: the 16:9 thumbnail carrying the quality
 // spec on its corner, then the title, artist and release date baseline-
@@ -11,15 +12,15 @@ import QtQuick
 //   host.artistsById  artistId -> name, for the credit line
 // and the same object is handed to BigVideoThumb, ArtistLinks and the
 // DownloadButton, which read their own contracts from it.
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except textDim which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Column {
   id: vcell
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — textDim binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property string mono: monoFont   // bundled JetBrains Mono (see app.py)
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
   property string vid: ""

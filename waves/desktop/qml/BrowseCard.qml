@@ -15,13 +15,13 @@ import "primitives" as Primitives
 //   host.openLibraryClaim / host.previewPosition / host.pvSt /
 //   host.queueEdgeHeld / host.shimmerPhase / host.stopPreview /
 //   host.togglePreview
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Rectangle {
   id: bc
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property color border1: "#262a31"   // default card border (outline-variant)
@@ -32,7 +32,7 @@ Rectangle {
   readonly property string mono: monoFont    // bundled JetBrains Mono (see app.py)
   readonly property color red: "#ff5a52"   // failed / peak / heart
   readonly property color surface: "#15181d"   // primary card surface
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property string uiFont: uiFontFamily   // native system sans (see app.py)
 
@@ -96,11 +96,12 @@ Rectangle {
       fxKind: bc.previewable ? bc.kind : ""
       fxId: bc.previewable ? ("" + (bc.card.id || "")) : ""
       url: bc.card.art || ""
-      MouseArea {
+      TapAction {
         anchors.fill: parent
-        hoverEnabled: true
-        cursorShape: bc.openable ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: host.openBrowseCard(bc.card)
+        enabled: bc.openable
+        accessibleLabel: "Open " + (bc.card.title || bc.kind)
+        focusRadius: 10
+        onTriggered: host.openBrowseCard(bc.card)
       }
     }
     Text {
@@ -121,15 +122,16 @@ Rectangle {
       maximumLineCount: (bc.libPresent && bc.libAtmos) ? 1 : 2
       wrapMode: Text.Wrap
       font.underline: bcTitleMa.containsMouse && bc.openable
-      MouseArea {
+      TapAction {
         id: bcTitleMa
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: Math.min(parent.implicitWidth, parent.width)
-        hoverEnabled: true
-        cursorShape: bc.openable ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: host.openBrowseCard(bc.card)
+        enabled: bc.openable
+        activeFocusOnTab: false // Artwork is the single tab stop for opening this card.
+        accessibleLabel: "Open " + (bc.card.title || bc.kind)
+        onTriggered: host.openBrowseCard(bc.card)
       }
     }
     // Full-width caption line: the album's artist link + date (or
@@ -194,6 +196,7 @@ Rectangle {
       readonly property bool tight: naturalW > availW
       Row {
         id: bcPvRow
+        z: 1
         anchors.verticalCenter: parent.verticalCenter
         spacing: 4
         Ico {
@@ -252,21 +255,19 @@ Rectangle {
           font.bold: true
           font.letterSpacing: btnTrack
           anchors.verticalCenter: parent.verticalCenter
-          MouseArea {
+          TapAction {
             id: bcStopMa
             anchors.fill: parent
             anchors.margins: -3
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: host.stopPreview()
+            accessibleLabel: "Stop preview of " + (bc.card.title || bc.kind)
+            onTriggered: host.stopPreview()
           }
         }
       }
-      MouseArea {
+      TapAction {
         anchors.fill: parent
-        z: -1
-        cursorShape: Qt.PointingHandCursor
-        onClicked: host.togglePreview(bc.kind, bc.card.id || "", 0)
+        accessibleLabel: (bc.pvSt === "playing" ? "Pause " : "Preview ") + (bc.card.title || bc.kind)
+        onTriggered: host.togglePreview(bc.kind, bc.card.id || "", 0)
       }
     }
     // download: DOWNLOAD -> dot bar + fixed-width % -> ✓ DONE
@@ -393,12 +394,11 @@ Rectangle {
           font.bold: true
         }
       }
-      MouseArea {
+      TapAction {
         anchors.fill: parent
-        cursorShape: Qt.PointingHandCursor
-        onClicked: {
-          if (bc.dlSt === "running" || bc.dlSt === "done" || bcDlBox.waiting)
-            return
+        enabled: bc.dlSt !== "running" && bc.dlSt !== "done" && !bcDlBox.waiting
+        accessibleLabel: (bc.libClaim ? "Show library copy of " : bc.dlSt === "failed" ? "Retry download of " : "Download ") + (bc.card.title || bc.kind)
+        onTriggered: {
           // A full claim opens the claim gate, the same click the
           // full button and the art card's strip give it. A
           // partial copy downloads: with the bulk skip gate on,

@@ -20,7 +20,7 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QDateTime, QTimer, QUrl
+from PySide6.QtCore import QDateTime, Qt, QTimer, QUrl
 from PySide6.QtGui import QFontDatabase, QGuiApplication, QIcon, QWindow
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkDiskCache, QNetworkRequest, QSslConfiguration
 from PySide6.QtQml import QQmlApplicationEngine, QQmlIncubationController, QQmlNetworkAccessManagerFactory
@@ -695,6 +695,8 @@ def waves_activate(tidal: Tidal | None = None) -> int:
                 _icon_debug("WAVES aumid: FAILED to set")
     owns_app = QGuiApplication.instance() is None
     app = QGuiApplication.instance() or QGuiApplication(sys.argv)
+    # macOS defaults to text/list controls; Waves also exposes button tab stops.
+    app.styleHints().setTabFocusBehavior(Qt.TabFocusAllControls)
     app.setApplicationName("Waves")
     app.setOrganizationName("Waves")
     icon = _app_icon()

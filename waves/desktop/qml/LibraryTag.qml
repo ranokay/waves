@@ -131,14 +131,14 @@ Rectangle {
     font.pixelSize: 9
     font.bold: true
   }
-  MouseArea {
+  TapAction {
     anchors.fill: parent
     // Gated by VISIBILITY, not enabled: a disabled MouseArea still
     // owns its cursorShape in Qt, so an explicit ArrowCursor here sat
     // on top of whatever cursor the row underneath was showing. An
     // invisible one claims nothing.
     visible: pxt.albumId !== ""
-    cursorShape: Qt.PointingHandCursor
-    onClicked: waves.revealLibraryAlbum(pxt.albumId)  // open the album folder
+    accessibleLabel: "Reveal library album"
+    onTriggered: waves.revealLibraryAlbum(pxt.albumId)  // open the album folder
   }
 }

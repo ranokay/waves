@@ -21,14 +21,14 @@ import "primitives" as Primitives
 //     host.qualFg  the row vocabulary helpers
 // Its `queueModel` is the app's queue model, bound at the instantiation and
 // required for the same reason.
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Drawer {
   id: queueDrawer
   required property var host
   required property var queueModel
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentSoft: "#9dffbe"   // CRT flash / phosphor highlight
@@ -46,7 +46,7 @@ Drawer {
   readonly property color redDim: "#b23f3a"   // small-lossy pill border
   readonly property color surface: "#15181d"   // primary card surface
   readonly property color surface2: "#191c22"   // hover / nested
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
   // 420, not the 340 it shipped at: the quality a row states is the
@@ -129,6 +129,24 @@ Drawer {
       spacing: 0
       model: queueModel
       ScrollBar.vertical: ScrollBar {}
+      Column {
+        anchors.centerIn: parent
+        visible: queueModel.count === 0
+        spacing: 8
+        Text {
+          text: "QUEUE EMPTY"
+          color: textLo
+          font.family: mono
+          font.pixelSize: 13
+          anchors.horizontalCenter: parent.horizontalCenter
+        }
+        Text {
+          text: "Downloads you start will appear here."
+          color: textDim
+          font.pixelSize: 12
+          anchors.horizontalCenter: parent.horizontalCenter
+        }
+      }
 
       // Grouped sections: Completed (collapsible) · Failed · Stopped · Downloading · Queued
       section.property: "uiGroup"
@@ -678,6 +696,8 @@ Drawer {
                   Layout.fillWidth: true
                 }
                 Text {
+                  id: rowReason
+                  objectName: "queueReason"
                   textFormat: Text.PlainText  // composed from a remote artist name
                   text: {
                     var a = model.artist ? model.artist + " · " : ""
@@ -716,6 +736,11 @@ Drawer {
                   font.pixelSize: 11
                   elide: Text.ElideRight
                   Layout.fillWidth: true
+                  ToolTip.visible: reasonHover.hovered && truncated
+                  ToolTip.text: text
+                  HoverHandler {
+                    id: reasonHover
+                  }
                 }
                 // Integrity quarantine: the bad bytes live
                 // in the quarantine folder with no other
@@ -1269,6 +1294,7 @@ Drawer {
       }
     }
     RowLayout {
+      visible: queueModel.count > 0
       Layout.fillWidth: true
       spacing: 8
       // One button, not two: the per-section CLEARs above handle the
@@ -1284,6 +1310,7 @@ Drawer {
       // width is for modal CTAs, an inline button that stretches is
       // just a wide empty box.
       SpecBtn {
+        objectName: "queueClearAll"
         danger: true
         label: "CLEAR ALL"
         onClicked: waves.clearQueue()

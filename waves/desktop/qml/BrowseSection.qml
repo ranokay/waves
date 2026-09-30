@@ -1,4 +1,5 @@
 import QtQuick
+import "primitives" as Primitives
 
 // One Browse content section (a card shelf, a track list, a link
 // cloud, a drilled grid). Hoisted out of the pane so the landing and
@@ -15,17 +16,17 @@ import QtQuick
 //   host.browseHighlightId / host.browseHighlightPending / host.browsePage /
 //   host.browseStyle / host.gridCols / host.openBrowseLink /
 //   host.openBrowseSection / host.openPlaylistsFolder
-// The palette values are local copies of Main.qml's static literals —
+// The palette values are local copies of Main.qml's static literals, except textDim which binds to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Column {
   id: bsec
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — textDim binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color border1: "#262a31"   // default card border (outline-variant)
   readonly property string mono: monoFont    // bundled JetBrains Mono (see app.py)
   readonly property color surface: "#15181d"   // primary card surface
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property color textLo: "#a8acb4"
 
@@ -71,15 +72,10 @@ Column {
   spacing: 8
   SectionHeader {
     visible: !bsec.artStyle && bsec.showHeadline
-    label: (bsec.sec.title || "More").toUpperCase() + (bsec.headlinable ? "  \u203a" : "")
+    label: (bsec.sec.title || "More").toUpperCase()
     count: (bsec.sec.items || []).length
-    MouseArea {
-      anchors.fill: parent
-      enabled: bsec.headlinable
-      hoverEnabled: enabled
-      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-      onClicked: bsec.openListing()
-    }
+    openable: bsec.headlinable
+    onOpened: bsec.openListing()
   }
   Text {
     id: bsecTitle
@@ -93,16 +89,15 @@ Column {
     width: parent.width
     elide: Text.ElideRight
     topPadding: 6
-    MouseArea {
+    TapAction {
       id: bsecTitleMa
       anchors.left: parent.left
       anchors.top: parent.top
       anchors.bottom: parent.bottom
       width: Math.min(parent.width, parent.implicitWidth)
       enabled: bsec.headlinable
-      hoverEnabled: enabled
-      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-      onClicked: bsec.openListing()
+      accessibleLabel: "Open " + (bsec.sec.title || "More")
+      onTriggered: bsec.openListing()
     }
   }
   // full-listing wrap grid (drilled "show more" pages).
@@ -435,10 +430,11 @@ Column {
                 font.pixelSize: 13
               }
             }
-            MouseArea {
+            TapAction {
               anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: blinkLd.modelData.pl ? host.openPlaylistsFolder(blinkLd.modelData.path, blinkLd.modelData.title) : host.openBrowseLink(blinkLd.modelData.path, blinkLd.modelData.title)
+              accessibleLabel: "Open " + (blinkLd.modelData.title || "category")
+              focusRadius: 8
+              onTriggered: blinkLd.modelData.pl ? host.openPlaylistsFolder(blinkLd.modelData.path, blinkLd.modelData.title) : host.openBrowseLink(blinkLd.modelData.path, blinkLd.modelData.title)
             }
           }
         }

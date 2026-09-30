@@ -949,11 +949,40 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
     if not _open_settings(q, settle):
         problems.append("the Settings tab did not open the Settings page for the commit actions")
     else:
+        header_finder = (
+            "findFirst(settingsPage, function (o) { return o.objectName === 'settingsSectionHeader' && o.visible; })"
+        )
+        header = _control_facts(q, header_finder)
+        if header is None or not header["focusable"] or not header["name"] or header["role"] != _ROLE_BUTTON:
+            problems.append(f"a Settings section header is not a named keyboard button: {header}")
+        else:
+            _focus(q, header_finder)
+            QTest.keyClick(root, Qt.Key_Space)
+            settle(250)
+            flipped = _control_facts(q, header_finder)
+            if flipped is None or flipped["name"] == header["name"]:
+                problems.append("Space on a Settings section header did not change its disclosure state")
+        q("settingsPage.setSectionOpen('providers', false)")
+        settle(300)
+        _focus(q, header_finder)
+        QTest.keyClick(root, Qt.Key_Tab)
+        settle(80)
+        next_stop = json.loads(q(scene_js(_TAB_STOP_BODY)))
+        if not next_stop["name"].startswith("Downloads settings"):
+            problems.append(f"Tab entered a collapsed Settings body: {next_stop}")
         # The Apple switch lives in the Providers card, collapsed by default,
         # and a collapsed section builds no rows now: open it the way a user
         # does before driving its controls.
         q("settingsPage.setSectionOpen('providers', true)")
         settle(300)
+        provider_head = _control_facts(q, header_finder)
+        if provider_head is None or provider_head["name"] != "Providers settings, expanded":
+            problems.append(f"opening Providers did not update its disclosure header: {provider_head}")
+        flag = _control_facts(
+            q, "findFirst(settingsPage, function (o) { return o.objectName === 'settingsFlagTile' && o.visible; })"
+        )
+        if flag is None or not flag["focusable"] or not flag["name"] or flag["role"] != _ROLE_CHECKBOX:
+            problems.append(f"a Settings flag tile is not a named keyboard checkbox: {flag}")
         before = bool(q("waves.appleEnabled"))
         saved = before
         staged = bool(q(scene_js(_APPLE_SWITCH + "if (!sw) return false; sw.toggle(); return true;")))

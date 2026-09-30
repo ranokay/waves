@@ -13,13 +13,13 @@ import "primitives" as Primitives
 //   host.openLibraryClaim / host.openRedownloadGate / host.ownAnswers /
 //   host.ownCardForget / host.ownCardRegister / host.ownGen / host.ownKeys /
 //   host.pvSt / host.togglePreview
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: ac
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentDim: "#22a64a"   // terminal-button border
   readonly property real btnBorderW: 1.5
@@ -33,7 +33,7 @@ Item {
   readonly property color greenDim: "#2aa862"
   readonly property string mono: monoFont    // bundled JetBrains Mono (see app.py)
   readonly property color red: "#ff5a52"   // failed / peak / heart
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
   readonly property color textHi: "#e6e8ec"
   readonly property string uiFont: uiFontFamily   // native system sans (see app.py)
 
@@ -168,11 +168,13 @@ Item {
     url: ac.card.art || ""
     // Declared first so the hover controls' own MouseAreas sit above it:
     // the artwork opens the page, the buttons keep their clicks.
-    MouseArea {
+    TapAction {
+      id: acOpenMa
       anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: ac.openable ? Qt.PointingHandCursor : Qt.ArrowCursor
-      onClicked: host.openBrowseCard(ac.card)
+      enabled: ac.openable
+      accessibleLabel: "Open " + (ac.card.title || ac.kind)
+      focusRadius: 10
+      onTriggered: host.openBrowseCard(ac.card)
     }
     // hero caption rides ON the art over a bottom scrim (children are
     // clipped to the rounded rect, so the scrim keeps the corners)
@@ -304,7 +306,7 @@ Item {
     // playlists/mixes) over Download; other kinds keep the corner icon.
     readonly property bool collection: ac.kind === "album" || ac.kind === "playlist" || ac.kind === "mix"
     readonly property string kindLabel: ac.kind === "album" ? "album" : ac.kind === "playlist" ? "playlist" : "mix"
-    readonly property bool controlsOn: collection && (acWrapHover.hovered || host.dlSt(ac.card.id || "") !== "" || host.pvSt(ac.kind, ac.card.id || "") !== "")
+    readonly property bool controlsOn: collection && (acWrapHover.hovered || acOpenMa.activeFocus || acPvMa.activeFocus || acDlMa.activeFocus || host.dlSt(ac.card.id || "") !== "" || host.pvSt(ac.kind, ac.card.id || "") !== "")
     // The artwork's own hover: the strip, the percentage word and the
     // corner icon follow it. Prefetch is NOT wired here, it rides the
     // card-wide handler on ac, so moving the pointer from the art down
@@ -503,10 +505,11 @@ Item {
                   anchors.verticalCenter: parent.verticalCenter
                 }
               }
-              MouseArea {
+              TapAction {
+                id: acPvMa
                 anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: host.togglePreview(ac.kind, ac.card.id || "", 0)
+                accessibleLabel: "Preview " + (ac.card.title || ac.kind)
+                onTriggered: host.togglePreview(ac.kind, ac.card.id || "", 0)
               }
             }
             Rectangle {
@@ -540,16 +543,17 @@ Item {
                   anchors.verticalCenter: parent.verticalCenter
                 }
               }
-              MouseArea {
+              TapAction {
+                id: acDlMa
                 anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
+                accessibleLabel: (acStrip.dlDone ? "Show downloaded copy of " : ac.libClaim ? "Show library copy of " : "Download ") + (ac.card.title || ac.kind)
                 // A finished download opens the owned gate:
                 // the fact, then REDOWNLOAD one click away. A
                 // full claim opens the claim gate, the same
                 // click the full button gives it. A partial
                 // copy downloads: with the bulk skip gate on,
                 // that fetches the rest.
-                onClicked: {
+                onTriggered: {
                   if (acStrip.dlDone) {
                     host.openRedownloadGate(ac.card)
                     return
@@ -611,16 +615,17 @@ Item {
       elide: Text.ElideRight
       horizontalAlignment: ac.kind === "artist" ? Text.AlignHCenter : Text.AlignLeft
       font.underline: acTitleMa.containsMouse && ac.openable
-      MouseArea {
+      TapAction {
         id: acTitleMa
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: ac.kind === "artist" ? parent.horizontalCenter : undefined
         anchors.left: ac.kind === "artist" ? undefined : parent.left
         width: Math.min(parent.implicitWidth, parent.width)
-        hoverEnabled: true
-        cursorShape: ac.openable ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: host.openBrowseCard(ac.card)
+        enabled: ac.openable
+        activeFocusOnTab: false // Artwork is the single tab stop for opening this card.
+        accessibleLabel: "Open " + (ac.card.title || ac.kind)
+        onTriggered: host.openBrowseCard(ac.card)
       }
     }
     CardCaption {

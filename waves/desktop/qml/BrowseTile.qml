@@ -297,12 +297,12 @@ Rectangle {
     maximumLineCount: 2
     elide: Text.ElideRight
   }
-  MouseArea {
+  TapAction {
     id: btMa
     anchors.fill: parent
-    hoverEnabled: true
-    cursorShape: Qt.PointingHandCursor
-    onClicked: bt.plOnly ? host.openPlaylistsFolder(bt.path, bt.title) : host.openBrowseLink(bt.path, bt.title)
+    accessibleLabel: "Open " + (bt.title || "category")
+    focusRadius: bt.radius
+    onTriggered: bt.plOnly ? host.openPlaylistsFolder(bt.path, bt.title) : host.openBrowseLink(bt.path, bt.title)
   }
   // All Playlists folder chrome: the card-style hover strip (PREVIEW |
   // DOWNLOAD ALL), swapped for the live rollup button + badge once the
@@ -318,7 +318,7 @@ Rectangle {
   // the pointer leaves (same rule as the album cards' controls).
   RiseIn {
     host: bt.host
-    on: bt.plOnly && (btHover.hovered || bt.catSt !== "")
+    on: bt.plOnly && (btHover.hovered || btMa.activeFocus || btPvMa.activeFocus || btDlMa.activeFocus || bt.catSt !== "")
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.bottom: parent.bottom
@@ -390,10 +390,11 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
               }
             }
-            MouseArea {
+            TapAction {
+              id: btPvMa
               anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
+              accessibleLabel: "Preview " + (bt.title || "category")
+              onTriggered: {
                 host.catPendingPv = bt.path
                 waves.resolvePlaylistCategory(bt.path, bt.title)
               }
@@ -430,10 +431,11 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
               }
             }
-            MouseArea {
+            TapAction {
+              id: btDlMa
               anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
+              accessibleLabel: "Download all in " + (bt.title || "category")
+              onTriggered: {
                 host.catPendingDl = bt.path
                 waves.resolvePlaylistCategory(bt.path, bt.title)
               }

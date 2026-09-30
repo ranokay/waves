@@ -18,13 +18,13 @@ import "primitives" as Primitives
 //   host.previewScrubbing / host.pvFrac / host.pvSt /
 //   host.scrubPreviewVisual / host.seekPreview / host.termBlink /
 //   host.togglePreview / host.warmArt
-// The palette values are local copies of Main.qml's static literals, except accent which binds to Primitives.Palette —
+// The palette values are local copies of Main.qml's static literals, except accent and textDim which bind to Primitives.Palette —
 // the SettingsPage.qml convention; keep them in step if the palette changes.
 Item {
   id: pa
   required property var host
   // Waves palette (kept local so this file is self-contained, the
-  // SettingsPage.qml convention) — accent binds to Primitives.Palette; the rest are copies of Main.qml's static literals.
+  // SettingsPage.qml convention) — accent and textDim bind to Primitives.Palette; the rest are copies of Main.qml's static literals.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentContTx: "#86ffaa"   // text on accent container
   readonly property color accentDim: "#22a64a"   // terminal-button border
@@ -35,18 +35,19 @@ Item {
   readonly property color red: "#ff5a52"   // failed / peak / heart
   readonly property color surface3: "#1d2128"   // art bg / unlit meter / inset
   readonly property color surfaceHi: "#22262e"   // toast
-  readonly property color textDim: "#6b6f78"
+  readonly property color textDim: Primitives.Palette.textDim
 
   property string url: ""
   property string kind: "track"
   property string pid: ""
+  property string label: "Preview track"
   readonly property string st: pa.pid !== "" ? host.pvSt(pa.kind, pa.pid) : ""
   readonly property bool active: pa.st === "playing" || pa.st === "paused" || pa.st === "loading"
   readonly property real frac: host.pvFrac(pa.kind, pa.pid)
   property bool hovered: false
   // Show the play/pause glyph on hover, or while connecting/errored. Plain
   // playback shows through the ring alone, keeping the cover unobscured.
-  readonly property bool showGlyph: pa.hovered || pa.st === "loading" || pa.st === "error"
+  readonly property bool showGlyph: pa.hovered || paZone.activeFocus || pa.st === "loading" || pa.st === "error"
   // Seek aim state: aimFrac is the track fraction under the mouse angle,
   // 12 o'clock = 0, clockwise (the arc's fill direction).
   property real aimFrac: 0
@@ -650,11 +651,23 @@ Item {
   // seek surface: a resting hover aims the ghost marker, press/drag scrubs the
   // fill locally, the single real seek fires on release (same discipline
   // as the PreviewBar scrubber, no mid-gesture flush pop).
-  MouseArea {
+  TapAction {
     id: paZone
     anchors.fill: parent
     anchors.margins: -6
-    hoverEnabled: true
+    enabled: pa.pid !== ""
+    accessibleLabel: (pa.st === "playing" ? "Pause " : "") + pa.label
+    focusRadius: width / 2
+    onTriggered: host.togglePreview(pa.kind, pa.pid, 0)
+    // The angular pointer gesture commits on release below.
+    onClicked: {}
+    Keys.onPressed: function (event) {
+      if (pa.active && host.previewDuration > 0 && (event.key === Qt.Key_Left || event.key === Qt.Key_Right)) {
+        var step = event.key === Qt.Key_Left ? -5000 : 5000
+        host.seekPreview(Math.max(0, Math.min(1, pa.frac + step / host.previewDuration)))
+        event.accepted = true
+      }
+    }
     preventStealing: true
     property bool scrubbing: false
     property bool ringHover: false

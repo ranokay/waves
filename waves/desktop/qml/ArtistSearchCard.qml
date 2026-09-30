@@ -42,6 +42,7 @@ Rectangle {
   implicitHeight: cardCol.implicitHeight + 16
   Column {
     id: cardCol
+    z: 1
     anchors.fill: parent
     anchors.margins: 8
     spacing: 8
@@ -84,7 +85,7 @@ Rectangle {
     }
     // Preview + Download live in the card body (never overlaid on the
     // photo); each has its own MouseArea that consumes the click so the
-    // card-wide open-artist MouseArea (z:-1, below) only fires elsewhere.
+    // card-wide open-artist TapAction (below the content) only fires elsewhere.
     // Preview plays the artist's top track and doubles as a scrubber.
     PreviewBar {
       host: asc.host
@@ -111,10 +112,11 @@ Rectangle {
       }
     }
   }
-  MouseArea {
+  TapAction {
     anchors.fill: parent
-    cursorShape: Qt.PointingHandCursor
-    z: -1
-    onClicked: waves.loadArtist(aId)
+    accessibleLabel: "Open artist " + aName
+    focusRadius: 12
+    z: 0
+    onTriggered: waves.loadArtist(aId)
   }
 }

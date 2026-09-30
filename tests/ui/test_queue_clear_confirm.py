@@ -172,6 +172,15 @@ def _run_scenario() -> int:
 
     settle(150)
     q(PARK_LOGIN_QML)
+    q("root.width = 1200")
+    q("root.height = 800")
+    q("root.visible = true")
+    q("queueDrawer.open()")
+    settle(300)
+    clear_all = next((it for it in visual_items() if it.objectName() == "queueClearAll"), None)
+    if clear_all is None or clear_all.isVisible():
+        bad.append("an empty queue still offers CLEAR ALL")
+    q("queueDrawer.close()")
     seed([(1, "failed"), (2, "cancelled"), (3, "queued"), (4, "done")])
     # A done row rides Downloading until the linger clock promotes it; the
     # Completed header under test is the destination, so move it there the
@@ -183,9 +192,6 @@ def _run_scenario() -> int:
         " queueModel.setProperty(i, 'uiGroup', 'completed'); }"
         " queuePartition(); updateQueueCounts();"
     )
-    q("root.width = 1200")
-    q("root.height = 800")
-    q("root.visible = true")
     settle(150)
     q("queueDrawer.open()")
     settle(500)
