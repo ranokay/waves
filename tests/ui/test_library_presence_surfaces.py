@@ -89,9 +89,10 @@ function faceOf(item) {
 
 def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
     try:
-        from PySide6.QtCore import QEventLoop, QTimer, QUrl
+        from PySide6.QtCore import QEventLoop, Qt, QTimer, QUrl
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
+        from PySide6.QtTest import QTest
     except Exception as exc:
         print(f"Qt unavailable: {exc}", file=sys.stderr)
         return EXIT_NO_QT
@@ -242,8 +243,7 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
         bad.append(f"track icon: a song NOT on disk read {absent!r}, wanted a live button")
 
     # A claim is a GUESS, so the icon has to answer for it instead of sitting
-    # inert: fire the real tap area, not the function behind it, or the branch
-    # in the MouseArea could be deleted and this would keep passing.
+    # inert: fire the real tap area, not the function behind it, so keyboard users reach the same claim gate as pointer users.
     tap = (
         "(function() {" + _COLLECT + " var icons = collect(contentCol, function(k) {"
         "   return (k.objectName === 'downIcon' && ('' + k.mediaId) === 'tr-held') ? k : null; }, []);"
@@ -251,11 +251,13 @@ def _run_scenario() -> int:  # (a linear boot -> drive -> measure scenario)
         " var areas = collect(icons[0], function(k) {"
         "   return k.objectName === 'diTapArea' ? k : null; }, []);"
         " if (areas.length === 0) return false;"
-        " areas[0].clicked(null); return true })()"
+        " if (!areas[0].activeFocusOnTab || areas[0].Accessible.name !== 'Download Hide') return false;"
+        " areas[0].forceActiveFocus(); return true })()"
     )
     if not q(tap):
         print("could not reach the held track's tap area", file=sys.stderr)
         return EXIT_PRECONDITION
+    QTest.keyClick(root, Qt.Key_Space)
     settle(120)
     gate = {
         "opens": bool(q("libraryClaimGate.shown")),

@@ -49,6 +49,7 @@ Item {
 
   // Underneath the live controls so their tap areas win while expanded.
   TapAction {
+    objectName: "trackPreviewStart"
     anchors.fill: parent
     enabled: !tp.live && tp.pid !== ""
     accessibleLabel: tp.label
@@ -136,6 +137,7 @@ Item {
           color: accent
           size: 11
           TapAction {
+            objectName: "trackPreviewToggle"
             anchors.fill: parent
             anchors.margins: -4
             enabled: tp.live
@@ -152,6 +154,7 @@ Item {
           size: 11
           TapAction {
             id: tpStopMa
+            objectName: "trackPreviewStop"
             anchors.fill: parent
             anchors.margins: -5
             enabled: tp.live

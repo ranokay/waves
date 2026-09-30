@@ -3167,7 +3167,7 @@ Item {
                           font.underline: changed && mapDefaultMa.containsMouse
                           TapAction {
                             id: mapDefaultMa
-                            accessibleLabel: offUseTxt.text
+                            accessibleLabel: "Use recommended " + mapCard.modelData.label
                             focusRadius: 8
                             anchors.fill: parent
                             anchors.margins: -4
@@ -3307,7 +3307,7 @@ Item {
                                 font.letterSpacing: page.btnTrack
                               }
                               TapAction {
-                                accessibleLabel: (mapCol.expanded ? "Hide " : "Show ") + String(modelData.label) + " map"
+                                accessibleLabel: "Use recommended stand-ins for " + mapCard.modelData.label
                                 focusRadius: 8
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
@@ -3387,7 +3387,7 @@ Item {
                         color: page.accent
                         font.pixelSize: 12
                         TapAction {
-                          accessibleLabel: (mapCol.expanded ? "Hide " : "Show ") + String(modelData.label) + " map"
+                          accessibleLabel: "Use recommended stand-ins for " + mapCard.modelData.label
                           focusRadius: 8
                           anchors.fill: parent
                           anchors.margins: -4
@@ -3683,7 +3683,7 @@ Item {
                           readonly property string stateKey: live ? String(live.state) : String(modelData.value || "")
                           readonly property string word: live ? String(live.word) : String(modelData.word || "")
                           readonly property bool hasSwitch: modelData.enabled_key !== undefined
-                          readonly property bool switchOn: statusCol.hasSwitch && (page.editMap[modelData.enabled_key] !== undefined ? page.editMap[modelData.enabled_key] : modelData.enabled_key === "apple_enabled" ? waves.appleEnabled : modelData.switch_value === true)
+                          readonly property bool switchOn: statusCol.hasSwitch && (page.editMap[modelData.enabled_key] !== undefined ? page.editMap[modelData.enabled_key] : statusCol.live ? statusCol.stateKey !== "off" : modelData.switch_value === true)
                           RowLayout {
                             width: parent.width
                             spacing: 10

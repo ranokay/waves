@@ -91,7 +91,7 @@ Window {
         )
 
     def key(name: str, code):
-        assert control(name, "return c.activeFocusOnTab;") is True
+        assert control(name, "return c.activeFocusOnTab && c.objectName !== '';") is True
         control(name, "c.forceActiveFocus();")
         QTest.keyClick(root, code)
         settle()

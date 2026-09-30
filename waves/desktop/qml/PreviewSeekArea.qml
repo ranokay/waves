@@ -5,6 +5,7 @@ import "primitives" as Primitives
 // Arrow keys and accessibility increment actions move by five seconds.
 MouseArea {
   id: seekArea
+  objectName: "previewSeekArea"
   required property var host
   property bool scrubbing: false
   readonly property real value: host.previewPosition

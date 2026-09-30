@@ -9203,9 +9203,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     def _can_open_browse_item(self, kind: str, media_id: str) -> bool:
         if kind not in ("playlist", "mix", "album"):
             return False
-        if media_id.startswith(f"{CTX_APPLE}:"):
-            return kind in ("playlist", "album") and self._get_apple_enabled()
-        return self._logged_in
+        provider_id = provider_of_id(media_id)
+        provider = (getattr(self, "providers", None) or {}).get(provider_id)
+        if provider is None or Capability.CATALOG not in provider.capabilities:
+            return False
+        if kind == "mix" and Capability.MIXES not in provider.capabilities:
+            return False
+        return _search_provider_on(self, provider_id)
 
     @Slot(str, str)
     def prefetchBrowseItem(self, kind: str, media_id: str) -> None:

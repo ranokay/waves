@@ -62,6 +62,7 @@ def fake_track(tid, album):
 def browse_bridge(obj, kind):
     b = WavesBridge.__new__(WavesBridge)
     b._logged_in = True
+    b._provider_search_gates = {"tidal": lambda: b._logged_in, "apple": b._get_apple_enabled}
     b._browse_pages = {}
     b._browse_loading = set()
     b._browse_gen = 0

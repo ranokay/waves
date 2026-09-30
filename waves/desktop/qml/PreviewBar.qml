@@ -105,6 +105,7 @@ Rectangle {
     }
   }
   TapAction {
+    objectName: "previewBarStart"
     anchors.fill: parent
     visible: !pbar.live
     enabled: !pbar.live && pbar.pid !== ""
@@ -129,6 +130,7 @@ Rectangle {
       size: 13
       width: 18
       TapAction {
+        objectName: "previewBarToggle"
         anchors.fill: parent
         anchors.margins: -4
         accessibleLabel: pbar.st === "playing" ? "Pause preview" : "Resume preview"
@@ -148,6 +150,7 @@ Rectangle {
       size: 11
       TapAction {
         id: pbarStopMa
+        objectName: "previewBarStop"
         anchors.fill: parent
         anchors.margins: -5
         hoverEnabled: true

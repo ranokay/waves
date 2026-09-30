@@ -571,7 +571,7 @@ Item {
     }
     RiseIn {
       host: ac.host
-      on: !acArt.collection && (acWrapHover.hovered || host.dlSt(ac.card.id || "") !== "")
+      on: !acArt.collection && (acWrapHover.hovered || acOpenMa.activeFocus || acCornerDl.actionFocused || host.dlSt(ac.card.id || "") !== "")
       anchors.right: parent.right
       anchors.bottom: parent.bottom
       anchors.margins: 10
@@ -582,6 +582,8 @@ Item {
         radius: btnRad
         color: "#d90d0f12"
         DownIcon {
+          id: acCornerDl
+          label: "Download " + (ac.card.title || ac.kind)
           host: ac.host
           anchors.centerIn: parent
           mediaId: ac.card.id || ""

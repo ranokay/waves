@@ -1167,7 +1167,7 @@ ApplicationWindow {
     id: browseItemFreshTimer
     interval: 5 * 60 * 1000
     repeat: true
-    running: (root.signedIn || root.browsePageKey.indexOf(":apple:") !== -1) && root.windowUp && root.browseOpen && root.browsePageKey !== "" && !root.browsePageLoading && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
+    running: root.windowUp && root.browseOpen && root.browsePageKey !== "" && !root.browsePageLoading && !root.settingsOpen && !root.libraryOpen && !root.artistOpen
     onTriggered: {
       var parts = root.browsePageKey.split(":")
       if (parts.length < 3 || parts[0] !== "item")
@@ -4483,8 +4483,6 @@ ApplicationWindow {
   // dwell defaults to the card rest; a caller can ask for a longer one where
   // the pointer sits by accident more often than on purpose (track rows).
   function hoverPrefetch(card, dwell) {
-    if (!root.signedIn && !root.appleEnabled)
-      return
     var k = _cardPrefetchKey(card)
     if (k === "" || root.browsePageKey === "item:" + k)
       // not a page, or already on it
@@ -9006,6 +9004,7 @@ ApplicationWindow {
               font.underline: npTitleMa.containsMouse && root.previewNowAlbumId !== ""
               TapAction {
                 id: npTitleMa
+                enabled: root.previewNowAlbumId !== ""
                 accessibleLabel: "Open current album"
                 anchors.fill: parent
                 anchors.topMargin: -6
@@ -9062,6 +9061,7 @@ ApplicationWindow {
                         id: npArtMa
                         accessibleLabel: "Open artist " + npArtName.text
                         enabled: npArtName.linkable
+                        activeFocusOnTab: enabled && npArtName.parent.x < npArtist.width
                         anchors.fill: parent
                         anchors.topMargin: -6
                         anchors.bottomMargin: -6

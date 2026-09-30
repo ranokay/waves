@@ -1380,6 +1380,7 @@ ColumnLayout {
             Layout.preferredWidth: 42
           }
           DownIcon {
+            label: "Download video " + model.title
             host: group.host
             mediaId: model.id
             onTap: function () {

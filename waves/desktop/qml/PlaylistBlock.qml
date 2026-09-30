@@ -489,6 +489,7 @@ Column {
                 Layout.preferredWidth: 42
               }
               DownIcon {
+                label: "Download " + modelData.title
                 host: pb.host
                 mediaId: modelData.id
                 // A playlist row carries its own artist but

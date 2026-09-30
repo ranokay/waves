@@ -608,6 +608,7 @@ Column {
                 Layout.preferredWidth: 42
               }
               DownIcon {
+                label: "Download " + modelData.title
                 host: ab.host
                 mediaId: modelData.id
                 // The panel knows the release these rows

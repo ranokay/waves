@@ -21,13 +21,12 @@ Row {
   property string albumId: ""      // set -> the suffix (album name) links to the album page
   property int px: 12
   clip: true
-  readonly property string fullText: {
-    var names = []
-    for (var i = 0; i < artists.length; ++i)
-      if (artists[i].name)
-        names.push(artists[i].name)
-    return names.join(", ") + (suffix ? (names.length ? " · " : "") + suffix : "")
-  }
+  readonly property var namedArtists: artists.filter(function (artist) {
+    return !!artist.name
+  })
+  readonly property string fullText: namedArtists.map(function (artist) {
+    return artist.name
+  }).join(", ") + (suffix ? (namedArtists.length ? " · " : "") + suffix : "")
   ToolTip.visible: alHover.hovered && implicitWidth > width + 1
   ToolTip.text: fullText
   HoverHandler {
@@ -42,7 +41,7 @@ Row {
   }
   baselineOffset: alFm.ascent
   Repeater {
-    model: al.artists
+    model: al.namedArtists
     delegate: Row {
       required property var modelData
       required property int index
@@ -60,12 +59,13 @@ Row {
           id: alMa
           anchors.fill: parent
           enabled: alName.linkable
+          activeFocusOnTab: enabled && alName.parent.x < al.width
           accessibleLabel: "Open artist " + modelData.name
           onTriggered: waves.loadArtist(modelData.id)
         }
       }
       Text {
-        visible: index < al.artists.length - 1
+        visible: index < al.namedArtists.length - 1
         text: ", "
         color: textLo
         font.pixelSize: al.px
@@ -73,7 +73,7 @@ Row {
     }
   }
   Text {
-    visible: al.suffix !== ""
+    visible: al.suffix !== "" && al.namedArtists.length > 0
     textFormat: Text.PlainText
     text: " · "
     color: textLo
@@ -92,6 +92,7 @@ Row {
       id: alSfMa
       anchors.fill: parent
       enabled: alSuffix.linkable
+      activeFocusOnTab: enabled && alSuffix.x < al.width
       accessibleLabel: "Open album " + al.suffix
       onTriggered: host.openAlbumPage(al.albumId, "", al.suffix)
     }

@@ -41,6 +41,8 @@ Rectangle {
   // a track row without matching on the properties it shares with the
   // full button.
   objectName: "downIcon"
+  property string label: "Download item"
+  readonly property bool actionFocused: diTap.activeFocus
   property var onTap: (function () {})
   property string mediaId: ""
   // Opt-in: mediaId is an album/playlist/mix id, not a track id, so it
@@ -304,19 +306,21 @@ Rectangle {
     color: red
     box: 15
   }
-  MouseArea {
+  TapAction {
+    id: diTap
+    accessibleLabel: di.label
+    enabled: di.libClaim || (di.st !== "running" && di.st !== "done" && !di.waiting)
     // Named so the scenario test can drive the REAL tap area rather
     // than the function behind it (the wiring is the thing at risk).
     objectName: "diTapArea"
     anchors.fill: parent
-    cursorShape: Qt.PointingHandCursor
     onPressed: di.scale = 0.85
     onReleased: di.scale = 1.0
     onCanceled: di.scale = 1.0
     // A library claim is a guess, so it answers instead of ignoring:
     // the same conversation the full button opens, with DOWNLOAD
     // ANYWAY one click away.
-    onClicked: {
+    onTriggered: {
       if (di.libClaim) {
         di.openLibraryClaim()
         return
