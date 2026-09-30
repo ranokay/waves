@@ -357,6 +357,7 @@ Column {
           height: 40
           spacing: 12
           Check {
+            accessibleLabel: "Select all tracks in " + pb.title
             Layout.alignment: Qt.AlignVCenter
             checked: pb.allSelected
             onToggled: pb.toggleAll()
@@ -437,6 +438,7 @@ Column {
               anchors.rightMargin: 4
               spacing: 12
               Check {
+                accessibleLabel: "Select " + modelData.title
                 Layout.alignment: Qt.AlignVCenter
                 checked: pb.sel[index] !== undefined
                 onToggled: pb.setSel(index, modelData.kind, pb.sel[index] === undefined)

@@ -486,6 +486,7 @@ Column {
           height: 40
           spacing: 12
           Check {
+            accessibleLabel: "Select all tracks in " + ab.title
             Layout.alignment: Qt.AlignVCenter
             checked: ab.allSelected
             onToggled: ab.toggleAll()
@@ -564,6 +565,7 @@ Column {
               anchors.rightMargin: 4
               spacing: 12
               Check {
+                accessibleLabel: "Select " + modelData.title
                 Layout.alignment: Qt.AlignVCenter
                 checked: ab.sel[modelData.id] === true
                 onToggled: ab.setSel(modelData.id, !(ab.sel[modelData.id] === true))
