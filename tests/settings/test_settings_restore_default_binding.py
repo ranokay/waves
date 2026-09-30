@@ -64,11 +64,11 @@ def test_restore_default_rebinds_rather_than_overwrites():
     """Pin the shape of the handler itself, so the pair cannot drift apart."""
     src = _source()
     handler = re.search(
-        r"onClicked:\s*\{[^}]*default_value[^}]*strField\.text[^}]*\}",
+        r"onTriggered:\s*\{[^}]*default_value[^}]*strField\.text[^}]*\}",
         src,
         re.DOTALL,
     )
-    assert handler is not None, "the Restore default click handler moved or was renamed"
+    assert handler is not None, "the Restore default action moved or was renamed"
     body = handler.group(0)
     assert "page.setv(" in body
     assert "Qt.binding(" in body, "Restore default must re-establish the binding, not overwrite the text"

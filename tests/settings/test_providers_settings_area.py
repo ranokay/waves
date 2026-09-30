@@ -505,9 +505,6 @@ def test_the_provider_sections_declarations_carry_the_area_vocabulary():
     assert "Accessible.role: Accessible.CheckBox" in qml
     assert "Keys.onPressed" in qml
     assert "!event.isAutoRepeat" in qml
-    # Both provider cards carry their marks in the descriptor (the QML reads
-    # modelData.logo, never a card-id switch).
-    assert '"providers_tidal"' in qml and '"providers_apple"' in qml
 
 
 def test_the_factory_reset_walk_still_finds_the_switch_through_the_composite():
@@ -588,12 +585,13 @@ def test_the_page_renders_provider_bands_with_logos_and_deep_links():
     # addressed by the provider the status row names — never by identity.
     assert "waves.providerAction(" in qml
     assert "statusCol.row.provider" in qml
-    # The seeded app still resolves the legacy deep-links onto the one
-    # section (bands stay expanded while it is open).
+    # Legacy provider deep-links resolve generically onto the section and
+    # position its requested band after lazy controls finish sizing.
     assert "dualLogo" in qml
     assert "providerFieldCount" in qml
-    assert 'cardId === "providers_tidal"' in qml
-    assert 'cardId === "providers_apple"' in qml
+    assert 'cardId.indexOf("providers_") === 0' in qml
+    assert "page.jumpProvider = providerId" in qml
+    assert "jumpCard.providerBandY(jumpProvider)" in qml
 
 
 # ---- the descriptor contract ------------------------------------------------------
