@@ -980,8 +980,11 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
             "findFirst(settingsPage, function (o) { return o.objectName === 'settingsSectionHeader' "
             "&& o.visible && o.accessibleLabel.indexOf('Processing') === 0; })"
         )
+        q("settingsPage.pendingY = 1000000")
         _focus(q, last_header)
         settle(250)
+        if q("settingsPage.pendingY") != -1:
+            problems.append("keyboard focus left a delayed Settings scroll restore armed")
         revealed = q(
             scene_js(
                 f"var c = {last_header}; var pane = settingsPage.scrollViewport; "

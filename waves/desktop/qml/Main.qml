@@ -18,7 +18,7 @@ ApplicationWindow {
     if (!item)
       return
     if (settingsPage && settingsPage.active && item.activeFocusOnTab)
-      settingsPage.cancelJump()
+      settingsPage.takeScrollOwnership()
     for (var pane = item.parent; pane; pane = pane.parent) {
       if (pane.contentY === undefined || pane.contentHeight === undefined || pane.height <= 0)
         continue

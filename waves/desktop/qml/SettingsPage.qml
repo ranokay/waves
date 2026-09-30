@@ -356,6 +356,10 @@ Item {
     jumpCard = null
     jumpProvider = ""
   }
+  function takeScrollOwnership() {
+    pendingY = -1
+    cancelJump()
+  }
   function _positionJump() {
     if (!jumpCard || !active || settingsFlick.height <= 0)
       return false
@@ -368,7 +372,7 @@ Item {
     enabled: page.active
     acceptedButtons: Qt.AllButtons
     onActiveChanged: if (active)
-      page.cancelJump()
+      page.takeScrollOwnership()
   }
 
   // Holding your place across tabs
@@ -1555,10 +1559,7 @@ Item {
       // The user taking over cancels a partially-applied restore, so a
       // later re-measure can't yank the view away from where they
       // scrolled to.
-      onMovementStarted: {
-        page.pendingY = -1
-        page.cancelJump()
-      }
+      onMovementStarted: page.takeScrollOwnership()
 
       Column {
         id: col
@@ -2934,8 +2935,7 @@ Item {
                 onTriggered: {
                   // Toggling re-measures the page; a still-armed
                   // restore must not ride that and jump the view.
-                  page.pendingY = -1
-                  page.cancelJump()
+                  page.takeScrollOwnership()
                   page.setSectionOpen(card.modelData.id, !card.open)
                 }
               }
