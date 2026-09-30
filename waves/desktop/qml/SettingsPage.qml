@@ -3387,7 +3387,7 @@ Item {
                         color: page.accent
                         font.pixelSize: 12
                         TapAction {
-                          accessibleLabel: "Use recommended stand-ins for " + mapCard.modelData.label
+                          accessibleLabel: (mapCol.expanded ? "Hide " : "Show ") + mapCard.modelData.label + " map"
                           focusRadius: 8
                           anchors.fill: parent
                           anchors.margins: -4
