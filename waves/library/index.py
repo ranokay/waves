@@ -2748,14 +2748,10 @@ class LibraryIndex:
             seen = shape[key] - {0}
             return seen.pop() if len(seen) == 1 else 0
 
-        # The album-artist vote. A blank album-artist tag used to be filled
-        # from ONE file's track artist, so a Various-Artists comp ripped
-        # without TPE2 was keyed under whichever artist sorted first and could
-        # claim that artist's same-titled album. The fallback now has to win
-        # the folder the way the album tag does (see above); a folder whose
-        # track artists disagree is a compilation and goes keyless. A reader
-        # that never reports the raw album-artist (older callers, the tests'
-        # stubs) keeps the old fallback untouched. The vote runs on the
+        # A blank album-artist tag needs agreement across the folder's track
+        # artists; choosing one track could falsely claim a compilation as that
+        # artist's album. A folder whose track artists disagree goes keyless.
+        # A reader that never reports raw album-artist retains its own fallback. The vote runs on the
         # canonical set only, like the album vote: an attached Version's tags
         # describe the twin's release, never its own.
         pairs = [_disc_pair(t) for (_, t) in canonical]

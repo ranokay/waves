@@ -28,10 +28,6 @@ The section list, the source labels and the empty-state choice are **bridge
 data derived from provider capabilities and live sessions**, never QML
 branches on a provider's name.
 
-This is the settled destination, not a description of every pane today: the
-pane's first provider-shaped views are the starting point, and what remains
-to move onto the rule is recorded under Consequences.
-
 ## Why
 
 - "What is in my TIDAL account?" was the old home; a user who enabled only
@@ -53,8 +49,8 @@ to move onto the rule is recorded under Consequences.
 - **A separate "Downloads" pane for saved files**: rejected in the design
   interview — saved files are music and belong in the same home as the rest
   of the user's music.
-- **QML-side section rendering per provider**: rejected — the audit's
-  identity branching (F-10) is what the descriptor contract (#214) removes.
+- **QML-side section rendering per provider**: rejected — identity branches
+  duplicate the descriptor contract and require changes for each provider.
 
 ## Consequences
 
@@ -63,13 +59,11 @@ to move onto the rule is recorded under Consequences.
   gate wrote (generic tag first, the legacy TIDAL id as fallback), and the
   provider badge is that id's namespace, so the ownership store keeps its
   existing role.
-- The pane's first provider-shaped views are the starting point, and the
-  staged work is now done: the **saved shelves are per source**
-  (#259). The bridge answers a list of source groups (descriptor + the
+- The **saved shelves are per source**. The bridge answers a list of source groups (descriptor + the
   categories its capabilities can fill), each source renders its own label,
   strip and keep-alive panes, and every page loads through that source's
   provider, so a second FAVORITES provider appears with no QML edit. The
-  pane's **Library section** (Saved and All files) landed in #222: it sits
+  pane's **Library section** (Saved and All files) sits
   above the source groups, pages the scan's own file rows
   (`myMusicLibrary()` / `loadLibraryFiles(view)`) and is
   provider-independent by construction — no row comes from a provider

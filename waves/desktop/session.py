@@ -2,9 +2,8 @@
 
 Subclasses the engine's ``waves.config.Tidal`` so a correctness fix lands here
 instead of in the shared ``config.py`` method body. Keeping the override out of
-``config.py`` follows the engine/UI seam discipline: engine modules stay close
-to their inherited shape (a habit from the fork era's upstream merges, kept
-because it makes the engine easy to audit), and UI-owned behavior lives here.
+``config.py`` follows the engine/UI seam discipline: engine modules stay
+independent of the desktop package, and UI-owned behavior lives here.
 """
 
 from __future__ import annotations

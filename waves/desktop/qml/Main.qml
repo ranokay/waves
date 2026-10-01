@@ -27,14 +27,32 @@ ApplicationWindow {
   // Custom controls in Flickables need the same visible focus behavior as
   // native controls, including horizontal artwork shelves.
   onActiveFocusItemChanged: Qt.callLater(root.revealKeyboardFocus)
+  readonly property var focusedScrollViewport: root.scrollViewportFor(root.activeFocusItem)
+  function scrollViewportFor(item) {
+    for (var pane = item ? item.parent : null; pane; pane = pane.parent) {
+      if (pane.contentY !== undefined && pane.contentHeight !== undefined)
+        return pane
+    }
+    return null
+  }
+  // A viewport resize can clip the same focused control without changing focus.
+  Connections {
+    target: root.focusedScrollViewport
+    function onHeightChanged() {
+      Qt.callLater(root.revealKeyboardFocus)
+    }
+    function onWidthChanged() {
+      Qt.callLater(root.revealKeyboardFocus)
+    }
+  }
   function revealKeyboardFocus() {
     var item = root.activeFocusItem
     if (!item)
       return
     if (settingsPage && settingsPage.active && item.activeFocusOnTab)
       settingsPage.takeScrollOwnership()
-    for (var pane = item.parent; pane; pane = pane.parent) {
-      if (pane.contentY === undefined || pane.contentHeight === undefined || pane.height <= 0)
+    for (var pane = root.scrollViewportFor(item); pane; pane = root.scrollViewportFor(pane)) {
+      if (pane.height <= 0)
         continue
       var pos = item.mapToItem(pane, 0, 0)
       var dy = pos.y < 0 ? pos.y : pos.y + item.height > pane.height ? pos.y + item.height - pane.height : 0

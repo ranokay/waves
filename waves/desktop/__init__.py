@@ -2,9 +2,8 @@
 
 This package is intentionally self-contained: it imports the engine modules
 (config, download, paths, redaction, providers) through a narrow seam and
-keeps UI concerns out of them. The seam discipline is inherited from the project's fork era, when
-the engine had to merge cleanly against upstream releases; the merges are
-retired, the layering stays because it keeps the engine auditable.
+keeps UI concerns out of them. This boundary keeps the engine independent
+of Qt and makes its behavior easier to audit.
 """
 
 # The app's user-facing version, the one the in-app updater

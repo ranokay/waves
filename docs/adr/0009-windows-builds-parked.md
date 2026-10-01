@@ -1,7 +1,7 @@
 # 0009: Windows bundle builds are parked until the engine compiles under MSVC
 
 - Status: superseded (2026-09-23) — both Windows legs went green on the exclusion recipe; see Supersession
-- Decided: 2026-09-21 (issue #227, audit remediation R-03; evidence in `docs/platform-enablement-review.md`; the #205 closing overclaim is corrected by that issue's follow-up comment, not by editing history)
+- Decided: 2026-09-21 (issue #227; build evidence and the corrected platform claims are recorded in issue #205)
 - Scope: whether this fork publishes Windows artifacts
 
 ## Supersession

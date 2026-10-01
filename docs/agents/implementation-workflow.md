@@ -59,3 +59,9 @@ statuses, and result counts) plus the reviews and their dispositions. No
 raw logs, no linked logs: counts and exits are the whole record.
 Screenshots and recordings are evidence
 only for native claims the offscreen layers cannot prove.
+
+Keep implementation evidence in the owning issue or PR: audit findings,
+screenshots, benchmark results, investigation notes and completion reports.
+Temporary plans, session state and handoff prompts may be used locally while
+work is active; omit them from the final change. Promote only current rules,
+contracts or supported workflows into maintained project documentation.

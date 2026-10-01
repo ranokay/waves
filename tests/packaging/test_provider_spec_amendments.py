@@ -1,11 +1,7 @@
-"""The provider spec names the decisions that superseded it.
+"""The provider contract names its current distribution decisions and defaults.
 
-Sections of `docs/apple-music-provider-spec.md` that later decisions changed
-must point at their successor (ADR or issue), so a reader never follows a
-stale ruling. The guard is mechanical: dropping any successor note below
-fails here instead of silently reopening HD-15/LM-12. The §9.1 assertions
-pin the ratified #59 fresh-install defaults staying stated (LM-12, fixed
-by #280); the shipped values themselves are pinned by the settings tests.
+Bundling and wrapper distribution point at the maintained ADRs. The lyrics
+and art defaults stay documented; settings tests cover the shipped values.
 """
 
 from __future__ import annotations
@@ -33,12 +29,6 @@ def test_engine_bundling_names_adr_0004():
 def test_wrapper_image_names_adr_0005():
     section = _section(SPEC.read_text(encoding="utf-8"), "## 10. Packaging")
     assert "0005-wrapper-image-distribution" in section
-
-
-def test_platform_section_and_deferrals_name_the_windows_record():
-    text = SPEC.read_text(encoding="utf-8")
-    assert "0009-windows-builds-parked" in _section(text, "## 10. Packaging")
-    assert "ADR 0009" in _section(text, "## 12. Post-v1")
 
 
 def test_lyrics_art_defaults_state_the_ratified_set():

@@ -36,7 +36,7 @@ INTEGRITY_FAIL_MESSAGE: str = "failed integrity check \u2014 quarantined"
 QUARANTINE_DIR_NAME: str = "Waves Quarantine"
 
 # Outbreak pre-filter: Apple's own ALAC encoder has emitted malformed packets
-# since ~May 2025 (research/alac-verification). An outbreak-era file
+# since ~May 2025 (provider spec §6). An outbreak-era file
 # quarantines after 1 retry instead of the normal 2: re-fetching known-bad
 # Apple sources is pure waste.
 OUTBREAK_YEAR: int = 2025

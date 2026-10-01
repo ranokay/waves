@@ -1,13 +1,8 @@
 # Wrapper image license and distribution review
 
-- Status: complete; the decision is recorded in `docs/adr/0005-wrapper-image-distribution.md`
-- Scope: `ghcr.io/ranokay/waves-wrapper-v2:0.2.3`, its build inputs, and what
-  the project publishes through it
-- Method: static review of the pinned source and workflow, plus a local pull
-  of the published image (digest
-  `sha256:1aac416aae06995095fac19a12d180d869a3bc615b83d31b0773281a9801be15`,
-  328 MB, matching the runbook's documented digest) and a contents inspection
-  (transcript: `docs/audits/apple-music-2026-09-11/evidence/wrapper-image-inspection-2026-09-15.md`)
+The maintained inventory and distribution constraints for the public wrapper
+image pinned in [the runbook](wrapper-image.md). The accepted distribution
+posture is recorded in [ADR 0005](adr/0005-wrapper-image-distribution.md).
 
 This is an engineering inventory and risk record, not legal advice. Apple's
 terms and applicable law govern the Apple components; a lawyer's review was
@@ -27,52 +22,26 @@ Upstream wrapper-v2's own vendor README describes the tree as self-contained
 package is public, so the image distributes those Apple binaries to anyone
 who pulls it.
 
-## Findings
+## Distribution requirements
 
-1. **Public redistribution of proprietary Apple libraries.** The central
-   exposure. The maintainer accepted it explicitly (ADR 0005) rather than
-   leaving it a caveat.
-2. **AOSP notices were missing from the image.** Apache-2.0 and BSD require
-   attribution/license retention. Fixed in the publish pipeline on
-   2026-09-15: a single build now appends `COPY` lines to upstream's
-   Dockerfile and ships `NOTICE`, `Apache-2.0`, `BSD-3-Clause` and
-   `BSD-2-Clause` under `/licenses` (`tools/wrapper-image/`). The `0.2.3`
-   tag predates this; the `0.2.4` publish carries it (the pull and the
-   `/licenses` listing are in `docs/evidence/wrapper-image-inspection.md`).
-   No retag happened — republishes take a new tag per the runbook. The three-clause text
-   is byte-identical to Debian's `/usr/share/common-licenses/BSD` (verified
-   from `debian:bookworm-slim`, 2026-09-16), the generic UC Regents form
-   Debian ships in the image's own base; AOSP's
-   `aosp-mirror/platform_bionic` notices (`libc/NOTICE`, `linker/NOTICE`)
-   carry the same clauses with per-file year ranges for the vendor'd `libc`,
-   `libm` and `linker64` binaries. The image ships one generic text per
-   license family, not per-file excerpts; the two-clause file is the
-   canonical two-clause terms (verified against SPDX's `BSD-2-Clause` text,
-   2026-09-16) under a provenance header that points at the per-file AOSP
-   notices. It replaced an unfilled SPDX template on 2026-09-16, and the
-   notices test rejects `<year>`/`<owner>` markers, so the placeholder form
-   cannot ship again.
-3. **No image provenance labels.** Fixed in the same pipeline change: OCI
-   title, source, revision (the exact wrapper-v2 commit), licenses and
-   description labels are set through the build action. The `0.2.3` tag
-   predates them; the `0.2.4` pull in `docs/evidence/wrapper-image-inspection.md`
-   records them.
-4. **The pinned digest was documented but unenforced in the app.** Fixed:
-   `AppleRuntimeManager` resolves the pulled image's repo digest (preferring
-   the pin when the runtime reports several) after `docker pull`; a digest
-   differing from `WRAPPER_V2_IMAGE_DIGEST` refuses the image, and the receipt
-   records the digest and whether it matched. Runtimes that cannot report a
-   digest record none and are tolerated; a receipt that recorded a mismatch
-   never counts as pulled. A packaging test keeps the constant and the
-   runbook's documented digest in lockstep. This is a pull-time check: it
-   catches a registry serving different bytes than the pin, not a local image
-   mutated afterwards by someone with Docker access.
-
-## Decision
-
-Recorded in ADR 0005: keep the public image, accept the Apple-libraries risk,
-and carry the notice, label and digest fixes above. ADR 0004's license review
-of the bundled clients closes with no change.
+- The image contains proprietary Apple libraries. No license from Apple
+  authorizing redistribution was identified; ADR 0005 records the
+  maintainer's accepted risk. The image must not be described as entirely
+  open source.
+- The publish pipeline ships `NOTICE`, `Apache-2.0`, `BSD-3-Clause` and
+  `BSD-2-Clause` under `/licenses`, using the maintained files in
+  `tools/wrapper-image/`. The Debian base supplies its own common licenses.
+  AOSP notices carry per-file copyright attribution; the generic BSD texts
+  retain their provenance pointers and must not contain unfilled templates.
+- OCI title, source, revision, licenses and description labels identify the
+  wrapper source used to build each image. Every changed image uses a new tag.
+- `AppleRuntimeManager` compares the pulled repo digest with
+  `WRAPPER_V2_IMAGE_DIGEST` and refuses a mismatch. Runtimes that cannot report
+  a digest are tolerated; a receipt with a recorded mismatch is never ready.
+  This is a pull-time check, not detection of later local image mutation.
+- The bundle's open-source clients remain covered by ADR 0004 and the
+  generated third-party notices; the proprietary libraries stay in the
+  separately provisioned image.
 
 ## Residual risk
 

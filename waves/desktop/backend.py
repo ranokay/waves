@@ -5414,7 +5414,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     def _rebind_merge_plan(self, bucket: str, media_id: str, session) -> list | None:
         """Rebuild an unbound plan's Track objects through ``session``.
 
-        A borrowed track TIDAL no longer serves (issue #25) takes the identity
+        A borrowed track TIDAL no longer serves takes the identity
         edition's own cut, the same rescue the fan-out makes for a refused
         slot. Raises when a slot cannot be rebuilt either way, and never as
         ObjectNotFound: the caller reads that as the album itself being gone,
@@ -15721,8 +15721,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._chooser_drop_refetch(bucket, media_id)
                 self.downloadState.emit(media_id, "failed")
                 # Only TIDAL's own not-found proves delisting; a rate limit or
-                # a dropped connection is a fetch to try again (issue #25:
-                # never claim a takedown on weak evidence).
+                # a dropped connection is a fetch to try again:
+                # never claim a takedown on weak evidence.
                 self._set_status(ITEM_GONE if gone else ITEM_FETCH_FAILED)
                 # A group member that never re-materialised must still be
                 # accounted for: without this bump a discography whose video

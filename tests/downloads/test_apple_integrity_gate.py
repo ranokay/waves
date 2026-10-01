@@ -57,7 +57,7 @@ def _alac_with_broken_frame_end(clean: Path, dest: Path) -> Path:
     """A decode-failing ALAC built from a clean tone, deterministically.
 
     The documented outbreak defect is ALAC packets missing their trailing
-    TYPE_END terminator (docs/research/alac-verification.md): ffprobe reads
+    TYPE_END terminator: ffprobe reads
     the stream metadata, the full decode rejects the frame. This walks the
     muxed packets and zeroes the final packet's last non-zero byte -- the
     bit window carrying the frame's end tag -- reproducing the

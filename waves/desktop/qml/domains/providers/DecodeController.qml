@@ -99,7 +99,7 @@ QtObject {
     if (glyph)
       glyph.play()
   }
-  // Enter mid-decode (issue #41): settle at once and hand back the real
+  // Enter mid-decode: settle at once and hand back the real
   // text, so the caller submits what was pasted, not the glyphs on
   // screen. decoded() is NOT emitted: the caller is the submit.
   function finish() {
