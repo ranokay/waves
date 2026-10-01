@@ -1040,9 +1040,8 @@ class AppUpdater:
                 lock.release()
 
     #: Written by the Windows helper beside armed.json when its swap did not
-    #: happen: one line, ``swap_failed <reason>``. The helper used to say so
-    #: only in update.log, which nothing reads, so every later launch re-armed
-    #: the same swap and promised "restart to finish" in a loop.
+    #: happen: one line, ``swap_failed <reason>``. Startup reads this marker
+    #: to avoid re-arming a failed swap and promising another restart.
     _OUTCOME_NAME = "swap_outcome.txt"
 
     def _swap_outcome(self) -> Path:

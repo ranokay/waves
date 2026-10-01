@@ -5,7 +5,7 @@ Deliberately import-light (standard library only -- no tidalapi, no Qt): the
 neutral types are consumable by the engine, the bridge, the tests, and the
 second provider without dragging anyone else along.
 
-The design is the wayfinder map's Provider-seam decision (spec §4): one fused
+The Provider seam (spec §4) is one fused
 interface that TIDAL and Apple Music both implement, the row-dict schema as
 the contract with QML, namespaced string ids everywhere new, and one
 Waves-owned quality scale with the audio type (stereo / Dolby Atmos)

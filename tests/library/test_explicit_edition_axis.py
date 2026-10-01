@@ -1,8 +1,6 @@
-"""The explicit-edition axis (UP-01): clean and explicit copies never vouch
-for each other, on any surface.
+"""Clean and explicit copies never vouch for each other, on any surface.
 
-Ports the removed v0.1.31 coverage (the audit's presence, merge-adjacent,
-dressing and tag-truth pins) onto the restructured tree:
+Coverage spans presence, merge-adjacent decisions, card dressing and tag truth:
 
 * the matcher weighs the advisory fact on the album and the track verdict,
   joins disc sets' facts, reads both TRACKTOTAL conventions, refuses

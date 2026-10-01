@@ -81,10 +81,6 @@ run = "bash tools/sync_star_history.sh"
 description = "Fail fast on stale installs and missing hooks (versions, waves/tidaler, lock, hooks, QML smoke)"
 run = "bash tools/doctor.sh"
 
-[tasks.evidence]
-description = "Repeat the durable evidence checks (bundle, wrapper image) to stdout or --dest FILE"
-run = "bash tools/capture_evidence.sh"
-
 [tasks.graph]
 description = "Refresh the code-review-graph index (run when list_graph_stats reports head_matches_build false; semantic search stays keyword until embeddings are generated)"
 run = "uvx code-review-graph update"

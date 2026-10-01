@@ -1,4 +1,4 @@
-"""A DASH track must not lose its genuinely required last segment (rework phase 1e).
+"""A DASH track must not lose its genuinely required last segment.
 
 tidalapi's ``DashInfo.get_urls`` counts segment URLs as ``2 + sum(r if r else 1)``
 over the MPD SegmentTimeline, but per the DASH spec an ``<S r="N">`` element

@@ -1,6 +1,6 @@
 """JobRuntime without a bridge: the GUI-thread contract and the registries.
 
-The affinity rule is the whole point of the runtime (ARCH-03): the progress
+The affinity rule is the whole point of the runtime: the progress
 relay must be constructed on the GUI thread, and this is where that rule is
 pinned — a relay built elsewhere re-opens the freeze class of bugs with no
 other test able to see it. The main thread is the GUI thread, so construction

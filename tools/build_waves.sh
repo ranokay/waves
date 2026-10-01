@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Builds the Waves standalone app with Nuitka. This is the one build recipe:
-# `mise run build` and every CI build leg call this file (the old Makefile
-# target, ported verbatim).
+# `mise run build` and every CI build leg call this file.
 #
 # --dry-run prints the Nuitka command a host would use and exits, so tests can
-# assert the flag set (OS=Windows_NT simulates the Windows default, as the
-# Makefile's $(OS) did).
+# assert the flag set (OS=Windows_NT simulates the Windows default).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -40,15 +38,12 @@ WAVES_MACOS_MIN="${WAVES_MACOS_MIN:-15.0}"
 # pass a one-time cost; an environment-provided WAVES_NUITKA_FLAGS still wins.
 #
 # yt-dlp's lazy extractor table is excluded on every host: its
-# generated C dominated the build (4,182 s of a 4,593 s cold build on Apple
-# silicon) and it is the one module MSVC cannot compile at all -- the full
-# record and numbers live in docs/platform-enablement-review.md. Waves never
+# generated C adds substantial build time and MSVC cannot compile it on
+# hosted Windows runners. Waves never
 # extracts a page URL (gamdl hands yt-dlp only direct stream URLs, so only
 # yt_dlp.downloader runs), and yt-dlp's own import contract falls back to the
 # real extractor modules when the table is absent (`except ImportError` in
-# extractor/extractors.py), so every extractor stays in the artifact. With the
-# exclusion the cold build is ~6.5 minutes and waves.app 236 MB (was ~77
-# minutes, 301 MB).
+# extractor/extractors.py), so every extractor stays in the artifact.
 #
 # On Apple silicon, Nuitka's auto-downloaded ccache is an x86-64 binary (its
 # cache holds one build per version), so Scons runs it under Rosetta and clang

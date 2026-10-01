@@ -220,7 +220,7 @@ def _run_scenario() -> int:
     #    blank for every track that had not started, which is most of them for
     #    most of the download.
     # The fetched list names every track the registry knows: a registry row
-    # the fetch leaves out is shown after it (final audit C18, a short read),
+    # the fetch leaves out is shown after it,
     # which is not what this step is about.
     bridge._merge_queue_tracks(
         qid,

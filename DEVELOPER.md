@@ -103,6 +103,28 @@ silicon, their `_legacy` twins (PySide6 6.9.3 overlay, macOS floor 12.0),
 Linux x64 + arm64, Windows x64 + arm64. A container/OrbStack Linux host
 can build the Linux leg matching its arch, not the macOS/Windows legs.
 
+The release workflow smoke-launches all macOS bundles and the Linux/Windows
+x64 bundles offscreen; Linux/Windows arm64 artifacts are built without a
+launch. `master.yml` runs the strict suite (`mise run test-strict`) on Linux for Python 3.12–3.14
+and fast-domain tests on macOS and Windows. These checks do not verify live
+accounts or container behavior on each platform. The wrapper image is
+`linux/arm64`; x86_64 hosts require emulation, whose full-tier behavior needs
+separate live verification.
+
+`tools/build_waves.sh` excludes yt-dlp's generated `lazy_extractors` module:
+MSVC cannot compile its generated C on hosted Windows runners, and it adds
+substantial build time elsewhere. yt-dlp falls back to the eager extractor
+list; gamdl uses direct stream URLs. Windows also uses Nuitka's low-memory
+mode. Inspect each built bundle with:
+
+```bash
+uv run --locked --all-extras python tools/inspect_bundle.py dist/waves.app
+```
+
+The build task runs this inspector automatically after trimming and signing.
+Use the emitted bundle path on Linux or Windows. Record build/launch results
+and benchmark measurements in the owning issue or PR.
+
 `tools/prune_static_qml_plugins.py` deletes static-only QML plugin
 directories inside the build venv's PySide6 tree before Nuitka walks it.
 Restore with `uv sync --reinstall-package pyside6`.
@@ -248,7 +270,7 @@ upstream.
 ## More detail
 
 - [Architecture](docs/architecture.md): ownership, dependency direction and naming.
-- [Documentation index](docs/README.md): domain rules, provider specs and evidence.
+- [Documentation index](docs/README.md): domain rules and provider contracts.
 - `waves/desktop/README.md`: desktop directory entry points.
 - `waves/desktop/BRIDGE.md`: reference for every bridge signal and slot
   pattern.

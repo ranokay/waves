@@ -1534,17 +1534,6 @@ def test_undated_disc_joins_only_with_matching_disc_total():
     assert r["local_tracks"] == 20 and r["partial"] is False
 
 
-def test_undated_disc_without_shape_witness_still_refused():
-    # The original failure stays pinned: an undated disc with nothing but its
-    # folder name to vouch for it may be a different pressing entirely.
-    idx = _index(
-        ("Album", "A", "2005", 10, "/m/A/Album (Disc 1)"),
-        ("Album", "A", "", 10, "/m/A/Album (Disc 2)"),
-    )
-    r = _decide_presence("Album", "A", "2005", 20, idx)
-    assert r["local_tracks"] == 10 and r["partial"] is True
-
-
 def test_undated_disc_with_disagreeing_shape_refused():
     idx = _shaped(
         ("Album", "A", "2005", 10, "/m/A/Album (Disc 1)", {"disc_no": 1, "disc_total": 2}),

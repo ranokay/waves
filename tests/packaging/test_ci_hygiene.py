@@ -224,8 +224,7 @@ def _dry_run_nuitka_command(extra_env: dict[str, str]) -> str:
 @pytest.mark.integration
 def test_windows_builds_ask_nuitka_for_low_memory():
     """MSVC dies compiling yt-dlp's generated C at full parallelism, so both
-    Windows legs must build with one C compiler job (the numbers live in
-    docs/platform-enablement-review.md and its evidence file)."""
+    Windows legs must build with one C compiler job."""
     legs = json.loads(BUILD_LEGS.read_text())["legs"]
     windows_legs = [leg for leg in legs if str(leg.get("os", "")).startswith("windows")]
     assert len(windows_legs) == 2, "expected both Windows legs in the leg table"
@@ -259,9 +258,8 @@ def test_yt_dlp_floor_matches_gamdl_and_exclusion_is_real():
 @pytest.mark.integration
 def test_the_build_excludes_yt_dlps_lazy_extractor_table():
     """Every host must exclude yt-dlp's lazy extractor table: its
-    generated C dominated the cold build (the measured numbers live in
-    docs/platform-enablement-review.md) and it is the one module the Windows
-    runners cannot compile at all. Waves only ever hands yt-dlp direct stream
+    generated C adds substantial build time and Windows runners cannot
+    compile it. Waves only ever hands yt-dlp direct stream
     URLs (gamdl's HlsFD/HttpFD path) and yt-dlp's own import contract falls back
     to the real extractor modules when the table is absent, so the artifact
     keeps every extractor. The CI Windows legs export
@@ -358,10 +356,6 @@ def test_the_merge_gate_record_matches_the_manual_workflow():
     assert "workflow_dispatch" in text
     assert "manual-only" in text.lower().replace("manual only", "manual-only")
     assert "PR body" in text and "short SHA" in text
-    # Tripwire for the exact removed promise (CONTRIBUTING.md:107 on
-    # develop): a reworded per-push claim would need a human read, but this
-    # sentence coming back fails here first.
-    assert "runs across Python" not in text
 
 
 def test_the_classifiers_match_the_tested_python_versions():

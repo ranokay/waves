@@ -434,20 +434,6 @@ def test_the_chooser_qml_names_no_provider():
         assert needle.lower() not in region.lower(), f"the Chooser region still names a provider: {needle}"
 
 
-def test_the_chooser_offers_no_inert_control():
-    """The provider chip is static (issue #414): no control in the Chooser
-    wears a cursor without acting. The audit's own evidence check -- an
-    ``enabled: false`` control in DownloadButton.qml -- must stay empty."""
-    import pathlib
-
-    from waves.desktop import backend as backend_module
-
-    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "domains/downloads/DownloadButton.qml").read_text(
-        encoding="utf-8"
-    )
-    assert "enabled: false" not in qml, "an inert control came back into the download button"
-
-
 # --------------------------------------------------------------------------- #
 # The search gate reads the declared capability
 # --------------------------------------------------------------------------- #

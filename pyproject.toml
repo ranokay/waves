@@ -313,8 +313,7 @@ ignore = [
 "tests/providers/test_provider_logos.py" = ["C901"]
 # The live account suite probes a downloaded file with a fixed-argv ffprobe.
 "tests/account/test_live_account.py" = ["S603"]
-# The scenario files added for the T6 pass and the remaining item-21
-# additions keep the same shape: boot the real Main.qml, drive one flow and
+# These QML scenarios keep the same shape: boot the real Main.qml, drive one flow and
 # assert on the rendered tree, as one deliberately linear function (C901).
 # The subprocess call itself lives in support.qml's runner.
 "tests/providers/apple/test_apple_setup_guidance.py" = ["C901"]
@@ -348,7 +347,7 @@ ignore = [
 # The Waves bridge has several inherently branchy but linear functions (the
 # settings-schema builder, the settings dispatcher and the search/discography
 # orchestration) that trip mccabe (C901) without being genuinely complex.
-# The queue pilot (ARCH-01) moved the same shape into bridge_queue.py.
+# The queue bridge has the same orchestration shape.
 "waves/desktop/backend.py" = ["C901"]
 "waves/desktop/queue/bridge.py" = ["C901"]
 # The ffmpeg manager's job is to download and run a static ffmpeg build, so it

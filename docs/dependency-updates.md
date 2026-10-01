@@ -49,7 +49,7 @@ never leaks into the default run or CI.
 | FFmpeg            | The FFmpeg manager's sources (martin-riedl, BtbN)                    | On breakage, or at the review date (2027-03-24)                        | Bump the parser/pin on shape change + smoke-test a managed install; accepted posture: same-origin checksum is integrity-only, macOS codesign verification is advisory-only (warn, non-blocking), HTTPS + smoke test; at the review date re-evaluate pinning and record the decision. |
 | Qt / PySide6      | `pyproject.toml`, locked                                             | Deliberately, per release                                              | Re-check the macOS floor, the 6.9.3 legacy overlay and the QML suite (below).                                                                                                                                                                                                        |
 | Nuitka            | `pyproject.toml` (`==4.2.2`, exact)                                  | Deliberately, per release                                              | Kept exact: a bump invalidates the release build cache and needs a verified packaged artifact on the release matrix (below).                                                                                                                                                         |
-| Python version    | `pyproject.toml` (`>=3.12,<3.15`, 3.12–3.14)                         | Deliberately, per release                                              | Re-check Nuitka, the CI legs and `docs/evidence/platform-builds.md` (Nuitka §).                                                                                                                                                                                                      |
+| Python version    | `pyproject.toml` (`>=3.12,<3.15`, 3.12–3.14)                         | Deliberately, per release                                              | Re-check Nuitka, the CI legs and packaged-build verification (Nuitka §).                                                                                                                                                                                                             |
 | Legacy Qt overlay | `.github/workflows/build-legs.json` (`pyside6==6.9.3`, floor 12.0)   | Deliberately, per release                                              | Re-verify the overlay wheels honor the macOS 12 tag plus `WAVES_MACOS_MIN` floor assertions and the QML suite (Qt §).                                                                                                                                                                |
 | pywidevine / CDM  | Via gamdl closure, locked (`pywidevine 1.9.0` + `protobuf 6.33.6`)   | With a gamdl bump, or on a CDM advisory                                | Live fetch plus `tools/inspect_bundle.py` presence check (§gamdl).                                                                                                                                                                                                                   |
 | Everything else   | `uv.lock`                                                            | Weekly via Dependabot, or on advisories                                | Review the grouped PR: `uv lock --upgrade-package <pkg>`, `mise run check`, full suite.                                                                                                                                                                                              |
@@ -120,14 +120,14 @@ exact — a bump invalidates the release build cache (the workflow's cache key
 hashes `pyproject.toml` and `uv.lock`, and the `nuitka-` prefix is a manual
 lever on top) and needs a verified packaged artifact before the pin moves. The
 proof is one build leg: dispatch the release workflow with an `only` filter and
-a blank `release_tag`, then record the run and head SHA in
-`docs/evidence/platform-builds.md`.
+a blank `release_tag`, then record the run, head SHA and result in the owning
+issue or PR.
 
 The same pin carries the 3.14 story: `uv sync --locked --all-extras --python
 3.14` succeeds (the pinned PyCryptodome publishes no cp314 wheel, but its
 `cp37-abi3` artifact installs and loads its native libraries through ctypes),
-and the manual workflow's 3.14 test leg is green — both recorded in
-`docs/evidence/platform-builds.md`.
+and `master.yml` includes a 3.14 test leg. Verify both when moving the pin and
+record the results in the owning issue or PR.
 
 ## Reviewing a Dependabot PR
 

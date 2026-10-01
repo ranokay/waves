@@ -163,7 +163,7 @@ cython_debug/
 
 # Local media output and scratch download folders. Anchored to the repo root on
 # purpose: an unanchored `downloads/` also matches `tests/downloads/`, hiding
-# its tracked test modules from rg, editors and review tooling (TT-04).
+# its tracked test modules from rg, editors and review tooling.
 /download/
 /downloads/
 
@@ -180,7 +180,26 @@ packaging/winget/
 # Dated audit working notes and their captured evidence (screenshots, logs,
 # JSON dumps) are local analysis artifacts, not product documentation; promote
 # one deliberately if it should become durable.
-docs/audits/
+/docs/audits/
+/docs/evidence/
+/docs/research/
+/docs/reports/
+
+# Local test captures, generated reports and profiling output.
+/artifacts/
+/test-results/
+/reports/
+/screenshots/
+/pytest.xml
+/*.prof
+/*.pstats
+
+# Agent working state; durable guidance belongs in AGENTS.md and docs/agents/.
+/STATE.md
+/HANDOFF.md
+/CONTINUATION.md
+/PLAN.md
+/TODO.md
 
 # macOS Finder metadata and the local Apple cookies export used for manual
 # download tests: machine-local, never part of the repo.

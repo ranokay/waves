@@ -11,9 +11,8 @@ implementation (`ProviderDescriptor`: id, name, mark, one honest capability
 line, its card's own action words, the Settings fields its card owns, and the
 shape of live status it carries). What a provider _can do_ is its
 `Capability` set, and its chooser metadata (the option ladder a download can
-ask for) sits on the provider beside them. The spec's sketch also listed
-`status` and `actions` on the descriptor: here the bridge composes them at
-read time (the probes are the bridge's), and Apple's wizard steps are
+ask for) sits on the provider beside them. The bridge composes `status` and
+`actions` at read time (the probes are the bridge's), and Apple's wizard steps are
 bridge-built live data, so the descriptor stays static identity. Surfaces
 render from the seam's metadata, and the bridge composes the live state on
 top:
@@ -33,16 +32,10 @@ FAVORITES-less provider contributes no shelf). Live data stays bridge-owned
 because the probes are the bridge's to run; the descriptor is static identity
 only.
 
-The migration is staged. Surfaces the audit found TIDAL-shaped — the
-Chooser's enable gate, the search group header — move as their remediation
-tickets land; the rule above is the destination and the bar for every new
-surface.
-
 ## Why
 
-- The audit's F-10 measured the cost of the alternative: every new provider
-  meant another hardcoded tab, another first-run branch and another
-  one-provider empty state, spread across the bridge and QML.
+- Hardcoded provider identities make every new provider require another
+  tab, first-run branch and empty state across the bridge and QML.
 - A descriptor next to the provider keeps the copy and the fields under
   review with the code they describe; a central registry would drift.
 - The paper tests make the promise falsifiable: a fake provider registered

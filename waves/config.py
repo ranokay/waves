@@ -249,13 +249,10 @@ class BaseConfig[TModel: (ModelSettings, ModelToken)]:
         except (JSONDecodeError, TypeError, ValueError, AttributeError) as e:
             # AttributeError is what a file of valid JSON whose top level is not
             # an object raises: dataclasses_json asks the parsed value for
-            # .items(), and "[]", "null", a bare string or a number has none. It
-            # crashed every launch with a traceback, past the very self-heal this
-            # arm exists to do, and only deleting the file by hand recovered the
-            # app. TypeError is a field of the wrong shape (a list where a number
-            # belongs): it used to skip the set-aside, so the defaults written
-            # back below replaced the only copy. A file that is there and
-            # unusable is a broken config whatever shape it is broken in.
+            # .items(), and "[]", "null", a bare string or a number has none.
+            # TypeError is a field of the wrong shape (a list where a number
+            # belongs). Preserve the unusable file before writing defaults;
+            # invalid structure needs the same recovery as invalid JSON.
             self.data = self.cls_model()
             if not _set_aside(path, e):
                 # Not moved (a lock, a read-only folder), so it is still the
