@@ -41,5 +41,5 @@ def patch_offline() -> None:
 # hover. Scenarios that test other surfaces park it and put the welcome
 # back on its provider cards, so a sign-in surface left by another step can
 # never linger. Scenarios actually about onboarding or sign-in keep this
-# state away (see tests/ui/test_onboarding_state_qml.py).
+# state away (see tests/providers/test_onboarding_state_qml.py).
 PARK_LOGIN_QML = "setupMode = 'cards'; setupUrlOpened = false; providerPicker.visible = false"

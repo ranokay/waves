@@ -22,7 +22,7 @@ import re
 
 from support.paths import QML_DIR
 
-_QML = QML_DIR / "SettingsPage.qml"
+_QML = QML_DIR / "domains/settings/SettingsPage.qml"
 
 
 def _source() -> str:

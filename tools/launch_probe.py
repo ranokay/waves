@@ -37,7 +37,7 @@ _STAMP = re.compile(
 _CHILD = """
 import ctypes, os, sys, threading
 sys.path.insert(0, %(root)r)
-from waves.desktop import diagnostics
+from waves.desktop.diagnostics import export as diagnostics
 diagnostics._install_qt_handler = lambda: None
 def _quit():
     # Qt's default handler writes stderr through C stdio, fully buffered

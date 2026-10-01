@@ -31,7 +31,7 @@ _SOURCE_ITEM = re.compile(r"ShaderEffectSource\s*\{[^}]*?sourceItem:\s*([A-Za-z_
 
 
 def _qml_files() -> list[Path]:
-    return sorted(QML_DIR.glob("*.qml"))
+    return sorted(QML_DIR.rglob("*.qml"))
 
 
 def test_every_mask_source_item_is_hidden():

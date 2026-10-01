@@ -10,7 +10,8 @@ value.
 
 from __future__ import annotations
 
-from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge, _shipped_default
+from waves.desktop.backend import WavesBridge
+from waves.desktop.settings.schema import FIRST_RUN_OVERRIDES, shipped_field_default
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as CfgSettings
 
@@ -77,7 +78,7 @@ def test_the_default_is_what_a_fresh_install_gets():
     # (the dataclass default stays empty so an upgrade changes nothing until
     # the user says so), and the link must still offer the real fresh value.
     fresh = CfgSettings()
-    for key, value in _FIRST_RUN_OVERRIDES.items():
+    for key, value in FIRST_RUN_OVERRIDES.items():
         setattr(fresh, key, value)
     for key, field in _fields_by_key().items():
         if "default_value" not in field:
@@ -89,7 +90,7 @@ def test_fields_with_no_useful_default_do_not_offer_one():
     fields = _fields_by_key()
     for key in _WITHOUT_DEFAULT:
         assert "default_value" not in fields[key], f"{key} must not offer a default"
-        assert _shipped_default(key) is None
+        assert shipped_field_default(key) is None
 
 
 def test_help_entries_name_a_settings_field():
@@ -105,4 +106,4 @@ def test_help_entries_name_a_settings_field():
 
 
 def test_unknown_key_has_no_default():
-    assert _shipped_default("not_a_setting") is None
+    assert shipped_field_default("not_a_setting") is None

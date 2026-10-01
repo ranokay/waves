@@ -198,20 +198,18 @@ class TestTheSettingsBoxRefusesIllegalCharacters:
         assert WavesBridge.sanitizeFilenameReplacement(None, "?") == ""
         assert WavesBridge.sanitizeFilenameReplacement(None, " - ") == " - "
 
-    def test_wiring_the_field_is_marked_for_laundering(self):
-        """The single-char replacement field registers for sanitize-on-save (wiring
-        pin: the launderer itself is proved by the behavioral test above and the
-        filename-torture suite; this fences the field registration)."""
-        src = (_UI / "backend.py").read_text()
+    def test_the_field_requires_sanitizing(self):
+        from settings.fakes import schema_stub
 
-        assert '_SANITIZED_FIELDS = {"filename_illegal_replacement"}' in src
-        assert 'extra["sanitize"] = True' in src
+        fields = [field for section in WavesBridge.settingsSchema(schema_stub()) for field in section["fields"]]
+        field = next(f for f in fields if f["key"] == "filename_illegal_replacement")
+        assert field["sanitize"] is True
 
     def test_wiring_the_box_turns_red_while_the_value_would_not_survive(self):
         """The red-outline/hold-save QML machinery reads the engine's launderer
         (wiring pin: same behavioral backing as above; this fences the QML call
         sites so the page cannot judge by a rule of its own)."""
-        src = (_UI / "qml" / "SettingsPage.qml").read_text()
+        src = (_UI / "qml" / "domains/settings/SettingsPage.qml").read_text()
 
         # SText paints its outline red on `invalid` ...
         assert "border.color: invalid ? page.red :" in src
@@ -225,7 +223,7 @@ class TestTheSettingsBoxRefusesIllegalCharacters:
         # Correcting the value on save flashed "changes saved" over a silent
         # rewrite. The button is held instead, leaving the bad character on
         # screen to be fixed.
-        src = (_UI / "qml" / "SettingsPage.qml").read_text()
+        src = (_UI / "qml" / "domains/settings/SettingsPage.qml").read_text()
 
         assert "readonly property bool canSave: page.dirty && !page.hasInvalidEdits()" in src
         assert "opacity: canSave ? 1 : 0.4" in src

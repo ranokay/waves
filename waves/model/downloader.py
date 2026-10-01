@@ -20,7 +20,7 @@ class ProgressGui(Protocol):
     """The neutral progress-signal shape the engine drives.
 
     Satisfied structurally by the Qt-backed ``ProgressBars`` in
-    waves.model.gui_data (built from live ``_ProgressSignals`` in the
+    waves.desktop.queue.progress (built from live ``_ProgressSignals`` in the
     desktop layer) and by any stand-in carrying the same four emitters.
     Lives here, beside the engine's other neutral types, so
     ``waves.download`` never imports Qt to name it.

@@ -34,10 +34,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from settings.fakes import APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL
 from support.paths import REPO_ROOT
-from support.settings_fakes import APPLE_SETUP_PILLS, APPLE_SIGN_OUT_PILL
 
-from waves.desktop.backend import WavesBridge, _apple_status
+from waves.desktop.backend import WavesBridge
+from waves.desktop.providers.presentation import apple_status
 from waves.providers.apple.runtime import (
     APK_PINNED_VERSION,
     NM3U8DLRE_VERSION,
@@ -136,12 +137,12 @@ def test_describe_setup_precedence():
 
 
 def test_apple_status_helper_covers_all_five():
-    assert _apple_status(False) == {"state": "off", "word": "Off"}
-    assert _apple_status(True) == {"state": "not_set_up", "word": "Not set up"}
-    assert _apple_status(True, runtime_ready=True) == {"state": "runtime_ready", "word": "Runtime ready"}
-    assert _apple_status(True, cookies_ready=True) == {"state": "signed_in", "word": "Signed in"}
-    assert _apple_status(True, signed_in=True) == {"state": "signed_in", "word": "Signed in"}
-    assert _apple_status(True, signed_in=True, needs_attention=True)["state"] == "needs_attention"
+    assert apple_status(False) == {"state": "off", "word": "Off"}
+    assert apple_status(True) == {"state": "not_set_up", "word": "Not set up"}
+    assert apple_status(True, runtime_ready=True) == {"state": "runtime_ready", "word": "Runtime ready"}
+    assert apple_status(True, cookies_ready=True) == {"state": "signed_in", "word": "Signed in"}
+    assert apple_status(True, signed_in=True) == {"state": "signed_in", "word": "Signed in"}
+    assert apple_status(True, signed_in=True, needs_attention=True)["state"] == "needs_attention"
 
 
 # ---- container runtime ------------------------------------------------------- #

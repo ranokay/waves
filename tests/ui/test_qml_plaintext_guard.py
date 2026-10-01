@@ -54,7 +54,7 @@ from support.paths import QML_DIR
 #   So `model.`/`modelData.` there are NOT remote. It is still
 #   scanned so its deliberate StyledText spots stay deliberate and
 #   can't quietly start binding a TIDAL string.
-LOCAL_ONLY_FILES = {"SettingsPage.qml"}
+LOCAL_ONLY_FILES = {"domains/settings/SettingsPage.qml"}
 FILES = sorted(p.relative_to(QML_DIR).as_posix() for p in QML_DIR.rglob("*.qml"))
 TIDAL_DATA_FILES = set(FILES) - LOCAL_ONLY_FILES
 
@@ -112,9 +112,12 @@ DELIBERATE_RICHTEXT: set[tuple[str, str]] = {
     ("Main.qml", "ffmpeg-attribution"),  # FFmpeg source attribution link (appFfmpeg.status.*)
     ("Main.qml", "privacy-promise"),  # privacy-promise blurb (string literal w/ <font>)
     ("Main.qml", "download-nudge-body"),  # download-folder nudge body (string literal, <font>/<tt> code path)
-    ("SettingsPage.qml", "ffmpeg-attribution"),  # FFmpeg attribution link (page.ff.status.*)
-    ("SettingsPage.qml", "ffmpeg-attribution-managed"),  # same link, managed twin-tile layout
-    ("SettingsPage.qml", "updater-releases-link"),  # updater "Releases & changelog" link (page.appUp.*)
+    ("domains/settings/SettingsPage.qml", "ffmpeg-attribution"),  # FFmpeg attribution link (page.ff.status.*)
+    ("domains/settings/SettingsPage.qml", "ffmpeg-attribution-managed"),  # same link, managed twin-tile layout
+    (
+        "domains/settings/SettingsPage.qml",
+        "updater-releases-link",
+    ),  # updater "Releases & changelog" link (page.appUp.*)
 }
 
 # The in-source anchor for an audited rich-text element. Must sit on the element's

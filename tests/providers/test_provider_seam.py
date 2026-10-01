@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from support.provider_fakes import BareProvider
+from providers.fakes import BareProvider
 from tidalapi import Track
 from tidalapi.media import AudioMode, MediaMetadataTags, Quality
 from tidalapi.mix import Mix
@@ -1296,7 +1296,7 @@ class TestRefusals:
         from requests import HTTPError
         from tidalapi.exceptions import AssetNotAvailable, ObjectNotFound, StreamNotAvailable, TooManyRequests
 
-        from waves.download import _tidal_refuses_asset
+        from waves.providers.tidal_refusals import asset_refusal_message
 
         provider, _ = _provider()
         cases: list[Exception] = [
@@ -1314,7 +1314,7 @@ class TestRefusals:
         for exc in cases:
             refusal = provider.classify_refusal(exc)
             engine_refused = isinstance(exc, StreamNotAvailable | ObjectNotFound | AssetNotAvailable) or (
-                isinstance(exc, HTTPError) and _tidal_refuses_asset(exc) is not None
+                isinstance(exc, HTTPError) and asset_refusal_message(exc) is not None
             )
             if engine_refused:
                 assert refusal.kind.value == "unavailable", exc

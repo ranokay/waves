@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from support.library_fakes import make_album_dir, make_library_bridge
+from library.fakes import make_album_dir, make_library_bridge
 
 from waves.desktop.backend import _library_file_row
 

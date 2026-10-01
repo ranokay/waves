@@ -351,22 +351,24 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     # their own files, and the controls that adopted the shared tap area now
     # answer through TapAction.qml; the pins span the whole primary-control
     # surface, so read all thirteen.
-    qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "DownloadButton.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "QueueDrawer.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "SpecBtn.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "GateAction.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "DecodeController.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "NavTab.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "NavCrumbTrail.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "GateCard.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "TapAction.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "Check.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "ShowAllLabel.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "LogsDrawer.qml").read_text(encoding="utf-8")
+    qml = QML_MAIN.read_text(encoding="utf-8") + (QML_DIR / "domains/downloads/DownloadButton.qml").read_text(
+        encoding="utf-8"
+    )
+    qml += (QML_DIR / "domains/queue/QueueDrawer.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "primitives/ActionButton.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "components/GateAction.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "domains/providers/DecodeController.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "shell/NavTab.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "shell/NavCrumbTrail.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "components/GateCard.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "primitives/TapAction.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "primitives/Check.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "components/ShowAllLabel.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "domains/diagnostics/LogsDrawer.qml").read_text(encoding="utf-8")
     # The settings commit actions are adoptions too; the page's switch answers
     # Keys.onPressed (one handler, three keys), so it stays outside the
     # per-file Return/Enter/Space shape below but inside the adoption count.
-    qml += (QML_DIR / "SettingsPage.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "domains/settings/SettingsPage.qml").read_text(encoding="utf-8")
     press_actions = qml.count("Accessible.onPressAction")
     assert press_actions >= 5, "the primary controls lost their press actions"
     # The shared TapAction answers every control that adopts it with one
@@ -375,18 +377,18 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     # least as many Return/Enter/Space handlers.
     for name in (
         "Main.qml",
-        "DownloadButton.qml",
-        "QueueDrawer.qml",
-        "SpecBtn.qml",
-        "GateAction.qml",
-        "DecodeController.qml",
-        "NavTab.qml",
-        "NavCrumbTrail.qml",
-        "GateCard.qml",
-        "TapAction.qml",
-        "Check.qml",
-        "ShowAllLabel.qml",
-        "LogsDrawer.qml",
+        "domains/downloads/DownloadButton.qml",
+        "domains/queue/QueueDrawer.qml",
+        "primitives/ActionButton.qml",
+        "components/GateAction.qml",
+        "domains/providers/DecodeController.qml",
+        "shell/NavTab.qml",
+        "shell/NavCrumbTrail.qml",
+        "components/GateCard.qml",
+        "primitives/TapAction.qml",
+        "primitives/Check.qml",
+        "components/ShowAllLabel.qml",
+        "domains/diagnostics/LogsDrawer.qml",
     ):
         body = (QML_MAIN if name == "Main.qml" else QML_DIR / name).read_text(encoding="utf-8")
         file_presses = body.count("Accessible.onPressAction")
@@ -397,7 +399,7 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
     # empty, so an unnamed adopter would ship a silent button. The label
     # bindings are pinned one by one, since counting ``accessibleLabel:``
     # across the files would be satisfied by the unrelated declarations in
-    # QueueDrawer/SpecBtn/TapAction.
+    # QueueDrawer/ActionButton/TapAction.
     assert qml.count("TapAction {") >= 8, "the adopted controls lost their tap area"
     flat = re.sub(r"\s+", " ", qml)
     for needle in (
@@ -449,7 +451,7 @@ def test_the_handlers_behind_the_keyboard_paths_exist():
         assert re.sub(r"\s+", " ", needle) in flat, f"the keyboard path is missing: {needle}"
     # The queue row's Delete key is the row's own give-up path, not a
     # second copy of the cancel/remove rule.
-    queue_qml = (QML_DIR / "QueueDrawer.qml").read_text(encoding="utf-8")
+    queue_qml = (QML_DIR / "domains/queue/QueueDrawer.qml").read_text(encoding="utf-8")
     assert "Keys.onDeletePressed" in queue_qml, "the queue row lost its Delete key"
     assert queue_qml.count("waves.cancelQueueItem(model.qid)") == 1, "the queue row grew a second cancel path"
     assert queue_qml.count("waves.removeQueueItem(model.qid)") == 1, "the queue row grew a second remove path"

@@ -5,7 +5,7 @@ The sandbox permission set is a security surface, so it is pinned here: a
 rationale (packaging/flatpak/README.md) is updated with it. The bundle itself
 only builds on Linux; the manifest, the glue files and the CI wiring are the
 testable half on every host. The updater's Flatpak deference is covered in
-tests/ui/test_updater.py.
+tests/updates/test_updater.py.
 """
 
 from __future__ import annotations

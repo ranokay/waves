@@ -36,7 +36,7 @@ from tidalapi.media import Quality
 
 from waves.constants import CTX_TIDAL
 from waves.desktop import backend
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 from waves.library.ownership import quality_rank
 
 

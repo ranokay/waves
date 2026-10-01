@@ -27,14 +27,15 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from support.paths import QML_DIR
-from support.settings_fakes import (
+from settings.fakes import (
     APPLE_SETUP_PILLS,
     APPLE_SIGN_OUT_PILL,
 )
-from support.settings_fakes import schema_stub as _schema_stub
+from settings.fakes import schema_stub as _schema_stub
+from support.paths import QML_DIR
 
-from waves.desktop.backend import WavesBridge, _apple_status
+from waves.desktop.backend import WavesBridge
+from waves.desktop.providers.presentation import apple_status
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as ModelSettings
 
@@ -223,8 +224,8 @@ def test_the_apple_card_offers_sign_out_only_while_signed_in():
 
 
 def test_one_helper_serves_the_slot_and_the_schema():
-    assert _apple_status(False) == {"state": "off", "word": "Off"}
-    assert _apple_status(True) == {"state": "not_set_up", "word": "Not set up"}
+    assert apple_status(False) == {"state": "off", "word": "Off"}
+    assert apple_status(True) == {"state": "not_set_up", "word": "Not set up"}
 
 
 # ---- the appleStatus() slot (the page's live mirror reads it) --------------------
@@ -481,7 +482,7 @@ def test_the_playlist_template_help_no_longers_claims_tidals_tree():
 
 
 def test_the_provider_sections_declarations_carry_the_area_vocabulary():
-    src = QML_DIR / "SettingsPage.qml"
+    src = QML_DIR / "domains/settings/SettingsPage.qml"
     qml = src.read_text(encoding="utf-8")
     # The status row delegate and the Apple light's live mirror are pinned
     # by source (the settings-page QML convention): the mirror re-reads
@@ -568,7 +569,7 @@ def test_factory_reset_reaches_inside_the_provider_cards():
 
 
 def test_the_page_renders_provider_bands_with_logos_and_deep_links():
-    src = QML_DIR / "SettingsPage.qml"
+    src = QML_DIR / "domains/settings/SettingsPage.qml"
     qml = src.read_text(encoding="utf-8")
     # One band per provider entry, each headed by the logo its descriptor
     # carries and its name, fields through the shared renderers. The page

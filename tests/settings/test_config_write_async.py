@@ -6,7 +6,7 @@ waves.json and settings.json are written atomically WITH AN FSYNC, and both
 were written synchronously from GUI-thread slots (every pref flip, every
 debounced window-geometry save): the GUI paid a disk sync per save. Saves
 now snapshot their payload on the calling thread (microseconds) and hand the
-fsync-bearing disk work to ``_SingleFlightWriter``, one background thread
+fsync-bearing disk work to ``SingleFlightWriter``, one background thread
 where consecutive submits per file coalesce to the newest snapshot.
 
 Pinned here: the fsync happens off the submitting thread; a burst of submits
@@ -27,11 +27,12 @@ import threading
 import time
 from typing import ClassVar
 
-from waves.desktop.backend import WavesBridge, _SingleFlightWriter
+from waves.desktop.backend import WavesBridge
+from waves.desktop.settings.persistence import SingleFlightWriter
 
 
 def test_a_submit_burst_runs_first_plus_newest():
-    w = _SingleFlightWriter()
+    w = SingleFlightWriter()
     gate = threading.Event()
     started = threading.Event()
     ran: list[str] = []
@@ -53,7 +54,7 @@ def test_a_submit_burst_runs_first_plus_newest():
 
 
 def test_flush_runs_leftovers_inline_when_the_thread_cannot_finish():
-    w = _SingleFlightWriter()
+    w = SingleFlightWriter()
     gate = threading.Event()
     started = threading.Event()
     ran: list[str] = []
@@ -76,7 +77,7 @@ def test_prefs_save_fsyncs_off_the_calling_thread_and_snapshots(tmp_path, monkey
     stub._factory_reset = False
     stub._waves_prefs = {"motion_background": True}
     stub._waves_prefs_path = str(tmp_path / "waves.json")
-    stub._config_writer = _SingleFlightWriter()
+    stub._config_writer = SingleFlightWriter()
     WavesBridge._save_waves_prefs(stub)
     # Mutating AFTER the save must not reach this save's file content.
     stub._waves_prefs["motion_background"] = False
@@ -106,7 +107,7 @@ def test_settings_write_serializes_before_returning():
             _Cfg.captured.append(data_json)
 
     stub.settings = _Cfg()
-    stub._config_writer = _SingleFlightWriter()
+    stub._config_writer = SingleFlightWriter()
 
     WavesBridge._submit_settings_write(stub)
     # The re-injection that follows a save in the app: it must not be able to
@@ -123,7 +124,7 @@ def test_shutdown_flush_lands_a_last_moment_pref(tmp_path):
     stub._factory_reset = False
     stub._waves_prefs = {"volume": 11}
     stub._waves_prefs_path = str(tmp_path / "waves.json")
-    stub._config_writer = _SingleFlightWriter()
+    stub._config_writer = SingleFlightWriter()
     WavesBridge._save_waves_prefs(stub)
     stub._config_writer.flush()
     with open(stub._waves_prefs_path) as f:

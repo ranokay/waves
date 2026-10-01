@@ -1,2 +1,14 @@
-module primitives
+module Primitives
 singleton Palette 1.0 Palette.qml
+ActionButton 1.0 ActionButton.qml
+Check 1.0 Check.qml
+DecryptText 1.0 DecryptText.qml
+DotMatrix 1.0 DotMatrix.qml
+ExpandChevron 1.0 ExpandChevron.qml
+HoverSwell 1.0 HoverSwell.qml
+Icon 1.0 Icon.qml
+LedBar 1.0 LedBar.qml
+RiseIn 1.0 RiseIn.qml
+RollSwap 1.0 RollSwap.qml
+RollingDigit 1.0 RollingDigit.qml
+TapAction 1.0 TapAction.qml

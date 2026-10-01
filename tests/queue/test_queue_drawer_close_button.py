@@ -1,0 +1,198 @@
+"""The queue drawer carries its own way out: a square X in the header.
+
+WHAT THIS FENCES OFF
+--------------------
+1. The way out being invisible. A Drawer dismisses on a click outside it, but
+   that is a gesture you have to already know. The header ends in a close
+   button, and a REAL click on it shuts the panel.
+
+2. The button going away with the queue. PAUSE hides when there is nothing
+   queued and STOP when nothing is running, which is exactly the state where a
+   user is most likely to be hunting for the exit, so the X is visible with an
+   empty queue and with a full one alike.
+
+3. It drifting off the corner. It sits last in the header row, to the right of
+   PAUSE, where every window puts a close.
+
+4. The square going. It is an icon-only ActionButton: same fill, border and hover as
+   the worded buttons beside it, exactly as tall as they are, and as wide as it
+   is tall. A glyph button that measures its (empty) label wrongly reads as a
+   thin sliver, and nothing warns.
+
+5. Closing costing the user work. The X only shuts the panel: it must not pause
+   the queue, stop anything, or drop a row.
+
+Drives the REAL Main.qml with a REAL mouse click on the button's own pixels, so
+the wiring is what is under test, not the function behind it.
+
+Runs in a SUBPROCESS like the other Main.qml scenarios: building the bridge
+installs process-global handlers that must not leak into the suite.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+from support.paths import QML_MAIN
+from support.qml import (
+    EXIT_NO_QT,
+    EXIT_OK,
+    EXIT_PRECONDITION,
+    EXIT_REGRESSED,
+    run_scenario,
+    sandbox_qml_settings,
+    scoped_q,
+)
+
+
+@pytest.mark.qml
+def test_the_queue_drawer_closes_from_its_own_header_button():
+    run_scenario(
+        Path(__file__),
+        "--run-scenario",
+        timeout=120,
+        sandbox_prefix="waves-queue-close-test-",
+        failure_message="the queue drawer's close button regressed.",
+    )
+
+
+def _run_scenario() -> int:
+    try:
+        from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer, QUrl
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
+        from PySide6.QtTest import QTest
+    except Exception as exc:
+        print(f"Qt unavailable: {exc}", file=sys.stderr)
+        return EXIT_NO_QT
+
+    from support.offline import PARK_LOGIN_QML, patch_offline
+
+    patch_offline()
+
+    app = QGuiApplication.instance() or QGuiApplication([])
+    sandbox_qml_settings()
+    try:
+        from waves.desktop.app import _load_mono
+        from waves.desktop.backend import WavesBridge
+    except Exception as exc:
+        print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
+        return EXIT_NO_QT
+
+    engine = QQmlApplicationEngine()
+    bridge = WavesBridge(tidal=None)
+    engine.rootContext().setContextProperty("waves", bridge)
+    engine.rootContext().setContextProperty("monoFont", _load_mono())
+    engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
+    engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
+    roots = engine.rootObjects()
+    if not roots:
+        print("Main.qml failed to load", file=sys.stderr)
+        return EXIT_PRECONDITION
+    root = roots[0]
+
+    def q(expr: str):
+        e = QQmlExpression(QQmlEngine.contextForObject(root), root, expr)
+        r = e.evaluate()
+        if e.hasError():
+            raise RuntimeError(e.error().toString())
+        return r[0] if isinstance(r, tuple) else r
+
+    def settle(ms: int) -> None:
+        loop = QEventLoop()
+        QTimer.singleShot(ms, loop.quit)
+        loop.exec()
+
+    # The header's buttons live inside QueueDrawer.qml:
+    # evaluate expressions naming their ids in that file's own scope.
+    qd = scoped_q(q, "queueDrawer.background")
+
+    q("root.width = 1200")
+    q("root.height = 800")
+    q("root.visible = true")
+    settle(150)
+    q(PARK_LOGIN_QML)
+    q("queueDrawer.open()")
+    settle(250)
+    if not bool(q("queueDrawer.visible")):
+        print("the queue drawer would not open", file=sys.stderr)
+        return EXIT_PRECONDITION
+
+    bad: list[str] = []
+
+    # 2. Empty queue: PAUSE and STOP are both gone and the X is still there.
+    if int(q("queueModel.count")) != 0:
+        print(f"the scenario started with {q('queueModel.count')} queued rows", file=sys.stderr)
+        return EXIT_PRECONDITION
+    if bool(qd("queuePauseBtn.visible")):
+        print("PAUSE is showing with an empty queue, so this proves nothing", file=sys.stderr)
+        return EXIT_PRECONDITION
+    if not bool(qd("queueCloseBtn.visible")):
+        bad.append("the close button is hidden when the queue is empty, which is when it is needed most")
+
+    # 4. Square, and the same height as the worded buttons it sits beside.
+    w = float(qd("queueCloseBtn.width"))
+    h = float(qd("queueCloseBtn.height"))
+    if abs(w - h) > 0.51:
+        bad.append(f"the close button is {w:.0f}x{h:.0f}, not square")
+    if w < 24:
+        bad.append(f"the close button collapsed to {w:.0f}px wide: the glyph has no room")
+    pause_h = float(qd("queuePauseBtn.height"))
+    if abs(h - pause_h) > 0.51:
+        bad.append(f"the close button stands {h:.0f}px against PAUSE's {pause_h:.0f}: the row is ragged")
+
+    # 3. Last in the row, to the right of PAUSE (which is measured even hidden).
+    close_x = float(qd("queueCloseBtn.mapToItem(null, 0, 0).x"))
+    pause_x = float(qd("queuePauseBtn.mapToItem(null, 0, 0).x"))
+    if close_x <= pause_x:
+        bad.append(f"the close button sits at x={close_x:.0f}, left of PAUSE at x={pause_x:.0f}")
+
+    # 1. A real click on its own pixels shuts the drawer.
+    cx = int(qd("queueCloseBtn.mapToItem(null, queueCloseBtn.width / 2, queueCloseBtn.height / 2).x"))
+    cy = int(qd("queueCloseBtn.mapToItem(null, queueCloseBtn.width / 2, queueCloseBtn.height / 2).y"))
+    was_paused = bool(q("waves.paused"))
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier, QPoint(cx, cy))
+    settle(400)
+    if bool(q("queueDrawer.visible")):
+        bad.append(f"clicking the close button at ({cx}, {cy}) left the drawer open")
+
+    # 5. And it did nothing else on the way out.
+    if bool(q("waves.paused")) != was_paused:
+        bad.append("closing the drawer paused or resumed the queue")
+    if int(q("queueModel.count")) != 0:
+        bad.append("closing the drawer changed the queue")
+
+    # 2 again, with rows in it: the X keeps its place beside PAUSE and STOP.
+    q("queueDrawer.open()")
+    settle(250)
+    # Straight into the view's model: all this needs is a row for PAUSE to
+    # appear beside, not a working download behind it.
+    q(
+        "queueModel.append({'qid': 'close-btn-row', 'title': 'Song', 'sub': 'Artist',"
+        " 'state': 'queued', 'uiGroup': 'queued'})"
+    )
+    settle(150)
+    if int(q("queueModel.count")) < 1:
+        print("could not put a row in the queue model", file=sys.stderr)
+        return EXIT_PRECONDITION
+    if not bool(qd("queueCloseBtn.visible")):
+        bad.append("the close button disappeared once the queue had a row in it")
+    if not bool(qd("queuePauseBtn.visible")):
+        print("PAUSE did not appear for a queued row", file=sys.stderr)
+        return EXIT_PRECONDITION
+    close_x = float(qd("queueCloseBtn.mapToItem(null, 0, 0).x"))
+    pause_right = float(qd("queuePauseBtn.mapToItem(null, 0, 0).x + queuePauseBtn.width"))
+    if close_x < pause_right:
+        bad.append(f"the close button at x={close_x:.0f} overlaps PAUSE, which ends at {pause_right:.0f}")
+
+    if bad:
+        for line in bad:
+            print(f"REGRESSED: {line}", file=sys.stderr)
+        return EXIT_REGRESSED
+    return EXIT_OK
+
+
+if __name__ == "__main__" and "--run-scenario" in sys.argv:
+    raise SystemExit(_run_scenario())

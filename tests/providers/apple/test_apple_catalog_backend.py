@@ -4,7 +4,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
-from support.browse_fakes import browse_bridge
+from browse.fakes import browse_bridge
 
 from waves.desktop.backend import WavesBridge
 from waves.providers.apple import AppleProvider

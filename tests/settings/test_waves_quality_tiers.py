@@ -20,7 +20,8 @@ from tidalapi.media import Quality
 
 from waves.config import tidal_quality_for_tier
 from waves.constants import TIER_RANK, QualityTier, quality_rank, tier_from_word
-from waves.desktop.backend import WavesBridge, _enum_options
+from waves.desktop.backend import WavesBridge
+from waves.desktop.settings.schema import enum_options
 from waves.library.ownership import quality_rank as ownership_quality_rank
 from waves.model.cfg import Settings as ModelSettings
 from waves.model.cfg import Settings as _Model  # the migration subject
@@ -257,7 +258,7 @@ def test_the_quality_cap_reads_the_tier_setting():
 
 
 def test_the_tidal_choice_round_trips_tier_strings():
-    options = _enum_options("tidal_quality_audio", QualityTier)
+    options = enum_options("tidal_quality_audio", QualityTier)
     assert [o["value"] for o in options] == ["LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS"]
     assert options[2]["label"]  # every option carries a human label
 
@@ -266,7 +267,7 @@ def test_the_apple_choice_exists_with_honest_labels():
     # The shared ladder drives the options; Apple's labels name its own
     # codecs with "Up to" ceilings and start at HIGH (Apple has
     # no LOW rung), so LOW has no mapped label and falls back to the raw name.
-    options = _enum_options("apple_quality_audio", QualityTier)
+    options = enum_options("apple_quality_audio", QualityTier)
     assert [o["value"] for o in options] == ["LOW", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS"]
     by_value = {o["value"]: o["label"] for o in options}
     assert by_value["HIGH"] == "High · Up to 256 Kbps (AAC)"

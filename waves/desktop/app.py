@@ -28,8 +28,9 @@ from PySide6.QtQml import QQmlApplicationEngine, QQmlIncubationController, QQmlN
 from waves import redaction
 from waves.config import Tidal
 
-from . import diagnostics, proc
+from . import proc
 from .backend import _ART_CACHE_DIR, WavesBridge
+from .diagnostics import export as diagnostics
 
 
 def _data_dir(name: str) -> Path:

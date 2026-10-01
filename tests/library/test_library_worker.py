@@ -3,7 +3,7 @@
 The scan must never hold the app's interpreter (the launch water dropped
 frames for every sweep, probed live 2026-09-01 and 2026-09-11), so it runs
 in a child process (waves.library.worker) that the bridge talks to over
-pipes (waves.desktop.library_proc). Pinned here:
+pipes (waves.desktop.library.scan_process). Pinned here:
   * the protocol, in-process over byte streams: a scan answers with a done
     event carrying the cache's verdicts, a probe with probe_done, a bad job
     with an error event that does not end the process, quit ends it, and
@@ -25,14 +25,14 @@ import sys
 
 import pytest
 
-from waves.desktop import library_proc
-from waves.desktop.library_proc import LibraryWorker, WorkerFailed
+from waves.desktop.library import scan_process as scan_process
+from waves.desktop.library.scan_process import LibraryWorker, WorkerFailed
 from waves.library import worker as library_worker
 from waves.library.index import SCAN_OK
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # One under the retire threshold, so a single success has to clear it.
-_MAX_CRASHES_FOR_TEST = library_proc._MAX_CRASHES - 1
+_MAX_CRASHES_FOR_TEST = scan_process._MAX_CRASHES - 1
 
 
 def _lines(stdout: io.BytesIO) -> list[dict]:
@@ -161,13 +161,13 @@ def test_launcher_hands_back_a_job_when_the_child_dies(tmp_path):
 
 
 def test_default_command_frozen_and_source(monkeypatch):
-    from waves.desktop import updater
+    from waves.desktop import runtime_paths
 
-    monkeypatch.setattr(updater, "is_frozen", lambda: False)
-    assert library_proc.default_command() == [sys.executable, "-m", "waves.library.worker"]
-    monkeypatch.setattr(updater, "is_frozen", lambda: True)
-    monkeypatch.setattr(updater, "_current_exe", lambda: "/Applications/Waves.app/Contents/MacOS/Waves")
-    assert library_proc.default_command() == ["/Applications/Waves.app/Contents/MacOS/Waves", "--library-worker"]
+    monkeypatch.setattr(runtime_paths, "is_frozen", lambda: False)
+    assert scan_process.default_command() == [sys.executable, "-m", "waves.library.worker"]
+    monkeypatch.setattr(runtime_paths, "is_frozen", lambda: True)
+    monkeypatch.setattr(runtime_paths, "executable_path", lambda: "/Applications/Waves.app/Contents/MacOS/Waves")
+    assert scan_process.default_command() == ["/Applications/Waves.app/Contents/MacOS/Waves", "--library-worker"]
 
 
 def test_a_job_stops_when_the_parent_goes_away(tmp_path, monkeypatch):
@@ -366,7 +366,7 @@ def test_a_quit_while_a_scan_runs_does_not_make_the_app_wait(tmp_path, monkeypat
     waited = time.monotonic() - t0
     job.join(10)
 
-    assert waited < library_proc._QUIT_WAIT_S / 2, f"the quit waited on a busy child ({waited:.2f}s)"
+    assert waited < scan_process._QUIT_WAIT_S / 2, f"the quit waited on a busy child ({waited:.2f}s)"
     assert w._proc is None
 
 

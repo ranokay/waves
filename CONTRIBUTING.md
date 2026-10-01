@@ -78,10 +78,14 @@ with a `uv` you installed yourself.
 4. Create a branch for local development:
 
 ```bash
-git checkout -b name-of-your-bugfix-or-feature
+git switch develop
+git switch -c name-of-your-bugfix-or-feature
 ```
 
-Now you can make your changes locally.
+This fork integrates into `develop`; `main` mirrors upstream and takes no
+PRs. Follow [the implementation workflow](docs/agents/implementation-workflow.md)
+for issue branches and synchronization. Locate the feature's code and tests
+in [the domain map](docs/architecture.md).
 
 5. Don't forget to add test cases for your added functionality to the `tests` directory.
 
@@ -101,8 +105,8 @@ mise run test-strict
 The merge stands on that local run: there is no per-push test gate —
 `master.yml` is manual-only (`workflow_dispatch`), so record the gate in
 the PR body with the tested short SHA (the strict result, run alone, plus
-`mise run check` and the two reviews). Paste the raw output of the exact
-gate commands verbatim — never summarized or rewritten.
+`mise run check` and the two reviews). Record exact commands, the tested SHA, exit statuses, result counts and review
+dispositions, as in [the PR template](.github/pull_request_template.md).
 The manual workflow covers the same group across Python 3.12, 3.13 and
 3.14. To run another version locally, re-sync the venv onto it
 first (uv keeps the existing interpreter otherwise):
@@ -111,8 +115,8 @@ first (uv keeps the existing interpreter otherwise):
 8. Commit your changes and push your branch to GitHub:
 
 ```bash
-git add .
-git commit -m "Your detailed description of your changes."
+git add path/to/changed-file.py path/to/new-file.py
+git commit -m "fix(domain): describe the corrected behavior" -- path/to/changed-file.py path/to/new-file.py
 git push origin name-of-your-bugfix-or-feature
 ```
 
@@ -126,7 +130,8 @@ its contributor-facing minimum.
 
 Before you submit a pull request, check that it meets these guidelines:
 
-1. The pull request should include tests.
+1. Include focused behavior tests for changed functionality; prose-only changes
+   need the checks described in the implementation workflow.
 
 2. If the pull request adds functionality, the docs should be updated.
    Put your new functionality into a function with a docstring, and add the feature to the "What Waves can do" section in `README.md`.

@@ -15,8 +15,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from waves.desktop import backend as backend_mod
-from waves.desktop.bridge_library import _IN_PROCESS, LibraryMixin
-from waves.desktop.library_proc import LibraryWorker, WorkerFailed
+from waves.desktop.library.bridge import _IN_PROCESS, LibraryMixin
+from waves.desktop.library.scan_process import LibraryWorker, WorkerFailed
 
 
 class _Lib:

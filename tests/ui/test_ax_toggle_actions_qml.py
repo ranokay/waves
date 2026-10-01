@@ -39,8 +39,8 @@ def test_every_checkable_role_answers_the_toggle_action():
     AX press on a checkbox) falls through to a role-default that needs a
     ``checked`` property these items do not have: a silent no-op.
     """
-    qml = (QML_DIR / "SettingsPage.qml").read_text(encoding="utf-8")
-    qml += (QML_DIR / "DownloadButton.qml").read_text(encoding="utf-8")
+    qml = (QML_DIR / "domains/settings/SettingsPage.qml").read_text(encoding="utf-8")
+    qml += (QML_DIR / "domains/downloads/DownloadButton.qml").read_text(encoding="utf-8")
     roles = len(re.findall(r"Accessible\.role: Accessible\.(?:CheckBox|RadioButton|Switch)", qml))
     toggles = qml.count("Accessible.onToggleAction")
     assert roles > 0, "the checkable roles are gone from the scanned files"
@@ -49,7 +49,7 @@ def test_every_checkable_role_answers_the_toggle_action():
     # are answered by its one toggle handler, so their files carry no pair of
     # their own: the primitive must keep the checkable flag and the handler
     # gated on it.
-    tap = re.sub(r"\s+", " ", (QML_DIR / "TapAction.qml").read_text(encoding="utf-8"))
+    tap = re.sub(r"\s+", " ", (QML_DIR / "primitives/TapAction.qml").read_text(encoding="utf-8"))
     assert "Accessible.checkable: ta.checkable" in tap, "the shared tap area lost its checkable flag"
     assert "Accessible.onToggleAction" in tap, "the shared tap area lost its toggle action"
     assert "if (ta.checkable && ta.enabled)" in tap, "the shared toggle no longer gates on checkable"
@@ -57,7 +57,7 @@ def test_every_checkable_role_answers_the_toggle_action():
 
 def test_the_welcome_skip_is_a_named_press_target():
     """The welcome's skip carries the name and press a reader needs."""
-    flat = re.sub(r"\s+", " ", (QML_DIR / "WelcomePicker.qml").read_text(encoding="utf-8"))
+    flat = re.sub(r"\s+", " ", (QML_DIR / "domains/providers/WelcomePicker.qml").read_text(encoding="utf-8"))
     assert 'objectName: "welcomeSkip"' in flat, "the welcome skip has no stable name"
     assert 'Accessible.name: "Not now"' in flat, "the welcome skip has no accessible name"
     assert "Accessible.onPressAction: pickCard.skipped()" in flat, "the welcome skip answers no press"

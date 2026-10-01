@@ -5,8 +5,22 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import QtCore
 import QtMultimedia
-import "StatusLight.js" as StatusLight
+import "domains/providers/StatusLight.js" as StatusLight
 import "primitives" as Primitives
+import "components"
+import "domains/browse"
+import "domains/catalog"
+import "domains/diagnostics"
+import "domains/downloads"
+import "domains/ffmpeg"
+import "domains/library"
+import "domains/playback"
+import "domains/providers"
+import "domains/queue"
+import "domains/search"
+import "domains/settings"
+import "primitives"
+import "shell"
 
 ApplicationWindow {
   id: root
@@ -4020,7 +4034,7 @@ ApplicationWindow {
       anchors.fill: parent
       anchors.margins: 1
       visible: !root.peekReady
-      SnakeField {
+      SearchField {
         anchors.fill: parent
         running: parent.visible && root.peekNow !== null
         plateW: peekWaitPlate.width
@@ -4562,7 +4576,7 @@ ApplicationWindow {
   // a dimmer shade of the same tier colour, so the tier stays prominent while
   // spelling out what that tier means for this specific album/track.
   // Tier counts for a loaded track list: [] when uniform, else
-  // [{q, n}, ...] best-tier-first, drives the MIXED variant of QualTag.
+  // [{q, n}, ...] best-tier-first, drives the MIXED variant of QualityBadge.
   function qualMixList(tracks) {
     var counts = {}
     for (var i = 0; i < tracks.length; ++i) {
@@ -5472,7 +5486,7 @@ ApplicationWindow {
   // My Music sort options (per category). Options adapt to the category;
   // every category shares a "Recently added" default so it matches the
   // backend's default order with no extra fetch. The per-source groups hold
-  // the chosen value (see LibSourceGroup.sortGet/applySort).
+  // the chosen value (see SavedSourceGroup.sortGet/applySort).
   function libSortOptions(cat) {
     if (cat === "albums")
       return [["Recently added", "date"], ["Name", "name"], ["Release date", "release"], ["Artist", "artist"]]
@@ -6441,7 +6455,7 @@ ApplicationWindow {
             id: queueBtnRow
             anchors.centerIn: parent
             spacing: 7
-            Ico {
+            Icon {
               name: "arrow-down"
               color: root.accent
               size: 15
@@ -6664,7 +6678,7 @@ ApplicationWindow {
                 anchors.leftMargin: 14
                 anchors.rightMargin: 6
                 spacing: 10
-                Ico {
+                Icon {
                   name: "search"
                   color: root.accent
                   size: 18
@@ -7590,7 +7604,7 @@ ApplicationWindow {
                     id: bihTitleFm
                     font: bihTitle.font
                   }
-                  NewTag {
+                  NewReleaseBadge {
                     id: bihNew
                     host: root
                     y: Math.round(bihTitle.y + bihTitle.baselineOffset - bihTitleFm.tightBoundingRect("H").height / 2 - capMiddle)
@@ -8449,7 +8463,7 @@ ApplicationWindow {
       // each list carries its own 8px inside the scroll area.
       spacing: 0
 
-      LibLibrarySection {
+      LibrarySection {
         id: libSection
         host: root
         // The section shares the pane with the source groups. Its
@@ -8474,7 +8488,7 @@ ApplicationWindow {
           Repeater {
             id: libSourceRep
             model: root.myMusicSources
-            delegate: LibSourceGroup {
+            delegate: SavedSourceGroup {
               host: root
               required property var modelData
               required property int index
@@ -10582,7 +10596,7 @@ ApplicationWindow {
             color: checked ? root.accent : "transparent"
             border.color: checked ? root.accent : root.outline
             border.width: 1.5
-            Ico {
+            Icon {
               anchors.centerIn: parent
               visible: ackChk.checked
               name: "check"
@@ -10802,13 +10816,13 @@ ApplicationWindow {
           Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: 4
           spacing: 12
-          SpecBtn {
+          ActionButton {
             primary: true
             label: "SHOW IN FOLDER"
             visible: libraryClaimGate.folder !== ""
             onClicked: libraryClaimGate.reveal()
           }
-          SpecBtn {
+          ActionButton {
             label: libraryClaimGate.isOwned ? "REDOWNLOAD" : "DOWNLOAD ANYWAY"
             onClicked: libraryClaimGate.proceed()
           }
@@ -10930,12 +10944,12 @@ ApplicationWindow {
           Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: 4
           spacing: 12
-          SpecBtn {
+          ActionButton {
             primary: true
             label: "TURN ON UPDATE CHECKS"
             onClicked: updateOptInGate.answer(true)
           }
-          SpecBtn {
+          ActionButton {
             label: "NOT NOW"
             onClicked: updateOptInGate.answer(false)
           }
@@ -11032,7 +11046,7 @@ ApplicationWindow {
           Layout.alignment: Qt.AlignHCenter
           Layout.topMargin: 4
           spacing: 12
-          SpecBtn {
+          ActionButton {
             primary: true
             label: "KEEP DOWNLOADING"
             onClicked: {
@@ -11041,7 +11055,7 @@ ApplicationWindow {
               exitGate.open = false
             }
           }
-          SpecBtn {
+          ActionButton {
             danger: true
             label: "EXIT ANYWAY"
             onClicked: {

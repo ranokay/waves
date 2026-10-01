@@ -121,9 +121,9 @@ jobs:
       - name: Guard, a published release must be able to self-update
         if: ${{ (github.event_name != 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
         run: |
-          grep -Eq '^REPO = "[^"]+"' waves/desktop/updater.py \
+          grep -Eq '^REPO = "[^"]+"' waves/desktop/updates/updater.py \
             || { echo "::error::updater.REPO is empty; a published build could never auto-update. Set REPO before tagging a release."; exit 1; }
-          grep -Eq '^UPDATE_PUBLIC_KEY(: str)? = "[^"]+"' waves/desktop/signing.py \
+          grep -Eq '^UPDATE_PUBLIC_KEY(: str)? = "[^"]+"' waves/desktop/updates/signing.py \
             || { echo "::error::signing.UPDATE_PUBLIC_KEY is empty; shipped updates could not be signature-verified. Embed UPDATE_PUBLIC_KEY before tagging a release."; exit 1; }
           echo "Updater is configured; release build may proceed."
       # The version compiled INTO the binary must equal the release tag, or the
@@ -539,7 +539,7 @@ jobs:
         # in-repo test can see it (round-trip tests monkeypatch the key). This
         # exercises the real verify() over the just-signed manifest bytes.
         run: |
-          uv run --no-sync python -c "from waves.desktop.signing import UPDATE_PUBLIC_KEY, verify; import sys; ok = verify(open('SHA256SUMS','rb').read(), open('SHA256SUMS.sig').read().strip(), UPDATE_PUBLIC_KEY); sys.exit(0 if ok else 'SHA256SUMS.sig does not verify against the baked UPDATE_PUBLIC_KEY')"
+          uv run --no-sync python -c "from waves.desktop.updates.signing import UPDATE_PUBLIC_KEY, verify; import sys; ok = verify(open('SHA256SUMS','rb').read(), open('SHA256SUMS.sig').read().strip(), UPDATE_PUBLIC_KEY); sys.exit(0 if ok else 'SHA256SUMS.sig does not verify against the baked UPDATE_PUBLIC_KEY')"
           echo "SHA256SUMS verifies against the baked update key."
       # The Release body comes from CHANGELOG.md: the section whose heading is
       # exactly "## <tag> (date)". Missing section = empty body + a warning,

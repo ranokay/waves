@@ -30,7 +30,7 @@ from types import SimpleNamespace
 
 from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.desktop import backend
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 from waves.providers.apple import AppleProvider
 from waves.providers.tidal import TidalProvider
 

@@ -205,7 +205,7 @@ def test_a_direct_scenario_run_never_writes_the_native_config(tmp_path, monkeypa
     """
     native = _sandboxed_home(monkeypatch, tmp_path)
     proc = subprocess.run(  # noqa: S603 (fixed argv: this interpreter, a repo scenario file)
-        [sys.executable, str(TESTS_ROOT / "ui" / "test_search_sort_pref.py"), "--run-scenario"],
+        [sys.executable, str(TESTS_ROOT / "search" / "test_search_sort_pref.py"), "--run-scenario"],
         env=scenario_env(None),
         capture_output=True,
         text=True,

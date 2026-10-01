@@ -349,7 +349,7 @@ def occupant_is_own(path_file: str | pathlib.Path, owned_ids: set[str], version:
     delivery skip both ask, so a tagged file for a DIFFERENT item falls
     through to destination numbering and is fetched instead of skipped.
 
-    ``owned_ids`` mirrors ``waves.download._waves_owned_ids``: every id a file
+    ``owned_ids`` mirrors ``waves.ids.owned_item_ids``: every id a file
     of the item may legitimately carry (its own, plus the legacy spellings).
     """
     if not occupant_is_version(path_file, version):

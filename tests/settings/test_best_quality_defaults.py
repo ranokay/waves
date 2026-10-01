@@ -15,7 +15,7 @@ configs that never set the keys (see test_the_default_is_what_a_fresh_install_ge
 from __future__ import annotations
 
 from waves.constants import CoverDimensions
-from waves.desktop.backend import _ENUM_LABELS
+from waves.desktop.settings.schema import ENUM_LABELS
 from waves.model.cfg import Settings
 
 
@@ -37,12 +37,12 @@ def test_fresh_install_keeps_the_finest_lyrics_and_art():
 
 
 def test_quality_dropdowns_state_up_to_ceilings():
-    tidal = _ENUM_LABELS["tidal_quality_audio"]
+    tidal = ENUM_LABELS["tidal_quality_audio"]
     assert tidal["LOW"] == "Low · Up to 96 Kbps"
     assert tidal["HIGH"] == "High · Up to 320 Kbps"
     assert tidal["LOSSLESS"] == "Lossless · Up to 16-bit / 44.1 kHz"
     assert tidal["HI_RES_LOSSLESS"] == "Max · Hi-Res · Up to 24-bit / 192 kHz"
-    apple = _ENUM_LABELS["apple_quality_audio"]
+    apple = ENUM_LABELS["apple_quality_audio"]
     assert apple["HIGH"] == "High · Up to 256 Kbps (AAC)"
     assert apple["LOSSLESS"] == "Lossless · Up to 24-bit / 48 kHz (ALAC)"
     assert apple["HI_RES_LOSSLESS"] == "Max · Hi-Res · Up to 24-bit / 192 kHz (ALAC)"

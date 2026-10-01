@@ -11,7 +11,7 @@ mixed in with everything else that ever landed there.
 runs over ``Path.parent.parts`` and pathlib has already swallowed the "." by
 the time it looks. It still catches "..", which pathlib keeps. So the naming of
 a dots-only segment has to happen on the string, before any Path is built,
-which is where ``_drop_empty_segments`` sits.
+which is where ``normalize_template_segments`` sits.
 
 The rule, pinned below: ONLY a segment that is entirely "." (or
 "..") is renamed. ". (Deluxe)", "Album." and "(...) ." keep whatever the

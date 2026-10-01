@@ -18,15 +18,15 @@ from __future__ import annotations
 
 import os
 
-from support.library_fakes import (
+from library.fakes import (
     make_album_dir as _album,
 )
-from support.library_fakes import (
+from library.fakes import (
     make_library_bridge as _make,
 )
 
 import waves.metadata.matching as matching
-from waves.desktop import bridge_library
+from waves.desktop.library import bridge as library_bridge
 
 
 def _bridge(tmp_path):
@@ -71,7 +71,7 @@ def test_a_republish_resets_the_memo(tmp_path, monkeypatch):
 
 def test_the_memo_is_bounded_fifo(tmp_path, monkeypatch):
     s = _bridge(tmp_path)
-    monkeypatch.setattr(bridge_library, "_PRESENCE_MEMO_MAX", 8)
+    monkeypatch.setattr(library_bridge, "_PRESENCE_MEMO_MAX", 8)
     for i in range(12):
         s.libraryAlbumPresence(f"Artist {i}", f"Album {i}", "2020", 5)
     assert len(s._presence_memo) == 8

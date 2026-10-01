@@ -1,0 +1,1 @@
+"""Desktop queue domain."""

@@ -289,3 +289,9 @@ Waves collects no information and its developer has **no way of knowing how the 
 Full terms: **<https://getwaves.dev/terms/>**. Questions reach the project through [GitHub issues](https://github.com/iamprivacy/Waves/issues).
 
 Please respect the artists and rights-holders whose work this plays.
+
+## Developing Waves
+
+Start with [DEVELOPER.md](DEVELOPER.md) for setup and validation, the
+[domain map](docs/architecture.md) to find a feature and its tests, and the
+[documentation index](docs/README.md) for provider rules and architecture decisions.

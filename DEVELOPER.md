@@ -3,64 +3,28 @@
 A short orientation for anyone who wants to read or change the Waves code.
 Ten minutes here saves an afternoon of reverse-engineering.
 
-## Architecture at a glance
+## Finding code
 
-```
-┌─────────────────────────────  Waves (GUI)  ─────────────────────────────┐
-│                                                                         │
-│  qml/Main.qml ── the main window (views, routing, state, object tree)   │
-│  qml/*.qml ── every component, split out beside it: ArtCard, TrackRow,  │
-│               LibSourceGroup, DownloadButton, NavTab, the drawers, the  │
-│               player surfaces)                                          │
-│  qml/SettingsPage.qml ── schema-driven settings editor                  │
-│        │                                    ▲                           │
-│        │ calls slots on `waves`             │ signals (queued,          │
-│        ▼ (context property)                 │ GUI-thread delivery)      │
-│  backend.py ── WavesBridge(QObject): every slot QML can call,           │
-│        │       every signal QML listens to (the library and queue        │
-│        │       behavior live in the bridge_library.py / bridge_queue.py  │
-│        │       mixins)                                                   │
-│        │                                                                │
-│        ├── threadpool (QThreadPool): search, artist pages, metadata     │
-│        └── dl_pool   (QThreadPool, 1 thread): the ONE download job in   │
-│                                     flight; queued rows wait as specs   │
-└────────┼────────────────────────────────────────────────────────────────┘
-         ▼ imports, unchanged
-   waves engine ──── Settings, Tidal (auth/session), Download
-                     (streaming, FLAC extraction, tagging)
-                     providers/ ── the Provider seam: TIDAL and Apple catalog
-                     reads plug in here; each provider's engine stays behind it
-```
+Start with [the architecture and domain map](docs/architecture.md). It links
+Python owners, QML components, tests and domain rules for each feature. The
+[glossary](CONTEXT.md) defines the language; [ADRs](docs/adr/) explain decisions.
 
-One process, one window, one bridge object. QML never talks to TIDAL and
-Python never builds UI.
+`waves/desktop/backend.py` composes the single `WavesBridge` context object.
+`qml/Main.qml` composes the window and routing. Domain modules own the
+extracted behavior; `qml/domains/` contains their UI. Shared controls live in
+`qml/components/`, low-level controls and Palette in `qml/primitives/`.
+Search, browse, catalog and playback coordination still live in the bridge;
+the map names those sections explicitly.
 
-## Package layout and the engine/UI seam
+The engine/UI seam is a hard boundary: `waves/library/`, `waves/metadata/`,
+`waves/providers/` and the download engine never import `waves/desktop/`.
+Provider implementations translate SDK objects behind the Provider contract;
+QML receives plain payloads and IDs. One process, one window, one bridge
+object, plus a child process for library scanning.
 
-Waves began as a fork of Tidaler and now maintains its own engine: the
-download engine modules at the top of the `waves` package descend from the
-upstream code (with many fixes of our own), and everything UI-specific lives
-in `waves/desktop/`. The engine/UI split is a hard seam: engine modules stay
-close to their inherited shape and UI-owned behavior lands in
-`waves/desktop/` subclasses and helpers, which keeps the engine easy to audit.
-
-```
-waves/
-  config.py  constants.py  ids.py      # settings/session, shared primitives
-  paths.py  errors.py  redaction.py    # naming rules, error types, log scrubbing
-  download.py  progress.py  poolgauge.py  playlists.py  # the inherited engine
-  library/                             # scan, index, worker, ownership, share mounts
-  metadata/                            # tags, matching, MusicBrainz, lyrics, camelot
-  providers/                           # the Provider seam: base, tidal*, apple/
-  model/                               # persisted data models
-  desktop/                             # the Qt/QML layer, see desktop/README.md
-    icons/  fonts/  qml/
-```
-
-User-facing state lives in its own `Waves` folder, independent of the package
-name (`~/.config/Waves` on Linux, `~/Library/Application Support/Waves` on
-macOS, `%APPDATA%\Waves` on Windows; see `__config_dirname__` in
-`waves/__init__.py`).
+User-facing state lives in its own `Waves` folder (`~/.config/Waves` on
+Linux, `~/Library/Application Support/Waves` on macOS, `%APPDATA%\Waves` on
+Windows; see `__config_dirname__` in `waves/__init__.py`).
 
 ## Threading model
 
@@ -90,8 +54,8 @@ def doThing(self, arg: str) -> None:  # called from QML
 ```
 
 Signals emitted from a worker are delivered on the GUI thread automatically
-(queued connection), which is why the bridge never needs locks around
-QML-facing state.
+(queued connection), so handlers can commit results there. Worker callbacks must not mutate
+GUI-owned state directly; queue rows have their own lock as described above.
 
 ## Where state lives
 
@@ -102,27 +66,32 @@ QML-facing state.
 | User preferences                                          | engine `Settings` (`settings.json`) plus `waves.json` for GUI-only prefs | Persisted across runs                              |
 | Login token                                               | engine `Tidal` (`token.json`)                                            | Owned by the engine                                |
 
-## Worked example: adding a feature end to end
+## Adding a feature
 
-Say you want a "share link" action on album cards:
+For an album-card action:
 
-1. **Bridge slot** (`backend.py`): add `@Slot(str)` `def shareAlbum(self,
-album_id)`, look the album up in `self._objs["album"]`, do the work on
-   `self.threadpool` via `Worker`, emit a new signal with the result.
-2. **Signal**: declare it near the other signals with a comment saying what
-   it carries and when it fires (see `BRIDGE.md` in `waves/desktop/`).
-3. **QML**: add a `function onShareAlbum(...)` handler inside Main.qml's
-   `Connections { target: waves }` block, and call `waves.shareAlbum(id)`
-   from the card's control line.
-4. **Conventions**: reuse the shared components (ArtistLinks, DotMatrix,
-   button spec constants on the root item) so the new surface matches the
-   rest of the app, and keep any dynamic `Text` as `Text.PlainText` (a test
-   enforces this).
+1. Find catalog ownership in [the domain map](docs/architecture.md). Put the
+   provider operation on its Provider implementation, or a pure catalog rule
+   beside its owner. A bridge slot coordinates the current session/cache and
+   dispatches blocking work through `Worker`.
+2. Keep `@Slot`/`Signal` declarations on the bridge context object. Document
+   new payloads in [BRIDGE.md](waves/desktop/BRIDGE.md); preserve GUI-thread
+   state mutation and stale-result generation checks.
+3. Add the action to `qml/domains/catalog/ArtCard.qml`. Route results through
+   Main's `Connections` where they change shared window state. Reuse the
+   relevant domain control or a shared primitive, and set dynamic Text to
+   `Text.PlainText`.
+4. Add behavior tests in `tests/catalog/`, including provider-contract tests
+   in `tests/providers/` if that surface changes. Use the existing subprocess
+   QML harness for rendered behavior, then the final strict gate.
+
+Extract a cohesive state owner when a feature needs one; avoid appending pure
+rules to the bridge or adding a forwarding module for a single call.
 
 ## Testing and verification
 
 ```bash
-mise run test                         # unit tests, incl. the QML guards
+mise run test                         # default suite, excludes live accounts
 mise run app                          # run the app from source
 mise run build                        # Nuitka build -> dist/waves.app
 ```
@@ -156,18 +125,17 @@ entry (the Waves name and icon) is a property of the packaged bundle:
 
 The suite splits into groups with their own commands. Do not run groups
 concurrently, and keep the machine idle while one runs: the QML scenarios are
-timing-sensitive under load. Counts and runtimes below are as of 2026-09-17
-(macOS arm64, offscreen Qt); the budget is the limit the group must stay
-within on this host.
+timing-sensitive under load. The budgets are local targets on macOS arm64, offscreen Qt. Use the run
+summary for current counts; they change as coverage grows.
 
-| Group                                                  | Command                 |  Cases |                   Budget (measured) |
-| ------------------------------------------------------ | ----------------------- | -----: | ----------------------------------: |
-| fast (no Qt, ffmpeg, slow, integration or account)     | `mise run test-fast`    | ~4,194 |                      < 1 min (37 s) |
-| quick QML (the heaviest boots skipped)                 | `mise run test-qml`     |    ~91 |                < 5 min (4 min 12 s) |
-| default (all but the live account tests)               | `mise run test-default` | ~4,354 |               < 10 min (6 min 48 s) |
-| strict (the merge gate; default plus `--require-qml`)  | `mise run test-strict`  | ~4,354 | < 10 min (6 min 51 s to 9 min 21 s) |
-| ffmpeg (assumes ffmpeg on PATH; `-rs` shows the skips) | `mise run test-ffmpeg`  |    ~56 |                      < 1 min (11 s) |
-| live account (never in CI; needs credentials)          | `mise run test-account` |      4 |                                 n/a |
+| Group                                                           | Command                                    | Target            |
+| --------------------------------------------------------------- | ------------------------------------------ | ----------------- |
+| fast (excludes qml, ffmpeg, slow, integration, account markers) | `mise run test-fast`                       | < 1 min           |
+| quick QML (excludes slow and integration scenarios)             | `mise run test-qml`                        | < 5 min           |
+| default (all but live accounts)                                 | `mise run test` or `mise run test-default` | < 10 min          |
+| strict (default plus required Qt)                               | `mise run test-strict`                     | < 10 min          |
+| FFmpeg                                                          | `mise run test-ffmpeg`                     | < 1 min           |
+| live accounts (opt-in credentials, never CI)                    | `mise run test-account`                    | service-dependent |
 
 `--require-qml` turns a missing Qt into a failure instead of a silent skip of
 the whole QML half. The `slow` marker names the heaviest QML boots (each case
@@ -180,13 +148,14 @@ the live account group has its own wrapper (`mise run test-account`) and never r
 check task runs the command through `uv run --locked --all-extras`, so the
 lockfile is the environment and drift fails the run.
 
-`mise run check` also carries the static gates. It runs the format hooks
+`mise run check` (also `mise run lint`) carries the static gates. It runs the format hooks
 (ruff format, prettier, qmlformat), so it rewrites unformatted files instead
-of only failing: run `mise run fmt` first on a dirty tree, or re-run check
+of only failing: run `mise run format` first on a dirty tree, or re-run check
 until it is clean.
 
-- `mise run fmt` — the three formatters check runs (ruff format, qmlformat,
-  prettier) with nothing else attached.
+- `mise run format` (also `fmt`) — format Python, QML and the remaining
+  text with ruff, qmlformat and prettier. `lint` is an alias for the comprehensive
+  `check` gate and can also rewrite files through the format hooks.
 - `mise run lint-qml` — qmllint over `waves/desktop/qml` for direct use, also wired as a
   pre-commit hook for changed QML. `mise run check` reaches that same hook through its
   `pre-commit run -a` (once, over the whole tree), so there is no separate lint pass.
@@ -222,7 +191,7 @@ The launch water (the wave video behind the launch screen) shares the GUI
 thread with the interface, and the GUI thread waits for the interpreter lock
 whenever any Python runs, so a job dispatched before `bootRevealed` competes
 with the picture for every frame it holds the lock. Two things keep it
-smooth: `tests/test_boot_quiet_window.py` allowlists every job that may run
+smooth: `tests/ui/test_boot_quiet_window.py` allowlists every job that may run
 before the reveal (a new boot job fails the test until it is added with its
 reason), and `tools/launch_probe.py` measures a real launch with Qt's own
 render-loop log, no Python on the measured path, and prints a verdict:
@@ -233,7 +202,7 @@ uv run --locked --all-extras python tools/launch_probe.py   # 12 s, gaps over 45
 
 Run it twice (the first launch after a build is colder) before and after
 anything that touches the boot path. The library walk itself runs in a child
-process (`waves/library/worker.py`, started by `waves/desktop/library_proc.py`)
+process (`waves/library/worker.py`, started by `waves/desktop/library/scan_process.py`)
 for the same reason: off the GUI thread was never enough, off the interpreter
 is what the picture needs.
 
@@ -265,11 +234,11 @@ Releases are published from the upstream repository,
 [`iamprivacy/Waves`](https://github.com/iamprivacy/Waves/releases). It holds the
 signing key (`WAVES_SIGNING_KEY`) and the release line. This fork is a
 development line. It publishes no releases and cannot sign one. The
-`UPDATE_PUBLIC_KEY` in `waves/desktop/signing.py` is upstream's public key, and
+`UPDATE_PUBLIC_KEY` in `waves/desktop/updates/signing.py` is upstream's public key, and
 the private half is not in this repository.
 
 The in-app updater resolves updates from upstream (`REPO` in
-`waves/desktop/updater.py`), so a fork build can be replaced in place by an
+`waves/desktop/updates/updater.py`), so a fork build can be replaced in place by an
 upstream release. The Apple Music engine is fork-only and is not in that
 release. The release workflow (`.github/workflows/release-or-test-build.yml`)
 is rehearsal-only here. Dispatch it with a blank `release_tag` to build the
@@ -278,7 +247,9 @@ upstream.
 
 ## More detail
 
-- `waves/desktop/README.md`: layout, key concepts, architecture notes.
+- [Architecture](docs/architecture.md): ownership, dependency direction and naming.
+- [Documentation index](docs/README.md): domain rules, provider specs and evidence.
+- `waves/desktop/README.md`: desktop directory entry points.
 - `waves/desktop/BRIDGE.md`: reference for every bridge signal and slot
   pattern.
 - `WavesBridge`'s class docstring in `backend.py`: the state model.

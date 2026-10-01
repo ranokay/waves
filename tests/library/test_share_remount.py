@@ -20,7 +20,7 @@ from support.dispatch_stub import arm_queue
 
 import waves.desktop.backend as backend_mod
 from waves.desktop.backend import WavesBridge
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 from waves.library import netmount
 
 

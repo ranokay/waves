@@ -25,7 +25,7 @@ import pytest
 from support.dispatch_stub import arm_queue
 
 from waves.desktop.backend import WavesBridge
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 
 
 class _Signal:

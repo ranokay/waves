@@ -18,11 +18,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from support.provider_fakes import BareProvider
+from providers.fakes import BareProvider
 from tidalapi.media import AudioMode, Quality
 
 from waves.desktop.backend import WavesBridge
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 from waves.download import Download
 from waves.model.downloader import TrackStreamInfo
 from waves.providers import (

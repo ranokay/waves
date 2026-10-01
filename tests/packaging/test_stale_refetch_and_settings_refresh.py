@@ -19,12 +19,12 @@ from unittest.mock import patch
 from support.dispatch_stub import arm_queue
 from support.paths import QML_DIR
 
-from waves.desktop import updater as updater_mod
 from waves.desktop.backend import WavesBridge, _link_tiles_of
+from waves.desktop.updates import updater as updater_mod
 
 MAIN_QML = (QML_DIR / "Main.qml").read_text(encoding="utf-8")
-SETTINGS_QML = (QML_DIR / "SettingsPage.qml").read_text(encoding="utf-8")
-ALBUM_BLOCK_QML = (QML_DIR / "AlbumBlock.qml").read_text(encoding="utf-8")
+SETTINGS_QML = (QML_DIR / "domains/settings/SettingsPage.qml").read_text(encoding="utf-8")
+ALBUM_BLOCK_QML = (QML_DIR / "domains/catalog/AlbumBlock.qml").read_text(encoding="utf-8")
 
 
 class _Signal:

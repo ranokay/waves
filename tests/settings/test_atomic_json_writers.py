@@ -16,14 +16,15 @@ from unittest.mock import patch
 
 import pytest
 
-from waves.desktop.backend import _FACTORY_WIPE_FILES, _write_json_atomic, _write_text_atomic
+from waves.desktop.backend import _FACTORY_WIPE_FILES
+from waves.desktop.settings.persistence import write_json_atomic, write_text_atomic
 
 
 class TestAtomicWriters:
     def test_the_payload_lands_complete(self, tmp_path):
         target = tmp_path / "cache.json"
 
-        _write_json_atomic(str(target), {"a": [1, 2, 3]}, indent=1)
+        write_json_atomic(str(target), {"a": [1, 2, 3]}, indent=1)
 
         assert json.loads(target.read_text(encoding="utf-8")) == {"a": [1, 2, 3]}
 
@@ -35,7 +36,7 @@ class TestAtomicWriters:
             patch("waves.desktop.backend.os.replace", side_effect=OSError(28, "No space left on device")),
             pytest.raises(OSError, match="No space left on device"),
         ):
-            _write_json_atomic(str(target), {"replacement": True})
+            write_json_atomic(str(target), {"replacement": True})
 
         assert json.loads(target.read_text(encoding="utf-8")) == {"kept": True}
 
@@ -46,7 +47,7 @@ class TestAtomicWriters:
             patch("waves.desktop.backend.os.replace", side_effect=OSError(28, "No space left on device")),
             pytest.raises(OSError),
         ):
-            _write_json_atomic(str(target), {"a": 1})
+            write_json_atomic(str(target), {"a": 1})
 
         assert list(tmp_path.iterdir()) == []
 
@@ -72,7 +73,7 @@ class TestAtomicWriters:
             patch("waves.desktop.backend.os.fsync", _fsync),
             patch("waves.desktop.backend.os.replace", _replace),
         ):
-            _write_text_atomic(str(target), "{}")
+            write_text_atomic(str(target), "{}")
 
         assert order == ["fsync", "replace"]
 
@@ -89,7 +90,7 @@ class TestTheWritersAreTheOnesUsed:
     def test_the_prefs_writer_leaves_a_readable_file(self, tmp_path):
         target = tmp_path / "waves.json"
 
-        _write_json_atomic(str(target), {"window": {"w": 1280}}, indent=2)
+        write_json_atomic(str(target), {"window": {"w": 1280}}, indent=2)
 
         assert json.loads(target.read_text(encoding="utf-8"))["window"]["w"] == 1280
         assert not pathlib.Path(str(target) + ".tmp").exists()

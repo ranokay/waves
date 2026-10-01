@@ -13,7 +13,7 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
-from support.provider_fakes import BareProvider
+from providers.fakes import BareProvider
 
 from waves.constants import CTX_APPLE, CTX_TIDAL, QualityTier
 from waves.desktop.backend import WavesBridge
@@ -423,7 +423,9 @@ def test_the_chooser_qml_names_no_provider():
 
     # The Chooser lives in DownloadButton.qml; the popover component is
     # the last block in the file, so the region runs to the end.
-    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "DownloadButton.qml").read_text(encoding="utf-8")
+    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "domains/downloads/DownloadButton.qml").read_text(
+        encoding="utf-8"
+    )
     start = qml.find("id: chooserComp")
     assert start != -1, "the guard found no chooser region to check"
     region = qml[start:]
@@ -440,7 +442,9 @@ def test_the_chooser_offers_no_inert_control():
 
     from waves.desktop import backend as backend_module
 
-    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "DownloadButton.qml").read_text(encoding="utf-8")
+    qml = (pathlib.Path(backend_module.__file__).parent / "qml" / "domains/downloads/DownloadButton.qml").read_text(
+        encoding="utf-8"
+    )
     assert "enabled: false" not in qml, "an inert control came back into the download button"
 
 

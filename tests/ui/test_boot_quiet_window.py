@@ -75,7 +75,7 @@ ALLOWED_BOOT_JOBS = {
     # The saved-session login: one HTTPS round trip.
     "WavesBridge._try_token_login.<locals>.work",
     # The settings writer: asleep until a save is queued.
-    "_SingleFlightWriter._run",
+    "SingleFlightWriter._run",
 }
 
 

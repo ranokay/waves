@@ -13,7 +13,7 @@ import threading
 import time
 
 import pytest
-from support.library_fakes import ScandirStub
+from library.fakes import ScandirStub
 from support.paths import REPO_ROOT
 
 from waves.library.index import (
@@ -2229,7 +2229,7 @@ def test_the_sqlite_artist_rollup_refuses_various_artists_keys(tmp_path):
     walks past it and only normalises into a compilation afterwards. Both nets
     were deliberate. Without this one a compilation credit is rolled up as a
     real artist, badge and tally included."""
-    from waves.desktop.bridge_library import SqlArtistRollup
+    from waves.desktop.library.bridge import SqlArtistRollup
 
     lib = _mk(tmp_path, "lib", [])
     real = _mk(tmp_path, "lib/Lorna Shore/Pain Remains", ["01.flac"])

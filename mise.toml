@@ -1,4 +1,4 @@
-# Tool versions and the task surface (the Makefile's successor).
+# Pinned tools and the development commands used locally and in CI.
 #
 # uv owns Python resolution, installation and the lockfile (uv.lock is the one
 # authoritative lock; `uv lock --check` fails on drift); mise owns which
@@ -14,6 +14,7 @@ description = "Create/sync the dev environment and install the pre-commit hooks"
 run = "uv sync --locked --all-extras && uv run --locked --all-extras pre-commit install"
 
 [tasks.check]
+alias = "lint"
 description = "Lock drift, static analysis, pre-commit hooks and unused dependencies (the format hooks rewrite files; run fmt first)"
 depends = ["typecheck"]
 run = "uv lock --check && uv run --locked --all-extras pre-commit run -a && uv run --locked --all-extras deptry ."
@@ -31,6 +32,7 @@ description = "Format the QML tree with qmlformat (style pinned by .qmlformat.in
 run = "bash tools/format_qml.sh"
 
 [tasks.fmt]
+alias = "format"
 description = "Format the tree: ruff format (Python), qmlformat (QML), prettier (the rest)"
 run = "uv run --locked --all-extras ruff format --force-exclude && bash tools/format_qml.sh && uv run --locked --all-extras pre-commit run prettier --all-files"
 
@@ -38,12 +40,8 @@ run = "uv run --locked --all-extras ruff format --force-exclude && bash tools/fo
 description = "ty over the shipped package (waves/)"
 run = "uv run --locked --all-extras ty check"
 
-[tasks.test]
-description = "Run the whole suite (unit tests, incl. the QML guards)"
-run = 'uv run --locked --all-extras pytest'
-
 [tasks.test-fast]
-description = "The fast group (no Qt, ffmpeg, slow, integration or account; < 1 min)"
+description = "Fast tests (excludes qml, ffmpeg, slow, integration and account markers)"
 run = 'uv run --locked --all-extras pytest -rs -q -m "not qml and not ffmpeg and not slow and not account and not integration" tests'
 
 [tasks.test-qml]
@@ -51,6 +49,7 @@ description = "The quick QML group (Qt required; < 5 min)"
 run = 'uv run --locked --all-extras pytest -rs -q -m "qml and not slow and not integration and not account" --require-qml tests'
 
 [tasks.test-default]
+alias = "test"
 description = "The default group (all but the live account tests; < 10 min)"
 run = 'uv run --locked --all-extras pytest -rs -m "not account" tests'
 

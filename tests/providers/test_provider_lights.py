@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from support.provider_fakes import StubProvider, stub_bridge
+from providers.fakes import StubProvider, stub_bridge
 
 from waves.desktop import backend
 from waves.providers import Capability, StatusKind

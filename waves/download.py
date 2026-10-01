@@ -58,6 +58,8 @@ from waves.constants import (
     wants_atmos_delivery,
 )
 from waves.errors import MediaMissing
+from waves.http import pooled_session
+from waves.ids import credited_artist_ids, download_identity_id, owned_item_ids
 from waves.metadata.camelot import format_initial_key
 from waves.metadata.lyrics import fetch_lrclib_lyrics, lyrics_file_choice
 from waves.metadata.naming import name_builder_item, name_builder_title
@@ -90,22 +92,6 @@ from waves.playlists import populate_playlists
 from waves.poolgauge import PoolGauge
 from waves.progress import Progress, TaskID
 from waves.providers.base import AudioType, Provider, Refusal, RefusalKind, StreamInfo
-
-# Provider-shared implementation this engine used to own (identity, refusal
-# parsing, HTTP pooling). Imported for use here and re-exported by name, so
-# the suite's existing ``waves.download.<name>`` targets keep resolving.
-from waves.providers.shared import (
-    _artist_ids,
-    _waves_item_id,
-    _waves_owned_ids,
-    pooled_session,
-)
-from waves.providers.shared import (
-    _SharedContextAdapter as _SharedContextAdapter,
-)
-from waves.providers.shared import (
-    _tidal_refuses_asset as _tidal_refuses_asset,
-)
 from waves.providers.tidal_client import instantiate_media, items_results_all
 from waves.redaction import content as log_content
 
@@ -1818,8 +1804,8 @@ class Download:
         that difference is felt per track. Names are matched literally, never
         globbed, because a stem may hold glob characters of its own.
         """
-        media_id = _waves_item_id(media)
-        owned_ids = _waves_owned_ids(media)
+        media_id = download_identity_id(media)
+        owned_ids = owned_item_ids(media)
         if not media_id:
             return path_media_dst
         occupant_id = read_item_id(path_media_dst)
@@ -1930,7 +1916,7 @@ class Download:
         protected too; an unreadable file keeps the historical id-only answer.
 
         ``owned_ids`` widens "its own" to every id this item may have been
-        written under (see :func:`_waves_owned_ids`), which is what lets a
+        written under (see :func:`owned_item_ids`), which is what lets a
         best-of-both member replace the copy an older Waves filed under the
         source edition's id. ``fetch_is_atmos`` is what THIS download is
         bringing; None means the caller cannot say, and the mode gate stands
@@ -2000,12 +1986,12 @@ class Download:
         if not self.skip_existing:
             return None
 
-        media_id: str = _waves_item_id(media)
+        media_id: str = download_identity_id(media)
 
         if not media_id:
             return None
 
-        owned_ids: set[str] = _waves_owned_ids(media)
+        owned_ids: set[str] = owned_item_ids(media)
         # Asked before the existence check below, and not folded into it: the
         # twin may be sitting at a numbered variant with the base name empty or
         # holding somebody else entirely.
@@ -2921,7 +2907,7 @@ class Download:
             # unique name BEFORE writing lyrics/cover so those sidecars align with the final
             # audio file.
             overwrite: bool = not self.skip_existing
-            media_id: str = _waves_item_id(media)
+            media_id: str = download_identity_id(media)
             path_media_dst = pathlib.Path(path_file_sanitize(path_media_dst, adapt=True))
             # Which Version this fetch brings, resolved once: the stream's own
             # word first, else the job's pin (an empty delivered word would
@@ -2943,7 +2929,7 @@ class Download:
             fetch_is_atmos: bool = fetch_version == AudioType.ATMOS
             path_media_asked: pathlib.Path = path_media_dst
             path_media_dst, name_reserved = self._claim_destination(
-                path_media_dst, media_id, _waves_owned_ids(media), fetch_is_atmos
+                path_media_dst, media_id, owned_item_ids(media), fetch_is_atmos
             )
 
             if name_reserved is None:
@@ -3305,7 +3291,7 @@ class Download:
             # at somebody else's track.
             overwrite: bool = not self.skip_existing
             name_reserved: str | None = None
-            media_id: str = _waves_item_id(media)
+            media_id: str = download_identity_id(media)
 
             if self.skip_existing:
                 # The file being moved is this fetch's own copy, so its Version
@@ -3337,7 +3323,7 @@ class Download:
                 # ask the file itself: this claim runs long after the stream
                 # object is gone.
                 path_media_dst, name_reserved = self._claim_destination(
-                    path_media_dst, media_id, _waves_owned_ids(media), _file_audio_mode_is_atmos(path_media_src)
+                    path_media_dst, media_id, owned_item_ids(media), _file_audio_mode_is_atmos(path_media_src)
                 )
 
                 if name_reserved is None:
@@ -3377,7 +3363,7 @@ class Download:
             # the step's own missing-parent handling takes it from here.
             return True
 
-        media_id = _waves_item_id(media)
+        media_id = download_identity_id(media)
 
         if media_id and self._names_written.get(str(path_media_src)) == media_id:
             return True
@@ -3387,7 +3373,7 @@ class Download:
         except Exception:
             return False
 
-        return bool(occupant_id) and occupant_id in _waves_owned_ids(media)
+        return bool(occupant_id) and occupant_id in owned_item_ids(media)
 
     def _symlink_after_move(
         self,
@@ -4232,7 +4218,7 @@ class Download:
         # this tag exists.
         credited = getattr(video, "artists", None) or []
         album_artist = primary if primary is not None and getattr(primary, "name", "") else next(iter(credited), None)
-        artist_ids: list[str] = _artist_ids(video)
+        artist_ids: list[str] = credited_artist_ids(video)
         album_artist_ids: list[str] = (
             [str(album_artist.id)] if album_artist is not None and getattr(album_artist, "id", None) else []
         )

@@ -27,14 +27,14 @@ from __future__ import annotations
 
 import os
 
-from support.library_fakes import (
+from library.fakes import (
     make_album_dir as _album,
 )
-from support.library_fakes import (
+from library.fakes import (
     make_library_bridge as _make,
 )
 
-from waves.desktop import bridge_library
+from waves.desktop.library import bridge as library_bridge
 
 
 class _BurstLib:
@@ -72,7 +72,7 @@ def _scanned_bridge(tmp_path, commits: int):
 
 
 def test_a_commit_burst_publishes_once_plus_the_final(tmp_path, monkeypatch):
-    monkeypatch.setattr(bridge_library, "_SCAN_PUBLISH_MIN_S", 10_000.0)
+    monkeypatch.setattr(library_bridge, "_SCAN_PUBLISH_MIN_S", 10_000.0)
     s = _scanned_bridge(tmp_path, commits=5)
     s._rebuild_library_index()
     # First commit of the burst, then the unconditional final publish.
@@ -82,14 +82,14 @@ def test_a_commit_burst_publishes_once_plus_the_final(tmp_path, monkeypatch):
 
 
 def test_an_open_window_lets_every_commit_publish(tmp_path, monkeypatch):
-    monkeypatch.setattr(bridge_library, "_SCAN_PUBLISH_MIN_S", 0.0)
+    monkeypatch.setattr(library_bridge, "_SCAN_PUBLISH_MIN_S", 0.0)
     s = _scanned_bridge(tmp_path, commits=5)
     s._rebuild_library_index()
     assert len(s.libraryPresenceChanged.emits) == 5 + 1
 
 
 def test_every_publish_precomputes_the_artist_rollup(tmp_path, monkeypatch):
-    monkeypatch.setattr(bridge_library, "_SCAN_PUBLISH_MIN_S", 10_000.0)
+    monkeypatch.setattr(library_bridge, "_SCAN_PUBLISH_MIN_S", 10_000.0)
     s = _scanned_bridge(tmp_path, commits=3)
     s._rebuild_library_index()
     # Precomputed for the published index BEFORE anyone asked the slot.

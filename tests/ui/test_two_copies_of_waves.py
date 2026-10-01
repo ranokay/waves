@@ -243,7 +243,7 @@ def test_a_failed_install_lets_go_too():
 def test_backend_writer_stages_through_a_name_of_its_own(tmp_path, monkeypatch):
     import os
 
-    from waves.desktop.backend import _write_text_atomic
+    from waves.desktop.backend import write_text_atomic
 
     staged: list[str] = []
     real_replace = os.replace
@@ -255,8 +255,8 @@ def test_backend_writer_stages_through_a_name_of_its_own(tmp_path, monkeypatch):
     monkeypatch.setattr("waves.desktop.backend.os.replace", replace)
     target = str(tmp_path / "waves.json")
 
-    _write_text_atomic(target, "{}")
-    _write_text_atomic(target, "{}")
+    write_text_atomic(target, "{}")
+    write_text_atomic(target, "{}")
 
     assert len(staged) == 2 and staged[0] != staged[1], "one fixed sibling is what two instances interleave into"
     for name in staged:

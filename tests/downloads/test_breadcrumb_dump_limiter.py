@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from waves.desktop import diagnostics
+from waves.desktop.diagnostics import export as diagnostics
 
 
 class _Sink(logging.Handler):

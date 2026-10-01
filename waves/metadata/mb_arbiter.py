@@ -47,7 +47,7 @@ import urllib.request
 from collections.abc import Callable
 from threading import Lock
 
-from waves.metadata.matching import _album_duration_tol, same_edition, to_year_int
+from waves.metadata.matching import album_duration_tolerance, same_edition, to_year_int
 
 logger = logging.getLogger("waves.mbarbiter")
 
@@ -157,7 +157,7 @@ class MBArbiter:
             return False
         wy = to_year_int(want.get("year"))
         wd = int(want.get("duration", 0) or 0)
-        tol = _album_duration_tol(local_tracks)
+        tol = album_duration_tolerance(local_tracks)
         asked = 0
         verdict: bool | None = False
         for r in candidates:

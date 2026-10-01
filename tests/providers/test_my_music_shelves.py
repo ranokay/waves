@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from support.provider_fakes import StubProvider, stub_bridge
+from providers.fakes import StubProvider, stub_bridge
 
 from waves.desktop import bridge_surfaces
 from waves.desktop.backend import WavesBridge
@@ -30,7 +30,7 @@ QML_DIR = REPO_ROOT / "waves" / "desktop" / "qml"
 MAIN_QML = QML_DIR / "Main.qml"
 # The whole QML tree: the pane's words are bridge data, and the surfaces that
 # must not hardcode them may live in any split-out file.
-ALL_QML = "\n".join(path.read_text(encoding="utf-8") for path in sorted(QML_DIR.glob("*.qml")))
+ALL_QML = "\n".join(path.read_text(encoding="utf-8") for path in sorted(QML_DIR.rglob("*.qml")))
 
 # TIDAL's strip, exactly as the pane has always rendered it.
 _TIDAL_CATEGORIES = ["home", "albums", "tracks", "artists", "playlists", "mixes", "videos"]

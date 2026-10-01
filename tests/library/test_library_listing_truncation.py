@@ -23,8 +23,8 @@ import os
 import shutil
 import time
 
-from support.library_fakes import fake_listing
-from support.library_fakes import make_album_dir as _mk
+from library.fakes import fake_listing
+from library.fakes import make_album_dir as _mk
 
 import waves.library.index as li
 from waves.library.index import SCAN_OK, LibraryIndex
