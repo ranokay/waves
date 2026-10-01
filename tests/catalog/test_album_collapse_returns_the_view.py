@@ -26,14 +26,13 @@ import sys
 from pathlib import Path
 
 import pytest
-from support.paths import QML_MAIN
 from support.qml import (
-    EXIT_NO_QT,
     EXIT_OK,
     EXIT_PRECONDITION,
     EXIT_REGRESSED,
+    boot_main_qml,
     run_scenario,
-    sandbox_qml_settings,
+    wait_until,
 )
 
 # The heaviest QML boot: excluded from the quick QML pass.
@@ -111,58 +110,18 @@ _FIND_BLOCKS = """
 """
 
 
-def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
-    try:
-        from PySide6.QtCore import QEventLoop, QTimer, QUrl
-        from PySide6.QtGui import QGuiApplication
-        from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
-    except Exception as exc:
-        print(f"Qt unavailable: {exc}", file=sys.stderr)
-        return EXIT_NO_QT
-
-    from support.offline import PARK_LOGIN_QML, patch_offline
-
-    patch_offline()
-    app = QGuiApplication.instance() or QGuiApplication([])
-    sandbox_qml_settings()
-    try:
-        from waves.desktop.app import _load_mono
-        from waves.desktop.backend import WavesBridge
-    except Exception as exc:
-        print(f"Qt platform/backend unavailable: {exc}", file=sys.stderr)
-        return EXIT_NO_QT
-
-    WavesBridge._library_root = lambda self: ""  # type: ignore[method-assign]
-    WavesBridge.loadBrowse = lambda self: None  # type: ignore[method-assign]
-    WavesBridge.refreshBrowse = lambda self: None  # type: ignore[method-assign]
-    WavesBridge.loadAlbumTracks = lambda self, album_id: None  # type: ignore[method-assign]
-
-    engine = QQmlApplicationEngine()
-    bridge = WavesBridge(tidal=None)
-    engine.rootContext().setContextProperty("waves", bridge)
-    engine.rootContext().setContextProperty("monoFont", _load_mono())
-    engine.rootContext().setContextProperty("uiFontFamily", app.font().family())
-    engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
-    roots = engine.rootObjects()
-    if not roots:
-        print("Main.qml failed to load", file=sys.stderr)
-        return EXIT_PRECONDITION
-    root = roots[0]
+def _run_scenario() -> int:
+    booted = boot_main_qml()
+    if isinstance(booted, int):
+        return booted
+    _, evaluate, settle, bridge = booted
+    type(bridge).refreshBrowse = lambda self: None  # type: ignore[method-assign]
+    type(bridge).loadAlbumTracks = lambda self, album_id: None  # type: ignore[method-assign]
 
     def q(expr: str):
         expr = expr.replace("root._ab", "(" + _FIND_BLOCKS + ")")
-        e = QQmlExpression(QQmlEngine.contextForObject(root), root, expr)
-        r = e.evaluate()
-        if e.hasError():
-            raise RuntimeError(e.error().toString())
-        if isinstance(r, tuple):
-            r = r[0]
+        r = evaluate(expr)
         return r.toVariant() if hasattr(r, "toVariant") else r
-
-    def settle(ms: int = 120) -> None:
-        loop = QEventLoop()
-        QTimer.singleShot(ms, loop.quit)
-        loop.exec()
 
     failures: list[str] = []
 
@@ -170,25 +129,26 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
         if not cond:
             failures.append(what)
 
-    settle(150)
-    q(PARK_LOGIN_QML)
     bridge._logged_in = True
     bridge.loggedInChanged.emit()
     q("openSearch()")
-    settle()
+    settle(120)
     q("_searchSeq = _navSeq")
     bridge.searchResults.emit(_payload())
-    settle(600)
     # The albums chip lifts the five-row cap, so the page is long enough to
     # scroll; the panels have their (empty) track lists so no fetch is owed.
     q("root.filterType = 'albums'")
     q(
         f"root.trackCache = (function(){{ var m = {{}}; for (var i = 0; i < {_ALBUMS}; ++i) m['a' + i] = []; return m }})()"
     )
-    settle(400)
-    if not q("results.contentHeight > results.height * 2"):
-        print("the results page is not long enough to scroll", file=sys.stderr)
-        return EXIT_PRECONDITION
+    wait_until(
+        lambda: q(
+            f"!root.searchBuilding && Object.keys(root._ab).length === {_ALBUMS} "
+            "&& results.contentHeight > results.height * 2"
+        ),
+        timeout_ms=10000,
+        message="album results finished loading and are scrollable",
+    )
 
     # Scroll so a row sits low in the view, the way a row you reach by
     # scrolling does, then expand it: the view moves up to the anchor line.

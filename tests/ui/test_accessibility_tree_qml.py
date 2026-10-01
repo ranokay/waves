@@ -975,7 +975,7 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         # At minimum size, focusing a section below the viewport must reveal
         # its whole focus target without requiring a separate mouse scroll.
         prior_size = (root.width(), root.height())
-        root.resize(880, 560)
+        root.resize(880, 580)
         q("settingsPage.setSectionOpen('providers', true)")
         settle(300)
         last_header = (
@@ -985,9 +985,9 @@ def _scenario_body() -> int:  # noqa: C901 (one straight scenario)
         q("settingsPage.pendingY = 1000000")
         _focus(q, last_header)
         settle(250)
-        # A late viewport remeasure must keep the user's focused target in
-        # view instead of applying the old, partially restored position.
-        root.resize(880, 580)
+        # Shrinking the viewport after focus must keep the whole target in
+        # view instead of leaving its bottom clipped at the old position.
+        root.resize(880, 560)
         settle(150)
         revealed = q(
             scene_js(
