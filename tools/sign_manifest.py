@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import sys
 
-from waves.desktop.signing import sign
+from waves.desktop.updates.signing import sign
 
 
 def main(argv: list[str]) -> int:

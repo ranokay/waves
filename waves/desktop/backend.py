@@ -33,7 +33,7 @@ import time
 from collections import Counter, deque, namedtuple
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Condition, Event, Lock, Thread, current_thread, local
+from threading import Event, Lock, Thread, current_thread, local
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -47,22 +47,15 @@ from tidalapi.media import AudioMode, Track, Video
 from tidalapi.mix import Mix
 from tidalapi.playlist import Playlist
 
-import waves.download as _waves_download
 from waves import redaction
 from waves.config import Settings, Tidal
 from waves.constants import (
     CTX_APPLE,
     CTX_TIDAL,
-    DEFAULT_ILLEGAL_MAP,
     ITEM_FETCH_FAILED,
     ITEM_GONE,
     LIBRARY_PAGE,
-    CoverDimensions,
-    DefaultAudio,
-    DownsampleTarget,
-    InitialKey,
     MediaType,
-    MetadataTargetUPC,
     QualityTier,
     QualityVideo,
     default_audio_is_both,
@@ -72,10 +65,12 @@ from waves.constants import (
     wants_atmos_delivery,
 )
 from waves.desktop import proc
+from waves.desktop.queue.progress import ProgressBars
 from waves.desktop.session import WavesTidal
 from waves.desktop.worker import Worker
 from waves.download import COLLECTION_GAUGE, SEGMENT_GAUGE, Download
 from waves.errors import DownloadIncomplete
+from waves.http import pooled_session
 from waves.ids import provider_of_id
 from waves.library import netmount
 from waves.library.index import (
@@ -116,10 +111,7 @@ from waves.model.cfg import (
     wants_both_default,
 )
 from waves.model.cfg import Settings as CfgSettings
-from waves.model.cfg import Settings as ModelSettings
-from waves.model.gui_data import ProgressBars
 from waves.paths import (
-    ILLEGAL_FILENAME_CHARS,
     format_path_media,
     format_str_media,
     path_config_base,
@@ -137,7 +129,6 @@ from waves.providers import (
     DownloadAdapter,
     Provider,
     RefusalKind,
-    StatusKind,
     TidalProvider,
 )
 from waves.providers.apple import runner
@@ -154,22 +145,12 @@ from waves.providers.tidal_client import quality_audio_highest
 from waves.providers.tidal_folders import FOLDER_PATH_TOKEN, apply_folder_path
 
 from . import __version__ as _WAVES_VERSION
-from . import devlog, diagnostics
-from .bridge_library import (
-    _LIBRARY_DEEP_SWEEP_MS,
-    _LIBRARY_DL_DEBOUNCE_MS,
-    _LIBRARY_POLL_MS,
-    _LIBRARY_WATCH_DEBOUNCE_MS,
-    LibraryMixin,
-)
-from .bridge_queue import QueueMixin
 from .bridge_surfaces import (
     _APPLE_UNAVAILABLE_STATUS,
     _CHOOSER_KINDS,
     _FAVOURITES_CATEGORIES,
     _LIBRARY_VIEW_LABELS,
     _SEARCH_SECTIONS,
-    _apple_status,
     _begin_login,
     _browse_nav,
     _fmt_duration,
@@ -180,23 +161,44 @@ from .bridge_surfaces import (
     _library_files_view,
     _my_music_empty,
     _my_music_sources,
-    _provider_card,
     _provider_descriptor_dict,
     _provider_light,
     _provider_lights,
     _provider_logos,
     _provider_registry,
-    _provider_session_field,
     _provider_sign_out,
     _record_in_library,
     _session_logged_in,
     _source_provider,
     _source_rows,
 )
-from .ffmpeg_manager import FfmpegCancelled, FfmpegManager
-from .job_runtime import JobRuntime
-from .library_proc import LibraryWorker
-from .updater import AppUpdater, UpdateCancelled, user_facing_error
+from .diagnostics import devlog
+from .diagnostics import export as diagnostics
+from .ffmpeg.manager import FfmpegCancelled, FfmpegManager
+from .library.bridge import (
+    _LIBRARY_DEEP_SWEEP_MS,
+    _LIBRARY_DL_DEBOUNCE_MS,
+    _LIBRARY_POLL_MS,
+    _LIBRARY_WATCH_DEBOUNCE_MS,
+    LibraryMixin,
+)
+from .library.scan_process import LibraryWorker
+from .providers.presentation import apple_status
+from .queue.bridge import QueueMixin
+from .queue.runtime import JobRuntime
+from .settings.persistence import SingleFlightWriter, write_json_atomic, write_text_atomic
+from .settings.schema import (
+    ENUM_BY_FIELD,
+    FIRST_RUN_OVERRIDES,
+    FLAG_FIELDS,
+    FLOAT_FIELDS,
+    MAP_FIELDS,
+    NUMBER_FIELDS,
+    SettingsSchema,
+    apple_status_actions,
+    shipped_field_default,
+)
+from .updates.updater import AppUpdater, UpdateCancelled, user_facing_error
 
 logger = logging.getLogger("waves")
 # Window geometry persistence. Its own child logger so restore/save
@@ -284,7 +286,7 @@ def _probe_http():
     global _http_probe
     with _http_probe_lock:
         if _http_probe is None:
-            _http_probe = _waves_download.pooled_session()
+            _http_probe = pooled_session()
         return _http_probe
 
 
@@ -390,7 +392,7 @@ def _preview_http():
     global _http_preview
     with _http_preview_lock:
         if _http_preview is None:
-            _http_preview = _waves_download.pooled_session(
+            _http_preview = pooled_session(
                 pool_connections=_PREVIEW_SEG_WORKERS,
                 pool_maxsize=_PREVIEW_SEG_WORKERS,
             )
@@ -401,134 +403,6 @@ def _preview_http():
 # convention; on Linux/Windows a horizontal wheel is ordinary scrolling.
 _IS_MACOS = sys.platform == "darwin"
 
-# Type registries, which coercion each settings key needs. settingsSchema()
-# arranges these into task-based sections for the page; the lists below only
-# decide how a value is read from / written back to the config.
-_FLAG_FIELDS = [
-    "video_download",
-    "video_convert_mp4",
-    "lyrics_embed",
-    "lyrics_file",
-    "lyrics_file_synced_only",
-    "lyrics_prefer_lrclib",
-    # Lyrics & art matrix (spec section 9.1): word-timed source
-    # toggle (default on) and the verbatim Apple TTML sidecar (default on,
-    # the ratified best-quality fresh-install set).
-    "lyrics_word_timed",
-    "lyrics_ttml_file",
-    # Per-provider mirrors: each provider's own lyrics/artwork
-    # options, rendered inside its Providers card.
-    "tidal_lyrics_embed",
-    "tidal_lyrics_file",
-    "tidal_lyrics_file_synced_only",
-    "tidal_lyrics_prefer_lrclib",
-    "tidal_lyrics_word_timed",
-    "tidal_lyrics_ttml_file",
-    "apple_lyrics_embed",
-    "apple_lyrics_file",
-    "apple_lyrics_file_synced_only",
-    "apple_lyrics_prefer_lrclib",
-    "apple_lyrics_word_timed",
-    "apple_lyrics_ttml_file",
-    "download_delay",
-    "extract_flac",
-    "extract_flac_all",
-    "metadata_cover_embed",
-    "cover_album_file",
-    # Child of cover_album_file, carried inside its "cover_scope" composite rather
-    # than as its own tile; listed here so applySettings persists it as a bool.
-    "cover_single_track_file",
-    "tidal_metadata_cover_embed",
-    "tidal_cover_album_file",
-    "tidal_cover_single_track_file",
-    "apple_metadata_cover_embed",
-    "apple_cover_album_file",
-    "apple_cover_single_track_file",
-    "skip_existing",
-    "confirm_category_download",
-    "symlink_to_track",
-    "playlist_create",
-    "mark_explicit",
-    "use_primary_album_artist",
-    # Custom tag template: the master switch plus one omit flag
-    # per tag group, shown only while the switch is on.
-    "metadata_custom",
-    "metadata_tag_composer",
-    "metadata_tag_copyright",
-    "metadata_tag_isrc",
-    "metadata_tag_bpm",
-    "metadata_tag_initial_key",
-    "metadata_tag_upc",
-    # Providers area: the Apple component's enable switch. It is
-    # never rendered as a flag tile: the Apple status row carries it as the
-    # section's master switch, so it only needs the persistence coercion.
-    "apple_enabled",
-    # Integrity gate (spec §6): keep-vs-delete for quarantined
-    # files, default keep. The quarantine folder itself is a path field below.
-    "apple_quarantine_keep",
-    # Advanced
-    "downsample_enabled",
-    "metadata_replay_gain",
-    "metadata_write_url",
-]
-_CHOICE_FIELDS = [
-    ("tidal_quality_audio", QualityTier),
-    ("apple_quality_audio", QualityTier),
-    ("default_audio_type", DefaultAudio),
-    ("quality_video", QualityVideo),
-    ("metadata_cover_dimension", CoverDimensions),
-    # Per-provider mirrors of the keys above.
-    ("tidal_metadata_cover_dimension", CoverDimensions),
-    ("apple_metadata_cover_dimension", CoverDimensions),
-    # Advanced
-    ("downsample_target", DownsampleTarget),
-    ("metadata_target_upc", MetadataTargetUPC),
-    ("initial_key_format", InitialKey),
-]
-_NUMBER_FIELDS = [
-    "album_track_num_pad_min",
-    "downloads_concurrent_max",
-    # Advanced
-    "downloads_simultaneous_per_track_max",
-    "api_rate_limit_batch_size",
-    # Integrity gate: automatic re-downloads after an integrity
-    # failure, tunable in Advanced. Default 2 (3 attempts total).
-    "apple_integrity_retries",
-    # Setup wizard: wrapper HTTP API port override. 0 means pick
-    # a free high port; rendered as a plain number field in the Apple section.
-    "apple_wrapper_port",
-    # Session supervision (spec §3): proactive Apple pacing, same
-    # shape as TIDAL's api_rate_limit_* (pause after N songs for N seconds).
-    "apple_pacing_batch_size",
-]
-# Second-scale floats (Advanced), rendered as a decimal stepper.
-_FLOAT_FIELDS = [
-    "download_delay_sec_min",
-    "download_delay_sec_max",
-    "api_rate_limit_delay_sec",
-    "apple_integrity_retry_delay_sec",
-    # Session supervision (spec §3): the proactive Apple pause
-    # length, and the idle timeout after which the sidecar stops itself.
-    "apple_pacing_delay_sec",
-    "apple_wrapper_idle_sec",
-]
-# Waves' opinionated defaults layered over the engine's stock dataclass defaults.
-# Applied once on a brand-new install (_apply_first_run_defaults) and restored
-# by the Advanced-settings "reset all settings" action, so the two always agree
-# on what "factory default" means.
-_FIRST_RUN_OVERRIDES = {
-    "use_primary_album_artist": True,  # library-friendly Artist/Album folders
-    "video_download": False,  # audio-first out of the box
-    "quality_video": QualityVideo.P720,
-    "mark_explicit": True,
-    "metadata_write_url": False,
-    # Recommended stand-ins for the rejected characters that carry meaning. Only
-    # a fresh install gets them outright: an existing library is asked first
-    # (_migrate_illegal_map_offer), because its folders already spell those
-    # characters some other way. Copied, never the shared constant.
-    "filename_illegal_map": dict(DEFAULT_ILLEGAL_MAP),
-}
-
 
 # Factory reset deletes ONLY these files: the exact names Waves itself writes
 # into its config directory. The wipe is allowlist-only with no recursive
@@ -537,118 +411,6 @@ _FIRST_RUN_OVERRIDES = {
 # the folder is structurally impossible to touch, let alone anything outside
 # it. install_channel is deliberately absent: the installer owns it and a
 # fresh install of the same channel would have it too.
-def _write_text_atomic(path_file: str, text: str) -> None:
-    """Write a file so a crash mid-write cannot damage what is already there.
-
-    Temp sibling, flushed to stable storage, then os.replace, which is atomic
-    within one directory on POSIX and Windows alike. The fsync is the part that
-    is easy to leave out and the part that matters: without it the rename can
-    reach disk ahead of the bytes, so a power cut leaves an empty or partial
-    file under the real name. These caches all self-heal, but healing means a
-    fresh crawl or a lost set of preferences, which is dear next to one flush.
-    Mirrors BaseConfig.save, which does the same for settings and token.
-
-    The temp name is this write's OWN (mkstemp), for the same reason
-    BaseConfig.save's is: nothing stops a second copy of Waves running against
-    the same config folder, and two writers staging through one fixed ".tmp"
-    sibling interleave into it, publish the mixture, and silently reset every
-    preference on the next launch. The factory wipe knows this name shape.
-
-    The temp file never outlives a failure, so a wedged write cannot leave
-    litter next to the real file.
-
-    Args:
-        path_file (str): The destination file.
-        text (str): The complete contents to write.
-    """
-    fd, path_tmp = tempfile.mkstemp(
-        dir=os.path.dirname(path_file) or ".",
-        prefix=f"{os.path.basename(path_file)}.",
-        suffix=".tmp",
-    )
-
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-
-        os.replace(path_tmp, path_file)
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.remove(path_tmp)
-
-        raise
-
-
-def _write_json_atomic(path_file: str, payload, indent: int | None = None) -> None:
-    """Serialize and write JSON through :func:`_write_text_atomic`.
-
-    Args:
-        path_file (str): The destination file.
-        payload: Anything json.dump accepts.
-        indent (int | None, optional): Pretty-printing indent. Defaults to None.
-    """
-    _write_text_atomic(path_file, json.dumps(payload, indent=indent))
-
-
-class _SingleFlightWriter:
-    """One background thread owning the small config-file writes.
-
-    The atomic writers above fsync, and both waves.json and settings.json were
-    written from GUI-thread slots (every pref flip, every window-geometry
-    debounce), so the GUI paid a disk sync per save. Callers snapshot
-    their payload on their own thread (microseconds) and submit the disk work
-    here keyed by file: consecutive submits for the same key coalesce to the
-    NEWEST closure (latest snapshot wins, which is also what the old
-    synchronous ordering produced), and the writes run one at a time, so the
-    per-file tmp-sibling staging can never race itself. ``flush`` is the
-    shutdown hook: it drains what is pending (inline if the thread cannot
-    finish in time), so a pref set just before quit still lands."""
-
-    def __init__(self) -> None:
-        self._cond = Condition()
-        self._pending: dict[str, Callable] = {}
-        self._writing = False
-        self._thread = Thread(target=self._run, name="config-writer", daemon=True)
-        self._thread.start()
-
-    def submit(self, key: str, fn: Callable) -> None:
-        with self._cond:
-            self._pending[key] = fn
-            self._cond.notify_all()
-
-    def _run(self) -> None:
-        while True:
-            with self._cond:
-                while not self._pending:
-                    self._cond.wait()
-                key = next(iter(self._pending))
-                fn = self._pending.pop(key)
-                self._writing = True
-            try:
-                fn()
-            except Exception:
-                logger.exception("Background config write failed")
-            finally:
-                with self._cond:
-                    self._writing = False
-                    self._cond.notify_all()
-
-    def flush(self, timeout: float = 3.0) -> None:
-        deadline = time.monotonic() + timeout
-        with self._cond:
-            while (self._pending or self._writing) and time.monotonic() < deadline:
-                self._cond.wait(timeout=0.05)
-            leftovers = list(self._pending.values())
-            self._pending.clear()
-        # Past the deadline with work still queued (a wedged disk, a dead
-        # thread): write inline rather than lose a pref on quit.
-        for fn in leftovers:
-            try:
-                fn()
-            except Exception:
-                logger.exception("Config write during shutdown flush failed")
 
 
 _FACTORY_WIPE_FILES = (
@@ -705,7 +467,7 @@ _FACTORY_WIPE_LOG_PATTERNS = (
     # file Waves named.
     re.compile(r"library-[0-9a-f]{12}\.sqlite3(-wal|-shm)?\Z"),
     re.compile(r"waves-diagnostics-\d{8}-\d{6}-\d{3}\.txt\Z"),
-    # Per-write staging leftovers: BaseConfig.save and _write_text_atomic both
+    # Per-write staging leftovers: BaseConfig.save and write_text_atomic both
     # stage through tempfile.mkstemp names of the shape "<name>.<random>.tmp".
     # A hard kill or power cut mid-save strands one, and for token.json the
     # stray holds the session token document, exactly what a factory reset
@@ -823,88 +585,7 @@ def _factory_wipe_art_cache(art: str) -> None:
 # the buckets, but browsing artists/albums without searching keeps appending, so
 # cap each bucket far above any realistic single view and evict oldest-first.
 _MAX_OBJS_PER_BUCKET = 2000
-_PATH_FIELDS = [
-    "download_base_path",
-    "format_track",
-    "format_video",
-    "format_album",
-    "format_playlist",
-    "format_mix",
-    "format_atmos",
-    "filename_delimiter_artist",
-    "filename_delimiter_album_artist",
-    # Surfaced under Advanced as a power-user override. The Settings "FFmpeg"
-    # card normally manages the binary; an explicit path here wins over the
-    # managed copy (see _resolve_ffmpeg).
-    "path_binary_ffmpeg",
-    # Cookies tier: a Netscape cookies export that unlocks Apple downloads,
-    # browsed like the FFmpeg override above.
-    "apple_cookies_path",
-    # Same override shape for the N_m3u8DL-RE binary Apple downloads fetch
-    # through; the wizard provisions it later.
-    "path_binary_nm3u8dlre",
-    # Integrity gate: quarantine folder override, browsed like a
-    # download folder. Empty means the default inside the download folder.
-    "apple_quarantine_dir",
-]
-_BROWSE = {
-    "download_base_path": "dir",
-    "path_binary_ffmpeg": "file",
-    "apple_cookies_path": "file",
-    "path_binary_nm3u8dlre": "file",
-    "apple_quarantine_dir": "dir",
-}
-# String fields whose value is a character or two: they render as a compact
-# row with a small box on the right (the Track-number padding shape) instead
-# of a full-width text box under the help.
-_INLINE_STR_FIELDS = {
-    "filename_delimiter_artist",
-    "filename_delimiter_album_artist",
-    "filename_illegal_replacement",
-}
-# Fields the engine launders before use: the page warns in red while the typed
-# value would not survive it, and holds the save rather than storing text that
-# would be silently dropped (see sanitizeFilenameReplacement). The per-
-# character map is laundered the same way, value by value.
-_SANITIZED_FIELDS = {"filename_illegal_replacement"}
-# Fields holding a character -> stand-in table rather than a single value.
-_MAP_FIELDS = {"filename_illegal_map"}
-# How each rejected character is named on the settings page. The glyph alone
-# is the label; the name is what a screen reader (and a puzzled user) gets.
-_ILLEGAL_CHAR_NAMES = {
-    "/": "slash",
-    "\\": "backslash",
-    ":": "colon",
-    "*": "asterisk",
-    "?": "question mark",
-    '"': "quote",
-    "<": "less than",
-    ">": "greater than",
-    "|": "pipe",
-}
 
-
-def _shipped_default(key: str):
-    """The value a field has on a fresh install, or None if it has no useful one.
-
-    Read straight off the ``Settings`` dataclass so it can never drift from
-    what a new install actually gets. Feeds the per-field "Default" link on the
-    settings page: a mistyped template is one click from the shipped one, with
-    no need to reset every other setting to get there.
-    """
-    for f in dataclasses.fields(CfgSettings):
-        if f.name != key:
-            continue
-        default = f.default
-        if default is dataclasses.MISSING or not isinstance(default, str) or default == "":
-            return None
-        return default
-    return None
-
-
-_ENUM_BY_FIELD = dict(_CHOICE_FIELDS)
-# Flags that do nothing without FFmpeg, greyed out on the page when it's absent.
-_FFMPEG_DEPENDENT = {"video_convert_mp4", "extract_flac", "extract_flac_all"}
 
 # Every template token, grouped for the "Want to know more?" reference table.
 # The sample values shown next to each are produced by the REAL formatter
@@ -1040,193 +721,6 @@ def _build_template_sample():
     return trk, alb, pl, mx, vid
 
 
-# Human field titles, overriding the auto-prettified key (e.g. "Api rate limit
-# delay sec"). Anything not listed falls back to _pretty(key).
-_FIELD_LABELS = {
-    # Downloads
-    "download_base_path": "Download folder",
-    "tidal_quality_audio": "Audio quality",
-    "apple_quality_audio": "Audio quality (Apple)",
-    "apple_cookies_path": "Cookies file (Apple)",
-    "path_binary_nm3u8dlre": "N_m3u8DL-RE binary path",
-    "apple_wrapper_port": "Wrapper port (Apple)",
-    "apple_quarantine_dir": "Quarantine folder (Apple)",
-    "apple_quarantine_keep": "Keep quarantined files",
-    "apple_integrity_retries": "Integrity retries (Apple)",
-    "apple_integrity_retry_delay_sec": "Integrity retry delay (s)",
-    "apple_pacing_batch_size": "Pause every N songs (Apple)",
-    "apple_pacing_delay_sec": "Length of that pause (s, Apple)",
-    "apple_wrapper_idle_sec": "Wrapper idle stop (s, Apple)",
-    "quality_video": "Video quality",
-    "downloads_concurrent_max": "Concurrent track downloads",
-    "default_audio_type": "Default audio type",
-    "confirm_category_download": "Confirm bulk downloads",
-    # Discography & editions (a source toggle like the disco_* prefs)
-    "video_download": "Music videos",
-    # File organization
-    "format_track": "Track path & name",
-    "format_album": "Album path & name",
-    "format_playlist": "Playlist path & name",
-    "format_video": "Video path & name",
-    "format_mix": "Mix path & name",
-    "format_atmos": "Dolby Atmos files",
-    "album_track_num_pad_min": "Track-number padding",
-    "filename_delimiter_artist": "Artist separator",
-    "filename_delimiter_album_artist": "Album-artist separator",
-    "filename_illegal_replacement": "Illegal-character stand-in",
-    "filename_illegal_map": "Per-character stand-ins",
-    "use_primary_album_artist": "Primary album artist for folders",
-    "symlink_to_track": "Symlink into track folder",
-    "playlist_create": "Create .m3u8 playlist",
-    # Metadata (the tag template; lyrics/cover embedding lives per provider)
-    "metadata_cover_dimension": "Embedded cover size",
-    "metadata_cover_embed": "Embed cover art",
-    "cover_album_file": "Save cover.jpg",
-    "lyrics_embed": "Embed lyrics",
-    "lyrics_file": "Save lyrics file",
-    "lyrics_file_synced_only": "Only synced lyrics files",
-    "lyrics_prefer_lrclib": "Prefer LRCLIB lyrics",
-    "lyrics_word_timed": "Prefer word-timed lyrics",
-    "lyrics_ttml_file": "Save Apple TTML file",
-    "cover_file_format": "Cover file format",
-    "mark_explicit": "Mark explicit in title",
-    # Per-provider mirrors: the Providers cards already name the
-    # provider, so the labels stay provider-neutral.
-    "tidal_lyrics_embed": "Embed lyrics",
-    "tidal_lyrics_file": "Save lyrics file",
-    "tidal_lyrics_file_synced_only": "Only synced lyrics files",
-    "tidal_lyrics_prefer_lrclib": "Prefer LRCLIB lyrics",
-    "tidal_lyrics_word_timed": "Prefer word-timed lyrics",
-    "tidal_lyrics_ttml_file": "Save TTML file",
-    "tidal_metadata_cover_dimension": "Embedded cover size",
-    "tidal_metadata_cover_embed": "Embed cover art",
-    "tidal_cover_album_file": "Save cover.jpg",
-    "tidal_cover_file_format": "Cover file format",
-    "apple_lyrics_embed": "Embed lyrics",
-    "apple_lyrics_file": "Save lyrics file",
-    "apple_lyrics_file_synced_only": "Only synced lyrics files",
-    "apple_lyrics_prefer_lrclib": "Prefer LRCLIB lyrics",
-    "apple_lyrics_word_timed": "Prefer word-timed lyrics",
-    "apple_lyrics_ttml_file": "Save Apple TTML file",
-    "apple_metadata_cover_dimension": "Embedded cover size",
-    "apple_metadata_cover_embed": "Embed cover art",
-    "apple_cover_album_file": "Save cover",
-    "apple_cover_file_format": "Cover file format",
-    # Custom tag template.
-    "metadata_custom": "Custom tag template",
-    "metadata_tag_composer": "Composer tag",
-    "metadata_tag_copyright": "Copyright tag",
-    "metadata_tag_isrc": "ISRC tag",
-    "metadata_tag_bpm": "BPM tag",
-    "metadata_tag_initial_key": "Initial-key tag",
-    "metadata_tag_upc": "UPC tag",
-    # Advanced
-    "path_binary_ffmpeg": "FFmpeg binary path",
-    "downsample_target": "Downsample target",
-    "downloads_simultaneous_per_track_max": "Parallel chunks per track",
-    "download_delay_sec_min": "Minimum download delay (s)",
-    "download_delay_sec_max": "Maximum download delay (s)",
-    "metadata_target_upc": "UPC tag field",
-    "initial_key_format": "Initial-key tag format",
-    "api_rate_limit_batch_size": "Pause every N songs",
-    "api_rate_limit_delay_sec": "Length of that pause (s)",
-    "downsample_enabled": "Downsample hi-res FLAC",
-    "metadata_replay_gain": "Write ReplayGain tags",
-    "metadata_write_url": "Write source URL tag",
-}
-
-# Human labels for enum dropdown values, keyed by field then by enum member
-# name (the stored value). Unmapped members fall back to the raw name.
-_ENUM_LABELS = {
-    # Per-provider audio quality: the Waves rungs, each provider
-    # stating them in its own codecs with "Up to" ceilings, so the
-    # dropdown reads as a fidelity promise: bitrate for lossy rungs, bit depth
-    # and sample rate for lossless ones. Apple has no LOW rung (AAC 256 starts
-    # at HIGH), so its list starts there.
-    "tidal_quality_audio": {
-        "LOW": "Low · Up to 96 Kbps",
-        "HIGH": "High · Up to 320 Kbps",
-        "LOSSLESS": "Lossless · Up to 16-bit / 44.1 kHz",
-        "HI_RES_LOSSLESS": "Max · Hi-Res · Up to 24-bit / 192 kHz",
-    },
-    "apple_quality_audio": {
-        "HIGH": "High · Up to 256 Kbps (AAC)",
-        "LOSSLESS": "Lossless · Up to 24-bit / 48 kHz (ALAC)",
-        "HI_RES_LOSSLESS": "Max · Hi-Res · Up to 24-bit / 192 kHz (ALAC)",
-    },
-    "quality_video": {"P360": "360p", "P480": "480p", "P720": "720p", "P1080": "1080p"},
-    # Chooser one-click audio default: stereo, or both Versions
-    # side by side where a track offers the choice.
-    "default_audio_type": {"STEREO": "Stereo", "BOTH": "Stereo + Atmos"},
-    "metadata_cover_dimension": {
-        "Px80": "80×80",
-        "Px160": "160×160",
-        "Px320": "320×320",
-        "Px640": "640×640",
-        "Px1280": "1280×1280",
-        "PxORIGIN": "Original",
-    },
-    # Per-provider mirrors: identical rungs, one list each so a
-    # provider's wording can diverge later without touching the other.
-    "tidal_metadata_cover_dimension": {
-        "Px80": "80×80",
-        "Px160": "160×160",
-        "Px320": "320×320",
-        "Px640": "640×640",
-        "Px1280": "1280×1280",
-        "PxORIGIN": "Original",
-    },
-    "apple_metadata_cover_dimension": {
-        "Px80": "80×80",
-        "Px160": "160×160",
-        "Px320": "320×320",
-        "Px640": "640×640",
-        "Px1280": "1280×1280",
-        "PxORIGIN": "Original",
-    },
-    "downsample_target": {"BIT16_48": "16-bit / 48 kHz", "BIT24_48": "24-bit / 48 kHz"},
-    "metadata_target_upc": {"UPC": "UPC", "BARCODE": "Barcode", "EAN": "EAN"},
-    "initial_key_format": {"ALPHANUMERIC": "Alphanumeric (Camelot)", "CLASSIC": "Classic"},
-    "explicit_mode": {"explicit": "Explicit", "clean": "Clean", "both": "Both"},
-    "edition_conflict": {
-        "keep_both": "Keep both",
-        "completeness": "Most complete",
-        "quality": "Highest quality",
-        "merge": "Best of both",
-    },
-    "update_cadence": {"launch": "Every launch", "daily": "Once a day"},
-}
-
-
-def _enum_options(key: str, members) -> list:
-    """Build [{value, label}] dropdown options for an enum field. ``members``
-    may be an enum class (uses each member's ``name``) or a list of value
-    strings (for the Waves prefs, which aren't backed by a Python enum)."""
-    labels = _ENUM_LABELS.get(key, {})
-    out = []
-    for m in members:
-        v = getattr(m, "name", m)
-        out.append({"value": v, "label": labels.get(v, v)})
-    return out
-
-
-def _apple_status_actions(state: str) -> list[dict]:
-    """The Apple status row's actions for a light state.
-
-    One builder for the schema's baked value and the live mirror the page
-    re-reads, so the two can never disagree about which pills exist: sign-out
-    only while a session stands, the runtime management always.
-    """
-    actions = [
-        {"label": "Setup wizard", "action": "apple_setup"},
-        {"label": "Update runtime", "action": "apple_update_runtime"},
-        {"label": "Remove runtime", "action": "apple_remove_runtime"},
-    ]
-    if state == "signed_in":
-        actions.append({"label": "Sign out", "action": "apple_signout"})
-    return actions
-
-
 # Button words for the wizard steps' actions. A step button says what it
 # does ("Remove", not "Continue"), so a destructive action never wears a
 # next-step mask. QML uppercases for the pill style.
@@ -1291,10 +785,6 @@ _LEGACY_FORMAT_VIDEOS = (
     "Videos/{artist_name} - {track_title}{track_explicit}",
     "Videos/{artist_name}/{video_year_optional}{track_title}{track_explicit}",
 )
-
-
-def _pretty(key: str) -> str:
-    return key.replace("_", " ").capitalize()
 
 
 class _ProgressSignals(QObject):
@@ -4278,10 +3768,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._fresh_install = fresh_install
         self.settings = Settings()
         # The background config writer exists before anything can save a pref
-        # (the migrations below do): see _SingleFlightWriter. Boot-time bare
+        # (the migrations below do): see SingleFlightWriter. Boot-time bare
         # settings.save() calls stay synchronous on purpose, they run once and
         # later init steps read the file's existence.
-        self._config_writer = _SingleFlightWriter()
+        self._config_writer = SingleFlightWriter()
         # Bundled wave-loop path, injected by app.py (set_motion_video_source)
         # after construction; empty until then and in tests.
         self._motion_video_src = ""
@@ -4307,7 +3797,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "Could not persist the video-template migration (%s); continuing in memory", type(exc).__name__
                 )
         # Dev timing/diagnostics log lands next to the app's settings file so
-        # it's easy to find; see waves.desktop.devlog (WAVES_DEBUG to toggle).
+        # it's easy to find; see waves.desktop.diagnostics.devlog (WAVES_DEBUG to toggle).
         log_path = devlog.init(log_dir=os.path.dirname(self.settings.file_path))
         devlog.event("app", "WavesBridge starting", log=str(log_path or "stderr"))
         # Persisted share origins are identity (host, maybe a username): make
@@ -5010,7 +4500,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._own_pool = QtCore.QThreadPool()
         self._own_pool.setMaxThreadCount(2)
         diagnostics.register_pool("ownership", self._own_pool)
-        # See waves.library.index + bridge_library.LibraryMixin: scans the
+        # See waves.library.index + desktop/library/bridge.py: LibraryMixin: scans the
         # configured library folder for albums the user already has, downloaded
         # by Waves or not. Kept across logout: it describes files on THIS disk.
         # Local library-presence index: matching.presence_key -> [ {year, tracks,
@@ -5089,7 +4579,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._library_scan_read_t0 = 0.0
         # Whether the last scan met a folder listing it could not trust (see
         # library_index.LibraryIndex.last_scan_partial): the gate for the
-        # probe by name in bridge_library, and the Settings note that explains
+        # probe by name in library/bridge.py, and the Settings note that explains
         # a blank badge on such a share. The memo remembers artists already
         # asked about (deadline per artist key) and the in-flight set stops a
         # pill re-ask from stacking probes; both reset whenever a new index
@@ -5120,7 +4610,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._library_backfill_done = False
         self._library_probe_gate = threading.Lock()
         # Every page of catalogue results asks the library about the artists it
-        # names, in one batch (bridge_library._library_probe_page). Wired to the
+        # names, in one batch (library/bridge.py: _library_probe_page). Wired to the
         # signals rather than to each emit site, so a page added later cannot
         # forget to ask and quietly go back to showing nothing.
         self.searchResults.connect(self._library_probe_page)
@@ -5134,7 +4624,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # invalidation can tell whether the object it just retired may be
         # closed at once or must be left to that scan's own cleanup.
         self._library_scanning = None
-        # Freshness (see the _LIBRARY_* constants in bridge_library): a cheap
+        # Freshness (see the _LIBRARY_* constants in library/bridge.py): a cheap
         # container-mtime poll every few minutes (the network-safe backbone), an
         # hourly full sweep (track-level changes inside an album), a twice-daily
         # deep force_full sweep (heals a mount that never updates folder mtimes),
@@ -6031,8 +5521,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             serialized = json.dumps(data)
             serialized_searches = json.dumps(searches)
             with self._page_cache_lock:
-                _write_text_atomic(self._page_cache_path, serialized)
-                _write_text_atomic(self._search_cache_path, serialized_searches)
+                write_text_atomic(self._page_cache_path, serialized)
+                write_text_atomic(self._search_cache_path, serialized_searches)
         except Exception:
             logger.debug("page cache save failed", exc_info=True)
 
@@ -9504,7 +8994,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     self._tile_art_running = False
                 if fetched and not getattr(self, "_factory_reset", False):
                     try:
-                        _write_json_atomic(self._tile_art_path, disk, indent=1)
+                        write_json_atomic(self._tile_art_path, disk, indent=1)
                     except Exception:
                         logger.exception("Could not save the tile-art cache")
 
@@ -11362,7 +10852,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         touched. Returns True when a change was made and needs persisting."""
         if self.settings.data.format_video not in _LEGACY_FORMAT_VIDEOS:
             return False
-        self.settings.data.format_video = _shipped_default("format_video")
+        self.settings.data.format_video = shipped_field_default("format_video")
         return True
 
     def _migrate_video_flag(self) -> None:
@@ -11394,7 +10884,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         disk, so the table is offered on the File organization card instead,
         and only ever written by the user's own hand. This just settles who
         never needs asking: a brand-new install (the defaults are already in
-        _FIRST_RUN_OVERRIDES) and anyone who has stand-ins of their own.
+        FIRST_RUN_OVERRIDES) and anyone who has stand-ins of their own.
         Everyone else is left unstamped, which is what puts the strip on the
         card.
 
@@ -11425,9 +10915,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         the engine's stock dataclass defaults and persisted. Only called when no
         settings file existed yet, an existing user's choices are never touched.
         resetSettingsDefaults restores the same values, so keep the two in step
-        via _FIRST_RUN_OVERRIDES."""
+        via FIRST_RUN_OVERRIDES."""
         d = self.settings.data
-        for key, value in _FIRST_RUN_OVERRIDES.items():
+        for key, value in FIRST_RUN_OVERRIDES.items():
             # Copy the containers: handing the module-level dict itself to the
             # live settings would make the next edit rewrite the default.
             setattr(d, key, dict(value) if isinstance(value, dict) else value)
@@ -11628,7 +11118,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # Window geometry saves land often, a debounced write per drag/resize
         # gesture, so a process death mid-write must not truncate waves.json and
         # wipe every pref (a partial file fails json.load and falls back to
-        # defaults). _write_json_atomic stages, flushes and swaps, and clears
+        # defaults). write_json_atomic stages, flushes and swaps, and clears
         # its temp sibling on any failure.
         # _prefs_unsavable: the file on disk could not be read AND could not be
         # set aside (see _preserve_unreadable_prefs), so it is the only copy of
@@ -11645,7 +11135,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
             def _write() -> None:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
-                _write_json_atomic(path, snapshot, indent=2)
+                write_json_atomic(path, snapshot, indent=2)
 
             self._config_writer.submit("waves_prefs", _write)
         except Exception:
@@ -19331,14 +18821,14 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         except Exception:
             logger.debug("Apple status flags failed", exc_info=True)
             flags = {"enabled": bool(getattr(getattr(self.settings, "data", None), "apple_enabled", False))}
-        described = _apple_status(
+        described = apple_status(
             bool(flags.get("enabled", False)),
             runtime_ready=bool(flags.get("runtime_ready", False)),
             signed_in=bool(flags.get("signed_in", False)),
             needs_attention=bool(flags.get("needs_attention", False)),
             cookies_ready=bool(flags.get("cookies_ready", False)),
         )
-        described["actions"] = _apple_status_actions(described["state"])
+        described["actions"] = apple_status_actions(described["state"])
         return described
 
     @Slot(result="QVariant")
@@ -19940,772 +19430,20 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
     @Slot(result="QVariant")
     def settingsSchema(self) -> list:
-        """Settings for the QML page, arranged into task-based, collapsible
-        sections rather than raw engine field types.
-
-        Each group carries ``id``/``open``/``desc`` for the collapsible UI, and
-        ``card: "ffmpeg"`` injects the FFmpeg manager card at the top of that
-        section. Per-field hints (``requires_ffmpeg``, ``depends_on`` +
-        ``depends_on_value``) let the page grey-out or hide a control without
-        hard-coding key names in QML.
-        """
-        d = self.settings.data
-        # The Providers area's status rows: live bridge state,
-        # read at build time — the TIDAL session, and the Apple component's
-        # light, through the same helper the appleStatus() slot serves the
-        # page's live mirror from, so the two can never disagree.
-        try:
-            _flags = self._apple_live_flags()
-        except Exception:
-            _flags = {"enabled": bool(getattr(d, "apple_enabled", False))}
-        apple_status = _apple_status(
-            bool(_flags.get("enabled", False)),
-            runtime_ready=bool(_flags.get("runtime_ready", False)),
-            signed_in=bool(_flags.get("signed_in", False)),
-            needs_attention=bool(_flags.get("needs_attention", False)),
-            cookies_ready=bool(_flags.get("cookies_ready", False)),
-        )
-
-        def field(key: str, ftype: str, value, extra: dict | None = None) -> dict:
-            out = {
-                "key": key,
-                "label": _FIELD_LABELS.get(key) or _pretty(key),
-                "help": self._help_for(key),
-                "type": ftype,
-                "value": value,
-            }
-            if extra:
-                out.update(extra)
-            return out
-
-        def auto_field(key: str) -> dict:
-            """Build a field dict for an engine ``Settings`` key, choosing the
-            control type from the registries above."""
-            if key in _ENUM_BY_FIELD:
-                enum = _ENUM_BY_FIELD[key]
-                current = getattr(d, key)
-                return field(key, "enum", getattr(current, "name", str(current)), {"options": _enum_options(key, enum)})
-            if key in _FLOAT_FIELDS:
-                # Most second-scale fields pause under a minute; the
-                # supervision knobs run longer by design (idle
-                # default 300 s), so they carry their own ceiling.
-                maximum = {"apple_wrapper_idle_sec": 3600.0, "apple_pacing_delay_sec": 600.0}.get(key, 60)
-                return field(
-                    key,
-                    "float",
-                    float(getattr(d, key)),
-                    {"minimum": 0, "maximum": maximum, "step": 0.5, "decimals": 1},
-                )
-            if key in _NUMBER_FIELDS:
-                return field(key, "int", int(getattr(d, key)))
-            if key in _FLAG_FIELDS:
-                return field(key, "bool", bool(getattr(d, key)))
-            if key in _MAP_FIELDS:
-                # A character -> stand-in table. The page renders one box per
-                # rejected character, so it is handed the character list (with
-                # names) rather than deriving one of its own. "default_value"
-                # is the recommended table, behind the card's Default link;
-                # "offer" additionally puts it on screen as a one-time strip,
-                # for an install that predates it and has no stand-ins of its
-                # own (see _migrate_illegal_map_offer).
-                return field(
-                    key,
-                    "char_map",
-                    safe_filename_replacement_map(getattr(d, key, None)),
-                    {
-                        "chars": [{"char": c, "name": _ILLEGAL_CHAR_NAMES.get(c, c)} for c in ILLEGAL_FILENAME_CHARS],
-                        "default_value": dict(DEFAULT_ILLEGAL_MAP),
-                        "offer": not self._waves_prefs.get("illegal_map_offer_done", False),
-                    },
-                )
-            # "default" (when the field has a meaningful shipped value) drives
-            # the page's per-field Default link, so a mangled template can be
-            # restored without resetting every other setting.
-            extra = {"browse": _BROWSE.get(key, "")}
-            shipped = _shipped_default(key)
-            if shipped is not None:
-                extra["default_value"] = shipped
-            if key in _INLINE_STR_FIELDS:
-                # Compact box beside the help, and a third of the row each, so
-                # the three of them sit side by side on one line.
-                extra["inline"] = True
-                extra["third"] = True
-            if key in _SANITIZED_FIELDS:
-                extra["sanitize"] = True
-            return field(key, "str", str(getattr(d, key)), extra)
-
-        # Waves-only prefs (stored in waves.json) keep their hand-written labels
-        # and help; indexed by key so sections can pick them in any order.
-        waves_fields = {
-            f["key"]: f
-            for f in [
-                {
-                    # Composite control (QML renders "library" specially): a
-                    # master on/off toggle (off by default, the card below it
-                    # greys out), a download-vs-separate source picker, the
-                    # separate folder field, the live scan progress, and a
-                    # Rescan button. The controls stage into the page's editMap
-                    # and commit through SAVE CHANGES (applySettings), which
-                    # also starts the first scan; only Rescan acts immediately,
-                    # and only on the saved configuration.
-                    "key": "library",
-                    # The composite is a UI marker, not a pref; naming its
-                    # backing prefs here lets _factory_default_values enumerate
-                    # them, so RESET ALL SETTINGS restores the library switch,
-                    # source, folder, bulk-skip and MusicBrainz toggles like
-                    # every other field.
-                    "enabled_key": "library_enabled",
-                    "file_key": "library_source",
-                    "child_key": "library_folder",
-                    "bulk_key": "library_bulk_skip",
-                    "mb_key": "library_mb_arbiter",
-                    "label": "Music library",
-                    "help": (
-                        "Choose where your music library lives, then SAVE CHANGES to scan it. Waves matches "
-                        "what you browse against it to badge what you already have, no matter which "
-                        "provider saved the files. Scanning only ever "
-                        "reads: it never writes, moves or renames anything it finds."
-                    ),
-                    "type": "library",
-                    # The composite reads its state live from the bridge; this empty
-                    # value only satisfies the generic str/enum delegates, which
-                    # still instantiate (hidden) for every field and read f.value.
-                    "value": "",
-                },
-                {
-                    "key": "explicit_mode",
-                    "label": "Explicit versions",
-                    "help": (
-                        "When an album or track exists as both explicit and clean: 'explicit' keeps the explicit "
-                        "version, 'clean' keeps the censored one, 'both' keeps both. Applies to search results "
-                        "and downloads."
-                    ),
-                    "type": "enum",
-                    "value": self._waves_prefs.get("explicit_mode", "explicit"),
-                    "options": _enum_options("explicit_mode", ["explicit", "clean", "both"]),
-                },
-                {
-                    "key": "collapse_editions",
-                    "label": "Most-complete edition only",
-                    "help": (
-                        "On 'Download discography' and a playlist's 'Download full albums', keep only the most "
-                        "complete edition of each album (Deluxe, Complete). Remasters, re-releases, anniversary "
-                        "editions and live or acoustic versions still count as their own album. Artist pages "
-                        "hide the skipped editions too (see the next setting). "
-                        "With this off, every edition is downloaded as it is."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("collapse_editions"),
-                },
-                {
-                    "key": "artist_page_all_editions",
-                    "label": "Show every edition on artist pages",
-                    "help": (
-                        "With 'Most-complete edition only' on, artist pages hide the editions a discography "
-                        "download would skip. Turn this on to list them all anyway, at a little loading time "
-                        "per artist."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("artist_page_all_editions"),
-                },
-                {
-                    "key": "edition_conflict",
-                    "label": "When an album has several editions",
-                    "help": (
-                        "'Best of both' builds one album from the most complete edition's track list, with each "
-                        "shared song pulled from the highest-quality edition that has it (the exclusive bonus "
-                        "tracks stay at the complete edition's quality). When you save a single album it runs on "
-                        "its own. On 'Download discography' and a playlist's 'Download full albums' every "
-                        "choice here, 'Best of both' included, only "
-                        "takes effect when 'Most-complete edition only' is on; with that off, every edition is "
-                        "downloaded as it is. The other three choices decide what happens when the most complete "
-                        "edition is a lower audio quality than a smaller one: 'Keep both' downloads both, "
-                        "'Most complete' keeps the most complete, 'Highest quality' keeps the highest quality."
-                    ),
-                    "type": "enum",
-                    "value": self._waves_prefs.get("edition_conflict", "keep_both"),
-                    "options": _enum_options("edition_conflict", ["keep_both", "completeness", "quality", "merge"]),
-                },
-                {
-                    "key": "clean_album_artist",
-                    "label": "Clean Album Artist",
-                    "help": (
-                        "Write only the primary artist to the album-artist tag, so Plex sorts "
-                        "multi-artist albums correctly. Metadata only; folder names are unchanged."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("clean_album_artist"),
-                },
-                {
-                    "key": "disco_albums",
-                    "label": "Albums",
-                    "help": "Studio albums and the artist's own compilations (e.g. greatest-hits).",
-                    "type": "bool",
-                    "value": self._waves_pref_bool("disco_albums"),
-                },
-                {
-                    "key": "disco_eps",
-                    "label": "EPs & singles",
-                    "help": "The artist's own EPs and singles.",
-                    "type": "bool",
-                    "value": self._waves_pref_bool("disco_eps"),
-                },
-                {
-                    "key": "disco_featured",
-                    "label": "Featured on",
-                    "help": (
-                        "Other artists' releases the artist is a featured guest on (e.g. a duet or a "
-                        "guest verse); only the tracks the artist appears on are downloaded, not the "
-                        "whole release."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("disco_featured"),
-                },
-                {
-                    "key": "disco_appears_on",
-                    "label": "Appears on",
-                    "help": (
-                        "Various-artists compilations and soundtracks the artist appears on; only "
-                        "the tracks the artist appears on are downloaded, not the whole release."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("disco_appears_on"),
-                },
-                {
-                    "key": "motion_background",
-                    "label": "Motion background",
-                    "help": (
-                        "Show the slow ocean loop behind the interface. Turning it off stops video "
-                        "playback entirely and keeps a flat background (saves a little battery)."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("motion_background"),
-                },
-                {
-                    "key": "hover_control_motion",
-                    "label": "Hover controls slide in",
-                    "help": (
-                        "Preview and download controls rise up from the bottom of a cover with a "
-                        "small bounce when you hover it, and roll their contents over when a "
-                        "preview or a download starts. Download buttons ride the same roll "
-                        "between their states (queued, progress, done, retry), with colours "
-                        "fading along. Turn this off to have them simply fade in and out, and "
-                        "change over instantly."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("hover_control_motion"),
-                },
-                {
-                    "key": "art_hover_tilt",
-                    "label": "Cover art tilts on hover",
-                    "help": (
-                        "Album and artist artwork tilts toward your cursor and lifts slightly "
-                        "once the pointer rests on it, springing back when you move away. Turn "
-                        "this off to keep every cover flat and still."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("art_hover_tilt"),
-                },
-                {
-                    "key": "video_hover_peek",
-                    "label": "Videos preview on hover",
-                    "help": (
-                        "Resting the pointer on a video thumbnail grows a small live preview "
-                        "with sound. Turn this off to keep thumbnails still: videos then play "
-                        "only when you click them."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("video_hover_peek"),
-                },
-                {
-                    "key": "verbose_diagnostics",
-                    "label": "Verbose diagnostics",
-                    "help": (
-                        "Write a detailed activity log to help diagnose slowdowns, freezes and "
-                        "crashes. Off by default: only warnings and errors are kept. Turn it on, "
-                        "reproduce the problem, then export the report below."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("verbose_diagnostics"),
-                },
-                {
-                    "key": "diagnostics_redact_content",
-                    "label": "Also hide titles and searches",
-                    "help": (
-                        "Exported reports always remove your username, file paths, network "
-                        "addresses, account details and tokens. This additionally hides what you "
-                        "searched for and the track, album and artist names; that can make some "
-                        "bugs harder to reproduce."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("diagnostics_redact_content"),
-                },
-                {
-                    "key": "auto_update",
-                    "label": "Check for updates automatically",
-                    "help": (
-                        "Off by default. When on, Waves checks the releases page for a newer version "
-                        "(at launch or once a day) and only notifies you; nothing downloads until you "
-                        "click Update. The check sends none of your data."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("auto_update"),
-                },
-                {
-                    "key": "update_cadence",
-                    "label": "How often to check",
-                    "help": "Run the automatic check on every launch, or at most once a day.",
-                    "type": "enum",
-                    "value": self._waves_prefs.get("update_cadence", "daily"),
-                    "options": _enum_options("update_cadence", ["launch", "daily"]),
-                },
-                {
-                    "key": "ffmpeg_auto_update",
-                    "label": "Check for updates automatically",
-                    "help": (
-                        "Off by default. When on, Waves checks for a newer managed FFmpeg build "
-                        "(at launch or once a day) and only notifies you; nothing downloads until "
-                        "you click Update. The check sends none of your data."
-                    ),
-                    "type": "bool",
-                    "value": self._waves_pref_bool("ffmpeg_auto_update"),
-                },
-                {
-                    "key": "ffmpeg_update_cadence",
-                    "label": "How often to check",
-                    "help": "Run the automatic check on every launch, or at most once a day.",
-                    "type": "enum",
-                    "value": self._waves_prefs.get("ffmpeg_update_cadence", "daily"),
-                    "options": _enum_options("update_cadence", ["launch", "daily"]),
-                },
-                {
-                    # The Apple section's master switch, status light and
-                    # runtime-manage actions in one row (spec §9.2.3).
-                    # apple_enabled rides as enabled_key: the switch
-                    # stages into editMap like any toggle and SAVE CHANGES
-                    # persists it, while enabled_key is what makes
-                    # _factory_default_values enumerate it for RESET ALL
-                    # SETTINGS. The actions drive the managed runtime's
-                    # install/remove behind the setup wizard;
-                    # "action" names the slot channel QML calls. "live" names
-                    # the channel the page re-reads when a save moves the switch.
-                    "key": "provider_apple_status",
-                    "provider": CTX_APPLE,
-                    "enabled_key": "apple_enabled",
-                    "switch_value": bool(getattr(d, "apple_enabled", False)),
-                    "live": "apple_status",
-                    "label": "Enable Apple Music",
-                    "help": (
-                        "Apple Music ships off by default. Turn it on to add Apple Music "
-                        "catalog results to search. Search needs no Apple account or runtime. "
-                        "Downloads need setup below: a cookies export unlocks AAC 256 and Atmos "
-                        "at once (no runtime), while the managed runtime plus the wrapper sign-in "
-                        "unlock the full tier. Turning it off stops its queued downloads; RETRY "
-                        "brings them back after it is switched on again."
-                    ),
-                    "type": "status",
-                    "value": apple_status["state"],
-                    "word": apple_status["word"],
-                    "actions": _apple_status_actions(apple_status["state"]),
-                },
-                {
-                    # The in-place setup wizard steps (spec §2):
-                    # a bridge-computed card, not a pref. QML renders the
-                    # step list from the live appleSetupState() mirror
-                    # ("live" names that channel, like apple_status above)
-                    # and calls back the actions the steps name. It stages
-                    # no edit and carries no factory default.
-                    "key": "apple_setup_wizard",
-                    "provider": CTX_APPLE,
-                    "label": "Setup wizard",
-                    "help": (
-                        "Walks the setup in order: cookies unlock AAC 256 and Atmos at once, "
-                        "then the managed runtime, container, wrapper image, and Apple ID sign-in "
-                        "unlock the full tier. Steps refresh live as each lands."
-                    ),
-                    "type": "apple_setup",
-                    "live": "apple_setup",
-                    "value": "",
-                },
-                {
-                    # A pure command row: re-opens the welcome surface as a
-                    # page, where each provider is enabled and set up. It
-                    # stages no edit and carries no value.
-                    "key": "provider_setup_action",
-                    "label": "Set up providers",
-                    "help": (
-                        "Re-opens the welcome surface: turn a provider on, sign in, or run its "
-                        "one-time setup. The same cards the first run shows."
-                    ),
-                    "type": "action",
-                    "action": "show_setup",
-                    "value": "",
-                },
-            ]
-        }
-        # Session-kind provider cards get their status row here: one generic
-        # row per provider, its state read from the bridge's session truth,
-        # so a second session-kind provider needs no schema or QML branch.
-        # (With no session the landing panel can be hidden by another
-        # provider or a dismissed first-run picker, so the card's action is
-        # the entry point that always exists; it starts the same flow the
-        # panel and the top bar use.)
-        for _provider in _provider_registry(self):
-            _descriptor = _provider.descriptor()
-            if _descriptor.status_kind != StatusKind.SESSION:
-                continue
-            waves_fields[f"provider_{_descriptor.id}_session"] = _provider_session_field(
-                _descriptor, _session_logged_in(self, _provider)
-            )
-
-        def get_field(key: str) -> dict:
-            f = dict(waves_fields[key]) if key in waves_fields else auto_field(key)
-
-            def _provider_of(name: str) -> str:
-                for prefix in ("tidal_", "apple_"):
-                    if name.startswith(prefix):
-                        return prefix[:-1]
-                return ""
-
-            def _base_key(name: str) -> str:
-                provider = _provider_of(name)
-                return name[len(provider) + 1 :] if provider else name
-
-            def _prefixed(base: str, provider: str) -> str:
-                return f"{provider}_{base}" if provider else base
-
-            provider = _provider_of(key)
-            base = _base_key(key)
-            if base == "metadata_cover_dimension":
-                # Composite control: the embedded-cover size (this field's enum)
-                # plus an optional, progressively-disclosed size for the saved
-                # cover file. Power users get a second size without a new row
-                # appearing for everyone else. QML renders "cover_sizes" specially
-                # and writes both keys back through applySettings. Per-provider
-                # mirrors carry their own file size the same way.
-                file_key = _prefixed("metadata_cover_file_dimension", provider)
-                f["type"] = "cover_sizes"
-                f["file_key"] = file_key
-                f["file_value"] = getattr(d, file_key, "follow") or "follow"
-                f["file_label"] = "Separate cover file size"
-                f["file_options"] = [
-                    {"value": "follow", "label": "Same as embedded"},
-                    *_enum_options("metadata_cover_dimension", _ENUM_BY_FIELD["metadata_cover_dimension"]),
-                ]
-            if base == "cover_album_file":
-                # Stays a normal on/off tile, but carries a nested child: a compact
-                # checkbox for single-track downloads that appears under the
-                # description while "Save cover" is on. The tile keeps its fixed
-                # size, so the niche option adds no separate tile and the section
-                # keeps its compact 2-column grid.
-                child_key = _prefixed("cover_single_track_file", provider)
-                f["child_key"] = child_key
-                f["child_value"] = bool(getattr(d, child_key, False))
-                f["child_label"] = "Also save for single tracks"
-                f["child_help"] = "Write the cover file for a single track downloaded on its own, not just full albums."
-            if base == "lyrics_file":
-                # "Only synced" is meaningless while no lyrics file is saved, so
-                # it rides inside this tile as a nested checkbox (same pattern
-                # as cover_album_file) instead of a free-floating toggle.
-                child_key = _prefixed("lyrics_file_synced_only", provider)
-                f["child_key"] = child_key
-                f["child_value"] = bool(getattr(d, child_key, False))
-                f["child_label"] = "Only when lyrics are timed (skip the .txt)"
-                f["child_help"] = self._help_for(child_key)
-            if key == "apple_quarantine_dir":
-                # The stored value and the used folder can differ (the resolver
-                # refuses a folder that overlaps the download or library root);
-                # the card must say which one is in use.
-                note = self._apple_quarantine_note()
-                if note:
-                    f["help"] = f"{f.get('help', '')} {note}".strip()
-            if key == "video_download":
-                # Lives with the other 'Download discography' sources; the
-                # stock engine help ("Allow download of videos") no longer
-                # describes what it does. Videos downloaded one at a time
-                # never consult it.
-                f["help"] = (
-                    "The artist's music videos, saved with the video path template. "
-                    "Downloading a single video yourself always works, with or without this."
-                )
-            if base == "lyrics_prefer_lrclib":
-                # The source preference only matters while lyrics are fetched at
-                # all; the tile greys out (live, unsaved toggles included) when
-                # the provider's lyrics switches are all off.
-                f["requires_any"] = {
-                    _prefixed("lyrics_embed", provider): bool(getattr(d, _prefixed("lyrics_embed", provider), False)),
-                    _prefixed("lyrics_file", provider): bool(getattr(d, _prefixed("lyrics_file", provider), False)),
-                    _prefixed("lyrics_ttml_file", provider): bool(
-                        getattr(d, _prefixed("lyrics_ttml_file", provider), False)
-                    ),
-                }
-                f["requires_hint"] = "Turn on a lyrics option first"
-            if base in ("lyrics_word_timed", "lyrics_ttml_file"):
-                # Same gate as the LRCLIB preference: word-timed sourcing and
-                # the verbatim TTML sidecar only matter while lyrics are
-                # fetched at all.
-                f["requires_any"] = {
-                    _prefixed("lyrics_embed", provider): bool(getattr(d, _prefixed("lyrics_embed", provider), False)),
-                    _prefixed("lyrics_file", provider): bool(getattr(d, _prefixed("lyrics_file", provider), False)),
-                    _prefixed("lyrics_ttml_file", provider): bool(
-                        getattr(d, _prefixed("lyrics_ttml_file", provider), False)
-                    ),
-                }
-                f["requires_hint"] = "Turn on a lyrics option first"
-            if base == "cover_file_format":
-                # Small enum rendered as a dropdown: jpg/png everywhere, raw
-                # as the original-master sidecar (Apple-only; TIDAL treats raw
-                # as jpg, which the label says).
-                raw_label = "Original (Apple only)" if provider != "tidal" else "Original (jpg on TIDAL)"
-                f["type"] = "enum"
-                f["value"] = str(getattr(d, key, "jpg") or "jpg")
-                f["options"] = [
-                    {"value": "jpg", "label": "JPG"},
-                    {"value": "png", "label": "PNG"},
-                    {"value": "raw", "label": raw_label},
-                ]
-            if base in (
-                "metadata_tag_composer",
-                "metadata_tag_copyright",
-                "metadata_tag_isrc",
-                "metadata_tag_bpm",
-                "metadata_tag_initial_key",
-                "metadata_tag_upc",
-            ):
-                # Custom-template omit flags: shown only while the
-                # Custom template is on (the page hides depends_on fields).
-                f["depends_on"] = "metadata_custom"
-                f["depends_on_value"] = bool(getattr(d, "metadata_custom", False))
-            if key in ("auto_update", "update_cadence", "ffmpeg_auto_update", "ffmpeg_update_cadence"):
-                # Rendered inside the updater / FFmpeg cards (toggle + cadence
-                # segment), not as the generic tile/row controls.
-                f["embedded"] = True
-            if key in ("verbose_diagnostics", "diagnostics_redact_content"):
-                # Rendered inside the diagnostics card next to the export
-                # action, not as generic tiles.
-                f["embedded"] = True
-            if key in _FFMPEG_DEPENDENT:
-                f["requires_ffmpeg"] = True
-                # Report the user's *real* preference, not the in-memory value
-                # Download force-disables while ffmpeg is missing, the page
-                # greys the toggle (requires_ffmpeg) and animates it back to this
-                # value once ffmpeg arrives, with no schema rebuild.
-                f["value"] = bool(self._ffmpeg_flag_prefs.get(key, f.get("value", False)))
-            if key == "path_binary_ffmpeg":
-                # Surface a genuine user override first. With none set, prefill
-                # the binary detected on the system PATH so the box shows what
-                # Waves is actually using (and Browse opens beside it); the box
-                # is empty only when nothing is detected. The managed copy is
-                # never shown here, it has its own card above, and this stays a
-                # display prefill: nothing persists unless the user edits/saves.
-                val = self._user_ffmpeg_path()
-                if not val:
-                    try:
-                        st = self._ffmpeg.status(val)
-                        if st.get("state") == "path":
-                            val = str(st.get("path") or "")
-                    except Exception:
-                        logger.debug("Could not probe ffmpeg for the settings prefill", exc_info=True)
-                f["value"] = val
-                f["label"] = "Or link your own FFmpeg"
-                f["help"] = (
-                    "Point Waves at an FFmpeg binary you already have instead of the managed copy. "
-                    "Leave empty to use the managed copy above, or one found on your system PATH."
-                )
-            # edition_conflict deliberately has NO depends_on: 'Best of both'
-            # runs on its own for a single album, and hiding the control
-            # behind another toggle is what let the merge sit silently off
-            # with nothing on the page to say so. On the discography sweep it
-            # follows 'Most-complete edition only', which the help
-            # says in words instead.
-            if key == "update_cadence":
-                f["depends_on"] = "auto_update"
-                f["depends_on_value"] = self._waves_pref_bool("auto_update")
-            elif key == "artist_page_all_editions":
-                f["depends_on"] = "collapse_editions"
-                f["depends_on_value"] = self._waves_pref_bool("collapse_editions")
-            elif key == "ffmpeg_update_cadence":
-                f["depends_on"] = "ffmpeg_auto_update"
-                f["depends_on_value"] = self._waves_pref_bool("ffmpeg_auto_update")
-            elif key == "downsample_target":
-                f["depends_on"] = "downsample_enabled"
-                f["depends_on_value"] = bool(d.downsample_enabled)
-            return f
-
-        sections: list[dict] = [
-            {
-                # The two-axis layout's first axis (spec §9.2): ONE
-                # Providers section holding a distinctive card per provider
-                # for what differs (session, quality, runtime/pacing/setup).
-                # A third provider slots in as a third card; shared behavior
-                # stays in the shared sections below. The QML renders each
-                # entry with the provider's logo header and its fields, so a
-                # card is never a flat mixed field list.
-                "group": "Providers",
-                "id": "providers",
-                "desc": "Your music services. Each provider keeps its own session, quality default and setup.",
-                # One card per registered provider, composed from its
-                # descriptor: a provider contributes its identity, blurb
-                # and field list; the live status data behind those keys
-                # is built above. A new provider is a descriptor, not a
-                # QML branch.
-                "providers": [_provider_card(p) for p in _provider_registry(self)],
-                # No loose fields except the re-open command: everything
-                # provider-specific lives on the cards above.
-                "fields": ["provider_setup_action"],
-            },
-            {
-                "group": "Downloads",
-                "id": "downloads",
-                "desc": "Where your music is saved and how downloads run, for every enabled provider.",
-                "fields": [
-                    "download_base_path",
-                    "quality_video",
-                    "downloads_concurrent_max",
-                    "default_audio_type",
-                    "skip_existing",
-                    "confirm_category_download",
-                    "download_delay",
-                ],
-            },
-            {
-                "group": "Library",
-                "id": "library",
-                "desc": "Point Waves at your music library so it can badge what you already have.",
-                "fields": [
-                    "library",
-                ],
-            },
-            {
-                "group": "File organization",
-                "id": "files",
-                "desc": (
-                    "Folder layout, file-name templates and how multiple artists are joined. The templates are shared by every enabled provider."
-                ),
-                "fields": [
-                    "format_track",
-                    "format_album",
-                    "format_playlist",
-                    "format_video",
-                    "format_mix",
-                    "format_atmos",
-                    "album_track_num_pad_min",
-                    "filename_illegal_replacement",
-                    "filename_illegal_map",
-                    "filename_delimiter_artist",
-                    "filename_delimiter_album_artist",
-                    "use_primary_album_artist",
-                    "symlink_to_track",
-                    "playlist_create",
-                ],
-            },
-            {
-                # One tag template for every provider: with the
-                # Custom switch off each file carries what its provider
-                # supplies; with it on, the tag groups switched off below are
-                # omitted. Lyrics and cover embedding live only in the
-                # Providers cards above, never as template tags.
-                "group": "Metadata",
-                "id": "metadata",
-                "desc": "The tag template every download is written with, no matter which provider saved it.",
-                "fields": [
-                    "mark_explicit",
-                    "clean_album_artist",
-                    "metadata_replay_gain",
-                    "metadata_write_url",
-                    "metadata_target_upc",
-                    "initial_key_format",
-                    "metadata_custom",
-                    "metadata_tag_composer",
-                    "metadata_tag_copyright",
-                    "metadata_tag_isrc",
-                    "metadata_tag_bpm",
-                    "metadata_tag_initial_key",
-                    "metadata_tag_upc",
-                ],
-            },
-            {
-                "group": "Processing (FFmpeg)",
-                "id": "processing",
-                "card": "ffmpeg",
-                "desc": "Post-processing that relies on the FFmpeg tool below.",
-                # path_binary_ffmpeg is a str field → renders as a labelled box
-                # with a Browse… button right under the card (before the bool
-                # toggles), so linking your own binary lives beside its status.
-                # The two ffmpeg_* auto-check fields are embedded in the card.
-                "fields": [
-                    "path_binary_ffmpeg",
-                    "video_convert_mp4",
-                    "extract_flac",
-                    "extract_flac_all",
-                    "ffmpeg_auto_update",
-                    "ffmpeg_update_cadence",
-                ],
-            },
-            {
-                "group": "Discography & editions",
-                "id": "discography",
-                "desc": (
-                    "What 'Download discography' pulls in, and how duplicate editions are "
-                    "resolved (a playlist's 'Download full albums' follows the same edition rules)."
-                ),
-                "fields": [
-                    "explicit_mode",
-                    "edition_conflict",
-                    "disco_albums",
-                    "disco_eps",
-                    "disco_featured",
-                    "disco_appears_on",
-                    "video_download",
-                    "collapse_editions",
-                    "artist_page_all_editions",
-                ],
-            },
-            {
-                "group": "Updates",
-                "id": "updates",
-                "card": "updates",
-                "desc": "Keep Waves current. Checks are off by default and never send any of your data.",
-                "fields": ["auto_update", "update_cadence"],
-            },
-            {
-                "group": "Diagnostics",
-                "id": "diagnostics",
-                "card": "diagnostics",
-                "desc": (
-                    "Help fix bugs with a shareable report covering every enabled provider. "
-                    "Personal details are always removed."
-                ),
-                "fields": ["verbose_diagnostics", "diagnostics_redact_content"],
-            },
-            {
-                "group": "Advanced",
-                "id": "advanced",
-                "desc": "Power-user knobs. The defaults are right for almost everyone.",
-                "fields": [
-                    "motion_background",
-                    "hover_control_motion",
-                    "art_hover_tilt",
-                    "video_hover_peek",
-                    "downsample_target",
-                    "downloads_simultaneous_per_track_max",
-                    "download_delay_sec_min",
-                    "download_delay_sec_max",
-                    "api_rate_limit_batch_size",
-                    "api_rate_limit_delay_sec",
-                    "apple_integrity_retries",
-                    "apple_integrity_retry_delay_sec",
-                    "downsample_enabled",
-                ],
-            },
-        ]
-        for sec in sections:
-            sec["fields"] = [get_field(k) for k in sec["fields"]]
-            # Provider cards resolve their fields the same way:
-            # one Providers section, one card per provider.
-            for provider in sec.get("providers") or []:
-                provider["fields"] = [get_field(k) for k in provider["fields"]]
-        return sections
+        """Build the Settings page from current preferences and provider state."""
+        return SettingsSchema(
+            data=self.settings.data,
+            preferences=self._waves_prefs,
+            providers=list(_provider_registry(self)),
+            help_for=self._help_for,
+            preference_bool=self._waves_pref_bool,
+            apple_flags=lambda: self._apple_live_flags(),
+            quarantine_note=lambda: self._apple_quarantine_note(),
+            session_logged_in=lambda provider: _session_logged_in(self, provider),
+            ffmpeg_preferences=self._ffmpeg_flag_prefs,
+            ffmpeg_path=self._user_ffmpeg_path,
+            ffmpeg_status=lambda path: self._ffmpeg.status(path),
+        ).build()
 
     def _template_sample(self):
         smp = getattr(self, "_tpl_sample", None)
@@ -21496,13 +20234,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if not hasattr(data, key):
                 continue
             try:
-                if key in _ENUM_BY_FIELD:
-                    setattr(data, key, _ENUM_BY_FIELD[key][value])
-                elif key in _FLOAT_FIELDS:
+                if key in ENUM_BY_FIELD:
+                    setattr(data, key, ENUM_BY_FIELD[key][value])
+                elif key in FLOAT_FIELDS:
                     setattr(data, key, float(value))
-                elif key in _NUMBER_FIELDS:
+                elif key in NUMBER_FIELDS:
                     setattr(data, key, int(value))
-                elif key in _MAP_FIELDS:
+                elif key in MAP_FIELDS:
                     # Stored already laundered, so a config file written here
                     # can never carry an entry the engine would refuse: the
                     # page holds SAVE CHANGES on a rejected stand-in, and this
@@ -21517,7 +20255,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     if laundered and not self._waves_prefs.get("illegal_map_offer_done"):
                         self._waves_prefs["illegal_map_offer_done"] = True
                         self._save_waves_prefs()
-                elif key in _FLAG_FIELDS:
+                elif key in FLAG_FIELDS:
                     setattr(data, key, bool(value))
                     # Track the user's real preference for ffmpeg-gated toggles
                     # so a later force-disable can be undone to the right value.
@@ -21731,8 +20469,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         (including composite sub-keys), shaped the way applySettings expects
         them (enums by name). Keys outside the schema, housekeeping state,
         are deliberately absent."""
-        stock = ModelSettings()
-        for key, value in _FIRST_RUN_OVERRIDES.items():
+        stock = CfgSettings()
+        for key, value in FIRST_RUN_OVERRIDES.items():
             setattr(stock, key, value)
         pref_defaults = self._default_waves_prefs()
         values: dict = {}
@@ -21766,7 +20504,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         settings "reset all settings").
 
         Factory default = the engine's stock dataclass values with Waves'
-        first-run overrides on top (_FIRST_RUN_OVERRIDES), plus the waves.json
+        first-run overrides on top (FIRST_RUN_OVERRIDES), plus the waves.json
         pref defaults. Only keys that appear in settingsSchema are touched:
         housekeeping state (window frame, section collapse memory, update-check
         timestamps) is not a setting and survives. The reset is routed through

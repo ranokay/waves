@@ -27,7 +27,6 @@ on materialising. Tests pin that no Apple path references the user home.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import logging
 import os
@@ -44,6 +43,8 @@ from pathlib import Path
 from threading import Event
 
 import requests
+
+from waves.file_integrity import sha256_file
 
 logger = logging.getLogger("waves.providers.apple.runtime")
 
@@ -810,7 +811,7 @@ class AppleRuntimeManager:
             if not expected:
                 raise ValueError("refusing to install N_m3u8DL-RE: no checksum available to verify the download")
             _log("verifying checksum")
-            actual = _sha256_file(arc_tmp)
+            actual = sha256_file(arc_tmp)
             if actual.lower() != expected.lower():
                 raise ValueError(f"checksum mismatch: expected {expected}, got {actual}")
 
@@ -991,14 +992,6 @@ def _port_free(port: int) -> bool:
         except OSError:
             return False
         return True
-
-
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(_IO_CHUNK), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _extract_binary(arc_path: Path, dest: Path, exe_name: str) -> None:

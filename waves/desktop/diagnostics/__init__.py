@@ -1,0 +1,1 @@
+"""Desktop diagnostics domain."""

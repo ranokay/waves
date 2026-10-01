@@ -29,7 +29,8 @@ from support.paths import REPO_ROOT
 from tidalapi import Album, Track
 
 from waves.constants import DEFAULT_ILLEGAL_MAP
-from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge
+from waves.desktop.backend import WavesBridge
+from waves.desktop.settings.schema import FIRST_RUN_OVERRIDES
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as CfgSettings
 from waves.paths import (
@@ -40,7 +41,7 @@ from waves.paths import (
 )
 
 _UI = REPO_ROOT / "waves" / "desktop"
-_SETTINGS_QML = (_UI / "qml" / "SettingsPage.qml").read_text(encoding="utf-8")
+_SETTINGS_QML = (_UI / "qml" / "domains/settings/SettingsPage.qml").read_text(encoding="utf-8")
 
 
 class _Stub:
@@ -164,7 +165,7 @@ class TestWhoGetsTheDefaultsOutright:
         assert CfgSettings().filename_illegal_map == {}
 
     def test_a_brand_new_install_starts_with_them(self):
-        assert _FIRST_RUN_OVERRIDES["filename_illegal_map"] == DEFAULT_ILLEGAL_MAP
+        assert FIRST_RUN_OVERRIDES["filename_illegal_map"] == DEFAULT_ILLEGAL_MAP
 
     def test_the_first_run_copy_cannot_rewrite_the_constant(self):
         # setattr of the shared dict would make the user's first edit change

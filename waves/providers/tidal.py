@@ -2,7 +2,7 @@
 
 Every method hands the work to the body that has always done it --
 ``waves.providers.tidal_client``'s catalog adapters, ``waves.config``'s session, and the
-shared normalizers in ``waves.providers.shared``. The bridge routes every TIDAL
+identity helpers in ``waves.ids`` and pooled HTTP in ``waves.http``. The bridge routes every TIDAL
 session, catalog and editorial read through this module (the seam's contract
 half); the only tidal-object touches left in the bridge are the
 engine hand-off and the config layer's credential-event wiring.
@@ -28,6 +28,7 @@ from tidalapi.mix import Mix
 
 from waves.config import ATMOS_REQUEST_QUALITY, Tidal, harden_api_session, session_quality_from_word
 from waves.constants import CTX_TIDAL, LIBRARY_PAGE, MediaType, QualityTier, quality_rank, tier_from_word
+from waves.ids import credited_artist_ids, download_identity_id
 from waves.metadata.naming import get_album_artist_ids, get_album_artists
 from waves.providers.base import (
     AudioType,
@@ -42,7 +43,6 @@ from waves.providers.base import (
     StatusKind,
     StreamInfo,
 )
-from waves.providers.shared import _artist_ids, _tidal_refuses_asset, _waves_item_id
 from waves.providers.tidal_client import (
     get_tidal_media_id,
     get_tidal_media_type,
@@ -54,6 +54,7 @@ from waves.providers.tidal_client import (
 )
 from waves.providers.tidal_folders import walk_playlist_tree
 from waves.providers.tidal_manifest import overgenerated_tail_urls
+from waves.providers.tidal_refusals import asset_refusal_message
 
 logger = logging.getLogger("waves.providers.tidal")
 
@@ -800,8 +801,8 @@ class TidalProvider(Provider):
             # Identity rides the seam's namespaced spelling (§4.2) -- the new
             # schema never bares an id; the legacy tag writer strips when it
             # writes the WAVES_TIDAL_* tags it still owns.
-            "item_id": _tidal_id(_waves_item_id(track)),
-            "artist_ids": [_tidal_id(artist_id) for artist_id in _artist_ids(track)],
+            "item_id": _tidal_id(download_identity_id(track)),
+            "artist_ids": [_tidal_id(artist_id) for artist_id in credited_artist_ids(track)],
             "album_artist_ids": [_tidal_id(artist_id) for artist_id in get_album_artist_ids(track)],
             # Every credited artist keeps its name, exactly the old tag pull
             # (`a.name for a in track.artists`): a credit whose id never
@@ -845,7 +846,7 @@ class TidalProvider(Provider):
             return Refusal(RefusalKind.THROTTLED, "TIDAL is rate-limiting; back off and retry")
         message = None
         if isinstance(exc, HTTPError):
-            message = _tidal_refuses_asset(exc)
+            message = asset_refusal_message(exc)
         if message is not None or isinstance(exc, StreamNotAvailable | ObjectNotFound | AssetNotAvailable):
             return Refusal(RefusalKind.UNAVAILABLE, message or "this item is not available on TIDAL")
         return Refusal(RefusalKind.FAILURE, str(exc) or type(exc).__name__)

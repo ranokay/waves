@@ -38,7 +38,7 @@ from waves.desktop.backend import (
     _ScanStopped,
 )
 
-QML_GROUP = (QML_DIR / "LibSourceGroup.qml").read_text(encoding="utf-8")
+QML_GROUP = (QML_DIR / "domains/library/SavedSourceGroup.qml").read_text(encoding="utf-8")
 QML_MAIN_TEXT = QML_MAIN.read_text(encoding="utf-8")
 
 SOURCE = "tidal"

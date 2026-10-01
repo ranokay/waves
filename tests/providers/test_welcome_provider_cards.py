@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from support.provider_fakes import StubProvider, stub_bridge
+from providers.fakes import StubProvider, stub_bridge
 
 from waves.desktop import backend
 from waves.providers import Capability, StatusKind
@@ -72,9 +72,9 @@ def test_the_welcome_action_is_descriptor_data_not_qml_copy():
     # welcome surface lives in WelcomePicker.qml, so read it
     # beside Main.qml: neither may grow a hardcoded provider action.
     qml_dir = Path(backend.__file__).resolve().parent / "qml"
-    qml = (qml_dir / "Main.qml").read_text(encoding="utf-8") + (qml_dir / "WelcomePicker.qml").read_text(
-        encoding="utf-8"
-    )
+    qml = (qml_dir / "Main.qml").read_text(encoding="utf-8") + (
+        qml_dir / "domains/providers/WelcomePicker.qml"
+    ).read_text(encoding="utf-8")
 
     assert "Set up Apple Music" not in qml
     assert "modelData.action" in qml

@@ -16,12 +16,12 @@ from support.paths import QML_MAIN
 MAIN_QML = QML_MAIN.read_text()
 # The cover box is its own file, so the Art pins read it
 # there; the file body is the component.
-ART_QML = (QML_MAIN.parent / "Art.qml").read_text()
+ART_QML = (QML_MAIN.parent / "components/Art.qml").read_text()
 # Components whose pins below read them in their own files.
-ALBUM_BLOCK_QML = (QML_MAIN.parent / "AlbumBlock.qml").read_text()
-ART_CARD_QML = (QML_MAIN.parent / "ArtCard.qml").read_text()
-LIB_PLAYLIST_ROW_QML = (QML_MAIN.parent / "LibPlaylistRow.qml").read_text()
-PLAYLIST_BLOCK_QML = (QML_MAIN.parent / "PlaylistBlock.qml").read_text()
+ALBUM_BLOCK_QML = (QML_MAIN.parent / "domains/catalog/AlbumBlock.qml").read_text()
+ART_CARD_QML = (QML_MAIN.parent / "domains/catalog/ArtCard.qml").read_text()
+LIB_PLAYLIST_ROW_QML = (QML_MAIN.parent / "domains/library/SavedPlaylistRow.qml").read_text()
+PLAYLIST_BLOCK_QML = (QML_MAIN.parent / "domains/catalog/PlaylistBlock.qml").read_text()
 
 
 def _body(start: str, end: str = "}") -> str:
@@ -46,9 +46,10 @@ def _body(start: str, end: str = "}") -> str:
 def _component(name: str) -> str:
     """The component's own text: its file when it has one, else its inline block
     in Main.qml."""
-    path = QML_MAIN.parent / f"{name}.qml"
-    if path.exists():
-        return path.read_text()
+    paths = list(QML_MAIN.parent.rglob(f"{name}.qml"))
+    if paths:
+        assert len(paths) == 1, f"ambiguous component {name}"
+        return paths[0].read_text()
     return _body(f"component {name}:", "component ")
 
 
@@ -143,7 +144,7 @@ def test_every_loading_surface_shares_the_one_wire_hint():
     # The hint's look lives in WireHint.qml alone; the three loading surfaces
     # (landing, drilled page, fresh search) instantiate it rather than each
     # carrying its own copy, so an edit there changes every loading state.
-    wire = (QML_MAIN.parent / "WireHint.qml").read_text(encoding="utf-8")
+    wire = (QML_MAIN.parent / "shell/WireHint.qml").read_text(encoding="utf-8")
     assert 'property string phrase: "Reading the wire…"' in wire
     # (comments in Main.qml still quote the phrase when they explain the
     # loading states; what must not come back is a Text rendering it.)
@@ -158,7 +159,7 @@ def test_the_hint_ships_one_treatment_and_not_a_dial():
     # the chosen one is the whole file now. A `variant` switch back in this
     # component means the other ten came back with it, and every loading
     # surface in the app is then carrying code no release can reach.
-    wire = (QML_MAIN.parent / "WireHint.qml").read_text(encoding="utf-8")
+    wire = (QML_MAIN.parent / "shell/WireHint.qml").read_text(encoding="utf-8")
     assert "property int variant" not in wire
     assert "Loader" not in wire
     # The swell: a row of cells with a bright head and a long wake behind it.
@@ -172,7 +173,7 @@ def test_the_finished_page_never_waits_for_the_hint_to_fade():
     # collapse the instant loading ends: an animated height would hold the
     # finished page down for the length of the fade, and the rows would be
     # watched sliding up into place on every load.
-    wire = (QML_MAIN.parent / "WireHint.qml").read_text(encoding="utf-8")
+    wire = (QML_MAIN.parent / "shell/WireHint.qml").read_text(encoding="utf-8")
     assert "height: active ? implicitHeight : 0" in wire
     assert "Behavior on height" not in wire
     # The visual, and only the visual, rides the cross-fade. Through states and
@@ -222,7 +223,7 @@ def test_cards_and_rows_arm_the_prefetch_on_hover():
     assert "host.hoverPrefetch(ac.card)" in ac and "host.hoverPrefetchCancel(ac.card)" in ac
     wrap = ART_CARD_QML.split("id: acWrapHover", 1)[1].split("}", 1)[0]
     assert "hoverPrefetch" not in wrap, "prefetch belongs to the card-wide handler, not the artwork's"
-    pl = _component("LibPlaylistRow")
+    pl = _component("SavedPlaylistRow")
     assert "host.hoverPrefetch(plRow.prefetchCard)" in pl and "enabled: !plRow.isFolder" in pl
     assert '({ kind: "album", id: ab.albumId, art: ab.art })' in _flat(ALBUM_BLOCK_QML)
     assert '({ kind: "playlist", id: pb.plId, art: pb.art })' in _flat(PLAYLIST_BLOCK_QML)

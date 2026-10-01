@@ -15,7 +15,7 @@ import pytest
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 from waves.errors import DownloadIncomplete
 from waves.providers import AppleCollectionIncomplete
 from waves.providers.apple import runner
@@ -1435,7 +1435,7 @@ def test_a_foreign_occupant_that_follows_every_name_fails_the_item(tmp_path, mon
 
     # The app's diagnostics setup can leave the "waves" tree non-propagating;
     # caplog reads through the root, so restore it (the same guard as
-    # tests/ui/test_move_errno_breadcrumb.py).
+    # tests/library/test_move_errno_breadcrumb.py).
     monkeypatch.setattr(logging.getLogger("waves"), "propagate", True, raising=True)
     with caplog.at_level(logging.ERROR), pytest.raises(DownloadIncomplete):
         _run_job_with_a_writer_on_the_picked_name(tmp_path, monkeypatch, occupy_always)

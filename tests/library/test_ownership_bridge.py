@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge, _stream_quality
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 from waves.library.ownership import OwnershipStore
 from waves.providers import TidalProvider
 

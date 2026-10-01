@@ -1,7 +1,7 @@
 Phosphor Icons
 https://phosphoricons.com  ·  https://github.com/phosphor-icons/core
 
-The icon glyph paths embedded in Ico.qml are from Phosphor Icons, used under
+The icon glyph paths embedded in primitives/Icon.qml are from Phosphor Icons, used under
 the MIT License.
 
 MIT License

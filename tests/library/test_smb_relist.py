@@ -1,5 +1,5 @@
 """Recovering the folders an SMB mount refuses to list
-(waves/library/smb_relist.py, wired in bridge_library._library_recover_untrusted).
+(waves/library/smb_relist.py, wired in library/bridge.py: _library_recover_untrusted).
 
 The macOS SMB client fills a directory cache with ten parallel queries. On the
 affected pairing all ten come back with the FIRST page and all ten are kept, so
@@ -35,8 +35,8 @@ import os
 from types import SimpleNamespace
 
 import pytest
-from support.library_fakes import ScandirStub, fake_listing
-from support.library_fakes import make_album_dir as _mk
+from library.fakes import ScandirStub, fake_listing
+from library.fakes import make_album_dir as _mk
 
 from waves.library import smb_relist
 from waves.library.index import LibraryIndex

@@ -1,5 +1,5 @@
 """The bridge's probe by name behind a badge miss on an untrusted listing
-(bridge_library.py, the "Probe by name" section).
+(library_bridge.py, the "Probe by name" section).
 
 A share whose directory paging repeats lists the same first page of artist
 folders over and over, so the scan never sees the artists past it and every
@@ -23,19 +23,19 @@ import os
 import threading
 from types import SimpleNamespace
 
-from support.library_fakes import (
+from library.fakes import (
     LibraryStub as _Stub,
 )
-from support.library_fakes import fake_listing
-from support.library_fakes import (
+from library.fakes import fake_listing
+from library.fakes import (
     make_album_dir as _album,
 )
-from support.library_fakes import (
+from library.fakes import (
     make_library_bridge as _make,
 )
 
-from waves.desktop import bridge_library
 from waves.desktop.backend import WavesBridge
+from waves.desktop.library import bridge as library_bridge
 
 for _m in (
     "_library_probe_candidates",
@@ -245,7 +245,7 @@ def test_candidates_come_from_the_naming_settings(tmp_path, monkeypatch):
     s.settings.data.filename_illegal_replacement = "_"
     s.settings.data.filename_illegal_map = {"/": "-"}
     assert s._library_probe_candidates("AC/DC") == ["AC-DC", "AC_DC", "ACDC"]
-    monkeypatch.setattr(bridge_library, "folder_name_candidates", lambda *a: ["X"])
+    monkeypatch.setattr(library_bridge, "folder_name_candidates", lambda *a: ["X"])
     assert s._library_probe_candidates("anything") == ["X"]
 
 
@@ -481,7 +481,7 @@ def test_a_busy_cache_stops_the_gate_asking_again_but_not_a_badge(tmp_path, monk
     # The real gate wait is 15s of standing still, which is the cost this
     # cooldown exists to stop paying. The test only needs ONE deferral to
     # happen, so it buys that at a hundredth of the price.
-    monkeypatch.setattr(bridge_library, "_LIBRARY_PROBE_GATE_WAIT_S", 0.05)
+    monkeypatch.setattr(library_bridge, "_LIBRARY_PROBE_GATE_WAIT_S", 0.05)
     with s._library._scan_busy:
         s._library_probe_sync_many(["C", "D"])
         assert len(calls) == 1  # asked once, told the cache is busy

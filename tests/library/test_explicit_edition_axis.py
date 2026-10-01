@@ -32,7 +32,7 @@ from types import SimpleNamespace
 import pytest
 
 import waves.metadata.matching as matching
-from waves.desktop.bridge_library import LibraryMixin
+from waves.desktop.library.bridge import LibraryMixin
 from waves.library.index import (
     LibraryIndex,
     _advisory_word,
@@ -884,7 +884,7 @@ def test_every_qml_presence_ask_passes_the_flag():
     were unknown and so vouches for the other edition the gate refuses."""
     qml_dir = pathlib.Path(__file__).resolve().parents[2] / "waves" / "desktop" / "qml"
     checked = 0
-    for path in sorted(qml_dir.glob("*.qml")):
+    for path in sorted(qml_dir.rglob("*.qml")):
         src = path.read_text(encoding="utf-8")
         for name in ("libraryAlbumPresence", "libraryTrackPresence"):
             for args in _call_args(src, name):
@@ -1004,7 +1004,7 @@ def _reveal(monkeypatch, platform, target):
     popen: list = []
     opened: list = []
     monkeypatch.setattr(sys, "platform", platform)
-    monkeypatch.setattr("waves.desktop.bridge_library.subprocess.Popen", lambda argv, **kw: popen.append((argv, kw)))
+    monkeypatch.setattr("waves.desktop.library.bridge.subprocess.Popen", lambda argv, **kw: popen.append((argv, kw)))
     from PySide6 import QtGui
 
     monkeypatch.setattr(QtGui.QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()))
@@ -1037,7 +1037,7 @@ def test_a_failed_finder_reveal_falls_back_to_showing_the_parent(tmp_path, monke
     def boom(argv, **kw):
         raise OSError("no open")
 
-    monkeypatch.setattr("waves.desktop.bridge_library.subprocess.Popen", boom)
+    monkeypatch.setattr("waves.desktop.library.bridge.subprocess.Popen", boom)
     monkeypatch.setattr(QtGui.QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()))
     LibraryMixin._reveal_in_file_manager(str(bundle))
     assert opened == [str(bundle.parent)]

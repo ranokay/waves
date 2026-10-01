@@ -18,10 +18,12 @@ from threading import Event, Thread
 
 import pytest
 
+from waves.desktop.settings.schema import FIRST_RUN_OVERRIDES
+
 pytest.importorskip("PySide6")
 
 from waves.desktop import backend as backend_mod
-from waves.desktop.backend import _FIRST_RUN_OVERRIDES, WavesBridge
+from waves.desktop.backend import WavesBridge
 
 
 class _Stub:
@@ -74,10 +76,10 @@ def _values_stub():
 
 def test_factory_defaults_cover_schema_keys_in_apply_shape():
     values = _bind(_values_stub(), "_factory_default_values")()
-    # Engine enum arrives by NAME (what applySettings indexes _ENUM_BY_FIELD with).
+    # Engine enum arrives by NAME (what applySettings indexes ENUM_BY_FIELD with).
     assert isinstance(values["tidal_quality_audio"], str)
     # First-run override wins over the stock dataclass default.
-    assert values["video_download"] is _FIRST_RUN_OVERRIDES["video_download"]
+    assert values["video_download"] is FIRST_RUN_OVERRIDES["video_download"]
     # Waves pref comes from the waves.json defaults.
     assert values["explicit_mode"] == "explicit"
     # Composite sub-keys are resolved too.
@@ -397,7 +399,7 @@ def test_factory_reset_freeze_blocks_pref_saves(tmp_path):
 class _DrainingWriter:
     """The bridge's config-writer seam, deterministic for ordering tests.
 
-    ``_SingleFlightWriter`` runs submitted closures on its own thread, which
+    ``SingleFlightWriter`` runs submitted closures on its own thread, which
     would race an assertion about whether a write landed before or after the
     wipe. Same contract, run at flush: exactly what the shutdown path uses.
     """

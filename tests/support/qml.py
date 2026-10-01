@@ -64,7 +64,7 @@ def seed_tidal_search(q, bridge, *, artists=(), albums=(), tracks=(), videos=(),
     sections the caller asks for. The caller owns ``openSearch()`` and any
     page state around it.
     """
-    from support.search_fakes import qml_search_payload
+    from search.fakes import qml_search_payload
 
     q("_searchSeq = _navSeq")
     bridge.searchResults.emit(

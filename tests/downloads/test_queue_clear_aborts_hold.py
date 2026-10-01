@@ -14,7 +14,7 @@ from support.dispatch_stub import _queue_stub, arm_dispatch
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge, _JobSpec
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 
 
 class _Sig:

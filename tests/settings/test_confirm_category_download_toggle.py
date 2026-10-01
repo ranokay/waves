@@ -18,7 +18,8 @@ category, permanently.
 
 from __future__ import annotations
 
-from waves.desktop.backend import _FLAG_FIELDS, WavesBridge
+from waves.desktop.backend import WavesBridge
+from waves.desktop.settings.schema import FLAG_FIELDS
 from waves.model.cfg import HelpSettings
 from waves.model.cfg import Settings as CfgSettings
 
@@ -71,7 +72,7 @@ def test_the_confirm_has_a_toggle_on_the_settings_page():
 def test_it_is_persisted_as_a_flag():
     """Without this applySettings would str() the checkbox value, and every
     write would land as a truthy string."""
-    assert _KEY in _FLAG_FIELDS
+    assert _KEY in FLAG_FIELDS
 
 
 def test_reset_all_settings_restores_it():

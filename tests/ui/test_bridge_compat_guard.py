@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from support.provider_fakes import StubProvider, stub_bridge
+from providers.fakes import StubProvider, stub_bridge
 
 from waves.desktop import backend, bridge_surfaces
 from waves.desktop.backend import WavesBridge
@@ -37,7 +37,6 @@ _BRIDGE_SURFACE_ALIASES = (
     "_FAVOURITES_CATEGORIES",
     "_LIBRARY_VIEW_LABELS",
     "_SEARCH_SECTIONS",
-    "_apple_status",
     "_begin_login",
     "_browse_nav",
     "_fmt_duration",
@@ -48,13 +47,11 @@ _BRIDGE_SURFACE_ALIASES = (
     "_library_files_view",
     "_my_music_empty",
     "_my_music_sources",
-    "_provider_card",
     "_provider_descriptor_dict",
     "_provider_light",
     "_provider_lights",
     "_provider_logos",
     "_provider_registry",
-    "_provider_session_field",
     "_provider_sign_out",
     "_record_in_library",
     "_session_logged_in",
@@ -99,7 +96,7 @@ _PUBLIC_IMPORTS = (
     "_ART_CACHE_DIR",
     "_FACTORY_WIPE_LOG_PATTERNS",
     "_FACTORY_WIPE_SUBDIRS",
-    "_FIRST_RUN_OVERRIDES",
+    "FIRST_RUN_OVERRIDES",
     "_MergeRec",
     "_TEMPLATE_TOKENS",
     "_TrackedDownload",

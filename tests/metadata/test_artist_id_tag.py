@@ -28,7 +28,7 @@ import mutagen.mp4
 import pytest
 from tidalapi.artist import Role
 
-from waves.download import _artist_ids
+from waves.ids import credited_artist_ids
 from waves.metadata.naming import get_album_artist_ids, get_album_artists
 from waves.metadata.tags import (
     ALBUM_ARTIST_ID_TAG,
@@ -206,18 +206,18 @@ def test_the_item_id_and_the_artist_id_are_different_questions():
 # --------------------------------------------------------------------------- #
 def test_credited_artist_ids_follow_the_credited_order():
     video = SimpleNamespace(artists=[_artist(4676988, "Marina"), _artist(77, "Guest")])
-    assert _artist_ids(video) == ["4676988", "77"]
+    assert credited_artist_ids(video) == ["4676988", "77"]
 
 
 def test_an_id_less_stub_is_dropped_not_written_blank():
     """An empty value in an identity tag would read as a real, nameless artist."""
     track = SimpleNamespace(artists=[_artist(4676988, "Marina"), _artist(None, "Stub")])
-    assert _artist_ids(track) == ["4676988"]
+    assert credited_artist_ids(track) == ["4676988"]
 
 
 def test_no_credits_at_all_is_an_empty_list():
-    assert _artist_ids(SimpleNamespace()) == []
-    assert _artist_ids(SimpleNamespace(artists=None)) == []
+    assert credited_artist_ids(SimpleNamespace()) == []
+    assert credited_artist_ids(SimpleNamespace(artists=None)) == []
 
 
 def test_album_artist_ids_name_the_same_artists_the_name_tag_does():

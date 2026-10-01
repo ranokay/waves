@@ -132,7 +132,7 @@ def test_metadata_writer_omits_only_switched_off_groups(tmp_path):
 
 
 def _schema():
-    from support.settings_fakes import schema_stub as _schema_stub
+    from settings.fakes import schema_stub as _schema_stub
 
     from waves.desktop.backend import WavesBridge
 
@@ -172,7 +172,7 @@ def test_bands_carry_the_mirrors_with_composites_and_gates():
 
 
 def test_metadata_section_holds_the_template_and_no_embed_toggles():
-    from support.settings_fakes import schema_stub as _schema_stub
+    from settings.fakes import schema_stub as _schema_stub
 
     from waves.desktop.backend import WavesBridge
 

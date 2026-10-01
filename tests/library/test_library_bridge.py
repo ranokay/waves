@@ -1,4 +1,4 @@
-"""Glue tests for the bridge's local-library scan family (bridge_library.py).
+"""Glue tests for the bridge's local-library scan family (desktop/library/bridge.py).
 
 Qt-free: the mixin's methods are bound onto a bare stub with an inline pool, so
 the scan, the source resolution, the presence answers and the signal traffic are
@@ -15,10 +15,10 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-from support.library_fakes import (
+from library.fakes import (
     make_album_dir as _album,
 )
-from support.library_fakes import (
+from library.fakes import (
     make_library_bridge as _make,
 )
 from support.paths import REPO_ROOT
@@ -634,7 +634,7 @@ def test_a_long_download_batch_still_gets_its_badges(tmp_path, monkeypatch):
     Driven on a fake clock: tracks land every second forever, and the rebuild
     must still happen, roughly on the ceiling's cadence.
     """
-    from waves.desktop import bridge_library
+    from waves.desktop.library import bridge as library_bridge
 
     s = _make(tmp_path, library_source="download", download_base=str(tmp_path / "dl"))
     s._on_download_recorded = WavesBridge._on_download_recorded.__get__(s)
@@ -643,7 +643,7 @@ def test_a_long_download_batch_still_gets_its_badges(tmp_path, monkeypatch):
     s._rebuild_library_index = lambda **kw: rebuilds.append(1)
 
     now = {"t": 1000.0}
-    monkeypatch.setattr(bridge_library.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(library_bridge.time, "monotonic", lambda: now["t"])
 
     # A single-shot QTimer stand-in: active until it is stopped, never fires on
     # its own, which is exactly the case under test.
@@ -663,7 +663,7 @@ def test_a_long_download_batch_still_gets_its_badges(tmp_path, monkeypatch):
     s._library_dl_debounce = _Timer()
     s._library_dl_burst_start = 0.0
 
-    ceiling = bridge_library._LIBRARY_DL_MAX_DEBOUNCE_S
+    ceiling = library_bridge._LIBRARY_DL_MAX_DEBOUNCE_S
     for _ in range(int(ceiling * 5)):  # five ceilings' worth of steady downloading
         s._on_download_recorded()
         now["t"] += 1.0
@@ -676,14 +676,14 @@ def test_a_short_download_batch_still_coalesces(tmp_path, monkeypatch):
     """And the ceiling does not break the debounce it guards: a burst shorter
     than the ceiling still collapses to nothing forced, leaving the ordinary
     settle timer to run one rebuild after the last track."""
-    from waves.desktop import bridge_library
+    from waves.desktop.library import bridge as library_bridge
 
     s = _make(tmp_path, library_source="download", download_base=str(tmp_path / "dl"))
     s._on_download_recorded = WavesBridge._on_download_recorded.__get__(s)
     rebuilds: list[int] = []
     s._rebuild_library_index = lambda **kw: rebuilds.append(1)
     now = {"t": 500.0}
-    monkeypatch.setattr(bridge_library.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(library_bridge.time, "monotonic", lambda: now["t"])
 
     class _Timer:
         def __init__(self):
@@ -913,12 +913,12 @@ def test_presence_never_reaches_the_download_engine():
             assert "matching" not in imported, f"download.py imports the presence matcher at line {node.lineno}"
 
     # 3. And the decision it all turns on has exactly two callers, both in
-    #    bridge_library: the badge slot and the bulk claim helper. Not the
+    #    library_bridge: the badge slot and the bulk claim helper. Not the
     #    engine, and not the rest of the bridge: backend reaches presence only
     #    through the bridge's claim helpers, whose answers are skip-or-nothing.
     backend = (root / "waves" / "desktop" / "backend.py").read_text(encoding="utf-8")
-    assert "decide_presence" not in backend, "presence answers stay in bridge_library"
-    bridge = (root / "waves" / "desktop" / "bridge_library.py").read_text(encoding="utf-8")
+    assert "decide_presence" not in backend, "presence answers stay in library_bridge"
+    bridge = (root / "waves" / "desktop" / "library" / "bridge.py").read_text(encoding="utf-8")
     assert bridge.count("decide_presence") == 2  # the badge slot + _library_claims_album
     assert bridge.count("decide_track_presence") == 2  # the pill slot + _library_claims_track
 
@@ -1284,7 +1284,7 @@ def test_a_read_that_failed_once_is_not_remembered_as_an_empty_library(tmp_path)
     kept. Keeping a FAILURE there (a cache locked by a writer, a share that
     blinked) turned one transient error into "you own nothing" for the whole
     life of that index: every badge dark until the next publish."""
-    from waves.desktop.bridge_library import SqlPresenceIndex
+    from waves.desktop.library.bridge import SqlPresenceIndex
 
     class _Flaky:
         def __init__(self):
@@ -1306,7 +1306,7 @@ def test_a_read_that_failed_once_is_not_remembered_as_an_empty_library(tmp_path)
 def test_a_settled_answer_is_still_only_resolved_once(tmp_path):
     """The other half: a real answer is kept, or every badge on the page pays
     for a table read that cannot change until the next publish."""
-    from waves.desktop.bridge_library import SqlPresenceIndex
+    from waves.desktop.library.bridge import SqlPresenceIndex
 
     class _Counting:
         def __init__(self):
@@ -1328,7 +1328,7 @@ def test_a_capped_memo_holds_its_cap_while_several_threads_fill_it():
     eviction is a read of the first key followed by a delete with two threads
     in it. Under the lock it cannot lose the cap or raise mid-iteration; the
     backend's own caches solve it the same way."""
-    from waves.desktop.bridge_library import _remember
+    from waves.desktop.library.bridge import _remember
 
     d: dict = {}
     errors: list[str] = []
@@ -1387,7 +1387,7 @@ def test_a_publish_sweeps_before_it_freezes(tmp_path, monkeypatch):
     under the water."""
     import gc as _gc
 
-    from waves.desktop import bridge_library as bl
+    from waves.desktop.library import bridge as bl
 
     calls: list[str] = []
     frozen = [0]

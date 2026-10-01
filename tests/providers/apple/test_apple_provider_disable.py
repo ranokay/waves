@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from waves.constants import CTX_APPLE
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 
 _REASON = "Apple Music was disabled"
 

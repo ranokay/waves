@@ -33,14 +33,14 @@ from collections import deque
 from threading import Event, Lock
 from types import SimpleNamespace
 
+from catalog.discography_fakes import DiscoStub as _DiscoStub
+from catalog.discography_fakes import VideoArtist as _VideoArtist
 from conftest import _Signal
-from support.discography_fakes import DiscoStub as _DiscoStub
-from support.discography_fakes import VideoArtist as _VideoArtist
 from support.dispatch_stub import arm_queue
 from support.paths import QML_MAIN
 
 from waves.desktop.backend import _RETRYABLE, WavesBridge, _stop_check_for
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 
 # ---------------------------------------------------------------------------
 # 1. STOP during a discography scan
@@ -214,7 +214,7 @@ def test_the_drawer_stop_button_reads_scanning():
     # The drawer lives in its own file; read both trees.
     import re
 
-    src = QML_MAIN.read_text() + (QML_MAIN.parent / "QueueDrawer.qml").read_text()
+    src = QML_MAIN.read_text() + (QML_MAIN.parent / "domains/queue/QueueDrawer.qml").read_text()
     stop = re.search(r'visible: ([^\n]*)\n\s*danger: true\n\s*label: "STOP"', src)
     assert stop, "the drawer's STOP button"
     assert "waves.scanning" in stop.group(1) and "activeQueueCount > 0" in stop.group(1)
@@ -632,7 +632,7 @@ def test_the_help_says_the_sweep_follows_the_switch():
     # are pinned to the FIELDS they belong to: a substring search over the
     # whole bridge source passed with them moved into a comment or onto the
     # wrong field.
-    from support.discography_fakes import schema_stub as _schema_stub
+    from catalog.discography_fakes import schema_stub as _schema_stub
 
     fields = {f["key"]: f for s in WavesBridge.settingsSchema(_schema_stub()) for f in s["fields"]}
     conflict = fields["edition_conflict"]["help"]

@@ -502,37 +502,16 @@ def format_path_media(
                 value += " "
             result = result.replace(template_str, value)
 
-    return _drop_empty_segments(result)
+    return normalize_template_segments(result)
 
 
-def _drop_empty_segments(path_relative: str) -> str:
-    """Collapse empty components out of a formatted relative media path, and
-    give a component that is nothing but dots a name it can keep.
+def normalize_template_segments(path_relative: str) -> str:
+    """Normalize rendered template components while keeping the path relative.
 
-    A token whose value sanitizes to ``""`` is substituted blind, and both
-    default templates open with ``{artist_name}``. An artist name that empties
-    out under pathvalidate (``?``, ``*``, ``<>``, ``|``, ``"``, or a name of
-    only dots) therefore made the relative path start with a separator, and
-    ``Path(path_base) / file_name_relative`` DISCARDS the base when the
-    right-hand operand is absolute. On Windows ``PureWindowsPath`` keeps the
-    drive, so the track landed outside the download folder (at ``C:\\<album>``)
-    and the queue still reported done; on POSIX the write failed at the volume
-    root with an unexplained errno 30. ``_no_traversal`` covers ``..`` escaping
-    the base and does not address this shape.
-
-    Dropping empty components keeps the path relative and inside the base, and
-    also tidies the doubled separator an emptied mid-template token leaves.
-
-    A component of exactly ``.`` or ``..`` is a different failure with the same
-    look. Nothing removes it: pathvalidate exempts both from its trailing-dot
-    rule, so ``.`` reaches the join intact and dies there, because ``.`` is what
-    every platform calls "this folder". An album titled ``.`` therefore gets no
-    folder at all and drops its tracks, its cover and its playlist file loose
-    into the artist folder. ``_no_traversal`` covers both,
-    but it runs over ``Path.parent.parts``, and pathlib has already swallowed
-    the ``.`` by then; it still catches ``..``, which pathlib keeps. Naming them
-    here, on the string, is the only place either can still be seen, and it
-    covers every segment a template can name: artist, album, playlist, mix.
+    An empty leading token must not leave a separator: joining an absolute
+    path would discard the download root. Replace literal "."/".." names
+    before pathlib swallows "." or interprets ".." as traversal. Empty bracket
+    pairs left by missing token values are removed by the component helper.
     """
     parts = (_close_up_after_a_vanished_token(part) for part in re.split(r"[\\/]+", path_relative))
     return "/".join(DOT_SEGMENT_STANDIN if part in (".", "..") else part for part in parts if part)

@@ -285,7 +285,7 @@ class Settings:
     # A character named here uses its own text (empty means removed outright);
     # every other rejected character follows filename_illegal_replacement. Only
     # characters a file name cannot hold can be named (see
-    # helper.path.safe_filename_replacement_map).
+    # waves.paths.safe_filename_replacement_map).
     # Empty by default on purpose: constants.DEFAULT_ILLEGAL_MAP holds the
     # recommended table, but an existing library was built under the spelling it
     # already has, so Waves offers that table on the settings page instead of

@@ -23,7 +23,7 @@ from support.paths import QML_DIR, QML_MAIN
 
 # The whole QML tree: the expanded-set writers must not go unscanned when a
 # surface that writes it moves out of Main.qml.
-ALL_QML = "\n".join(path.read_text(encoding="utf-8") for path in sorted(QML_DIR.glob("*.qml")))
+ALL_QML = "\n".join(path.read_text(encoding="utf-8") for path in sorted(QML_DIR.rglob("*.qml")))
 
 # The two writers the rule allows: the reset helper's own line, and the toggle
 # that adds or removes a single row (AlbumBlock, its own file).

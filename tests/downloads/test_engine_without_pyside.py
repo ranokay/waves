@@ -35,7 +35,7 @@ def test_engine_source_names_no_qt_or_gui_data():
         elif isinstance(node, ast.ImportFrom):
             assert node.module != "PySide6"
             assert not (node.module or "").startswith("PySide6.")
-            assert node.module != "waves.model.gui_data"
+            assert node.module != "waves.desktop.queue.progress"
 
 
 @pytest.mark.integration
@@ -48,7 +48,7 @@ class _B(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, _B())
 import waves.download
 print('PySide6' in sys.modules)
-print('waves.model.gui_data' in sys.modules)
+print('waves.desktop.queue.progress' in sys.modules)
 """
     out = subprocess.run(
         [sys.executable, "-c", probe],
@@ -62,7 +62,7 @@ print('waves.model.gui_data' in sys.modules)
 
 
 def test_qt_backed_bars_still_satisfy_the_neutral_shape():
-    tree = _parse("waves/model/gui_data.py")
+    tree = _parse("waves/desktop/queue/progress.py")
     fields = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "ProgressBars":

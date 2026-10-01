@@ -27,7 +27,7 @@ import re
 
 from support.paths import QML_DIR
 
-QML = QML_DIR / "SettingsPage.qml"
+QML = QML_DIR / "domains/settings/SettingsPage.qml"
 
 _DIAG_PREFS = ("verbose_diagnostics", "diagnostics_redact_content")
 

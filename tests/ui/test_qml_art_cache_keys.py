@@ -54,11 +54,11 @@ from support.paths import QML_MAIN as QML
 # them, or the app's
 # most-used art surfaces stop being scanned and their cache keys can drift
 # from the pool's unnoticed.
-ART_QML = QML.parent / "Art.qml"
-PREVIEW_ART_QML = QML.parent / "PreviewArt.qml"
-SEARCH_GROUP_QML = QML.parent / "SearchProviderGroup.qml"
-MOSAIC_CELL_QML = QML.parent / "MosaicCell.qml"
-WELCOME_PICKER_QML = QML.parent / "WelcomePicker.qml"
+ART_QML = QML.parent / "components/Art.qml"
+PREVIEW_ART_QML = QML.parent / "domains/playback/PreviewArt.qml"
+SEARCH_GROUP_QML = QML.parent / "domains/search/SearchProviderGroup.qml"
+MOSAIC_CELL_QML = QML.parent / "domains/browse/MosaicCell.qml"
+WELCOME_PICKER_QML = QML.parent / "domains/providers/WelcomePicker.qml"
 COVER_FILES = (QML, ART_QML, PREVIEW_ART_QML, SEARCH_GROUP_QML, MOSAIC_CELL_QML, WELCOME_PICKER_QML)
 
 # The one fill mode every cover surface uses. Covers are square and so are the

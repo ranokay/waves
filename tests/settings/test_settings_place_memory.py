@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 
-from support.settings_fakes import prefs_stub as _prefs_stub
-from support.settings_fakes import schema_stub as _schema_stub
+from settings.fakes import prefs_stub as _prefs_stub
+from settings.fakes import schema_stub as _schema_stub
 
 from waves.desktop.backend import WavesBridge
 

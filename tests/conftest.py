@@ -79,7 +79,7 @@ class _InlinePool:
 
 
 class _InlineWriter:
-    """Stand-in for the bridge's ``_SingleFlightWriter`` that performs each
+    """Stand-in for the bridge's ``SingleFlightWriter`` that performs each
     submitted config write synchronously, so a test that borrows the real
     ``_save_settings`` / ``_save_waves_prefs`` can assert what landed on disk
     right after the call, exactly as before those saves went off-thread. The

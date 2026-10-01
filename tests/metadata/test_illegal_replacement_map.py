@@ -293,7 +293,7 @@ class TestThePageCannotSaveARejectedStandIn:
     """
 
     def test_wiring_a_bad_row_turns_red_and_holds_save_changes(self):
-        src = (_UI / "qml" / "SettingsPage.qml").read_text()
+        src = (_UI / "qml" / "domains/settings/SettingsPage.qml").read_text()
 
         # Same red-outline / held-save machinery as the general stand-in: the
         # table is collected from the schema into sanitizeKeys (a delegate
@@ -304,14 +304,14 @@ class TestThePageCannotSaveARejectedStandIn:
         assert "sanitizeKeys = collectSanitizeKeys()" in src
 
     def test_wiring_the_row_asks_the_engines_own_launderer(self):
-        src = (_UI / "qml" / "SettingsPage.qml").read_text()
+        src = (_UI / "qml" / "domains/settings/SettingsPage.qml").read_text()
 
         assert "waves.sanitizeFilenameReplacement(v)" in src
 
     def test_wiring_clearing_a_row_is_not_the_same_as_emptying_it(self):
         # An empty stand-in IS a choice (remove the character outright), so
         # "follow the general stand-in again" needs its own action.
-        src = (_UI / "qml" / "SettingsPage.qml").read_text()
+        src = (_UI / "qml" / "domains/settings/SettingsPage.qml").read_text()
 
         assert "function mapClear(" in src
         assert "onTriggered: {\n" in src.replace("\r\n", "\n")
@@ -320,6 +320,6 @@ class TestThePageCannotSaveARejectedStandIn:
     def test_wiring_the_save_path_stores_a_table_not_its_text(self):
         src = (_UI / "backend.py").read_text()
 
-        assert "elif key in _MAP_FIELDS:" in src
+        assert "elif key in MAP_FIELDS:" in src
         assert "laundered = safe_filename_replacement_map(dict(value or {}))" in src
         assert "setattr(data, key, laundered)" in src

@@ -29,8 +29,8 @@ from collections import defaultdict
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from support.download_fakes import make_download as _make_download
-from support.download_fakes import make_track as _track
+from downloads.fakes import make_download as _make_download
+from downloads.fakes import make_track as _track
 
 from waves.download import Download, StreamInfo
 

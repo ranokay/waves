@@ -355,8 +355,8 @@ class TestSymlinkFallbackCopy:
             patch("waves.download.format_path_media", return_value="track/song"),
             patch.object(pathlib.Path, "symlink_to", refuse),
             patch("waves.download.read_item_id", return_value="42"),
-            patch("waves.download._waves_item_id", return_value="42"),
-            patch("waves.download._waves_owned_ids", return_value={"42"}),
+            patch("waves.download.download_identity_id", return_value="42"),
+            patch("waves.download.owned_item_ids", return_value={"42"}),
         ):
             out = download_instance.media_move_and_symlink(media, src, ".flac")
 
@@ -380,8 +380,8 @@ class TestSymlinkFallbackCopy:
         with (
             patch("waves.download.format_path_media", return_value="track/song"),
             patch("waves.download.read_item_id", return_value="99"),
-            patch("waves.download._waves_item_id", return_value="42"),
-            patch("waves.download._waves_owned_ids", return_value={"42"}),
+            patch("waves.download.download_identity_id", return_value="42"),
+            patch("waves.download.owned_item_ids", return_value={"42"}),
         ):
             out = download_instance.media_move_and_symlink(media, src, ".flac")
 

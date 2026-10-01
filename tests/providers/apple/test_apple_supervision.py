@@ -734,7 +734,7 @@ def test_backend_ensure_skips_cookies_tier_and_holds_a_dead_sidecar(tmp_path, mo
 def test_queue_drawer_shows_held_and_throttled_presentations():
     # The drawer lives in its own file; the words live there.
     qml = Path("waves/desktop/qml/Main.qml").read_text(encoding="utf-8")
-    qml += Path("waves/desktop/qml/QueueDrawer.qml").read_text(encoding="utf-8")
+    qml += Path("waves/desktop/qml/domains/queue/QueueDrawer.qml").read_text(encoding="utf-8")
     flat = " ".join(qml.split())
     assert 'if (qrow.st === "queued") return a + (model.reason ? model.reason : "Queued")' in flat
     assert 'if (qrow.st === "running" && model.reason) return a + model.reason' in flat

@@ -24,7 +24,7 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-from support.provider_fakes import BareProvider
+from providers.fakes import BareProvider
 
 import waves.desktop.backend as backend
 from waves.desktop.backend import WavesBridge

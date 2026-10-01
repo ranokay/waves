@@ -3,7 +3,7 @@
 Both layers of the app log through this module, so it lives below them: the
 engine marks user content (:func:`content`) and registers runtime secrets
 (:func:`register_secret`) without importing the UI, and the UI's diagnostics
-layer (:mod:`waves.desktop.diagnostics`) attaches :class:`_RedactingFilter` to
+layer (:mod:`waves.desktop.diagnostics.export`) attaches :class:`_RedactingFilter` to
 every handler and reuses :func:`scrub` for the crash log and the export bundle.
 
 Content markers («…», produced by content()) and identity placeholders (‹…›)

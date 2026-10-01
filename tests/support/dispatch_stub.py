@@ -15,7 +15,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 
 from waves.desktop.backend import WavesBridge
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 from waves.providers import Refusal, RefusalKind
 
 

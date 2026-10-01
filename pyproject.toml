@@ -223,61 +223,61 @@ ignore = [
 "tests/ui/test_boot_version_drain_order.py" = ["C901"]
 # The ported browse scenarios keep their boot -> drive -> assert shape as one
 # deliberately linear function (C901).
-"tests/ui/test_browse_back_scroll.py" = ["C901"]
-"tests/ui/test_browse_card_library_state.py" = ["C901"]
-"tests/ui/test_browse_card_line_fits.py" = ["C901"]
-"tests/ui/test_browse_card_openable.py" = ["C901"]
-"tests/ui/test_browse_console_wayfinding.py" = ["C901"]
-"tests/ui/test_browse_row_window.py" = ["C901"]
-"tests/ui/test_browse_strip_fits_the_card.py" = ["C901"]
+"tests/browse/test_browse_back_scroll.py" = ["C901"]
+"tests/browse/test_browse_card_library_state.py" = ["C901"]
+"tests/browse/test_browse_card_line_fits.py" = ["C901"]
+"tests/browse/test_browse_card_openable.py" = ["C901"]
+"tests/browse/test_browse_console_wayfinding.py" = ["C901"]
+"tests/browse/test_browse_row_window.py" = ["C901"]
+"tests/browse/test_browse_strip_fits_the_card.py" = ["C901"]
 # The ported search scenarios keep their boot -> drive -> assert shape as one
 # deliberately linear function (C901).
-"tests/ui/test_search_artists_show_all_empty.py" = ["C901"]
-"tests/ui/test_search_playlist_block.py" = ["C901"]
-"tests/ui/test_search_refresh_in_place.py" = ["C901"]
-"tests/ui/test_search_scroll_reset.py" = ["C901"]
-"tests/ui/test_search_tab_artist_restore.py" = ["C901"]
-"tests/ui/test_search_top_result.py" = ["C901"]
+"tests/search/test_search_artists_show_all_empty.py" = ["C901"]
+"tests/search/test_search_playlist_block.py" = ["C901"]
+"tests/search/test_search_refresh_in_place.py" = ["C901"]
+"tests/search/test_search_scroll_reset.py" = ["C901"]
+"tests/search/test_search_tab_artist_restore.py" = ["C901"]
+"tests/search/test_search_top_result.py" = ["C901"]
 # The ported queue/progress scenarios keep their boot -> drive -> assert shape
 # as one deliberately linear function (C901).
 "tests/ui/test_card_progress_outline.py" = ["C901"]
-"tests/ui/test_progress_carved_percent.py" = ["C901"]
-"tests/ui/test_progress_jump_ramp.py" = ["C901"]
-"tests/ui/test_progress_matrix_stable_width.py" = ["C901"]
-"tests/ui/test_progress_pad_cells.py" = ["C901"]
-"tests/ui/test_queue_drawer_close_button.py" = ["C901"]
-"tests/ui/test_queue_clear_confirm.py" = ["C901"]
-"tests/ui/test_queue_drawer_resize.py" = ["C901"]
-"tests/ui/test_queue_expected_tier.py" = ["C901"]
-"tests/ui/test_queue_failed_section.py" = ["C901"]
-"tests/ui/test_queue_ledger_cap.py" = ["C901"]
-"tests/ui/test_queue_owned_prediction.py" = ["C901"]
-"tests/ui/test_queue_playlist_expands.py" = ["C901"]
-"tests/ui/test_queue_repeated_track_state.py" = ["C901"]
-"tests/ui/test_queue_row_index.py" = ["C901"]
-"tests/ui/test_queue_row_progress_density.py" = ["C901"]
-"tests/ui/test_queue_row_quality.py" = ["C901"]
-"tests/ui/test_queue_unavailable_word.py" = ["C901"]
+"tests/downloads/test_progress_carved_percent.py" = ["C901"]
+"tests/downloads/test_progress_jump_ramp.py" = ["C901"]
+"tests/downloads/test_progress_matrix_stable_width.py" = ["C901"]
+"tests/downloads/test_progress_pad_cells.py" = ["C901"]
+"tests/queue/test_queue_drawer_close_button.py" = ["C901"]
+"tests/queue/test_queue_clear_confirm.py" = ["C901"]
+"tests/queue/test_queue_drawer_resize.py" = ["C901"]
+"tests/queue/test_queue_expected_tier.py" = ["C901"]
+"tests/queue/test_queue_failed_section.py" = ["C901"]
+"tests/queue/test_queue_ledger_cap.py" = ["C901"]
+"tests/queue/test_queue_owned_prediction.py" = ["C901"]
+"tests/queue/test_queue_playlist_expands.py" = ["C901"]
+"tests/queue/test_queue_repeated_track_state.py" = ["C901"]
+"tests/queue/test_queue_row_index.py" = ["C901"]
+"tests/queue/test_queue_row_progress_density.py" = ["C901"]
+"tests/queue/test_queue_row_quality.py" = ["C901"]
+"tests/queue/test_queue_unavailable_word.py" = ["C901"]
 # The ported hover/video scenarios keep their boot -> drive -> assert shape as
 # one deliberately linear function (C901).
 "tests/ui/test_hover_prefetch_scenario.py" = ["C901"]
-"tests/ui/test_hover_swell_fade.py" = ["C901"]
-"tests/ui/test_video_grid_hover_dwell.py" = ["C901"]
+"tests/settings/test_hover_swell_fade.py" = ["C901"]
+"tests/catalog/test_video_grid_hover_dwell.py" = ["C901"]
 # The ported update-toast scenario keeps its boot -> drive -> assert shape as
 # one deliberately linear function (C901).
-"tests/ui/test_update_toast_staged.py" = ["C901"]
+"tests/updates/test_update_toast_staged.py" = ["C901"]
 # The ported folder/playlist/nav scenarios keep their boot -> drive -> assert
 # shape as one deliberately linear function (C901).
-"tests/ui/test_folder_badge_and_crumb_labels.py" = ["C901"]
+"tests/library/test_folder_badge_and_crumb_labels.py" = ["C901"]
 "tests/ui/test_forward_history_account_switch.py" = ["C901"]
-"tests/ui/test_playlist_folder_qml.py" = ["C901"]
-"tests/ui/test_playlist_selection_and_reset.py" = ["C901"]
+"tests/catalog/test_playlist_folder_qml.py" = ["C901"]
+"tests/catalog/test_playlist_selection_and_reset.py" = ["C901"]
 # The ported library scenarios keep their boot -> drive -> assert shape as one
 # deliberately linear function (C901).
-"tests/ui/test_library_downloaded_state.py" = ["C901"]
-"tests/ui/test_library_presence_surfaces.py" = ["C901"]
-"tests/ui/test_library_track_claim.py" = ["C901"]
-"tests/ui/test_presence_call_budget.py" = ["C901"]
+"tests/library/test_library_downloaded_state.py" = ["C901"]
+"tests/library/test_library_presence_surfaces.py" = ["C901"]
+"tests/library/test_library_track_claim.py" = ["C901"]
+"tests/library/test_presence_call_budget.py" = ["C901"]
 # Sets a real xattr via the fixed /usr/bin/xattr binary to exercise the strip
 # helper for real on macOS (S603, fixed argv).
 "tests/metadata/test_apple_double_cleanup.py" = ["S603"]
@@ -286,10 +286,10 @@ ignore = [
 "tests/packaging/test_release_verify_notes.py" = ["S603", "S607"]
 # Measures import-time metadata cost in a fresh interpreter: this interpreter
 # runs a literal probe script (S603, fixed argv).
-"tests/ui/test_lazy_metadata.py" = ["S603"]
+"tests/catalog/test_lazy_metadata.py" = ["S603"]
 # The exit-time cancel of the freeze-watchdog countdown can only be observed
 # in a fresh interpreter: this one runs a literal probe script (S603, fixed argv).
-"tests/ui/test_freeze_watchdog_quit.py" = ["S603"]
+"tests/diagnostics/test_freeze_watchdog_quit.py" = ["S603"]
 # The library scanner's directory walk (_walk_album_dirs) is a small state
 # machine over each folder's probe result (unchanged / relist / transient error /
 # vanished / root offline); the branching is the point and the function was kept
@@ -304,10 +304,10 @@ ignore = [
 # child as one deliberately linear function (C901); the subprocess call
 # itself lives in support.qml's runner.
 "tests/ui/test_boot_quiet_window.py" = ["C901"]
-"tests/ui/test_new_release_mark.py" = ["C901"]
-"tests/ui/test_queue_section_pulse.py" = ["C901"]
-"tests/ui/test_queue_single_row_has_nothing_to_expand.py" = ["C901"]
-"tests/ui/test_search_query_collapse_qml.py" = ["C901"]
+"tests/catalog/test_new_release_mark.py" = ["C901"]
+"tests/queue/test_queue_section_pulse.py" = ["C901"]
+"tests/queue/test_queue_single_row_has_nothing_to_expand.py" = ["C901"]
+"tests/search/test_search_query_collapse_qml.py" = ["C901"]
 # The provider-logo scenario is the same boot -> drive -> assert shape: one
 # deliberately linear function (C901).
 "tests/providers/test_provider_logos.py" = ["C901"]
@@ -319,7 +319,7 @@ ignore = [
 # The subprocess call itself lives in support.qml's runner.
 "tests/providers/apple/test_apple_setup_guidance.py" = ["C901"]
 "tests/providers/apple/test_apple_probe_responsive.py" = ["C901"]
-"tests/ui/test_dual_version_queue_scenario.py" = ["C901"]
+"tests/queue/test_dual_version_queue_scenario.py" = ["C901"]
 "tests/ui/test_track_row_hover_stable.py" = ["C901"]
 # Imports the download engine in a clean interpreter to check its import closure
 # (S603, fixed argv: sys.executable -c with a literal probe).
@@ -329,19 +329,19 @@ ignore = [
 "tests/downloads/test_engine_without_pyside.py" = ["S603"]
 # The startup picker scenario re-runs itself in a subprocess to isolate the
 # Qt boot (S603, fixed argv).
-"tests/ui/test_startup_provider_picker_qml.py" = ["S603"]
+"tests/providers/test_startup_provider_picker_qml.py" = ["S603"]
 # The TIDAL sign-in reachability scenario re-runs itself in a subprocess to
 # isolate the Qt boot (S603, fixed argv), and its build -> click -> assert
 # scenario is one deliberately linear function (C901).
-"tests/ui/test_tidal_signin_reachable_qml.py" = ["S603", "C901"]
+"tests/providers/test_tidal_signin_reachable_qml.py" = ["S603", "C901"]
 # The setup-CTA scenarios keep the same boot -> drive -> assert shape as one
 # deliberately linear function (C901); the subprocess call itself lives in
 # support.qml's runner.
-"tests/ui/test_setup_ctas_qml.py" = ["C901"]
+"tests/providers/test_setup_ctas_qml.py" = ["C901"]
 "tests/ui/test_offscreen_qt_is_usable.py" = ["S603"]
 # Runs the bundle size report for real, on a root wide enough to fill the pipe
 # buffer, through the shell it is written for (S603/S607, fixed argv).
-"tests/packaging/test_updater_backup_keep.py" = ["S603", "S607"]
+"tests/updates/test_updater_backup_keep.py" = ["S603", "S607"]
 # Drives the real release.sh (bash) and git against throwaway sandbox repos;
 # both are resolved from PATH on purpose (S603/S607, fixed argv).
 "tests/packaging/test_release_star_history.py" = ["S603", "S607"]
@@ -350,11 +350,11 @@ ignore = [
 # orchestration) that trip mccabe (C901) without being genuinely complex.
 # The queue pilot (ARCH-01) moved the same shape into bridge_queue.py.
 "waves/desktop/backend.py" = ["C901"]
-"waves/desktop/bridge_queue.py" = ["C901"]
+"waves/desktop/queue/bridge.py" = ["C901"]
 # The ffmpeg manager's job is to download and run a static ffmpeg build, so it
 # intentionally shells out (S603/S607); install() is one linear sequence (C901);
 # and its raised errors carry deliberately descriptive messages (TRY003).
-"waves/desktop/ffmpeg_manager.py" = ["S603", "S607", "C901", "TRY003"]
+"waves/desktop/ffmpeg/manager.py" = ["S603", "S607", "C901", "TRY003"]
 # Same shape for the managed Apple runtime : it downloads and runs
 # the N_m3u8DL-RE binary and probes the container runtime (S603/S607), its
 # install is one linear sequence (C901), and its errors carry deliberately
@@ -372,7 +372,7 @@ ignore = [
 # The updater downloads and swaps a packaged build, so it intentionally shells
 # out (S603/S607) for the platform swap/relaunch; install()/_apply are linear
 # sequences (C901); and its errors carry deliberately descriptive messages (TRY003).
-"waves/desktop/updater.py" = ["S603", "S606", "S607", "C901", "TRY003"]
+"waves/desktop/updates/updater.py" = ["S603", "S606", "S607", "C901", "TRY003"]
 # download.py is upstream Tidaler code (kept as-is apart from the keep_album flag);
 # its downsample/transcode raises carry deliberately descriptive messages (TRY003),
 # same rationale as ffmpeg_manager/updater above.

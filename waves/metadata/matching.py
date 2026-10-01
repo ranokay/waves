@@ -914,7 +914,7 @@ def _as_int(value) -> int:
 _TRACK_DURATION_TOL_S = 2
 
 
-def _album_duration_tol(tracks: int) -> int:
+def album_duration_tolerance(tracks: int) -> int:
     return max(5, _TRACK_DURATION_TOL_S * int(tracks or 0))
 
 
@@ -935,7 +935,7 @@ def _year_veto_survivors(candidates: list, ty: int | None, tt: int, want_len: in
             and c_tracks == tt
             and want_len > 0
             and _as_int(c.get("runtime")) > 0
-            and abs(_as_int(c.get("runtime")) - want_len) <= _album_duration_tol(tt)
+            and abs(_as_int(c.get("runtime")) - want_len) <= album_duration_tolerance(tt)
         )
 
     def length_vouches(c) -> bool:
@@ -1068,8 +1068,8 @@ def decide_presence(title, artist, year, tracks, index, duration=0, explicit=Non
     # tolerance comment above explains.
     have_len = _as_int(best.get("runtime"))
     testifies = tt > 0 and local_tracks == tt and want_len > 0 and have_len > 0
-    length_agrees = testifies and abs(have_len - want_len) <= _album_duration_tol(tt)
-    length_refutes = testifies and abs(have_len - want_len) > 3 * _album_duration_tol(tt)
+    length_agrees = testifies and abs(have_len - want_len) <= album_duration_tolerance(tt)
+    length_refutes = testifies and abs(have_len - want_len) > 3 * album_duration_tolerance(tt)
     # The verdict has two INDEPENDENT axes, and conflating them once made a
     # 12-of-12 undated folder read "partially in library" (nothing partial
     # about it, the match was merely unproven).

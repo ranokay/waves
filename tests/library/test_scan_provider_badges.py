@@ -17,10 +17,10 @@ from __future__ import annotations
 import os
 
 import pytest
-from support.library_fakes import make_album_dir as _mk
+from library.fakes import make_album_dir as _mk
 
 from waves.desktop.backend import WavesBridge
-from waves.desktop.bridge_library import _atmos_fragments, _atmos_parent
+from waves.desktop.library.bridge import _atmos_fragments, _atmos_parent
 from waves.library.index import LibraryIndex, _default_audio_type
 from waves.library.ownership import OwnershipStore
 from waves.metadata import matching
@@ -163,7 +163,7 @@ def test_presence_facts_carry_atmos_presence_through_the_sql_path(tmp_path):
     holds no Atmos rows (its documented gate)."""
     from types import SimpleNamespace
 
-    from waves.desktop.bridge_library import SqlPresenceIndex
+    from waves.desktop.library.bridge import SqlPresenceIndex
 
     def _sql_pair(lib):
         stub = SimpleNamespace()
@@ -449,7 +449,7 @@ def test_dropped_placeholder_level_folds_to_the_album(tmp_path):
 def test_sanitized_fragment_spellings_fold(monkeypatch):
     """The download pipeline rewrites what the platform rejects: the fold
     knows the on-disk spelling too."""
-    import waves.desktop.bridge_library as bridge
+    import waves.desktop.library.bridge as bridge
 
     monkeypatch.setattr(bridge, "sanitize_filename", lambda name, **kw: str(name).replace("?", "_"))
     frags = _atmos_fragments("Atmos?")

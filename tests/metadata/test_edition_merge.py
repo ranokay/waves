@@ -623,19 +623,19 @@ def test_a_merged_member_is_filed_under_the_identity_id():
     # whether a destination holds Waves' own copy. Writing the SOURCE edition's
     # id meant a later plain job asked with the identity id, failed to recognise
     # the file, and wrote a _01 duplicate beside it instead of replacing it.
-    from waves.download import _waves_item_id, _waves_owned_ids
+    from waves.ids import download_identity_id, owned_item_ids
 
     plain = _Track("t-1", "Song", 200)
-    assert _waves_item_id(plain) == "t-1", "an ordinary track is filed under its own id"
-    assert _waves_owned_ids(plain) == {"t-1"}
+    assert download_identity_id(plain) == "t-1", "an ordinary track is filed under its own id"
+    assert owned_item_ids(plain) == {"t-1"}
 
     member = _as_member_of(plain, object(), 3, 1, "identity-9")
     assert member.id == "t-1", "the stream still comes from the source edition"
-    assert _waves_item_id(member) == "identity-9"
+    assert download_identity_id(member) == "identity-9"
     # Builds up to v0.1.21 wrote the SOURCE id into this file, so a library
     # already on disk is tagged the other way. Both count as our own copy, or a
     # forced re-save drops a numbered duplicate the app will never delete.
-    assert _waves_owned_ids(member) == {"identity-9", "t-1"}
+    assert owned_item_ids(member) == {"identity-9", "t-1"}
 
 
 # ---- ownership gate: merge members skip only at THIS job's destination -------

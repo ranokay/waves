@@ -27,8 +27,8 @@ from waves.constants import (
 )
 from waves.metadata.tags import Metadata, sniff_image_format
 from waves.paths import (
-    _drop_empty_segments,
     calculate_number_padding,
+    normalize_template_segments,
     path_file_numbered_candidate,
     sanitize_name_component,
 )
@@ -128,8 +128,8 @@ def format_apple_path(
 
     rendered = re.sub(r"\{(.+?)\}", replace, template)
     # Same traversal safety as the shared engine: a token sanitizing to ""
-    # or ".." must not escape the library root (see _drop_empty_segments).
-    return _drop_empty_segments(rendered)
+    # or ".." must not escape the library root (see normalize_template_segments).
+    return normalize_template_segments(rendered)
 
 
 def pick_destination(base_dir: str | Path, relative: str, extension: str) -> Path:

@@ -92,7 +92,7 @@ def test_no_slot_resolves_media_objects_on_the_gui_thread():
     offenders: list[str] = []
 
     # Walk the MRO, not just WavesBridge's own dict: bridge behavior lives in
-    # mixins (bridge_library, bridge_queue), and a vars() sweep would go blind
+    # mixins (library/bridge.py, queue/bridge.py), and a vars() sweep would go blind
     # to every moved slot.
     members: dict[str, object] = {}
     for klass in WavesBridge.__mro__:

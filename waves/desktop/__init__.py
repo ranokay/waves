@@ -8,7 +8,7 @@ retired, the layering stays because it keeps the engine auditable.
 """
 
 # The app's user-facing version, the one the in-app updater
-# (:mod:`waves.desktop.updater`) compares against the latest GitHub release
+# (:mod:`waves.desktop.updates.updater`) compares against the latest GitHub release
 # tag. tests/packaging/test_package_version.py pins pyproject.toml to the same value.
 # Bump both (and tag a matching ``vX.Y.Z`` release) on every shipped build.
 __version__ = "0.1.32"

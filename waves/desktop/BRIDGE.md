@@ -8,8 +8,10 @@ on thread pools and emit from worker threads, Qt delivers every signal on
 the GUI thread (queued connection); QML handlers never see a race.
 
 The signal declarations in backend.py carry inline comments with the exact
-payload shapes. This file is the map of which signal belongs to which
-feature.
+payload shapes. This file maps signals to features; [the architecture map](../../docs/architecture.md)
+links their Python, QML and test owners. Settings payload construction belongs
+to `settings/schema.py`, provider cards/status to `providers/presentation.py`.
+Their Qt entry points remain on this context object.
 
 ## Session and status
 
@@ -285,11 +287,11 @@ the row live with no QML edit.
 
 ## Local library presence (the "in your library" badge)
 
-The scan family lives in `bridge_library.py` (`LibraryMixin`, mixed into
+The scan family lives in `library/bridge.py` (`LibraryMixin`, mixed into
 `WavesBridge`); `waves/library/index.py` walks the configured folder and
 `waves/metadata/matching.py` decides what counts as the same album. The walk runs in a
 child process (`waves/library/worker.py`, driven by
-`waves/desktop/library_proc.py`'s `LibraryWorker`), so a long scan never holds
+`waves/desktop/library/scan_process.py`'s `LibraryWorker`), so a long scan never holds
 the interpreter lock the interface thread needs.
 
 Ownership (the record of what Waves itself downloaded) is scoped to at most two
@@ -394,8 +396,8 @@ documented 30-second clip URL directly (no remux).
 
 | Signal                                                                                                              | Fires when                                                                                         |
 | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `ffmpegStatusChanged` / `ffmpegProgress(pct)` / `ffmpegStateChanged(state, msg)` / `ffmpegUpdateChecked(...)`       | The managed-FFmpeg install/update lifecycle (ffmpeg_manager.py)                                    |
-| `appUpdateStatusChanged` / `appUpdateProgress(pct)` / `appUpdateStateChanged(state, msg)` / `appUpdateChecked(...)` | The self-updater lifecycle (updater.py)                                                            |
+| `ffmpegStatusChanged` / `ffmpegProgress(pct)` / `ffmpegStateChanged(state, msg)` / `ffmpegUpdateChecked(...)`       | The managed-FFmpeg install/update lifecycle (`ffmpeg/manager.py`)                                  |
+| `appUpdateStatusChanged` / `appUpdateProgress(pct)` / `appUpdateStateChanged(state, msg)` / `appUpdateChecked(...)` | The self-updater lifecycle (`updates/updater.py`)                                                  |
 | `appUpdatePending(version)`                                                                                         | A staged update from an earlier session was re-armed at boot; Main shows the restart pill outright |
 
 ## Internal signals (thread hops)

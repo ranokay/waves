@@ -21,6 +21,8 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
+For feature locations, dependency direction, naming and test owners, start with
+[the architecture map](docs/architecture.md). Commands live in [DEVELOPER.md](DEVELOPER.md).
 
 <!-- code-review-graph MCP tools -->
 

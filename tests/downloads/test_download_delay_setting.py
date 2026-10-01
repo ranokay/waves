@@ -1,6 +1,6 @@
 """The "Download delay" setting actually reaches the engine.
 
-``download_delay`` is a Waves setting: it appears in ``_FLAG_FIELDS``, on the
+``download_delay`` is a Waves setting: it appears in ``FLAG_FIELDS``, on the
 Settings page under Downloads, and its two companion fields "Minimum/Maximum
 download delay (s)" are live. The engine takes it as a PARAMETER and relies on
 the caller to forward it, so a dispatch that passes nothing falls back to the
@@ -28,7 +28,7 @@ from support.dispatch_stub import arm_dispatch
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
-from waves.desktop.job_runtime import JobRuntime
+from waves.desktop.queue.runtime import JobRuntime
 from waves.download import Download
 
 

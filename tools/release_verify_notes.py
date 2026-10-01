@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import sys
 
-from waves.desktop.signing import parse_sha256sums, public_key_pem
+from waves.desktop.updates.signing import parse_sha256sums, public_key_pem
 
 README_VERIFY_URL = "https://github.com/iamprivacy/Waves#verify-a-download"
 

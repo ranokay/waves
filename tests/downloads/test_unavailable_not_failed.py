@@ -29,7 +29,8 @@ from tidalapi.media import Track
 from waves import download as download_mod
 from waves.desktop import backend
 from waves.desktop.backend import _TrackedDownload
-from waves.download import Download, _tidal_refuses_asset
+from waves.download import Download
+from waves.providers.tidal_refusals import asset_refusal_message
 
 
 def _make_tracked() -> tuple[_TrackedDownload, MagicMock]:
@@ -87,12 +88,12 @@ def _stub_name_builders():
 def test_asset_refusal_is_recognised():
     # The real body observed for tracks greyed out in the official apps.
     err = _http_error(401, {"status": 401, "subStatus": 4005, "userMessage": "Asset is not ready for playback"})
-    assert _tidal_refuses_asset(err) == "Asset is not ready for playback"
+    assert asset_refusal_message(err) == "Asset is not ready for playback"
 
 
 def test_a_403_asset_refusal_counts_too():
     err = _http_error(403, {"subStatus": 4006, "userMessage": "Asset is not available in your location"})
-    assert _tidal_refuses_asset(err) == "Asset is not available in your location"
+    assert asset_refusal_message(err) == "Asset is not available in your location"
 
 
 def test_an_expired_token_is_not_a_refusal():
@@ -101,16 +102,16 @@ def test_an_expired_token_is_not_a_refusal():
     err = _http_error(
         401, {"status": 401, "subStatus": 11003, "userMessage": "The token has expired. (Expired on ...)"}
     )
-    assert _tidal_refuses_asset(err) is None
+    assert asset_refusal_message(err) is None
 
 
 def test_an_auth_substatus_is_not_a_refusal():
     err = _http_error(401, {"status": 401, "subStatus": 11002, "userMessage": "User does not have a valid session"})
-    assert _tidal_refuses_asset(err) is None
+    assert asset_refusal_message(err) is None
 
 
 def test_a_server_error_is_not_a_refusal():
-    assert _tidal_refuses_asset(_http_error(500, {"userMessage": "Internal server error"})) is None
+    assert asset_refusal_message(_http_error(500, {"userMessage": "Internal server error"})) is None
 
 
 def test_a_bodyless_401_is_still_a_refusal():
@@ -118,7 +119,7 @@ def test_a_bodyless_401_is_still_a_refusal():
     # already survived tidalapi's one expired-token refresh), with a generic
     # message so the log line still says something.
     err = _http_error(401, None)
-    assert _tidal_refuses_asset(err) == "HTTP 401"
+    assert asset_refusal_message(err) == "HTTP 401"
 
 
 # --- the engine raises the mark at stream time -------------------------------

@@ -108,7 +108,7 @@ def _declared_public_signals() -> set[str]:
     the same category BRIDGE.md's internal-signals section exempts.
     """
     names = set()
-    for path in (REPO_ROOT / "waves/desktop/backend.py", REPO_ROOT / "waves/desktop/bridge_library.py"):
+    for path in (REPO_ROOT / "waves/desktop/backend.py", REPO_ROOT / "waves/desktop/library/bridge.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef) or node.name.startswith("_"):

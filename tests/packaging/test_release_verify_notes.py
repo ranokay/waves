@@ -13,8 +13,8 @@ import pytest
 from Crypto.PublicKey import ECC
 from support.paths import REPO_ROOT
 
-from waves.desktop import signing
-from waves.desktop.signing import UPDATE_PUBLIC_KEY, public_key_pem, sign
+from waves.desktop.updates import signing as signing
+from waves.desktop.updates.signing import UPDATE_PUBLIC_KEY, public_key_pem, sign
 
 
 def _openssl3() -> bool:

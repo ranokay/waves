@@ -15,14 +15,14 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from support.updater_fakes import make_manifest as _manifest
-from support.updater_fakes import prep_updater as _prep
+from updates.fakes import make_manifest as _manifest
+from updates.fakes import prep_updater as _prep
 
 from waves.desktop import backend as backend_mod
-from waves.desktop import signing
 from waves.desktop.backend import WavesBridge, _graft_scroll_growth
-from waves.desktop.job_runtime import JobRuntime
-from waves.desktop.updater import UpdateCancelled
+from waves.desktop.queue.runtime import JobRuntime
+from waves.desktop.updates import signing as signing
+from waves.desktop.updates.updater import UpdateCancelled
 from waves.metadata.naming import name_builder_album_artist
 from waves.paths import FILENAME_LENGTH_MAX, format_path_media, path_file_uniquify
 from waves.providers.tidal_client import user_media_lists
