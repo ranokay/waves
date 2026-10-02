@@ -21,6 +21,7 @@ import queue
 import subprocess
 import sys
 import threading
+from typing import IO, cast
 
 from waves.desktop import proc
 from waves.library.index import READ_GAUGE, WALK_GAUGE
@@ -338,9 +339,10 @@ class LibraryWorker:
         is the only way to reach it, so there is nothing to retry."""
         import json
 
+        stdin = cast(IO[bytes], process.stdin)  # _ensure always spawns with stdin=PIPE
         try:
-            process.stdin.write((json.dumps(job, ensure_ascii=False) + "\n").encode("utf-8"))
-            process.stdin.flush()
+            stdin.write((json.dumps(job, ensure_ascii=False) + "\n").encode("utf-8"))
+            stdin.flush()
         except (OSError, ValueError) as exc:
             self._crashed("write")
             raise WorkerFailed(str(exc)) from exc

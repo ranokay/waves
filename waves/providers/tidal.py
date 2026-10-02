@@ -48,6 +48,7 @@ from waves.providers.tidal_client import (
     get_tidal_media_type,
     instantiate_media,
     items_results_all,
+    logged_in_user,
     quality_audio_highest,
     search_results_all,
     user_media_lists,
@@ -461,7 +462,7 @@ class TidalProvider(Provider):
         """The favorites accessor for ``kind`` plus its total-count answer
         (``None`` when the engine offers no count) -- the shared front of
         both favorites reads."""
-        favorites = self._tidal.session.user.favorites
+        favorites = logged_in_user(self._tidal.session).favorites
         method = getattr(favorites, kind)
         try:
             total = int(getattr(favorites, f"get_{kind}_count")())
@@ -559,8 +560,10 @@ class TidalProvider(Provider):
             deliveries.append((tier, AudioType.STEREO))
         if _ATMOS_MODE in {str(mode) for mode in modes}:
             # Atmos rides ONE fixed request tier the quality setting cannot
-            # raise; the UI words an Atmos delivery ATMOS, never a rung.
-            deliveries.append((tier_from_word(ATMOS_REQUEST_QUALITY), AudioType.ATMOS))
+            # raise; the UI words an Atmos delivery ATMOS, never a rung. The
+            # request Quality's value is already the ladder word, so it is
+            # also the tier the row carries.
+            deliveries.append((QualityTier(str(ATMOS_REQUEST_QUALITY)), AudioType.ATMOS))
         return deliveries
 
     def advertised_ceiling(self, obj) -> int | None:

@@ -1170,8 +1170,9 @@ class AppUpdater:
         # is a previously staged swap by definition: the marker was written
         # with the flag false (it was a fresh install then) and would otherwise
         # travel on unchanged into a result that says this call staged it.
-        pending = {**pending, "already_staged": True}
-        if not _is_newer(pending.get("version", ""), self.current_version):
+        pending["already_staged"] = True
+        version = pending.get("version")
+        if not isinstance(version, str) or not _is_newer(version, self.current_version):
             # The swap landed: this IS the staged build. Clear the leftovers.
             self._clear_armed_marker()
             _rmtree(new_tree)

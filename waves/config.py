@@ -835,12 +835,18 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
         self.is_pkce = do_pkce
 
         if self.token_from_storage:
+            token_type = self.data.token_type
+            access_token = self.data.access_token
+            if not token_type or not access_token:
+                # The model declares null credentials for a logged-out file;
+                # there is no stored sign-in to load.
+                return False
             try:
                 result = self.session.load_oauth_session(
-                    self.data.token_type,
-                    self.data.access_token,
+                    token_type,
+                    access_token,
                     self.data.refresh_token,
-                    self.data.expiry_time,
+                    self.data.expiry_time,  # ty: ignore[invalid-argument-type]  # stored as an epoch float; tidalapi only round-trips it
                     is_pkce=do_pkce,
                 )
             except Exception:
@@ -911,7 +917,10 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
         try:
             if not self.login_token(do_pkce=self.is_pkce):
                 return False
-            refreshed = bool(self.session.token_refresh(self.session.refresh_token))
+            refresh_token = self.session.refresh_token
+            if not refresh_token:
+                return False
+            refreshed = bool(self.session.token_refresh(refresh_token))
         except Exception as exc:
             # A category, never the credential: the exception type says what
             # kind of failure it was without naming any client id or endpoint.

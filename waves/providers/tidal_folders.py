@@ -24,6 +24,7 @@ from tidalapi.exceptions import TooManyRequests
 from tidalapi.playlist import Folder
 
 from waves.paths import sanitize_name_component
+from waves.providers.tidal_client import logged_in_user
 
 logger = logging.getLogger("waves.folders")
 
@@ -93,7 +94,9 @@ def _page_folders(session: Session, parent_id: str) -> list[Folder]:
     result: list[Folder] = []
     offset = 0
     while True:
-        batch = session.user.favorites.playlist_folders(limit=_PAGE_LIMIT, offset=offset, parent_folder_id=parent_id)
+        batch = logged_in_user(session).favorites.playlist_folders(
+            limit=_PAGE_LIMIT, offset=offset, parent_folder_id=parent_id
+        )
         if not batch:
             break
         result.extend(batch)

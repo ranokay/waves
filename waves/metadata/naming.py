@@ -27,7 +27,7 @@ def name_builder_artist(media: Track | Video | Album, delimiter: str = ", ") -> 
     return delimiter.join(artist.name or "" for artist in media.artists or [])
 
 
-def get_album_artist_objects(media: Track | Album) -> list[Artist]:
+def get_album_artist_objects(media: Track | Album | Playlist | Video | Mix) -> list[Artist]:
     """The album's main-credit artists, in the album's own order.
 
     The one place the main-credit filter lives, so neither the names written to
@@ -36,6 +36,11 @@ def get_album_artist_objects(media: Track | Album) -> list[Artist]:
     id-less stub, and the name tag can be collapsed to the primary by a user
     setting (the engine's tag writer applies it; see waves/download.py). Never
     pair them by index.
+
+    A track reads its album's credit; any other media contributes its own
+    ``artists`` when it has them (a video does, a playlist usually does not),
+    and nothing when it does not -- every caller of a ``{album_artist}``
+    template may pass whatever is being downloaded.
     """
     # A playlist can carry a track whose album block never arrived, so the
     # album credit is simply unknown. Answer "no album artists" rather than
@@ -49,7 +54,7 @@ def get_album_artist_objects(media: Track | Album) -> list[Artist]:
     return [artist for artist in artists if artist.roles is None or Role.main in artist.roles]
 
 
-def get_album_artists(media: Track | Album) -> list[str]:
+def get_album_artists(media: Track | Album | Playlist | Video | Mix) -> list[str]:
     return [artist.name or "" for artist in get_album_artist_objects(media)]
 
 
@@ -66,13 +71,15 @@ def get_album_artist_ids(media: Track | Album) -> list[str]:
     return [str(artist.id) for artist in get_album_artist_objects(media) if getattr(artist, "id", None)]
 
 
-def name_builder_album_artist(media: Track | Album, first_only: bool = False, delimiter: str = ", ") -> str:
+def name_builder_album_artist(
+    media: Track | Album | Playlist | Video | Mix, first_only: bool = False, delimiter: str = ", "
+) -> str:
     """Builds a string of main album artist names for a track or album.
 
     Returns a delimited string of main artist names from the album, optionally including only the first main artist.
 
     Args:
-        media (Track | Album): The media object to extract artist names from.
+        media (Track | Album | Playlist | Video | Mix): The media object to extract artist names from.
         first_only (bool, optional): If True, only the first main artist is included. Defaults to False.
         delimiter (str, optional): The delimiter to use between artist names. Defaults to ", ".
 

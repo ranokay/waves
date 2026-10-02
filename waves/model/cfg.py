@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Self
 
 from dataclasses_json import config, dataclass_json
 
@@ -12,9 +13,24 @@ from waves.constants import (
 )
 
 
+class _JsonModel:
+    """Checker-only surface of @dataclass_json's injected methods.
+
+    The decorator adds ``to_json``/``from_json`` at runtime, which a type
+    checker cannot see; declaring them once here is what lets ``BaseConfig``
+    call them on whichever model it owns. Nothing exists at runtime.
+    """
+
+    if TYPE_CHECKING:
+
+        def to_json(self, **kwargs: object) -> str: ...
+        @classmethod
+        def from_json(cls, s: str, **kwargs: object) -> Self: ...
+
+
 @dataclass_json
 @dataclass
-class Settings:
+class Settings(_JsonModel):
     skip_existing: bool = True
     # ----- shared lyrics/artwork keys: migration carriers only -----
     # The keys below predate the per-provider mirrors further down. Two readers
@@ -566,7 +582,7 @@ class HelpSettings:
 
 @dataclass_json
 @dataclass
-class Token:
+class Token(_JsonModel):
     token_type: str | None = None
     access_token: str | None = None
     refresh_token: str | None = None

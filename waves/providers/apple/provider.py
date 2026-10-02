@@ -6,6 +6,7 @@ import asyncio
 import logging
 from contextlib import contextmanager
 from threading import Lock
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
@@ -21,6 +22,11 @@ from waves.providers.base import (
     StreamInfo,
     validate_row,
 )
+
+if TYPE_CHECKING:
+    # The engine is imported lazily at runtime (its gamdl imports are heavy);
+    # the names are still the real types of the objects kept on this provider.
+    from waves.providers.apple.engine import AppleDelivery, AppleFetchSession
 
 
 class _QuietCatalogLog:
@@ -209,12 +215,12 @@ class AppleProvider(Provider):
         # Staged deliveries by their file path: resolve_stream decrypts into
         # a workdir the caller moves out of, then releases here so the temp
         # tree is removed. Never global: one entry per in-flight track.
-        self._staged: dict[str, object] = {}
+        self._staged: dict[str, AppleDelivery] = {}
         # One download job's reused gamdl stack (event loop, API, wrapper
         # client). The runner opens a scope around a job's tracks; outside
         # one every fetch builds and closes its own stack.
         self._fetch_scoped = False
-        self._fetch_stack: object | None = None
+        self._fetch_stack: AppleFetchSession | None = None
 
     @property
     def wrapper_available(self) -> bool:
@@ -339,6 +345,15 @@ class AppleProvider(Provider):
         except (TypeError, ValueError):
             return None
         return rate if rate > 0 else None
+
+    @staticmethod
+    def _probe_depth(probe: dict) -> int | None:
+        """An ffprobe bit depth as an int, or None when it carries none.
+
+        Mirrors the engine's own read: a non-integer depth is no depth, never
+        a guessed one."""
+        depth = probe.get("bit_depth")
+        return depth if isinstance(depth, int) and depth > 0 else None
 
     def _run(self, awaitable):
         with self._loop_lock:
@@ -832,7 +847,8 @@ class AppleProvider(Provider):
         """A bucket's continuation URI, under ``next`` or ``links.next``."""
         if not isinstance(bucket, dict):
             return ""
-        links = bucket.get("links") if isinstance(bucket.get("links"), dict) else {}
+        raw_links = bucket.get("links")
+        links = raw_links if isinstance(raw_links, dict) else {}
         return _relative_amp_uri(bucket.get("next") or links.get("next") or "")
 
     async def _exhaust_pages(self, bucket: dict, label: str) -> None:
@@ -1273,7 +1289,7 @@ class AppleProvider(Provider):
                 logger.debug("Apple ALAC probe failed; recording LOSSLESS, not the ask", exc_info=True)
                 probe = {"codec": "alac", "sample_rate": "", "bit_depth": None}
         codec = str(probe.get("codec") or getattr(delivery, "codec", "") or "alac")
-        bit_depth = probe.get("bit_depth")
+        bit_depth = self._probe_depth(probe)
         sample_rate: int | None = self._probe_rate(probe)
         tier_value = apple_tier_for_delivery(codec, bit_depth, sample_rate or "", fallback=QualityTier.LOSSLESS.value)
         logger.debug(

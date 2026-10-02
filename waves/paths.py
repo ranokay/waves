@@ -812,7 +812,8 @@ def _format_ids(
         # the empty segment is collapsed away.
         return media.isrc or ""
     elif name == "album_artist_id" and isinstance(media, Album):
-        return str(media.artist.id)
+        artist = media.artist
+        return str(artist.id) if artist is not None else ""
     elif name == "track_artist_id" and isinstance(media, Track):
         artist = _album_field(media, "artist")
         artist_id = getattr(artist, "id", None) if artist is not None else None
@@ -945,9 +946,8 @@ def _format_metadata(
         # a bare Album object.
         if isinstance(media, Album):
             return FORMAT_TEMPLATE_EXPLICIT if media.explicit else ""
-        if isinstance(media, Track | Video) and getattr(media, "album", None):
-            return FORMAT_TEMPLATE_EXPLICIT if media.album.explicit else ""
-        return ""
+        album = getattr(media, "album", None)
+        return FORMAT_TEMPLATE_EXPLICIT if getattr(album, "explicit", False) else ""
     elif name == "media_type":
         if isinstance(media, Album):
             return media.type or ""

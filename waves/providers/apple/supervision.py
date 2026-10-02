@@ -302,8 +302,9 @@ def parse_retry_after(exc: BaseException) -> float | None:
     """
     headers_list: list = []
     resp = getattr(exc, "response", None)
-    if getattr(resp, "headers", None) is not None:
-        headers_list.append(resp.headers)
+    resp_headers = getattr(resp, "headers", None)
+    if resp_headers is not None:
+        headers_list.append(resp_headers)
     for attr in ("headers", "header"):
         headers = getattr(exc, attr, None)
         if headers is not None:

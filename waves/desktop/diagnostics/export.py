@@ -55,6 +55,7 @@ from collections import deque
 from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from pathlib import Path
+from typing import Protocol, cast
 
 from waves.redaction import _RedactingFilter, scrub
 
@@ -358,6 +359,13 @@ def _stall_bucket(sec: float) -> str:
     return ">1s"
 
 
+class _PoolLike(Protocol):
+    """The two Qt ThreadPool readings the sampler takes off a registered pool."""
+
+    def activeThreadCount(self) -> int: ...
+    def maxThreadCount(self) -> int: ...
+
+
 class _PerfSampler:
     """Low-rate resource snapshot (verbose only): RSS plus per-pool activity.
 
@@ -367,7 +375,7 @@ class _PerfSampler:
 
     def __init__(self) -> None:
         self._timer = None
-        self._pools: list[tuple[str, object]] = []
+        self._pools: list[tuple[str, _PoolLike]] = []
         # Event-loop occupancy accumulators, drained each _sample (see
         # _probe_tick). Busy = time the fast probe fired later than scheduled;
         # wall = total elapsed; max_stall = worst single overrun in the window.
@@ -377,7 +385,7 @@ class _PerfSampler:
         self._probe_wall = 0.0
         self._probe_max_stall = 0.0
 
-    def register_pool(self, name: str, pool) -> None:
+    def register_pool(self, name: str, pool: _PoolLike) -> None:
         self._pools.append((name, pool))
 
     def start(self) -> None:
@@ -505,7 +513,7 @@ def set_crash_file(handle) -> None:
     _crash_file = handle
 
 
-def register_pool(name: str, pool) -> None:
+def register_pool(name: str, pool: _PoolLike) -> None:
     """Register a QThreadPool for the perf sampler. One line per new pool."""
     _sampler.register_pool(name, pool)
 
@@ -614,7 +622,7 @@ def install(log_dir: str) -> Path | None:
     for target in (waves, root):
         target.addHandler(_stream_handler)
         target.addHandler(_crumbs)
-        if _disk_handler is not None:
+        if _disk_handler is not None and _crumb_dump is not None:
             target.addHandler(_disk_handler)
             target.addHandler(_crumb_dump)
 
@@ -716,7 +724,7 @@ def wait_for_disk_log(timeout: float = 2.0) -> None:
     if handler is None:
         return
     deadline = time.monotonic() + timeout
-    while not handler.queue.empty() and time.monotonic() < deadline:
+    while not cast(_queue.Queue[object], handler.queue).empty() and time.monotonic() < deadline:
         time.sleep(0.01)
 
 
