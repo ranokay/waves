@@ -192,12 +192,11 @@ until it is clean.
   the shipped package (`waves/`); tests and tools are outside the gate. The
   dynamic-seam categories (attribute access, argument types, mixin Signal
   descriptors) and the inherited engine's shape are downgraded to warnings
-  only for the four files the `pyproject.toml` override names (`backend.py`,
-  `queue/bridge.py`, `library/bridge.py`, `download.py`); every other module
-  is held at the error level, so a new diagnostic in hand-written code fails
-  the gate. Warnings do not fail (ty's own default-warn rules included); the
-  remaining warnings are that accepted baseline. Re-check each override reason
-  when a seam, a stub, or the inherited engine moves.
+  only inside the files the `pyproject.toml` overrides name; every other
+  module is held at the error level, so a new diagnostic in hand-written code
+  fails the gate. Warnings do not fail (ty's own default-warn rules included);
+  the seam warnings that remain are that accepted baseline. Re-check each
+  override reason when a seam, a stub, or the inherited engine moves.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
 `mise run doctor` first — it detects the stale state — then

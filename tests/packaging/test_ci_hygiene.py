@@ -362,26 +362,34 @@ def test_the_ty_warning_baseline_is_scoped_to_its_documented_files():
     """The seam rules (unresolved attribute, argument type, Signal descriptor)
     stay warnings only inside the four files pyproject.toml records as the
     accepted baseline; everywhere else they are errors, so a new diagnostic in
-    a hand-written module fails the gate. A global downgrade would silently
-    let one join a burn-down the gate no longer watches."""
+    a hand-written module fails the gate. This sweeps every override, so no
+    later override can widen the downgrade back over the tree."""
     config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["ty"]
     seam_rules = {"unresolved-attribute", "invalid-argument-type", "invalid-attribute-access"}
     for rule in seam_rules:
         assert rule not in config.get("rules", {}), f"{rule} must be scoped, not global"
 
-    rules_by_files = {tuple(override.get("include", [])): override.get("rules", {}) for override in config["overrides"]}
-    baseline_files = (
+    baseline_files = {
         "waves/desktop/backend.py",
         "waves/desktop/queue/bridge.py",
         "waves/desktop/library/bridge.py",
         "waves/download.py",
-    )
-    assert rules_by_files.get(baseline_files) == {
+    }
+    for override in config["overrides"]:
+        downgraded = seam_rules & set(override.get("rules", {}))
+        assert not downgraded or set(override.get("include", [])) == baseline_files, (
+            f"only the accepted-baseline files may downgrade {sorted(downgraded)}, not {override.get('include')}"
+        )
+
+    baseline = [o for o in config["overrides"] if set(o.get("include", [])) == baseline_files]
+    assert baseline, "the accepted-baseline override is missing"
+    assert baseline[0].get("rules") == {
         "unresolved-attribute": "warn",
         "invalid-argument-type": "warn",
         "invalid-attribute-access": "warn",
     }
-    assert rules_by_files.get(("waves/download.py",)) == {
+    download = [o for o in config["overrides"] if set(o.get("include", [])) == {"waves/download.py"}]
+    assert download and download[0].get("rules") == {
         "invalid-assignment": "warn",
         "invalid-return-type": "warn",
         "invalid-raise": "warn",

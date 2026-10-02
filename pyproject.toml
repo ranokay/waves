@@ -86,7 +86,7 @@ module-root = ""
 # and tools are outside the gate (the suite's fakes are deliberately dynamic,
 # and the runtime suite is what exercises them). The point is catching
 # call/return and assignment mistakes in shipped code, not a full annotation
-# campaign; the inherited engine's residue is handled by the path override
+# campaign; the inherited engine's residue is handled by the path overrides
 # below.
 
 [tool.ty.src]
@@ -101,11 +101,12 @@ include = ["waves"]
 # inherited engine moves.
 error-on-warning = false
 
-# The accepted baseline, scoped to the files whose reasons are recorded here.
-# These three rules are errors everywhere else: a new diagnostic in a
-# hand-written module fails the gate instead of joining a burn-down. In these
-# files they stay visible as warnings, like ty's own default-warn rules
-# (redundant-condition, deprecated); error-level categories fail the gate.
+# The accepted baseline, scoped to the files that carry it; the reasons the
+# rules are accepted are recorded here. These three rules are errors
+# everywhere else: a new diagnostic in a hand-written module fails the gate
+# instead of joining a burn-down. In these files they stay visible as
+# warnings, like ty's own default-warn rules (redundant-condition,
+# deprecated); error-level categories fail the gate.
 # - unresolved-attribute: catalog/engine objects cross the provider seam as
 #   plain objects by design (the row-dict contract), and the cooperative
 #   library mixin's methods resolve `self` to the mixin, so its Qt members
