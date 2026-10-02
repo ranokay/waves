@@ -74,7 +74,7 @@ def get_album_artist_ids(media: Track | Album) -> list[str]:
 def name_builder_album_artist(
     media: Track | Album | Playlist | Video | Mix, first_only: bool = False, delimiter: str = ", "
 ) -> str:
-    """Builds a string of main album artist names for a track or album.
+    """Builds a string of main album artist names for the media being written.
 
     Returns a delimited string of main artist names from the album, optionally including only the first main artist.
 

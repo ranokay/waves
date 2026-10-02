@@ -561,9 +561,10 @@ class TidalProvider(Provider):
         if _ATMOS_MODE in {str(mode) for mode in modes}:
             # Atmos rides ONE fixed request tier the quality setting cannot
             # raise; the UI words an Atmos delivery ATMOS, never a rung. The
-            # request Quality's value is already the ladder word, so it is
-            # also the tier the row carries.
-            deliveries.append((QualityTier(ATMOS_REQUEST_QUALITY.value), AudioType.ATMOS))
+            # tier folds from that fixed request quality, and an unreadable
+            # spelling falls back to HIGH (the 320k rung it asks for), never
+            # a crash.
+            deliveries.append((tier_from_word(ATMOS_REQUEST_QUALITY) or QualityTier.HIGH, AudioType.ATMOS))
         return deliveries
 
     def advertised_ceiling(self, obj) -> int | None:

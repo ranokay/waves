@@ -830,6 +830,18 @@ def test_a_marker_that_is_not_an_object_is_not_a_marker(tmp_path, monkeypatch):
     assert up.resume_pending_apply() is None
 
 
+def test_a_marker_whose_version_is_not_a_string_is_not_a_marker(tmp_path, monkeypatch):
+    """A hand-edited marker cannot be judged against the running version, so it
+    reads as no marker: no crash, and the staged tree is left alone."""
+    up, _, _, new_tree = _staged_but_unapplied(tmp_path, monkeypatch)
+    up._armed_marker().write_text('{"ok": true, "version": 123, "applied_to": "x", "relaunch": true}', encoding="utf-8")
+    monkeypatch.setattr(u.subprocess, "Popen", lambda *a, **k: pytest.fail("armed a helper"))
+
+    assert up._read_armed_marker() is None
+    assert up.resume_pending_apply() is None
+    assert new_tree.exists()
+
+
 def test_a_second_copy_cannot_stage_over_an_armed_update(tmp_path, monkeypatch):
     """A per-process armed guard lets a second copy of
     Waves re-extract over the staged tree the first one's helper is waiting to
