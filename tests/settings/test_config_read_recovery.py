@@ -195,3 +195,28 @@ def test_a_failed_cached_sign_in_warns_and_prints_nothing(tmp_path, capfd):
     assert [record.levelno for record in records] == [logging.WARNING]
     out, _err = capfd.readouterr()
     assert out == "", "the sign-in failure must not reach stdout past the redacting handlers"
+
+
+def test_null_stored_credentials_are_not_loaded(tmp_path):
+    """A logged-out token file (the model's nulls) has no sign-in to load:
+    answer False without handing None to tidalapi, and leave the file."""
+    import types
+
+    from waves.config import Tidal
+
+    tidal = Tidal.__new__(Tidal)
+    tidal.token_from_storage = True
+    tidal.data = types.SimpleNamespace(token_type=None, access_token=None, refresh_token=None, expiry_time=0.0)
+    token_file = tmp_path / "token.json"
+    token_file.write_text("{}")
+    tidal.file_path = str(token_file)
+    calls = []
+
+    def _record(*args, **_kwargs):
+        calls.append(args)
+
+    tidal.session = types.SimpleNamespace(load_oauth_session=_record)
+
+    assert tidal.login_token() is False
+    assert calls == [], "null credentials must not reach tidalapi"
+    assert token_file.exists(), "a logged-out file is not a refused sign-in"

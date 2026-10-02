@@ -281,6 +281,36 @@ def test_resolve_stream_alac_16bit_lands_lossless(tmp_path, monkeypatch):
     provider.discard_delivery(str(staged))
 
 
+def test_a_non_integer_probe_depth_is_unknown_never_guessed(tmp_path, monkeypatch):
+    """The probe contract is int or None; a string depth (the shape an ffprobe
+    stream carries before the engine's own read) must never be passed on as a
+    number or guessed into one."""
+    import waves.providers.apple.engine as engine
+
+    staged = tmp_path / "staged.m4a"
+    staged.write_bytes(b"fake-alac")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.setattr(
+        engine,
+        "download_song_alac_file",
+        lambda **kwargs: SimpleNamespace(staged_path=staged, workdir=workdir, is_atmos=False, codec="alac"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "probe_audio_file",
+        lambda path, ffprobe_path="": {"codec": "alac", "sample_rate": "44100", "bit_depth": "24"},
+    )
+    provider = AppleProvider(catalog=None)
+    provider.wrapper_url = "http://127.0.0.1:51234"
+
+    info = provider.resolve_stream(_song_resource(), QualityTier.LOSSLESS, AudioType.STEREO)
+
+    assert info.delivered["bit_depth"] is None
+    assert info.delivered["tier"] == QualityTier.LOSSLESS.value
+    provider.discard_delivery(str(staged))
+
+
 def test_resolve_stream_without_wrapper_stays_aac(tmp_path, monkeypatch):
     import waves.providers.apple.engine as engine
 

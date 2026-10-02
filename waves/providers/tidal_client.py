@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import Literal, cast
 
 from tidalapi import Album, Mix, Playlist, Session, Track, UserPlaylist, Video
 from tidalapi.artist import Artist
@@ -22,6 +23,16 @@ from waves.errors import MediaUnknown
 logger = logging.getLogger(__name__)
 
 
+def logged_in_user(session: Session) -> LoggedInUser:
+    """The session's signed-in user object.
+
+    TIDAL hangs favorites and playlist folders on ``LoggedInUser`` alone; the
+    session's declared union also covers the fetched and not-signed-in shapes,
+    and every caller here runs past sign-in.
+    """
+    return cast(LoggedInUser, session.user)
+
+
 def get_tidal_media_id(url_or_id_media: str) -> str:
 
     id_dirty = url_or_id_media.rsplit("/", 1)[-1]
@@ -30,8 +41,8 @@ def get_tidal_media_id(url_or_id_media: str) -> str:
     return id_media
 
 
-def get_tidal_media_type(url_media: str) -> MediaType | bool:
-    result: MediaType | bool = False
+def get_tidal_media_type(url_media: str) -> MediaType | Literal[False]:
+    result: MediaType | Literal[False] = False
     url_split = url_media.split("/")[-2]
 
     if len(url_split) > 1:
@@ -141,7 +152,7 @@ def paginate_results(func_get_items_media: list[Callable]) -> list[Track | Video
         offset: int = 0
         done: bool = False
 
-        if func_media.__func__ == LoggedInUser.playlist_and_favorite_playlists:
+        if getattr(func_media, "__func__", None) == LoggedInUser.playlist_and_favorite_playlists:
             limit: int = 50
 
         while not done:
@@ -252,7 +263,7 @@ def user_media_lists(session: Session) -> dict[str, list]:
     limit = 50
 
     while True:
-        batch = session.user.favorites.playlist_folders(limit=limit, offset=offset, parent_folder_id="root")
+        batch = logged_in_user(session).favorites.playlist_folders(limit=limit, offset=offset, parent_folder_id="root")
         if not batch:
             break
         folders.extend(batch)
@@ -260,7 +271,7 @@ def user_media_lists(session: Session) -> dict[str, list]:
             break
         offset += limit
 
-    playlists = _root_playlists(session.user.favorites, len(folders))
+    playlists = _root_playlists(logged_in_user(session).favorites, len(folders))
 
     # Combine folders and playlists
     all_playlists = folders + playlists

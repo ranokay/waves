@@ -2201,8 +2201,9 @@ def deliver_track(
     try:
         probe_depth = landed_probe.get("bit_depth")
         depth = int(probe_depth) if isinstance(probe_depth, int) and probe_depth > 0 else None
-        if depth is None and delivered.get("bit_depth") is not None:
-            depth = int(delivered.get("bit_depth"))
+        fallback_depth = delivered.get("bit_depth")
+        if depth is None and fallback_depth is not None:
+            depth = int(fallback_depth)
     except (TypeError, ValueError):
         depth = None
     try:

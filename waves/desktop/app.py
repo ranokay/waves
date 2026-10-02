@@ -19,6 +19,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from typing import cast
 
 from PySide6.QtCore import QDateTime, Qt, QTimer, QUrl
 from PySide6.QtGui import QFontDatabase, QGuiApplication, QIcon, QWindow
@@ -593,8 +594,8 @@ def _memoize_macos_proxy_lookups(ttl: float = 60.0) -> None:
                 memo[key] = (now, val)
         return val
 
-    ur.getproxies_macosx_sysconf = getproxies_macosx_sysconf
-    ur.proxy_bypass_macosx_sysconf = proxy_bypass_macosx_sysconf
+    ur.getproxies_macosx_sysconf = getproxies_macosx_sysconf  # ty: ignore[unresolved-attribute]  # urllib's macOS-only hooks; typeshed omits them
+    ur.proxy_bypass_macosx_sysconf = proxy_bypass_macosx_sysconf  # ty: ignore[unresolved-attribute]  # urllib's macOS-only hooks; typeshed omits them
 
 
 def _log_config_migration() -> None:
@@ -695,9 +696,11 @@ def waves_activate(tidal: Tidal | None = None) -> int:
             if os.environ.get("WAVES_DEBUG"):
                 _icon_debug("WAVES aumid: FAILED to set")
     owns_app = QGuiApplication.instance() is None
-    app = QGuiApplication.instance() or QGuiApplication(sys.argv)
+    # instance() is declared on QCoreApplication in the stubs; asking through
+    # QGuiApplication always answers with the GUI application (or None).
+    app = cast(QGuiApplication, QGuiApplication.instance()) or QGuiApplication(sys.argv)
     # macOS defaults to text/list controls; Waves also exposes button tab stops.
-    app.styleHints().setTabFocusBehavior(Qt.TabFocusAllControls)
+    app.styleHints().setTabFocusBehavior(Qt.TabFocusBehavior.TabFocusAllControls)
     app.setApplicationName("Waves")
     app.setOrganizationName("Waves")
     icon = _app_icon()
@@ -723,19 +726,19 @@ def waves_activate(tidal: Tidal | None = None) -> int:
     # HTTP disk cache for artwork (must be installed before the QML loads).
     art_cache = _ArtCacheFactory(os.path.join(os.path.dirname(bridge.settings.file_path), _ART_CACHE_DIR))
     engine.setNetworkAccessManagerFactory(art_cache)
-    app._waves_art_cache = art_cache  # ty: ignore[invalid-assignment]  # keep alive
+    app._waves_art_cache = art_cache  # ty: ignore[unresolved-attribute]  # keep alive
     engine.rootContext().setContextProperty("waves", bridge)
     # Monospace family for the QML layer (numeric readouts + ASCII art).
     engine.rootContext().setContextProperty("monoFont", _load_mono())
     # UI-label family for buttons/tabs (Console button spec).
     engine.rootContext().setContextProperty("uiFontFamily", _ui_font())
     # Keep a reference so it isn't garbage-collected.
-    app._waves_bridge = bridge  # ty: ignore[invalid-assignment]
+    app._waves_bridge = bridge  # ty: ignore[unresolved-attribute]
     # Paced incubation while the launch overlay is up (see the class): must be
     # installed before load so the window never installs its own controller.
     incubation = _BootPacedIncubation(app)
     engine.setIncubationController(incubation)
-    app._waves_incubation = incubation  # ty: ignore[invalid-assignment]  # keep alive
+    app._waves_incubation = incubation  # ty: ignore[unresolved-attribute]  # keep alive
     bridge.set_boot_reveal_hook(incubation.release_throttle)
     incubation.set_count_notifier(bridge.note_incubation_count)
     bridge.set_incubation_count_reader(incubation.count_reader())

@@ -161,6 +161,24 @@ def test_no_stored_sign_in_is_a_noop(tmp_path):
     assert token_file.exists(), "with nothing stored the file is never touched"
 
 
+def test_null_credentials_are_a_logged_out_file_not_a_refusal(tmp_path):
+    """A token file with the model's nulls has no sign-in to load: answer False
+    without calling tidalapi, and never read the nulls as a refusal."""
+    wt, token_file = _bare(tmp_path, returns=True)
+    wt.data.token_type = None
+    wt.data.access_token = None
+    calls = []
+
+    def _record(*args, **_kwargs):
+        calls.append(args)
+
+    wt.session.load_oauth_session = _record
+
+    assert wt.login_token() is False
+    assert calls == [], "null credentials must not reach tidalapi"
+    assert token_file.exists(), "a logged-out file is not a refused sign-in"
+
+
 # --- A client probe is not the user's sign-in -------------------------------
 #
 # Fetching Dolby Atmos swaps the client id and re-authenticates mid-download to

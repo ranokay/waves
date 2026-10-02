@@ -434,7 +434,7 @@ def wrapper_login_2fa(base_url: str, code: str, session=None, timeout: int = 30)
     return {"ok": True, "error": ""}
 
 
-def describe_image_pull_error(exc: Exception, image: str = WRAPPER_V2_IMAGE) -> str:
+def describe_image_pull_error(exc: Exception | str, image: str = WRAPPER_V2_IMAGE) -> str:
     """Plain-words guidance for a failed wrapper-image pull.
 
     A registry "denied"/"unauthorized" refusal almost always means access,

@@ -641,6 +641,16 @@ def test_album_artist_with_no_credits_is_empty_not_a_crash():
         assert name_builder_album_artist(SimpleNamespace(), first_only=True) == ""
 
 
+# {album_artist_id} with an album whose artist never arrived, same rule.
+
+
+def test_album_artist_id_without_an_artist_is_empty_not_a_crash():
+    album = _album()
+    album.artist = None
+    out = format_path_media("{album_artist_id}/song", album)
+    assert out == "song"
+
+
 # A mixes failure must not throw away the playlist sweep.
 
 

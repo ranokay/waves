@@ -87,12 +87,18 @@ class WavesTidal(Tidal):
         self.is_pkce = do_pkce
 
         if self.token_from_storage:
+            token_type = self.data.token_type
+            access_token = self.data.access_token
+            if not token_type or not access_token:
+                # The model declares null credentials for a logged-out file;
+                # there is no stored sign-in to load.
+                return False
             try:
                 result = self.session.load_oauth_session(
-                    self.data.token_type,
-                    self.data.access_token,
+                    token_type,
+                    access_token,
                     self.data.refresh_token,
-                    self.data.expiry_time,
+                    self.data.expiry_time,  # ty: ignore[invalid-argument-type]  # stored as an epoch float; tidalapi only round-trips it
                     is_pkce=do_pkce,
                 )
             except Exception as exc:

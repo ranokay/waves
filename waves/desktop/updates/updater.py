@@ -984,9 +984,13 @@ class AppUpdater:
             data = json.loads(self._armed_marker().read_text("utf-8"))
         except (OSError, ValueError):
             return None
-        # Valid JSON that is not an object (a list, a bare number) must not
+        # Valid JSON that is not an object (a list, a bare number), or an
+        # object whose version is not the string _is_newer compares, must not
         # crash a launch; a marker we cannot read is a marker we do not have.
-        return data if isinstance(data, dict) and data.get("version") else None
+        if not isinstance(data, dict):
+            return None
+        version = data.get("version")
+        return data if isinstance(version, str) and version else None
 
     def _write_armed_marker(self, result: dict) -> None:
         try:
@@ -1170,7 +1174,7 @@ class AppUpdater:
         # is a previously staged swap by definition: the marker was written
         # with the flag false (it was a fresh install then) and would otherwise
         # travel on unchanged into a result that says this call staged it.
-        pending = {**pending, "already_staged": True}
+        pending["already_staged"] = True
         if not _is_newer(pending.get("version", ""), self.current_version):
             # The swap landed: this IS the staged build. Clear the leftovers.
             self._clear_armed_marker()

@@ -29,6 +29,8 @@ def asset_refusal_message(error: HTTPError) -> str | None:
             refusal of the asset itself, None otherwise.
     """
     response = getattr(error, "response", None)
+    if response is None:
+        return None
     status = getattr(response, "status_code", None)
     if status not in (401, 403):
         return None
