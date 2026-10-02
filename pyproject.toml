@@ -21,19 +21,19 @@ requires-python = ">=3.12,<3.15"
 
 dependencies = [
   "requests>=2.34.2,<3",
-  "mutagen>=1.47.0,<2",
+  "mutagen>=1.48.1,<2",
   "dataclasses-json>=0.6.7,<0.7",
   "pathvalidate>=3.3.1,<4",
   "m3u8>=6.0.0,<7",
   "gamdl>=3.8.5,<3.9",
-  "tidalapi>=0.8.10,<0.9",
+  "tidalapi>=0.8.11,<0.9",
   "python-ffmpeg>=2.0.12,<3",
   # Direct import in waves/providers/apple/engine.py (the cookies-tier fallback shells
   # through it); pinned to gamdl's own floor so the two can never disagree.
   "yt-dlp>=2025.10.22",
   "pycryptodome>=3.23.0,<4",
-  "certifi>=2026.4.22",
-  "urllib3>=2.7.0,<3",
+  "certifi>=2026.7.22",
+  "urllib3>=2.8.0,<3",
 ]
 
 [project.urls]
@@ -56,12 +56,12 @@ gui = ["pyside6==6.11.1"]
 
 [dependency-groups]
 dev = [
-  "pytest>=9.0.1,<10",
+  "pytest>=9.1.1,<10",
   "deptry>=0.25.1,<0.26",
-  "pre-commit>=4.5.0,<5",
+  "pre-commit>=4.6.2,<5",
   # Pinned so the pre-commit hooks (which run this environment's ruff) and CI
   # lint with one version; Dependabot may bump it like any other dev tool.
-  "ruff==0.16.8",
+  "ruff==0.16.9",
   "pyupgrade>=3.21.2,<4",
   # Exact pin: the release build cache is keyed to Nuitka's generated C, and a
   # bump invalidates it (docs/dependency-updates.md). 4.x is AGPL-3.0-only, a
@@ -71,11 +71,11 @@ dev = [
   # Exact pin: ty is pre-1.0 and its diagnostics shift between releases;
   # Dependabot may bump it like any other dev tool, and a bump re-baselines
   # the rule exceptions below.
-  "ty==0.0.82",
+  "ty==0.0.84",
 ]
 
 [build-system]
-requires = ["uv_build>=0.12.16,<0.13"]
+requires = ["uv_build>=0.12.20,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
