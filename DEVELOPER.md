@@ -191,11 +191,13 @@ until it is clean.
 - `mise run typecheck` — ty (Astral's type checker, pinned while in beta) over
   the shipped package (`waves/`); tests and tools are outside the gate. The
   dynamic-seam categories (attribute access, argument types, mixin Signal
-  descriptors) and the inherited engine's shape are warnings, with the reasons
-  in `pyproject.toml`; error-level diagnostics elsewhere fail the gate,
-  warnings do not (ty's own default-warn rules included). The remaining
-  warnings are accepted as the permanent shape; re-check each reason when a
-  seam, a stub, or the inherited engine moves.
+  descriptors) and the inherited engine's shape are downgraded to warnings
+  only for the four files the `pyproject.toml` override names (`backend.py`,
+  `queue/bridge.py`, `library/bridge.py`, `download.py`); every other module
+  is held at the error level, so a new diagnostic in hand-written code fails
+  the gate. Warnings do not fail (ty's own default-warn rules included); the
+  remaining warnings are that accepted baseline. Re-check each override reason
+  when a seam, a stub, or the inherited engine moves.
 
 Updating a checkout across the package rename (`tidaler/` to `waves/`)? Run
 `mise run doctor` first — it detects the stale state — then

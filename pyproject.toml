@@ -95,14 +95,17 @@ include = ["waves"]
 [tool.ty.terminal]
 # Warnings stay visible but do not fail the gate, the same shape as the
 # basedpyright warning level this replaces: errors exit non-zero, warnings
-# exit zero. The remaining warnings are accepted as the permanent shape, not
-# a burn-down in progress: re-check each rule's reason when a seam, a stub,
-# or the inherited engine moves.
+# exit zero. The warnings that remain are the accepted baseline of the four
+# files the first override below names; every other module is held to the
+# error level. Re-check each override reason when a seam, a stub, or the
+# inherited engine moves.
 error-on-warning = false
 
-# Downgraded, with reasons. All three stay visible as warnings, like ty's own
-# default-warn rules (redundant-condition, deprecated); error-level categories
-# fail the gate. Accepted as the permanent shape, not a pass.
+# The accepted baseline, scoped to the files whose reasons are recorded here.
+# These three rules are errors everywhere else: a new diagnostic in a
+# hand-written module fails the gate instead of joining a burn-down. In these
+# files they stay visible as warnings, like ty's own default-warn rules
+# (redundant-condition, deprecated); error-level categories fail the gate.
 # - unresolved-attribute: catalog/engine objects cross the provider seam as
 #   plain objects by design (the row-dict contract), and the cooperative
 #   library mixin's methods resolve `self` to the mixin, so its Qt members
@@ -114,7 +117,15 @@ error-on-warning = false
 # - invalid-attribute-access: PySide6 Signal descriptors accessed from the
 #   library mixin's methods; the descriptor's typed receiver is QObject and
 #   the mixin itself is not one (the WavesBridge subclass is).
-[tool.ty.rules]
+[[tool.ty.overrides]]
+include = [
+  "waves/desktop/backend.py",
+  "waves/desktop/queue/bridge.py",
+  "waves/desktop/library/bridge.py",
+  "waves/download.py",
+]
+
+[tool.ty.overrides.rules]
 unresolved-attribute = "warn"
 invalid-argument-type = "warn"
 invalid-attribute-access = "warn"

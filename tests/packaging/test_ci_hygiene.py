@@ -358,6 +358,36 @@ def test_the_merge_gate_record_matches_the_manual_workflow():
     assert "PR body" in text and "short SHA" in text
 
 
+def test_the_ty_warning_baseline_is_scoped_to_its_documented_files():
+    """The seam rules (unresolved attribute, argument type, Signal descriptor)
+    stay warnings only inside the four files pyproject.toml records as the
+    accepted baseline; everywhere else they are errors, so a new diagnostic in
+    a hand-written module fails the gate. A global downgrade would silently
+    let one join a burn-down the gate no longer watches."""
+    config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["ty"]
+    seam_rules = {"unresolved-attribute", "invalid-argument-type", "invalid-attribute-access"}
+    for rule in seam_rules:
+        assert rule not in config.get("rules", {}), f"{rule} must be scoped, not global"
+
+    rules_by_files = {tuple(override.get("include", [])): override.get("rules", {}) for override in config["overrides"]}
+    baseline_files = (
+        "waves/desktop/backend.py",
+        "waves/desktop/queue/bridge.py",
+        "waves/desktop/library/bridge.py",
+        "waves/download.py",
+    )
+    assert rules_by_files.get(baseline_files) == {
+        "unresolved-attribute": "warn",
+        "invalid-argument-type": "warn",
+        "invalid-attribute-access": "warn",
+    }
+    assert rules_by_files.get(("waves/download.py",)) == {
+        "invalid-assignment": "warn",
+        "invalid-return-type": "warn",
+        "invalid-raise": "warn",
+    }
+
+
 def test_the_classifiers_match_the_tested_python_versions():
     """DEP-03: the classifiers claimed 3.14 while the pinned toolchain and the
     only 3.14 leg stopped short of proving it. A classifier may only name a
