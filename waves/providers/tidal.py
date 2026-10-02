@@ -563,7 +563,7 @@ class TidalProvider(Provider):
             # raise; the UI words an Atmos delivery ATMOS, never a rung. The
             # request Quality's value is already the ladder word, so it is
             # also the tier the row carries.
-            deliveries.append((QualityTier(str(ATMOS_REQUEST_QUALITY)), AudioType.ATMOS))
+            deliveries.append((QualityTier(ATMOS_REQUEST_QUALITY.value), AudioType.ATMOS))
         return deliveries
 
     def advertised_ceiling(self, obj) -> int | None:
