@@ -24,10 +24,11 @@ from __future__ import annotations
 import re
 
 from conftest import _Signal
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from support.paths import QML_MAIN, REPO_ROOT
 
 from waves.desktop import backend as backend_mod
+from waves.desktop.app import _content_item
 from waves.desktop.backend import WavesBridge
 
 _MAIN_QML = QML_MAIN
@@ -124,10 +125,39 @@ def test_filter_is_installed_on_the_content_item_not_the_window():
     src = _APP_PY.read_text(encoding="utf-8")
     assert "root_objects[0].installEventFilter(bridge)" not in src
     assert "app.installEventFilter(bridge)" not in src
-    assert 'content_item = getattr(root_objects[0], "contentItem", None)' in src
+    assert "content = _content_item(root_objects[0])" in src
     assert "(content or root_objects[0]).installEventFilter(bridge)" in src, (
         "the swipe filter belongs on the content item"
     )
+
+
+def test_content_lookup_accepts_the_binding_getter():
+    class Window(QObject):
+        def contentItem(self):
+            return self.content
+
+    window = Window()
+    window.content = QObject(window)
+    assert _content_item(window) is window.content
+
+
+def test_failed_binding_getter_still_finds_the_content_child():
+    class Window(QObject):
+        def contentItem(self):
+            raise TypeError("no binding converter")
+
+    class QQuickRootItem(QObject):
+        pass
+
+    window = Window()
+    unrelated = QObject(window)
+    content = QQuickRootItem(window)
+    assert _content_item(window) is content
+    assert content is not unrelated
+
+
+def test_content_lookup_returns_none_when_no_root_exists():
+    assert _content_item(QObject()) is None
 
 
 def test_search_select_all_rearms_on_window_activation():

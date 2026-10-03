@@ -91,3 +91,19 @@ def test_dynamic_qml_targets_resolve_inside_the_scanned_tree():
         "these runtime QML targets resolve to no file under waves/desktop/qml, "
         "so the closure test above cannot see their imports: " + ", ".join(unresolvable)
     )
+
+
+def test_python_imports_do_not_require_bindings_the_bundle_trims():
+    trim = TRIM_SCRIPT.read_text()
+    match = re.search(r"^PYSIDE_BINDINGS=\(([^)]*)\)", trim, re.MULTILINE)
+    assert match, "the trim script must declare the Python bindings it removes"
+    bindings = set(match.group(1).split())
+    assert "QtQuick" in bindings
+    pattern = re.compile(r"^\s*(?:from\s+PySide6\.(\w+)\s+import|import\s+PySide6\.(\w+))", re.MULTILINE)
+    offenders = []
+    for path in sorted((REPO_ROOT / "waves").rglob("*.py")):
+        for imported in pattern.finditer(path.read_text()):
+            binding = imported.group(1) or imported.group(2)
+            if binding in bindings:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: PySide6.{binding}")
+    assert not offenders, "Python imports require removed bindings: " + ", ".join(offenders)
