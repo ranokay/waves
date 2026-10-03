@@ -561,7 +561,11 @@ class HelpSettings:
         "accordingly."
     )
     playlist_create: str = "Creates a '_playlist.m3u8' file for downloaded albums, playlists and mixes."
-    metadata_replay_gain: str = "Replay gain information will be written to metadata."
+    metadata_replay_gain: str = (
+        "Writes provider-measured track and album loudness as ReplayGain tags. Players that honour these tags "
+        "adjust playback volume to a common loudness, often making loud tracks quieter. Turn this off to omit "
+        "the tags; it does not change the audio samples."
+    )
     metadata_write_url: str = "URL of the media file will be written to metadata."
     filename_delimiter_artist: str = "Filename delimiter for multiple artists. Default: ', '"
     filename_delimiter_album_artist: str = "Filename delimiter for multiple album artists. Default: ', '"
