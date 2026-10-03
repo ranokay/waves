@@ -419,7 +419,7 @@ def test_search_with_apple_disabled_keeps_the_old_page_unchanged():
 
 
 def test_search_with_tidal_signed_out_and_apple_enabled_asks_only_apple():
-    # J2: the picker's "Search works with no account" promise. The signed-out
+    # The picker's "Search works with no account" promise. The signed-out
     # TIDAL provider is never touched; the page carries exactly the Apple
     # group.
     tidal = _provider(search=AssertionError("TIDAL search ran without a session"))

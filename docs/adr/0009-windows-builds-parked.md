@@ -1,6 +1,6 @@
 # 0009: Windows bundle builds are parked until the engine compiles under MSVC
 
-- Status: superseded (2026-09-23) — both Windows legs went green on the exclusion recipe; see Supersession
+- Status: superseded (2026-09-23; see Supersession)
 - Decided: 2026-09-21 (issue #227; build evidence and the corrected platform claims are recorded in issue #205)
 - Scope: whether this fork publishes Windows artifacts
 
@@ -12,7 +12,7 @@ without a launch by design), so the park was lifted: the release matrix
 keeps all eight legs and the README presents the Windows assets as
 downloadable. The decision and its reasoning below stand as the record of
 the park while it held; the dispatch, run ids and build proof are in
-issue #205, and the Windows test job and live verification stay owed as
+PR #406, and the Windows test job and live verification stay owed as
 separate work (see Consequences).
 
 ## Decision
@@ -65,7 +65,7 @@ which is follow-up work, not this decision).
   legs green on the exclusion recipe (x64 build plus smoke-launch, arm64
   build, arm64 launch still by design); (2) the README table and badge
   updated to present the Windows assets as downloadable; (3) this record
-  amended to superseded with the run ids.
+  amended to superseded, pointing at the revalidation run (PR #406).
 - A green bundle is not a tested platform: the Windows fast-domain test job
   and the live account/container verification stay owed separately
   (#244 for CI, #250 for the human run).

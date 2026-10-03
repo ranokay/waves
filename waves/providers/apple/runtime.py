@@ -58,7 +58,7 @@ _UA = "Waves-apple-runtime"
 # and never vendors the image into its own package (spec 10.1); the setup
 # flow pulls this exact tag. The digest is the registry manifest the runbook
 # documents; ensure_image checks it when the runtime can report one, so a
-# retagged or mutated registry copy is refused (item 24).
+# retagged or mutated registry copy is refused.
 WRAPPER_V2_IMAGE = "ghcr.io/ranokay/waves-wrapper-v2:0.2.4"
 WRAPPER_V2_IMAGE_DIGEST = "sha256:79a36375a3555ca9e4aa6a9d1ccffbf0ac45a1604d19d307761c6d6ba29b428b"
 # The wrapper's guest-lib set this image was built against, mirrored from
@@ -910,7 +910,7 @@ class AppleRuntimeManager:
             "image": WRAPPER_V2_IMAGE,
             "libs": WRAPPER_LIBS_VERSION,
             "pulled_at": int(time.time()),
-            # Provenance (item 24): the registry digest when the runtime can
+            # Provenance: the registry digest when the runtime can
             # report one, and whether it matched the pin. None means the
             # runtime could not say (podman's inspect format may differ);
             # a mismatch never reaches the receipt.
