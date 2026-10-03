@@ -550,7 +550,7 @@ Rectangle {
       }
     }
   }
-  // Offset depth shadow (sx=-px*14, sy=-py*14+6). While
+  // Offset depth shadow. While
   // hovered it leans away from the tilt; while raised it sits straight
   // down at artPlayShadowY, and fxRaiseT crosses between the two, so the
   // shadow never jumps as a hovered cover becomes a playing one. Gated

@@ -1337,10 +1337,10 @@ ApplicationWindow {
   property bool searchBuilding: false
   // The library has not answered yet, so the badges the finished cards will
   // wear are not knowable and every pill would resolve to "not present".
-  // Revealing here is what made a search during the first scan render bare
-  // and then light every badge at once one frame later; the veil is already
-  // up, so waiting costs nothing but the wait, and searchBuildGuard is still
-  // the ceiling that ends it whatever the library is doing.
+  // Revealing here would render the search bare and then light every badge
+  // one frame later; the veil is already up, so waiting costs nothing but
+  // the wait, and searchBuildGuard is still the ceiling that ends it
+  // whatever the library is doing.
   property bool _searchAwaitingLibrary: false
   function _searchBuildStart(n) {
     _searchBuildTotal = n
