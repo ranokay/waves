@@ -120,7 +120,7 @@ def test_the_build_job_restores_the_nuitka_cache_before_it_builds():
 
 
 def test_excluded_legs_never_start_instead_of_succeeding_green():
-    """R-32: the `only` filter used to live on every build step, so a leg it
+    """The `only` filter used to live on every build step, so a leg it
     excluded finished Success with all steps skipped and job conclusions read
     as passes. Selection now happens once, in the compute job, and the build
     matrix iterates only selected legs: an excluded leg never becomes a job,
@@ -184,7 +184,7 @@ def test_the_selector_cli_prints_json_and_rejects_bad_argv(capsys):
 
 
 def test_legacy_macos_legs_carry_the_pinned_qt_overlay():
-    """BUILD-03/DEP-04: the legacy macOS legs build on the same runners as
+    """The legacy macOS legs build on the same runners as
     the regular twins but overlay PySide6 6.9.3 with the 12.0 floor. A leg
     that loses or retags the overlay ships the wrong Qt on macOS 12-14, so
     the pin set fails here first."""
@@ -239,7 +239,7 @@ def test_windows_builds_ask_nuitka_for_low_memory():
 
 
 def test_yt_dlp_floor_matches_gamdl_and_exclusion_is_real():
-    """DEP-05: pyproject's yt-dlp floor tracks gamdl's own requirement, and the
+    """The yt-dlp floor in pyproject tracks gamdl's own requirement, and the
     build's nofollow module exists in the locked yt-dlp."""
     project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
     declared = next((d for d in project["dependencies"] if d.startswith("yt-dlp")), None)
@@ -342,7 +342,7 @@ def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
 
 
 def test_the_merge_gate_record_matches_the_manual_workflow():
-    """R-01: the test workflow is manual-only, so the contributor record may
+    """The test workflow is manual-only, so the contributor record may
     not promise per-push CI. The merge stands on the local strict run whose
     short SHA the PR body carries; if the trigger ever grows beyond a manual
     dispatch, the contributor record has to say so too, and this fails until
@@ -397,7 +397,7 @@ def test_the_ty_warning_baseline_is_scoped_to_its_documented_files():
 
 
 def test_the_classifiers_match_the_tested_python_versions():
-    """DEP-03: the classifiers claimed 3.14 while the pinned toolchain and the
+    """The classifiers claimed 3.14 while the pinned toolchain and the
     only 3.14 leg stopped short of proving it. A classifier may only name a
     version the manual workflow actually tests, so adding one or dropping a
     matrix leg fails here until the other side moves with it."""

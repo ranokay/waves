@@ -1,7 +1,7 @@
 # 0005: the wrapper image stays public, with notices, labels and digest checks
 
 - Status: accepted
-- Decided: 2026-09-15 (issue #203, audit item 24; the bundled clients are ADR 0004)
+- Decided: 2026-09-15 (issue #203; the bundled clients are ADR 0004)
 - Scope: distribution of the Waves-built wrapper image and its guest libraries
 
 ## Decision
@@ -38,8 +38,8 @@ does not replace legal advice.
   but every user needs `docker login` and a grant; the runbook already calls
   it a one-click-setup killer.
 - **Source-only image with user-supplied libraries mounted at runtime**: no
-  redistribution, but re-introduces APK supply and extraction (audit S13) and
-  puts guest libraries on every user's disk.
+  redistribution, but re-introduces APK supply and extraction and puts guest
+  libraries on every user's disk.
 - **Local image build per user**: maximum friction; rejected when the pinned
   public image was chosen.
 

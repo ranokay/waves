@@ -565,7 +565,7 @@ def test_chooser_toggles_layer_over_settings_for_one_job(tmp_path, monkeypatch):
 
 
 def test_apple_folder_hold_replays_with_the_same_toggle_pins():
-    """A held Apple job replays the click's toggles, not Settings (S15)."""
+    """A held Apple job replays the click's toggles, not Settings."""
     calls: list = []
     provider = SimpleNamespace(row_for=lambda kind, obj: {"id": "apple:song-1", "title": "Xtal"})
     stub = SimpleNamespace(
@@ -1831,7 +1831,7 @@ def test_wrapper_setup_failure_fails_the_row_with_setup_words(tmp_path, monkeypa
 
 
 # ---------------------------------------------------------------------------
-# E11 reuse: one verified probe, one fetch session per job
+# Reuse: one verified probe, one fetch session per job
 # ---------------------------------------------------------------------------
 
 

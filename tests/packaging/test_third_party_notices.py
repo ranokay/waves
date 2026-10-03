@@ -1,4 +1,4 @@
-"""The third-party notices generator ships DEP-09's bundle artifact."""
+"""The third-party notices generator ships the bundle artifact."""
 
 from __future__ import annotations
 

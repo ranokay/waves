@@ -172,8 +172,8 @@ def inspect_bundle(
     a verified Developer ID signature, for release pipelines. A missing
     required native module (``_REQUIRED_NATIVE``) always fails the report. The
     expected dependencies (``_EXPECTED``) are reported present or absent,
-    never failed. The third-party notices (DEP-09: ``THIRD_PARTY_NOTICES``
-    plus ``licenses/`` texts beside the app) always fail when absent.
+    never failed. The third-party notices (``THIRD_PARTY_NOTICES`` plus
+    ``licenses/`` texts beside the app) always fail when absent.
     """
     path = Path(bundle)
     if not path.exists():

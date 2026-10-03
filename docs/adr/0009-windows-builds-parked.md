@@ -1,21 +1,19 @@
 # 0009: Windows bundle builds are parked until the engine compiles under MSVC
 
-- Status: superseded (2026-09-23) — both Windows legs went green on the exclusion recipe; see Supersession
+- Status: superseded (2026-09-23; see Supersession)
 - Decided: 2026-09-21 (issue #227; build evidence and the corrected platform claims are recorded in issue #205)
 - Scope: whether this fork publishes Windows artifacts
 
 ## Supersession
 
-Run [35836125855](https://github.com/ranokay/waves/actions/runs/35836125855)
-(2026-09-23, head `cbf4827315f5e6b8ac2bc5dffa5b75270b33d38e`) dispatched
-`only=windows-x64,windows-arm64` on the exclusion recipe and both legs went
-green: `windows-2022` built and smoke-launched offscreen (healthy, ~1h36m),
-`windows-11-arm` built (no launch by design, ~1h44m), both artifacts
-uploaded. The park is lifted: the release matrix keeps all eight legs, the
-README presents the Windows assets as downloadable, and the platform-claim
-tests pin this state. The decision and its reasoning below stand as the
-record of the park while it held; the Windows test job and the live
-verification stay owed as separate work (see Consequences).
+Both Windows legs went green on the exclusion recipe on 2026-09-23
+(`windows-x64` built and smoke-launched offscreen, `windows-arm64` built
+without a launch by design), so the park was lifted: the release matrix
+keeps all eight legs and the README presents the Windows assets as
+downloadable. The decision and its reasoning below stand as the record of
+the park while it held; the dispatch, run ids and build proof are in
+PR #406, and the Windows test job and live verification stay owed as
+separate work (see Consequences).
 
 ## Decision
 
@@ -30,32 +28,28 @@ which is follow-up work, not this decision).
 
 ## Why
 
-- Both Windows legs genuinely fail on hosted runners, on one module:
-  x64 dies with `cl` stack overflow (`0xC00000FD`) and arm64 with `C1002`
-  heap exhaustion, both on yt-dlp's generated `lazy_extractors` (186k lines
-  of generated C). Serial compilation (`--low-memory`, shipped) removed the
-  parallelism pressure but not the module; every other module — all 1,751
-  individual extractors and the second-largest generated file — compiles.
+- Both Windows legs genuinely failed on hosted runners, on one module:
+  x64 with a `cl` stack overflow and arm64 with heap exhaustion, both on
+  yt-dlp's generated `lazy_extractors`. Serial compilation (`--low-memory`,
+  shipped) removed the parallelism pressure but not the module; every other
+  module compiled.
 - The cause is the fork's bundled Apple engine: gamdl pulls in yt-dlp's full
-  extractor set, so Nuitka compiles ~1,700 extra C modules. Upstream's tree
-  has no providers package and no gamdl entry, and its v0.1.29 release built
-  both Windows legs in ~14 minutes (run `34766640853`) — the same workflow
-  without the engine.
-- The retained runs prove the failure and nothing else: Linux x64 built and
-  smoke-launched (run `34928310777`), Linux arm64 built (run `34929398611`,
-  no launch by design), while every macOS leg in those runs finished
-  "success" with its build steps skipped by the `only` filter — job
-  conclusions, not builds. A stated park is honest; a Windows zip that
-  cannot be built would be worse.
+  extractor set, so Nuitka compiles the generated extractor table where
+  upstream's tree — no providers package, no gamdl entry — built both
+  Windows legs on the same workflow without the engine.
+- The supporting runs proved the failure and nothing else: Linux built on
+  both arches while the macOS legs in those runs finished "success" with
+  their build steps skipped by the `only` filter — job conclusions, not
+  builds. A stated park is honest; a Windows zip that cannot be built would
+  be worse.
 
 ## Alternatives considered
 
 - **Exclude `yt_dlp.extractor.lazy_extractors` via `--nofollow-import-to` —
   adopted in the recipe (#245).** yt-dlp falls back to its eager extractor
-  list (all 1,751 classes verified, source tree and compiled probe); gamdl
-  only ever hands yt-dlp direct stream URLs, so the extractor machinery is
-  never touched. The Windows legs have not been re-run since, so
-  revalidation is still owed.
+  list (verified in the source tree and a compiled probe); gamdl only ever
+  hands yt-dlp direct stream URLs, so the extractor machinery is never
+  touched. The Windows re-run is recorded in Supersession.
 - **Drop the Apple engine from the Windows bundle (an ADR 0004 amendment)**:
   rejected for now — it splits the product into two apps by platform.
 - **A larger runner**: the x64 failure is `cl`'s own stack, so memory alone
@@ -71,7 +65,7 @@ which is follow-up work, not this decision).
   legs green on the exclusion recipe (x64 build plus smoke-launch, arm64
   build, arm64 launch still by design); (2) the README table and badge
   updated to present the Windows assets as downloadable; (3) this record
-  amended to superseded with the run ids.
+  amended to superseded, pointing at the revalidation run (PR #406).
 - A green bundle is not a tested platform: the Windows fast-domain test job
   and the live account/container verification stay owed separately
   (#244 for CI, #250 for the human run).

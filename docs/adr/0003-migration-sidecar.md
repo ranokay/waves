@@ -1,7 +1,7 @@
 # 0003: migration completion lives in a sidecar, recorded after the save
 
 - Status: accepted
-- Decided: 2026-09-13 (issue #128, audit item 15 / E12)
+- Decided: 2026-09-13 (issue #128)
 - Scope: the one-time steps in `waves/config.py`'s `_migrate_settings`
 
 ## Decision

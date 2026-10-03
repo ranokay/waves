@@ -1,7 +1,7 @@
 # 0002: disabling a provider stops its queue
 
 - Status: accepted
-- Decided: 2026-09-13 (issue #126, audit item 14 / J5, J8)
+- Decided: 2026-09-13 (issue #126)
 - Scope: the provider enable switches (today only Apple Music's `apple_enabled`)
 
 ## Decision
@@ -18,9 +18,9 @@ rows. The save's status line reports how many rows stopped.
 ## Why
 
 The switch reads as "stop using this provider". Leaving its downloads
-running behind a search group and badges that have already vanished is the
-misleading state the audit recorded (J3, J5): the interface says the provider
-is gone while bytes keep coming. Stopping is also the honest sequel to
+running behind a search group and badges that have already vanished creates
+that misleading state: the interface says the provider is gone while bytes
+keep coming. Stopping is also the honest sequel to
 sign-out, which clears the credentials those queued jobs would need.
 
 Keeping the rows in Stopped (the STOP button's own shape) preserves

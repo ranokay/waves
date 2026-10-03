@@ -188,7 +188,7 @@ def test_wrapper_tier_fetches_alac_live(real_profile):
 def test_tidal_session_resumes_and_searches_live(real_profile):
     """The saved TIDAL session resumes and answers a search.
 
-    The J1-J3 UI journey (sign in from the card with Apple on, both providers
+    The full sign-in UI journey (sign in from the card with Apple on, both providers
     reachable, sign out, reverse order, relaunch) needs the credential typed in
     a browser; it is recorded as manual evidence in the run notes. This test
     proves the resumable session half once a sign-in exists.

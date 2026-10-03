@@ -1,4 +1,4 @@
-"""E11 reuse: one verified probe, one gamdl stack and one event loop per job.
+"""Reuse: one verified probe, one gamdl stack and one event loop per job.
 
 The engine's fetch session keeps a job's cookies/wrapper stack and event
 loop alive; the provider opens that session through ``fetch_job_session``
