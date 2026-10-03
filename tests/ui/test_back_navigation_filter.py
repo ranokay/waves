@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from conftest import _Signal
 from PySide6.QtCore import QEvent, QObject, Qt
 from support.paths import QML_MAIN, REPO_ROOT
@@ -135,6 +136,7 @@ def test_wiring_filter_is_installed_on_the_content_item_not_the_window():
     )
 
 
+@pytest.mark.qml
 def test_content_lookup_accepts_the_binding_getter():
     class Window(QObject):
         def contentItem(self):
@@ -145,6 +147,7 @@ def test_content_lookup_accepts_the_binding_getter():
     assert _content_item(window) is window.content
 
 
+@pytest.mark.qml
 def test_failed_binding_getter_still_finds_the_content_child():
     class Window(QObject):
         def contentItem(self):
@@ -160,6 +163,7 @@ def test_failed_binding_getter_still_finds_the_content_child():
     assert content is not unrelated
 
 
+@pytest.mark.qml
 def test_content_lookup_returns_none_when_no_root_exists():
     assert _content_item(QObject()) is None
 
