@@ -298,9 +298,16 @@ Ownership (the record of what Waves itself downloaded) is scoped to at most two
 roots, the download folder and the library folder (`_ownership_roots`): a
 recorded path outside both never counts and is never statted. `ownershipOf`
 answers carry `in_library` and `folder` per copy, and
-`collectionOwnershipDetail(ids)` rolls them up for an album or playlist, so a
+`collectionOwnership` and `collectionOwnershipMany` judge members against the
+collection's quality choice (or the current default), independently of each
+track's own choice. `collectionOwnershipDetail(ids, collection_id)` uses the
+same context for an explicit member list; its ids-only overload retains track
+choices. One ownership scan supplies the verdict and location facts, so a
 finished button reads IN LIBRARY or DOWNLOADED by where the copy lives and its
-click can name that folder.
+click can name that folder. Existing Version selection remains in effect;
+this context pins quality for the scan, not queued audio intent. Dual answers
+that lack location facts cannot claim that all required Versions are in the
+library.
 
 `decide_presence` answers at two strengths and the difference matters. `present`
 lights the pill and is generous. Beyond it the verdict splits into two

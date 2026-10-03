@@ -106,6 +106,7 @@ class _BridgeStub:
             "_evict_own_cache_locked",
             "_note_download_base_ok",
             "ownershipOf",
+            "_ownership_for",
             "_would_refetch_atmos",
             "_own_refresh",
             "_learn_ceiling",

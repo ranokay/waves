@@ -282,17 +282,20 @@ def test_the_currency_check_targets_the_choice_so_a_lower_copy_offers_an_upgrade
     assert b._override_target_rank("t404") == quality_rank(Quality.high_lossless.value)
 
 
-def test_wiring_ownership_of_uses_the_choice_aware_rank():
-    """The wiring: ownershipOf's up_to_date is computed against
-    _override_target_rank, not the bare setting. Wiring pin: driving ownershipOf
-    needs the full bridge cache, so the user-facing currency behavior is proved
-    by the choice-propagation tests in this file (a choice re-asks ownership and
-    moves what the buttons stand on); this fences the call site itself."""
-    import inspect
+def test_ownership_of_uses_the_tracks_choice_aware_rank():
+    from time import monotonic
 
-    src = inspect.getsource(backend.WavesBridge.ownershipOf)
-    assert "_override_target_rank(tid)" in src
-    assert "_copy_is_current(rec, self._target_quality_rank()" not in src
+    b = _bridge(setting="LOSSLESS")
+    b._own_lock = Lock()
+    b._own_cache = {"t1": (monotonic(), {"owned": True, "quality_rank": 2, "quality_tier": "LOSSLESS"})}
+    b._own_pending = set()
+    b._OWN_TTL = 60
+    b._OWN_TTL_BUSY = 5
+    b._downloads_running = lambda: False
+    _bind(b, "ownershipOf", "_ownership_for", "_would_refetch_atmos")
+    assert b.ownershipOf("t1")["up_to_date"] is True
+    b._quality_overrides["t1"] = "HI-RES"
+    assert b.ownershipOf("t1")["up_to_date"] is False
 
 
 def test_wiring_the_download_reads_the_choice_after_every_gate_and_writes_it_on_the_row():

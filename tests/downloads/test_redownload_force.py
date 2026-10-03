@@ -138,6 +138,7 @@ class _OwnBridge:
         )
         for name in (
             "ownershipOf",
+            "_ownership_for",
             "_would_refetch_atmos",
             "_own_refresh",
             "_announce_ownership",

@@ -10331,6 +10331,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         Atmos alone; stereo-only tracks settle on stereo. Unknown tracks
         (object evicted) keep the legacy whole-track answer.
         """
+        return self._ownership_for(track_id)
+
+    def _ownership_for(self, track_id: str, *, target_rank: int | None = None):
+        """Cache-only ownership at a supplied collection rank, or the track's
+        own choice. Audio-type selection and learned ceilings are shared with
+        the public track query; only the quality context changes."""
         tid = str(track_id)
         now = time.monotonic()
         ttl = self._OWN_TTL_BUSY if self._downloads_running() else self._OWN_TTL
@@ -10349,6 +10355,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # from DOWNLOAD to DOWNLOADED when the real answer lands a beat
             # later. A stale-but-known answer stays unmarked on purpose.
             return {"owned": False, "pending": True} if hit is None else {"owned": False}
+        rank = self._override_target_rank(tid) if target_rank is None else target_rank
         # Dual-download button coverage (§5.3): when toggle on and the track
         # offers both, require both Versions — cache-only (versioned keys
         # refreshed alongside the whole on the worker, never disk here).
@@ -10399,8 +10406,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # Both survive: current only when each Version is current on
                 # its own scale (stereo vs target, Atmos via its fixed tier).
                 # The button shows the stereo half's facts (the tier), settled.
-                st_cur = _copy_is_current(rec_st, self._override_target_rank(tid), False, None)
-                at_cur = _copy_is_current(rec_at, self._override_target_rank(tid), True, None)
+                st_cur = _copy_is_current(rec_st, rank, False, None)
+                at_cur = _copy_is_current(rec_at, rank, True, None)
                 return {**rec_st, "up_to_date": bool(st_cur and at_cur)}
         path = str(rec.get("path") or "")
         # The track itself, when a page holds it (every row on screen was
@@ -10426,7 +10433,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self._learn_ceiling(tid, rec, ceiling)
         return {
             **rec,
-            "up_to_date": _copy_is_current(rec, self._override_target_rank(tid), wants_atmos, ceiling),
+            "up_to_date": _copy_is_current(rec, rank, wants_atmos, ceiling),
             # Where THIS copy lives, not where downloads go now: a
             # copy written before the download folder moved reads DOWNLOADED,
             # and the redownload gate names its folder.
@@ -10506,7 +10513,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     @Slot(str, result="QVariant")
     def collectionOwnership(self, collection_id: str):
         """The whole-collection ownership rollup in ONE call: the member ids
-        plus a verdict, "owned" (every member owned at the current quality),
+        plus a verdict, "owned" (every member satisfies the collection's quality
+        request),
         "no" (at least one member firmly not), or "pending" (nothing firmly
         against, but a cold query is still being answered).
 
@@ -10516,8 +10524,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         landing builds. Each call takes the GIL, and while the library scan's
         workers are busy the GUI thread queues for it on every one, which
         drops launch-animation frames."""
-        ids = self._ownership.members_of(str(collection_id))
-        return {"ids": ids, **self._rollup_detail(ids or [])}
+        cid = str(collection_id)
+        ids = self._ownership.members_of(cid)
+        return {"ids": ids, **self._rollup_detail(ids or [], collection_id=cid)}
 
     @Slot("QVariantList", result="QVariant")
     def collectionOwnershipMany(self, collection_ids):
@@ -10529,28 +10538,33 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         for cid in collection_ids or []:
             cid = str(cid)
             ids = self._ownership.members_of(cid)
-            out[cid] = {"ids": ids, **self._rollup_detail(ids or [])}
+            out[cid] = {"ids": ids, **self._rollup_detail(ids or [], collection_id=cid)}
         return out
 
     @Slot("QVariantList", result="QVariant")
-    def collectionOwnershipDetail(self, ids):
+    @Slot("QVariantList", str, result="QVariant")
+    def collectionOwnershipDetail(self, ids, collection_id: str = ""):
         """collectionOwnership's verdict for a member list the caller already
         holds, plus where the owned copies live: {verdict, in_library,
         folder}. One crossing, so a page's header button can word its done
-        face and name the folder in its redownload gate."""
-        return self._rollup_detail([str(t) for t in ids or []])
+        face and name the folder in its redownload gate. A collection id uses
+        that collection's quality request; ids-only calls use track choices."""
+        return self._rollup_detail([str(t) for t in ids or []], collection_id=str(collection_id or ""))
 
-    def _rollup_detail(self, ids) -> dict:
+    def _rollup_detail(self, ids, *, collection_id: str = "") -> dict:
         """The rollup verdict plus in_library (every member's copy sits under
         the library root; only meaningful when the verdict is "owned") and
         folder (the first owned member's folder, for the redownload gate)."""
-        verdict = self._rollup_verdict(ids)
+        rank = None
+        if collection_id:
+            ask, _ = self._ask_quality_for(None, "collection", collection_id)
+            rank = self._target_quality_rank(ask)
+        verdict, answers = self._rollup_scan(ids, target_rank=rank)
         in_library = False
         folder = ""
         if verdict == "owned":
             in_library = True
-            for tid in ids:
-                o = self.ownershipOf(str(tid))
+            for o in answers:
                 if not folder:
                     folder = str(o.get("folder") or "")
                 if o.get("in_library") is not True:
@@ -10603,8 +10617,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         return weakest
 
     def _rollup_verdict(self, ids) -> str:
+        return self._rollup_scan(ids)[0]
+
+    def _rollup_scan(self, ids, *, target_rank: int | None = None) -> tuple[str, list[dict]]:
+        """Evaluate each visited member once, retaining its facts for detail.
+        A firm no ends the scan; pending wins only when no member says no."""
         if not ids:
-            return "no"
+            return "no", []
         # Every member the cache cannot answer goes to the refresh pool as
         # ONE job (one query for the lot), claimed here so the per-id reads
         # below dispatch nothing. A job per cold member was hundreds of jobs
@@ -10615,16 +10634,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # its ownershipOf answers.
         claim = getattr(self, "_own_claim_cold", None)
         cold = claim(ids) if claim is not None else []
+        answers = []
         try:
             pending = False
             for tid in ids:
-                o = self.ownershipOf(tid)
+                o = self.ownershipOf(tid) if target_rank is None else self._ownership_for(tid, target_rank=target_rank)
+                answers.append(o)
                 if o.get("pending") is True:
                     pending = True
                     continue
                 if not (o.get("owned") is True and o.get("up_to_date") is True):
-                    return "no"
-            return "pending" if pending else "owned"
+                    return "no", answers
+            return ("pending" if pending else "owned"), answers
         finally:
             # Dispatched AFTER the reads above: a cold member reads "pending"
             # from this call whatever the pool's timing, and the answers land

@@ -142,7 +142,7 @@ def test_collectionOwnershipMany_batches_member_lookups_in_one_call():
     members = {"c1": ["t1", "t2"], "c2": []}
     s = _stub(
         _ownership=SimpleNamespace(members_of=lambda cid: members[cid]),
-        _rollup_detail=lambda ids: {"verdict": "owned" if ids else "no", "ids": ids},
+        _rollup_detail=lambda ids, **context: {"verdict": "owned" if ids else "no", "ids": ids},
     )
     s.collectionOwnershipMany = _bind(s, "collectionOwnershipMany")
     out = s.collectionOwnershipMany(["c1", "c2"])
