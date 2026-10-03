@@ -16,8 +16,14 @@ Two properties keep that spike gone and must not regress:
 
 from __future__ import annotations
 
-import pytest
+import queue
+import time
 
+import pytest
+import requests
+import tidalapi
+
+from waves.config import harden_api_session
 from waves.download import Download
 from waves.http import _SharedContextAdapter, pooled_session
 
@@ -101,3 +107,173 @@ def test_cert_verify_falls_back_for_custom_verify(tmp_path):
     conn = _Conn()
     adapter.cert_verify(conn, "https://example.com", verify=certifi.where(), cert=None)
     assert conn.ca_certs == certifi.where()
+
+
+class _Clock:
+    def __init__(self, monkeypatch):
+        self.wall = 1000.0
+        self.mono = 10.0
+        monkeypatch.setattr(time, "time", lambda: self.wall)
+        monkeypatch.setattr(time, "monotonic", lambda: self.mono)
+
+    def advance(self, seconds, *, asleep=False):
+        self.wall += seconds
+        if not asleep:
+            self.mono += seconds
+
+
+class _Connection:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def _waiting_connection(adapter, *, proxy=False):
+    manager = adapter.proxy_manager_for("http://proxy.example:8080") if proxy else adapter.poolmanager
+    pool = manager.connection_from_host("example.com", 443, scheme="https")
+    pool.pool.get(block=False)
+    connection = _Connection()
+    pool.pool.put(connection, block=False)
+    return pool, connection
+
+
+@pytest.mark.parametrize("session_kind", ["media", "catalog"])
+@pytest.mark.parametrize("gap,asleep,stale", [(61, False, True), (10, True, True), (30, False, False)])
+def test_idle_and_sleep_drop_waiting_connections_without_changing_request_policy(
+    monkeypatch, session_kind, gap, asleep, stale
+):
+    clock = _Clock(monkeypatch)
+    if session_kind == "catalog":
+        session = tidalapi.Session.__new__(tidalapi.Session)
+        session.request_session = requests.Session()
+        harden_api_session(session)
+        adapter = session.request_session.get_adapter("https://example.com")
+    else:
+        adapter = pooled_session(pool_maxsize=2, pool_block=True).get_adapter("https://example.com")
+    pool, connection = _waiting_connection(adapter)
+    requests_seen = []
+
+    def send(_adapter, request, *args, **kwargs):
+        requests_seen.append(kwargs)
+        return "sent"
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+    clock.advance(gap, asleep=asleep)
+    assert adapter.send("request") == "sent"
+    assert connection.closed is stale
+    assert pool.pool.qsize() == pool.pool.maxsize
+    if stale:
+        assert all(slot is None for slot in pool.pool.queue)
+    if session_kind == "catalog":
+        assert requests_seen[0]["timeout"]
+        assert adapter.max_retries.total > 0
+    else:
+        assert adapter._pool_block is True
+        assert adapter.max_retries.total == 0
+        assert adapter._ssl_context.cert_store_stats()["x509_ca"] > 0
+
+
+def test_sleep_drops_proxy_connections_too(monkeypatch):
+    clock = _Clock(monkeypatch)
+    adapter = pooled_session(pool_maxsize=2).get_adapter("https://example.com")
+    direct_pool, direct = _waiting_connection(adapter)
+    proxy_pool, proxied = _waiting_connection(adapter, proxy=True)
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", lambda *_args, **_kwargs: "sent")
+    clock.advance(20, asleep=True)
+    adapter.send("request")
+    assert direct.closed and proxied.closed
+    assert direct_pool.pool.qsize() == proxy_pool.pool.qsize() == 2
+
+
+@pytest.mark.parametrize("another_request", [False, True])
+def test_request_in_flight_across_sleep_does_not_make_waiting_connections_fresh(monkeypatch, another_request):
+    clock = _Clock(monkeypatch)
+    adapter = pooled_session(pool_maxsize=2, pool_block=True).get_adapter("https://example.com")
+    pool, waiting = _waiting_connection(adapter)
+    checked_out = pool.pool.get(block=False)
+    seen = []
+
+    def send(_adapter, request, *args, **kwargs):
+        if request == "before-sleep":
+            clock.advance(20, asleep=True)
+            if another_request:
+                adapter.send("after-wake")
+        seen.append(request)
+        return "sent"
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+    # One real connection is checked out; only the other waits in the pool.
+    pool.pool.get(block=False)
+    pool.pool.put(_Connection(), block=False)
+    waiting = pool.pool.queue[-1]
+    adapter.send("before-sleep")
+    assert waiting.closed
+    assert not checked_out.closed
+    assert pool.pool.qsize() == 1
+    assert seen == (["after-wake", "before-sleep"] if another_request else ["before-sleep"])
+    pool.pool.put(checked_out, block=False)
+    assert pool.pool.qsize() == 2
+
+
+def test_drop_returns_slots_for_a_blocking_worker(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    _Clock(monkeypatch)
+    adapter = pooled_session(pool_maxsize=1, pool_block=True).get_adapter("https://example.com")
+    pool, checked_out = _waiting_connection(adapter)
+    assert pool.pool.get(block=False) is checked_out
+    started = Event()
+
+    def waiting_worker():
+        started.set()
+        return pool.pool.get(timeout=1)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(waiting_worker)
+        assert started.wait(timeout=1)
+        # A different pool has a stale waiting connection. Eviction must
+        # preserve its slot, while the checked-out pool stays usable.
+        other = adapter.poolmanager.connection_from_host("other.example", 443, scheme="https")
+        other.pool.get(block=False)
+        stale = _Connection()
+        other.pool.put(stale, block=False)
+        adapter._drop_pooled_connections()
+        assert stale.closed
+        assert other.pool.get(block=False) is None
+        pool.pool.put(checked_out, block=False)
+        assert future.result(timeout=1) is checked_out
+    assert not checked_out.closed
+    with pytest.raises(queue.Empty):
+        pool.pool.get(block=False)
+
+
+def test_return_during_eviction_cannot_hide_an_older_stale_socket(monkeypatch):
+    clock = _Clock(monkeypatch)
+    adapter = pooled_session(pool_maxsize=3, pool_block=True).get_adapter("https://example.com")
+    pool = adapter.poolmanager.connection_from_host("example.com", 443, scheme="https")
+    for _ in range(3):
+        pool.pool.get(block=False)
+    older, newer, checked_out = _Connection(), _Connection(), _Connection()
+    pool.pool.put(older, block=False)
+    pool.pool.put(newer, block=False)
+
+    def close_and_return():
+        newer.closed = True
+        pool.pool.put(checked_out, block=False)
+
+    # This is also a lock check: close must run outside Queue.mutex, so
+    # another worker can return its checked-out connection while it runs.
+    monkeypatch.setattr(newer, "close", close_and_return)
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", lambda *_args, **_kwargs: "sent")
+    clock.advance(61)
+    adapter.send("request")
+
+    assert older.closed and newer.closed
+    assert not checked_out.closed
+    assert pool.pool.qsize() == 3
+    assert pool.pool.get(block=False) is checked_out
+    assert pool.pool.get(block=False) is None
+    assert pool.pool.get(block=False) is None
