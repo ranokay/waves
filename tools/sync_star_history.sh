@@ -3,12 +3,12 @@
 # sync_star_history.sh: copy the star-history chart from the public repo into
 # this tree, so the dev repo's README renders the same chart the public one does.
 #
-# The chart is upstream's (iamprivacy/Waves): it is generated ON the public
-# repo by .github/workflows/star-history.yml and committed there (the private
-# mirror meters Actions minutes, and the workflow guards on the repository
-# name, so it can only ever run on public). That makes public the source of
-# truth for these files and this tree a copy that goes stale between runs.
-# Re-run this whenever you want the dev README to match; nothing depends on it being current, and the release procedure takes the public
+# The chart is generated ON the public repo by .github/workflows/star-history.yml
+# and committed there (the private mirror meters Actions minutes, and the
+# workflow guards on the repository name, so it can only ever run on public).
+# That makes public the source of truth for these files and this tree a copy
+# that goes stale between runs. Re-run this whenever you want the dev README to
+# match; nothing depends on it being current, and release.sh takes the public
 # tip's copy regardless of what is here.
 #
 # Leaves the changes in the working tree. Review and commit them yourself.
@@ -19,22 +19,13 @@ REPO_ROOT="$(git rev-parse --show-toplevel)" \
 cd "$REPO_ROOT" || { echo "error: cannot cd to repo root" >&2; exit 1; }
 
 PUBLIC_REMOTE="public"
-FALLBACK_REMOTE="upstream"
 PUBLIC_BRANCH="main"
 CHART_DIR="assets/star-history"
 SH_START='<!-- star-history:start -->'
 SH_END='<!-- star-history:end -->'
 
-if ! git remote get-url "$PUBLIC_REMOTE" >/dev/null 2>&1; then
-  if url="$(git remote get-url "$FALLBACK_REMOTE" 2>/dev/null)" && [[ "$url" == *iamprivacy/Waves* ]]; then
-    echo "note: remote '$PUBLIC_REMOTE' is not configured; using '$FALLBACK_REMOTE' (the chart is upstream iamprivacy/Waves's)." >&2
-    PUBLIC_REMOTE="$FALLBACK_REMOTE"
-  else
-    echo "error: remote '$PUBLIC_REMOTE' is not configured." >&2
-    echo "Add it with: git remote add public https://github.com/iamprivacy/Waves.git" >&2
-    exit 1
-  fi
-fi
+git remote get-url "$PUBLIC_REMOTE" >/dev/null 2>&1 \
+  || { echo "error: remote '$PUBLIC_REMOTE' is not configured" >&2; exit 1; }
 
 echo "→ fetching $PUBLIC_REMOTE/$PUBLIC_BRANCH ..."
 git fetch --quiet "$PUBLIC_REMOTE" "$PUBLIC_BRANCH"
@@ -64,7 +55,7 @@ if [ -s "$BLOCK" ]; then
        index($0,e){skip=0} !skip' \
       README.md > "$BLOCK.readme"
   # Refuse to write a README that lost the end marker: without it the next run
-  # (and the release procedure) would have no block to replace.
+  # (and release.sh) would have no block to replace.
   grep -q "$SH_END" "$BLOCK.readme" \
     || { echo "error: spliced README lost the '$SH_END' marker; leaving README.md alone." >&2; exit 1; }
   mv "$BLOCK.readme" README.md

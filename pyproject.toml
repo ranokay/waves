@@ -353,9 +353,6 @@ ignore = [
 # Runs the bundle size report for real, on a root wide enough to fill the pipe
 # buffer, through the shell it is written for (S603/S607, fixed argv).
 "tests/updates/test_updater_backup_keep.py" = ["S603", "S607"]
-# Drives the real release.sh (bash) and git against throwaway sandbox repos;
-# both are resolved from PATH on purpose (S603/S607, fixed argv).
-"tests/packaging/test_release_star_history.py" = ["S603", "S607"]
 # The Waves bridge has several inherently branchy but linear functions (the
 # settings-schema builder, the settings dispatcher and the search/discography
 # orchestration) that trip mccabe (C901) without being genuinely complex.
