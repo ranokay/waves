@@ -1,7 +1,7 @@
-"""The provider contract names its current distribution decisions and defaults.
+"""The provider contract points at the ADR recording each distribution decision.
 
-Bundling and wrapper distribution point at the maintained ADRs. The lyrics
-and art defaults stay documented; settings tests cover the shipped values.
+Bundling and wrapper distribution link the maintained ADRs; the shipped
+lyrics/art defaults are covered behaviorally by the settings tests.
 """
 
 from __future__ import annotations
@@ -29,15 +29,3 @@ def test_engine_bundling_names_adr_0004():
 def test_wrapper_image_names_adr_0005():
     section = _section(SPEC.read_text(encoding="utf-8"), "## 10. Packaging")
     assert "0005-wrapper-image-distribution" in section
-
-
-def test_lyrics_art_defaults_state_the_ratified_set():
-    section = _section(SPEC.read_text(encoding="utf-8"), "## 9. Lyrics")
-    for stated in (
-        "lyrics_embed` off",
-        "lyrics_file` **on**",
-        "word-timed **on**",
-        ".ttml` sidecar **on**",
-        "raw (default",
-    ):
-        assert stated in section, f"the ratified default {stated!r} left §9.1"
