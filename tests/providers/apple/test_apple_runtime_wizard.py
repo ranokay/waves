@@ -28,6 +28,7 @@ import hashlib
 import io
 import json
 import shutil
+import socket
 import tarfile
 import time
 from pathlib import Path
@@ -248,6 +249,29 @@ def test_picked_port_is_high_and_free():
 def test_pick_exhausted_high_range_raises():
     with pytest.raises(OSError, match="no free high port"):
         pick_free_high_port(low=65535, high=65534)
+
+
+def test_pick_skips_a_port_served_on_the_wildcard_address():
+    """A wildcard listener must make the candidate read taken.
+
+    Benign on Linux, exact on macOS/BSD: with a wildcard listener up, a
+    specific-address bind that borrows SO_REUSEADDR still succeeds (macOS
+    Continuity holds *:49152, the range's first port), so a probe that reuses
+    the address hands out an occupied port the wrapper cannot publish.
+    """
+    listener = candidate = None
+    for port in range(61000, 61050):
+        sock = socket.socket()
+        try:
+            sock.bind(("", port))
+        except OSError:
+            sock.close()
+            continue
+        listener, candidate = sock, port
+        break
+    assert listener is not None and candidate is not None, "no wildcard test port available"
+    with listener:
+        assert pick_free_high_port(low=candidate, high=candidate + 1) == candidate + 1
 
 
 def test_manager_ensure_port_prefers_override_when_free(tmp_path):
