@@ -31,9 +31,8 @@ cancel discards.
 
 ## Why
 
-- The audit's F-11 was a latching full-window login panel: starting a
-  sign-in became a session-long commitment. Inline, cancellable steps make
-  starting nothing of the sort.
+- A latching full-window login panel made starting a sign-in a session-long
+  commitment. Inline, cancellable steps make starting nothing of the sort.
 - The persistence lives where the flag is read. The Python migration sidecar
   (ADR 0003) covers `settings.json` only and cannot migrate QML settings, so
   a shim in the QML store is the honest mechanism; a second state store

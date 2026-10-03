@@ -1,7 +1,7 @@
 # 0004: open-source client libraries ship; Apple-derived engine material is provisioned
 
 - Status: accepted
-- Decided: 2026-09-14, ratified 2026-09-15 (issue #200, audit item 23 / S12)
+- Decided: 2026-09-14, ratified 2026-09-15 (issue #200)
 - Scope: spec §10.1 ("Nothing Apple-engine ships inside Waves' own package")
 
 ## Decision
@@ -27,8 +27,9 @@ separately provisioned executables, not a general-purpose open-source client.
   manifest, platform artifacts, a checksum/trust chain and a sys.path loader.
   The cookies tier deliberately needs no runtime at all; making it download
   one would weaken that tier, not strengthen it.
-- gamdl is MIT-licensed and contains no Apple code; item 24's distribution
-  review is where licensing can overrule this decision.
+- gamdl is MIT-licensed and contains no Apple code; the wrapper-image
+  distribution review (ADR 0005, issue #203) is where licensing can overrule
+  this decision.
 
 ## Alternatives considered
 
@@ -49,8 +50,8 @@ item if that reading is ever adopted.
   to a failure for the strict reading.
 - `--require-developer-id` fails an ad-hoc or Apple Development signature, for
   a release pipeline that signs and notarizes.
-- The classification is name-based; a content audit belongs to item 24's
-  distribution review.
+- The classification is name-based; a content audit belongs to the
+  wrapper-image distribution review (ADR 0005, issue #203).
 - Building this locally needs `--disable-cache=ccache` because Nuitka's
   downloaded x86_64 ccache cannot run `xcrun` on Apple silicon with this
   Command Line Tools install.
@@ -59,4 +60,5 @@ item if that reading is ever adopted.
 
 - Every release's bundle inspection keeps confirming the provisioned pieces
   are absent.
-- Item 24's license review can reopen this decision; a contrary finding wins.
+- The wrapper-image license review (ADR 0005, issue #203) can reopen this
+  decision; a contrary finding wins.
