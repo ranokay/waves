@@ -550,7 +550,7 @@ Rectangle {
     var r
     if (collectionIds !== null) {
       _ownKeys = host.ownKeys(collectionIds)
-      var cd = waves.collectionOwnershipDetail(collectionIds)
+      var cd = waves.collectionOwnershipDetail(collectionIds, mediaId)
       r = _rollupWord(cd ? cd.verdict : "no")
       ownInLibrary = !!(cd && cd.in_library === true)
       ownFolder = cd && cd.folder ? "" + cd.folder : ""
@@ -616,10 +616,10 @@ Rectangle {
     // Empty id = broadcast (the quality setting changed).
     function onOwnershipChanged(tid) {
       if (db.collectionIds !== null) {
-        if (tid === "" || db.collectionIds.indexOf(tid) !== -1)
+        if (tid === "" || tid === db.mediaId || db.collectionIds.indexOf(tid) !== -1)
           db.refreshOwned()
       } else if (db.collectionCheck) {
-        if (tid === "" || (db._ownIds && db._ownIds.indexOf(tid) !== -1))
+        if (tid === "" || tid === db.mediaId || (db._ownIds && db._ownIds.indexOf(tid) !== -1))
           db.refreshOwned()
       } else if (tid === db.mediaId || tid === "") {
         db.refreshOwned()

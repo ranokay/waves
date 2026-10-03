@@ -1,20 +1,20 @@
 """The one verdict behind the DOWNLOADED / IN LIBRARY state on every album,
-playlist and mix card: ``WavesBridge._rollup_verdict`` (backend.py), reached
+playlist and mix card: ``WavesBridge._rollup_scan`` (backend.py), reached
 through ``collectionOwnership`` and ``collectionOwnershipDetail``.
 
 The stake is the quality conjunct. A member is only counted as "owned" for the
-roll-up when its copy is ALSO up_to_date against the current audio quality
-setting. Drop that conjunct and an album saved at HIGH keeps reading "owned"
+roll-up when its copy is ALSO up_to_date against the caller's quality
+request. Drop that conjunct and an album saved at HIGH keeps reading "owned"
 after the user raises the setting to Lossless, so the upgrade the card is
-supposed to offer is never offered. Nothing else in the suite pinned it.
+supposed to offer is never offered. Collection choices are independent of
+member choices; ids-only calls retain track context.
 
 Two layers:
 
-  * the pure roll-up, called unbound on a Qt-free stub whose ownershipOf is a
-    plain dict lookup, one test per branch of the loop, and
-  * one wire test through the REAL ownershipOf on a WavesBridge carcass with a
-    real OwnershipStore, so the stored quality_rank is what decides the verdict
-    (not a dict the test invented).
+  * the pure scan on a Qt-free lookup stub, covering precedence, one
+    evaluation per member and deferred cold-batch dispatch, and
+  * real ownership queries on a WavesBridge carcass with a real OwnershipStore,
+    covering stored ranks, collection choices, defaults and both Versions.
 
 These import WavesBridge, so they collect only in the full runtime venv
 (PySide6 present), like tests/library/test_ownership_bridge.py.
@@ -42,6 +42,7 @@ class _LookupStub:
     def __init__(self, answers: dict):
         self._answers = {str(k): v for k, v in answers.items()}
         self.asked: list[str] = []
+        self._rollup_scan = WavesBridge._rollup_scan.__get__(self, _LookupStub)
 
     def ownershipOf(self, tid):
         self.asked.append(tid)
@@ -228,3 +229,92 @@ def test_detail_one_copy_outside_is_not_in_library():
 def test_detail_nothing_owned_names_no_folder():
     assert _detail({"1": NOT_OWNED}) == {"verdict": "no", "in_library": False, "folder": ""}
     assert _detail({}, ids=[]) == {"verdict": "no", "in_library": False, "folder": ""}
+
+
+def test_owned_detail_evaluates_each_member_once():
+    stub = _LookupStub({"1": _at("/lib/A", True), "2": _at("/old/A", False)})
+    stub._rollup_verdict = WavesBridge._rollup_verdict.__get__(stub, _LookupStub)
+    detail = WavesBridge._rollup_detail(stub, ["1", "2"])
+    assert detail == {"verdict": "owned", "in_library": False, "folder": "/lib/A"}
+    assert stub.asked == ["1", "2"]
+
+
+def test_scan_dispatches_one_cold_batch_after_an_early_no():
+    stub = _LookupStub({"1": NOT_OWNED, "2": PENDING})
+    stub._own_cache = {}
+    stub._own_pending = set()
+    stub._own_lock = Lock()
+    stub._OWN_TTL = 60
+    stub._OWN_TTL_BUSY = 5
+    stub._downloads_running = lambda: False
+    stub._own_claim_cold = WavesBridge._own_claim_cold.__get__(stub, _LookupStub)
+    refreshed = []
+    stub._own_refresh_many = lambda ids: refreshed.append(ids)
+
+    class Pool:
+        def start(self, worker):
+            assert stub.asked == ["1"], "the firm no stops the scan before dispatch"
+            worker.run()
+
+    stub._own_pool = Pool()
+    assert WavesBridge._rollup_verdict(stub, ["1", "2"]) == "no"
+    assert refreshed == [["1", "2"]]
+
+
+def test_collection_choice_is_independent_of_its_members(tmp_path):
+    store = OwnershipStore(str(tmp_path / "own.db"))
+    store.record("101", _file(tmp_path, "song.flac"), "LOSSLESS", audio_mode="STEREO")
+    store.record_members_replace("album", ["101"])
+    b = _bridge(store, quality="HI_RES_LOSSLESS")
+    b._quality_overrides = {"album": "LOSSLESS", "101": "HI-RES"}
+    b._objs = {"track": {}}
+    _warm(b, ["101"])
+    assert b.ownershipOf("101")["up_to_date"] is False
+    assert b.collectionOwnership("album")["verdict"] == "owned"
+    assert b.collectionOwnershipMany(["album"])["album"]["verdict"] == "owned"
+    assert b.collectionOwnershipDetail(["101"], "album")["verdict"] == "owned"
+    assert b.collectionOwnershipDetail(["101"])["verdict"] == "no"
+
+
+def test_each_collection_resolves_its_own_choice_with_shared_members(tmp_path):
+    store = OwnershipStore(str(tmp_path / "own.db"))
+    store.record("101", _file(tmp_path, "song.flac"), "LOSSLESS", audio_mode="STEREO")
+    for cid in ("low", "lossless", "max", "default"):
+        store.record_members_replace(cid, ["101"])
+    b = _bridge(store, quality="HI_RES_LOSSLESS")
+    b._quality_overrides = {"low": "LOW", "lossless": "LOSSLESS", "max": "HI-RES", "default": "DEFAULT"}
+    _warm(b, ["101"])
+    assert {
+        cid: answer["verdict"]
+        for cid, answer in b.collectionOwnershipMany(["low", "lossless", "max", "default"]).items()
+    } == {"low": "owned", "lossless": "owned", "max": "no", "default": "no"}
+    b.settings.data.tidal_quality_audio = "LOSSLESS"
+    assert b.collectionOwnership("default")["verdict"] == "owned"
+    b._quality_overrides.pop("max")
+    assert b.collectionOwnership("max")["verdict"] == "owned"
+
+
+def test_dual_collection_still_requires_each_version_at_its_own_scale(tmp_path):
+    from tidalapi.media import AudioMode, Track
+
+    from waves.config import ATMOS_REQUEST_QUALITY
+
+    store = OwnershipStore(str(tmp_path / "own.db"))
+    store.record("101", _file(tmp_path, "stereo.m4a"), "HIGH", audio_mode="STEREO")
+    store.record_members_replace("album", ["101"])
+    b = _bridge(store, quality="HI_RES_LOSSLESS")
+    b.settings.data.default_audio_type = "both"
+    b.settings.data.download_dolby_atmos = True
+    track = Track.__new__(Track)
+    track.audio_modes = [AudioMode.stereo.value, AudioMode.dolby_atmos.value]
+    b._objs = {"track": {"101": track}}
+    b._quality_overrides = {"album": "LOW", "101": "HI-RES"}
+    _warm(b, ["101"])
+    assert b.collectionOwnership("album")["verdict"] == "no"
+    store.record("101", _file(tmp_path, "atmos.m4a"), ATMOS_REQUEST_QUALITY.value, audio_mode="DOLBY_ATMOS")
+    b._own_cache["101"] = (-1e9, b._own_cache["101"][1])
+    _warm(b, ["101"])
+    assert b.collectionOwnership("album")["verdict"] == "owned"
+    assert b.ownershipOf("101")["up_to_date"] is False
+    # The existing dual answer does not aggregate locations of both copies.
+    assert b.collectionOwnership("album")["in_library"] is False

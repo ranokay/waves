@@ -177,7 +177,7 @@ class _Stub:
                 quality_audio="LOSSLESS", symlink_to_track=symlink_to_track, default_audio_type="stereo"
             )
         )
-        for name in ("ownershipOf", "_would_refetch_atmos", "_record_ownership"):
+        for name in ("ownershipOf", "_ownership_for", "_would_refetch_atmos", "_record_ownership"):
             setattr(self, name, getattr(WavesBridge, name).__get__(self, _Stub))
 
     def seed_stale(self, tid: str) -> None:
