@@ -342,17 +342,14 @@ def test_the_bundle_trim_leaves_the_pycryptodome_native_modules_alone(tmp_path):
 
 
 def test_the_merge_gate_record_matches_the_manual_workflow():
-    """The test workflow is manual-only, so the contributor record may not
-    promise per-push CI and must name the manual trigger. If the trigger ever
-    grows beyond a manual dispatch, the contributor record has to say so too,
-    and this fails until it does."""
+    """The test workflow must stay dispatch-only, and the contributor record
+    must name the manual mechanism it uses (one stable token, not a phrase
+    suite: rewording the surrounding sentence is not a regression)."""
     wf = _master_workflow()
     # YAML 1.1 reads the `on:` key as boolean True (the wrapper-image pins
     # test notes the same quirk); the trigger set must stay dispatch-only.
     assert set(wf[True]) == {"workflow_dispatch"}, wf[True]
 
-    # One stable token, not a phrase suite: CONTRIBUTING must point at the
-    # mechanism; rewording the sentence around it is not a regression.
     assert "workflow_dispatch" in CONTRIBUTING.read_text()
 
 

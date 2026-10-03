@@ -1,6 +1,6 @@
-"""The provider contract names the owner of each distribution decision.
+"""The provider contract points at the ADR recording each distribution decision.
 
-Bundling and wrapper distribution point at the maintained ADRs; the shipped
+Bundling and wrapper distribution link the maintained ADRs; the shipped
 lyrics/art defaults are covered behaviorally by the settings tests.
 """
 
