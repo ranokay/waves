@@ -94,6 +94,9 @@ def test_dynamic_qml_targets_resolve_inside_the_scanned_tree():
 
 
 def test_python_imports_do_not_require_bindings_the_bundle_trims():
+    # Development installs contain these bindings, so an offscreen launch
+    # cannot prove import closure after trim. Scan every shipped Python file
+    # to catch imports on lazy paths that a boot scenario never executes.
     trim = TRIM_SCRIPT.read_text()
     match = re.search(r"^PYSIDE_BINDINGS=\(([^)]*)\)", trim, re.MULTILINE)
     assert match, "the trim script must declare the Python bindings it removes"

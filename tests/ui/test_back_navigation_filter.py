@@ -121,7 +121,11 @@ def test_mouse_buttons_and_window_events_pass_through_the_filter(monkeypatch):
     assert stub.forwardRequested.emits == []
 
 
-def test_filter_is_installed_on_the_content_item_not_the_window():
+def test_wiring_filter_is_installed_on_the_content_item_not_the_window():
+    # The binding-free window scenario in test_boot_paced_incubation proves
+    # content-root targeting. This pin keeps the real entry point using that
+    # target rather than installing the filter on all window/app events;
+    # driving that call site otherwise requires the full application boot.
     src = _APP_PY.read_text(encoding="utf-8")
     assert "root_objects[0].installEventFilter(bridge)" not in src
     assert "app.installEventFilter(bridge)" not in src
