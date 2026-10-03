@@ -107,9 +107,7 @@ ApplicationWindow {
   color: bg
 
   // Album-art hover tilt knobs.
-  // Variant: none | tilt | tilt_gloss | tilt_shadow. Tilt is BGT's value.
-  // Lift is BGT's 1.04 swell cut by a fifth (0.04 -> 0.032): the cover read
-  // as jumping toward you too eagerly at BGT's number.
+  // Variant: none | tilt | tilt_gloss | tilt_shadow.
   // Settings > Advanced > "Cover art tilts on hover". "none" is the same
   // switch the variants already had, so one binding turns the effect off
   // everywhere it reaches (Art, the track discs, the Browse hero cards).
@@ -232,8 +230,6 @@ ApplicationWindow {
   property int artPlayBreathMs: 2400      // paused: one half-breath
 
   // Console palette (phosphor-green CRT, dark only)
-  // Legacy names kept (values repointed) so every existing binding recolours
-  // for free; new tokens add the gold / cyan / outline / surface-tier ideas.
   readonly property color accent: Primitives.Palette.accent   // phosphor green (primary)
   readonly property color accentText: "#03210e"   // ink on a green fill
   readonly property color surface: "#15181d"   // primary card surface
@@ -946,10 +942,8 @@ ApplicationWindow {
   // mediaId -> a small reactive holder { real pct; string st }, created lazily
   // when a download for that id first reports. dlPct()/dlSt() read the holder;
   // the downloadProgress/downloadState handlers set exactly one holder's
-  // property, so a progress tick re-binds only the controls showing THAT id.
-  // (The previous whole-map reassignment invalidated the pct/state binding of
-  // every instantiated download control on every tick, which under a burst of
-  // per-segment ticks stole GUI-thread frames from scrolling and cover art.)
+  // property, so a progress tick re-binds only the controls showing THAT id;
+  // a whole-map reassignment would pay every control's re-bind on every tick.
   property var dlHolders: ({})
   Component {
     id: dlHolderComp
@@ -1529,10 +1523,8 @@ ApplicationWindow {
   // Paint the interface, invisibly, before the reveal needs it. The scene
   // graph skips a subtree whose opacity is 0 outright, so the first frame
   // that shows the interface pays for the whole page at once: every texture
-  // upload, every glyph rastered, every material built. That bill landed
-  // halfway through the wordmark zoom (the reveal starts 350ms into a 700ms
-  // scale), which is the stutter that was seen, always at the same point
-  // because the reveal always begins at the same point.
+  // upload, every glyph rastered, every material built — a stutter halfway
+  // through the wordmark zoom (the reveal starts 350ms into a 700ms scale).
   //
   // Warming holds the interface a hair above the skip threshold (0.001)
   // during the version drain instead: far enough below perception to be
@@ -1659,8 +1651,7 @@ ApplicationWindow {
   // It sits in the window's own content, so a modal popup's overlay is above
   // it and the side buttons do nothing while a dialog is open. That is the
   // wanted behaviour, not a gap: navigating the page underneath a modal
-  // question is how you answer it by accident. Reviewed and deliberately
-  // left alone.
+  // question is how you answer it by accident.
   Item {
     anchors.fill: parent
     z: 1000000
@@ -4469,18 +4460,13 @@ ApplicationWindow {
         sourceSize.width: model.w
         sourceSize.height: model.h
         // Qt keys the pixmap cache on the FILL MODE as well as the url
-        // and the decode size: PreserveAspectCrop and PreserveAspectFit
-        // each raise their own flag in the load request, and an entry
-        // stored under one is never handed to the other. Left at the
-        // default (Stretch) this pool therefore fetched and decoded a
-        // SECOND copy of every cover and pinned that, while the copy
-        // the page had actually painted stayed unpinned and fell out
-        // of Qt's ~2 MB budget for no-longer-shown pixmaps (measured
-        // here: 40-60 thumbnails, i.e. one page of results), so a
-        // revisit went back to the loading placeholder exactly as if
-        // the pool did not exist. Every art surface crops (Art,
-        // PreviewArt, MosaicCell, the browse header), so cropping here
-        // is what pins the pixmap the next page will ask for.
+        // and the decode size: an entry stored under one fill mode is
+        // never handed to another. A Stretch pool would pin a second,
+        // unused copy of every cover while the painted crop fell out of
+        // Qt's budget for no-longer-shown pixmaps. Every art surface
+        // crops (Art, PreviewArt, MosaicCell, the browse header), so
+        // PreserveAspectCrop is what pins the pixmap the next page asks
+        // for.
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: true

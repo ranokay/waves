@@ -99,7 +99,7 @@ Rectangle {
   border.color: border1
   border.width: 1
   clip: true
-  // Album-art hover tilt (from BGT's CoverArt.qml): opt-in per call
+  // Album-art hover tilt: opt-in per call
   // site. The whole cover (art, border, anything anchored on it)
   // tilts toward the cursor and lifts slightly, springing back on
   // exit. Pure render-thread transforms: Image geometry, decode size
@@ -492,7 +492,7 @@ Rectangle {
       }
     }
   }
-  // Gloss variant (from BGT): a cursor-following radial highlight.
+  // Gloss variant: a cursor-following radial highlight.
   // Behind a Loader: the Shape + gradient exist only for tilt_gloss
   // instances, every other Art (there are hundreds in list delegates)
   // creates nothing here.
@@ -550,7 +550,7 @@ Rectangle {
       }
     }
   }
-  // Offset depth shadow (BGT tilt_shadow: sx=-px*14, sy=-py*14+6). While
+  // Offset depth shadow (sx=-px*14, sy=-py*14+6). While
   // hovered it leans away from the tilt; while raised it sits straight
   // down at artPlayShadowY, and fxRaiseT crosses between the two, so the
   // shadow never jumps as a hovered cover becomes a playing one. Gated
