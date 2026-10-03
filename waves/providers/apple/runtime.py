@@ -282,8 +282,12 @@ def pick_free_high_port(low: int = WRAPPER_PORT_LOW, high: int = WRAPPER_PORT_HI
     """
     for port in range(low, high + 1):
         with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
+                # Bind exactly as the consumer will: loopback, no SO_REUSEADDR.
+                # BSD lets a reusing specific-address bind succeed while
+                # another process listens on the wildcard address (macOS
+                # Continuity holds *:49152), which would hand out an occupied
+                # port; a plain bind fails there.
                 sock.bind(("127.0.0.1", port))
             except OSError:
                 continue
