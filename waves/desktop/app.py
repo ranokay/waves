@@ -13,15 +13,17 @@ from __future__ import annotations
 import faulthandler
 import gc
 import logging
+import math
 import os
 import sys
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QDateTime, Qt, QTimer, QUrl
+from PySide6.QtCore import SIGNAL, QDateTime, QObject, Qt, QTimer, QUrl, Slot
 from PySide6.QtGui import QFontDatabase, QGuiApplication, QIcon, QWindow
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkDiskCache, QNetworkRequest, QSslConfiguration
 from PySide6.QtQml import QQmlApplicationEngine, QQmlIncubationController, QQmlNetworkAccessManagerFactory
@@ -165,111 +167,159 @@ class _ArtCacheFactory(QQmlNetworkAccessManagerFactory):
 
 
 class _BootPacedIncubation(QQmlIncubationController):
-    """Incubation pacing that keeps the boot water smooth.
+    """Keep incubation bounded while the GUI serves boot and page frames.
 
-    Asynchronous Loaders incubate through the engine's controller, and the
-    default one (the window's) drives incubation as hard as the frame loop
-    allows. During launch that meant the landing's ~130 shelf and card
-    incubations completed back to back, ~10-16 ms each: the GUI thread's
-    event loop never idled, the render loop missed its sync slot for
-    hundreds of milliseconds at a stretch, and the only visible motion on
-    screen (the boot water) froze with it (probe: presentation gaps up to
-    356 ms mid-hold, with no single chunk crossing the 40 ms stall
-    detector).
-
-    Installed on the engine BEFORE the QML loads (so the window never
-    installs its own). While the launch overlay is up it incubates in small
-    slices on a timer, leaving the GUI thread free for roughly half of every
-    frame, so the water holds its rate while the landing assembles slightly
-    slower (the opening hold and the handover gate already absorb exactly
-    this). The bridge's bootRevealed() opens the throttle for the rest of
-    the session: a near-continuous slice per tick, the pre-existing pace, so
-    tab strikes and page builds keep their speed.
-
-    The timer runs unconditionally for the whole boot window (an empty
-    incubateFor is near-free), and at release the engine is handed back to
-    the window's own stock controller, so this class drives incubation only
-    while the launch look is up. Nothing here may depend on the
-    incubatingObjectCountChanged virtual firing: the first shipped version
-    started its timer from that virtual, whose binding passes the new count
-    as an argument, and the no-arg override raised TypeError on every call.
-    No timer ever started, no async Loader in the whole app could complete,
-    and the launch revealed a blank, dead landing.
+    Install before QML loads and retain for the session. Boot always runs
+    on a timer; after reveal, a queued GUI-thread relay serves short slices
+    after window frames. The timer covers quiet windows or failed hooks and
+    slows down when no objects incubate. Neither path needs QtQuick's Python
+    binding, which the packaged application trims.
     """
 
     _BOOT_SLICE_MS = 12
-    _OPEN_SLICE_MS = 50
+    _TICK_MS = 16
+    _IDLE_TICK_MS = 50
+    _FRAME_FRESH_S = 0.05
 
-    def __init__(self, timer_parent) -> None:
+    @staticmethod
+    def _slices_for(refresh_rate: float) -> tuple[int, int, float]:
+        """Use a third of a frame after presentation, twice that otherwise."""
+        rate = refresh_rate if math.isfinite(refresh_rate) and refresh_rate > 0 else 60.0
+        third = max(1, int(1000 / rate) // 3)
+        return third, 2 * third, 1.0 / rate
+
+    def __init__(self, timer_parent: QObject) -> None:
         super().__init__()
         self._boot = True
         self._released = False
-        self._notify = None
-        self._handback = None
+        self._notify: Callable[[int], None] | None = None
+        self._last_frame = 0.0
+        self._win: QWindow | None = None
+        self._relay: _FrameRelay | None = None
+        self._frame_slice_ms, self._open_slice_ms, self._frame_period_s = self._slices_for(60.0)
         self._timer = QTimer(timer_parent)
-        self._timer.setInterval(16)
+        self._timer.setInterval(self._TICK_MS)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
-    def set_count_notifier(self, fn) -> None:
-        """Kept for the release path: the bridge is told 0 once the throttle
-        opens. The live count itself is polled through count_reader."""
+    def set_count_notifier(self, fn: Callable[[int], None]) -> None:
+        """Clear the reveal gate once; live counts are polled separately."""
         self._notify = fn
 
-    def count_reader(self):
-        """A callable the bridge's reveal gate polls for the live incubation
-        count (see the note on incubatingObjectCountChanged above)."""
+    def count_reader(self) -> Callable[[], int]:
         return self.incubatingObjectCount
 
-    def set_handback(self, fn) -> None:
-        """Called once at release; returns True when it restored the window's
-        own incubation controller on the engine."""
-        self._handback = fn
+    def attach_window(self, win: QWindow) -> None:
+        """Read display sizing now; connect frame delivery only at reveal."""
+        self._win = win
+        self._read_screen()
+        win.screenChanged.connect(lambda _screen: self._read_screen())
 
-    # incubatingObjectCountChanged is deliberately NOT overridden. Qt calls
-    # that virtual on every incubation start and finish, and a Python
-    # override means Shiboken takes the interpreter for each call (one wait
-    # per card behind the launch workers, inside the frame). Without an
-    # override the wrapper caches the miss and never crosses again; the
-    # reveal gate polls incubatingObjectCount() instead.
+    def _read_screen(self) -> None:
+        try:
+            screen = self._win.screen() if self._win is not None else None
+            rate = float(screen.refreshRate()) if screen is not None else 60.0
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            logging.getLogger(__name__).debug("screen refresh rate unavailable", exc_info=True)
+            rate = 60.0
+        self._frame_slice_ms, self._open_slice_ms, self._frame_period_s = self._slices_for(rate)
+
+    def _hook_frames(self) -> bool:
+        if self._win is None:
+            return False
+        try:
+            relay = _FrameRelay(self, self._timer.parent())
+            # frameSwapped originates on the render thread. Find it by name
+            # on the plain QWindow wrapper and land it on the GUI thread.
+            connection = QObject.connect(
+                self._win, SIGNAL("frameSwapped()"), relay.frame, Qt.ConnectionType.QueuedConnection
+            )
+        except (RuntimeError, TypeError):
+            logging.getLogger(__name__).debug("frame hook not attached", exc_info=True)
+            return False
+        if not connection:
+            relay.deleteLater()
+            return False
+        self._relay = relay
+        return True
+
+    # Do not override incubatingObjectCountChanged: it would cross into
+    # Python on every card incubation. The reveal gate polls the live count.
+
+    def _set_tick(self, ms: int) -> None:
+        if self._timer.interval() != ms:
+            if ms == self._TICK_MS and self._timer.interval() == self._IDLE_TICK_MS:
+                self._read_screen()
+            self._timer.setInterval(ms)
 
     def _tick(self) -> None:
-        self.incubateFor(self._BOOT_SLICE_MS if self._boot else self._OPEN_SLICE_MS)
+        if self._boot:
+            self.incubateFor(self._BOOT_SLICE_MS)
+            return
+        if not self.incubatingObjectCount():
+            if self._timer.interval() != self._IDLE_TICK_MS:
+                self._set_tick(self._IDLE_TICK_MS)
+                self._read_screen()
+            return
+        self._set_tick(self._TICK_MS)
+        if time.monotonic() - self._last_frame < self._FRAME_FRESH_S:
+            return
+        self.incubateFor(self._open_slice_ms)
+
+    def _frame(self) -> None:
+        if self._boot:
+            return
+        now = time.monotonic()
+        # Queued frames can arrive in one batch after a GUI pause. Serve one
+        # slice for that batch so it cannot starve the next event-loop turn.
+        backlog = now - self._last_frame < self._frame_period_s / 2
+        self._last_frame = now
+        if not backlog and self.incubatingObjectCount():
+            self._set_tick(self._TICK_MS)
+            self.incubateFor(self._frame_slice_ms)
 
     def release_throttle(self) -> None:
         if self._released:
             return
         self._released = True
         self._boot = False
+        try:
+            self._hook_frames()
+        except (RuntimeError, TypeError):
+            logging.getLogger(__name__).debug("frame hook failed at release", exc_info=True)
         if self._notify is not None:
             self._notify(0)
-        restored = False
-        if self._handback is not None:
-            try:
-                restored = bool(self._handback())
-            except Exception:
-                restored = False
-        if restored:
-            self._timer.stop()
-        # Not restored (no window to hand back to): keep ticking at the open
-        # slice so incubation can never go dead, whatever else went wrong.
 
 
-def _hand_incubation_back_to_window(engine) -> bool:
-    """Restore the window's own incubation controller on the engine.
+class _FrameRelay(QObject):
+    """GUI-thread receiver for the window's render-thread frame signal."""
 
-    Stock behavior for the rest of the session: the window's controller
-    drives incubation from the frame loop again, so the paced controller
-    only ever governs the boot window.
-    """
-    for win in engine.rootObjects():
-        getter = getattr(win, "incubationController", None)
-        if callable(getter):
-            controller = getter()
-            if controller is not None:
-                engine.setIncubationController(controller)
-                return True
-    return False
+    def __init__(self, pacer: _BootPacedIncubation, parent: QObject | None) -> None:
+        super().__init__(parent)
+        self._pacer = pacer
+
+    @Slot()
+    def frame(self) -> None:
+        self._pacer._frame()
+
+
+def _content_item(win: QObject) -> QObject | None:
+    """Find the content root even when QtQuick's Python binding is absent."""
+    getter = getattr(win, "contentItem", None)
+    if callable(getter):
+        try:
+            content = getter()
+            if content is not None:
+                return content
+        except (RuntimeError, TypeError):
+            logging.getLogger(__name__).debug("contentItem() failed on the root window", exc_info=True)
+    for child in win.children():
+        try:
+            if child.metaObject().className() == "QQuickRootItem":
+                return child
+        except RuntimeError:
+            logging.getLogger(__name__).debug("unreadable child on the root window", exc_info=True)
+    return None
 
 
 def _load_mono() -> str:
@@ -742,7 +792,6 @@ def waves_activate(tidal: Tidal | None = None) -> int:
     bridge.set_boot_reveal_hook(incubation.release_throttle)
     incubation.set_count_notifier(bridge.note_incubation_count)
     bridge.set_incubation_count_reader(incubation.count_reader())
-    incubation.set_handback(lambda: _hand_incubation_back_to_window(engine))
     # Belt and braces: if the reveal hook is somehow never reached, open the
     # throttle anyway; by then every boot path has long finished.
     QTimer.singleShot(20_000, incubation.release_throttle)
@@ -778,8 +827,8 @@ def waves_activate(tidal: Tidal | None = None) -> int:
     # gesture, which nothing else claims, and nothing at all while the scene
     # is idle. The mouse side buttons are read by a MouseArea at the top of
     # the scene (Main.qml).
-    content_item = getattr(root_objects[0], "contentItem", None)
-    content = content_item() if callable(content_item) else None
+    incubation.attach_window(cast(QWindow, root_objects[0]))
+    content = _content_item(root_objects[0])
     (content or root_objects[0]).installEventFilter(bridge)
 
     # Also set the icon on the actual top-level window, not just the application
