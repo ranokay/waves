@@ -73,10 +73,6 @@ run = "uv run --locked --all-extras python -m waves.desktop"
 description = "Build the Waves QML app (Nuitka); on macOS this yields dist/waves.app"
 run = "bash tools/build_waves.sh"
 
-[tasks.star-history]
-description = "Copy the star-history chart from the public repo into this tree"
-run = "bash tools/sync_star_history.sh"
-
 [tasks.doctor]
 description = "Fail fast on stale installs and missing hooks (versions, waves/tidaler, lock, hooks, QML smoke)"
 run = "bash tools/doctor.sh"
