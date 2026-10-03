@@ -2,18 +2,28 @@
 
 - Status: accepted
 - Decided: 2026-09-13 (issue #126)
-- Scope: the provider enable switches (today only Apple Music's `apple_enabled`)
+- Scope: provider disable and sign-out, including legacy bare-TIDAL identity
+- Amended: 2026-10-03; generalized stop/sign-out behavior is accepted target
 
 ## Decision
 
-Turning a provider off stops that provider's queued and running downloads.
+Turning a provider off or signing it out stops that provider's queued and running
+downloads. Route namespaced IDs by provider; legacy bare IDs remain TIDAL.
 The rows are not dropped: they settle in the queue's Stopped section carrying
 the reason ("Apple Music was disabled"), so RETRY / RETRY ALL re-queues them
 after the provider is switched back on; a retry attempted while it is still
 off is refused with a status message. Work belonging to other providers,
 and work of other providers held for the download folder to return, is
 untouched; the disabled provider's own held replays are dropped with its
-rows. The save's status line reports how many rows stopped.
+rows. Intentional disable/sign-out never substitutes another provider or
+automatically signs back in. Retry requires the provider to be enabled and
+authenticated and preserves the captured request.
+
+Stop reasons and counts follow the structured event contract in
+[ADR 0013](0013-redacted-event-lifecycle.md) and the neutral surfaces in
+[ADR 0012](0012-composable-provider-surfaces.md). Deliberate engine/runtime Stop
+is a different boundary, defined by
+[ADR 0010](0010-provider-engine-runtime-boundary.md).
 
 ## Why
 

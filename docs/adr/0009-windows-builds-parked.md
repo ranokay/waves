@@ -15,6 +15,11 @@ the park while it held; the dispatch, run ids and build proof are in
 PR #406, and the Windows test job and live verification stay owed as
 separate work (see Consequences).
 
+The accepted new-capability parity gate is
+[ADR 0010](0010-provider-engine-runtime-boundary.md). It requires packaged native,
+account/runtime and delivered-media qualification across all eight builds;
+this historical build recovery does not satisfy those results.
+
 ## Decision
 
 No Windows asset ships from this fork until a Windows leg builds and

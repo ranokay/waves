@@ -1,28 +1,23 @@
-# 0007: My Music puts the Library first, then source-labelled saved shelves
+# 0007: My Music distinguishes local files from account-saved shelves
 
-- Status: accepted
+- Status: accepted semantics; fixed layout/order/empty states superseded by ADR 0012
 - Decided: 2026-09-16 (issue #213, the onboarding spec; rename and labels in #221/#258, generic sections in #259, the Library section in #222)
 - Scope: the information architecture of the My Music pane
+- Amended: 2026-10-03
 
 ## Decision
 
-The home surface is **My Music**, not one account's page. Its content, top
-to bottom:
+The home is **My Music**, not one account's page. Its local Library has
+**Saved** (the files Waves saved, carrying actual provider provenance) and
+**All files** (everything the configured folder scan sees; untagged files have
+no invented provider badge). Provider account-saved shelves are separate
+collections contributed by capable authenticated providers.
 
-1. **The Library section**, always present, with two views: **Saved** as the
-   default (the files Waves itself saved, carrying provider provenance) and
-   **All files** second (everything the configured folder scan sees,
-   untagged rows carrying no provider badge). With no library folder
-   configured the section says how to point Waves at one instead of
-   disappearing.
-2. **Saved shelves**, one per provider that can fill them — an account
-   library, so a provider contributes only while it has a live session. A
-   shelf is **labelled by source only when more than one provider
-   contributes** ("Saved from TIDAL"); with a single source the rows _are_
-   that source and no label repeats it.
-3. **Nothing else**: a section no enabled provider can fill is hidden, and a
-   signed-out pane shows one provider-named empty state with the sign-in
-   action rather than leaving dead tabs.
+[ADR 0012](0012-composable-provider-surfaces.md) owns the accepted All home,
+source filters, configurable shelves and compact setup prompts. It supersedes
+this record's fixed Library-first layout, mandatory shelf ordering and old
+empty-state presentation. Those QML changes are planned; Library and account
+semantics remain in force.
 
 The section list, the source labels and the empty-state choice are **bridge
 data derived from provider capabilities and live sessions**, never QML
@@ -59,12 +54,12 @@ branches on a provider's name.
   gate wrote (generic tag first, the legacy TIDAL id as fallback), and the
   provider badge is that id's namespace, so the ownership store keeps its
   existing role.
-- The **saved shelves are per source**. The bridge answers a list of source groups (descriptor + the
+- The existing **saved shelves are per source**. The bridge answers a list of source groups (descriptor + the
   categories its capabilities can fill), each source renders its own label,
   strip and keep-alive panes, and every page loads through that source's
   provider, so a second FAVORITES provider appears with no QML edit. The
-  pane's **Library section** (Saved and All files) sits
-  above the source groups, pages the scan's own file rows
+  pane's **Library section** (Saved and All files) currently sits
+  above the source groups; the target order is configurable. It pages the scan's own file rows
   (`myMusicLibrary()` / `loadLibraryFiles(view)`) and is
   provider-independent by construction — no row comes from a provider
   fetch.

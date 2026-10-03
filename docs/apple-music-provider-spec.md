@@ -1,66 +1,98 @@
 # Waves × Apple Music: the second provider
 
-Current Apple Music behavior and integration requirements. The [architecture map](architecture.md) names source and test owners; the [ADRs](adr/) record the maintained decisions.
+Accepted Apple Music integration contract, amended 2026-10-03. The existing
+gamdl route, audio/asset rules and compatibility invariants below are the
+maintained baseline. Multiple engines, offers/cross-provider fulfillment,
+redesigned surfaces and managed-asset update extensions are **planned**, not
+released or qualified by this document. The [architecture map](architecture.md)
+names current owners; the [ADRs](adr/) own shared product decisions. Qualification
+and delivery evidence stays in the owning issues/PRs and releases.
 
-**Vocabulary**: per `CONTEXT.md` — Provider, Engine, Chooser, Audio type, Audio quality, Version, Dual-download, Quarantine, Ownership, Config-first. Used here in exactly those senses.
+**Vocabulary**: per `CONTEXT.md` — Provider, Engine, Runtime, catalog offer, Edition, Chooser, Audio type, Audio quality, Version, Dual-download, Quarantine, Ownership, Config-first. Used here in exactly those senses.
 
-## Ground rules (inherited, non-negotiable)
+## Ground rules
 
-1. **Don't break what works.** The TIDAL path's behavior is unchanged everywhere except where a section below explicitly states a ratified product change (one exists: the Atmos toggle's meaning, §5.1). Apple is additive.
+1. **Preserve useful behavior.** Unrelated TIDAL execution/catalog functions and compatibility remain intact. Shared product changes follow the explicitly amended ADRs; symmetry never requires removing legitimate provider capabilities.
 2. **Config-first.** Anything possibly configurable is exposed in Settings rather than hardcoded. Every default named below is an initial value, user-tunable.
 3. **Optional component.** Apple Music ships as a user-enabled component: off by default, explicit opt-in in Settings.
-4. **Platform order**: macOS Apple silicon first, then Windows, then Linux. (Windows and Linux follow as later enablements — see §10.5.)
+4. **Platform parity.** New capabilities release across all eight builds together under [ADR 0010](adr/0010-provider-engine-runtime-boundary.md). Build success does not establish native runtime/account/delivery qualification (§10.5).
 5. **License discipline.** Waves is AGPL-3.0. Every bundled, vendored, or wrapped artifact must be license-compatible (§2, §11).
 6. **One-time external setup is acceptable**; fully-in-app setup is a bonus, never a requirement.
 
 ---
 
-## 1. The Engine
+## 1. Apple engines
 
-**Waves adopts [glomatico/gamdl](https://github.com/glomatico/gamdl) as the Apple Engine, embedded as a Python library — with [glomatico/wrapper-v2](https://github.com/glomatico/wrapper-v2) backing the ALAC path.** ([Ticket: Choose the Apple engine approach](https://github.com/ranokay/waves/issues/8))
+The maintained implementation embeds pinned [gamdl](https://github.com/glomatico/gamdl)
+client APIs with wrapper-v2 for wrapper-dependent delivery, and separately
+provisioned byte-download tools. Catalog search can work before download setup.
+Waves owns its client configuration; it does not read or mutate a user's
+`~/.gamdl/config.ini`. Existing integration is a comparison baseline, not proof
+of the best route or packaged parity.
 
-- **Embedding, not vendoring, not CLI.** Waves uses gamdl's published embedding API (`AppleMusicApi` + its downloaders), pinned to the 3.8.x version line. Bumps ride Waves' updater (§10).
-- **Catalog search is built in** (`get_search_results`) and needs only the auto-scraped dev token — no cookies, no user input. Apple search works before any setup exists.
-- **ALAC path**: wrapper-v2, a Docker-based Android guest whose guest libs are **arm64** — on Apple silicon the linux/arm64 image runs **natively**, no emulation. This is the deciding platform fact: the x86-64 FairPlay guests of the other candidates are where the M-series crash reports live. wrapper-v2 publishes source only; **Waves builds and pins its own image artifacts**.
-- **Download mode**: N_m3u8DL-RE (MIT; prebuilt binaries for macOS arm64/x64, Windows x64/arm64, Linux x64/arm64) is the default download mode. Its corruption class (yt-dlp-mode's malformed m4a) is avoided by mode choice; the remainder lands in the integrity gate (§6). N_m3u8DL-RE only changes the byte-download step; decryption is always local (Widevine-keyed license exchange, or wrapper FairPlay for ALAC).
-- **Throttling**: gamdl has no license-exchange backoff; Waves adds its own (§4).
-- **Fallback Engine**: [WorldObservationLog wrapper@lite](https://github.com/WorldObservationLog/wrapper) (MIT) + [AppleMusicDecrypt@v3](https://github.com/WorldObservationLog/AppleMusicDecrypt/tree/v3) (AGPL-3.0), kept viable behind the Provider seam — a swap means new `AppleProvider` method bodies, nothing else. Swap triggers: dev-token scraper breakage outpacing upstream releases; the wrapper/APK setup proving unacceptable in practice; word-timed lyrics becoming a hard requirement (v3 has syllable TTML today).
-- **Ruled out**: [zhaarey/apple-music-downloader](https://github.com/zhaarey/apple-music-downloader) — **no license at all** (never vendored; external-CLI use only would be permitted, but its wrapper is Linux-x86_64-first against a macOS-first platform order and it ships no releases); an in-house thin client — FairPlay is only reachable through the Android-lib bridge every candidate wraps, and hi-res, exact-quality, and original-art facts ride undocumented extensions; a hybrid two-engine v1 — double integration surface, no v1 gain.
+The accepted extension is several subordinate engines beneath one Apple
+Provider, starting with gamdl and one qualified lite/Temari client. Selection,
+operation readiness, shared failure boundaries, cancellation and fallback are
+owned by [ADR 0010](adr/0010-provider-engine-runtime-boundary.md). Engine adapters
+remain inside the Apple domain, not replacement Apple providers or QML branches.
 
-**License surface** (all compatible with AGPL-3.0): gamdl MIT; wrapper-v2 Unlicense; N_m3u8DL-RE MIT; fallback AppleMusicDecrypt v3 AGPL-3.0 + wrapper@lite MIT.
+No candidate is Recommended until equivalent-workload qualification establishes
+its actual delivery, recovery, resource/setup costs, protocol compatibility,
+credential/TLS handling and complete dependency distribution eligibility. An
+engine's headline license is insufficient (§10.1). Neither another engine nor a
+new downloader release is assumed to fix a transport/integrity failure without
+exercising that route. Additional codecs/video/rich assets are exposed only as
+implemented and qualified delivery capabilities.
 
-## 2. One-time setup: managed, degrading to two tiers
+## 2. One-time setup: managed and user-supplied
 
-The setup wizard (§9.2) provisions what Waves can, **FFmpeg-manager style** — the user does only what only they can. The cookies tier and full wrapper tier share the same wizard.
+Apple remains an explicit optional provider, off by default. Activation opens
+usable catalog/search/preview access immediately, without automatically starting
+provisioning. Download setup is separate, on request or first need, and can be
+cancelled/deferred without undoing catalog activation
+([ADR 0006](adr/0006-onboarding-state-machine.md)).
 
-| Step                                                                                                               | Tier     | Who                                                                                                                                |
-| ------------------------------------------------------------------------------------------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Managed runtime: wrapper-v2 image built/provisioned, N_m3u8DL-RE downloaded, checksum-verified, extracted, chmod'd | full     | Waves, one click                                                                                                                   |
-| Container runtime (Docker) present and running                                                                     | full     | detected; Waves attempts a gentle start (`open -a Docker`) and otherwise guides — **never silently installs a hypervisor product** |
-| Apple ID login + 2FA                                                                                               | full     | human, one time; wrapper tokens persist across container restarts                                                                  |
-| Cookies export from a logged-in music.apple.com browser session                                                    | fallback | human                                                                                                                              |
+The existing setup supports a cookies route and a wrapper-v2 route, with distinct
+operation requirements. Cookies can serve supported AAC/Atmos operations;
+wrapper-dependent ALAC requires its runtime/session. These are capability facts,
+not a universal two-tier readiness light or an all-platform qualification claim.
+Specific requests show missing setup; unused optional engines remain neutral.
 
-- **The two tiers**: **cookies alone** unlocks AAC 256 + Atmos (no runtime at all — Atmos needs no wrapper since gamdl 3.8.0); **ALAC (up to 24/192)** unlocks when the managed wrapper step completes. The wizard offers the cookies tier as the graceful fallback for anyone who won't run the runtime, upgradeable in place later.
-- **Search needs nothing**: the dev token is auto-scraped; the Apple search group renders before any setup exists (§7.1).
-- **Configuration isolation**: Waves **owns its gamdl-library configuration surface entirely** — it never reads, inherits, or mutates a user-visible `~/.gamdl/config.ini`. The N_m3u8DL-RE asset is a tar.gz — extract, verify, chmod (the lesson the FFmpeg manager already encodes). The wrapper HTTP API defaults to port 80, collision-prone on a desktop — Waves starts it on a free high port and passes it explicitly.
+Support both verified managed assets and user-supplied Apple assets/existing
+endpoints (§10.2). Login/2FA or cookie export remains a user action. Engine sessions
+must match the active account/storefront; do not assume sessions are interchangeable.
+Keep private state isolated and preserve restoration without exposing credentials.
+Waves configures its own managed tools and collision-free loopback endpoints;
+external endpoints are checked for compatibility rather than modified.
+
+A needed container runtime is detected and guided; host-tool installation is a
+separate explicit action. Docker-compatible installations may include OrbStack.
+Provisioning verifies artifact pins/provenance and keeps downloaded executables
+outside the signed bundle. Setup/runtime ownership and truthful readiness follow
+[ADR 0010](adr/0010-provider-engine-runtime-boundary.md).
 
 ## 3. Apple session supervision
 
-**An on-demand sidecar, held-not-failed recovery, honest breakage messaging, and no new queue states.** ([Ticket: Apple session supervision](https://github.com/ranokay/waves/issues/17))
+The maintained wrapper supervision is lazy: catalog/link/preview operations do
+not start it. Wrapper-dependent downloads may start a configured managed runtime;
+idle supervision stops it after an initial five minutes. Supervision does not
+silently re-provision. Existing Apple pacing starts at 30 seconds every 25 songs;
+reactive 429 handling honors Retry-After or bounded backoff. Values remain tunable
+and move under provider-owned Advanced settings (§9.2).
 
-- **Lifecycle**: search, browsing, and link resolution never start the wrapper. Waves starts it **lazily on the first Apple download**, health-probes its HTTP API, and **stops it after an idle period** (initial idle timeout: 5 minutes, Advanced-tunable) — an idle Docker VM must not burn memory and battery. The runtime is the setup wizard's artifact; supervision never re-provisions silently.
-- **Failure classes and what the user sees**:
+The planned multi-engine lifecycle follows
+[ADR 0010](adr/0010-provider-engine-runtime-boundary.md): distinguish account expiry,
+engine/runtime-local failure, provider refusal, rate-limit scope and incompatible
+protocol. Same-provider fallback preserves the requested item/delivery; another
+client sharing the failed runtime is not independent recovery. Deliberate runtime
+Stop never causes automatic restart. External services are disconnected, not killed.
 
-| Class                            | Presentation                                                                                           | Recovery                                                                                      |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| Runtime missing / dies mid-run   | Apple downloads are **HELD, not failed** — one clear message, no wall of failures                      | Automatic when the runtime returns; manual via existing retry affordances                     |
-| License-exchange 429             | Affected rows show **THROTTLED with a visible resume countdown** inside their normal downloading state | Automatic, in place                                                                           |
-| Dev-token scraper breakage       | Search/catalog die with honest words: "Apple changed their web app — a Waves update is needed"         | The updater ships the pinned-engine bump (§10.4) — no hot-patching, no silent hoping          |
-| Wrapper session / cookies expiry | Status light → needs attention; downloads pause at the next boundary                                   | One click re-opens the wizard's login step; wrapper tokens refresh on their own between times |
-
-- **Pacing**: **proactive** — Apple pacing fields in the Apple settings section, same shape as TIDAL's `api_rate_limit_*`: pause after N songs for N seconds; initial values **30 s every 25 songs**, tuned to the undocumented 429 threshold, fully tunable. **Reactive** — on a 429, honor `Retry-After` when present, else exponential backoff capped at a few minutes; resume the same job in place. Automatic recovery is never a failure and never a user task.
-- **Queue vocabulary**: **HELD and THROTTLED are presentations, not new states.** A held row sits under Queued/Held with its reason; a throttled row stays in Downloading with its countdown. Both resume automatically and respect STOP; RETRY ALL covers anything manually stopped.
-- **Errors**: Apple engine errors map into the existing refusal-vs-failure taxonomy through `classify_refusal` (§4.4) — a refusal ("this item is gone") is final and counted unavailable, exactly as TIDAL's; a failure is retryable. The queue never conflates them.
+HELD and THROTTLED remain presentations, not invented queue states. Account/setup
+holds require action when appropriate; backoff remains visible and respects Cancel.
+Provider disable/sign-out stops its work under [ADR 0002](adr/0002-disabled-provider-stops-its-queue.md).
+Owner-classified events and actionable detail follow
+[ADR 0013](adr/0013-redacted-event-lifecycle.md); do not promise every failure will
+resume automatically or reduce every catalog change to a generic update message.
 
 ## 4. The Provider seam
 
@@ -69,11 +101,11 @@ The setup wizard (§9.2) provisions what Waves can, **FFmpeg-manager style** —
 ### 4.1 Shape
 
 - The `waves/providers/` package contains `base.py` (interface + neutral types), `tidal.py`, and `apple/`. TIDAL delegates to the existing session and engine; Apple owns its catalog and download adapter.
-- **The row-dict schema is the contract.** Each provider builds the exact plain dicts QML consumes today (search payload, result rows, queue rows) from its own engine objects; the field-name contract is documented in `base.py`. Zero QML work for Apple beyond tier words. The `_objs` id-bucket pattern stays per-provider.
+- **Plain row/presentation data is the contract.** Provider SDK objects stay in Python; only plain payloads cross the Qt boundary. `base.py` describes current rows, and `waves/desktop/BRIDGE.md` owns bridge slots/signals. Evolve shared presentations with their consumers; object caches remain provider-scoped.
 - **Composition**: `Download` takes a `Provider`; stream resolution is `provider.resolve_stream(...)` returning a neutral `StreamInfo` (replacing `TrackStreamInfo`'s tidalapi payloads). The bridge holds `self.providers: dict[str, Provider]` keyed by provider id; `_JobSpec` carries `(provider_id, kind, namespaced_id)` and resolves via `get_object` at dispatch.
 - **Capability flags** on the interface (`SEARCH OPEN_URL CATALOG DOWNLOAD LYRICS ART BROWSE FAVORITES MIXES VIDEOS` — plus `PREVIEW`, §7.4) gate My Music shelves, Browse, mixes, and videos on provider support.
-- **The fence**: TIDAL's Atmos session-swap machinery stays inside `TidalProvider`, never generalized.
-- **No Engine sub-abstraction in v1**: the fallback-engine swap happens behind the same `AppleProvider` methods.
+- **The fence**: TIDAL Atmos/session switching remains in its provider and existing TIDAL download engine. `TidalProvider.resolve_stream` delegates through the job-bound engine resolver; shared provider-neutral consumers do not acquire that machinery.
+- **Subordinate engines are planned** under [ADR 0010](adr/0010-provider-engine-runtime-boundary.md). Current `base.py` is the implemented seam, not a claim that every target operation/payload already exists.
 
 ### 4.2 Ids
 
@@ -83,8 +115,8 @@ The setup wizard (§9.2) provisions what Waves can, **FFmpeg-manager style** —
 
 - The four rungs `LOW < HIGH < LOSSLESS < HI_RES_LOSSLESS` become a **Waves-owned enum** (no longer tidalapi's `Quality`); each provider maps its engine codecs onto it. Apple: AAC 256 → HIGH (Apple has no LOW); ALAC 16-bit at any rate and ALAC 24-bit at 44.1/48 kHz → LOSSLESS; ALAC 24-bit above 48 kHz (88.2–192) → HI_RES_LOSSLESS (Apple's own Lossless-vs-Hi-Res class boundary, so the rung never overstates the master). **Audio type (stereo/Atmos) stays orthogonal** to quality everywhere.
 - The queue's pinned-quality string parses through the Waves enum. The three rank-comparison sites (ownership store, engine gate, bridge gate) keep their scale.
-- The Chooser renders provider detail ("ALAC 24/192") as **label text, never as rank**.
-- **Advertised vs delivered**: the Chooser shows what the catalog advertises (`advertised_deliveries` — Apple's `audioVariants` flags, with the exact tier available via one enhanced-HLS probe where it matters); after download, rows report the **delivered** quality in plain words (per the existing reporting), which ffprobe confirms (§6.1). 24/96 vs 24/192 is track-dependent; both are HI_RES_LOSSLESS.
+- Exact item evidence may provide codec/resolution detail; a theoretical "up to 24/192" maximum is never presented as the selected item's exact quality. Detail is not a tier rank.
+- **Evidence:** [ADR 0001](adr/0001-one-quality-model.md) owns advertised/probed/selected/verified facts and constrained ranking. Apple catalog flags and enhanced-HLS manifests can supply different evidence; unknown/stale/checking states remain explicit. Verified delivered facts come from the staged file (§6). Rich offer evidence/probing is planned. Both 24/96 and 24/192 map to HI_RES_LOSSLESS; that does not make them equal resolution.
 
 ### 4.4 Refusals
 
@@ -110,33 +142,47 @@ interface and row schemas; provider-specific contracts live with
 
 **Always-on, pre-swap verification of every Apple audio delivery, with a two-class retry policy and a Quarantine the library can never mistake for owned music.** ([Ticket: ALAC verification & quarantine](https://github.com/ranokay/waves/issues/16))
 
-1. **Scope and timing.** Every Apple delivery — ALAC, AAC, Atmos EC-3 — is verified post-download, pre-swap: the `ffmpeg -v error … -f null` decode runs on the staged file during the existing finishing phase (~50 ms, no network). **Only a verified file ever reaches the library** through the atomic swap. TIDAL downloads are untouched. Verification is **always-on structural behavior, never a setting** — a toggle whose only function is writing known-corrupt files has no user. No conversion before verification passes; **no TYPE_END patching in v1** (patching masks a bad source as a decodable-but-lossy one).
+1. **Scope and timing.** Every Apple delivery — ALAC, AAC, Atmos EC-3 — is verified post-download, pre-swap: the `ffmpeg -v error … -f null` decode runs on the staged file during the existing finishing phase (full decode, no network; duration depends on the media). **Only a verified file ever reaches the library** through the atomic swap. TIDAL downloads are untouched. Verification is **always-on structural behavior, never a setting** — a toggle whose only function is writing known-corrupt files has no user. No conversion before verification passes; **no TYPE_END patching in v1** (patching masks a bad source as a decodable-but-lossy one).
 2. **Retry policy with the outbreak pre-filter.** **2 automatic re-downloads** (3 attempts total, ~5 s pacing between; count tunable in Advanced). The **`Encoded date` ≥ 2025-05 pre-filter** sharpens it: an outbreak-era file quarantines after **1** retry — re-fetching known-bad Apple sources is pure waste. Never warn-and-save.
-3. **Quarantine, skip-list, and the way back.** A **`Waves Quarantine` folder inside the library root** (location configurable), **excluded from the library scan** — a quarantined file can never badge as IN LIBRARY; files keep their intended names so a later verified copy replaces them. A provider-scoped **skip-list** (namespaced ids) marks quarantined tracks; **bulk runs auto-skip skip-listed tracks**, shown plainly like IN LIBRARY rows. **REDOWNLOAD is the explicit re-ask**: it re-attempts; if Apple has re-encoded (detectable via the Encoded date changing), the file verifies, adopts normally, and the skip-list entry clears. No background re-checking — no surprise bandwidth. A config toggle decides **keep vs delete** for quarantined files, default **keep**. Ownership stays honest by construction: a quarantined file was never swapped in, so nothing is owned that isn't on disk.
+3. **Quarantine, skip-list, and the way back.** A **`Waves Quarantine` folder under the download root** by default (location configurable; the scanned Library root may be separate), **outside Library membership and excluded from scans** — a quarantined file can never badge as IN LIBRARY; files keep their intended names so a later verified copy replaces them. A provider-scoped **skip-list** (namespaced ids) marks quarantined tracks; **bulk runs auto-skip skip-listed tracks**, with a quarantine reason distinct from Library presence. **REDOWNLOAD is the explicit re-ask**: it re-attempts; if Apple has re-encoded (detectable via the Encoded date changing), the file verifies, adopts normally, and the skip-list entry clears. No background re-checking — no surprise bandwidth. A config toggle decides **keep vs delete** for quarantined files, default **keep**. Ownership stays honest by construction: a quarantined file was never swapped in, so nothing is owned that isn't on disk.
 4. **Queue presentation.** Verification folds into the existing finishing phase — no new state; a mid-run integrity retry keeps the row's progress with a brief "retrying (integrity)" note. After the cap the row lands **FAILED with plain words: "failed integrity check — quarantined"**, counted in the album roll-up as failed, covered by RETRY ALL. Per §5.2, **each version verifies independently** — a corrupt Atmos source never blocks the stereo file, and vice versa.
 5. **The honest limit**, documented in-app help and here: verification proves ffmpeg-decodability, **not bit-perfect fidelity** — the only complete check is cross-source comparison, which Waves cannot automate.
 
-## 7. Search, Chooser, and preview UX
+## 7. Search, Chooser and preview UX
 
-**Provider groups and a split-button Chooser** keep search and per-download options together.
+### 7.1 Shared surfaces
 
-### 7.1 Search results sectioned per provider
+[ADR 0012](adr/0012-composable-provider-surfaces.md) owns the planned All Providers
+Search, progressive results, safe merged offers and compact source identity.
+Apple catalog access remains possible before download setup. Missing requested
+setup stays actionable; disabled providers belong to separate setup opportunities.
+The current grouped Search is a baseline, not the permanent target requirement.
 
-- Top-level **provider groups**: a TIDAL group header, then the familiar type sections (ARTISTS / ALBUMS / TRACKS / PLAYLISTS), then an APPLE MUSIC group with the same sections. **No per-row provider badges** — group membership carries the identity.
-- **The Apple group renders when the Apple provider is enabled** — not when signed in. Search rides the dev token alone, so Apple search works **before any setup exists**. Disabled = today's TIDAL-only page, unchanged.
-- A download click on an Apple row before setup completes **routes into the setup wizard at the login step** — the affordance stays live; it opens the path to making it work.
+### 7.2 Download With
 
-### 7.2 The Chooser gesture
-
-Every download control is a **split button**: main face = one click with saved defaults (the queued toast confirms provider/tier/files); `▾` face (or right-click anywhere on the control) = the full Chooser as an **anchored popover** — never a dialog on every click. Chooser content: the row's provider as a **static chip** (a collection belongs to its provider), the provider's quality tiers with detail text (Apple: "ALAC 24/192 · ALAC 16/44.1 · AAC 256"; TIDAL: its four rungs), audio type stereo/Atmos/both (collapsing to ATMOS ONLY on Atmos-only tracks), lyrics embed/.lrc/.ttml quick toggles, art sidecar/embed toggles, **SET AS DEFAULTS** (writes back to Settings) + DOWNLOAD. Choice applies to that click only.
+Keep the split-button/anchored Chooser gesture. Planned stacked offer rows allow
+provider comparison and explicit selection, with delivery/asset options and useful
+engine detail. Defaults come from Settings; enqueue captures the request.
+[ADR 0011](adr/0011-captured-fulfillment-intent.md) owns matching confidence,
+provider/engine pins and album/playlist/artist policies; the originating provider
+is no longer a permanently fixed chip. Collection matching never silently changes
+Editions or track lists. Quality claims follow ADR 0001.
 
 ### 7.3 Standalone lyrics/art actions
 
-First-class buttons beside DOWNLOAD on album and artist pages ("LYRICS", "COVER"); per-track as a compact always-visible pair beside the track's split button (always visible to avoid hover reflow). Both providers; they honor the embed/sidecar matrix (§9 of the [lyrics & art ticket](https://github.com/ranokay/waves/issues/10)) independently of audio, on found music and already-saved music alike.
+Keep standalone actions independent of audio on catalog and already-saved music,
+honoring the existing embed/sidecar matrix (§9). The planned icon treatment uses
+existing intentional lyrics/art icons, useful labels in menus/Chooser and
+accessible tooltip-labelled compact controls, without hover reflow. Standalone
+requests require the asset; optional/required download extras follow ADR 0011.
 
 ### 7.4 Preview playback
 
-v1 includes Apple previews: the documented **30-second AAC preview URL** (a plain song attribute; no session, no wrapper, no setup) plays through the **existing shared preview player**. Full-track preview stays TIDAL-only, expressed as the `PREVIEW` capability with the optional `preview_url` hook (§4.5). Apple rows show the standard preview affordance; the asymmetry (30 s clip vs whole track) is accepted — it is what Apple documents.
+The existing Apple preview URL plays through the shared preview player without
+account/wrapper/download setup. Apple uses the service-provided clip; TIDAL's
+full-track preview remains a legitimate difference exposed through PREVIEW and
+the optional preview_url hook (§4.5). Provider choice for download does not switch
+preview identity or create an engine qualification claim.
 
 ## 8. Library recognition and badges
 
@@ -156,13 +202,13 @@ On MP4 (Apple ALAC/AAC/Atmos and TIDAL Atmos) these ride the existing freeform-a
 
 ### 8.2 Path templates stay shared
 
-Apple files land through the **same template system** as TIDAL — one `Artist/[Year] Album/…` tree, one Plex-readable library, provider-neutral tokens. The only special placement remains the **Dolby Atmos files** template (§5.4). Per-provider template variants are rejected for v1.
+Apple files land through the **same template system** as TIDAL — one `Artist/[Year] Album/…` tree, one Plex-readable library, provider-neutral tokens. The **Dolby Atmos files** template (§5.4) remains. Planned optional provider/quality/audio-type tokens and mixed-collection organization follow [ADR 0011](adr/0011-captured-fulfillment-intent.md); no duplicate template system per provider is introduced.
 
 ### 8.3 Badge semantics: two different questions
 
 - **IN LIBRARY / PARTIALLY / MAYBE — scan-based, provider-blind.** They answer _"does this music exist on disk?"_; the scan matches by tags whoever saved it. Owning the TIDAL master **does** badge the Apple search result IN LIBRARY — the music is in your library. MAYBE-proof and the MusicBrainz arbiter work unchanged.
 - **DOWNLOADED / HAVE / REDOWNLOAD — ownership-based, strictly per-provider.** They answer _"has Waves saved this provider's version?"_. Owning TIDAL's HI-RES never shows Apple's row as DOWNLOADED. The queue's HAVE marking is per-provider likewise.
-- **Quality upgrades stay per-provider**: each provider's quality setting governs its own re-fetch ladder. No cross-provider upgrade interaction — wanting Apple's ALAC when TIDAL's copy exists is a deliberate choice, and both copies coexist as separate Versions.
+- **Ownership remains per provider and Version.** Planned cross-provider upgrades are a separate off-by-default policy under [ADR 0011](adr/0011-captured-fulfillment-intent.md), requiring trustworthy ownership and verified improvement. Initial provider selection does not authorize replacement. Equivalent Library presence never invents Apple ownership.
 
 ### 8.4 Atmos files in the scan
 
@@ -191,43 +237,62 @@ SRT is dropped for v1 (a conversion artifact, not something Apple provides).
 
 **Defaults** (fresh installs; existing installs keep their stored values): `lyrics_embed` off, `lyrics_file` **on**, `synced_only` off, `prefer_lrclib` on, word-timed **on**, `.ttml` sidecar **on** (Apple only; inert where the provider's engine serves no TTML). Every lyrics/art key additionally has a per-provider mirror under the provider's card; the shared keys are one-time migration carriers (`provider_setting` reads the mirror first), and a fresh install starts every mirror at these values.
 
-**Album art**: the existing `CoverDimensions` setting governs both providers; **ORIGIN maps per provider** — TIDAL keeps its exact current behavior (embedded cap included), Apple's ORIGIN is the true original-master image (URL-rewrite path), with the `{w}x{h}` template up to 5000×5000 otherwise. The separate cover file can carry its own size (`metadata_cover_file_dimension`: "follow" reuses the embedded size). Sidecar format options: **raw (default — the served bytes, Apple's true original master where available)** / jpg / png; embedded format stays jpg for both. Animated Apple artwork is not supported.
+**Album art**: the existing `CoverDimensions` setting governs both providers; **ORIGIN maps per provider** — TIDAL keeps its exact current behavior (embedded cap included), Apple's ORIGIN is the true original-master image (URL-rewrite path), with the `{w}x{h}` template up to 5000×5000 otherwise. The separate cover file can carry its own size (`metadata_cover_file_dimension`: "follow" reuses the embedded size). Sidecar format options: **raw (default — the served bytes, Apple's true original master where available)** / jpg / png; embedded format stays jpg for both. Animated Apple artwork is not implemented. Planned cross-provider asset sourcing, required extras and optional translations/pronunciation follow [ADR 0011](adr/0011-captured-fulfillment-intent.md) and require capability qualification; this matrix does not certify an engine's rich-lyrics delivery.
 
-## 9.2 Settings architecture
+### 9.2 Settings architecture
 
-([Ticket: Config-first settings architecture](https://github.com/ranokay/waves/issues/11)) **Two axes — per-provider sections for what differs, shared sections for what doesn't — with a one-migration carry-over that no existing user feels.**
+[ADR 0012](adr/0012-composable-provider-surfaces.md) owns the planned hierarchy and
+normal/Advanced/Diagnostics boundaries. Accounts, provider download overrides,
+engines and runtime stay under Apple; shared Downloads, Library and Lyrics &
+Artwork behavior appears once. Keep one schema and staged Apply/Cancel. Enabling
+Apple is catalog-first (§2); requested setup and one Providers attention surface
+replace automatic provisioning and mandatory per-provider status lights.
 
-1. **The Providers area** has a **TIDAL** section and an **Apple** section for session state, quality defaults, lyrics/art preferences and provider-specific runtime/pacing. Lyrics/art preferences have independent per-provider mirrors (§9.1); their shared keys are migration carriers. Path templates including **Dolby Atmos files**, library, queue and diagnostics remain shared.
-2. **Per-provider quality fields**: **`tidal_quality_audio` / `apple_quality_audio`** serialize as Waves tier strings (§4.3). Migration converts legacy `quality_audio` into `tidal_quality_audio` without resetting settings. `quality_video` remains TIDAL-only. The shared `default_audio_type` chooses stereo or both; Atmos alone is a per-click Chooser option. Migration carries a legacy enabled `download_dolby_atmos` value into `both`.
-3. **The Apple section**: always visible, behind an **enable switch (default off)** — the optional-component decision made concrete. Turning it on starts the **in-place setup wizard** (§2): managed runtime provisioning → Apple ID login + 2FA, with the **cookies-only tier** in the same wizard as the graceful fallback. A **color-coded status light** — not set up / runtime ready / signed in / needs attention — mirrors the existing FFmpeg status light. The section also hosts Apple's pacing fields (§3) and runtime manage actions (update, remove).
-4. **Pacing fields**: TIDAL's `api_rate_limit_*` keep their names, meaning, and section verbatim; Apple gains same-shape fields in the Apple section (§3).
-5. **Chooser defaults fall out of Settings** exactly as the glossary says: per-provider quality, the shared audio type and each provider's lyrics/art preferences. No separate chooser-defaults store.
+Preserve serialized `tidal_quality_audio` / `apple_quality_audio` tier strings,
+legacy `quality_audio` migration, shared `default_audio_type`, the retired
+`download_dolby_atmos` carrier and independent lyrics/art mirrors (§9.1). Existing
+video values survive the planned move to shared Downloads. Provider pacing names
+and values survive their move under owner-grouped Advanced settings. Migration
+completion/downgrade protection remains [ADR 0003](adr/0003-migration-sidecar.md).
+Chooser defaults read Settings; no separate defaults store is introduced.
 
 ## 10. Packaging and distribution constraints
 
-1. **Bundle boundary.** Waves ships its open-source client libraries (gamdl,
-   yt-dlp and their dependencies). Apple-derived/proprietary material, the
-   wrapper image and separately provisioned executables remain outside the
-   app bundle ([ADR 0004](adr/0004-apple-engine-bundling.md)).
-   `tools/inspect_bundle.py` enforces this boundary.
-2. **Published wrapper image.** The image build downloads the maintainer's
-   pinned APK, extracts its arm64 libraries and packages them with notices
-   and OCI provenance labels. End users pull the public image; they never
-   supply or extract an APK. The app verifies its pinned digest at pull time.
-   [ADR 0005](adr/0005-wrapper-image-distribution.md) records the accepted
-   redistribution risk; [the runbook](wrapper-image.md) describes the pins
-   and supported publishing workflow.
-3. **Container runtime dependency**: the full tier presumes a container runtime (Docker). The wizard detects it, attempts a gentle start on macOS, and guides when absent (§2) — it never silently installs one.
-4. **Engine bumps ride the updater**: Waves pins gamdl (version line), its own wrapper-v2 image build, and the N_m3u8DL-RE release; when upstream fixes scraper breakage, a pinned-version bump ships through Waves' normal update channel — the user updates Waves, the runtime refresh follows on next wizard/supervision pass.
-5. **Platforms.** The wrapper image runs natively on macOS Apple silicon.
-   Full-tier behavior on x86_64 hosts requires container emulation and live
-   verification. The eight-leg release matrix includes Windows and Linux;
-   build and smoke-launch coverage is described in the [developer guide](../DEVELOPER.md).
-6. **Notarization**: Waves' own signing/notarization pipeline is unchanged; the provisioning flow must keep downloaded executables inside the app's managed-runtime area with provenance recorded (source URL + checksum), the pattern the FFmpeg manager already uses.
+1. **Bundle boundary.** Cleared open-source clients/dependencies may ship as
+   ordinary dependencies. Apple-derived/proprietary material, wrapper images and
+   separately provisioned executables remain outside the signed app
+   ([ADR 0004](adr/0004-apple-engine-bundling.md)). Whole-stack eligibility includes
+   dependencies/platform wheels/assets/notices; no new candidate is cleared by
+   its headline license. `tools/inspect_bundle.py` enforces the existing material
+   boundary, not a complete license audit.
+2. **Managed and user-supplied assets.** Support the fork-managed image and
+   user-supplied Apple assets/existing endpoints. Managed artifacts require
+   provenance, version/checksum/digest pins and isolated private session state;
+   user-managed services receive compatibility guidance. The accepted public
+   image policy is this fork's independent [ADR 0005](adr/0005-wrapper-image-distribution.md).
+   Upstream product contributions do not require that image or its publishing
+   policy. The [runbook](wrapper-image.md) owns current pins and publishing.
+3. **Host tools.** Detect and guide required tools/container runtime. Host-tool
+   installation is a separate explicit action; missing unused engines do not
+   force setup. Runtime requirements vary by qualified engine/operation (§2).
+4. **Updates.** Bundled client upgrades accompany Waves releases. Planned managed
+   assets may receive separately approved, compatible version-pinned updates
+   using the app's update-check preference. Manual installation is default;
+   optional automatic installation runs idle with rollback. Preserve queued
+   intent, compatibility and active attempts. User-managed services are not
+   automatically modified. A fetched release is not qualification evidence.
+5. **Platforms.** New capabilities satisfy [ADR 0010](adr/0010-provider-engine-runtime-boundary.md)
+   across all eight builds together. Distinguish host client, guest architecture,
+   packaged/native launch, account/session and verified delivery; successful
+   container emulation or a build cannot substitute for native acceptance.
+   Current build coverage is described in the [developer guide](../DEVELOPER.md).
+6. **Signing/provenance.** Keep the app signing/notarization boundary. Downloaded
+   executables stay in the managed-runtime area, with verified source/pins and
+   recorded provenance, following the existing FFmpeg provisioning pattern.
 
 ## 11. Compatibility invariants
 
 - **TIDAL's engine, session, matching, metadata, lyrics, artwork behavior**: unchanged, except the audio-type choice in §5.1 and the mechanical call-routing through `TidalProvider` (tests pin behavior).
 - **The library scan's provider-blindness** for IN LIBRARY-class badges: unchanged (§8.3 formalizes it).
 - **Existing path templates, quality ranks, refusal taxonomy, queue states, ownership semantics**: extended (namespaced ids, explicit audio type, per-provider scoping), not replaced; existing data backfills, nothing resets.
-- **AGPL-3.0**: no unlicensed or incompatible code enters the tree; the wrapper-v2 image is built from source (Unlicense) and never vendored into Waves.
+- **Distribution:** no unlicensed or incompatible code enters the tree. Whole-stack eligibility is reviewed under ADR 0004; the fork image's distinct residual risk is ADR 0005. It remains outside Waves' bundle.

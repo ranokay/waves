@@ -41,6 +41,21 @@ flowchart TD
   `redaction.py` for log privacy. Do not borrow another domain's private
   helpers for these operations.
 
+This map names the current implementation. The accepted extensions are planned:
+[Provider → Engine → Runtime](adr/0010-provider-engine-runtime-boundary.md),
+[captured fulfillment intent and catalog offers](adr/0011-captured-fulfillment-intent.md),
+[composable surfaces/Settings](adr/0012-composable-provider-surfaces.md), and
+[structured redacted events](adr/0013-redacted-event-lifecycle.md). Add those
+contracts within their existing provider, download, metadata and desktop owners;
+do not infer new implemented folders or a global manager from the target design.
+Capability release requires packaged/native, account/runtime and delivered-media
+qualification, not merely building this dependency graph.
+
+Product contracts and coherent UI slices are upstream candidates. This fork's
+CI/graph/branch workflow and image publishing remain independent; an upstream
+integration does not require the fork image. Maintained docs own contracts;
+research, benchmarks and delivery evidence belong in issues/PRs and releases.
+
 ## Find a feature
 
 Python owner paths below are relative to `waves/`; test paths are relative to
