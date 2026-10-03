@@ -252,12 +252,11 @@ def test_pick_exhausted_high_range_raises():
 
 
 def test_pick_skips_a_port_served_on_the_wildcard_address():
-    """A wildcard listener must make the candidate read taken.
+    """A wildcard listener must make its port read taken.
 
-    Benign on Linux, exact on macOS/BSD: with a wildcard listener up, a
-    specific-address bind that borrows SO_REUSEADDR still succeeds (macOS
-    Continuity holds *:49152, the range's first port), so a probe that reuses
-    the address hands out an occupied port the wrapper cannot publish.
+    macOS/BSD let a reuse-borrowing probe bind over it (see
+    ``pick_free_high_port``); the returned port is not *which* port comes next,
+    only that the wildcard-held one is skipped.
     """
     listener = candidate = None
     for port in range(61000, 61050):
@@ -271,7 +270,9 @@ def test_pick_skips_a_port_served_on_the_wildcard_address():
         break
     assert listener is not None and candidate is not None, "no wildcard test port available"
     with listener:
-        assert pick_free_high_port(low=candidate, high=candidate + 1) == candidate + 1
+        picked = pick_free_high_port(low=candidate, high=candidate + 49)
+        assert picked != candidate
+        assert candidate < picked <= candidate + 49
 
 
 def test_manager_ensure_port_prefers_override_when_free(tmp_path):
