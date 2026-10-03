@@ -248,6 +248,8 @@ class _BootPacedIncubation(QQmlIncubationController):
 
     def _set_tick(self, ms: int) -> None:
         if self._timer.interval() != ms:
+            if ms == self._TICK_MS and self._timer.interval() == self._IDLE_TICK_MS:
+                self._read_screen()
             self._timer.setInterval(ms)
 
     def _tick(self) -> None:

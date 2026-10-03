@@ -243,6 +243,27 @@ def test_unreadable_screen_uses_default_slices():
     assert pacer._frame_period_s == pytest.approx(1 / 60)
 
 
+@pytest.mark.parametrize("wake", ["timer", "frame"])
+def test_waking_rechecks_a_screen_rate_changed_while_idle(monkeypatch, wake):
+    now = [100.0]
+    monkeypatch.setattr(desktop_app.time, "monotonic", lambda: now[0])
+    window = _Window()
+    pacer = _Stub(count=0)
+    pacer.attach_window(window)
+    pacer.release_throttle()
+    pacer._tick()
+    assert pacer._timer.interval() == pacer._IDLE_TICK_MS
+
+    # The same QScreen changes rate, so QWindow.screenChanged does not fire.
+    window.current_screen.rate = 120.0
+    pacer.count = 3
+    now[0] += 0.1
+    (pacer._tick if wake == "timer" else pacer._frame)()
+    assert pacer.slices == [4 if wake == "timer" else 2]
+    assert pacer._timer.interval() == pacer._TICK_MS
+    assert pacer._frame_period_s == pytest.approx(1 / 120)
+
+
 _WINDOW_QML = b"""
 import QtQuick
 import QtQuick.Controls.Basic
