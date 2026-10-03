@@ -1,20 +1,20 @@
 """The one verdict behind the DOWNLOADED / IN LIBRARY state on every album,
-playlist and mix card: ``WavesBridge._rollup_verdict`` (backend.py), reached
+playlist and mix card: ``WavesBridge._rollup_scan`` (backend.py), reached
 through ``collectionOwnership`` and ``collectionOwnershipDetail``.
 
 The stake is the quality conjunct. A member is only counted as "owned" for the
-roll-up when its copy is ALSO up_to_date against the current audio quality
-setting. Drop that conjunct and an album saved at HIGH keeps reading "owned"
+roll-up when its copy is ALSO up_to_date against the caller's quality
+request. Drop that conjunct and an album saved at HIGH keeps reading "owned"
 after the user raises the setting to Lossless, so the upgrade the card is
-supposed to offer is never offered. Nothing else in the suite pinned it.
+supposed to offer is never offered. Collection choices are independent of
+member choices; ids-only calls retain track context.
 
 Two layers:
 
-  * the pure roll-up, called unbound on a Qt-free stub whose ownershipOf is a
-    plain dict lookup, one test per branch of the loop, and
-  * one wire test through the REAL ownershipOf on a WavesBridge carcass with a
-    real OwnershipStore, so the stored quality_rank is what decides the verdict
-    (not a dict the test invented).
+  * the pure scan on a Qt-free lookup stub, covering precedence, one
+    evaluation per member and deferred cold-batch dispatch, and
+  * real ownership queries on a WavesBridge carcass with a real OwnershipStore,
+    covering stored ranks, collection choices, defaults and both Versions.
 
 These import WavesBridge, so they collect only in the full runtime venv
 (PySide6 present), like tests/library/test_ownership_bridge.py.
