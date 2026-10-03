@@ -2,11 +2,12 @@
 
 - Status: accepted
 - Decided: 2026-09-15 (issue #203; the bundled clients are ADR 0004)
-- Scope: distribution of the Waves-built wrapper image and its guest libraries
+- Scope: this fork's wrapper image; independent managed/user-supplied product paths
+- Amended: 2026-10-03; user-supplied assets and image-independent upstream integration are accepted target, planned
 
 ## Decision
 
-Waves keeps publishing `ghcr.io/ranokay/waves-wrapper-v2` publicly and
+This fork keeps publishing `ghcr.io/ranokay/waves-wrapper-v2` publicly and
 knowingly accepts that the image contains Apple's proprietary libraries —
 they are what makes ALAC decryption possible, and upstream's own vendor
 README calls them non-redistributable. Everything that can be made compliant
@@ -17,6 +18,15 @@ is:
   source/revision/licenses labels;
 - the app verifies the pulled image's digest against `WRAPPER_V2_IMAGE_DIGEST`
   at pull time and records it in the runtime receipt, refusing a mismatch.
+
+The product supports both verified fork-managed assets and user-supplied Apple
+assets/existing endpoints. Provisioning, provenance/pins and isolated private
+session state remain required; installing host tools is a separate explicit
+action. Proprietary assets remain outside the signed app
+([ADR 0004](0004-apple-engine-bundling.md)). An upstream contribution must work
+independently of this image and need not adopt this fork's distribution policy.
+User-managed services receive compatibility guidance rather than automatic
+modification. Asset update policy lives in the [Apple spec](../apple-music-provider-spec.md#10-packaging-and-distribution-constraints).
 
 The inventory, findings and residual risk are in
 `docs/wrapper-image-license-review.md`. This ADR is the decision record; it
@@ -38,15 +48,15 @@ does not replace legal advice.
   but every user needs `docker login` and a grant; the runbook already calls
   it a one-click-setup killer.
 - **Source-only image with user-supplied libraries mounted at runtime**: no
-  redistribution, but re-introduces APK supply and extraction and puts guest
-  libraries on every user's disk.
-- **Local image build per user**: maximum friction; rejected when the pinned
-  public image was chosen.
+  redistribution of those libraries by this fork, but requires user supply and
+  extraction. It is now an accepted optional path, not a required setup burden.
+- **Local image build per user**: an optional user-supplied path; the managed
+  image remains available for users who choose it.
 
 ## Consequences
 
-- The Apple libraries stay in a public artifact by decision; changing posture
-  means taking one of the alternatives above.
+- The managed public artifact retains this fork's accepted residual risk. The
+  user-supplied path and upstream product contracts do not inherit that posture.
 - Every republish produces a new manifest digest, so the tag, `WRAPPER_V2_IMAGE`
   and `WRAPPER_V2_IMAGE_DIGEST` move together in `docs/wrapper-image.md`'s
   lockstep table. The publish summary prints the digest.
@@ -56,6 +66,6 @@ does not replace legal advice.
 - Digest verification is a pull-time check: it catches a registry serving
   different bytes than the pin. A local image mutated after verification by
   someone with Docker access is outside its threat model.
-- ADR 0004's license review for the bundled clients closes here with no
-  change: gamdl/yt-dlp remain ordinary dependencies, and the published image
-  carries only the Apple-derived risk accepted above.
+- The prior bundled-client decision remains the baseline. New engine stacks
+  require whole-stack review under ADR 0004; this image decision cannot clear
+  their dependencies or establish runtime/media qualification.

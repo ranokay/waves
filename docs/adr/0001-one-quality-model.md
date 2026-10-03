@@ -3,6 +3,7 @@
 - Status: accepted
 - Decided: 2026-09-03 (issue #24, from the Apple Music provider spec §4.3, §9.2)
 - Supersedes: the tidalapi `Quality` type as the app's shared quality vocabulary
+- Amended: 2026-10-03; delivery evidence/ranking is accepted target, planned for offer routing
 
 ## Decision
 
@@ -21,6 +22,29 @@ The `quality_audio` setting split into `tidal_quality_audio` /
 carries the legacy value onto `tidal_quality_audio`; the legacy field is a
 never-serialized carrier, so the migration is one-time by construction.
 
+Keep catalog-advertised, manifest/probed, selected and verified delivered facts
+separate. A service maximum is never an item's exact available quality. Enrich
+tiers with codec/profile, sample rate, bit depth, bitrate and video facts where
+known. Metadata/manifest probes are lazy and bounded to enabled ready providers
+when Download With or opt-in routing needs them; timestamp/cache evidence and
+show unknown/stale/checking states. Actual media diagnostics remain explicit.
+
+Best available is the initial configurable mode within the selected audio
+family. Lower lossless resolution can be accepted visibly; lossless-to-lossy or
+stereo/Atmos changes require confirmation. Minimum required enforces the
+requested tier/exact constraints. Auto never silently changes mix/codec family.
+
+Filter by audio type and minimum constraints before ranking. Demonstrated
+availability outranks theoretical ceilings. Comparable lossless offers rank bit
+depth then sample rate; equal-resolution FLAC/ALAC are equivalent unless a codec
+is required. Compare lossy bitrate only across comparable codecs/profiles. Video
+ranks demonstrated resolution within selected codec/HDR/frame-rate constraints;
+HDR is explicit. Provider priority breaks ties; retain origin absent an override
+or evidence of improvement. Resolution does not prove better mastering.
+
+Matching and request policy are owned by
+[ADR 0011](0011-captured-fulfillment-intent.md), not quality rank.
+
 ## Why
 
 tidalapi is the TIDAL engine's library, not the app's vocabulary: a second
@@ -36,6 +60,8 @@ configs keep working.
   nothing to sessions; they never crash a caller and never rank as LOW.
 - The engine's internal use of tidalapi `Quality` (download.py) is codec
   vocabulary, not a shared path.
-- The settings page's TIDAL dropdown keeps its wording and position; Apple's
-  section (with `apple_quality_audio` surfaced) lands with the providers'
-  settings area (issue #11).
+- Provider quality values retain their serialization and migration. Their
+  placement follows [ADR 0012](0012-composable-provider-surfaces.md); a historical
+  dropdown position is not a permanent product constraint.
+- A delivery's verified codec/quality is not its identity confidence and does
+  not replace the mandatory Apple integrity gate.

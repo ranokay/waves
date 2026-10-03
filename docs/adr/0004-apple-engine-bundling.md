@@ -3,6 +3,7 @@
 - Status: accepted
 - Decided: 2026-09-14, ratified 2026-09-15 (issue #200)
 - Scope: spec §10.1 ("Nothing Apple-engine ships inside Waves' own package")
+- Amended: 2026-10-03; whole-stack eligibility applies to additional clients
 
 ## Decision
 
@@ -12,9 +13,17 @@ are provisioned at setup through the managed-runtime flow, and
 `tools/inspect_bundle.py` fails a build whose bundle contains any of them.
 
 The bundle does ship the open-source client libraries it depends on — gamdl,
-yt-dlp and their dependencies — as ordinary runtime dependencies. For §10.1,
+yt-dlp and their cleared dependencies — as ordinary runtime dependencies. For §10.1,
 "Apple-engine artifacts" means the Apple-derived or proprietary pieces and the
 separately provisioned executables, not a general-purpose open-source client.
+
+Additional clients qualify for bundling only after reviewing the complete
+dependency stack, platform artifacts and notices for distribution eligibility.
+An engine's headline license does not clear its dependencies, downloaded wheels
+or embedded assets. External execution is not a blanket exception to this gate.
+Candidate qualification belongs to
+[ADR 0010](0010-provider-engine-runtime-boundary.md); no new candidate is approved
+for bundling by this amendment.
 
 ## Why
 
@@ -27,9 +36,9 @@ separately provisioned executables, not a general-purpose open-source client.
   manifest, platform artifacts, a checksum/trust chain and a sys.path loader.
   The cookies tier deliberately needs no runtime at all; making it download
   one would weaken that tier, not strengthen it.
-- gamdl is MIT-licensed and contains no Apple code; the wrapper-image
-  distribution review (ADR 0005, issue #203) is where licensing can overrule
-  this decision.
+- The existing client boundary avoids Apple-derived bundle material; each new
+  stack still needs its own distribution review. ADR 0005 records the fork's
+  image posture, not universal eligibility for clients or dependencies.
 
 ## Alternatives considered
 
@@ -60,5 +69,5 @@ item if that reading is ever adopted.
 
 - Every release's bundle inspection keeps confirming the provisioned pieces
   are absent.
-- The wrapper-image license review (ADR 0005, issue #203) can reopen this
-  decision; a contrary finding wins.
+- A contrary distribution finding can reopen this decision. The accepted fork
+  image risk in ADR 0005 does not clear another stack's dependency licenses.

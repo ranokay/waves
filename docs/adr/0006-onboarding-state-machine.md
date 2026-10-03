@@ -2,7 +2,8 @@
 
 - Status: accepted
 - Decided: 2026-09-16 (issue #213, the onboarding spec; implemented across #215, #218, #219)
-- Scope: the first-run welcome surface, its provider paths, the "Finish setup" chip, and the one key that remembers the answer
+- Scope: first-run provider choice, answered-once persistence and requested setup
+- Amended: 2026-10-03; Apple catalog-first and Providers entry points are accepted target, planned
 
 ## Decision
 
@@ -15,19 +16,27 @@ Skip. Every path out of it is cancellable and lands in a usable app.
   to the cards with nothing kept. A completed sign-in answers the first run
   and lands on Search with the field focused.
 - **Apple** is enabled by the choice (search and previews work immediately,
-  before any setup) and the existing in-place wizard opens in Settings; its
-  **SKIP FOR NOW** defers the remaining steps without undoing the choice.
-- **Skip** answers the first run and leaves a dismissible **"Finish setup"**
-  chip in the header while no provider can download yet. Settings →
-  Providers → "Set up providers" re-opens the same surface as a normal page.
+  before download setup). Download setup is separate, on request or first need;
+  choosing Apple does not automatically provision or open a download wizard.
+  Recommended hides engine choice initially; specific engines are available
+  under Advanced setup.
+- **Skip** answers first run and activates/provisions nothing. Resume setup
+  explicitly from Providers/Settings or a relevant empty state. Show catalog-ready
+  separately from download-ready; unused optional setup is neutral.
 
-Persistence is **two keys** in the QML `Settings` store (category `setup`):
+Header setup presentation follows [ADR 0012](0012-composable-provider-surfaces.md),
+replacing the mandatory Finish setup chip. Requested provisioning follows the
+[Apple spec](../apple-music-provider-spec.md#2-one-time-setup-managed-and-user-supplied).
+
+Existing persistence is **two keys** in the QML `Settings` store (category `setup`):
 `firstRunAnswered` and the chip's `setupChipDismissed`. The legacy picker
 bit is migrated by a **one-time shim inside that store**
 (`migrateOnboarding()`): it seeds `firstRunAnswered` from the old
 `providerPickerDone` and clears it. Everything else about the surface —
 which mode it is on, whether a login URL arrived — is session state that
 cancel discards.
+Preserve the answered-once flag and migration when changing presentation; a
+retired chip's stored dismissal must not re-onboard an existing install.
 
 ## Why
 
@@ -38,8 +47,7 @@ cancel discards.
   a shim in the QML store is the honest mechanism; a second state store
   would have meant two owners for one answer.
 - An existing install must not be onboarded again: the shim seeds from the
-  bit every prior release wrote, and the chip only appears while no
-  provider can download yet.
+  bit prior releases wrote, independently of changes to setup presentation.
 
 ## Alternatives considered
 
@@ -51,19 +59,19 @@ cancel discards.
   provider path must be escapable.
 - **Auto-enabling a provider on Skip**: rejected (spec S9.2e); enabling is
   an explicit click, so a skip cannot surprise the user with catalog calls.
-- **A second inline wizard for Apple**: rejected in favour of reusing the
-  existing in-place wizard, so there is one place that owns setup actions.
+- **Automatically opening Apple download setup on provider choice**: superseded
+  by catalog-first activation and separately requested setup; a usable catalog
+  does not require committing to an external runtime.
 
 ## Consequences
 
 - A future migration of these two QML keys needs the same shim treatment;
   the Python sidecar will not see them.
 - The first run is answered at most once per install; re-entering the
-  surface is always an explicit request (the chip, Settings, or an empty
+  surface is always an explicit request (Providers, Settings, or an empty
   state's call to action).
 - Onboarding behaviour is testable as a state machine on the rendered QML:
   fresh, either provider, cancel from each panel, skip, restart and the
   shim's one-time seed all run in the offscreen scenarios.
-- The setup chip's test is "can any provider download yet", read from the
-  live provider state (the session flag and the Apple light), so it retires
-  itself the moment one can.
+- Providers readiness replaces the mandatory chip's download-only gate.
+  Catalog access and requested download readiness are independently observable.

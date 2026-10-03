@@ -2,10 +2,14 @@
 
 Waves is a native desktop app for saving music from the user's own accounts, search-first and art-forward.
 
+This vocabulary covers the accepted product design. The [architecture map](docs/architecture.md)
+describes current owners; the [ADRs](docs/adr/) distinguish implemented contracts
+from planned extensions.
+
 ## Language
 
 **Provider**:
-A music service Waves can search and save from (today TIDAL; Apple Music as the second).
+A music service/account/catalog owner. It contributes only the operations it implements.
 _Avoid_: source, backend
 
 **Provider descriptor**:
@@ -16,16 +20,31 @@ what those surfaces render.
 _Avoid_: provider config, provider metadata
 
 **Engine**:
-The component that performs a provider's fetching and decryption, possibly a wrapped external tool; each provider plugs into Waves through one.
+An execution component subordinate to a Provider, possibly wrapping an external
+tool. A provider can route supported operations through several engines.
 _Avoid_: downloader, backend
+
+**Runtime**:
+The resources and lifecycle an engine uses: a built-in client, Waves-managed
+external service, or user-managed endpoint. Engines sharing a runtime may share
+an account or failure boundary.
+_Avoid_: provider, engine (for the execution resource)
 
 **Download adapter**:
 A provider's own surface for serving download asks; providers without one use the shared engine path.
 _Avoid_: provider hook, download hook
 
 **Chooser**:
-The per-download control where the user picks audio quality, audio type, and lyrics/art options; the provider is the row's own, stated rather than picked. Its defaults come from Settings, and one click uses those defaults.
+The per-download control (Download With) where the user compares catalog offers
+and selects a provider, delivery and lyrics/art options. Defaults come from
+Settings; explicit choices apply to the captured download request.
 _Avoid_: download dialog, picker
+
+**Catalog offer**:
+A provider's identified representation of the requested media, with matching
+evidence, delivery capability, ownership/presence and readiness. Match confidence
+describes identity; it does not verify a delivered file.
+_Avoid_: universal catalog, provider (for a matched item)
 
 **Audio type**:
 Which mix of a track is being saved: stereo or Dolby Atmos.
@@ -36,7 +55,9 @@ The fidelity tier a download is fetched at, stated on Waves' own four-rung ladde
 _Avoid_: bitrate, resolution
 
 **Version**:
-One saved instance of a track at a specific audio type; a track can be owned as several versions.
+One saved instance of a track from a particular provider at a specific audio
+type, with its actual delivery facts and provenance. A track can have several
+Versions.
 _Avoid_: copy, duplicate
 
 **Dual-download**:
@@ -59,7 +80,9 @@ The first-run conversation that offers each provider and a skip, answered at mos
 _Avoid_: first-run wizard, setup flow
 
 **My Music**:
-The home surface for the user's music: the Library first, then the saved shelves each enabled provider can fill, labelled by source only when more than one contributes.
+The composable home for local Library and provider account-saved shelves, with
+source filters and configurable sections. Local Saved, All files and account
+saves remain distinct collections.
 _Avoid_: My Tidal, account home
 
 **Saved vs Library**:
@@ -75,7 +98,10 @@ One release among an album's releases — a reissue, remaster, anniversary, or r
 _Avoid_: version, release, variant
 
 **Held**:
-A queued download waiting its turn or paused at a boundary (an unreachable folder, a missing runtime), resuming automatically when the path clears. Queue state, distinct from Stopped.
+A queued download waiting its turn or paused at a recoverable boundary. Recovery
+can resume it under its captured policy; intentionally stopping its pinned
+engine requires explicit action and never restarts the runtime automatically.
+Queue state, distinct from Stopped.
 _Avoid_: pending, paused, waiting
 
 **Twin**:
