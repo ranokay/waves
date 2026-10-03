@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import queue
 import threading
 import time
 
@@ -56,21 +55,20 @@ class IdleDropAdapter(HTTPAdapter):
                 slots = getattr(pool, "pool", None)
                 if slots is None:
                     continue
-                removed = 0
-                # Bound the sweep even if workers return more connections
-                # while it runs. Never wait for a checked-out connection.
-                for _ in range(slots.qsize()):
-                    try:
-                        connection = slots.get(block=False)
-                    except queue.Empty:
-                        break
-                    removed += 1
+                # urllib3 uses a LIFO Queue. Detach the whole waiting set
+                # atomically: a concurrent return must not hide an older
+                # socket beneath itself during a bounded pop/put sweep.
+                with slots.mutex:
+                    waiting = list(slots.queue)
+                    slots.queue.clear()
+                    slots.queue.extend([None] * len(waiting))
+                    slots.not_empty.notify_all()
+                # close() may block or return another worker's connection;
+                # it must run after the queue lock has been released.
+                for connection in waiting:
                     if connection is not None:
                         with contextlib.suppress(Exception):
                             connection.close()
-                for _ in range(removed):
-                    with contextlib.suppress(queue.Full):
-                        slots.put(None, block=False)
 
     def send(self, request, *args, **kwargs):
         wall0, mono0 = time.time(), time.monotonic()

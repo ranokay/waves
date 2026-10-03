@@ -248,3 +248,32 @@ def test_drop_returns_slots_for_a_blocking_worker(monkeypatch):
     assert not checked_out.closed
     with pytest.raises(queue.Empty):
         pool.pool.get(block=False)
+
+
+def test_return_during_eviction_cannot_hide_an_older_stale_socket(monkeypatch):
+    clock = _Clock(monkeypatch)
+    adapter = pooled_session(pool_maxsize=3, pool_block=True).get_adapter("https://example.com")
+    pool = adapter.poolmanager.connection_from_host("example.com", 443, scheme="https")
+    for _ in range(3):
+        pool.pool.get(block=False)
+    older, newer, checked_out = _Connection(), _Connection(), _Connection()
+    pool.pool.put(older, block=False)
+    pool.pool.put(newer, block=False)
+
+    def close_and_return():
+        newer.closed = True
+        pool.pool.put(checked_out, block=False)
+
+    # This is also a lock check: close must run outside Queue.mutex, so
+    # another worker can return its checked-out connection while it runs.
+    monkeypatch.setattr(newer, "close", close_and_return)
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", lambda *_args, **_kwargs: "sent")
+    clock.advance(61)
+    adapter.send("request")
+
+    assert older.closed and newer.closed
+    assert not checked_out.closed
+    assert pool.pool.qsize() == 3
+    assert pool.pool.get(block=False) is checked_out
+    assert pool.pool.get(block=False) is None
+    assert pool.pool.get(block=False) is None
