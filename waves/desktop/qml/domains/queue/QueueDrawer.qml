@@ -955,10 +955,10 @@ Drawer {
               readonly property bool shown: qrow.qexp || qrow.peeking
               visible: shown || implicitHeight > 0.5
               clip: true
-              // Off the ANIMATED height, not off `shown`: bound to
-              // the flag it added its 2px the instant the pointer
-              // arrived, a step the card took before the smooth part
-              // of the motion had begun.
+              // Off the ANIMATED height, not off `shown`: bound to the
+              // flag, the 2px margin lands the instant the pointer
+              // arrives — before the motion has begun, so it reads as
+              // a step.
               Layout.fillWidth: true
               Layout.bottomMargin: implicitHeight > 0.5 ? 2 : 0
               implicitHeight: qrow.qexp ? qtrackCol.implicitHeight : (qrow.peeking ? 30 : 0)

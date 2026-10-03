@@ -165,11 +165,11 @@ Item {
   // per drag, a GUI event backlog, and a pointer that stayed wedged
   // for a beat after letting go. The bar tolerating a stale column
   // count for a beat is invisible; the churn was not.
-  // 300ms, and never while the drawer edge is held: at 120ms the one
-  // remaining rebuild landed mid-way through the grip's 220ms release
-  // animation and visibly froze it (a plain click, changing nothing,
-  // was smooth). Letting the release animation finish first moves the
-  // same rebuild onto a static screen, where it cannot be seen.
+  // 300ms, and never while the drawer edge is held: a shorter delay lands
+  // the one remaining rebuild mid-way through the grip's 220ms release
+  // animation and visibly freezes it. Letting the release animation finish
+  // first moves the same rebuild onto a static screen, where it cannot be
+  // seen.
   // Declared with a binding for a correct first paint, then the
   // imperative assignment below BREAKS that binding so a drag can no
   // longer ride it; from then on only the timer writes. The break is

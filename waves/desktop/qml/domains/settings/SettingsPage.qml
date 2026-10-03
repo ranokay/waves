@@ -103,11 +103,10 @@ Item {
     onTriggered: page.auCheckFailed = false
   }
   // The control tree is expensive to instantiate, but the schema's *shape*
-  // never changes, only the persisted values do, and those only when we
-  // save. So we build `groups` once and keep the delegates alive; rebuilding
-  // the whole Repeater on every open was what made switching to Settings feel
-  // laggy. `needsRefresh` forces a one-time rebuild after a save so the
-  // controls reflect the freshly-saved values on the next open.
+  // never changes, only the persisted values do (and those only on save).
+  // So `groups` is built once and the delegates stay alive; `needsRefresh`
+  // forces a one-time rebuild after a save so the controls reflect the
+  // freshly-saved values on the next open.
   property bool needsRefresh: false
 
   // Shared FFmpeg manager
@@ -876,9 +875,9 @@ Item {
       height: width
       radius: width / 2
       anchors.verticalCenter: parent.verticalCenter
-      // Target the ON knob's FINAL width (16), not the live `width`. Otherwise
-      // the slide-on chases the simultaneously-animating width and lags; the
-      // slide-off already targeted a constant (5), which is why it stayed smooth.
+      // Target the ON knob's FINAL width (16), not the live `width`: the
+      // slide-on would otherwise chase the simultaneously-animating width
+      // and lag. The OFF x is already a constant (5).
       x: parent.checked ? parent.width - 16 - 4 : 5
       color: parent.checked ? page.accent : page.textDim
       Behavior on x {
@@ -2838,16 +2837,14 @@ Item {
                   // red = not found, yellow = found but unmanaged (system
                   // PATH or a linked path), and managed-by-Waves reads as
                   // the standard accent, so a healthy FFmpeg section looks
-                  // like every other section (page.green is mintier than
-                  // the accent and made this one glyph stand out). The
-                  // Updates glyph goes gold while a newer release is
-                  // available. Every other section keeps the accent glyph.
+                  // like every other section. The Updates glyph goes gold
+                  // while a newer release is available. Every other section
+                  // keeps the accent glyph.
                   readonly property bool ffStatus: card.modelData.card === "ffmpeg" && page.ff
                   readonly property bool auStatus: card.modelData.card === "updates" && page.auUpdate
                   readonly property color statusColor: glyphTile.auStatus ? page.gold : !glyphTile.ffStatus ? page.accent : page.ff.stateKey === "managed" ? page.accent : page.ff.stateKey === "path" ? page.gold : page.red
-                  // No status ring: it made the FFmpeg (and Updates) tile the
-                  // only outlined section, which looked out of place. The status
-                  // still reads from the glyph colour (red/gold/green) below.
+                  // No status ring: the status reads from the glyph colour
+                  // (red/gold/green) below.
                   border.width: 0
                   // Provider sections show their official logos (from the
                   // provider descriptors); every other section keeps the
@@ -4377,9 +4374,8 @@ Item {
                       // its cell Repeater off a width that is non-zero while hidden, so
                       // each invisible copy built a couple of hundred rectangles, and each
                       // carried its own FolderDialog. That tripled the whole page's item
-                      // count, on the very page whose comment at the top of this file
-                      // explains that control-tree instantiation cost is what made
-                      // switching to Settings feel laggy.
+                      // count, on the very page whose top-of-file comment explains
+                      // the control-tree instantiation cost.
                       Loader {
                         id: libraryLoader
                         active: card.open && modelData.type === "library"
