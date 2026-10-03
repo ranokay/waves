@@ -18,6 +18,20 @@ children and strings that merely contain ``text:``; hence the scanners here
 are deliberately character-level and are themselves unit-tested in
 tests/ui/test_qml_text_scan.py.
 
+HOW IT SCANS
+------------
+1. Enumerate every ``Text``/``Label`` open token (the lookbehind rejects
+   ``TextField``, ``Foo.Text`` and friends).
+2. Walk forward from its ``{`` counting depth while skipping string literals
+   and comments; that balanced span is exactly the element's own source.
+3. Inside the span, find a ``text:``/``textFormat:`` binding that is a direct
+   property (brace-depth 1): a nested child's or a ``function(){}`` body's
+   property does not count.
+4. Read the value to the end of the logical statement (``;``, newline at
+   depth 0, or the element's closing ``}``), continuing across newlines when
+   a ``+`` joins the lines.
+5. Classify: pure literals carry no identifiers; anything else is dynamic.
+
 WHAT IT DOES NOT KNOW
 ---------------------
 Nothing about which strings are remote or safe, and nothing about policy
@@ -94,7 +108,7 @@ def brace_span(src: str, open_brace_idx: int) -> int:  # noqa: C901 (a deliberat
     return n - 1
 
 
-def read_value(span: str, j: int) -> str:  # noqa: C901 (a deliberate char scanner)
+def _read_value(span: str, j: int) -> str:  # noqa: C901 (a deliberate char scanner)
     """Read a property value starting just past its colon at index ``j``.
 
     A bare newline at paren/bracket depth 0 normally ends the statement, EXCEPT
@@ -220,7 +234,7 @@ def find_own_prop_value(  # noqa: C901 (a deliberate char scanner)
             j = i + plen
             while j < n and span[j] != ":":
                 j += 1
-            return read_value(span, j + 1)
+            return _read_value(span, j + 1)
         i += 1
     return None
 

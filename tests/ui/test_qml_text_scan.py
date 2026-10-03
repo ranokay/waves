@@ -45,6 +45,11 @@ def test_brace_span_handles_escaped_quotes():
     assert brace_span(source, source.index("{")) == source.rindex("}")
 
 
+def test_brace_span_falls_back_for_unterminated_source():
+    source = "Text { text: 'x'"
+    assert brace_span(source, source.index("{")) == len(source) - 1
+
+
 # ------------------------------------------------------------- element finding
 
 
@@ -118,6 +123,23 @@ def test_a_multiline_js_block_is_captured_whole():
 def test_prop_value_finds_text_format_and_ignores_children():
     element = _only_element("Text { Item { textFormat: Text.StyledText } textFormat: Text.PlainText }")
     assert find_own_prop_value(element.span, "textFormat").strip() == "Text.PlainText"
+
+
+def test_a_semicolon_ends_the_value_without_swallowing_the_next_property():
+    element = _only_element("Text { text: model.title; textFormat: Text.PlainText }")
+    assert find_own_text_value(element.span).strip() == "model.title"
+
+
+def test_block_comments_hide_property_names():
+    commented = _only_element("Text { /* text: model.x */ textFormat: Text.PlainText }")
+    assert find_own_text_value(commented.span) is None
+    noted = _only_element("Text { /* note */ text: 'shown' }")
+    assert find_own_text_value(noted.span).strip() == "'shown'"
+
+
+def test_whitespace_before_the_colon_is_allowed():
+    element = _only_element("Text { text : model.title }")
+    assert find_own_text_value(element.span).strip() == "model.title"
 
 
 # ----------------------------------------------------------- value classifiers

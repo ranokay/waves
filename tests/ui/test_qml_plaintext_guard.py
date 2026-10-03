@@ -22,7 +22,9 @@ THE POLICY (structural, no remote-vs-local guessing)
 
 The scanner these tests read QML with lives in ``tests/support/qml_text.py``
 (unit-tested in ``tests/ui/test_qml_text_scan.py``); this file owns the policy
-and the exceptions.
+and the exceptions. The check is source-level on purpose: no runtime scenario
+can enumerate every dynamic ``text:`` binding, so the structural scan is what
+makes a new binding anywhere fail without a list edit.
 """
 
 from __future__ import annotations
