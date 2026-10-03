@@ -67,8 +67,10 @@ class IdleDropAdapter(HTTPAdapter):
                 # it must run after the queue lock has been released.
                 for connection in waiting:
                     if connection is not None:
-                        with contextlib.suppress(Exception):
+                        try:
                             connection.close()
+                        except Exception:
+                            logger.debug("Detached HTTP connection could not close", exc_info=True)
 
     def send(self, request, *args, **kwargs):
         wall0, mono0 = time.time(), time.monotonic()
