@@ -503,40 +503,53 @@ def test_old_artist_build_cannot_release_a_new_accounts_hover_claim(bridge):
     assert not bridge._artist_loading and bridge._artist_prefetch is None
 
 
-def test_artist_cleanup_does_not_block_a_catalog_commit_behind_the_prefetch_lock(bridge):
-    from waves.desktop.backend import _cache_put, _catalog_work, _release_artist_build
+def test_simultaneous_artist_and_album_completions_allow_navigation_to_finish(bridge):
+    from threading import current_thread
 
-    attempted, committed = Event(), Event()
+    album_held, artist_waiting, release_album = Event(), Event(), Event()
     lock = bridge._prefetch_lock
+    errors = []
 
-    class ObservedLock:
+    class CompletionLock:
         def __enter__(self):
-            attempted.set()
-            lock.acquire()
+            if current_thread().name == "artist":
+                artist_waiting.set()
+            if not lock.acquire(timeout=1):
+                raise TimeoutError("catalog completion deadlocked")
+            if current_thread().name == "album":
+                album_held.set()
+                if not release_album.wait(2):
+                    lock.release()
+                    raise TimeoutError("album completion was never released")
 
         def __exit__(self, *_args):
             lock.release()
 
-    bridge._prefetch_lock = ObservedLock()
-    artist_work = _catalog_work(bridge, "paper", lambda: _release_artist_build(bridge, "paper:artist-1", silent=True))
+    bridge.loadAlbumTracks("paper:album-1")
+    bridge.loadArtist("paper:artist-1")
+    album_work, artist_work = bridge.threadpool.workers
+    bridge.threadpool.workers.clear()
+    bridge._prefetch_lock = CompletionLock()
 
-    def finish_album():
-        _cache_put(bridge, bridge._album_tracks_cache, "album-1", [])
-        committed.set()
+    def run(worker):
+        try:
+            worker.fn()
+        except Exception as exc:
+            errors.append(exc)
 
-    album_work = _catalog_work(bridge, "tidal", finish_album)
-    artist, album = Thread(target=artist_work), Thread(target=album_work)
-    # An album/browse completion already holds the shared prefetch lock.
-    lock.acquire()
+    album = Thread(target=run, args=(album_work,), name="album")
+    artist = Thread(target=run, args=(artist_work,), name="artist")
+    album.start()
     try:
+        assert album_held.wait(2)
         artist.start()
-        assert attempted.wait(2)
-        album.start()
-        assert committed.wait(2), "artist cleanup must not hold epoch authority while waiting for prefetch"
+        assert artist_waiting.wait(2)
     finally:
-        lock.release()
-        artist.join(2)
-        if album.ident is not None:
-            album.join(2)
-    assert not artist.is_alive() and not album.is_alive()
-    assert bridge._album_tracks_cache["album-1"] == []
+        release_album.set()
+        album.join(2)
+        if artist.ident is not None:
+            artist.join(2)
+    assert not album.is_alive() and not artist.is_alive() and not errors
+    _drain_gui(bridge)
+    assert len(bridge.artistLoaded.emits) == 1
+    assert len(bridge.albumTracksLoaded.emits) == 1
