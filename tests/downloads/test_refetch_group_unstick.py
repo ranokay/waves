@@ -15,14 +15,20 @@ and account switched mid-fetch) to settle the group.
 
 from __future__ import annotations
 
+from collections import deque
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
+
 from waves.constants import CTX_TIDAL
 from waves.desktop.backend import WavesBridge
+from waves.desktop.queue.bridge import QueueMixin
+from waves.desktop.queue.runtime import JobRuntime
+from waves.providers import Capability
 
 
-class _Stub:
+class _Stub(QueueMixin):
     """Bare object the real methods get bound onto."""
 
 
@@ -55,9 +61,27 @@ def _stub(session_video):
     # session callable, looked up late so the account-switch test's
     # reassignment still takes effect, and bind the real drop (a no-op
     # without parked pins).
-    stub.providers = {
-        CTX_TIDAL: SimpleNamespace(get_object=lambda bucket, media_id: stub.tidal.session.video(media_id))
-    }
+    provider = StubProvider(CTX_TIDAL, "TIDAL", capabilities={Capability.CATALOG}, logged_in=True)
+    provider.get_object = lambda bucket, media_id: stub.tidal.session.video(media_id)
+    stub.providers = {CTX_TIDAL: provider}
+    stub._queue = []
+    stub._queue_lock = Lock()
+    stub._reindex_queue()
+    stub._jobs = JobRuntime()
+    stub._pending_qids = deque()
+    stub._pending_lock = Lock()
+    stub._pending_downloads = []
+    stub._merge_plans = {}
+    stub._redownload_overrides = set()
+    stub._library_claim_overrides = set()
+    stub._search_gen = 0
+    stub._set_busy = lambda busy: None
+    stub._set_login_busy = lambda provider_id, busy: None
+    stub.providerStateChanged = _Sig()
+    stub._schedule_provider_cache_clear = lambda provider_id: None
+    stub._end_provider_context = _bind(stub, "_end_provider_context")
+    stub._stop_provider_downloads = _bind(stub, "_stop_provider_downloads")
+    stub._release_abandoned_hold = _bind(stub, "_release_abandoned_hold")
     stub._chooser_drop_refetch = _bind(stub, "_chooser_drop_refetch")
     stub.threadpool = _InlinePool()
     stub.downloadState = _Sig()
@@ -97,11 +121,11 @@ def test_an_account_switch_mid_fetch_settles_the_group_too():
     real_video = stub.tidal.session.video
 
     def _switch(vid):
-        stub._browse_gen = 2
+        stub._end_provider_context(CTX_TIDAL, "Account changed")
         return real_video(vid)
 
     stub.tidal.session.video = _switch
     stub._refetch_for_download("video", "9")
     assert stub._artist_groups == {}, "the finished group must be deleted, not leak"
-    assert ("art1", "failed") in stub.downloadState.emits
+    assert ("art1", "") in stub.downloadState.emits
     assert stub._refetch_inflight == set()

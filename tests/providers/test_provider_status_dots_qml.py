@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from providers.fakes import BareProvider
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
@@ -107,7 +108,7 @@ def test_the_header_reports_each_provider_and_browse_hides_without_one():
     )
 
 
-class _NewCo:
+class _NewCo(BareProvider):
     """A provider registered after every QML surface was written."""
 
     id = "newco"

@@ -6,8 +6,7 @@ WHAT THIS FENCES OFF
    so an Apple-only user's Search pane was empty chrome; it now shows the
    invitation and the setup actions.
 
-2. Dead-end empty states. Search offers "Enable Apple Music - search works
-   without an account" (the bridge's own enable flow) and "Sign in to TIDAL"
+2. Dead-end empty states. Search offers "Set up Apple Music" (the bridge's own enable flow) and "Sign in to TIDAL"
    (the welcome surface's inline steps); Browse and My Music name TIDAL and
    offer the same sign-in click instead of rendering blank.
 
@@ -28,6 +27,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from providers.qml_auth import CallbackLoginAttempt
 from support.qml import EXIT_OK, EXIT_REGRESSED, boot_main_qml, run_scenario
 from support.qml_probe import scene_js
 
@@ -105,7 +105,7 @@ def _pin_paste(scope: str, text: str) -> str:
     )
 
 
-_APPLE_LABEL = "Enable Apple Music — search works without an account"
+_APPLE_LABEL = "Set up Apple Music"
 _APPLE_ROW = {
     "id": "apple:1",
     "title": "Selected Ambient Works 85-92",
@@ -218,7 +218,7 @@ def _run_apple_cta_scenario() -> int:
 
     # The TIDAL action opens the welcome surface's inline steps, and nothing
     # opens a browser on its own.
-    if not _click(root, q, settle, _point("results", "emptyTidalCta"), "root.setupOpen === true"):
+    if not _click(root, q, settle, _point("results", "emptyProviderCta_tidal"), "root.setupOpen === true"):
         failures.append("the Search TIDAL action did not open the sign-in surface")
     else:
         if q("root.setupMode") != "tidal":
@@ -235,20 +235,20 @@ def _run_apple_cta_scenario() -> int:
     # One click enables Apple from the empty state; the bridge's own flow
     # (search row, status light, in-place wizard) takes over from there.
     _open_search(q, settle)
-    if not _click(root, q, settle, _point("results", "emptyAppleCta"), "root.appleEnabled === true"):
+    if not _click(root, q, settle, _point("results", "emptyProviderCta_apple"), "root.appleEnabled === true"):
         failures.append("the Search Apple action did not enable the provider")
     else:
         if bridge.settings.data.apple_enabled is not True:
             failures.append("the Search Apple action did not persist the enable")
-        if q(_visible("results", "emptyAppleCta")):
+        if q(_visible("results", "emptyProviderCta_apple")):
             failures.append("the Apple action outlived the provider it set up")
 
     # Apple enabled, TIDAL still signed out: the Apple action is gone, the
     # TIDAL one is not, and a search answer now carries Apple's own group.
     _open_search(q, settle)
-    if q(_visible("results", "emptyAppleCta")):
+    if q(_visible("results", "emptyProviderCta_apple")):
         failures.append("the Apple action came back after the enable")
-    if not q(_visible("results", "emptyTidalCta")):
+    if not q(_visible("results", "emptyProviderCta_tidal")):
         failures.append("enabling Apple retired the TIDAL action too")
     q("root._searchSeq = root._navSeq; root.lastSearchQuery = 'ambient'")
     bridge.searchResults.emit(_search_payload_with_apple())
@@ -319,6 +319,7 @@ def _run_tidal_cta_scenario() -> int:
     tidal = bridge.providers["tidal"]
     tidal.login_begin = lambda: "https://tidal.test/authorize"
     tidal.login_complete = lambda url: str(url).startswith("https://tidal.test/")
+    tidal.create_login_attempt = lambda **kwargs: CallbackLoginAttempt(tidal.login_begin, tidal.login_complete)
     if not _click(root, q, settle, _point("setupPane", "welcomeSignInOpen"), "root.setupUrlOpened === true"):
         failures.append("the sign-in steps exposed no working browser-login action")
     else:
@@ -331,7 +332,7 @@ def _run_tidal_cta_scenario() -> int:
     if not bool(q("root.signedIn")):
         failures.append("the scenario never reached a signed-in session")
     else:
-        if q(_visible("results", "emptyTidalCta")):
+        if q(_visible("results", "emptyProviderCta_tidal")):
             failures.append("the TIDAL action outlived the sign-in")
         q("root.openBrowse()")
         settle(300)

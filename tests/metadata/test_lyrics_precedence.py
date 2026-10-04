@@ -336,10 +336,13 @@ def _standalone_bridge(tmp_path, *, psettings, lyrics=None, lyrics_error=False):
     folder.mkdir(parents=True, exist_ok=True)
     statuses: list[str] = []
     states: list[tuple] = []
-    provider = SimpleNamespace(
-        get_object=lambda kind, raw_id: {"id": raw_id},
-        track_facts=lambda obj: {},
-    )
+    from providers.fakes import StubProvider
+
+    from waves.providers import Capability
+
+    provider = StubProvider("apple", "Apple Music", capabilities={Capability.LYRICS, Capability.ART}, logged_in=True)
+    provider.get_object = lambda kind, raw_id: {"id": raw_id}
+    provider.track_facts = lambda obj: {}
     stub = SimpleNamespace(
         settings=SimpleNamespace(
             data=SimpleNamespace(
@@ -445,6 +448,53 @@ def test_download_art_only_writes_the_cover_and_no_audio(tmp_path):
     assert statuses[-1] == "Saved artwork for 1 track"
 
 
+@pytest.mark.parametrize("provider_id", ["apple", "tidal"])
+@pytest.mark.parametrize("saved_cover", ["absent", "existing", "while_preparing"])
+def test_download_art_only_keeps_saved_covers_at_publication(tmp_path, monkeypatch, provider_id, saved_cover):
+    from types import SimpleNamespace
+
+    from providers.fakes import StubProvider
+
+    from waves.desktop import backend
+    from waves.desktop.backend import WavesBridge
+    from waves.providers import Capability
+
+    stub, folder, statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map())
+    media_id = "apple:s1"
+    if provider_id == "tidal":
+        media_id = "1"
+        stub.providers["tidal"] = StubProvider("tidal", "TIDAL", capabilities={Capability.ART}, logged_in=True)
+        track = SimpleNamespace(id=1, album=SimpleNamespace(image=lambda dimension: "https://test.invalid/cover"))
+        stub._standalone_tidal_tracks = lambda media_id: [(track, None, False)]
+        stub._tidal_standalone_dest = lambda base, track, collection: (folder, "S1")
+        stub._dl = SimpleNamespace(
+            _retrieve_lyrics=lambda track: ("", "", ""),
+            cover_data_cached=lambda url: b"\xff\xd8\xff\xdbjpeg-bytes",
+        )
+        stub._standalone_tidal = WavesBridge._standalone_tidal.__get__(stub, SimpleNamespace)
+    target = folder / "cover.jpg"
+    original = b"custom saved artwork"
+    if saved_cover == "existing":
+        target.write_bytes(original)
+    elif saved_cover == "while_preparing":
+        write_cover = backend.write_cover_sidecar
+
+        def prepare_cover(*args, **kwargs):
+            result = write_cover(*args, **kwargs)
+            target.write_bytes(original)
+            return result
+
+        monkeypatch.setattr(backend, "write_cover_sidecar", prepare_cover)
+
+    stub.downloadArtOnly(media_id)
+
+    expected = b"\xff\xd8\xff\xdbjpeg-bytes" if saved_cover == "absent" else original
+    assert target.read_bytes() == expected
+    assert states == [(media_id, "running"), (media_id, "done")]
+    assert statuses[-1] == "Saved artwork for 1 track"
+    assert list(folder.iterdir()) == [target]
+
+
 def test_download_lyrics_only_files_the_verbatim_ttml_when_asked(tmp_path):
     """The TTML sidecar toggle is independent: the verbatim document lands as .ttml."""
     ttml = '<tt><body><div><p begin="00:01.00">Hi</p></div></body></tt>'
@@ -458,3 +508,156 @@ def test_download_lyrics_only_files_the_verbatim_ttml_when_asked(tmp_path):
 
     assert (folder / "S1.ttml").read_text() == ttml
     assert not (folder / "S1.lrc").exists()
+
+
+class _AssetPool:
+    def __init__(self):
+        self.workers = []
+
+    def start(self, worker):
+        self.workers.append(worker)
+
+
+@pytest.mark.parametrize("mode", ["lyrics", "art"])
+def test_standalone_revocation_during_fetch_prevents_output_and_releases_only_its_buttons(tmp_path, mode):
+    from threading import Event, Thread
+
+    from waves.desktop import backend
+    from waves.desktop.providers.lifecycle import provider_contexts, scan_generation
+
+    stub, folder, statuses, states = _standalone_bridge(
+        tmp_path, psettings=_psetting_map(lyrics_file=True, lyrics_embed=True)
+    )
+    stub.threadpool = _AssetPool()
+    entered, release = Event(), Event()
+
+    def fetch(*args):
+        entered.set()
+        assert release.wait(2)
+        return ("[00:01.00]hi", "hi", "") if mode == "lyrics" else (b"jpeg", b"jpeg")
+
+    if mode == "lyrics":
+        stub._apple_lyrics_full = fetch
+    else:
+        stub._apple_cover_bytes = fetch
+    stub._standalone_fetch("apple:s1", mode)
+    other = scan_generation(stub, "paper")
+    stub._standalone_active["paper:s1"] = other
+    worker = Thread(target=stub.threadpool.workers.pop(0).fn)
+    worker.start()
+    try:
+        assert entered.wait(2)
+        provider_contexts(stub).revoke("apple")
+        backend._stop_standalone(stub, "apple")
+    finally:
+        release.set()
+        worker.join(2)
+    assert not worker.is_alive()
+    assert not list(folder.iterdir())
+    assert states == [("apple:s1", "running"), ("apple:s1", "")]
+    assert stub._standalone_active == {"paper:s1": other}
+    assert not any(text.startswith("Saved ") for text in statuses)
+
+
+def test_standalone_revoked_before_dispatch_never_fetches(tmp_path):
+    from waves.desktop import backend
+    from waves.desktop.providers.lifecycle import provider_contexts
+
+    stub, folder, _statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map(lyrics_file=True))
+    stub.threadpool = _AssetPool()
+    calls = []
+    stub._apple_lyrics_full = lambda *args: calls.append(args) or ("hi", "hi", "")
+    stub.downloadLyricsOnly("apple:s1")
+    provider_contexts(stub).revoke("apple")
+    backend._stop_standalone(stub, "apple")
+    stub.threadpool.workers.pop(0).fn()
+    assert not calls and not list(folder.iterdir())
+    assert states == [("apple:s1", "running"), ("apple:s1", "")]
+
+
+def test_standalone_revocation_during_tagging_preserves_saved_audio(tmp_path, monkeypatch):
+    from waves.desktop import backend
+    from waves.desktop.providers.lifecycle import provider_contexts
+
+    stub, folder, _statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map(lyrics_embed=True))
+    original = folder / "S1.m4a"
+    original.write_bytes(b"saved audio")
+
+    def tag(candidate, **kwargs):
+        assert candidate != original and candidate.read_bytes() == b"saved audio"
+        provider_contexts(stub).revoke("apple")
+        backend._stop_standalone(stub, "apple")
+        candidate.write_bytes(b"new tags")
+        return True
+
+    monkeypatch.setattr(backend, "tag_apple_file", tag)
+    stub.downloadLyricsOnly("apple:s1")
+    assert original.read_bytes() == b"saved audio"
+    assert list(folder.iterdir()) == [original]
+    assert states == [("apple:s1", "running"), ("apple:s1", "")]
+
+
+def test_standalone_completion_queued_before_revocation_cannot_repaint(tmp_path):
+    from conftest import _Signal
+
+    from waves.desktop import backend
+    from waves.desktop.providers.lifecycle import provider_contexts
+
+    stub, folder, _statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map(lyrics_file=True))
+    stub._catalogEvent = _Signal()
+    stub.downloadLyricsOnly("apple:s1")
+    assert (folder / "S1.lrc").is_file()  # publication preceded revocation
+    assert states == [("apple:s1", "running")]
+    provider_contexts(stub).revoke("apple")
+    backend._stop_standalone(stub, "apple")
+    for event in stub._catalogEvent.emits:
+        backend.WavesBridge._on_catalog_event(stub, event)
+    assert states == [("apple:s1", "running"), ("apple:s1", "")]
+
+
+def test_global_stop_is_ordered_with_an_asset_replacement_already_issued(tmp_path, monkeypatch):
+    from pathlib import Path
+    from threading import Event, Thread
+
+    from conftest import _Signal
+
+    from waves.desktop import backend
+
+    stub, folder, _statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map(lyrics_file=True))
+    stub._catalogEvent = _Signal()
+    stub.threadpool = _AssetPool()
+    entered, release, stopping, stopped = Event(), Event(), Event(), Event()
+    target = folder / "S1.lrc"
+    replace = backend.os.replace
+
+    def held_replace(source, destination):
+        if Path(destination) == target:
+            entered.set()
+            assert release.wait(2)
+        return replace(source, destination)
+
+    def stop():
+        stopping.set()
+        backend._stop_standalone(stub)
+        stopped.set()
+
+    monkeypatch.setattr(backend.os, "replace", held_replace)
+    stub.downloadLyricsOnly("apple:s1")
+    worker = Thread(target=stub.threadpool.workers.pop(0).fn)
+    worker.start()
+    stopper = Thread(target=stop)
+    try:
+        assert entered.wait(2)
+        stopper.start()
+        assert stopping.wait(2)
+        assert not stopped.wait(0.2), "STOP cannot return before an issued replacement settles"
+    finally:
+        release.set()
+        worker.join(2)
+        if stopper.ident is not None:
+            stopper.join(2)
+    assert not worker.is_alive() and not stopper.is_alive() and stopped.is_set()
+    assert target.read_text() == "[00:01.00]hi"
+    for event in stub._catalogEvent.emits:
+        backend.WavesBridge._on_catalog_event(stub, event)
+    assert states == [("apple:s1", "running"), ("apple:s1", "")]

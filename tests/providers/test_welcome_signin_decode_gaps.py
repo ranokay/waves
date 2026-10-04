@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from providers.qml_auth import CallbackLoginAttempt
 from support.qml import (
     EXIT_OK,
     EXIT_PRECONDITION,
@@ -103,6 +104,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario, four legs)
         return False
 
     tidal.login_complete = fake_complete
+    tidal.create_login_attempt = lambda **kwargs: CallbackLoginAttempt(tidal.login_begin, tidal.login_complete)
     bridge._session_resolved = True
     bridge.sessionResolvedChanged.emit()
     settle(250)

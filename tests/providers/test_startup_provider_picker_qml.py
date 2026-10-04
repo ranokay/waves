@@ -5,7 +5,7 @@ TIDAL browser login: a picker overlay with the official marks, TIDAL
 swapping the same surface to its inline sign-in steps (still click-to-open),
 Apple Music enabling the provider (its setup wizard opens itself), "Not
 now" landing in the app. Answered once and persisted; nothing ever opens a
-browser on its own (beginLogin stays click-only).
+browser on its own (beginProviderLogin stays click-only).
 
 Runs offscreen through the real bridge on a temp config: fresh installs
 resolve logged-out with Apple off, which is exactly the picker state.
@@ -98,7 +98,7 @@ def _scenario() -> int:  # noqa: C901 (one straight scenario)
     if not q("providerPicker.visible"):
         problems.append("the first-run welcome did not show")
     # No browser ran before any choice: setupUrlOpened is set only from
-    # onLoginUrlReady, which only a beginLogin call emits.
+    # onProviderLoginUrlReady, which only the explicit browser action emits.
     if q("root.setupMode") != "cards" or q("root.setupUrlOpened"):
         problems.append("a TIDAL sign-in surface was up before any choice")
     if q(_visible("providerPicker", "o.objectName === 'welcomeSignIn'")):

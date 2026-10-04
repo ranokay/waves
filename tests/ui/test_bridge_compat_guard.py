@@ -37,7 +37,6 @@ _BRIDGE_SURFACE_ALIASES = (
     "_FAVOURITES_CATEGORIES",
     "_LIBRARY_VIEW_LABELS",
     "_SEARCH_SECTIONS",
-    "_begin_login",
     "_browse_nav",
     "_fmt_duration",
     "_is_provider_surface_pref",

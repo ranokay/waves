@@ -21,6 +21,7 @@ from tidalapi.album import Album
 from tidalapi.media import AudioMode, Quality, Track, Video
 
 from waves.desktop.backend import _PLAYLIST_ALBUMS_GROUP_PREFIX, WavesBridge
+from waves.desktop.providers.lifecycle import scan_generation
 
 QML = QML_MAIN.read_text(encoding="utf-8")
 ATMOS = AudioMode.dolby_atmos.value
@@ -193,7 +194,7 @@ def test_it_queues_each_distinct_album_once_in_playlist_order():
     playlist = _FakePlaylist([_track("2"), _track("1"), _video(), _track("2"), _track(None), _track("3")])
     stub = _Stub(playlist, [_album("1"), _album("2"), _album("3")])
     stub.downloadPlaylistAlbums("pl1")
-    assert stub._albumsQueued.emits == [(0, ["2", "1", "3"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["2", "1", "3"])]
     assert stub.tidal.session.album_fetches == ["2", "1", "3"], "one fetch per distinct album"
     assert any("3 albums" in s for s in stub.statuses)
 
@@ -249,7 +250,7 @@ def test_a_playlist_gone_from_the_registry_is_refetched():
     stub = _Stub(playlist, [_album("1")], cached=False)
     stub.downloadPlaylistAlbums("pl1")
     assert ("playlist", "pl1") in stub.remembered
-    assert stub._albumsQueued.emits == [(0, ["1"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["1"])]
 
 
 def test_a_playlist_that_will_not_load_settles_back_to_idle():
@@ -273,7 +274,7 @@ def test_atmos_off_leaves_out_an_atmos_edition_beside_its_stereo_twin():
     atmos = _album("22", "Random Access Memories", [ATMOS])
     stub = _Stub(_FakePlaylist([_track("22"), _track("11")]), [stereo, atmos], atmos=False)
     stub.downloadPlaylistAlbums("pl1")
-    assert stub._albumsQueued.emits == [(0, ["11"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["11"])]
 
 
 def test_atmos_on_keeps_both_editions():
@@ -281,13 +282,13 @@ def test_atmos_on_keeps_both_editions():
     atmos = _album("22", "Random Access Memories", [ATMOS])
     stub = _Stub(_FakePlaylist([_track("22"), _track("11")]), [stereo, atmos], atmos=True)
     stub.downloadPlaylistAlbums("pl1")
-    assert stub._albumsQueued.emits == [(0, ["22", "11"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["22", "11"])]
 
 
 def test_library_bulk_skip_leaves_out_claimed_albums_and_says_so():
     stub = _Stub(_FakePlaylist([_track("1"), _track("2")]), [_album("1"), _album("2")], bulk_skip=True, claimed=["1"])
     stub.downloadPlaylistAlbums("pl1")
-    assert stub._albumsQueued.emits == [(0, ["2"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["2"])]
     assert stub._artist_groups[GID]["keys"] == {"2"}
     assert any("1 already in your library" in s for s in stub.statuses)
 
@@ -357,7 +358,7 @@ def test_with_the_switch_off_every_edition_downloads_whole_even_with_best_of_bot
     stub = _EditionStub(*_two_editions(), collapse=False, merge=True)
     stub.downloadPlaylistAlbums("pl1")
     assert stub.calls == [], "the sweep merged or collapsed with 'Most-complete edition only' off"
-    assert stub._albumsQueued.emits == [(0, ["1", "2"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["1", "2"])]
     assert stub._merge_plans == {}
 
 
@@ -365,14 +366,14 @@ def test_with_the_switch_off_and_best_of_both_off_nothing_is_scanned_either_for_
     stub = _EditionStub(*_two_editions(), collapse=False, merge=False)
     stub.downloadPlaylistAlbums("pl1")
     assert stub.calls == []
-    assert stub._albumsQueued.emits == [(0, ["1", "2"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["1", "2"])]
 
 
 def test_with_the_switch_on_best_of_both_builds_the_one_edition_for_a_playlist():
     stub = _EditionStub(*_two_editions(), collapse=True, merge=True)
     stub.downloadPlaylistAlbums("pl1")
     assert stub.calls == ["merge"]
-    assert stub._albumsQueued.emits == [(0, ["2"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["2"])]
     assert stub._merge_plans == {"2": [("plan",)]}
     assert any("Scanning editions" in s for s in stub.statuses)
 
@@ -381,7 +382,7 @@ def test_with_the_switch_on_and_best_of_both_off_the_plain_collapse_runs_for_a_p
     stub = _EditionStub(*_two_editions(), collapse=True, merge=False)
     stub.downloadPlaylistAlbums("pl1")
     assert stub.calls == ["collapse"]
-    assert stub._albumsQueued.emits == [(0, ["2"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["2"])]
     assert stub._merge_plans == {}
 
 
@@ -395,7 +396,7 @@ def test_a_plan_an_earlier_run_left_behind_does_not_merge_with_the_switch_off_fo
     stub.collapse = False
     stub._albumsQueued.emits.clear()
     stub.downloadPlaylistAlbums("pl1")
-    assert stub._albumsQueued.emits == [(0, ["1", "2"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["1", "2"])]
     assert stub._merge_plans == {}
 
 

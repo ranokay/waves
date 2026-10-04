@@ -10,7 +10,7 @@ setting internal flags would not exercise that path.
 
 Drives the REAL Main.qml in a subprocess (building the bridge installs
 process-global handlers), with the account service faked at the provider
-boundary: login_begin/login_complete are patched, everything the UI does
+boundary: detached login attempts are faked, everything the UI does
 around them is real.
 """
 
@@ -252,8 +252,11 @@ def _run_journey(reverse: bool = False) -> int:
     # The account service is the fake: sign-in and sign-out talk to the
     # provider verbs, everything around them is the real bridge.
     tidal = bridge.providers["tidal"]
-    tidal.login_begin = lambda: "https://tidal.test/authorize"
-    tidal.login_complete = lambda url: str(url).startswith("https://tidal.test/")
+    from providers.qml_auth import CallbackLoginAttempt
+
+    tidal.create_login_attempt = lambda **kwargs: CallbackLoginAttempt(
+        lambda: "https://tidal.test/authorize", lambda url: str(url).startswith("https://tidal.test/")
+    )
     tidal.logout = lambda: None
     tidal.reset_session = lambda: None
     bridge._browse_root = lambda: {"sections": [], "genres": [], "moods": [], "decades": [], "error": True}

@@ -197,6 +197,8 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
         "top": None,
     }
     bridge.providers["fake"] = _fake_provider()
+    bridge.providerStateChanged.emit("fake")
+    q("root.openSearch()")
 
     failures: list[str] = []
     q("root.submitSearch('fabric')")
@@ -301,6 +303,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     # shift, not inherit the departed provider's state.
     bridge.settings.data.apple_enabled = False
     bridge.appleStatusChanged.emit()
+    bridge.providerStateChanged.emit("apple")
     settle(300)
     if q("root.searchGroupFor('apple')") is not None:
         failures.append("the switched-off provider's group stayed on the page")

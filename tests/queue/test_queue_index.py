@@ -97,6 +97,7 @@ def _stub():
         "_remove_rows_where",
         "_remove_row",
         "_discard_pending_downloads",
+        "_forget_held_queue_rows",
         "_release_abandoned_hold",
         "removeQueueItem",
         "clearFinished",

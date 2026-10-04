@@ -10,7 +10,10 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
+
 from waves.desktop.backend import WavesBridge
+from waves.providers import Capability
 
 
 class _Sig:
@@ -37,6 +40,11 @@ class _Stub:
     def __init__(self, *, fail=False, collapse=False):
         self.threadpool = _Pool()
         self._logged_in = True
+        self.providers = {
+            "tidal": StubProvider(
+                "tidal", "TIDAL", capabilities={Capability.CATALOG, Capability.FAVORITES}, logged_in=True
+            )
+        }
         self._collapse = collapse
         self._fail = fail
         self._artist_cache = {}

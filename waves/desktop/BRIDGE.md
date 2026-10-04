@@ -35,6 +35,9 @@ Their Qt entry points remain on this context object.
 | `appleSetupRequested(reason)`                                                                      | Apple needs setup (`setup` on enable, `cookies` on a pre-setup download click); Main deep-links to the wizard    |
 | `setupRequested()`                                                                                 | Settings -> Providers -> "Set up providers" asks to re-open the provider welcome surface as a page               |
 | `signInRequested(providerId)`                                                                      | A provider card asked for sign-in; the welcome surface opens that provider's steps (or its cards)                |
+| `providerStateChanged(providerId)`                                                                 | An account/readiness change invalidates only the named provider's retained presentation state                    |
+| `providerLoginUrlReady(providerId, url)`                                                           | The current selected provider login attempt has a browser URL ready                                              |
+| `providerLoginFinished(providerId, ok)`                                                            | The current provider login attempt settles successfully or fails; cancelled/stale attempts never fire            |
 | `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull and sign-out lifecycle; Settings re-reads `appleSetupState()`             |
 
 The provider cards' action pills dispatch through one slot, not per-provider
@@ -46,6 +49,30 @@ runtime management) come from the registry built where the providers are
 wired. `appleStatus()` answers `{state, word, actions}` — the same action
 list the schema bakes — so a live light flip moves its pills with it.
 
+`providerReadiness(providerId)` answers `{enabled, account, catalog,
+operations}`. `enabled` is true/false/unknown (`null`); `account` is
+`signed_in`, `signed_out` or `unknown`. `catalog` and each operation's
+`state` are `ready`, `disabled`, `sign_in_required`, `setup_required`,
+`unknown` or `unsupported`; operation entries are `{state, action}` keyed
+by capability. Actions are `signin`, `setup` or empty. Static capability
+declarations never imply live readiness, and catalog access does not require
+an account where a provider offers public access.
+
+`providerStateChanged(providerId)` refreshes these live presentations and
+invalidates only that provider's Search group, saved shelves, retained media
+maps and history. Identity is resolved through `providerDescriptor`, including
+bare legacy TIDAL IDs; unrelated providers retain their rows and pages.
+
+Browser auth uses `beginProviderLogin(providerId)`,
+`completeProviderLogin(providerId, payload)` and
+`cancelProviderLogin(providerId)`. `providerLoginUrlReady(providerId, url)`
+opens the browser only while that provider's selected steps are active.
+`providerLoginFinished(providerId, ok)` completes the selected successful
+flow. Cancel/Escape invalidates the attempt and cancels pending paste decode;
+stale worker results cannot publish or commit credentials. Legacy
+`beginLogin`, `completeLogin` and `loginUrlReady` remain compatibility APIs;
+shared QML uses the provider-scoped APIs.
+
 The header's per-provider marks come from two answer-only slots, both
 composed from the descriptors so a third provider needs no QML edit
 `providerLights()` answers `[{id, name, state, word}]`, one
@@ -54,26 +81,29 @@ sign-in state (`signed_in` / `signed_out`, worded with the card's own
 "Signed in" / "Signed out") or a setup-kind provider's setup light (Apple's
 five states, `off` contributing none). The QML renders a dot per entry — the
 colour is the shared status-light vocabulary in `qml/StatusLight.js` — and
-re-reads on `loggedInChanged` / `appleStatusChanged`; sign-out lives on the
-TIDAL card, never in the header. `browseNav()` answers `{available,
-signed_in}`: Browse exists while a configured provider declares
+re-reads on `providerStateChanged` and legacy `loggedInChanged` / `appleStatusChanged`; sign-out lives on the
+provider card, never in the header. `browseNav()` answers `{available,
+signed_in, provider, message, action, action_label}`: Browse exists while a configured provider declares
 `Capability.BROWSE` and is hidden when none does (never a permanently blank
-tab), and `signed_in` is the live session of the browse-capable provider
-whose pages fill the pane (the first in registry order), which the landing
-pane offers its sign-in call to action for.
+tab). The retained `signed_in` key reports operation readiness for the
+provider whose pages fill the pane (the first in registry order), rather
+than requiring every provider's Browse to use an account. When unavailable,
+the bridge supplies its provider-owned message and action; the landing
+dispatches that action through `providerAction`.
 
-A provider's sign-in steps component (TIDAL's browser/paste pair) is a QML
-component, so `providerSignInSteps()` answers the ids this build ships steps
-for, registered where the providers are wired. The surface opens a
-provider's steps when it has them and its cards otherwise; `signInRequested`
-carries the provider whose sign-in the surface is showing.
+`providerSignInSteps()` answers registered browser-flow provider IDs. All
+use the shared browser/paste component with the selected provider's ID and
+name. `signInRequested(providerId)` selects those steps without opening a
+browser; its explicit button starts the flow. Setup flows dispatch through
+`providerAction(providerId, "setup")`, retaining the provider's own wizard.
 
 The welcome surface's cards come from `providerCards()`: one entry per
 registered provider with its descriptor identity (id/name/logo), its
 `summary` (the one-line capability truth) and `action` (the provider's own
 action words — a setup for Apple, a sign-in for TIDAL), plus `state`/`word`
 from the same light composer as the header's marks ("" when the provider has
-nothing to report, e.g. Apple switched off). The surface re-reads the list
+nothing to report, e.g. Apple switched off), plus `readiness` and
+`login_flow` (`browser` by default, `setup` for Apple's wizard). The surface re-reads the list
 at boot, when the surface opens and on the same flips as the lights, so a
 card never states a stale account state.
 
@@ -201,6 +231,12 @@ and an expanded album/playlist panel's track rows likewise. The caches behind
 them stay undressed (a persisted verdict would be stale on the next launch),
 and a cross-account emit is dropped by generation.
 
+Catalog workers capture the provider epoch before dispatch and check it again
+when their results reach the GUI. Sign-out or disable prunes that owner's
+memory and disk entries while unrelated providers retain theirs. Disk page
+and search snapshots use version 8 with opaque per-provider account stamps;
+legacy mixed-account snapshots are discarded and rebuilt.
+
 ## Download queue
 
 | Signal                                                                       | Fires when                                                                                                                                 |
@@ -279,11 +315,18 @@ Library section's bulk rows carry the same fields (`provider`, `provider_logo`)
 so a badge there costs no per-row crossing. QML carries no provider asset path
 and never parses an id prefix to pick one.
 
-`searchEnabled()` answers whether any registered `Capability.SEARCH` provider
-is on right now (its gate read where the providers are wired; a provider with
-no gate is taken at its word). The search row's QML gate reads it alongside
-the reactive `signedIn`/`appleEnabled` flags, so a third provider alone keeps
-the row live with no QML edit.
+`searchEnabled()` answers whether any registered provider's SEARCH operation
+is ready. QML caches that answer and refreshes it on neutral and legacy state
+signals. `searchOpportunities()` answers `[{provider, action, action_label,
+message, detail}]` for providers that could fill Search after an explicit
+action, including disabled setup opportunities. The empty state renders and
+dispatches the list without identity branches.
+
+`isProviderLink(text)` is a pure registered-provider allowlist and nonempty-path
+check. The paste decoder uses it for automatic link submission, preserving
+its one-shot paste-button arm and navigation-generation guard. Provider URL
+grammar and result translation stay in Python; a host mentioned in a query,
+an unrelated host or a lookalike never auto-opens.
 
 ## Local library presence (the "in your library" badge)
 
@@ -409,17 +452,21 @@ documented 30-second clip URL directly (no remux).
 
 ## Internal signals (thread hops)
 
-Signals prefixed `_` are not for QML; they marshal work back onto the GUI
-thread: `_albumsQueued` (batch-enqueue a resolved discography),
-`_tracksQueued` (same batch marshalling for individual tracks),
-`_videosQueued` (same batch marshalling for music videos),
-`_artistsQueued` (batch-enqueue a shelf's favourite artists, one discography
-each), `_collectionsQueued(kind, keys)` (batch-enqueue a shelf's favourite
-playlists or mixes),
-`_mediaRefetched` (re-dispatch a download whose object was evicted from the
-cache), `_queueTracksFetched` (merge a track snapshot without racing live
-events), `_folderTreeWarmed(source)` (one source's folder sweep finished;
-the parked drill-ins for that source replay).
+Signals prefixed `_` are Python-only GUI thread hops. Provider tokens and
+event objects stay inside Python; only the public signals carry QML payloads.
+
+| Signal                                                                                     | Payload and delivery                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_providerLoginEvent(event)`                                                               | `LoginEvent(token, phase, url, ok, resume)`; publish committed account truth while its provider epoch is current; apply login-form effects only while its attempt is current |
+| `_catalogEvent(event)`                                                                     | `_CatalogEvent(token, deliver)`; invoke the GUI callback only while its provider context is current                                                                          |
+| `_searchEvent(event)`                                                                      | `_SearchEvent(generation, tokens, payload, status, cache_key, cacheable, paint)`; discard superseded searches and filter revoked providers before delivery                   |
+| `_albumsQueued(token, rows)` / `_tracksQueued(token, rows)` / `_videosQueued(token, rows)` | Batch enqueue a resolved discography, guest tracks or music videos, only while the provider context is current                                                               |
+| `_artistsQueued(token, keys)`                                                              | Batch enqueue a shelf's favourite artists, one discography each, while the context is current                                                                                |
+| `_collectionsQueued(token, kind, keys)`                                                    | Batch enqueue a shelf's favourite playlists or mixes (`kind`), while the context is current                                                                                  |
+| `_mediaRefetched(bucket, mediaId, token)`                                                  | Re-dispatch a download after fetching its evicted object, while the context is current                                                                                       |
+| `_queueRetryRefetched(bucket, mediaId, qid, token)`                                        | Retry the captured queue row only if the context and that row's refetch ownership remain current                                                                             |
+| `_queueTracksFetched(...)`                                                                 | Merge a track snapshot without racing live events                                                                                                                            |
+| `_folderTreeWarmed(source)`                                                                | Replay parked drill-ins after that source's folder sweep finishes                                                                                                            |
 
 The My Music slots name their source, so the doc's payload rule applies to
 them too: `loadLibrary(source, category[, quiet])`,

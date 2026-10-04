@@ -23,6 +23,8 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
+from collections.abc import Iterable
+from copy import deepcopy
 from threading import current_thread, main_thread
 
 from PySide6 import QtGui
@@ -30,13 +32,39 @@ from PySide6.QtCore import Slot
 from tidalapi.exceptions import ObjectNotFound
 
 from waves.constants import CTX_TIDAL, ITEM_FETCH_FAILED, ITEM_GONE
+from waves.desktop.providers.lifecycle import (
+    ProviderContexts,
+    ProviderToken,
+    ScanToken,
+    provider_contexts,
+    scan_current,
+)
 from waves.desktop.worker import Worker
+from waves.ids import DEFAULT_PROVIDER, namespaced_id, provider_of_id
 
 logger = logging.getLogger("waves.queue")
 
 
+def _pending_provider(media_id: str) -> str:
+    """Read the queue's synthetic rollup keys before the media-ID grammar."""
+    head, sep, tail = media_id.partition(":")
+    if head == "fav" and sep:
+        source, separator, _kind = tail.partition(":")
+        return source if separator else DEFAULT_PROVIDER
+    if head == "cat" and sep:
+        return DEFAULT_PROVIDER
+    if head in ("vids", "albums", "artist") and sep:
+        return provider_of_id(tail)
+    return provider_of_id(media_id)
+
+
 class QueueMixin:
     """Queue behavior for WavesBridge. See the module docstring."""
+
+    _provider_contexts: ProviderContexts
+    _scan_gen: int
+    _held_queue_rows: dict[int, tuple[str, dict]]
+    _retry_refetch_tokens: dict[tuple[str, str], tuple[ProviderToken, int]]
 
     def _trim_queue_history(self) -> None:
         """Bound what the finished half of the queue costs, without asking.
@@ -77,7 +105,7 @@ class QueueMixin:
         with self._queue_lock:
             self._qdirty_changed[qid] = None
 
-    def _remove_rows_where(self, pred, withdrawn_out: list[str] | None = None) -> list[int]:
+    def _remove_rows_where(self, pred, withdrawn_out: list[str] | None = None, *, for_hold: bool = False) -> list[int]:
         """Drop every row ``pred`` accepts in ONE pass over the queue, record
         them for QML, and return their qids. The one way a row leaves the
         queue: a per-row rebuild of the list was a quadratic stall when RETRY
@@ -114,10 +142,15 @@ class QueueMixin:
             dropped = [it for it in self._queue if pred(it)]
             if not dropped:
                 return []
+            if for_hold:
+                self._archive_held_rows_locked(dropped)
             gone = [it["qid"] for it in dropped]
+            gone_set = set(gone)
             if withdrawn_out is not None:
                 withdrawn_out.extend(str(it.get("media_id", "") or "") for it in dropped if it["status"] == "queued")
-            self._queue = [it for it in self._queue if not pred(it)]
+            # The abort can change while this lock is held; use the removal
+            # decision already made rather than evaluating its predicate twice.
+            self._queue = [it for it in self._queue if it["qid"] not in gone_set]
             self._reindex_queue()
             self._qdirty_removed.extend(gone)
             # A withdrawn row's quarantine paths are unreachable from the UI
@@ -176,6 +209,168 @@ class QueueMixin:
                 claims.discard(mid)
                 plans.pop(mid, None)
         return gone
+
+    def _archive_held_rows_locked(self, rows: list[dict]) -> None:
+        """Keep only plain visible asks, under the row-removal lock."""
+        archived = getattr(self, "_held_queue_rows", None)
+        if archived is None:
+            archived = self._held_queue_rows = {}
+        for row in rows:
+            spec = self._jobs.specs.get(int(row["qid"]))
+            owner = getattr(spec, "provider_id", "") or provider_of_id(row.get("media_id", ""))
+            archived[row["qid"]] = (owner, deepcopy(row))
+
+    def _withdraw_queue_row_for_hold(self, qid: int) -> bool:
+        """Withdraw an existing active row for recovery without losing its ask.
+
+        A stop that won the queue lock already owns its cancelled row. A
+        removed row or pre-queue hold has nothing to archive or resurrect.
+        The caller discards the replay if this withdrawal is refused.
+        """
+
+        def active(row: dict) -> bool:
+            abort = self._jobs.aborts.get(qid)
+            return (
+                row["qid"] == qid
+                and row.get("status") in ("queued", "running")
+                and not (abort is not None and abort.is_set())
+            )
+
+        return bool(self._remove_rows_where(active, for_hold=True))
+
+    def _forget_held_queue_rows(self, media_ids: Iterable[str]) -> None:
+        """Release archives after replay or deliberate abandonment, not stop."""
+        wanted = {str(mid) for mid in media_ids if mid}
+        if not wanted:
+            return
+        with self._queue_lock:
+            archived = getattr(self, "_held_queue_rows", {})
+            for qid, (_owner, row) in list(archived.items()):
+                if row.get("media_id", "") in wanted:
+                    archived.pop(qid, None)
+
+    def _restore_provider_holds_locked(self, provider_id: str, reason: str) -> list[int]:
+        """Restore archived rows in queue order. Caller holds _queue_lock."""
+        archived = getattr(self, "_held_queue_rows", {})
+        restored = []
+        for qid, (owner, row) in list(archived.items()):
+            if owner != provider_id:
+                continue
+            archived.pop(qid, None)
+            if qid not in self._queue_index:
+                row["status"], row["reason"] = "cancelled", reason
+                restored.append(row)
+        if not restored:
+            return []
+        restored.sort(key=lambda row: row["qid"])
+        # Merge without reordering unrelated rows. One pass even when a large
+        # collection left many asks waiting for the folder to return.
+        kept = []
+        pos = 0
+        for row in self._queue:
+            while pos < len(restored) and restored[pos]["qid"] < row["qid"]:
+                kept.append(restored[pos])
+                pos += 1
+            kept.append(row)
+        self._queue = kept + restored[pos:]
+        self._reindex_queue()
+        # Withdrawal may not have flushed yet. A full snapshot cannot add an
+        # already-visible qid twice or remove the restored row in a later delta.
+        self._qdirty_full = True
+        return [row["qid"] for row in restored]
+
+    def _stop_provider_queue(self, provider_id: str, reason: str) -> int:
+        """Stop only this provider, retaining visible asks and no old replay."""
+        if not provider_id:
+            return 0
+        with self._queue_lock:
+            held_owners = {
+                row.get("media_id", ""): owner for owner, row in getattr(self, "_held_queue_rows", {}).values()
+            }
+            stopped = self._restore_provider_holds_locked(provider_id, reason)
+            for row in self._queue:
+                spec = self._jobs.specs.get(int(row["qid"]))
+                owner = getattr(spec, "provider_id", "") or provider_of_id(row.get("media_id", ""))
+                if owner == provider_id and row.get("status") in ("queued", "running"):
+                    row["status"], row["reason"] = "cancelled", reason
+                    self._qdirty_changed[row["qid"]] = None
+                    stopped.append(row["qid"])
+            stopped_members = {self._queue_index[qid].get("media_id", "") for qid in stopped}
+            retained = {row.get("media_id", "") for row in self._queue if row.get("status") in ("failed", "cancelled")}
+        self._clear_retry_refetches(provider_id)
+        dropped = self._drop_provider_replays(provider_id, held_owners)
+        self._forget_held_queue_rows(dropped)
+        # Settle after the stash no longer advertises outstanding work, or a
+        # restored held row's aggregate waits for a replay we just cancelled.
+        self._stop_provider_rows(stopped)
+        self._release_abandoned_hold([mid for mid in dropped if mid not in retained])
+        for mid in dropped:
+            if mid:
+                self.downloadState.emit(mid, "")
+                if mid not in stopped_members:
+                    # A pre-queue hold has no worker or visible row to settle
+                    # its membership in an existing collection rollup.
+                    self._bump_download_groups(mid, None, "failed")
+        # Revoked refetches/scans cannot settle their aggregates later. Drop
+        # only this owner's rollups, including those with no queued row yet.
+        for name, lock_name in (("_artist_groups", "_artist_lock"), ("_folder_groups", "_folder_lock")):
+            groups = getattr(self, name, {})
+            with getattr(self, lock_name, None) or contextlib.nullcontext():
+                owned = [key for key in groups if _pending_provider(key) == provider_id]
+                for key in owned:
+                    groups.pop(key, None)
+            for key in owned:
+                self.downloadState.emit(key, "")
+        if stopped or dropped:
+            self._emit_queue()
+        return len(stopped)
+
+    def _stop_provider_rows(self, qids: list[int]) -> None:
+        for qid in qids:
+            self._jobs.specs.pop(qid, None)
+            with contextlib.suppress(ValueError):
+                self._pending_qids.remove(qid)
+            abort = self._jobs.aborts.get(qid)
+            if abort is not None:
+                abort.set()
+            row = self._queue_index.get(qid) or {}
+            mid = str(row.get("media_id", "") or "")
+            if mid:
+                self.downloadState.emit(mid, "")
+                # A queued/archived row without a worker cannot settle its
+                # aggregate later. Running workers settle after their abort.
+                if abort is None:
+                    self._bump_download_groups(mid, None, "failed")
+
+    def _drop_provider_replays(self, provider_id: str, held_owners: dict[str, str]) -> list[str]:
+        with self._pending_lock:
+            kept = []
+            dropped = []
+            for mid, replay in self._pending_downloads:
+                owner = held_owners.get(str(mid)) or _pending_provider(str(mid or ""))
+                if owner == provider_id:
+                    dropped.append(str(mid or ""))
+                else:
+                    kept.append((mid, replay))
+            self._pending_downloads = kept
+        if dropped and not kept:
+            poll = getattr(self, "_recovery_poll", None)
+            if poll is not None:
+                poll.stop()
+        return dropped
+
+    def _clear_retry_refetches(self, provider_id: str) -> None:
+        contexts = provider_contexts(self)
+        token = contexts.capture(provider_id)
+
+        def clear() -> None:
+            owners = getattr(self, "_retry_refetch_tokens", {})
+            for key, (owner, _qid) in list(owners.items()):
+                if owner.provider_id == provider_id:
+                    owners.pop(key, None)
+                    self._refetch_inflight.discard(key)
+
+        contexts.commit(token, clear)
 
     def _remove_row(self, qid: int, withdrawn_out: list[str] | None = None) -> bool:
         return bool(self._remove_rows_where(lambda it: it["qid"] == qid, withdrawn_out))
@@ -295,7 +490,7 @@ class QueueMixin:
         if patches:
             self.queueRowsChanged.emit(patches)
 
-    def _enqueue_albums(self, gen: int, keys) -> None:
+    def _enqueue_albums(self, gen: ScanToken | int, keys) -> None:
         """Enqueue a batch of album downloads as a single queue update.
 
         Runs on the GUI thread (via the queued ``_albumsQueued`` signal), so
@@ -307,7 +502,9 @@ class QueueMixin:
         posted before STOP can be DELIVERED after it, and would then queue the
         whole discography behind the press. A stale batch queues nothing and
         resets any button the scan lit for its keys."""
-        if gen != self._scan_gen:
+        if not scan_current(self, gen):
+            if isinstance(gen, ScanToken) and not provider_contexts(self).current(gen.provider):
+                return
             # The scan marked every key exempt from the edition scan before it
             # emitted this batch, and the mark is consumed by the next click
             # on that album. Nothing queued, so nothing consumes them: release
@@ -329,11 +526,13 @@ class QueueMixin:
             for key in keys:
                 self.downloadAlbum(str(key))
 
-    def _enqueue_tracks(self, gen: int, keys) -> None:
+    def _enqueue_tracks(self, gen: ScanToken | int, keys) -> None:
         """Batch counterpart of _enqueue_albums for individual tracks (guest
         appearances from a discography download). Same GUI-thread affinity,
         coalesced queueChanged, and stale-generation refusal rationale."""
-        if gen != self._scan_gen:
+        if not scan_current(self, gen):
+            if isinstance(gen, ScanToken) and not provider_contexts(self).current(gen.provider):
+                return
             for key in keys:
                 self.downloadState.emit(str(key), "")
             return
@@ -341,12 +540,14 @@ class QueueMixin:
             for key in keys:
                 self.downloadTrack(str(key))
 
-    def _enqueue_videos(self, gen: int, keys) -> None:
+    def _enqueue_videos(self, gen: ScanToken | int, keys) -> None:
         """Batch counterpart of _enqueue_albums for an artist's music videos
         (queued by a discography download when the Music videos source is on).
         Same GUI-thread affinity, coalesced queueChanged, and stale-generation
         refusal rationale."""
-        if gen != self._scan_gen:
+        if not scan_current(self, gen):
+            if isinstance(gen, ScanToken) and not provider_contexts(self).current(gen.provider):
+                return
             for key in keys:
                 self.downloadState.emit(str(key), "")
             return
@@ -354,26 +555,30 @@ class QueueMixin:
             for key in keys:
                 self.downloadVideo(str(key))
 
-    def _enqueue_artists(self, gen: int, ids) -> None:
+    def _enqueue_artists(self, gen: ScanToken | int, ids) -> None:
         """Batch counterpart of _enqueue_albums for a shelf's favourite
         artists: each id starts its own discography download. Same
         GUI-thread affinity, coalesced queueChanged, and stale-generation
         refusal (a batch posted before STOP starts no discography after it).
         The artists' own buttons were never lit, so a stale batch only has
         to start nothing."""
-        if gen != self._scan_gen:
+        if not scan_current(self, gen):
+            if isinstance(gen, ScanToken) and not provider_contexts(self).current(gen.provider):
+                return
             return
         with self._queue_batch():
             for artist_id in ids:
                 self.downloadArtist(str(artist_id))
 
-    def _enqueue_collections(self, gen: int, kind: str, keys) -> None:
+    def _enqueue_collections(self, gen: ScanToken | int, kind: str, keys) -> None:
         """Batch counterpart of _enqueue_albums for a shelf's favourite
         playlists or mixes (``kind`` is "playlist" or "mix"). Same
         GUI-thread affinity, coalesced queueChanged, and stale-generation
         refusal rationale."""
         start = self.downloadPlaylist if kind == "playlist" else self.downloadMix
-        if gen != self._scan_gen:
+        if not scan_current(self, gen):
+            if isinstance(gen, ScanToken) and not provider_contexts(self).current(gen.provider):
+                return
             return
         with self._queue_batch():
             for key in keys:
@@ -919,11 +1124,27 @@ class QueueMixin:
         re-fetch leaves RETRY available instead of consuming the row."""
         bucket, media_id, qid = item["type"], item["media_id"], item["qid"]
         key = (bucket, media_id)
-        if key in self._refetch_inflight or not self._logged_in:
+        provider_id = provider_of_id(media_id)
+        if provider_id == CTX_TIDAL and not self._logged_in:
             return
-        self._refetch_inflight.add(key)
-        gen = self._browse_gen
-        self._set_status("Fetching item…")
+        contexts = provider_contexts(self)
+        gen = contexts.capture(provider_id)
+        started = False
+
+        def begin() -> None:
+            nonlocal started
+            if key in self._refetch_inflight:
+                return
+            owners = getattr(self, "_retry_refetch_tokens", None)
+            if owners is None:
+                owners = self._retry_refetch_tokens = {}
+            owners[key] = (gen, qid)
+            self._refetch_inflight.add(key)
+            self._set_status("Fetching item…")
+            started = True
+
+        if not contexts.commit(gen, begin) or not started:
+            return
 
         def work() -> None:
             obj = None
@@ -931,8 +1152,8 @@ class QueueMixin:
             plan = None
             needs_rebind = False
             try:
-                provider = self.providers[CTX_TIDAL]
-                obj = provider.get_object(bucket, media_id)
+                provider = self.providers[provider_id]
+                obj = provider.get_object(bucket, namespaced_id(media_id).partition(":")[2])
                 # A merge whose plan died with a sign-out is rebuilt
                 # through this session; if that fails the row stays
                 # failed rather than retrying as a plain album.
@@ -946,35 +1167,55 @@ class QueueMixin:
             except ObjectNotFound:
                 gone = True
                 obj = None
-                logger.info("Item %s %s is no longer on TIDAL", bucket, media_id)
+                logger.info("Item %s %s is no longer on %s", bucket, media_id, provider_id)
             except Exception:
                 obj = None
                 logger.exception("Could not re-fetch %s %s for retry", bucket, media_id)
-            if gen != self._browse_gen:
-                self._refetch_inflight.discard(key)
-                return
-            if plan is not None:
-                getattr(self, "_merge_plans", {})[media_id] = plan
-                getattr(self, "_merge_plans_unbound", {}).pop(media_id, None)
-            elif needs_rebind:
+            if needs_rebind and plan is None:
                 # The plan was needed but could not be rebuilt: never
                 # degrade a best-of-both retry to a plain album. Fall
                 # through to the fetch-failed branch below.
                 obj = None
-            if obj is None:
-                self._refetch_inflight.discard(key)
-                self._set_status(ITEM_GONE if gone else ITEM_FETCH_FAILED)
-                return
-            self._remember(bucket, media_id, obj)
-            self._queueRetryRefetched.emit(bucket, media_id, qid)
+
+            def publish() -> None:
+                owners = getattr(self, "_retry_refetch_tokens", {})
+                if owners.get(key) != (gen, qid):
+                    return
+                if plan is not None:
+                    getattr(self, "_merge_plans", {})[media_id] = plan
+                    getattr(self, "_merge_plans_unbound", {}).pop(media_id, None)
+                if obj is None:
+                    owners.pop(key, None)
+                    self._refetch_inflight.discard(key)
+                    self._set_status(ITEM_GONE if gone else ITEM_FETCH_FAILED)
+                    return
+                self._remember(bucket, media_id, obj)
+                self._queueRetryRefetched.emit(bucket, media_id, qid, gen)
+
+            contexts.commit(gen, publish)
 
         self.threadpool.start(Worker(work))
 
-    def _on_queue_retry_refetched(self, bucket: str, media_id: str, qid: int) -> None:
+    def _on_queue_retry_refetched(
+        self, bucket: str, media_id: str, qid: int, token: ProviderToken | None = None
+    ) -> None:
         # GUI-thread dispatch, same anti-double-click gap rule as
         # _on_media_refetched: the in-flight marker lives until here.
-        self._refetch_inflight.discard((bucket, media_id))
-        self.retryQueueItem(qid)
+        key = (bucket, media_id)
+
+        def dispatch() -> None:
+            owners = getattr(self, "_retry_refetch_tokens", {})
+            owner = owners.get(key)
+            if owner is not None and owner != (token, qid):
+                return
+            owners.pop(key, None)
+            self._refetch_inflight.discard(key)
+            self.retryQueueItem(qid)
+
+        if token is None:
+            dispatch()  # compatibility for direct legacy calls, never current workers
+        elif token.provider_id == provider_of_id(media_id):
+            provider_contexts(self).commit(token, dispatch)
 
     @Slot(str, str)
     def copyShareUrl(self, bucket: str, media_id: str) -> None:

@@ -64,6 +64,7 @@ import pytest
 from tidalapi.album import Album
 
 from waves.desktop.backend import WavesBridge
+from waves.desktop.providers.lifecycle import scan_generation
 
 ARTIST_ID = 7
 _ARTIST_CREDIT = SimpleNamespace(name="Halcyon Drift", id=ARTIST_ID)
@@ -198,6 +199,7 @@ def _bridge(session):
     from waves.providers.tidal import TidalProvider
 
     bridge = WavesBridge.__new__(WavesBridge)
+    bridge._catalogEvent = SimpleNamespace(emit=lambda event: WavesBridge._on_catalog_event(bridge, event))
     bridge._objs = {"artist": {}, "album": {}}
     bridge._objs_lock = Lock()
     bridge._objs_max = 32
@@ -388,7 +390,7 @@ def test_a_genuinely_single_edition_album_still_says_so_and_downloads():
     bridge.downloadAlbumBestOfBoth("a1")
 
     assert bridge.statusChanged.texts[-1] == "Only one edition of this album; downloading it"
-    assert bridge._albumsQueued.emits == [(0, ["a1"])]
+    assert bridge._albumsQueued.emits == [(scan_generation(bridge), ["a1"])]
     assert bridge.downloadState.emits == [("a1", "preparing")]
     assert session.calls == [str(ARTIST_ID)]
     assert artist.asked == ["get_albums", "get_ep_singles", "get_other"]

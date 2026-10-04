@@ -57,6 +57,7 @@ class RecoveryHost:
     _downloads_running = WavesBridge._downloads_running
     _stash_pending_download = WavesBridge._stash_pending_download
     _run_pending_downloads = WavesBridge._run_pending_downloads
+    _forget_held_queue_rows = WavesBridge._forget_held_queue_rows
     _recovery_probe = WavesBridge._recovery_probe
     _on_folder_recovered = WavesBridge._on_folder_recovered
     # Proof of life records the share's origin (real method, real state: no
@@ -97,6 +98,7 @@ class RecoveryHost:
         self._base_ok = ("", 0.0)
         self._pending_downloads: list = []
         self._pending_lock = Lock()
+        self._queue_lock = Lock()
         self._queue: list[dict] = []
         self._recovery_poll = _Timer()
         self._recovery_inflight = False

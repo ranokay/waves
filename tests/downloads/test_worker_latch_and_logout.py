@@ -15,13 +15,15 @@
 
 from __future__ import annotations
 
-import inspect
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
+
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
-from waves.providers import Capability
+from waves.desktop.providers.lifecycle import provider_contexts
+from waves.providers import Capability, ProviderDescriptor
 
 
 class _Signal:
@@ -42,6 +44,12 @@ class _StubBase:
     """The attributes every slot under test shares."""
 
     def __init__(self):
+        self._logged_in = True
+        self.providers = {
+            "tidal": StubProvider(
+                "tidal", "TIDAL", capabilities={Capability.CATALOG, Capability.FAVORITES}, logged_in=True
+            )
+        }
         self.threadpool = _InlinePool()
         self.statuses: list[str] = []
         self.busy: list[bool] = []
@@ -218,7 +226,11 @@ def test_a_choking_link_payload_clears_busy(monkeypatch):
     # the payload lands in the albums bucket); the builder then chokes.
     from tidalapi.album import Album
 
-    stub.providers = {"tidal": SimpleNamespace(open_url=lambda url: Album.__new__(Album))}
+    provider = stub.providers["tidal"]
+    provider.capabilities |= {Capability.OPEN_URL}
+    provider.open_url = lambda url: {"kind": "album", "item": Album.__new__(Album)}
+    provider.row_for = lambda kind, item: stub._album_dict(item)
+    provider.descriptor = lambda: ProviderDescriptor(id="tidal", name="TIDAL", link_hosts=("tidal.com",))
 
     stub._open_url("https://tidal.com/album/42")
 
@@ -285,12 +297,44 @@ def test_an_unresolvable_library_artist_still_reports_failure():
 # Sign-out fences
 # --------------------------------------------------------------------------- #
 def test_logout_supersedes_every_inflight_search():
-    # The workers guard on _search_gen; logout must bump it or a search still
-    # in flight emits after "Signed out" and repoisons the caches logout just
-    # cleared. Behavior is pinned at the source because logout touches half
-    # the bridge and stubbing it whole would test the stub.
-    source = inspect.getsource(WavesBridge.logout)
-    assert "_search_gen += 1" in source
+    bridge = _SearchStub()
+    provider = StubProvider("tidal", "TIDAL", capabilities={Capability.SEARCH}, logged_in=True)
+    provider.search = lambda needle: {"albums": [SimpleNamespace(id="42")]}
+    bridge.providers = {"tidal": provider}
+    bridge._album_dict = lambda album: {"id": album.id}
+    bridge._top_hit_dict = lambda hit: None
+    bridge._searchEvent = _Signal()
+    bridge._SEARCH_CACHE_MAX = WavesBridge._SEARCH_CACHE_MAX
+    bridge._remember_search = WavesBridge._remember_search.__get__(bridge)
+    bridge._save_page_cache = lambda: None
+    bridge.logout = WavesBridge.logout.__get__(bridge)
+    bridge._end_provider_context = WavesBridge._end_provider_context.__get__(bridge)
+    bridge._stop_provider_downloads = lambda provider_id, reason: 0
+    bridge._schedule_provider_cache_clear = lambda provider_id: None
+    bridge._start_provider_logout = lambda provider_id: None
+    bridge._set_login_busy = lambda provider_id, busy: None
+    bridge._set_logged_in = lambda value: setattr(bridge, "_logged_in", value)
+    bridge.providerStateChanged = _Signal()
+
+    # First prove this result can paint and populate the actual search cache.
+    bridge.search("first")
+    first = bridge._searchEvent.emits.pop()[0]
+    WavesBridge._on_search_event(bridge, first)
+    assert bridge.searchResults.emits[-1][0]["groups"][0]["albums"] == [{"id": "42"}]
+    assert "tidal:first" in bridge._search_cache
+    bridge.searchResults.emits.clear()
+
+    # Hold the next completed worker result at the GUI relay across logout.
+    bridge.search("second")
+    late = bridge._searchEvent.emits.pop()[0]
+    assert late.cacheable
+    bridge.logout()
+    WavesBridge._on_search_event(bridge, late)
+
+    assert bridge.searchResults.emits == []
+    assert bridge._search_cache == {}
+    assert bridge.statuses[-1] == "Signed out"
+    assert bridge.busy[-1] is False
 
 
 class _AlbumTracksStub(_StubBase):
@@ -351,7 +395,7 @@ def test_playlist_tracks_landing_after_logout_are_dropped(monkeypatch):
     stub = _PlaylistTracksStub()
 
     def fetch(obj):
-        stub._browse_gen += 1  # logout mid-fetch
+        provider_contexts(stub).revoke("tidal")
         return [], True
 
     monkeypatch.setattr(backend, "_all_playlist_items", fetch)

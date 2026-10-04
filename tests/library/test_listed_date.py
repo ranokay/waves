@@ -23,9 +23,11 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from providers.fakes import StubProvider
 
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
+from waves.providers import Capability
 
 UTC = dt.UTC
 
@@ -167,6 +169,11 @@ class _PageStub:
     def __init__(self, artist):
         self.threadpool = _Pool()
         self._artist = artist
+        self.providers = {
+            "tidal": StubProvider(
+                "tidal", "TIDAL", capabilities={Capability.CATALOG, Capability.FAVORITES}, logged_in=True
+            )
+        }
         self._artist_cache = {}
         self._artist_loading = set()
         self._artist_prefetch = None
@@ -265,7 +272,15 @@ def test_a_snapshot_from_before_listed_dates_is_discarded(tmp_path):
     stub._load_page_cache()
     assert stub._artist_cache == {}
 
-    path.write_text(json.dumps({"version": backend._PAGE_CACHE_VERSION, "user": "u1", "artists": {"3616281": page}}))
+    path.write_text(
+        json.dumps(
+            {
+                "version": backend._PAGE_CACHE_VERSION,
+                "accounts": WavesBridge._cache_accounts(stub),
+                "artists": {"3616281": page},
+            }
+        )
+    )
     stub = _CacheStub(path)
     stub._load_page_cache()
     assert stub._artist_cache == {"3616281": page}

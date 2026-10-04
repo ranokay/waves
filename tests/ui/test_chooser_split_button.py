@@ -346,7 +346,7 @@ def _held_bridge(**over):
     b._download_gate = lambda: "nudge"
     b._pending_downloads = []
     b._pending_lock = Lock()
-    _bind(b, "_stash_pending_download", "_run_pending_downloads", "_chooser_replay")
+    _bind(b, "_stash_pending_download", "_run_pending_downloads", "_forget_held_queue_rows", "_chooser_replay")
     return b
 
 

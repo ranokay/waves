@@ -243,7 +243,7 @@ def test_a_failed_install_lets_go_too():
 def test_backend_writer_stages_through_a_name_of_its_own(tmp_path, monkeypatch):
     import os
 
-    from waves.desktop.backend import write_text_atomic
+    from waves.desktop.settings.persistence import write_text_atomic
 
     staged: list[str] = []
     real_replace = os.replace
@@ -252,7 +252,7 @@ def test_backend_writer_stages_through_a_name_of_its_own(tmp_path, monkeypatch):
         staged.append(os.path.basename(src))
         return real_replace(src, dst)
 
-    monkeypatch.setattr("waves.desktop.backend.os.replace", replace)
+    monkeypatch.setattr("waves.desktop.settings.persistence.os.replace", replace)
     target = str(tmp_path / "waves.json")
 
     write_text_atomic(target, "{}")

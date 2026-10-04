@@ -154,6 +154,25 @@ def _run_factory_reset(base, monkeypatch, stub=None):
     return stub, original_store
 
 
+def test_factory_reset_revokes_every_provider_and_cancels_generic_login(tmp_path, monkeypatch):
+    from waves.desktop.providers.auth import ActiveLogin
+    from waves.desktop.providers.lifecycle import provider_contexts
+
+    stub = _reset_stub()
+    stub.providers = {"paper": None, "linen": None}
+    contexts = provider_contexts(stub)
+    token = contexts.start_login("paper")
+    other = contexts.capture("linen")
+    stub._provider_login_attempts = {"paper": ActiveLogin(token)}
+    busy = {"paper"}
+    stub._set_login_busy = lambda provider_id, value: busy.discard(provider_id)
+    base = tmp_path / "cfg"
+    base.mkdir()
+    _run_factory_reset(base, monkeypatch, stub)
+    assert not contexts.current(token) and not contexts.current(other)
+    assert not stub._provider_login_attempts and not busy
+
+
 def test_factory_reset_wipes_waves_files_and_keeps_install_channel(tmp_path, monkeypatch):
     base = tmp_path / "cfg"
     base.mkdir()

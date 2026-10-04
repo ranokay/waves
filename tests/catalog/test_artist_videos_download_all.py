@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from support.paths import QML_DIR, QML_MAIN
 
 from waves.desktop.backend import _ARTIST_VIDEO_PAGE, _VIDEOS_GROUP_PREFIX, WavesBridge
+from waves.desktop.providers.lifecycle import scan_generation
 
 QML = QML_MAIN.read_text(encoding="utf-8")
 # SectionHeader lives in its own file; the pin follows it.
@@ -106,7 +107,7 @@ def test_it_queues_every_video_and_nothing_else():
     artist = _Artist([SimpleNamespace(id="v1"), SimpleNamespace(id="v2")])
     stub = _Stub(artist)
     stub.downloadArtistVideos("art1")
-    assert stub._videosQueued.emits == [(0, ["v1", "v2"])]
+    assert stub._videosQueued.emits == [(scan_generation(stub), ["v1", "v2"])]
     assert stub.remembered == [("video", "v1"), ("video", "v2")]
     assert any("2 videos" in s for s in stub.statuses)
 
@@ -117,7 +118,7 @@ def test_it_works_with_the_discography_video_toggle_off():
     artist = _Artist([SimpleNamespace(id="v1")])
     stub = _Stub(artist, video_download=False)
     stub.downloadArtistVideos("art1")
-    assert stub._videosQueued.emits == [(0, ["v1"])]
+    assert stub._videosQueued.emits == [(scan_generation(stub), ["v1"])]
 
 
 def test_the_group_is_namespaced_away_from_the_discography_button():

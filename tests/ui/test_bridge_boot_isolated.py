@@ -29,7 +29,10 @@ pytestmark = [pytest.mark.qml, pytest.mark.integration]
 def _wait_for(predicate, *, timeout: float = 30.0, step: float = 0.05) -> bool:
     """Poll a bridge property that a worker resolves, or the scan publishes."""
     deadline = time.monotonic() + timeout
+    from PySide6.QtCore import QCoreApplication
+
     while time.monotonic() < deadline:
+        QCoreApplication.processEvents()
         if predicate():
             return True
         time.sleep(step)
@@ -73,8 +76,11 @@ def test_a_real_bridge_boots_from_isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
+    from PySide6.QtCore import QCoreApplication
+
     from waves.desktop.backend import WavesBridge
 
+    _qt_app = QCoreApplication.instance() or QCoreApplication([])
     _pop_singletons()
     bridge: WavesBridge | None = None
     try:

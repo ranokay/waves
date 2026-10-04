@@ -23,7 +23,10 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
+
 from waves.desktop import backend
+from waves.providers import Capability
 
 
 class _DeferredPool:
@@ -59,6 +62,8 @@ def _album(tracks):
 def _bridge(album=None):
     b = backend.WavesBridge.__new__(backend.WavesBridge)
     b._logged_in = True
+    b.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.CATALOG}, logged_in=True)}
+    b._tracked_sessions = {"tidal"}
     b._objs = {"album": {}, "track": {}}
     b._objs_lock = Lock()
     b._prefetch_lock = Lock()
@@ -68,6 +73,7 @@ def _bridge(album=None):
     b.threadpool = _DeferredPool()
     b.albumTracksLoaded = _Signal()
     b.collectionMembershipChanged = _Signal()
+    b._catalogEvent = None  # This Qt-free fixture delivers guarded results inline.
     b._ownership = SimpleNamespace(record_members_replace=_Signal().emit)
     b._recorded = []
     b._ownership.record_members_replace = lambda aid, ids: b._recorded.append((aid, list(ids)))

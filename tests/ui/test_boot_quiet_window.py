@@ -73,7 +73,7 @@ ALLOWED_BOOT_JOBS = {
     # The diagnostics log queue drain: asleep until a record is queued.
     "QueueListener._monitor",
     # The saved-session login: one HTTPS round trip.
-    "WavesBridge._try_token_login.<locals>.work",
+    "start_login.<locals>.<lambda>",
     # The settings writer: asleep until a save is queued.
     "SingleFlightWriter._run",
 }

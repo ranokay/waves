@@ -2,7 +2,7 @@
 
 WHAT THIS FENCES OFF
 --------------------
-``onLoggedInChanged`` clears ``navHistory`` on an account switch because
+``onProviderStateChanged`` clears ``navHistory`` on an account switch because
 history snapshots hold page payloads (personalized rows) and artist ids from
 the previous account. Leaving ``navForwardHistory`` (mouse forward side button
 navigation) out of that reset lets a snapshot pushed onto it by ``navBack()``
@@ -12,7 +12,7 @@ data, exactly the cross-account leak the back-stack reset exists to prevent.
 
 HOW THIS STAYS FIXED
 --------------------
-``onLoggedInChanged`` clears ``navForwardHistory`` alongside ``navHistory``.
+``onProviderStateChanged`` clears ``navForwardHistory`` alongside ``navHistory``.
 
 The same reset also drops the armed Browse-category intent
 (``catPendingDl`` / ``catPendingPv`` / ``catDlPrompt``), which leaked the same
@@ -25,7 +25,7 @@ HOW IT IS RUN
 -------------
 Boots the REAL ``Main.qml``, drills into a distinctively-titled Browse item,
 presses Back (populating ``navForwardHistory`` with that item's snapshot),
-fires the bridge's ``loggedInChanged`` signal (the account-switch trigger),
+fires the bridge's ``providerStateChanged`` signal (the account-switch trigger),
 and asserts the forward stack is empty and that pressing Forward afterward
 never resurfaces the old item. Runs in a SUBPROCESS for the same reason as
 ``test_browse_back_scroll.py``: constructing the bridge installs a
@@ -153,9 +153,8 @@ def _run_scenario() -> int:
         print(f"forward-history top was not the expected marker page: {top_title!r}", file=sys.stderr)
         return EXIT_PRECONDITION
 
-    # 3. Simulate an account switch: this is the real trigger onLoggedInChanged
-    #    responds to, independent of the actual loggedIn value.
-    bridge.loggedInChanged.emit()
+    # 3. Simulate TIDAL account revocation through the provider-owned trigger.
+    bridge.providerStateChanged.emit("tidal")
 
     remaining = q("navForwardHistory.length")
     if remaining != 0:
@@ -184,7 +183,7 @@ def _run_scenario() -> int:
     q('catPendingDl = "pages/genre-rock"')
     q('catPendingPv = "pages/genre-jazz"')
     q('catDlPrompt = ({path: "pages/genre-rock", title: "Rock", count: 12})')
-    bridge.loggedInChanged.emit()
+    bridge.providerStateChanged.emit("tidal")
     armed = [
         name
         for name, expr in (

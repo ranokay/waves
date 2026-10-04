@@ -32,6 +32,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from providers.qml_auth import CallbackLoginAttempt
 from support.qml import (
     EXIT_NO_QT,
     EXIT_OK,
@@ -219,6 +220,7 @@ def _run_scenario() -> int:  # noqa: C901 (one straight scenario)
     tidal = bridge.providers["tidal"]
     tidal.login_begin = lambda: "https://tidal.test/authorize"
     tidal.login_complete = lambda url: str(url).startswith("https://tidal.test/")
+    tidal.create_login_attempt = lambda **kwargs: CallbackLoginAttempt(tidal.login_begin, tidal.login_complete)
 
     # A fresh profile: logged-out session resolved, nothing answered.
     bridge._session_resolved = True

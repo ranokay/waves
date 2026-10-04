@@ -15,16 +15,19 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from providers.fakes import StubProvider
 from updates.fakes import make_manifest as _manifest
 from updates.fakes import prep_updater as _prep
 
 from waves.desktop import backend as backend_mod
 from waves.desktop.backend import WavesBridge, _graft_scroll_growth
+from waves.desktop.providers.lifecycle import provider_contexts
 from waves.desktop.queue.runtime import JobRuntime
 from waves.desktop.updates import signing as signing
 from waves.desktop.updates.updater import UpdateCancelled
 from waves.metadata.naming import name_builder_album_artist
 from waves.paths import FILENAME_LENGTH_MAX, format_path_media, path_file_uniquify
+from waves.providers import Capability
 from waves.providers.tidal_client import user_media_lists
 
 BACKEND_SRC = pathlib.Path(backend_mod.__file__).read_text(encoding="utf-8")
@@ -59,11 +62,21 @@ class _HeldPool:
 class _LogoutStub:
     logout = WavesBridge.logout
     _unbind_merge_plans = WavesBridge._unbind_merge_plans
+    _end_provider_context = WavesBridge._end_provider_context
 
     def __init__(self):
         self.events: list = []
         # logout() ends the downloads before it touches the session.
-        self.stopAll = lambda: self.events.append("stopAll")
+        self.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities=set(Capability), logged_in=True)}
+        self._stop_provider_downloads = lambda pid, reason: 0
+        self._schedule_provider_cache_clear = lambda pid: self.events.append(
+            ("prune", provider_contexts(self).capture(pid))
+        )
+        self._set_login_busy = lambda pid, busy: None
+        self._start_provider_logout = lambda pid: None
+        self.providerStateChanged = _Signal()
+        self._queue = [{"qid": 7, "media_id": "7"}, {"qid": 8, "media_id": "paper:8"}]
+        self._queue_lock = Lock()
         self.tidal = SimpleNamespace(logout=lambda: None)
         self._reset_tidal_session = lambda: None
         # logout() drops the dead session's kept objects and scan marks, and
@@ -127,21 +140,24 @@ class _LogoutStub:
 
 def test_logout_clears_the_old_accounts_live_objects():
     stub = _LogoutStub()
-    stub._jobs.objs = {"7": object()}
+    other_object = object()
+    stub._jobs.objs = {7: object(), 8: other_object}
+
     stub._merge_scanned = {"7"}
     stub.logout()
     assert stub._objs == {"album": {}, "track": {}}, "revisited ids must re-fetch through the NEW session"
-    assert stub._jobs.objs == {}, "a RETRY on the next account would download under the old token"
+    assert stub._jobs.objs == {8: other_object}, "only the signed-out account's kept job objects are dropped"
     assert stub._merge_scanned == set(), "the next account must re-scan"
 
 
-def test_logout_flips_the_flag_before_deleting_the_snapshot():
+def test_logout_revokes_old_worker_authority_before_scheduling_disk_pruning():
     stub = _LogoutStub()
-    with patch.object(backend_mod.os, "remove", side_effect=lambda p: stub.events.append(("remove", p))):
-        stub.logout()
-    assert stub.events.index(("logged_in", False)) < stub.events.index(("remove", stub._page_cache_path)), (
-        "a worker mid-save must already see logged_in False when the file goes"
-    )
+    captured = provider_contexts(stub).capture("tidal")
+    seen = []
+    stub._schedule_provider_cache_clear = lambda pid: seen.append(provider_contexts(stub).current(captured))
+    stub.logout()
+    assert seen == [False]
+    assert ("logged_in", False) in stub.events
 
 
 # Capped-cache eviction is serialized (two workers evicting
@@ -248,7 +264,7 @@ class _MoreStub:
 
     def __init__(self):
         self._logged_in = True
-        self.providers = {"tidal": object()}
+        self.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)}
         self._lib_cache = {("tidal", "albums"): {"items": [{"id": "old"}], "offset": 40, "more": True}}
         self._lib_loading: set = set()
         self._lib_epoch = 0

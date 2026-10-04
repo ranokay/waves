@@ -19,9 +19,11 @@ import os
 import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
+from urllib.parse import urlsplit
 
 # ============================================================================
 # The row-dict schema (the catalog contract with QML)
@@ -278,6 +280,63 @@ class Capability(StrEnum):
     PREVIEW = "preview"
 
 
+class AccountState(StrEnum):
+    SIGNED_IN = "signed_in"
+    SIGNED_OUT = "signed_out"
+    UNKNOWN = "unknown"
+
+
+class ReadinessState(StrEnum):
+    READY = "ready"
+    DISABLED = "disabled"
+    SIGN_IN_REQUIRED = "sign_in_required"
+    SETUP_REQUIRED = "setup_required"
+    UNKNOWN = "unknown"
+    UNSUPPORTED = "unsupported"
+
+
+@dataclass(frozen=True)
+class OperationReadiness:
+    operation: Capability
+    state: ReadinessState
+    action: str = ""
+
+
+@dataclass(frozen=True)
+class ProviderReadiness:
+    """A live snapshot, separate from a provider's static descriptor.
+
+    Each operation answers for itself: an account or provisioned runtime is
+    not evidence that every catalog or delivery operation can run.
+    """
+
+    enabled: bool | None
+    account: AccountState
+    operations: tuple[OperationReadiness, ...]
+
+    def for_operation(self, operation: Capability) -> OperationReadiness:
+        return next(
+            (item for item in self.operations if item.operation == operation),
+            OperationReadiness(operation, ReadinessState.UNSUPPORTED),
+        )
+
+
+@dataclass(frozen=True)
+class CatalogLink:
+    kind: str
+    row: dict
+
+
+class LoginAttempt(Protocol):
+    """A provider-private candidate; validation cannot mutate live credentials."""
+
+    def begin(self) -> str: ...
+    def validate(self, payload: str) -> bool: ...
+    def persist(self, commit_if_current: Callable[[Callable[[], None]], bool]) -> bool: ...
+    def reject(self, commit_if_current: Callable[[Callable[[], None]], bool]) -> bool: ...
+    def discard(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class QualityOption:
     """One rung a provider's Chooser offers.
@@ -337,6 +396,8 @@ class ProviderDescriptor:
     welcome_action: str = ""  # the welcome card's action label (the provider's own words)
     settings_fields: tuple[str, ...] = ()
     status_kind: StatusKind = StatusKind.SESSION
+    link_hosts: tuple[str, ...] = ()
+    login_flow: str = "browser"
 
 
 class RefusalKind(StrEnum):
@@ -541,6 +602,7 @@ class Provider(ABC):
     id: str
     name: str
     capabilities: frozenset[Capability]
+    public_operations: frozenset[Capability] = frozenset()
 
     downloads: DownloadAdapter | None = None
     """This provider's download ask surface (see :class:`DownloadAdapter`),
@@ -609,7 +671,94 @@ class Provider(ABC):
         its card owns. See :class:`ProviderDescriptor`."""
         return ProviderDescriptor(id=cls.id, name=cls.name)
 
+    def readiness(self, *, enabled: bool | None = True, signed_in: bool | None = None) -> ProviderReadiness:
+        """Compose this service's account policy from current, explicit facts.
+
+        Desktop adapters can refine delivery setup without changing catalog
+        eligibility. StatusKind describes a card; it never grants an operation.
+        """
+        account = (
+            AccountState.UNKNOWN
+            if signed_in is None
+            else AccountState.SIGNED_IN
+            if signed_in
+            else AccountState.SIGNED_OUT
+        )
+        operations = []
+        for operation in Capability:
+            action = ""
+            if operation not in self.capabilities:
+                state = ReadinessState.UNSUPPORTED
+            elif enabled is False:
+                state, action = ReadinessState.DISABLED, "setup"
+            elif enabled is None:
+                state = ReadinessState.UNKNOWN
+            elif operation in getattr(self, "public_operations", frozenset()) or account == AccountState.SIGNED_IN:
+                state = ReadinessState.READY
+            elif account == AccountState.SIGNED_OUT:
+                state, action = ReadinessState.SIGN_IN_REQUIRED, "signin"
+            else:
+                state = ReadinessState.UNKNOWN
+            operations.append(OperationReadiness(operation, state, action))
+        return ProviderReadiness(enabled, account, tuple(operations))
+
+    def accepts_url(self, url: str) -> bool:
+        """Match only this provider's declared hosts, including subdomains."""
+        try:
+            parsed = urlsplit(url if "://" in url else f"https://{url}")
+            if parsed.scheme not in ("http", "https") or parsed.username or parsed.password:
+                return False
+            host = (parsed.hostname or "").lower()
+            return any(host == allowed or host.endswith(f".{allowed}") for allowed in self.descriptor().link_hosts)
+        except ValueError:
+            return False
+
+    def resolve_link(self, url: str) -> CatalogLink | None:
+        """Resolve and translate a link inside its owning provider.
+
+        The neutral catalog result is a kind/item mapping. SDK providers
+        override this translation; SDK objects never become a QML payload.
+        """
+        if not self.accepts_url(url):
+            return None
+        resolved = self.open_url(url)
+        if not isinstance(resolved, dict):
+            return None
+        kind = str(resolved.get("kind") or "")
+        if kind not in ("artist", "album", "track", "video", "playlist", "mix"):
+            return None
+        row = self.row_for(kind, resolved.get("item"))
+        return CatalogLink(kind, row) if row else None
+
+    def catalog_context(self) -> AbstractContextManager[None]:
+        """Capture the service's context for a scheduled catalog read."""
+        return nullcontext()
+
+    def invalidate_catalog_context(self) -> None:
+        """Discard account/context-bound catalog caches without closing workers."""
+        return None
+
+    def session_teardown_context(self) -> AbstractContextManager:
+        """Worker-only barrier before replacing resources used by old jobs."""
+        return nullcontext()
+
+    def collection_rows(self, obj, include_videos: bool = True) -> list:
+        """Translate collection members using this provider's row vocabulary."""
+        rows = []
+        for item in self.collection_items(obj, include_videos=include_videos):
+            kind = "video" if self.media_kind(item) == MediaType.VIDEO else "track"
+            row = self.row_for(kind, item)
+            if row:
+                rows.append({**row, "kind": kind})
+        return rows
+
     # ----- session / auth
+
+    def create_login_attempt(
+        self, *, resume: bool = False, register_secrets: Callable[[dict[str, str]], None] | None = None
+    ) -> LoginAttempt:
+        """Create a detached auth candidate for cancellable desktop sign-in."""
+        raise NotImplementedError
 
     @abstractmethod
     def login_begin(self) -> str:

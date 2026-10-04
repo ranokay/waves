@@ -36,6 +36,7 @@ from tidalapi.album import Album
 from tidalapi.media import AudioMode, Quality
 
 from waves.desktop.backend import _drop_spatial_editions
+from waves.desktop.providers.lifecycle import scan_generation
 
 ATMOS = AudioMode.dolby_atmos.value
 
@@ -145,7 +146,7 @@ def test_download_artist_queues_only_the_stereo_edition_with_the_setting_off():
     atmos = _album("a", "Album", [ATMOS])
     stub = _AtmosDiscoStub([stereo, atmos], atmos_on=False)
     stub.downloadArtist("art1")
-    assert stub._albumsQueued.emits == [(0, ["s"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["s"])]
 
 
 def test_download_artist_queues_both_editions_with_the_setting_on():
@@ -153,11 +154,11 @@ def test_download_artist_queues_both_editions_with_the_setting_on():
     atmos = _album("a", "Album", [ATMOS])
     stub = _AtmosDiscoStub([stereo, atmos], atmos_on=True)
     stub.downloadArtist("art1")
-    assert stub._albumsQueued.emits == [(0, ["s", "a"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["s", "a"])]
 
 
 def test_download_artist_keeps_a_spatial_release_with_no_twin_with_the_setting_off():
     lone = _album("a", "Spatial Only", [ATMOS])
     stub = _AtmosDiscoStub([lone], atmos_on=False)
     stub.downloadArtist("art1")
-    assert stub._albumsQueued.emits == [(0, ["a"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["a"])]

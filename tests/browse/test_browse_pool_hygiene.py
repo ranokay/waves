@@ -8,9 +8,8 @@ discipline its siblings already keep:
   contract: every new pool registers), or they are invisible to it.
 * The popularity cache must not be inserted into, and trimmed, with no lock
   while an older search's pool can still be inserting.
-* The sign-out and paste-a-link paths must take the object lock when they
-  clear the shared object buckets, the same as search does for the identical
-  clear.
+* Search evicts its provider objects under the object lock; opening a link
+  preserves objects that other provider views still need.
 * Expanding a hover-prefetched album must not run an ownership commit on the
   GUI thread.
 * Two tile-art crawls must not pass the same check-then-set; the last to
@@ -24,9 +23,11 @@ from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
+
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
-from waves.providers import Capability
+from waves.providers import Capability, ProviderDescriptor
 
 BACKEND_SRC = Path(backend.__file__).read_text(encoding="utf-8")
 
@@ -180,11 +181,9 @@ def _run_search(monkeypatch, n_artists: int):
     stub = _SearchStub()
     artists = [SimpleNamespace(id=f"a{i}", name=f"Artist {i}") for i in range(n_artists)]
     # The search fetch rides the Provider seam.
-    stub.providers = {
-        "tidal": SimpleNamespace(
-            capabilities=frozenset({Capability.SEARCH}), search=lambda needle: {"artists": artists}
-        )
-    }
+    provider = StubProvider("tidal", "TIDAL", capabilities={Capability.SEARCH}, logged_in=True)
+    provider.search = lambda needle: {"artists": artists}
+    stub.providers = {"tidal": provider}
     monkeypatch.setattr(backend, "_artist_popularity", lambda artist: 50)
     stub.search("needle")
     return stub
@@ -232,7 +231,7 @@ def test_the_pop_cache_trim_no_longer_walks_the_dict_unlocked():
 def test_no_bucket_clear_is_left_outside_the_object_lock():
     lines = BACKEND_SRC.splitlines()
     sites = [i for i, ln in enumerate(lines) if ln.strip() == "for bucket in self._objs.values():"]
-    assert len(sites) == 3, f"expected the sign-out, paste-link and search clears, found {len(sites)}"
+    assert sites, "search must still evict its own live object buckets"
     for i in sites:
         guard = next(ln for ln in reversed(lines[:i]) if ln.strip() and not ln.strip().startswith("#"))
         assert guard.strip().startswith("with self._objs_lock:"), f"unlocked bucket clear at line {i + 1}"
@@ -242,7 +241,10 @@ class _OpenUrlStub:
     _open_url = WavesBridge._open_url
 
     def __init__(self):
-        self.threadpool = _HoldingPool()  # the clear happens before the worker
+        provider = StubProvider("tidal", "TIDAL", capabilities={Capability.OPEN_URL}, logged_in=True)
+        provider.descriptor = lambda: ProviderDescriptor(id="tidal", name="TIDAL", link_hosts=("tidal.com",))
+        self.providers = {"tidal": provider}
+        self.threadpool = _HoldingPool()
         self._search_gen = 0
         self._objs_lock = _WatchedLock()
         self._objs = {"artist": _WatchedDict(self._objs_lock)}
@@ -257,15 +259,15 @@ class _OpenUrlStub:
         self.busy.append(bool(on))
 
 
-def test_the_pasted_link_clears_the_buckets_under_the_lock():
+def test_a_pasted_link_preserves_existing_provider_objects():
     stub = _OpenUrlStub()
-    stub._objs["artist"]["a1"] = object()
-
+    tidal_artist, other_artist = object(), object()
+    with stub._objs_lock:
+        stub._objs["artist"].update({"a1": tidal_artist, "paper:a1": other_artist})
     stub._open_url("https://tidal.com/album/42")
-
-    assert stub._objs["artist"] == {}
+    assert stub._objs["artist"] == {"a1": tidal_artist, "paper:a1": other_artist}
+    assert len(stub.threadpool.started) == 1
     assert stub._objs["artist"].unlocked_clears == 0
-    assert stub._objs_lock.uses == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -278,6 +280,7 @@ class _AlbumExpandStub:
 
     def __init__(self):
         self.threadpool = _HoldingPool()
+        self.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.CATALOG}, logged_in=True)}
         self._album_tracks_cache = {"al1": [{"id": "t1"}]}
         self._edition_tracks_cache = {"al1": ([("t", 1)], True)}
         self._prefetch_lock = Lock()

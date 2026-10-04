@@ -20,13 +20,14 @@ from __future__ import annotations
 from threading import Barrier, Lock
 from types import SimpleNamespace
 
+from providers.fakes import BareProvider
 from tidalapi.album import Album
 from tidalapi.artist import Artist
 
 from waves.constants import CTX_APPLE, CTX_TIDAL
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
-from waves.providers import Capability
+from waves.providers import Capability, ProviderDescriptor, TidalProvider
 from waves.providers.apple import AppleCatalogUnavailable
 
 
@@ -51,12 +52,16 @@ class _GuardSession:
         raise AssertionError(f"the bridge reached the TIDAL session directly: .{name}")
 
 
-class _FakeProvider:
+class _FakeProvider(BareProvider):
     """Records the seam calls the bridge makes; answers with canned objects."""
 
     capabilities = frozenset(Capability)
 
-    def __init__(self, **answers):
+    def __init__(self, provider_id="tidal", **answers):
+        self.id = provider_id
+        self.name = provider_id.title()
+        self._logged_in = answers.pop("signed_in", True)
+        self._row_builders = {}
         self.calls: list[tuple] = []
         # What the provider declares about its search surface:
         # the neutral answer is every section in the flow layout, which the
@@ -67,6 +72,17 @@ class _FakeProvider:
         self.search_artists_layout = answers.pop("search_artists_layout", "flow")
         self.search_head_when_alone = answers.pop("search_head_when_alone", True)
         self._answers = answers
+
+    @property
+    def is_logged_in(self):
+        return self._logged_in
+
+    def descriptor(self):
+        return ProviderDescriptor(id=self.id, name=self.name, link_hosts=(f"{self.id}.com",))
+
+    # The SDK interpretation belongs to its provider, as in production.
+    resolve_link = TidalProvider.resolve_link
+    row_for = TidalProvider.row_for
 
     def search(self, needle):
         self.calls.append(("search", needle))
@@ -281,6 +297,7 @@ def test_a_partial_tidal_failure_answers_the_tidal_group():
         search_sections=_APPLE_SECTIONS,
     )
     stub = _SearchStub(tidal)
+    apple.id, apple.name = "apple", "Apple Music"
     stub.providers["apple"] = apple
     stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
 
@@ -297,7 +314,7 @@ def test_a_partial_tidal_failure_answers_the_tidal_group():
 
 def test_search_enabled_reads_every_registered_provider_and_its_gate():
     # The search row's generic gate: a registered SEARCH provider
-    # with a gate that says on, or no gate at all, keeps it live; a provider
+    # with a gate that says on, or declared live readiness, keeps it live; a provider
     # without SEARCH, or with a gate that says off, does not.
     bridge = SimpleNamespace(providers={}, _provider_search_gates={"tidal": lambda: False}, _logged_in=False)
     assert WavesBridge.searchEnabled(bridge) is False
@@ -307,10 +324,12 @@ def test_search_enabled_reads_every_registered_provider_and_its_gate():
     bridge._provider_search_gates["tidal"] = lambda: True
     assert WavesBridge.searchEnabled(bridge) is True
 
-    # No gate: taken at its word (a third provider needs no wiring).
-    bridge.providers["fake"] = _provider()
+    # No bridge gate: a third provider contributes its own account facts.
+    bridge.providers["fake"] = _provider(provider_id="fake")
     bridge._provider_search_gates["tidal"] = lambda: False
     assert WavesBridge.searchEnabled(bridge) is True
+    bridge.providers["fake"]._logged_in = False
+    assert WavesBridge.searchEnabled(bridge) is False, "absence of a bridge gate does not grant a session"
 
     # A provider that cannot search never keeps the row live.
     bridge.providers.clear()
@@ -344,8 +363,8 @@ def test_search_enabled_answers_the_bridge_slot_through_the_real_seam():
     assert WavesBridge.searchEnabled(stub) is True, "a signed-in TIDAL keeps the row live"
     stub._logged_in = False
     assert WavesBridge.searchEnabled(stub) is False
-    stub.providers["fake"] = _provider()
-    assert WavesBridge.searchEnabled(stub) is True, "a gate-less third provider joins the gate"
+    stub.providers["fake"] = _provider(provider_id="fake")
+    assert WavesBridge.searchEnabled(stub) is True, "a ready third provider joins the gate"
 
 
 class _FanoutProvider(_FakeProvider):
@@ -379,6 +398,7 @@ def test_search_fans_out_over_enabled_providers_and_emits_separate_groups():
     # own sections, whatever the reply's key set.
     apple.search_sections = _APPLE_SECTIONS
     stub = _SearchStub(tidal)
+    apple.id, apple.name = "apple", "Apple Music"
     stub.providers["apple"] = apple
     stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
 
@@ -405,6 +425,7 @@ def test_search_with_apple_disabled_keeps_the_old_page_unchanged():
     )
     apple = _provider(search=AssertionError("disabled Apple search ran"))
     stub = _SearchStub(tidal)
+    apple.id, apple.name = "apple", "Apple Music"
     stub.providers["apple"] = apple
     stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=False))
 
@@ -434,6 +455,7 @@ def test_search_with_tidal_signed_out_and_apple_enabled_asks_only_apple():
     }
     apple = _provider(search=apple_payload, search_sections=_APPLE_SECTIONS)
     stub = _SearchStub(tidal)
+    apple.id, apple.name = "apple", "Apple Music"
     stub.providers["apple"] = apple
     stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
     stub._logged_in = False
@@ -455,6 +477,7 @@ def test_an_apple_only_failure_delivers_its_words_to_the_group():
     tidal = _provider(search=AssertionError("TIDAL search ran without a session"))
     apple = _provider(search=AppleCatalogUnavailable(), search_sections=_APPLE_SECTIONS)
     stub = _SearchStub(tidal)
+    apple.id, apple.name = "apple", "Apple Music"
     stub.providers["apple"] = apple
     stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
     stub._logged_in = False
@@ -479,6 +502,7 @@ def test_a_two_provider_failure_stays_a_plain_search_failure():
     tidal = _provider(search=RuntimeError("network died"))
     apple = _provider(search=AppleCatalogUnavailable())
     stub = _SearchStub(tidal)
+    apple.id, apple.name = "apple", "Apple Music"
     stub.providers["apple"] = apple
     stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
 
@@ -493,6 +517,7 @@ def test_search_with_no_provider_available_refuses_unchanged():
     tidal = _provider(search=AssertionError("TIDAL search ran without a session"))
     apple = _provider(search=AssertionError("Apple search ran while disabled"))
     stub = _SearchStub(tidal)
+    apple.id, apple.name = "apple", "Apple Music"
     stub.providers["apple"] = apple
     stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=False))
     stub._logged_in = False
@@ -511,6 +536,7 @@ def test_an_apple_only_page_never_serves_a_signed_in_search():
     tidal = _provider(search={"albums": [object()], "top_hit": None})
     apple = _provider(search={"tracks": [{"id": "apple:song-1", "title": "Xtal"}], "top_hit": None})
     stub = _SearchStub(tidal)
+    apple.id, apple.name = "apple", "Apple Music"
     stub.providers["apple"] = apple
     stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
     stub._logged_in = False
@@ -531,6 +557,7 @@ def test_an_apple_catalog_failure_is_visible_and_is_not_cached():
     tidal = _provider(search={"albums": [object()], "top_hit": None})
     apple = _provider(search=AppleCatalogUnavailable(), search_sections=_APPLE_SECTIONS)
     stub = _SearchStub(tidal)
+    apple.id, apple.name = "apple", "Apple Music"
     stub.providers["apple"] = apple
     stub.settings = SimpleNamespace(data=SimpleNamespace(apple_enabled=True))
 
@@ -558,6 +585,8 @@ class _OpenUrlStub:
         base = _stub_base({"tidal": provider})
         self.__dict__.update(base.__dict__)
         self.searchResults = _Signal()
+
+        provider._row_builders = {"album": self._album_dict, "artist": self._fav_artist_dict}
 
     def _set_status(self, text):
         self.statuses.append(text)
@@ -592,7 +621,7 @@ def test_a_link_the_provider_cannot_resolve_reports_failure():
     provider = _provider(open_url=None)
     stub = _OpenUrlStub(provider)
 
-    stub._open_url("https://example.com/nothing")
+    stub._open_url("https://tidal.com/browse/album/gone")
 
     assert stub.statuses[-1] == "Could not open that link"
     assert stub.busy == [True, False]

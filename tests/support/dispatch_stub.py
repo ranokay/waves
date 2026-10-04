@@ -52,6 +52,10 @@ def arm_queue(stub) -> None:
         ("_job_owned", dict),
         ("_job_fetched", dict),
         ("_queue_lock", Lock),
+        ("_queue", list),
+        ("_queue_index", lambda: {row["qid"]: row for row in stub._queue}),
+        # Recovery archives only plain asks that were already visible.
+        ("_held_queue_rows", dict),
         # A withdrawn row gives up its REDOWNLOAD force on the way out, and the
         # library-claim override it registered alongside that force: both marks
         # live only as long as a live row holds them.
@@ -61,6 +65,7 @@ def arm_queue(stub) -> None:
         # piece of the same per-row state: a plan left behind is picked up by
         # the next plain click on that album.
         ("_merge_plans", dict),
+        ("_merge_scanned", set),
         # The job in flight, so a clear that drops its row can abort it: a row
         # is handed to the pool while it still reads "queued", so the bulk
         # clears can select one that is already downloading.
@@ -96,6 +101,11 @@ def arm_queue(stub) -> None:
         "_queue_mark_changed",
         "_abort_if_in_flight",
         "_queue_batch",
+        "_reindex_queue",
+        "_remove_rows_where",
+        "_archive_held_rows_locked",
+        "_withdraw_queue_row_for_hold",
+        "_forget_held_queue_rows",
         "_discard_pending_downloads",
         "_release_abandoned_hold",
     ):

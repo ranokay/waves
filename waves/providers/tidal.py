@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
+from collections.abc import Iterator
 
 import tidalapi
 from requests import HTTPError
@@ -34,7 +35,9 @@ from waves.providers.base import (
     AudioType,
     BrowseWindow,
     Capability,
+    CatalogLink,
     FavoritesUnavailable,
+    LoginAttempt,
     Provider,
     ProviderDescriptor,
     QualityOption,
@@ -176,6 +179,7 @@ class TidalProvider(Provider):
                 "tidal_cover_file_format",
             ),
             status_kind=StatusKind.SESSION,
+            link_hosts=("tidal.com",),
         )
 
     def __init__(self, tidal: Tidal, stream_resolver=None):
@@ -213,6 +217,11 @@ class TidalProvider(Provider):
             self._stream_resolver = previous
 
     # ----- session / auth
+
+    def create_login_attempt(self, *, resume=False, register_secrets=None) -> LoginAttempt:
+        from waves.providers.tidal_auth import TidalLoginAttempt
+
+        return TidalLoginAttempt(self._tidal, resume=resume, register_secrets=register_secrets)
 
     def login_begin(self) -> str:
         # A prior sign-out tears the session down (the engine's logout deletes
@@ -262,7 +271,16 @@ class TidalProvider(Provider):
         self._tidal.original_client_id_pkce = self._tidal.session.config.client_id_pkce
         self._tidal.original_client_secret_pkce = self._tidal.session.config.client_secret_pkce
         self._tidal.is_atmos_session = False
-        self._tidal.settings_apply()
+        quality = session_quality_from_word(getattr(self._tidal.settings.data, "tidal_quality_audio", ""))
+        if quality is not None:
+            self._tidal.session.audio_quality = quality
+        self._tidal.session.video_quality = tidalapi.VideoQuality.high
+
+    @contextlib.contextmanager
+    def session_teardown_context(self) -> Iterator[None]:
+        """Let an old stream restore its credentials before replacing the session."""
+        with self._tidal.stream_lock:
+            yield
 
     @property
     def is_logged_in(self) -> bool:
@@ -324,6 +342,8 @@ class TidalProvider(Provider):
         bridge's own handler reports them identically today). Telling those
         apart to the user is the routing ticket's to decide.
         """
+        if not self.accepts_url(url):
+            return None
         media_type = get_tidal_media_type(url)
         if media_type is False:
             return None
@@ -331,6 +351,20 @@ class TidalProvider(Provider):
             return instantiate_media(self._tidal.session, media_type, get_tidal_media_id(url))
         except Exception:
             return None
+
+    def resolve_link(self, url: str) -> CatalogLink | None:
+        media = self.open_url(url)
+        kinds = (
+            (tidalapi.Artist, "artist"),
+            (tidalapi.Album, "album"),
+            (Track, "track"),
+            (Video, "video"),
+            (tidalapi.Playlist, "playlist"),
+            (Mix, "mix"),
+        )
+        kind = next((kind for cls, kind in kinds if isinstance(media, cls)), "")
+        row = self.row_for(kind, media) if kind else {}
+        return CatalogLink(kind, row) if row else None
 
     def get_object(self, kind: str, raw_id: str) -> object:
         # Under the browse lock: a Mix construction parses through the SHARED
