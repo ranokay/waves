@@ -183,7 +183,7 @@ def _run_scenario() -> int:
     q('catPendingDl = "pages/genre-rock"')
     q('catPendingPv = "pages/genre-jazz"')
     q('catDlPrompt = ({path: "pages/genre-rock", title: "Rock", count: 12})')
-    bridge.loggedInChanged.emit()
+    bridge.providerStateChanged.emit("tidal")
     armed = [
         name
         for name, expr in (

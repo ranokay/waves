@@ -78,6 +78,7 @@ class GateHost:
         self._base_ok = ("", 0.0)
         self._pending_downloads = []
         self._pending_lock = Lock()
+        self._queue_lock = Lock()
         self._queue: list[dict] = []
         self.statuses: list[str] = []
         self.unreachable_emits: list[str] = []

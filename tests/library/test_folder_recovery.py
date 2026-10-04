@@ -98,6 +98,7 @@ class RecoveryHost:
         self._base_ok = ("", 0.0)
         self._pending_downloads: list = []
         self._pending_lock = Lock()
+        self._queue_lock = Lock()
         self._queue: list[dict] = []
         self._recovery_poll = _Timer()
         self._recovery_inflight = False

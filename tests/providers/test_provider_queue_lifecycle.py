@@ -246,7 +246,7 @@ def test_held_member_settles_in_a_real_mixed_group_after_replay_is_dropped():
     queue = _Queue([_row(1, "17"), _row(2, "apple:17"), _row(3, "third:17")])
     keys = {"17", "apple:17", "third:17"}
     queue._folder_groups = {
-        "mixed": {
+        "fav:third:albums": {
             "keys": keys,
             "done": set(),
             "failed": set(),
@@ -254,7 +254,7 @@ def test_held_member_settles_in_a_real_mixed_group_after_replay_is_dropped():
             "weights": dict.fromkeys(keys, 1),
             "total": 3,
         },
-        "unrelated": {
+        "fav:apple:albums": {
             "keys": {"apple:17"},
             "done": set(),
             "failed": set(),
@@ -263,27 +263,27 @@ def test_held_member_settles_in_a_real_mixed_group_after_replay_is_dropped():
             "total": 1,
         },
     }
-    untouched = deepcopy(queue._folder_groups["unrelated"])
+    untouched = deepcopy(queue._folder_groups["fav:apple:albums"])
     queue._pending_downloads = [("17", lambda: None), ("apple:held", lambda: None)]
     assert queue._withdraw_queue_row_for_hold(1)
 
     queue._stop_provider_queue("tidal", "Signed out")
 
-    assert queue._folder_groups["mixed"]["done"] == {"17"}
-    assert queue._folder_groups["mixed"]["failed"] == {"17"}
-    assert queue._folder_groups["unrelated"] == untouched
-    assert ("mixed", 2, 3) in queue.folderRemaining.emits
+    assert queue._folder_groups["fav:third:albums"]["done"] == {"17"}
+    assert queue._folder_groups["fav:third:albums"]["failed"] == {"17"}
+    assert queue._folder_groups["fav:apple:albums"] == untouched
+    assert ("fav:third:albums", 2, 3) in queue.folderRemaining.emits
     assert queue._queue_index[2]["status"] == queue._queue_index[3]["status"] == "queued"
 
 
 def test_a_prequeue_hold_settles_its_existing_group_without_adding_a_row():
     queue = _Queue([_row(1, "apple:17")])
-    queue._artist_groups = {"mixed": {"keys": {"17", "apple:17"}, "done": set(), "failed": set(), "prog": {}}}
+    queue._artist_groups = {"third:artist": {"keys": {"17", "apple:17"}, "done": set(), "failed": set(), "prog": {}}}
     queue._pending_downloads = [("17", lambda: None)]
 
     assert queue._stop_provider_queue("tidal", "Signed out") == 0
-    assert queue._artist_groups["mixed"]["done"] == {"17"}
-    assert queue._artist_groups["mixed"]["failed"] == {"17"}
+    assert queue._artist_groups["third:artist"]["done"] == {"17"}
+    assert queue._artist_groups["third:artist"]["failed"] == {"17"}
     assert [row["media_id"] for row in queue._queue] == ["apple:17"]
 
 

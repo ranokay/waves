@@ -227,7 +227,9 @@ def test_a_choking_link_payload_clears_busy(monkeypatch):
     from tidalapi.album import Album
 
     provider = stub.providers["tidal"]
-    provider.open_url = lambda url: Album.__new__(Album)
+    provider.capabilities |= {Capability.OPEN_URL}
+    provider.open_url = lambda url: {"kind": "album", "item": Album.__new__(Album)}
+    provider.row_for = lambda kind, item: stub._album_dict(item)
     provider.descriptor = lambda: ProviderDescriptor(id="tidal", name="TIDAL", catalog_hosts=("tidal.com",))
 
     stub._open_url("https://tidal.com/album/42")
