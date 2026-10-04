@@ -230,7 +230,7 @@ def test_a_choking_link_payload_clears_busy(monkeypatch):
     provider.capabilities |= {Capability.OPEN_URL}
     provider.open_url = lambda url: {"kind": "album", "item": Album.__new__(Album)}
     provider.row_for = lambda kind, item: stub._album_dict(item)
-    provider.descriptor = lambda: ProviderDescriptor(id="tidal", name="TIDAL", catalog_hosts=("tidal.com",))
+    provider.descriptor = lambda: ProviderDescriptor(id="tidal", name="TIDAL", link_hosts=("tidal.com",))
 
     stub._open_url("https://tidal.com/album/42")
 
