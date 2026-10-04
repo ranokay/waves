@@ -501,3 +501,42 @@ def test_old_artist_build_cannot_release_a_new_accounts_hover_claim(bridge):
     _drain_gui(bridge)
     assert len(bridge.artistLoaded.emits) == 1
     assert not bridge._artist_loading and bridge._artist_prefetch is None
+
+
+def test_artist_cleanup_does_not_block_a_catalog_commit_behind_the_prefetch_lock(bridge):
+    from waves.desktop.backend import _cache_put, _catalog_work, _release_artist_build
+
+    attempted, committed = Event(), Event()
+    lock = bridge._prefetch_lock
+
+    class ObservedLock:
+        def __enter__(self):
+            attempted.set()
+            lock.acquire()
+
+        def __exit__(self, *_args):
+            lock.release()
+
+    bridge._prefetch_lock = ObservedLock()
+    artist_work = _catalog_work(bridge, "paper", lambda: _release_artist_build(bridge, "paper:artist-1", silent=True))
+
+    def finish_album():
+        _cache_put(bridge, bridge._album_tracks_cache, "album-1", [])
+        committed.set()
+
+    album_work = _catalog_work(bridge, "tidal", finish_album)
+    artist, album = Thread(target=artist_work), Thread(target=album_work)
+    # An album/browse completion already holds the shared prefetch lock.
+    lock.acquire()
+    try:
+        artist.start()
+        assert attempted.wait(2)
+        album.start()
+        assert committed.wait(2), "artist cleanup must not hold epoch authority while waiting for prefetch"
+    finally:
+        lock.release()
+        artist.join(2)
+        if album.ident is not None:
+            album.join(2)
+    assert not artist.is_alive() and not album.is_alive()
+    assert bridge._album_tracks_cache["album-1"] == []

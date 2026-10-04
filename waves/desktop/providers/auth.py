@@ -49,16 +49,24 @@ def committed_account_current(bridge, provider_id: str) -> bool:
 
 
 def _commit_account(bridge, token: ProviderToken, callback: Callable[[], None]) -> bool:
+    published = False
+
     def commit() -> None:
+        nonlocal published
+        if getattr(bridge, "_factory_reset", False):
+            return
         callback()
+        published = True
         if not hasattr(bridge, "_provider_committed_accounts"):
             bridge._provider_committed_accounts = {}
         bridge._provider_committed_accounts[token.provider_id] = dataclasses.replace(token, attempt=None)
 
-    return provider_contexts(bridge).commit(token, commit)
+    return provider_contexts(bridge).commit(token, commit) and published
 
 
 def start_login(bridge, provider_id: str, *, resume: bool = False) -> None:
+    if getattr(bridge, "_factory_reset", False):
+        return
     provider = bridge.providers.get(provider_id)
     if provider is None or (not resume and provider.descriptor().login_flow != "browser"):
         return
@@ -152,7 +160,7 @@ def _validate(bridge, active: ActiveLogin, payload: str) -> None:
     except Exception:
         logger.warning("Provider sign-in failed")
     finally:
-        if ok or not contexts.current(active.token) or active.resume:
+        if ok or not contexts.current(active.token) or active.resume or getattr(bridge, "_factory_reset", False):
             _discard(candidate)
         # Failed submissions remain latched until the GUI consumes this
         # event, so its queued failure cannot clear a newer retry's busy flag.
@@ -189,6 +197,8 @@ def _publish_account(bridge, event: LoginEvent) -> None:
 
 def apply_login_event(bridge, event: LoginEvent) -> None:
     """GUI thread: commit only the result still owned by this request."""
+    if getattr(bridge, "_factory_reset", False):
+        return
     contexts = provider_contexts(bridge)
     current = contexts.current(event.token)
     if event.phase == "url":

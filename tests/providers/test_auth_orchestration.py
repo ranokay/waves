@@ -171,6 +171,34 @@ def _begin(bridge: _Bridge, provider_id: str = "tidal") -> None:
     assert bridge.deliver().phase == "url"
 
 
+def test_factory_reset_latch_prevents_generic_credentials_and_new_login_attempts():
+    provider = _Provider("paper")
+    bridge = _Bridge(provider)
+    _begin(bridge, "paper")
+    provider.candidate.validate_hook = lambda: setattr(bridge, "_factory_reset", True)
+    auth.complete_login(bridge, "paper", "one-time-code")
+    bridge.threadpool.run_next()
+    assert provider.candidate.persisted == 0 and provider.candidate.discarded
+    assert not provider.signed_in and not getattr(bridge, "_provider_committed_accounts", {})
+    statuses = list(bridge.statuses)
+    bridge.deliver()
+    auth.start_login(bridge, "paper")
+    assert not bridge.threadpool.pending and not bridge.providerLoginFinished.emits
+    assert bridge.statuses == statuses and not bridge.providerStateChanged.emits
+
+
+def test_factory_reset_latch_discards_an_already_queued_login_success():
+    provider = _Provider("paper")
+    bridge = _Bridge(provider)
+    _begin(bridge, "paper")
+    auth.complete_login(bridge, "paper", "one-time-code")
+    bridge.threadpool.run_next()
+    assert provider.candidate.persisted == 1
+    bridge._factory_reset = True
+    bridge.deliver()
+    assert not bridge.providerLoginFinished.emits and not bridge.providerStateChanged.emits
+
+
 def _blocked(started: Event, release: Event) -> None:
     started.set()
     assert release.wait(5), "test must release the fake account service"

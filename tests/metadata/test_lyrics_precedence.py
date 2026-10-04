@@ -566,3 +566,51 @@ def test_standalone_completion_queued_before_revocation_cannot_repaint(tmp_path)
     for event in stub._catalogEvent.emits:
         backend.WavesBridge._on_catalog_event(stub, event)
     assert states == [("apple:s1", "running"), ("apple:s1", "")]
+
+
+def test_global_stop_is_ordered_with_an_asset_replacement_already_issued(tmp_path, monkeypatch):
+    from pathlib import Path
+    from threading import Event, Thread
+
+    from conftest import _Signal
+
+    from waves.desktop import backend
+
+    stub, folder, _statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map(lyrics_file=True))
+    stub._catalogEvent = _Signal()
+    stub.threadpool = _AssetPool()
+    entered, release, stopping, stopped = Event(), Event(), Event(), Event()
+    target = folder / "S1.lrc"
+    replace = backend.os.replace
+
+    def held_replace(source, destination):
+        if Path(destination) == target:
+            entered.set()
+            assert release.wait(2)
+        return replace(source, destination)
+
+    def stop():
+        stopping.set()
+        backend._stop_standalone(stub)
+        stopped.set()
+
+    monkeypatch.setattr(backend.os, "replace", held_replace)
+    stub.downloadLyricsOnly("apple:s1")
+    worker = Thread(target=stub.threadpool.workers.pop(0).fn)
+    worker.start()
+    stopper = Thread(target=stop)
+    try:
+        assert entered.wait(2)
+        stopper.start()
+        assert stopping.wait(2)
+        assert not stopped.wait(0.2), "STOP cannot return before an issued replacement settles"
+    finally:
+        release.set()
+        worker.join(2)
+        if stopper.ident is not None:
+            stopper.join(2)
+    assert not worker.is_alive() and not stopper.is_alive() and stopped.is_set()
+    assert target.read_text() == "[00:01.00]hi"
+    for event in stub._catalogEvent.emits:
+        backend.WavesBridge._on_catalog_event(stub, event)
+    assert states == [("apple:s1", "running"), ("apple:s1", "")]

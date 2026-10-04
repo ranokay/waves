@@ -2777,14 +2777,15 @@ def _release_artist_build(bridge, artist_id: str, *, silent: bool) -> bool:
 
     def release() -> None:
         nonlocal claimed
-        with bridge._prefetch_lock:
-            bridge._artist_loading.discard(artist_id)
-            claimed = silent and bridge._artist_prefetch == artist_id and bridge._artist_prefetch_claimed
-            if bridge._artist_prefetch == artist_id:
-                bridge._artist_prefetch = None
-                bridge._artist_prefetch_claimed = False
+        bridge._artist_loading.discard(artist_id)
+        claimed = silent and bridge._artist_prefetch == artist_id and bridge._artist_prefetch_claimed
+        if bridge._artist_prefetch == artist_id:
+            bridge._artist_prefetch = None
+            bridge._artist_prefetch_claimed = False
 
-    _cache_commit(bridge, release)
+    # Catalog completion already takes this lock before the epoch authority.
+    with bridge._prefetch_lock:
+        _cache_commit(bridge, release)
     return claimed
 
 
@@ -2796,6 +2797,13 @@ def _standalone_check(bridge) -> None:
     token = getattr(getattr(bridge, "_catalog_thread", None), "standalone", None)
     if isinstance(token, ScanToken) and not scan_current(bridge, token):
         raise _StandaloneStopped
+
+
+def _standalone_lock_for(bridge):
+    lock = getattr(bridge, "_standalone_publish_lock", None)
+    if lock is None:
+        lock = bridge._standalone_publish_lock = Lock()
+    return lock
 
 
 def _standalone_write(bridge, folder: pathlib.Path, build: Callable[[pathlib.Path], bool]) -> bool:
@@ -2814,9 +2822,10 @@ def _standalone_write(bridge, folder: pathlib.Path, build: Callable[[pathlib.Pat
         files = [entry for entry in staged.iterdir() if entry.is_file()]
 
         def publish() -> None:
-            _standalone_check(bridge)
-            for entry in files:
-                os.replace(entry, folder / entry.name)
+            with _standalone_lock_for(bridge):
+                _standalone_check(bridge)
+                for entry in files:
+                    os.replace(entry, folder / entry.name)
 
         if not _cache_commit(bridge, publish):
             raise _StandaloneStopped
@@ -2824,7 +2833,15 @@ def _standalone_write(bridge, folder: pathlib.Path, build: Callable[[pathlib.Pat
 
 
 def _stop_standalone(bridge, provider_id: str | None = None) -> None:
-    """Hand back only the stopped owner's asset buttons on the GUI thread."""
+    """Release owned asset buttons; global STOP also ends captured scans.
+
+    The global generation advances under the publication lock, ordering STOP
+    after any replacement already issued and preventing later replacements.
+    Signals fire after releasing the lock, keeping GUI handlers outside it.
+    """
+    if provider_id is None:
+        with _standalone_lock_for(bridge):
+            bridge._scan_gen = getattr(bridge, "_scan_gen", 0) + 1
     active = getattr(bridge, "_standalone_active", {})
     for media_id, token in list(active.items()):
         if provider_id is None or token.provider.provider_id == provider_id:
@@ -4047,6 +4064,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         }
         self._provider_contexts = ProviderContexts()
         self._standalone_active: dict[str, ScanToken] = {}
+        self._standalone_publish_lock = Lock()
         self._provider_login_attempts = {}
         self._provider_login_busy: set[str] = set()
         self._provider_cleanup_events: dict[str, Event] = {}
@@ -17232,6 +17250,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             active = self._standalone_active = {}
         if media_id in active:
             return
+        _standalone_lock_for(self)  # initialized on the GUI before dispatch
         gen = scan_generation(self, provider_id)
         active[media_id] = gen
         self.downloadState.emit(media_id, "running")
@@ -18470,7 +18489,6 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         gathered and hands its button back the next time it checks (see
         _stop_check_for). A scan that ignored the bump would finish after STOP
         and queue the whole discography behind the press."""
-        self._scan_gen += 1
         _stop_standalone(self)
         # The one job in flight gets its abort; the rows behind it never
         # became jobs, so dropping their specs is all it takes to stop them.
@@ -21022,6 +21040,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         process lifetime, which is fine on POSIX (unlink works) and means at
         worst a leftover crash.log on Windows."""
         self._factory_reset = True
+        contexts = provider_contexts(self)
+        for provider_id in getattr(self, "providers", {}):
+            contexts.revoke(provider_id)
+            cancel_login(self, provider_id)
         logger.info("factory reset requested; wiping the config directory")
         # The token store is the config module's own and cannot see that latch:
         # freeze it too, so a sign-in or refresh landing during the wipe cannot
