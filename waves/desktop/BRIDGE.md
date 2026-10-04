@@ -112,11 +112,13 @@ card never states a stale account state.
 for a provider without engines. Each entry carries `id`, `name`, `client`,
 `compatible_versions`, `recommended_operations` and `requirements`. A requirement
 names `operation`, `codecs`, `audio_types`, `tiers`, `runtime`, `runtime_kind`,
-`account_boundary`, `protocol`, `state` and `action`. These are capability/setup
+`account_boundary`, `protocol`, `formats`, `state` and `action`. These are capability/setup
 facts, not verified item availability or qualification claims. No paths, runtime
 endpoints, credentials or personal account identifiers enter this payload.
-Re-read on provider/session/setup changes. Missing optional requirements affect
-only operations that use them.
+The slot reads cached facts and schedules a coalesced worker refresh; cold or
+unverified facts remain unknown. Re-read on provider/session/setup changes and
+`appleStatusChanged` after refresh. Missing optional requirements affect only
+operations that use them.
 
 `appleSetupRequested(reason)` carries the wizard step a pre-setup click was
 missing: `"cookies"` (no account yet — the cookies/wrapper tier) or

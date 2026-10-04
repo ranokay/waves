@@ -3023,7 +3023,7 @@ class _AppleDownloads(DownloadAdapter):
             chooser_toggles=dict(item.get("askToggles") or {}),
             engine_policy=EnginePolicy(
                 tuple(item.get("enginePreferences") or ("gamdl",)),
-                "" if str(item.get("askEngine") or "auto").lower() == "auto" else str(item["askEngine"]),
+                str(item.get("askEngine") or ""),
             ),
             is_retry=True,
         )
@@ -5450,7 +5450,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         try:
             return probe() if probe is not None else provider.engine_details()
         except Exception:
-            logger.debug("Could not compose provider engine detail", exc_info=True)
+            logger.warning("Could not compose provider engine detail", exc_info=True)
             return []
 
     @Slot(str, result="QVariant")
@@ -10182,10 +10182,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         return (str(tier.value), _tier_word(str(tier.value)))
 
     def _chooser_toggle_pins(self, values) -> dict:
-        """The five lyrics/art quick toggles from a Chooser click, base-keyed.
+        """Parse the asset toggles and optional engine choice for dispatch.
 
-        Unknown keys are ignored and each present toggle is coerced to a
-        boolean, so an empty mapping means the click pinned nothing.
+        Asset keys are booleans. The download owner captures the engine
+        separately before exposing the boolean-only queue toggle map.
         """
         if hasattr(values, "toVariant"):
             try:
@@ -13506,10 +13506,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         (spec §7.1): the affordance stays live and opens the path to making
         it work, instead of failing silently.
         """
+        chooser_toggles = dict(chooser_toggles or {})
+        selected = chooser_toggles.pop("engine", None)
         if engine_policy is None:
             provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
             capture = getattr(provider, "engine_policy", None)
-            selected = (chooser_toggles or {}).get("engine")
             engine_policy = capture(selected) if callable(capture) else EnginePolicy()
         enabled_gate = getattr(self, "_apple_provider_enabled", None)
         if callable(enabled_gate) and not enabled_gate():
@@ -13723,8 +13724,10 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         and it.get("askQuality") == ask
                         and str(it.get("audioType") or "") == (row_atype or "")
                         and dict(it.get("askToggles") or {}) == dict(chooser_toggles or {})
-                        and str(it.get("askEngine") or "auto") == (engine_policy.pin or "auto")
-                        and tuple(it.get("enginePreferences") or ("gamdl",)) == engine_policy.preferences
+                        and EnginePolicy(
+                            tuple(it.get("enginePreferences") or ("gamdl",)), str(it.get("askEngine") or "")
+                        )
+                        == engine_policy
                         for it in self._queue
                     )
                 if dup:
@@ -20099,6 +20102,9 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         data = getattr(self.settings, "data", None)
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         provider.engine_selection = str(getattr(data, "apple_engine", "auto") or "auto")
+        if isinstance(provider, AppleProvider):
+            provider.engine_facts_probe = getattr(self, "_apple_engine_facts", None)
+        self._apple_engine_facts_cache = None
         provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
         resolver = getattr(self, "_resolve_apple_nm3u8dlre", None)
         if callable(resolver):
@@ -20653,7 +20659,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         # binary cannot start a download (the gate below says the same).
         signed_in = False
         account_signed_in = False
-        if cookies_ready and not needs_attention:
+        if cookies_ready and not bool(getattr(self, "_apple_session_expired", False)):
             try:
                 from waves.providers.apple.runtime import verify_cookies_file
 
@@ -20694,22 +20700,60 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "account_signed_in": account_signed_in or wrapper_ready,
         }
 
-    def _apple_engine_details(self) -> list:
+    def _apple_engine_facts(self, token=None) -> EngineFacts:
+        """Prepare setup evidence on a worker; publish only into its context."""
+        token = token or provider_contexts(self).capture(CTX_APPLE)
         flags = self._apple_live_flags()
+        auth = (getattr(self, "_apple_wrapper_auth_cache", None) or {}).get("result") or {}
+        # A recognized /me response establishes the wrapper-v2 control
+        # protocol shape, never decryption or entitlement qualification.
+        protocol = str(auth.get("state") or "") in ("authenticated", "logged_out") if auth.get("reachable") else None
+        facts = EngineFacts(
+            enabled=bool(flags["enabled"]),
+            cookies_ready=bool(flags["cookies_account_ready"]),
+            wrapper_ready=bool(flags["wrapper_ready"]),
+            fetch_ready=bool(self._apple_fetch_binary_ready()),
+            protocol_compatible=protocol,
+            wrapper_runtime_ready=self._apple_container_serves() and bool(auth.get("reachable")),
+        )
+        provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
+        details = provider.engine_details(facts) if isinstance(provider, AppleProvider) else []
+        published = provider_contexts(self).commit(
+            token, lambda: setattr(self, "_apple_engine_facts_cache", (token, time.time(), facts, details))
+        )
+        return facts if published else EngineFacts(enabled=False)
+
+    def _apple_engine_details(self) -> list:
+        """Serve cached setup facts; coalesce bounded refreshes on the pool."""
         provider = self.providers[CTX_APPLE]
         if not isinstance(provider, AppleProvider):
             return []
-        return provider.engine_details(
-            EngineFacts(
-                enabled=bool(flags["enabled"]),
-                cookies_ready=bool(flags["cookies_account_ready"]),
-                wrapper_ready=bool(flags["wrapper_ready"]) and self._apple_container_serves(),
-                fetch_ready=bool(self._apple_fetch_binary_ready()),
-                # The configured route is wrapper-v2. Reachability and account
-                # readiness remain separate facts and do not qualify decryption.
-                protocol_compatible=True,
-            )
-        )
+        cache = getattr(self, "_apple_engine_facts_cache", None)
+        current = cache is not None and provider_contexts(self).current(cache[0])
+        details = cache[3] if current else provider.engine_details(EngineFacts())
+        if not current or time.time() - cache[1] >= 30:
+            pool = getattr(self, "threadpool", None)
+            lock = getattr(self, "_apple_engine_refresh_lock", None)
+            if lock is None:
+                lock = Lock()
+                self._apple_engine_refresh_lock = lock
+            if pool is not None and lock.acquire(blocking=False):
+                token = provider_contexts(self).capture(CTX_APPLE)
+
+                def work() -> None:
+                    try:
+                        self._apple_engine_facts(token)
+                        if provider_contexts(self).current(token):
+                            self.appleStatusChanged.emit()
+                    finally:
+                        lock.release()
+
+                try:
+                    pool.start(Worker(work))
+                except Exception:
+                    lock.release()
+                    logger.warning("Could not refresh Apple engine facts", exc_info=True)
+        return details
 
     def _apple_readiness(self) -> ProviderReadiness:
         flags = self._apple_live_flags()

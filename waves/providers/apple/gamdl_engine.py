@@ -60,12 +60,19 @@ class GamdlEngine:
                 (AudioType.STEREO,),
                 (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS),
                 "apple:wrapper-v2",
-                "external",
+                "managed",
                 "apple:wrapper-session",
                 "wrapper-v2",
             ),
             EngineRequirement(
-                EngineOperation.LYRICS, (), (), (), "apple:catalog-client", "built_in", "apple:catalog-account"
+                EngineOperation.LYRICS,
+                (),
+                (),
+                (),
+                "apple:catalog-client",
+                "built_in",
+                "apple:catalog-account",
+                formats=("converted", "line_ttml", "syllable_ttml"),
             ),
             EngineRequirement(EngineOperation.ARTWORK, (), (), (), "apple:catalog-client", "built_in", ""),
         ),
@@ -79,6 +86,8 @@ class GamdlEngine:
     def supports(self, request: EngineRequest) -> bool:
         if request.operation not in self.descriptor.operations:
             return False
+        if request.operation == EngineOperation.LYRICS:
+            return not request.required_codec and request.lyrics_format in self.descriptor.requirements[2].formats
         if request.operation != EngineOperation.AUDIO:
             return not request.required_codec
         if request.audio_type not in (AudioType.STEREO, AudioType.ATMOS):
@@ -95,7 +104,7 @@ class GamdlEngine:
             codec = request.required_codec.lower()
             wrapper = codec == "alac" or (
                 codec != "aac"
-                and request.audio_type == AudioType.STEREO
+                and not self.provider._delivery_atmos(request.media, request.audio_type)
                 and request.tier in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
                 and self.provider.wrapper_available
             )
@@ -132,17 +141,31 @@ class GamdlEngine:
             )
             action = "signin" if state == ReadinessState.SIGN_IN_REQUIRED else ""
         else:
-            account = facts.wrapper_ready if requirement.protocol else facts.cookies_ready
-            if account is not True:
-                state = ReadinessState.SIGN_IN_REQUIRED if account is False else ReadinessState.UNKNOWN
-                action = "signin" if account is False else ""
-            elif requirement.protocol and facts.protocol_compatible is not True:
-                state = ReadinessState.SETUP_REQUIRED if facts.protocol_compatible is False else ReadinessState.UNKNOWN
-                action = "update" if facts.protocol_compatible is False else ""
-            elif facts.fetch_ready is not True:
-                state = ReadinessState.SETUP_REQUIRED if facts.fetch_ready is False else ReadinessState.UNKNOWN
-                action = "setup" if facts.fetch_ready is False else ""
+            state, action = self._audio_readiness(requirement, facts)
         return EngineReadiness(state, requirement.runtime, requirement.account_boundary, action)
+
+    @staticmethod
+    def _audio_readiness(requirement: EngineRequirement, facts: EngineFacts) -> tuple[ReadinessState, str]:
+        account = facts.wrapper_ready if requirement.protocol else facts.cookies_ready
+        if account is not True:
+            return (ReadinessState.SIGN_IN_REQUIRED, "signin") if account is False else (ReadinessState.UNKNOWN, "")
+        if requirement.protocol and facts.wrapper_runtime_ready is not True:
+            return (
+                (ReadinessState.SETUP_REQUIRED, "setup")
+                if facts.wrapper_runtime_ready is False
+                else (ReadinessState.UNKNOWN, "")
+            )
+        if requirement.protocol and facts.protocol_compatible is not True:
+            return (
+                (ReadinessState.SETUP_REQUIRED, "update")
+                if facts.protocol_compatible is False
+                else (ReadinessState.UNKNOWN, "")
+            )
+        if facts.fetch_ready is not True:
+            return (
+                (ReadinessState.SETUP_REQUIRED, "setup") if facts.fetch_ready is False else (ReadinessState.UNKNOWN, "")
+            )
+        return ReadinessState.READY, ""
 
     def cancel(self, request: EngineRequest) -> None:
         request.abort.set()
@@ -162,9 +185,14 @@ class GamdlEngine:
                     request.media, request.tier, request.audio_type, required_codec=request.required_codec.lower()
                 )
             elif request.operation == EngineOperation.LYRICS:
-                value = self.provider.fetch_lyrics(request.media)
+                fetch = {
+                    "converted": self.provider._fetch_gamdl_lyrics,
+                    "line_ttml": self.provider._fetch_gamdl_line_ttml,
+                    "syllable_ttml": self.provider._fetch_gamdl_syllable_ttml,
+                }[request.lyrics_format]
+                value = fetch(request.media)
             else:
-                value = self.provider.cover_url(request.media, request.artwork_dimension)
+                value = self.provider._gamdl_cover_url(request.media, request.artwork_dimension)
             self._check_cancelled(request, value)
             return EngineResult(value=value)
         except Exception as exc:

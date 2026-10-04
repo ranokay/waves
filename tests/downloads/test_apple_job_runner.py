@@ -2388,4 +2388,6 @@ def test_chooser_engine_pin_is_distinct_from_a_provider_auto_choice(tmp_path):
     assert WavesBridge._download_apple(stub, *args, chooser_toggles={"engine": "gamdl"})
     assert WavesBridge._download_apple(stub, *args)
     assert [row["askEngine"] for row in stub._queue] == ["gamdl", "auto"]
+    assert all("engine" not in row["askToggles"] for row in stub._queue)
+    assert all("engine" not in spec.chooser_toggles for spec in stub._jobs.specs.values())
     assert provider.engine_selection == "auto"

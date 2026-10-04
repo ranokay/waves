@@ -682,7 +682,7 @@ class QueueMixin:
             # (base keys, booleans). Empty for a plain click: the job then
             # reads the provider's stored options. Pinned like the quality so
             # a retry asks with the same options.
-            "askToggles": dict(ask_toggles or {}),
+            "askToggles": {key: bool(value) for key, value in (ask_toggles or {}).items() if key != "engine"},
             "askEngine": ask_engine,
             "enginePreferences": list(engine_preferences),
             # How many quarantined copies this row's job wrote (Apple

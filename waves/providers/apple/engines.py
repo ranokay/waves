@@ -36,6 +36,12 @@ class EnginePolicy:
     preferences: tuple[str, ...] = ("gamdl",)
     pin: str = ""
 
+    def __post_init__(self) -> None:
+        normalized = tuple(dict.fromkeys(value.strip().lower() for value in self.preferences if value.strip()))
+        pin = self.pin.strip().lower()
+        object.__setattr__(self, "preferences", normalized)
+        object.__setattr__(self, "pin", "" if pin == "auto" else pin)
+
 
 @dataclass(frozen=True)
 class EngineRequest:
@@ -46,6 +52,7 @@ class EngineRequest:
     abort: Event = field(default_factory=Event, compare=False)
     required_codec: str = ""
     artwork_dimension: int = 1280
+    lyrics_format: str = "converted"
 
 
 @dataclass(frozen=True)
@@ -57,6 +64,7 @@ class EngineFacts:
     wrapper_ready: bool | None = None
     fetch_ready: bool | None = None
     protocol_compatible: bool | None = None
+    wrapper_runtime_ready: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,7 @@ class EngineRequirement:
     runtime_kind: str
     account_boundary: str
     protocol: str = ""
+    formats: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -151,9 +160,11 @@ class EngineRouter:
             engine = self.engines.get(identity)
             if engine is None or not engine.supports(request):
                 continue
-            # Direct Provider calls retain the engine's own setup validation.
-            # Desktop selection can supply cached facts to filter readiness.
-            if facts is not None and engine.readiness(request, facts).state != ReadinessState.READY:
+            state = engine.readiness(request, facts or EngineFacts()).state
+            # Direct callers without setup evidence retain concrete engine
+            # validation. Known failures still exclude an engine; desktop
+            # dispatch supplies facts and admits only a ready route.
+            if state != ReadinessState.READY and not (facts is None and state == ReadinessState.UNKNOWN):
                 continue
             return engine
         raise EngineRouteUnavailable("The selected Apple engine cannot serve this request. Review Apple Music setup.")  # noqa: TRY003
