@@ -295,16 +295,44 @@ def test_an_unresolvable_library_artist_still_reports_failure():
 # Sign-out fences
 # --------------------------------------------------------------------------- #
 def test_logout_supersedes_every_inflight_search():
-    # A sole-provider search loses both its account context and its search
-    # generation on sign-out, before the detached session teardown runs.
-    from providers.tidal.test_signout_stops_the_queue import _Bridge
+    bridge = _SearchStub()
+    provider = StubProvider("tidal", "TIDAL", capabilities={Capability.SEARCH}, logged_in=True)
+    provider.search = lambda needle: {"albums": [SimpleNamespace(id="42")]}
+    bridge.providers = {"tidal": provider}
+    bridge._album_dict = lambda album: {"id": album.id}
+    bridge._top_hit_dict = lambda hit: None
+    bridge._searchEvent = _Signal()
+    bridge._SEARCH_CACHE_MAX = WavesBridge._SEARCH_CACHE_MAX
+    bridge._remember_search = WavesBridge._remember_search.__get__(bridge)
+    bridge._save_page_cache = lambda: None
+    bridge.logout = WavesBridge.logout.__get__(bridge)
+    bridge._end_provider_context = WavesBridge._end_provider_context.__get__(bridge)
+    bridge._stop_provider_downloads = lambda provider_id, reason: 0
+    bridge._schedule_provider_cache_clear = lambda provider_id: None
+    bridge._start_provider_logout = lambda provider_id: None
+    bridge._set_login_busy = lambda provider_id, busy: None
+    bridge._set_logged_in = lambda value: setattr(bridge, "_logged_in", value)
+    bridge.providerStateChanged = _Signal()
 
-    bridge = _Bridge()
-    bridge._active_search_providers = {"tidal"}
-    old = provider_contexts(bridge).capture("tidal")
+    # First prove this result can paint and populate the actual search cache.
+    bridge.search("first")
+    first = bridge._searchEvent.emits.pop()[0]
+    WavesBridge._on_search_event(bridge, first)
+    assert bridge.searchResults.emits[-1][0]["groups"][0]["albums"] == [{"id": "42"}]
+    assert "tidal:first" in bridge._search_cache
+    bridge.searchResults.emits.clear()
+
+    # Hold the next completed worker result at the GUI relay across logout.
+    bridge.search("second")
+    late = bridge._searchEvent.emits.pop()[0]
+    assert late.cacheable
     bridge.logout()
-    assert not provider_contexts(bridge).current(old)
-    assert bridge._search_gen == 8
+    WavesBridge._on_search_event(bridge, late)
+
+    assert bridge.searchResults.emits == []
+    assert bridge._search_cache == {}
+    assert bridge.statuses[-1] == "Signed out"
+    assert bridge.busy[-1] is False
 
 
 class _AlbumTracksStub(_StubBase):

@@ -97,18 +97,13 @@ def _logout_stub(tmp_path):
     stub._set_status = lambda text: stub.statuses.append(text)
     for name in (
         "_lib_cache",
-        "_lib_loading",
         "_lib_sort",
         "_fav_ids",
         "_browse_pages",
-        "_browse_loading",
         "_category_pl",
-        "_prefetch_unrecorded",
         "_album_tracks_inflight",
-        "_album_tracks_unrecorded",
         "_item_fetch_ts",
         "_artist_cache",
-        "_artist_loading",
         "_artist_reval_ts",
         "_album_tracks_cache",
         "_edition_tracks_cache",
@@ -117,6 +112,14 @@ def _logout_stub(tmp_path):
         "_artist_pop_cache",
     ):
         setattr(stub, name, {})
+    for name in (
+        "_lib_loading",
+        "_browse_loading",
+        "_prefetch_unrecorded",
+        "_album_tracks_unrecorded",
+        "_artist_loading",
+    ):
+        setattr(stub, name, set())
     stub._pending_lock = Lock()
     stub._prefetch_lock = Lock()
     stub._objs_lock = Lock()
