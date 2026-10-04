@@ -20100,11 +20100,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             except Exception:
                 logger.debug("Apple provider could not resolve ffmpeg", exc_info=True)
         data = getattr(self.settings, "data", None)
+        WavesBridge._invalidate_apple_engine_facts(self)
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
         provider.engine_selection = str(getattr(data, "apple_engine", "auto") or "auto")
         if isinstance(provider, AppleProvider):
             provider.engine_facts_probe = getattr(self, "_apple_engine_facts", None)
-        self._apple_engine_facts_cache = None
         provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
         resolver = getattr(self, "_resolve_apple_nm3u8dlre", None)
         if callable(resolver):
@@ -20142,6 +20142,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 _lib_index.register_quarantine_dir(known)
         except Exception:
             logger.warning("Apple quarantine dirs could not be registered for scan exclusion")
+        # Refreshes begun during configuration must not publish a mixed view.
+        WavesBridge._invalidate_apple_engine_facts(self)
+
+    def _invalidate_apple_engine_facts(self) -> None:
+        contexts = provider_contexts(self)
+
+        def invalidate() -> None:
+            self._apple_engine_facts_gen = getattr(self, "_apple_engine_facts_gen", 0) + 1
+            self._apple_engine_facts_cache = None
+
+        contexts.commit(contexts.capture(CTX_APPLE), invalidate)
 
     def _resolve_apple_nm3u8dlre(self) -> str:
         """The N_m3u8DL-RE binary an Apple download would use.
@@ -20700,28 +20711,48 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "account_signed_in": account_signed_in or wrapper_ready,
         }
 
-    def _apple_engine_facts(self, token=None) -> EngineFacts:
+    def _apple_engine_facts(self, token=None, generation: int | None = None) -> EngineFacts:
         """Prepare setup evidence on a worker; publish only into its context."""
         token = token or provider_contexts(self).capture(CTX_APPLE)
+        generation = getattr(self, "_apple_engine_facts_gen", 0) if generation is None else generation
         flags = self._apple_live_flags()
         auth = (getattr(self, "_apple_wrapper_auth_cache", None) or {}).get("result") or {}
         # A recognized /me response establishes the wrapper-v2 control
         # protocol shape, never decryption or entitlement qualification.
-        protocol = str(auth.get("state") or "") in ("authenticated", "logged_out") if auth.get("reachable") else None
+        protocol = True if auth.get("reachable") and auth.get("state") in ("authenticated", "logged_out") else None
         facts = EngineFacts(
             enabled=bool(flags["enabled"]),
             cookies_ready=bool(flags["cookies_account_ready"]),
-            wrapper_ready=bool(flags["wrapper_ready"]),
+            wrapper_ready=True
+            if auth.get("state") == "authenticated"
+            else False
+            if auth.get("state") == "logged_out"
+            else None,
             fetch_ready=bool(self._apple_fetch_binary_ready()),
             protocol_compatible=protocol,
-            wrapper_runtime_ready=self._apple_container_serves() and bool(auth.get("reachable")),
+            wrapper_runtime_ready=False if not self._apple_container_serves() else auth.get("reachable"),
         )
         provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
         details = provider.engine_details(facts) if isinstance(provider, AppleProvider) else []
-        published = provider_contexts(self).commit(
-            token, lambda: setattr(self, "_apple_engine_facts_cache", (token, time.time(), facts, details))
-        )
-        return facts if published else EngineFacts(enabled=False)
+
+        def current() -> bool:
+            return provider_contexts(self).current(token) and generation == getattr(self, "_apple_engine_facts_gen", 0)
+
+        def publish() -> None:
+            if not current():
+                return
+
+            def store() -> None:
+                if generation == getattr(self, "_apple_engine_facts_gen", 0):
+                    self._apple_engine_facts_cache = (token, time.time(), facts, details, generation)
+
+            if provider_contexts(self).commit(token, store) and current():
+                self.appleStatusChanged.emit()
+
+        relay = getattr(self, "_catalogEvent", None)
+        if current() and relay is not None:
+            relay.emit(_CatalogEvent(token, publish))
+        return facts if current() else EngineFacts(enabled=False)
 
     def _apple_engine_details(self) -> list:
         """Serve cached setup facts; coalesce bounded refreshes on the pool."""
@@ -20729,7 +20760,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if not isinstance(provider, AppleProvider):
             return []
         cache = getattr(self, "_apple_engine_facts_cache", None)
-        current = cache is not None and provider_contexts(self).current(cache[0])
+        generation = getattr(self, "_apple_engine_facts_gen", 0)
+        current = cache is not None and provider_contexts(self).current(cache[0]) and cache[4] == generation
         details = cache[3] if current else provider.engine_details(EngineFacts())
         if not current or time.time() - cache[1] >= 30:
             pool = getattr(self, "threadpool", None)
@@ -20742,9 +20774,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
                 def work() -> None:
                     try:
-                        self._apple_engine_facts(token)
-                        if provider_contexts(self).current(token):
-                            self.appleStatusChanged.emit()
+                        self._apple_engine_facts(token, generation)
                     finally:
                         lock.release()
 

@@ -151,7 +151,7 @@ def test_engine_choice_is_captured_for_a_job_and_provider_identity_stays_apple()
         ),
         (
             audio(required_codec="alac", tier=QualityTier.LOSSLESS),
-            EngineFacts(True, True, False, True, True, False),
+            EngineFacts(True, True, False, True, True, True),
             ReadinessState.SIGN_IN_REQUIRED,
         ),
         (
@@ -260,6 +260,8 @@ def test_bridge_engine_details_use_verified_account_facts_without_audio_binary_c
         _apple_wrapper_auth_cache={"result": {"reachable": False}},
         _get_apple_enabled=lambda: True,
     )
+    bridge.appleStatusChanged = SimpleNamespace(emit=lambda: None)
+    bridge._catalogEvent = SimpleNamespace(emit=lambda event: WavesBridge._on_catalog_event(bridge, event))
     WavesBridge._apple_engine_facts(bridge)
     details = WavesBridge._apple_engine_details(bridge)
     bridge._provider_engine_probes = {"apple": lambda: details}
@@ -306,13 +308,16 @@ def test_asset_operations_use_the_captured_pin_and_never_substitute_unknown_pins
         assert provider.fetch_line_ttml({"id": "song"}) == "<tt>lyrics</tt>"
         assert provider.fetch_syllable_ttml({"id": "song"}) == "<tt>lyrics</tt>"
         assert provider.cover_url({"id": "song"}, 2048) == "https://public.invalid/cover.jpg"
-    assert len(first.calls) == 4 and second.calls == []
-    assert first.calls[-1].artwork_dimension == 2048
+        assert provider.cover_raw_url({"id": "song"}) == "https://public.invalid/cover.jpg"
+    assert len(first.calls) == 5 and second.calls == []
+    assert first.calls[-2].artwork_dimension == 2048
+    assert first.calls[-1].artwork_original is True
     provider.engine_selection = "unknown"
     assert provider.fetch_lyrics({"id": "song"}) == ("", "")
     assert provider.fetch_line_ttml({"id": "song"}) == ""
     assert provider.cover_url({"id": "song"}, 1280) == ""
-    assert len(first.calls) == 4 and second.calls == []
+    assert provider.cover_raw_url({"id": "song"}) == ""
+    assert len(first.calls) == 5 and second.calls == []
 
 
 def test_wrapper_runtime_and_unverified_protocol_never_masquerade_as_account_failure():
@@ -352,7 +357,7 @@ def test_engine_detail_slot_queues_setup_reads_and_serves_cached_facts():
 
     from waves.desktop.backend import WavesBridge
 
-    queued, reads, signals = [], [], []
+    queued, publications, reads, signals = [], [], [], []
     bridge = SimpleNamespace(
         providers={"apple": AppleProvider()},
         threadpool=SimpleNamespace(start=queued.append),
@@ -365,13 +370,19 @@ def test_engine_detail_slot_queues_setup_reads_and_serves_cached_facts():
         _apple_container_serves=lambda: False,
         appleStatusChanged=SimpleNamespace(emit=lambda: signals.append(True)),
     )
-    bridge._apple_engine_facts = lambda token=None: WavesBridge._apple_engine_facts(bridge, token)
+    bridge._catalogEvent = SimpleNamespace(emit=publications.append)
+    bridge._apple_engine_facts = lambda token=None, generation=None: WavesBridge._apple_engine_facts(
+        bridge, token, generation
+    )
     details = WavesBridge._apple_engine_details(bridge)
     assert reads == [] and len(queued) == 1
     assert all(row["state"] == "unknown" for row in details[0]["requirements"] if row["operation"] != "artwork")
     WavesBridge._apple_engine_details(bridge)
     assert len(queued) == 1
     queued[0].run()
+    assert reads == ["facts"] and signals == []
+    assert getattr(bridge, "_apple_engine_facts_cache", None) is None
+    WavesBridge._on_catalog_event(bridge, publications[0])
     refreshed = WavesBridge._apple_engine_details(bridge)
     assert reads == ["facts"] and signals == [True]
     assert next(row for row in refreshed[0]["requirements"] if row["operation"] == "lyrics")["state"] == "ready"
@@ -394,3 +405,87 @@ def test_revoked_engine_detail_refresh_cannot_restore_account_readiness():
     provider_contexts(bridge).revoke("apple")
     assert WavesBridge._apple_engine_facts(bridge, token).enabled is False
     assert getattr(bridge, "_apple_engine_facts_cache", None) is None
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+def test_pending_engine_facts_are_discarded_after_settings_or_provider_context_changes(revoke):
+    from types import SimpleNamespace
+
+    from waves.desktop.backend import WavesBridge
+    from waves.desktop.providers.lifecycle import provider_contexts
+
+    publications, signals = [], []
+    bridge = SimpleNamespace(
+        providers={"apple": AppleProvider()},
+        settings=SimpleNamespace(data=SimpleNamespace(apple_cookies_path="new-export")),
+        _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": True, "wrapper_ready": False},
+        _apple_wrapper_auth_cache={"result": {"reachable": False}},
+        _apple_fetch_binary_ready=lambda: True,
+        _apple_container_serves=lambda: False,
+        _catalogEvent=SimpleNamespace(emit=publications.append),
+        appleStatusChanged=SimpleNamespace(emit=lambda: signals.append(True)),
+    )
+    assert WavesBridge._apple_engine_facts(bridge).cookies_ready is True
+    assert len(publications) == 1 and getattr(bridge, "_apple_engine_facts_cache", None) is None
+    if revoke:
+        provider_contexts(bridge).revoke("apple")
+    else:
+        WavesBridge._configure_apple_provider(bridge)
+    WavesBridge._on_catalog_event(bridge, publications[0])
+    assert getattr(bridge, "_apple_engine_facts_cache", None) is None
+    assert signals == []
+
+
+@pytest.mark.parametrize("auth", [{}, {"reachable": True, "state": "future-state"}])
+def test_unverified_control_protocol_remains_unknown(auth):
+    from types import SimpleNamespace
+
+    from waves.desktop.backend import WavesBridge
+
+    bridge = SimpleNamespace(
+        _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": False},
+        _apple_wrapper_auth_cache={"result": auth},
+        _apple_fetch_binary_ready=lambda: True,
+        _apple_container_serves=lambda: True,
+    )
+    facts = WavesBridge._apple_engine_facts(bridge)
+    assert facts.protocol_compatible is None and facts.wrapper_ready is None
+    state = GamdlEngine(AppleProvider()).readiness(audio(required_codec="alac", tier=QualityTier.LOSSLESS), facts)
+    assert state.state == ReadinessState.UNKNOWN
+
+
+def test_unreachable_auth_probe_reports_runtime_setup_without_requesting_sign_in():
+    from types import SimpleNamespace
+
+    from waves.desktop.backend import WavesBridge
+
+    bridge = SimpleNamespace(
+        _apple_live_flags=lambda: {"enabled": True, "cookies_account_ready": False, "wrapper_ready": False},
+        _apple_wrapper_auth_cache={"result": {"reachable": False, "state": "", "logged_in": False}},
+        _apple_fetch_binary_ready=lambda: True,
+        _apple_container_serves=lambda: True,
+    )
+    facts = WavesBridge._apple_engine_facts(bridge)
+    assert facts.wrapper_ready is None and facts.wrapper_runtime_ready is False
+    state = GamdlEngine(AppleProvider()).readiness(audio(required_codec="alac", tier=QualityTier.LOSSLESS), facts)
+    assert state.state == ReadinessState.SETUP_REQUIRED and state.action == "setup"
+
+
+def test_origin_artwork_runner_uses_the_pinned_engine_and_never_fetches_a_bypassed_url(monkeypatch):
+    from types import SimpleNamespace
+
+    from waves.providers.apple import runner
+
+    selected = FakeEngine("selected", operations=(EngineOperation.ARTWORK,))
+    provider = AppleProvider(engines=(selected,))
+    provider.engine_selection = "selected"
+    urls = []
+    response = SimpleNamespace(content=b"selected art", raise_for_status=lambda: None)
+    session = SimpleNamespace(get=lambda url, **kwargs: urls.append(url) or response)
+    monkeypatch.setattr(runner, "_pooled_session", lambda: session)
+    raw = {"attributes": {"artwork": {"url": "https://is1-ssl.mzstatic.com/image/thumb/gamdl/{w}x{h}bb.jpg"}}}
+    assert runner._cover_bytes_at(provider, raw, "origin") == b"selected art"
+    assert urls == ["https://public.invalid/cover.jpg"] and selected.calls[-1].artwork_original is True
+    provider.engine_selection = "unknown"
+    assert runner._cover_bytes_at(provider, raw, "origin") is None
+    assert len(urls) == 1 and len(selected.calls) == 1

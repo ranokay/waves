@@ -592,8 +592,12 @@ class AppleProvider(Provider):
             h = w
         return template.replace("{w}", str(w)).replace("{h}", str(h)).replace("{f}", "jpg")
 
+    def cover_raw_url(self, obj) -> str:
+        """Original-master artwork from the pinned or preferred engine."""
+        return self._engine_artwork(obj, 5000, original=True)
+
     @staticmethod
-    def cover_raw_url(obj) -> str:
+    def _gamdl_cover_raw_url(obj) -> str:
         """The true original-master image URL for an Apple resource.
 
         The gamdl raw-mode rewrite: strip the ``image/thumb/`` path segment,
@@ -1755,11 +1759,15 @@ class AppleProvider(Provider):
 
     def cover_url(self, obj, dimension: int) -> str:
         """Route optional artwork under the same captured engine policy."""
+        return self._engine_artwork(obj, dimension)
+
+    def _engine_artwork(self, obj, dimension: int, *, original: bool = False) -> str:
         request = EngineRequest(
             EngineOperation.ARTWORK,
             self._unwrap(obj),
             abort=self._engine_thread.abort or Event(),
             artwork_dimension=dimension,
+            artwork_original=original,
         )
         try:
             _engine, result = self._execute_engine(request)

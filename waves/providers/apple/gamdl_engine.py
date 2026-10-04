@@ -74,7 +74,16 @@ class GamdlEngine:
                 "apple:catalog-account",
                 formats=("converted", "line_ttml", "syllable_ttml"),
             ),
-            EngineRequirement(EngineOperation.ARTWORK, (), (), (), "apple:catalog-client", "built_in", ""),
+            EngineRequirement(
+                EngineOperation.ARTWORK,
+                (),
+                (),
+                (),
+                "apple:catalog-client",
+                "built_in",
+                "",
+                formats=("sized", "original"),
+            ),
         ),
         "gamdl",
         ">=3.8.5,<3.9",
@@ -146,6 +155,8 @@ class GamdlEngine:
 
     @staticmethod
     def _audio_readiness(requirement: EngineRequirement, facts: EngineFacts) -> tuple[ReadinessState, str]:
+        if requirement.protocol and facts.wrapper_runtime_ready is False:
+            return ReadinessState.SETUP_REQUIRED, "setup"
         account = facts.wrapper_ready if requirement.protocol else facts.cookies_ready
         if account is not True:
             return (ReadinessState.SIGN_IN_REQUIRED, "signin") if account is False else (ReadinessState.UNKNOWN, "")
@@ -192,7 +203,11 @@ class GamdlEngine:
                 }[request.lyrics_format]
                 value = fetch(request.media)
             else:
-                value = self.provider._gamdl_cover_url(request.media, request.artwork_dimension)
+                value = (
+                    self.provider._gamdl_cover_raw_url(request.media)
+                    if request.artwork_original
+                    else self.provider._gamdl_cover_url(request.media, request.artwork_dimension)
+                )
             self._check_cancelled(request, value)
             return EngineResult(value=value)
         except Exception as exc:

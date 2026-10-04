@@ -116,7 +116,9 @@ names `operation`, `codecs`, `audio_types`, `tiers`, `runtime`, `runtime_kind`,
 facts, not verified item availability or qualification claims. No paths, runtime
 endpoints, credentials or personal account identifiers enter this payload.
 The slot reads cached facts and schedules a coalesced worker refresh; cold or
-unverified facts remain unknown. Re-read on provider/session/setup changes and
+unverified facts remain unknown. Prepared facts return through the internal
+`_catalogEvent` relay and a guarded GUI receiver; provider revocation and setup
+changes discard pending results. Re-read on provider/session/setup changes and
 `appleStatusChanged` after refresh. Missing optional requirements affect only
 operations that use them.
 

@@ -52,6 +52,7 @@ class EngineRequest:
     abort: Event = field(default_factory=Event, compare=False)
     required_codec: str = ""
     artwork_dimension: int = 1280
+    artwork_original: bool = False
     lyrics_format: str = "converted"
 
 
