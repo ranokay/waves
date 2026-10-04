@@ -455,9 +455,9 @@ def test_download_art_only_keeps_saved_covers_at_publication(tmp_path, monkeypat
 
     from providers.fakes import StubProvider
 
+    from waves.desktop import backend
     from waves.desktop.backend import WavesBridge
     from waves.providers import Capability
-    from waves.providers.apple import files
 
     stub, folder, statuses, states = _standalone_bridge(tmp_path, psettings=_psetting_map())
     media_id = "apple:s1"
@@ -477,14 +477,14 @@ def test_download_art_only_keeps_saved_covers_at_publication(tmp_path, monkeypat
     if saved_cover == "existing":
         target.write_bytes(original)
     elif saved_cover == "while_preparing":
-        write_cover = files.write_cover_sidecar
+        write_cover = backend.write_cover_sidecar
 
         def prepare_cover(*args, **kwargs):
             result = write_cover(*args, **kwargs)
             target.write_bytes(original)
             return result
 
-        monkeypatch.setattr(files, "write_cover_sidecar", prepare_cover)
+        monkeypatch.setattr(backend, "write_cover_sidecar", prepare_cover)
 
     stub.downloadArtOnly(media_id)
 

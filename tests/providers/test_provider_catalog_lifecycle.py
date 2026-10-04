@@ -151,6 +151,7 @@ def bridge():
         "previewReady",
         "searchResults",
         "artistMetaLoaded",
+        "browseLoaded",
         "busyChanged",
         "statusChanged",
     ):

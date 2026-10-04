@@ -579,6 +579,7 @@ def test_apple_folder_hold_replays_with_the_same_toggle_pins():
         _jobs=JobRuntime(),
         _release_job_signals=lambda qid: None,
         _remove_row=lambda qid: None,
+        _withdraw_queue_row_for_hold=lambda qid: True,
         _emit_queue=lambda: None,
     )
     stub._jobs.aborts = {7: Event()}
@@ -1043,7 +1044,9 @@ def test_track_slot_refetches_a_cache_miss_on_a_worker(tmp_path):
 
     stub.downloadTrack("apple:song-1")
 
-    assert stub._mediaRefetched.emits == [("track", "apple:song-1")]
+    from waves.desktop.providers.lifecycle import provider_contexts
+
+    assert stub._mediaRefetched.emits == [("track", "apple:song-1", provider_contexts(stub).capture(CTX_APPLE))]
     assert ("track", "apple:song-1") in stub._refetch_inflight
 
 

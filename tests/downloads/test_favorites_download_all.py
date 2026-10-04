@@ -28,6 +28,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from providers.fakes import StubProvider
 from support.paths import QML_DIR, QML_MAIN
 
 from waves.desktop.backend import (
@@ -37,6 +38,8 @@ from waves.desktop.backend import (
     _fav_group_id,
     _ScanStopped,
 )
+from waves.desktop.providers.lifecycle import clear_provider_caches, provider_contexts, scan_current
+from waves.providers import Capability
 
 QML_GROUP = (QML_DIR / "domains/library/SavedSourceGroup.qml").read_text(encoding="utf-8")
 QML_MAIN_TEXT = QML_MAIN.read_text(encoding="utf-8")
@@ -75,7 +78,7 @@ class _InlinePool:
         worker.fn()
 
 
-class _FavProvider:
+class _FavProvider(StubProvider):
     """One source's favourites shelf through the seam: windows, count,
     collections and folder tree, the way the endpoint answers."""
 
@@ -91,6 +94,7 @@ class _FavProvider:
         fail_page: int | None = None,
         count_fails: bool = False,
     ):
+        super().__init__(SOURCE, "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)
         self._rows = {
             "tracks": list(tracks),
             "albums": list(albums),
@@ -178,6 +182,7 @@ class _Stub:
     def __init__(self, provider, gate: str = "ok", claim_on: bool = False, claimed: set | None = None):
         self._dl = object()
         self._logged_in = True
+        self._tracked_sessions = (SOURCE,)
         self.providers = {SOURCE: provider}
         self.settings = SimpleNamespace(data=SimpleNamespace(download_dolby_atmos=True))
         self._folder_groups: dict = {}
@@ -295,7 +300,7 @@ def test_tracks_page_the_whole_shelf_into_one_batch():
     stub.downloadFavoriteTracks(SOURCE)
     assert len(stub._tracksQueued.emits) == 1, "one batched delivery, not one per track"
     gen, queued = stub._tracksQueued.emits[0]
-    assert gen == 0
+    assert gen.provider.provider_id == SOURCE and scan_current(stub, gen)
     assert len(queued) == count, "the scan stopped at the first window"
     assert queued[0] == "t0" and queued[-1] == f"t{count - 1}"
     assert stub.remembered[0] == ("track", "t0")
@@ -389,7 +394,7 @@ def test_albums_page_the_whole_list_into_one_batch_under_the_rollup():
     stub.downloadFavoriteAlbums(SOURCE)
     assert len(stub._albumsQueued.emits) == 1
     gen, keys = stub._albumsQueued.emits[0]
-    assert gen == 0 and len(keys) == count
+    assert gen.provider.provider_id == SOURCE and scan_current(stub, gen) and len(keys) == count
     grp = stub._folder_groups[_FAV_ALBUMS_GROUP_ID]
     assert grp["total"] == count and grp["keys"] == set(keys)
     assert stub.downloadState.emits[-1] == (_FAV_ALBUMS_GROUP_ID, "queued")
@@ -609,7 +614,8 @@ def test_mixes_queue_each_mix_and_a_stale_batch_starts_nothing():
     gen, kind, keys = stub._collectionsQueued.emits[0]
     assert kind == "mix" and keys == ["m1", "m2"]
     assert _FAV_MIXES_GROUP_ID in stub._folder_groups
-    stub._enqueue_collections(gen - 1, kind, keys)
+    provider_contexts(stub).revoke(SOURCE)
+    stub._enqueue_collections(gen, kind, keys)
     assert stub.started == []
 
 
@@ -663,7 +669,8 @@ def test_resolve_drops_a_count_from_a_previous_account():
     class _BumpPool:
         @staticmethod
         def start(worker):
-            stub._browse_gen += 1  # logout landed while the count was in flight
+            provider_contexts(stub).revoke(SOURCE)
+            clear_provider_caches(stub, SOURCE)
             worker.fn()
 
     stub.threadpool = _BumpPool()
