@@ -16,9 +16,11 @@ import threading
 from types import SimpleNamespace
 
 from conftest import _InlinePool, _Signal
+from providers.fakes import StubProvider
 
 from waves.desktop import backend as bk
 from waves.desktop.backend import WavesBridge, _ProgressSignals
+from waves.providers import Capability
 
 
 def _bind(stub, name, owner=WavesBridge):
@@ -193,7 +195,9 @@ def test_loadHome_emits_cached_shelves_then_revalidates():
         }
     ]
     s = _home_stub(
-        providers={"tidal": object()}, cache={"tidal": cached}, page={"albums": [{"id": "a1"}], "tracks": []}
+        providers={"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)},
+        cache={"tidal": cached},
+        page={"albums": [{"id": "a1"}], "tracks": []},
     )
     s.loadHome("tidal")
     assert s.homeLoaded.emits[0] == ("tidal", cached), "the cached landing must paint instantly"
@@ -202,7 +206,10 @@ def test_loadHome_emits_cached_shelves_then_revalidates():
 
 # Slots: providerSignInSteps.
 def test_providerSignInSteps_lists_only_registered_step_providers():
-    s = _stub(_sign_in_step_providers=("tidal", "apple", "ghost"), providers={"tidal": object(), "apple": object()})
+    s = _stub(
+        _sign_in_step_providers=("tidal", "apple", "ghost"),
+        providers={"tidal": StubProvider("tidal", "TIDAL"), "apple": StubProvider("apple", "Apple Music")},
+    )
     s.providerSignInSteps = _bind(s, "providerSignInSteps")
     assert s.providerSignInSteps() == ["tidal", "apple"], "steps open for shipped providers only"
 

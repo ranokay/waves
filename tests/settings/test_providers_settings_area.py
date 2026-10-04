@@ -24,6 +24,7 @@ real on plain stubs.
 
 from __future__ import annotations
 
+import contextlib
 from threading import Lock
 from types import SimpleNamespace
 
@@ -288,6 +289,13 @@ def _apply_stub(apple_enabled: bool = False):
     stub.confirmCategoryDlChanged = _signal()
     stub.librarySourceChanged = _signal()
     stub.appleStatusChanged = _signal()
+    stub.providerStateChanged = _signal()
+    stub._set_login_busy = lambda provider_id, busy: None
+    stub._stop_provider_downloads = lambda provider_id, reason: 0
+    stub._schedule_provider_cache_clear = lambda provider_id: None
+    stub._end_provider_context = _bind(stub, "_end_provider_context")
+    stub._start_provider_logout = _bind(stub, "_start_provider_logout")
+    stub.threadpool = SimpleNamespace(start=lambda worker: worker.fn())
     stub.appleSetupRequested = _signal()
     stub._search_gen = 0
     stub._search_cache = {}
@@ -682,7 +690,11 @@ def test_provider_action_dispatches_by_descriptor_key():
         logout=lambda: calls.append("logout"),
     )
 
-    stub = _schema_stub()
+    stub = _apply_stub()
+    newco.name = "NewCo"
+    newco.invalidate_catalog_context = lambda: None
+    newco.session_teardown_context = contextlib.nullcontext
+    newco.reset_session = lambda: None
     stub.providers["newco"] = newco
     stub.signInRequested = SimpleNamespace(emit=lambda provider_id: calls.append(f"signin:{provider_id}"))
     stub.providerAction = _bind(stub, "providerAction")

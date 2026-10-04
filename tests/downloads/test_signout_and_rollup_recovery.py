@@ -9,6 +9,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 from conftest import _Signal
+from providers.fakes import StubProvider
 
 from waves.desktop.backend import WavesBridge
 from waves.providers import Capability
@@ -42,9 +43,9 @@ class _SearchStub:
         self.tidal = SimpleNamespace(session=object())
         # The fetch rides the Provider seam; the fake supersedes itself
         # mid-fetch.
-        self.providers = {
-            "tidal": SimpleNamespace(capabilities=frozenset({Capability.SEARCH}), search=self._superseded_search)
-        }
+        provider = StubProvider("tidal", "TIDAL", capabilities={Capability.SEARCH}, logged_in=True)
+        provider.search = self._superseded_search
+        self.providers = {"tidal": provider}
         self.searchResults = _Signal()
         self.artistMetaLoaded = _Signal()
 
@@ -78,6 +79,13 @@ def _logout_stub(tmp_path):
     """A stub carrying every attribute logout touches, and nothing else."""
     stub = SimpleNamespace()
     stub.logout = WavesBridge.logout.__get__(stub, type(stub))
+    stub._end_provider_context = WavesBridge._end_provider_context.__get__(stub, type(stub))
+    stub._stop_provider_downloads = lambda provider_id, reason: 0
+    stub._schedule_provider_cache_clear = lambda provider_id: None
+    stub._start_provider_logout = lambda provider_id: None
+    stub._set_login_busy = lambda provider_id, busy: None
+    stub.providerStateChanged = _Signal()
+    stub.providers = {"tidal": StubProvider("tidal", "TIDAL")}
     stub.busy: list[bool] = []
     stub.statuses: list[str] = []
     stub.stopped = []

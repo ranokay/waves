@@ -16,11 +16,14 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from providers.fakes import StubProvider
 from support.dispatch_stub import arm_queue
 from support.paths import QML_DIR
 
 from waves.desktop.backend import WavesBridge, _link_tiles_of
+from waves.desktop.providers.lifecycle import scan_generation
 from waves.desktop.updates import updater as updater_mod
+from waves.providers import Capability
 
 MAIN_QML = (QML_DIR / "Main.qml").read_text(encoding="utf-8")
 SETTINGS_QML = (QML_DIR / "domains/settings/SettingsPage.qml").read_text(encoding="utf-8")
@@ -73,11 +76,9 @@ class _AlbumTracksStub:
         self._ownership = SimpleNamespace(record_members_replace=lambda *a: None)
         # The re-fetch rides the Provider seam: the fake answers
         # get_object directly.
-        self.providers = {
-            "tidal": SimpleNamespace(
-                get_object=lambda kind, raw_id: session_album(raw_id) if session_album is not None else None
-            )
-        }
+        provider = StubProvider("tidal", "TIDAL", capabilities={Capability.CATALOG}, logged_in=True)
+        provider.get_object = lambda kind, raw_id: session_album(raw_id) if session_album is not None else None
+        self.providers = {"tidal": provider}
 
     def _remember(self, bucket, key, obj):
         self._objs.setdefault(bucket, {})[key] = obj
@@ -453,7 +454,7 @@ def test_best_of_both_guards_the_button_before_the_scan():
 
     assert stub.downloadState.emits[0] == ("a1", "preparing"), "published before the multi-request scan"
     assert ("a1", "") in stub.downloadState.emits, "the clicked button is handed back on the identity handoff"
-    assert stub._albumsQueued.emits == [(0, ["a2"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["a2"])]
 
 
 def test_best_of_both_same_identity_keeps_the_button_waiting():
@@ -465,7 +466,7 @@ def test_best_of_both_same_identity_keeps_the_button_waiting():
         stub.downloadAlbumBestOfBoth("a1")
 
     assert stub.downloadState.emits == [("a1", "preparing")], "the merge downloads under the clicked id"
-    assert stub._albumsQueued.emits == [(0, ["a1"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["a1"])]
 
 
 def test_a_failed_edition_scan_marks_the_button_failed():

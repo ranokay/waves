@@ -12,8 +12,11 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
+
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
+from waves.providers import Capability
 
 
 class _Album:
@@ -171,6 +174,11 @@ class _PageStub:
         self.threadpool = _Pool()
         self._collapse = collapse
         self._artist = artist
+        self.providers = {
+            "tidal": StubProvider(
+                "tidal", "TIDAL", capabilities={Capability.CATALOG, Capability.FAVORITES}, logged_in=True
+            )
+        }
         self._artist_cache = {}
         self._artist_loading = set()
         self._artist_prefetch = None

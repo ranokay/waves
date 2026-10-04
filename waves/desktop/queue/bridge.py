@@ -311,6 +311,16 @@ class QueueMixin:
                     # A pre-queue hold has no worker or visible row to settle
                     # its membership in an existing collection rollup.
                     self._bump_download_groups(mid, None, "failed")
+        # Revoked refetches/scans cannot settle their aggregates later. Drop
+        # only this owner's rollups, including those with no queued row yet.
+        for name, lock_name in (("_artist_groups", "_artist_lock"), ("_folder_groups", "_folder_lock")):
+            groups = getattr(self, name, {})
+            with getattr(self, lock_name, None) or contextlib.nullcontext():
+                owned = [key for key in groups if _pending_provider(key) == provider_id]
+                for key in owned:
+                    groups.pop(key, None)
+            for key in owned:
+                self.downloadState.emit(key, "")
         if stopped or dropped:
             self._emit_queue()
         return len(stopped)

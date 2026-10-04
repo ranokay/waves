@@ -26,7 +26,10 @@ from __future__ import annotations
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
+
 from waves.desktop.backend import WavesBridge
+from waves.providers import Capability
 from waves.providers.tidal_folders import FolderNode, FolderTree
 
 
@@ -68,9 +71,9 @@ class _WarmStub:
         self._tree_warm_inflight: set = set()
         # The pane's rows come through the source's own row vocabulary;
         # the stub answers the one key these tests read.
-        self.providers = {
-            "tidal": SimpleNamespace(id="tidal", row_for=lambda kind, item: {"kind": kind, "id": item.id})
-        }
+        provider = StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)
+        provider.row_for = lambda kind, item: {"kind": kind, "id": item.id}
+        self.providers = {"tidal": provider}
         self.threadpool = _InlinePool()
         self.sweeps = 0
         self.busy: list = []
@@ -136,9 +139,8 @@ def test_two_sources_warm_their_own_trees():
     join a sweep that never fetches its tree and then have its callback
     dropped."""
     stub = _WarmStub(_tree())
-    stub.providers["fake"] = SimpleNamespace(
-        id="fake", is_logged_in=True, row_for=lambda kind, item: {"kind": kind, "id": item.id}
-    )
+    stub.providers["fake"] = StubProvider("fake", "Fake", capabilities={Capability.FAVORITES}, logged_in=True)
+    stub.providers["fake"].row_for = lambda kind, item: {"kind": kind, "id": item.id}
     started: list = []
     stub.threadpool = SimpleNamespace(start=started.append)
 

@@ -15,13 +15,15 @@
 
 from __future__ import annotations
 
-import inspect
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
+
 from waves.desktop import backend
 from waves.desktop.backend import WavesBridge
-from waves.providers import Capability
+from waves.desktop.providers.lifecycle import provider_contexts
+from waves.providers import Capability, ProviderDescriptor
 
 
 class _Signal:
@@ -42,6 +44,12 @@ class _StubBase:
     """The attributes every slot under test shares."""
 
     def __init__(self):
+        self._logged_in = True
+        self.providers = {
+            "tidal": StubProvider(
+                "tidal", "TIDAL", capabilities={Capability.CATALOG, Capability.FAVORITES}, logged_in=True
+            )
+        }
         self.threadpool = _InlinePool()
         self.statuses: list[str] = []
         self.busy: list[bool] = []
@@ -218,7 +226,9 @@ def test_a_choking_link_payload_clears_busy(monkeypatch):
     # the payload lands in the albums bucket); the builder then chokes.
     from tidalapi.album import Album
 
-    stub.providers = {"tidal": SimpleNamespace(open_url=lambda url: Album.__new__(Album))}
+    provider = stub.providers["tidal"]
+    provider.open_url = lambda url: Album.__new__(Album)
+    provider.descriptor = lambda: ProviderDescriptor(id="tidal", name="TIDAL", catalog_hosts=("tidal.com",))
 
     stub._open_url("https://tidal.com/album/42")
 
@@ -285,12 +295,16 @@ def test_an_unresolvable_library_artist_still_reports_failure():
 # Sign-out fences
 # --------------------------------------------------------------------------- #
 def test_logout_supersedes_every_inflight_search():
-    # The workers guard on _search_gen; logout must bump it or a search still
-    # in flight emits after "Signed out" and repoisons the caches logout just
-    # cleared. Behavior is pinned at the source because logout touches half
-    # the bridge and stubbing it whole would test the stub.
-    source = inspect.getsource(WavesBridge.logout)
-    assert "_search_gen += 1" in source
+    # A sole-provider search loses both its account context and its search
+    # generation on sign-out, before the detached session teardown runs.
+    from providers.tidal.test_signout_stops_the_queue import _Bridge
+
+    bridge = _Bridge()
+    bridge._active_search_providers = {"tidal"}
+    old = provider_contexts(bridge).capture("tidal")
+    bridge.logout()
+    assert not provider_contexts(bridge).current(old)
+    assert bridge._search_gen == 8
 
 
 class _AlbumTracksStub(_StubBase):
@@ -351,7 +365,7 @@ def test_playlist_tracks_landing_after_logout_are_dropped(monkeypatch):
     stub = _PlaylistTracksStub()
 
     def fetch(obj):
-        stub._browse_gen += 1  # logout mid-fetch
+        provider_contexts(stub).revoke("tidal")
         return [], True
 
     monkeypatch.setattr(backend, "_all_playlist_items", fetch)

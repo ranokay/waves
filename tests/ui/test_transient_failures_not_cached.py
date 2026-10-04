@@ -155,6 +155,11 @@ class _LoadArtistStub:
 
     def __init__(self, artist, cached=None):
         self._artist = artist
+        self.providers = {
+            "tidal": StubProvider(
+                "tidal", "TIDAL", capabilities={Capability.CATALOG, Capability.FAVORITES}, logged_in=True
+            )
+        }
         self._artist_cache = dict(cached or {})
         self._artist_loading: set = set()
         self._artist_prefetch = None

@@ -40,6 +40,7 @@ from support.dispatch_stub import arm_queue
 from support.paths import QML_MAIN
 
 from waves.desktop.backend import _RETRYABLE, WavesBridge, _stop_check_for
+from waves.desktop.providers.lifecycle import scan_generation
 from waves.desktop.queue.runtime import JobRuntime
 
 # ---------------------------------------------------------------------------
@@ -162,7 +163,7 @@ def test_an_unstopped_scan_still_queues_everything():
     # registers the group, so the checks above are not a scan that never ran.
     stub = _StopMidScanStub("never")
     stub.downloadArtist("art1")
-    assert stub._albumsQueued.emits == [(0, ["al1", "al2"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["al1", "al2"])]
     assert stub._artist_groups["art1"]["keys"] == {"al1", "al2"}
 
 
@@ -571,7 +572,7 @@ def test_with_the_switch_off_every_edition_downloads_whole_even_with_best_of_bot
     stub = _EditionGateStub(collapse=False, merge=True)
     stub.downloadArtist("art1")
     assert stub.calls == [], "the sweep merged or collapsed with 'Most-complete edition only' off"
-    assert stub._albumsQueued.emits == [(0, ["std", "dlx"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["std", "dlx"])]
     assert stub._merge_plans == {}
 
 
@@ -579,7 +580,7 @@ def test_with_the_switch_off_and_best_of_both_off_nothing_is_scanned_either_for_
     stub = _EditionGateStub(collapse=False, merge=False)
     stub.downloadArtist("art1")
     assert stub.calls == []
-    assert stub._albumsQueued.emits == [(0, ["std", "dlx"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["std", "dlx"])]
 
 
 def test_a_plan_an_earlier_run_left_behind_does_not_merge_with_the_switch_off_for_a_discography():
@@ -596,7 +597,7 @@ def test_a_plan_an_earlier_run_left_behind_does_not_merge_with_the_switch_off_fo
     stub.collapse = False
     stub._albumsQueued.emits.clear()
     stub.downloadArtist("art1")
-    assert stub._albumsQueued.emits == [(0, ["std", "dlx"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["std", "dlx"])]
     assert stub._merge_plans == {}, "the sweep that decided 'plain' cleared the plan it did not make"
 
 
@@ -614,7 +615,7 @@ def test_with_the_switch_on_best_of_both_builds_the_one_edition_for_a_discograph
     stub = _EditionGateStub(collapse=True, merge=True)
     stub.downloadArtist("art1")
     assert stub.calls == ["merge"]
-    assert stub._albumsQueued.emits == [(0, ["dlx"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["dlx"])]
     assert "dlx" in stub._merge_plans
 
 
@@ -622,7 +623,7 @@ def test_with_the_switch_on_and_best_of_both_off_the_plain_collapse_runs_for_a_d
     stub = _EditionGateStub(collapse=True, merge=False)
     stub.downloadArtist("art1")
     assert stub.calls == ["collapse"]
-    assert stub._albumsQueued.emits == [(0, ["dlx"])]
+    assert stub._albumsQueued.emits == [(scan_generation(stub), ["dlx"])]
 
 
 def test_the_help_says_the_sweep_follows_the_switch():

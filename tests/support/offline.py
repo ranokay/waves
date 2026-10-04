@@ -31,9 +31,18 @@ def patch_offline() -> None:
     from support.qml import sandbox_app_config
 
     sandbox_app_config()
-    from waves.desktop.session import WavesTidal
+    from providers.qml_auth import CallbackLoginAttempt
 
-    WavesTidal.login_token = lambda self: False  # type: ignore[method-assign]
+    from waves.providers.tidal import TidalProvider
+
+    create_attempt = TidalProvider.create_login_attempt
+
+    def offline_attempt(self, *, resume=False, register_secrets=None):
+        if resume:
+            return CallbackLoginAttempt(lambda: "", lambda payload: False)
+        return create_attempt(self, resume=resume, register_secrets=register_secrets)
+
+    TidalProvider.create_login_attempt = offline_attempt
 
 
 # The session resolves logged-out (instantly, via patch_offline), so the

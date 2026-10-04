@@ -39,6 +39,7 @@ class GateHost:
     _downloads_running = WavesBridge._downloads_running
     _stash_pending_download = WavesBridge._stash_pending_download
     _run_pending_downloads = WavesBridge._run_pending_downloads
+    _forget_held_queue_rows = WavesBridge._forget_held_queue_rows
     _probe_download_base = WavesBridge._probe_download_base
     _probe_folder_verdict = staticmethod(WavesBridge._probe_folder_verdict)
     # Proof of life records the share's origin, and a dead probe may try a

@@ -19,9 +19,11 @@ import re
 from threading import Lock
 from types import SimpleNamespace
 
+from providers.fakes import StubProvider
 from support.paths import QML_DIR, REPO_ROOT
 
 from waves.desktop.backend import WavesBridge
+from waves.providers import Capability
 
 
 class _Emit:
@@ -81,7 +83,7 @@ class _WarmStub:
         self.downloadState = _Emit()
         self._objs = {"playlist": {"p1": SimpleNamespace(id="p1", name="Road Songs")}}
         self.settings = SimpleNamespace(data=SimpleNamespace(format_playlist="Playlists/{folder_path}{playlist_name}"))
-        self.providers = {"tidal": SimpleNamespace(id="tidal")}
+        self.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.FAVORITES}, logged_in=True)}
 
     def _set_busy(self, on):
         pass

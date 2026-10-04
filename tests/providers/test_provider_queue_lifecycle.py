@@ -43,6 +43,24 @@ class _Pool:
         self.workers.append(worker)
 
 
+def test_revocation_resets_only_owned_rollups_without_queue_rows():
+    queue = _Queue([])
+    queue._artist_groups = {"17": {}, "albums:tidal:19": {}, "apple:17": {}, "vids:paper:19": {}}
+    queue._folder_groups = {"cat:pages/a": {}, "fav:tidal:tracks": {}, "fav:paper:tracks": {}}
+    queue._provider_contexts.revoke("tidal")
+
+    assert queue._stop_provider_queue("tidal", "Signed out") == 0
+
+    assert queue._artist_groups == {"apple:17": {}, "vids:paper:19": {}}
+    assert queue._folder_groups == {"fav:paper:tracks": {}}
+    assert set(queue.downloadState.emits) == {
+        ("17", ""),
+        ("albums:tidal:19", ""),
+        ("cat:pages/a", ""),
+        ("fav:tidal:tracks", ""),
+    }
+
+
 class _Queue(QueueMixin):
     _release_abandoned_hold = WavesBridge._release_abandoned_hold
     _media_work_outstanding = WavesBridge._media_work_outstanding

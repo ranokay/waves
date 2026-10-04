@@ -13,9 +13,11 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from providers.fakes import StubProvider
 
 from waves.desktop import backend as backend_mod
 from waves.desktop.backend import WavesBridge
+from waves.providers import Capability
 
 
 class _Resp:
@@ -268,6 +270,7 @@ class _PreviewStub:
     _emit_preview_meta = WavesBridge._emit_preview_meta
 
     def __init__(self, track):
+        self.providers = {"tidal": StubProvider("tidal", "TIDAL", capabilities={Capability.PREVIEW}, logged_in=True)}
         self.log: list = []
         self._objs = {"track": {"t1": track}}
         self.previewMeta = _Emitter(self.log, "meta")
