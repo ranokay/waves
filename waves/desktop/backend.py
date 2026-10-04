@@ -202,6 +202,7 @@ from .providers.cache import SNAPSHOT_VERSION, page_provider, read_snapshot, rem
 from .providers.lifecycle import (
     ProviderContexts,
     ProviderToken,
+    ScanToken,
     clear_provider_caches,
     provider_contexts,
     scan_current,
@@ -2680,15 +2681,16 @@ def _stop_check_for(bridge) -> Callable[[], None]:
     return check
 
 
-def _catalog_work(bridge, provider_id: str, work) -> Callable[[], None]:
+def _catalog_work(bridge, provider_id: str, work, *, token: ProviderToken | None = None) -> Callable[[], None]:
     """Capture before scheduling; service-private caches share the scope."""
     contexts = provider_contexts(bridge)
     parent = getattr(getattr(bridge, "_catalog_thread", None), "token", None)
-    token = (
-        parent
-        if isinstance(parent, ProviderToken) and parent.provider_id == provider_id
-        else contexts.capture(provider_id)
-    )
+    if token is None:
+        token = (
+            parent
+            if isinstance(parent, ProviderToken) and parent.provider_id == provider_id
+            else contexts.capture(provider_id)
+        )
     provider = getattr(bridge, "providers", {}).get(provider_id)
     capture = getattr(provider, "catalog_context", None)
     scope = capture() if capture is not None else contextlib.nullcontext()
@@ -2709,8 +2711,8 @@ def _catalog_work(bridge, provider_id: str, work) -> Callable[[], None]:
     return run
 
 
-def _catalog_worker(bridge, provider_id: str, work) -> Worker:
-    return Worker(_catalog_work(bridge, provider_id, work))
+def _catalog_worker(bridge, provider_id: str, work, *, token: ProviderToken | None = None) -> Worker:
+    return Worker(_catalog_work(bridge, provider_id, work, token=token))
 
 
 def _cache_commit(bridge, callback: Callable[[], None]) -> bool:
@@ -2767,6 +2769,67 @@ def _deliver_catalog(bridge, deliver: Callable[[], None]) -> None:
 
 def _catalog_emit(bridge, signal, *args) -> None:
     _deliver_catalog(bridge, lambda: signal.emit(*args))
+
+
+def _release_artist_build(bridge, artist_id: str, *, silent: bool) -> bool:
+    """Release/claim one build only while its captured provider still owns it."""
+    claimed = False
+
+    def release() -> None:
+        nonlocal claimed
+        with bridge._prefetch_lock:
+            bridge._artist_loading.discard(artist_id)
+            claimed = silent and bridge._artist_prefetch == artist_id and bridge._artist_prefetch_claimed
+            if bridge._artist_prefetch == artist_id:
+                bridge._artist_prefetch = None
+                bridge._artist_prefetch_claimed = False
+
+    _cache_commit(bridge, release)
+    return claimed
+
+
+class _StandaloneStopped(Exception):
+    """A standalone asset request lost its provider or STOP ALL context."""
+
+
+def _standalone_check(bridge) -> None:
+    token = getattr(getattr(bridge, "_catalog_thread", None), "standalone", None)
+    if isinstance(token, ScanToken) and not scan_current(bridge, token):
+        raise _StandaloneStopped
+
+
+def _standalone_write(bridge, folder: pathlib.Path, build: Callable[[pathlib.Path], bool]) -> bool:
+    """Build sidecars/tags privately; publish only under the request's context.
+
+    Fetches, conversion and tag writes run outside the provider lock. Only
+    same-filesystem replacements hold it, so revocation never waits on I/O
+    preparation and a revoked request cannot modify an existing saved file.
+    """
+    _standalone_check(bridge)
+    with tempfile.TemporaryDirectory(prefix=".waves-assets-", dir=folder) as temporary:
+        staged = pathlib.Path(temporary)
+        if not build(staged):
+            return False
+        _standalone_check(bridge)
+        files = [entry for entry in staged.iterdir() if entry.is_file()]
+
+        def publish() -> None:
+            _standalone_check(bridge)
+            for entry in files:
+                os.replace(entry, folder / entry.name)
+
+        if not _cache_commit(bridge, publish):
+            raise _StandaloneStopped
+        return bool(files)
+
+
+def _stop_standalone(bridge, provider_id: str | None = None) -> None:
+    """Hand back only the stopped owner's asset buttons on the GUI thread."""
+    active = getattr(bridge, "_standalone_active", {})
+    for media_id, token in list(active.items()):
+        if provider_id is None or token.provider.provider_id == provider_id:
+            active.pop(media_id, None)
+            bridge.downloadState.emit(media_id, "")
 
 
 def _apple_auth_lock_for(bridge):
@@ -2956,11 +3019,24 @@ class _AppleDownloads(DownloadAdapter):
         bridge = self._bridge
         bucket, media_id, qid = item["type"], item["media_id"], item["qid"]
         key = (bucket, media_id)
-        if key in bridge._refetch_inflight:
+        contexts = provider_contexts(bridge)
+        gen = contexts.capture(provider_of_id(media_id))
+        owners = getattr(bridge, "_retry_refetch_tokens", None)
+        if owners is None:
+            owners = bridge._retry_refetch_tokens = {}
+        started = False
+
+        def begin() -> None:
+            nonlocal started
+            if key in bridge._refetch_inflight:
+                return
+            owners[key] = (gen, qid)
+            bridge._refetch_inflight.add(key)
+            bridge._set_status("Fetching item…")
+            started = True
+
+        if not contexts.commit(gen, begin) or not started:
             return True
-        bridge._refetch_inflight.add(key)
-        gen = provider_contexts(bridge).capture(provider_of_id(media_id))
-        bridge._set_status("Fetching item…")
 
         def work() -> None:
             obj = None
@@ -2974,16 +3050,20 @@ class _AppleDownloads(DownloadAdapter):
                 logger.warning("Apple %s retry fetch stopped partway: %s", bucket, failure)
             except Exception:
                 logger.exception("Could not re-fetch Apple %s %s for retry", bucket, media_id)
-            if not _provider_result_current(bridge, gen):
-                bridge._refetch_inflight.discard(key)
-                return
-            if obj is None:
-                bridge._refetch_inflight.discard(key)
-                bridge._set_status(failure or "That item is no longer available")
-                return
-            bridge._queueRetryRefetched.emit(bucket, media_id, qid, gen)
 
-        bridge.threadpool.start(Worker(work))
+            def publish() -> None:
+                if owners.get(key) != (gen, qid):
+                    return
+                if obj is None:
+                    owners.pop(key, None)
+                    bridge._refetch_inflight.discard(key)
+                    bridge._set_status(failure or "That item is no longer available")
+                    return
+                bridge._queueRetryRefetched.emit(bucket, media_id, qid, gen)
+
+            contexts.commit(gen, publish)
+
+        bridge.threadpool.start(_catalog_worker(bridge, CTX_APPLE, work, token=gen))
         return True
 
     def standalone(self, media_id: str, mode: str) -> int | None:
@@ -3837,8 +3917,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
     # (inline steps, one explicit browser click); QML opens it in sign-in
     # mode, so no provider action can start a browser behind the user's back.
     signInRequested = Signal(str)
+    # providerId: its account/readiness changed; discard only its retained UI state.
     providerStateChanged = Signal(str)
+    # providerId, url: a current selected login attempt has a browser URL ready.
     providerLoginUrlReady = Signal(str, str)
+    # providerId, ok: the current login attempt settled; stale attempts never fire.
     providerLoginFinished = Signal(str, bool)
     _providerLoginEvent = Signal(object)
     _catalogEvent = Signal(object)
@@ -3963,6 +4046,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             CTX_APPLE: AppleProvider(),
         }
         self._provider_contexts = ProviderContexts()
+        self._standalone_active: dict[str, ScanToken] = {}
         self._provider_login_attempts = {}
         self._provider_login_busy: set[str] = set()
         self._provider_cleanup_events: dict[str, Event] = {}
@@ -6454,7 +6538,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         def work() -> None:
             t0 = devlog.clock()
             if provider_of_id(playlist_id) != CTX_TIDAL:
-                rows = self._apple_playlist_expansion_rows(str(playlist_id))
+                rows = self._provider_playlist_expansion_rows(str(playlist_id))
                 if _provider_result_current(self, gen):
                     _catalog_emit(self, self.playlistTracksLoaded, playlist_id, self._dress_panel_rows(rows))
                     devlog.done("playlist", f"tracks id={playlist_id}", devlog.clock() - t0, n=len(rows))
@@ -6504,7 +6588,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
 
         self.threadpool.start(_catalog_worker(self, provider_of_id(playlist_id), work))
 
-    def _apple_playlist_expansion_rows(self, playlist_id: str) -> list:
+    def _provider_playlist_expansion_rows(self, playlist_id: str) -> list:
         """The owning provider's collection rows for inline expansion."""
         try:
             provider = self.providers[provider_of_id(playlist_id)]
@@ -6532,14 +6616,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             )
         return out
 
-    def _load_apple_artist(self, artist_id: str) -> None:
-        """An Apple artist page: albums, singles and top tracks, no bio.
-
-        Apple's catalog serves no biography; the page renders the art header
-        plus the three row sections. Cached per session like TIDAL pages, and
-        a hover prefetch in flight is claimed exactly as loadArtist claims
-        the TIDAL one (see prefetchArtist).
-        """
+    def _load_provider_artist(self, artist_id: str) -> None:
+        """Open a normalized provider artist page, adopting a pending hover."""
         provider = self.providers.get(provider_of_id(artist_id))
         if (
             provider is None
@@ -6573,14 +6651,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._set_busy(True)
                 self._set_status("Loading artist…")
             return
-        self._start_apple_artist_build(artist_id, silent=False)
+        self._start_provider_artist_build(artist_id, silent=False)
 
-    def _start_apple_artist_build(self, artist_id: str, *, silent: bool) -> None:
-        """The Apple artist page worker behind _load_apple_artist (a click)
-        and the prefetchArtist Apple branch (a hover). ``artist_id`` is
-        already in ``_artist_loading``; the worker takes it out. A silent
-        build that a click claims mid-flight finishes as the click."""
-        gen = provider_contexts(self).capture(provider_of_id(artist_id))  # account generation, bumped on logout
+    def _start_provider_artist_build(self, artist_id: str, *, silent: bool, cached: dict | None = None) -> None:
+        """Build normalized provider rows for a click, hover or quiet refresh.
+
+        The caller owns the loading marker. A claimed hover becomes a click;
+        a refresh paints only changed rows and preserves navigation/status.
+        """
+        gen = provider_contexts(self).capture(provider_of_id(artist_id))
+        refresh = cached is not None
         if not silent:
             self._set_busy(True)
             self._set_status("Loading artist…")
@@ -6609,34 +6689,30 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # build and start a redundant request. An empty-everywhere
                 # page is more likely a transient failure than a real
                 # artist with no catalogue: never cached.
-                if _provider_result_current(self, gen) and (payload["albums"] or payload["eps"] or payload["tracks"]):
-                    self._remember_artist_page(artist_id, payload)
+                if _provider_result_current(self, gen):
+                    reval_ts = getattr(self, "_artist_reval_ts", None)
+                    if isinstance(reval_ts, dict):
+                        _cache_put(self, reval_ts, artist_id, time.monotonic())
+                    if payload != cached and (payload["albums"] or payload["eps"] or payload["tracks"]):
+                        self._remember_artist_page(artist_id, payload)
             except AppleCollectionIncomplete as exc:
                 failure = str(exc)
-                logger.warning("Apple artist fetch stopped partway: %s", artist_id)
+                logger.warning("provider artist fetch stopped partway: %s", artist_id)
                 return
             except Exception:
                 failure = "Could not open that artist"
-                logger.exception("Could not load Apple artist %s", artist_id)
+                logger.exception("Could not load provider artist %s", artist_id)
                 return
             finally:
                 # Same claim breath as _start_artist_build's: free the hover
                 # slot and read the claim while the loading mark drops. Skipped
                 # when the generation moved (logout clears all of this state;
                 # a stale worker must not clear the next account's prefetch).
-                with self._prefetch_lock:
-                    if _provider_result_current(self, gen):
-                        _cache_commit(self, lambda: self._artist_loading.discard(artist_id))
-                        claimed = silent and self._artist_prefetch == artist_id and self._artist_prefetch_claimed
-                        if self._artist_prefetch == artist_id:
-                            self._artist_prefetch = None
-                            self._artist_prefetch_claimed = False
-                    else:
-                        claimed = False
-                quiet = silent and not claimed  # nobody is watching this build
-                if failure is not None:
+                claimed = _release_artist_build(self, artist_id, silent=silent)
+                quiet = silent and not claimed and not refresh  # nobody is watching this build
+                if failure is not None and not refresh:
                     if quiet:
-                        _prefetch_log.debug("prefetch Apple artist %s failed", artist_id)
+                        _prefetch_log.debug("prefetch provider artist %s failed", artist_id)
                     elif _provider_result_current(self, gen):
                         self._set_status(failure)
                         self._set_busy(False)
@@ -6648,12 +6724,16 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             if quiet:
                 # A page the user never opened is simply a cached page.
                 _prefetch_log.debug(
-                    "prefetch Apple artist %s done in %s", artist_id, devlog.fmt_dur(devlog.clock() - t0)
+                    "prefetch provider artist %s done in %s", artist_id, devlog.fmt_dur(devlog.clock() - t0)
                 )
                 return
-            _catalog_emit(self, self.artistLoaded, payload)
-            self._set_status(payload["name"])
-            self._set_busy(False)
+            if refresh:
+                if payload != cached and (payload["albums"] or payload["eps"] or payload["tracks"]):
+                    _catalog_emit(self, self.artistLoaded, {**payload, "refresh": True})
+            else:
+                _catalog_emit(self, self.artistLoaded, payload)
+                self._set_status(payload["name"])
+                self._set_busy(False)
             devlog.done(
                 "artist",
                 f"id={artist_id}",
@@ -6675,8 +6755,15 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         the QML updates it in place, only if something actually changed
         (e.g. a new album released since the page was cached)."""
         artist_id = str(artist_id or "")
+        provider = self.providers.get(provider_of_id(artist_id))
+        if (
+            not artist_id
+            or provider is None
+            or _provider_readiness(self, provider).for_operation(Capability.CATALOG).state != ReadinessState.READY
+        ):
+            return
         if provider_of_id(artist_id) != CTX_TIDAL:
-            self._load_apple_artist(artist_id)
+            self._load_provider_artist(artist_id)
             return
         cached = self._artist_cache.get(artist_id)
         collapse = self._artist_page_collapses_editions()
@@ -6729,9 +6816,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 or _provider_readiness(self, provider).for_operation(Capability.CATALOG).state != ReadinessState.READY
             ):
                 return
-            if artist_id in self._artist_cache and artist_id not in self._artist_loading:
+            cached = self._artist_cache.get(artist_id)
+            if cached is None:
+                return
+            stamp = getattr(self, "_artist_reval_ts", {}).get(artist_id)
+            if stamp is not None and time.monotonic() - stamp < 60.0:
+                return
+            with self._prefetch_lock:
+                if artist_id in self._artist_loading:
+                    return
                 self._artist_loading.add(artist_id)
-                self._start_apple_artist_build(artist_id, silent=False)
+            self._start_provider_artist_build(artist_id, silent=True, cached=cached)
             return
         if not self._logged_in or not artist_id:
             return
@@ -6773,10 +6868,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 or _provider_readiness(self, provider).for_operation(Capability.CATALOG).state != ReadinessState.READY
             ):
                 return
-            # Apple hover: warm the Apple page silently so the click that
-            # usually follows paints from the cache. Without this branch the
-            # hover fell into the TIDAL build below and spent a TIDAL lookup
-            # on an Apple id, warming nothing.
+            # Warm the owning provider's normalized page without a TIDAL lookup.
             if self._artist_cache.get(artist_id) is not None:
                 return
             with self._prefetch_lock:
@@ -6789,8 +6881,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._artist_prefetch = artist_id
                 self._artist_prefetch_claimed = False
                 self._artist_loading.add(artist_id)
-            _prefetch_log.debug("prefetch Apple artist %s", artist_id)
-            self._start_apple_artist_build(artist_id, silent=True)
+            _prefetch_log.debug("prefetch provider artist %s", artist_id)
+            self._start_provider_artist_build(artist_id, silent=True)
             return
         if not self._logged_in:
             return
@@ -6912,12 +7004,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 # breath as the loading mark drops: a click landing in
                 # between would otherwise start a second build of a page
                 # about to be cached, or claim a slot already gone.
-                with self._prefetch_lock:
-                    _cache_commit(self, lambda: self._artist_loading.discard(artist_id))
-                    claimed = silent and self._artist_prefetch == artist_id and self._artist_prefetch_claimed
-                    if self._artist_prefetch == artist_id:
-                        self._artist_prefetch = None
-                        self._artist_prefetch_claimed = False
+                claimed = _release_artist_build(self, artist_id, silent=silent)
                 quiet = silent and not claimed  # nobody is watching this build
                 if failed and not refresh:
                     if quiet:
@@ -6937,7 +7024,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # dict, the tests' stubs, keeps no floor.)
             reval_ts = getattr(self, "_artist_reval_ts", None)
             if isinstance(reval_ts, dict):
-                reval_ts[artist_id] = time.monotonic()
+                _cache_put(self, reval_ts, artist_id, time.monotonic())
             changed = payload != cached
             # A page with a failed or empty-everywhere fetch is more likely a
             # transient failure than a real artist with no catalogue, show it
@@ -8304,7 +8391,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._emit_dressed(self.browseLoaded, cached, gen)
                 self._start_tile_art(cached, gen)
 
-            self.threadpool.start(Worker(_emit_cached))
+            self.threadpool.start(_catalog_worker(self, CTX_TIDAL, _emit_cached))
         if "root" in self._browse_loading:
             return
         _cache_commit(self, lambda: self._browse_loading.add("root"))
@@ -8602,7 +8689,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         except Exception:
             logger.debug("Could not record collection membership", exc_info=True)
 
-    def _build_apple_browse_item(self, kind: str, media_id: str, key: str, *, record: bool = True) -> dict:
+    def _build_provider_browse_item(self, kind: str, media_id: str, key: str, *, record: bool = True) -> dict:
         """Build a registered provider's page from its normalized catalog rows."""
         provider = self.providers[provider_of_id(media_id)]
         raw_id = str(media_id).partition(":")[2] or str(media_id)
@@ -8669,7 +8756,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         let it go. Shared by openBrowseItem and the hover prefetch; raises on
         any failure, the callers own the error payload and the emits."""
         if provider_of_id(media_id) != CTX_TIDAL:
-            return self._build_apple_browse_item(kind, str(media_id), key, record=record)
+            return self._build_provider_browse_item(kind, str(media_id), key, record=record)
         obj = self._objs[kind].get(media_id)
         if obj is None:
             obj = self.providers[CTX_TIDAL].get_object(kind, media_id)
@@ -17122,8 +17209,17 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._standalone_fetch(str(media_id or ""), mode="art")
 
     def _standalone_fetch(self, media_id: str, mode: str) -> None:
-        """Queue a lyrics-only or art-only fetch on a worker thread."""
+        """Fetch assets in their owner's context, independently of audio setup."""
         if not media_id:
+            return
+        provider_id = provider_of_id(media_id)
+        provider = self.providers.get(provider_id)
+        operation = Capability.LYRICS if mode == "lyrics" else Capability.ART
+        if (
+            provider is None
+            or _provider_readiness(self, provider).for_operation(operation).state != ReadinessState.READY
+        ):
+            self._set_status("Set up this provider to fetch assets")
             return
         gate = self._download_gate()
         if gate == "block":
@@ -17131,37 +17227,55 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if gate == "nudge":
             self._stash_pending_download(media_id, lambda: self._standalone_fetch(media_id, mode))
             return
+        active = getattr(self, "_standalone_active", None)
+        if active is None:
+            active = self._standalone_active = {}
+        if media_id in active:
+            return
+        gen = scan_generation(self, provider_id)
+        active[media_id] = gen
         self.downloadState.emit(media_id, "running")
-        self._set_status(f"Fetching {'lyrics' if mode == 'lyrics' else 'artwork'}…")
+        noun = "lyrics" if mode == "lyrics" else "artwork"
+        self._set_status(f"Fetching {noun}…")
+
+        def finish(state: str, status: str) -> None:
+            if active.get(media_id) is not gen or not scan_current(self, gen):
+                return
+            active.pop(media_id, None)
+            self.downloadState.emit(media_id, state)
+            self._set_status(status)
 
         def work() -> None:
+            previous = getattr(self._catalog_thread, "standalone", None)
+            self._catalog_thread.standalone = gen
             try:
-                # The id's provider serves the ask through its own fetch when
-                # it carries a download adapter (its rows and catalogs are its
-                # own); the engine's fetch runs otherwise.
+                _standalone_check(self)
                 adapter = _downloads_for(self, media_id)
                 count = (
                     adapter.standalone(media_id, mode)
                     if adapter is not None
                     else self._standalone_tidal(media_id, mode)
+                    if provider_id == CTX_TIDAL
+                    else None
                 )
+                _standalone_check(self)
+                if count is None:
+                    state, status = "failed", ITEM_GONE
+                elif count == 0:
+                    state, status = "failed", f"No {noun} found"
+                else:
+                    state = "done"
+                    status = f"Saved {noun} for {count} track{'s' if count != 1 else ''}"
+                _deliver_catalog(self, lambda: finish(state, status))
+            except _StandaloneStopped:
+                return
             except Exception:
                 logger.exception("Standalone %s fetch failed for %s", mode, media_id)
-                self.downloadState.emit(media_id, "failed")
-                self._set_status(f"Could not fetch {'lyrics' if mode == 'lyrics' else 'artwork'}, try again")
-                return
-            if count is None:
-                self.downloadState.emit(media_id, "failed")
-                self._set_status(ITEM_GONE)
-            elif count == 0:
-                self.downloadState.emit(media_id, "failed")
-                self._set_status(f"No {'lyrics' if mode == 'lyrics' else 'artwork'} found")
-            else:
-                self.downloadState.emit(media_id, "done")
-                noun = "lyrics" if mode == "lyrics" else "artwork"
-                self._set_status(f"Saved {noun} for {count} track{'s' if count != 1 else ''}")
+                _deliver_catalog(self, lambda: finish("failed", f"Could not fetch {noun}, try again"))
+            finally:
+                self._catalog_thread.standalone = previous
 
-        self.threadpool.start(Worker(work))
+        self.threadpool.start(_catalog_worker(self, provider_id, work, token=gen.provider))
 
     def _standalone_base_dir(self) -> pathlib.Path | None:
         """The download folder standalone sidecars land under, or None."""
@@ -17189,6 +17303,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if provider is None:
             return None
         for kind in ("track", "album", "playlist", "artist"):
+            _standalone_check(self)
             raw = None
             # An artist's cached form can be a search summary whose album
             # rows are reference stubs; artist_page needs the canonical
@@ -17217,6 +17332,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     page = provider.artist_page(raw if isinstance(raw, dict) else {})
                     out: list[tuple[dict, dict | None, bool]] = []
                     for album_row in list(page.get("albums") or []) + list(page.get("eps") or []):
+                        _standalone_check(self)
                         try:
                             album_raw = provider.get_object(
                                 "album", str(album_row.get("id") or "").removeprefix(f"{CTX_APPLE}:")
@@ -17235,6 +17351,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         out.extend((track, full_album, True) for track in tracks)
                     out.extend((track, None, False) for track in page.get("tracks") or [])
                     return out
+            except _StandaloneStopped:
+                raise
             except Exception:
                 logger.debug("Standalone Apple resolve failed for %s", kind, exc_info=True)
                 continue
@@ -17276,6 +17394,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         data = self.settings.data
         served = 0
         for track_row, album_row, collection in resolved:
+            _standalone_check(self)
             raw = None
             try:
                 raw = provider.get_object("track", str(track_row.get("id") or "").removeprefix(f"{CTX_APPLE}:"))
@@ -17286,9 +17405,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 facts = provider.track_facts(raw if raw is not None else track_row) or {}
             except Exception:
                 facts = {}
+            _standalone_check(self)
             folder, stem = self._apple_standalone_dest(base, track_row, album_row, collection)
             if mode == "lyrics":
                 synced, plain, ttml = self._apple_lyrics_full(provider, track_row, facts)
+                _standalone_check(self)
                 if not (synced or plain or (ttml and bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False)))):
                     continue
                 wrote = False
@@ -17301,7 +17422,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     ttml_file=bool(self._psetting(CTX_APPLE, "lyrics_ttml_file", False)),
                     ttml_supported=True,
                 ):
-                    if write_text_sidecar(folder, stem, suffix, text) is not None:
+                    if _standalone_write(
+                        self,
+                        folder,
+                        lambda staged, stem=stem, suffix=suffix, text=text: (
+                            write_text_sidecar(staged, stem, suffix, text) is not None
+                        ),
+                    ):
                         wrote = True
                 # The embed side is independent of the sidecars: with the
                 # toggle on it tags a saved file even when every sidecar
@@ -17326,17 +17453,22 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 except Exception:
                     cover = None
                     embed_cover = None
+                _standalone_check(self)
                 if not cover and not embed_cover:
                     continue
                 served_here = False
-                if cover is not None and (
-                    write_cover_sidecar(
-                        folder,
-                        cover,
-                        cover_sidecar_format(data, "apple_cover_file_format"),
-                        ffmpeg_path=self._cover_convert_ffmpeg(),
-                    )
-                    is not None
+                if cover is not None and _standalone_write(
+                    self,
+                    folder,
+                    lambda staged, cover=cover: (
+                        write_cover_sidecar(
+                            staged,
+                            cover,
+                            cover_sidecar_format(data, "apple_cover_file_format"),
+                            ffmpeg_path=self._cover_convert_ffmpeg(),
+                        )
+                        is not None
+                    ),
                 ):
                     served_here = True
                 if bool(self._psetting(CTX_APPLE, "metadata_cover_embed", True)) and embed_cover is not None:
@@ -17367,10 +17499,13 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             candidate = folder / f"{stem}{ext}"
             if not candidate.is_file():
                 continue
-            try:
+
+            def tag(staged: pathlib.Path, candidate: pathlib.Path = candidate) -> bool:
+                copy = staged / candidate.name
+                shutil.copy2(candidate, copy)
                 return bool(
                     tag_apple_file(
-                        candidate,
+                        copy,
                         title=str(row.get("title") or ""),
                         facts=facts_without_share_url(self.settings.data, facts or {}),
                         lyrics_synced=synced,
@@ -17381,6 +17516,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         **self._tag_write_flags(),
                     )
                 )
+
+            try:
+                return _standalone_write(self, folder, tag)
+            except _StandaloneStopped:
+                raise
             except Exception:
                 logger.debug("Standalone Apple embed failed", exc_info=True)
                 return False
@@ -17404,6 +17544,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         if provider is None:
             return None
         for kind in ("track", "album", "artist", "playlist"):
+            _standalone_check(self)
             try:
                 obj = provider.get_object(kind, media_id)
             except Exception:
@@ -17447,10 +17588,12 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         data = self.settings.data
         served = 0
         for track_obj, _album_obj, collection in resolved:
+            _standalone_check(self)
             try:
                 _best, synced, unsynced = dl._retrieve_lyrics(track_obj)
             except Exception:
                 synced, unsynced = "", ""
+            _standalone_check(self)
             if mode == "lyrics":
                 choices = lyrics_sidecar_choices(
                     synced=synced,
@@ -17470,12 +17613,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 folder, stem = self._tidal_standalone_dest(base, track_obj, collection)
                 wrote = False
                 for text, suffix in choices:
-                    target = folder / f"{stem}{suffix}"
-                    try:
-                        target.write_text(text, encoding="utf-8")
+
+                    def write(staged: pathlib.Path, stem=stem, suffix=suffix, text=text) -> bool:
+                        try:
+                            (staged / f"{stem}{suffix}").write_text(text, encoding="utf-8")
+                        except OSError:
+                            logger.debug("Standalone TIDAL lyrics write failed", exc_info=True)
+                            return False
+                        else:
+                            return True
+
+                    if _standalone_write(self, folder, write):
                         wrote = True
-                    except OSError:
-                        logger.debug("Standalone TIDAL lyrics write failed", exc_info=True)
                 # The embed side is independent of the sidecars (same rule
                 # as Apple): a saved file gains the lyrics on the toggle
                 # alone, even with every sidecar toggle off.
@@ -17503,11 +17652,19 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     cover = dl.cover_data_cached(url) if url else b""
                 except Exception:
                     cover = b""
+                _standalone_check(self)
                 if not cover:
                     continue
                 folder, stem = self._tidal_standalone_dest(base, track_obj, collection)
                 fmt = cover_sidecar_format(data, "tidal_cover_file_format")
-                if write_cover_sidecar(folder, bytes(cover), fmt, ffmpeg_path=self._cover_convert_ffmpeg()) is not None:
+                if _standalone_write(
+                    self,
+                    folder,
+                    lambda staged, cover=cover, fmt=fmt: (
+                        write_cover_sidecar(staged, bytes(cover), fmt, ffmpeg_path=self._cover_convert_ffmpeg())
+                        is not None
+                    ),
+                ):
                     served += 1
                 if bool(self._psetting(CTX_TIDAL, "metadata_cover_embed", True)):
                     self._tidal_standalone_embed(folder, stem, track_obj, collection)
@@ -17541,14 +17698,18 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             # The tag writer only owns these containers; another format
             # beside the stem cannot gain tags, so it is no embed.
             return False
-        try:
-            written = dl.metadata_write(track_obj, existing, bool(collection))
-        except Exception:
-            logger.debug("Standalone TIDAL embed failed", exc_info=True)
-            return False
-        if not isinstance(written, tuple) or not written:
-            return False
-        return bool(written[0])
+
+        def tag(staged: pathlib.Path) -> bool:
+            copy = staged / existing.name
+            shutil.copy2(existing, copy)
+            try:
+                written = dl.metadata_write(track_obj, copy, bool(collection))
+            except Exception:
+                logger.debug("Standalone TIDAL embed failed", exc_info=True)
+                return False
+            return bool(isinstance(written, tuple) and written and written[0])
+
+        return _standalone_write(self, folder, tag)
 
     def _tidal_standalone_dest(self, base: pathlib.Path, track_obj, collection: bool) -> tuple[pathlib.Path, str]:
         """Folder and stem for one TIDAL standalone track, mirroring audio layout."""
@@ -17844,7 +18005,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         from before an account flip is dropped. The in-flight key always
         clears, so a dropped count never wedges the button."""
         load_key = gid  # the group id already names the source
-        if load_key in self._browse_loading or not self._logged_in:
+        if load_key in self._browse_loading:
             return
         if _source_provider(self, source) is None:
             return
@@ -17867,7 +18028,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 self._set_status(f"No favourite {kind} yet")
             elif total < 0:
                 self._set_status(f"Could not count your {kind}, try again")
-            signal.emit(source, int(total))
+            _catalog_emit(self, signal, source, int(total))
 
         self.threadpool.start(_catalog_worker(self, source, work))
 
@@ -18310,6 +18471,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         _stop_check_for). A scan that ignored the bump would finish after STOP
         and queue the whole discography behind the press."""
         self._scan_gen += 1
+        _stop_standalone(self)
         # The one job in flight gets its abort; the rows behind it never
         # became jobs, so dropping their specs is all it takes to stop them.
         for ev in list(self._jobs.aborts.values()):
@@ -18383,7 +18545,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         self._set_status("Downloads stopped")
 
     def _stop_provider_downloads(self, provider_id: str, reason: str) -> int:
-        """Stop this provider's queue, retaining plain retryable asks."""
+        """Stop this provider's assets and queue, retaining plain retryable asks."""
+        _stop_standalone(self, provider_id)
         return self._stop_provider_queue(str(provider_id or "").strip(), str(reason or ""))
 
     def shutdown(self) -> None:
@@ -20473,7 +20636,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 snapshot,
                 operations=tuple(
                     OperationReadiness(item.operation, ReadinessState.SETUP_REQUIRED, "setup")
-                    if item.operation in (Capability.DOWNLOAD, Capability.LYRICS)
+                    if item.operation == Capability.DOWNLOAD
                     else item
                     for item in snapshot.operations
                 ),

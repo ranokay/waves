@@ -894,7 +894,8 @@ class _ThirdDownloads(DownloadAdapter):
 class _ThirdProvider(BareProvider):
     id = "third"
     name = "Third"
-    capabilities = frozenset({Capability.DOWNLOAD})
+    capabilities = frozenset({Capability.DOWNLOAD, Capability.LYRICS, Capability.ART})
+    public_operations = frozenset({Capability.LYRICS, Capability.ART})
 
 
 class TestTheThirdProviderAdapter:

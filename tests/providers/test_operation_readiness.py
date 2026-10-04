@@ -138,3 +138,19 @@ def test_direct_private_shelf_calls_use_a_ready_third_provider():
     assert _source_provider(bridge, "paper") is provider
     assert WavesBridge._library_page(bridge, "paper", "albums", 0, 40) == ([{"id": "paper:album-1"}], False)
     assert provider.calls == [("albums", 0, 40)]
+
+
+@pytest.mark.parametrize("audio_ready", [False, True])
+def test_apple_asset_readiness_is_independent_of_audio_fetch_setup(audio_ready):
+    provider = AppleProvider()
+    bridge = SimpleNamespace(
+        providers={"apple": provider},
+        _apple_live_flags=lambda: {"enabled": True, "account_signed_in": True, "signed_in": audio_ready},
+    )
+    snapshot = WavesBridge._apple_readiness(bridge)
+    assert snapshot.account == AccountState.SIGNED_IN
+    assert snapshot.for_operation(Capability.LYRICS).state == ReadinessState.READY
+    assert snapshot.for_operation(Capability.ART).state == ReadinessState.READY
+    assert snapshot.for_operation(Capability.DOWNLOAD).state == (
+        ReadinessState.READY if audio_ready else ReadinessState.SETUP_REQUIRED
+    )

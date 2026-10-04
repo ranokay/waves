@@ -163,6 +163,7 @@ def bridge():
     bridge._album_tracks_inflight = {}
     bridge._album_tracks_unrecorded = set()
     bridge._artist_cache = {}
+    bridge._artist_reval_ts = {}
     bridge._artist_loading = set()
     bridge._artist_prefetch = None
     bridge._artist_prefetch_claimed = False
@@ -349,3 +350,154 @@ def test_disabled_provider_catalog_and_preview_do_not_call_the_service(bridge, m
     assert bridge.providers["paper"].calls == []
     assert getattr(bridge, signal).emits == []
     assert bridge.providers["tidal"].calls == []
+
+
+def test_cached_browse_root_is_checked_again_when_the_gui_receives_it(bridge):
+    bridge._logged_in = True
+    cached = {"title": "Previous account", "sections": []}
+    bridge._browse_root_cache = cached
+    bridge._start_tile_art = lambda *args: None
+    bridge._load_browse_root(emit_cached=True)
+    bridge.threadpool.run_next()
+    assert not bridge.browseLoaded.emits
+    assert bridge._catalogEvent.emits
+    bridge._provider_contexts.revoke("tidal")
+    clear_provider_caches(bridge, "tidal")
+    current = {"title": "Current account", "sections": []}
+    bridge._browse_root_cache = current
+    _drain_gui(bridge)
+    assert not bridge.browseLoaded.emits
+    assert bridge._browse_root_cache is current
+
+
+def test_favorite_count_from_an_old_account_cannot_consume_a_new_action(bridge):
+    paper = bridge.providers["paper"]
+    paper.capabilities |= {Capability.FAVORITES}
+    bridge._provider_readiness_probes["paper"] = lambda: paper.readiness(enabled=True, signed_in=True)
+    bridge.favoriteTracksResolved = _Signal()
+    gid = "fav:paper:tracks"
+    WavesBridge._resolve_favorite_count(bridge, "paper", "tracks", gid, bridge.favoriteTracksResolved, lambda: 42)
+    bridge.threadpool.run_next()
+    assert not bridge.favoriteTracksResolved.emits
+    bridge._provider_contexts.revoke("paper")
+    clear_provider_caches(bridge, "paper")
+    WavesBridge._resolve_favorite_count(bridge, "paper", "tracks", gid, bridge.favoriteTracksResolved, lambda: 7)
+    _drain_gui(bridge)
+    assert not bridge.favoriteTracksResolved.emits
+    bridge.threadpool.run_all()
+    _drain_gui(bridge)
+    assert bridge.favoriteTracksResolved.emits == [("paper", 7)]
+    assert bridge.providers["tidal"].calls == []
+
+
+def test_revoked_apple_retry_cannot_release_the_next_accounts_same_item(bridge):
+    from waves.desktop.backend import _AppleDownloads
+    from waves.desktop.queue.bridge import QueueMixin
+
+    apple = _PaperProvider()
+    bridge.providers["apple"] = apple
+    bridge._refetch_inflight = set()
+    bridge._retry_refetch_tokens = {}
+    bridge._queueRetryRefetched = _Signal()
+    retried = []
+    bridge.retryQueueItem = retried.append
+    entered, release = Event(), Event()
+
+    def hold_old(kind, raw_id):
+        entered.set()
+        assert release.wait(2)
+        return {"id": raw_id}
+
+    apple.get_object = hold_old
+    adapter = _AppleDownloads(bridge)
+    adapter.refetch_retry({"type": "track", "media_id": "apple:track-1", "qid": 3})
+    old_token = bridge._provider_contexts.capture("apple")
+    old = Thread(target=bridge.threadpool.workers.pop(0).fn)
+    old.start()
+    key = ("track", "apple:track-1")
+    try:
+        assert entered.wait(2)
+        bridge._provider_contexts.revoke("apple")
+        QueueMixin._clear_retry_refetches(bridge, "apple")
+        clear_provider_caches(bridge, "apple")
+        apple.get_object = lambda kind, raw_id: {"id": raw_id}
+        adapter.refetch_retry({"type": "track", "media_id": "apple:track-1", "qid": 4})
+    finally:
+        release.set()
+        old.join(2)
+    assert not old.is_alive()
+    new_owner = bridge._retry_refetch_tokens[key]
+    assert new_owner[1] == 4 and key in bridge._refetch_inflight
+    assert not bridge._queueRetryRefetched.emits
+    bridge.threadpool.run_all()
+    QueueMixin._on_queue_retry_refetched(bridge, "track", "apple:track-1", 3, old_token)
+    assert bridge._retry_refetch_tokens[key] == new_owner and not retried
+    QueueMixin._on_queue_retry_refetched(bridge, *bridge._queueRetryRefetched.emits[0])
+    assert retried == [4] and key not in bridge._refetch_inflight
+
+
+def test_parked_third_provider_artist_refresh_is_quiet_change_only_and_throttled(bridge):
+    import time
+
+    bridge.loadArtist("paper:artist-1")
+    bridge.threadpool.run_all()
+    _drain_gui(bridge)
+    bridge.artistLoaded.emits.clear()
+    bridge.statusChanged.emits.clear()
+    bridge.busyChanged.emits.clear()
+    bridge.refreshArtist("paper:artist-1")
+    assert not bridge.threadpool.workers
+    bridge._artist_reval_ts["paper:artist-1"] = time.monotonic() - 61
+    bridge.refreshArtist("paper:artist-1")
+    bridge.threadpool.run_all()
+    _drain_gui(bridge)
+    assert not bridge.artistLoaded.emits
+    bridge.providers["paper"].revision = 2
+    bridge._artist_reval_ts["paper:artist-1"] = time.monotonic() - 61
+    bridge.refreshArtist("paper:artist-1")
+    bridge.threadpool.run_all()
+    _drain_gui(bridge)
+    assert bridge.artistLoaded.emits[0]["refresh"]
+    assert "revision 2" in bridge.artistLoaded.emits[0]["albums"][0]["title"]
+    assert not bridge.statusChanged.emits and not bridge.busyChanged.emits
+    assert bridge.providers["tidal"].calls == []
+
+
+def test_signed_out_tidal_artist_entry_cannot_paint_a_cached_account_page(bridge):
+    bridge._artist_cache["old-artist"] = {"id": "old-artist", "name": "Old account"}
+    bridge.loadArtist("old-artist")
+    assert not bridge.artistLoaded.emits and not bridge.threadpool.workers
+    assert not bridge.providers["tidal"].calls
+
+
+def test_old_artist_build_cannot_release_a_new_accounts_hover_claim(bridge):
+    paper = bridge.providers["paper"]
+    original = paper.artist_page
+    entered, release = Event(), Event()
+
+    def hold_old(artist):
+        entered.set()
+        assert release.wait(2)
+        return original(artist)
+
+    paper.artist_page = hold_old
+    bridge.prefetchArtist("paper:artist-1")
+    old = Thread(target=bridge.threadpool.workers.pop(0).fn)
+    old.start()
+    try:
+        assert entered.wait(2)
+        bridge._provider_contexts.revoke("paper")
+        clear_provider_caches(bridge, "paper")
+        paper.artist_page = original
+        bridge.prefetchArtist("paper:artist-1")
+        bridge.loadArtist("paper:artist-1")
+    finally:
+        release.set()
+        old.join(2)
+    assert not old.is_alive()
+    assert bridge._artist_prefetch == "paper:artist-1" and bridge._artist_prefetch_claimed
+    assert bridge._artist_loading == {"paper:artist-1"}
+    bridge.threadpool.run_all()
+    _drain_gui(bridge)
+    assert len(bridge.artistLoaded.emits) == 1
+    assert not bridge._artist_loading and bridge._artist_prefetch is None

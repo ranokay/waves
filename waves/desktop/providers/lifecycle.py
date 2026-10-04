@@ -133,6 +133,9 @@ def page_provider(key: str) -> str:
         return provider_of_id(key.partition(":")[2].partition(":")[2])
     if key.startswith("pl:"):
         return provider_of_id(key.partition(":")[2])
+    if key.startswith("fav:"):
+        source, separator, _kind = key.partition(":")[2].partition(":")
+        return source if separator else DEFAULT_PROVIDER
     if key == "root" or key.startswith("cat:"):
         return DEFAULT_PROVIDER
     return provider_of_id(key)

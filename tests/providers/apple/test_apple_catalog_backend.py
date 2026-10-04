@@ -129,7 +129,7 @@ def test_apple_album_expansion_rows_map_track_rows():
     assert WavesBridge._apple_album_expansion_rows(empty, "apple:gone") == []
 
 
-def test_apple_playlist_expansion_rows_number_by_position():
+def test_provider_playlist_expansion_rows_number_by_position():
     playlist = {
         "id": "playlist-1",
         "type": "playlists",
@@ -142,7 +142,7 @@ def test_apple_playlist_expansion_rows_number_by_position():
     }
     stub = SimpleNamespace(providers={"apple": _apple_provider(playlist=playlist)})
 
-    rows = WavesBridge._apple_playlist_expansion_rows(stub, "apple:playlist-1")
+    rows = WavesBridge._provider_playlist_expansion_rows(stub, "apple:playlist-1")
 
     assert [(r["id"], r["num"], r["kind"]) for r in rows] == [
         ("apple:song-1", 1, "track"),
@@ -158,7 +158,7 @@ def test_apple_browse_item_matches_the_tidal_payload_shape():
     )
     stub._record_page_members = lambda payload: WavesBridge._record_page_members(stub, payload)
 
-    payload = WavesBridge._build_apple_browse_item(stub, "album", "apple:album-1", "item:album:apple:album-1")
+    payload = WavesBridge._build_provider_browse_item(stub, "album", "apple:album-1", "item:album:apple:album-1")
 
     assert payload["title"] == "Selected Ambient Works 85-92"
     assert payload["header"]["id"] == "apple:album-1"
@@ -401,7 +401,7 @@ def _prefetch_stub(**overrides):
     stub._set_busy = lambda on: stub.busy.append(bool(on))
     stub._get_apple_enabled = lambda: True
     stub._remember_artist_page = lambda aid, payload: stub._artist_cache.__setitem__(aid, payload)
-    stub._start_apple_artist_build = lambda *a, **k: WavesBridge._start_apple_artist_build(stub, *a, **k)
+    stub._start_provider_artist_build = lambda *a, **k: WavesBridge._start_provider_artist_build(stub, *a, **k)
     for key, value in overrides.items():
         setattr(stub, key, value)
     stub._provider_readiness_probes = {
@@ -458,7 +458,7 @@ def test_apple_click_claims_an_in_flight_hover_prefetch():
         _artist_prefetch="apple:artist-1",
     )
 
-    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+    WavesBridge._load_provider_artist(stub, "apple:artist-1")
 
     assert stub._artist_prefetch_claimed is True
     assert stub.busy == [True] and stub.statuses == ["Loading artist…"]
@@ -469,7 +469,7 @@ def test_apple_click_after_a_prefetch_serves_the_warmed_cache():
     stub = _prefetch_stub()
     WavesBridge.prefetchArtist(stub, "apple:artist-1")
 
-    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+    WavesBridge._load_provider_artist(stub, "apple:artist-1")
 
     (payload,) = stub.artistLoaded.emits
     assert payload["name"] == "Aphex Twin"
@@ -519,7 +519,7 @@ def test_apple_artist_payload_projects_named_rows_and_top_tracks():
     provider.search("aphex")  # the summary copy a click would see
     stub = _prefetch_stub(providers={"apple": provider})
 
-    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+    WavesBridge._load_provider_artist(stub, "apple:artist-1")
 
     (payload,) = stub.artistLoaded.emits
     assert payload["name"] == "Aphex Twin"
@@ -552,7 +552,7 @@ def test_apple_silent_prefetch_failure_stays_silent():
 def test_apple_click_failure_reports_and_releases_the_load():
     stub = _prefetch_stub(providers={"apple": AppleProvider(catalog=_FailingArtistCatalog())})
 
-    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+    WavesBridge._load_provider_artist(stub, "apple:artist-1")
 
     assert stub.artistLoaded.emits == []
     assert stub.statuses == ["Loading artist…", "Could not open that artist"]
@@ -573,7 +573,7 @@ def test_apple_click_serves_cache_even_with_a_stale_loading_mark():
     stub._artist_cache["apple:artist-1"] = {"id": "apple:artist-1", "name": "Aphex Twin"}
     stub._artist_loading.add("apple:artist-1")
 
-    WavesBridge._load_apple_artist(stub, "apple:artist-1")
+    WavesBridge._load_provider_artist(stub, "apple:artist-1")
 
     (payload,) = stub.artistLoaded.emits
     assert payload["name"] == "Aphex Twin"

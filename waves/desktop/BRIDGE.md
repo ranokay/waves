@@ -35,6 +35,9 @@ Their Qt entry points remain on this context object.
 | `appleSetupRequested(reason)`                                                                      | Apple needs setup (`setup` on enable, `cookies` on a pre-setup download click); Main deep-links to the wizard    |
 | `setupRequested()`                                                                                 | Settings -> Providers -> "Set up providers" asks to re-open the provider welcome surface as a page               |
 | `signInRequested(providerId)`                                                                      | A provider card asked for sign-in; the welcome surface opens that provider's steps (or its cards)                |
+| `providerStateChanged(providerId)`                                                                 | An account/readiness change invalidates only the named provider's retained presentation state                    |
+| `providerLoginUrlReady(providerId, url)`                                                           | The current selected provider login attempt has a browser URL ready                                              |
+| `providerLoginFinished(providerId, ok)`                                                            | The current provider login attempt settles successfully or fails; cancelled/stale attempts never fire            |
 | `appleRuntimeStatusChanged` / `appleRuntimeProgress(pct)` / `appleRuntimeStateChanged(state, msg)` | The managed-Apple-runtime install/pull and sign-out lifecycle; Settings re-reads `appleSetupState()`             |
 
 The provider cards' action pills dispatch through one slot, not per-provider
