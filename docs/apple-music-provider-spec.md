@@ -105,7 +105,7 @@ resume automatically or reduce every catalog change to a generic update message.
 - **Composition**: `Download` takes a `Provider`; stream resolution is `provider.resolve_stream(...)` returning a neutral `StreamInfo` (replacing `TrackStreamInfo`'s tidalapi payloads). The bridge holds `self.providers: dict[str, Provider]` keyed by provider id; `_JobSpec` carries `(provider_id, kind, namespaced_id)` and resolves via `get_object` at dispatch.
 - **Capability flags** on the interface (`SEARCH OPEN_URL CATALOG DOWNLOAD LYRICS ART BROWSE FAVORITES MIXES VIDEOS` — plus `PREVIEW`, §7.4) gate My Music shelves, Browse, mixes, and videos on provider support.
 - **The fence**: TIDAL Atmos/session switching remains in its provider and existing TIDAL download engine. `TidalProvider.resolve_stream` delegates through the job-bound engine resolver; shared provider-neutral consumers do not acquire that machinery.
-- **Subordinate engines are planned** under [ADR 0010](adr/0010-provider-engine-runtime-boundary.md). Current `base.py` is the implemented seam, not a claim that every target operation/payload already exists.
+- **Subordinate engines** use Apple's explicit request, readiness and classified-result contract. The registered gamdl adapter wraps the existing cookies/wrapper-v2 path. Engine preference order and request pins select beneath the provider; new queue entries capture the engine choice, and retries retain it. Bridge data carries safe engine/operation requirements. Additional adapters, complete persisted policy and recovery remain subject to [ADR 0010](adr/0010-provider-engine-runtime-boundary.md) and qualification.
 
 ### 4.2 Ids
 

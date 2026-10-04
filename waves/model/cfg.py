@@ -139,6 +139,8 @@ class Settings(_JsonModel):
     # no LOW rung (AAC 256 starts at HIGH).
     tidal_quality_audio: str = "HI_RES_LOSSLESS"
     apple_quality_audio: str = "HI_RES_LOSSLESS"
+    # A default explicit engine choice is captured by new jobs, never retries.
+    apple_engine: str = "auto"
     # Apple Music ships as a user-enabled provider (spec ground rule 3), off
     # by default and opt-in from Settings. Search, setup, the Chooser and
     # download routing all read this flag.
@@ -450,6 +452,10 @@ class HelpSettings:
         'Apple Music audio download quality as a Waves tier string: "HIGH" (up to 256 Kbps AAC, Apple '
         'has no LOW), "LOSSLESS" (up to 24-bit / 48 kHz ALAC), "HI_RES_LOSSLESS" (above 48 kHz, up '
         "to 24-bit / 192 kHz ALAC). Default: the highest rung."
+    )
+    apple_engine: str = (
+        "Auto uses the eligible Apple engine. Choosing an engine pins new downloads to it. "
+        "Recommendations require qualification; gamdl remains the existing route."
     )
     apple_cookies_path: str = (
         "Path to a cookies export (Netscape format) from a logged-in music.apple.com browser session. "

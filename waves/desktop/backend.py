@@ -138,6 +138,7 @@ from waves.providers import (
 )
 from waves.providers.apple import runner
 from waves.providers.apple.engine import AppleCredential
+from waves.providers.apple.engines import EngineFacts, EnginePolicy
 from waves.providers.apple.files import (
     facts_without_share_url,
     tag_apple_file,
@@ -2960,6 +2961,7 @@ class _JobSpec:
     # Per-click Chooser lyrics/art pins (base keys, booleans), or None for a
     # plain click: the job reads these over the provider's stored options.
     chooser_toggles: dict | None = None
+    engine_policy: EnginePolicy | None = None
 
     def raw_object_id(self) -> str:
         """The id inside the namespace, as the provider's get_object wants it."""
@@ -3019,6 +3021,10 @@ class _AppleDownloads(DownloadAdapter):
                 str(item.get("audioType") or "") or None,
             ),
             chooser_toggles=dict(item.get("askToggles") or {}),
+            engine_policy=EnginePolicy(
+                tuple(item.get("enginePreferences") or ("gamdl",)),
+                "" if str(item.get("askEngine") or "auto").lower() == "auto" else str(item["askEngine"]),
+            ),
             is_retry=True,
         )
 
@@ -4106,6 +4112,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             CTX_APPLE: self._apple_live_flags,
         }
         self._provider_readiness_probes = {CTX_APPLE: self._apple_readiness}
+        self._provider_engine_probes = {CTX_APPLE: self._apple_engine_details}
         self._provider_status_presenters = {
             CTX_APPLE: lambda flags: apple_status(
                 bool(flags.get("enabled", False)),
@@ -5428,9 +5435,23 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     "word": light.get("word", ""),
                     "readiness": _readiness_payload(_provider_readiness(self, provider)),
                     "login_flow": descriptor.login_flow,
+                    "engines": WavesBridge.providerEngines(self, descriptor.id),
                 }
             )
         return cards
+
+    @Slot(str, result="QVariant")
+    def providerEngines(self, provider_id: str) -> list:
+        """Safe subordinate operation/setup detail for one registered provider."""
+        provider = self.providers.get(provider_id)
+        if provider is None:
+            return []
+        probe = (getattr(self, "_provider_engine_probes", None) or {}).get(provider_id)
+        try:
+            return probe() if probe is not None else provider.engine_details()
+        except Exception:
+            logger.debug("Could not compose provider engine detail", exc_info=True)
+            return []
 
     @Slot(str, result="QVariant")
     def providerReadiness(self, provider_id: str) -> dict:
@@ -10015,6 +10036,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             audio_default = "stereo"
         return {
             "provider": provider_id,
+            "engines": WavesBridge.providerEngines(self, provider_id),
+            "engine": str(getattr(provider, "engine_selection", "auto")),
             "tier": self._chooser_default_tier_word(provider_id),
             "audioType": audio_default,
             "atmosOnly": bool(self._chooser_atmos_only(media_id, kind)),
@@ -10171,6 +10194,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 values = None
         incoming = values if isinstance(values, dict) else {}
         pins: dict = {}
+        if "engine" in incoming:
+            pins["engine"] = str(incoming["engine"]).strip().lower()
         for key in _CHOOSER_TOGGLE_KEYS:
             if key in incoming:
                 pins[key] = bool(incoming[key])
@@ -13458,6 +13483,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         chooser_ask: tuple[str, str] | None = None,
         chooser_audio: str | None = None,
         chooser_toggles: dict | None = None,
+        engine_policy: EnginePolicy | None = None,
     ) -> bool:
         """Queue one Apple track or collection. The TIDAL _download's shape
         for the parts that are provider-blind (folder gate, ffmpeg gate,
@@ -13480,6 +13506,11 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
         (spec §7.1): the affordance stays live and opens the path to making
         it work, instead of failing silently.
         """
+        if engine_policy is None:
+            provider = (getattr(self, "providers", None) or {}).get(CTX_APPLE)
+            capture = getattr(provider, "engine_policy", None)
+            selected = (chooser_toggles or {}).get("engine")
+            engine_policy = capture(selected) if callable(capture) else EnginePolicy()
         enabled_gate = getattr(self, "_apple_provider_enabled", None)
         if callable(enabled_gate) and not enabled_gate():
             # The switch is off: a stale click or a RETRY from the Stopped
@@ -13545,6 +13576,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         chooser_ask=chooser_ask,
                         chooser_audio=chooser_audio,
                         chooser_toggles=chooser_toggles,
+                        engine_policy=engine_policy,
                     )
                 ),
             )
@@ -13564,6 +13596,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                     chooser_ask=chooser_ask,
                     chooser_audio=chooser_audio,
                     chooser_toggles=chooser_toggles,
+                    engine_policy=engine_policy,
                 )
             ),
         ):
@@ -13690,6 +13723,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                         and it.get("askQuality") == ask
                         and str(it.get("audioType") or "") == (row_atype or "")
                         and dict(it.get("askToggles") or {}) == dict(chooser_toggles or {})
+                        and str(it.get("askEngine") or "auto") == (engine_policy.pin or "auto")
+                        and tuple(it.get("enginePreferences") or ("gamdl",)) == engine_policy.preferences
                         for it in self._queue
                     )
                 if dup:
@@ -13708,6 +13743,8 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 ask_tier=row_tier_word,
                 audio_type=row_atype,
                 ask_toggles=chooser_toggles,
+                ask_engine=engine_policy.pin or "auto",
+                engine_preferences=engine_policy.preferences,
             )
             queued_any = True
             # The row's kept object for retries: Apple rows never enter _objs,
@@ -13726,6 +13763,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 base_template=base_for_spec,
                 is_retry=is_retry,
                 chooser_toggles=dict(chooser_toggles or {}),
+                engine_policy=engine_policy,
             )
             self._pending_qids.append(qid)
         if not queued_any:
@@ -20060,6 +20098,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
                 logger.debug("Apple provider could not resolve ffmpeg", exc_info=True)
         data = getattr(self.settings, "data", None)
         provider.cookies_path = str(getattr(data, "apple_cookies_path", "") or "")
+        provider.engine_selection = str(getattr(data, "apple_engine", "auto") or "auto")
         provider.ffmpeg_path = str(getattr(data, "path_binary_ffmpeg", "") or "")
         resolver = getattr(self, "_resolve_apple_nm3u8dlre", None)
         if callable(resolver):
@@ -20650,9 +20689,27 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             "signed_in": signed_in,
             "needs_attention": needs_attention,
             "cookies_ready": cookies_ready and signed_in,
+            "cookies_account_ready": account_signed_in,
             "wrapper_ready": wrapper_ready,
             "account_signed_in": account_signed_in or wrapper_ready,
         }
+
+    def _apple_engine_details(self) -> list:
+        flags = self._apple_live_flags()
+        provider = self.providers[CTX_APPLE]
+        if not isinstance(provider, AppleProvider):
+            return []
+        return provider.engine_details(
+            EngineFacts(
+                enabled=bool(flags["enabled"]),
+                cookies_ready=bool(flags["cookies_account_ready"]),
+                wrapper_ready=bool(flags["wrapper_ready"]) and self._apple_container_serves(),
+                fetch_ready=bool(self._apple_fetch_binary_ready()),
+                # The configured route is wrapper-v2. Reachability and account
+                # readiness remain separate facts and do not qualify decryption.
+                protocol_compatible=True,
+            )
+        )
 
     def _apple_readiness(self) -> ProviderReadiness:
         flags = self._apple_live_flags()
@@ -20818,6 +20875,7 @@ class WavesBridge(QueueMixin, LibraryMixin, QObject):
             self.ownershipChanged.emit("")
         if (
             "apple_cookies_path" in values
+            or "apple_engine" in values
             or "path_binary_ffmpeg" in values
             or "path_binary_nm3u8dlre" in values
             or "apple_quarantine_dir" in values

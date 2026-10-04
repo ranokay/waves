@@ -1,6 +1,6 @@
 # 0010: engines execute beneath providers through explicit runtime boundaries
 
-- Status: accepted target; multiple-engine routing and qualification are planned
+- Status: accepted; subordinate engine contract and gamdl adapter implemented; additional adapters and qualification planned
 - Decided: 2026-10-03
 - Scope: provider execution, readiness, runtime lifecycle and capability release gates
 

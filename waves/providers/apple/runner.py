@@ -2718,6 +2718,7 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
             keep_ask=row_ask,
             is_retry=bool(getattr(spec, "is_retry", False)),
             chooser_toggles=getattr(spec, "chooser_toggles", None),
+            engine_policy=getattr(spec, "engine_policy", None),
         )
 
     if not hooks.gate_reachability(replay, media_id):
@@ -2770,6 +2771,10 @@ def run_job_body(hooks: AppleJobHooks, qid, spec, obj, *, signals, job_abort, ro
             # One engine stack and event loop per job: the provider opens its
             # session scope here, fetches every track through it, and the
             # scope releases the gamdl clients and the loop even on failure.
+            engine_context = getattr(provider, "engine_job_context", None)
+            if callable(engine_context):
+                policy = getattr(spec, "engine_policy", None) or provider.engine_policy()
+                stack.enter_context(engine_context(policy, job_abort))
             opener = getattr(provider, "fetch_job_session", None)
             if callable(opener):
                 stack.enter_context(opener())

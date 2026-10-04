@@ -6,11 +6,20 @@ import asyncio
 import logging
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
-from threading import Lock, RLock, local
+from threading import Event, Lock, RLock, local
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from waves.constants import CTX_APPLE, QualityTier, quality_rank
+from waves.providers.apple.engines import (
+    AppleEngine,
+    EngineFacts,
+    EngineOperation,
+    EnginePolicy,
+    EngineRequest,
+    EngineRouter,
+    EngineRouteUnavailable,
+)
 from waves.providers.base import (
     AudioType,
     Capability,
@@ -40,6 +49,11 @@ class _QuietCatalogLog:
 
 class _CatalogThreadState(local):
     epoch: int | None = None
+
+
+class _EngineThreadState(local):
+    policy: EnginePolicy | None = None
+    abort: Event | None = None
 
 
 class AppleCatalogUnavailable(RuntimeError):
@@ -165,6 +179,7 @@ class AppleProvider(Provider):
                 "provider_apple_status",
                 "apple_setup_wizard",
                 "apple_quality_audio",
+                "apple_engine",
                 "apple_lyrics_embed",
                 "apple_lyrics_file",
                 "apple_lyrics_prefer_lrclib",
@@ -188,7 +203,13 @@ class AppleProvider(Provider):
             login_flow="setup",
         )
 
-    def __init__(self, catalog=None, catalog_factory=None) -> None:
+    def __init__(self, catalog=None, catalog_factory=None, *, engines: tuple[AppleEngine, ...] | None = None) -> None:
+        from waves.providers.apple.gamdl_engine import GamdlEngine
+
+        self._engines = EngineRouter(engines if engines is not None else (GamdlEngine(self),))
+        self._engine_thread = _EngineThreadState()
+        self.engine_selection = "auto"
+        self.engine_preferences = ("gamdl",)
         self._catalog = catalog
         self._catalog_factory = catalog_factory or self._create_catalog
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -234,6 +255,63 @@ class AppleProvider(Provider):
         # one every fetch builds and closes its own stack.
         self._fetch_scoped = False
         self._fetch_stack: AppleFetchSession | None = None
+
+    def engine_policy(self, selection: str | None = None) -> EnginePolicy:
+        selected = str(self.engine_selection if selection is None else selection).strip().lower()
+        return EnginePolicy(tuple(self.engine_preferences), "" if selected in ("", "auto") else selected)
+
+    @contextmanager
+    def engine_job_context(self, policy: EnginePolicy, abort: Event) -> Iterator[None]:
+        """Keep the captured engine choice and whole-job Cancel on this worker."""
+        outer = self._engine_thread.policy, self._engine_thread.abort
+        self._engine_thread.policy, self._engine_thread.abort = policy, abort
+        try:
+            yield
+        finally:
+            self._engine_thread.policy, self._engine_thread.abort = outer
+
+    def engine_details(self, facts: EngineFacts | None = None) -> list[dict]:
+        """Safe capability/setup data. No paths, endpoints or account identifiers."""
+        details = []
+        for engine in self._engines.engines.values():
+            descriptor = engine.descriptor
+            requirements = []
+            for requirement in descriptor.requirements:
+                request = EngineRequest(
+                    requirement.operation,
+                    {},
+                    requirement.tiers[-1] if requirement.tiers else QualityTier.HIGH,
+                    requirement.audio_types[0] if requirement.audio_types else AudioType.STEREO,
+                    required_codec=requirement.codecs[0] if requirement.codecs else "",
+                )
+                readiness = engine.readiness(request, facts or EngineFacts())
+                requirements.append(
+                    {
+                        "operation": str(requirement.operation),
+                        "codecs": list(requirement.codecs),
+                        "audio_types": [str(value) for value in requirement.audio_types],
+                        "tiers": [str(value) for value in requirement.tiers],
+                        "runtime": requirement.runtime,
+                        "runtime_kind": requirement.runtime_kind,
+                        "account_boundary": requirement.account_boundary,
+                        "protocol": requirement.protocol,
+                        "state": str(readiness.state),
+                        "action": readiness.action,
+                    }
+                )
+            details.append(
+                {
+                    "id": descriptor.id,
+                    "name": descriptor.name,
+                    "client": descriptor.client,
+                    "compatible_versions": descriptor.compatible_versions,
+                    "requirements": requirements,
+                    "recommended_operations": [
+                        str(operation) for operation, evidence in descriptor.recommendations if evidence
+                    ],
+                }
+            )
+        return details
 
     def catalog_context(self) -> AbstractContextManager[None]:
         """Capture this dispatch's cache epoch before its worker can be delayed.
@@ -1238,6 +1316,39 @@ class AppleProvider(Provider):
         return tier, audio_type
 
     def resolve_stream(self, track, tier: QualityTier | None, audio_type: AudioType | None) -> StreamInfo:
+        """Route one audio ask beneath Apple, preserving the job's engine pin."""
+        tier, audio_type = self._required_request(tier, audio_type)
+        request = EngineRequest(
+            EngineOperation.AUDIO,
+            self._unwrap(track),
+            tier,
+            audio_type,
+            self._engine_thread.abort or Event(),
+        )
+        policy = self._engine_thread.policy or self.engine_policy()
+        engine = self._engines.select(request, policy)
+        result = engine.execute(request)
+        if result.error is not None:
+            raise result.error
+        if result.failure is not None or not isinstance(result.value, StreamInfo):
+            raise EngineRouteUnavailable("The selected Apple engine could not execute this request.")  # noqa: TRY003
+        info = result.value
+        codec = str((info.delivered or {}).get("codecs") or "").lower()
+        codec = {"mp4a.40.2": "aac", "ec-3": "eac3"}.get(codec, codec)
+        requirement = next(
+            (entry for entry in engine.descriptor.requirements if codec in entry.codecs),
+            None,
+        )
+        info.delivered = {
+            **(info.delivered or {}),
+            "engine_id": engine.descriptor.id,
+            "runtime_id": requirement.runtime if requirement else "",
+        }
+        return info
+
+    def _resolve_gamdl_stream(
+        self, track, tier: QualityTier | None, audio_type: AudioType | None, *, required_codec: str = ""
+    ) -> StreamInfo:
         """Fetch and locally decrypt one song through the gamdl engine.
 
         The request parameters may be None per the seam contract (a caller that
@@ -1269,7 +1380,13 @@ class AppleProvider(Provider):
             want = QualityTier(tier) if isinstance(tier, QualityTier) else QualityTier(str(tier))
         except ValueError:
             want = QualityTier.HIGH
-        if not atmos and want in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS) and self.wrapper_available:
+        self._check_gamdl_constraint(required_codec, atmos)
+        if (
+            not atmos
+            and required_codec != "aac"
+            and want in (QualityTier.LOSSLESS, QualityTier.HI_RES_LOSSLESS)
+            and self.wrapper_available
+        ):
             try:
                 return self._resolve_via_wrapper(item, want)
             except Exception as exc:
@@ -1288,7 +1405,11 @@ class AppleProvider(Provider):
                     kind = self.classify_refusal(exc).kind
                 except Exception:
                     kind = None
-                if str(kind) != str(RefusalKind.UNAVAILABLE) or not str(self.cookies_path or "").strip():
+                if (
+                    required_codec
+                    or str(kind) != str(RefusalKind.UNAVAILABLE)
+                    or not str(self.cookies_path or "").strip()
+                ):
                     raise
                 logger.debug("Apple ALAC unavailable, falling back to AAC", exc_info=True)
         delivery = self._fetch_cookies(song_id=str(item.get("id")), atmos=atmos)
@@ -1325,6 +1446,14 @@ class AppleProvider(Provider):
             single_file=True,
             local_file=str(delivery.staged_path),
         )
+
+    def _check_gamdl_constraint(self, codec: str, atmos: bool) -> None:
+        from waves.providers.apple.engine import AppleVariantUnavailable
+
+        if codec == "eac3" and not atmos:
+            raise AppleVariantUnavailable("This song has no Atmos rendition.")  # noqa: TRY003
+        if codec == "alac" and not self.wrapper_available:
+            raise AppleVariantUnavailable("ALAC requires the wrapper-v2 runtime.")  # noqa: TRY003
 
     def _resolve_via_wrapper(self, item: dict, want: QualityTier) -> StreamInfo:
         """One stereo song through the managed wrapper's ALAC path.

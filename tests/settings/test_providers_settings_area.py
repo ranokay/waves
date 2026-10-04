@@ -115,6 +115,7 @@ def test_the_apple_card_holds_the_switch_row_and_the_quality():
         "provider_apple_status",
         "apple_setup_wizard",
         "apple_quality_audio",
+        "apple_engine",
         "apple_lyrics_embed",
         "apple_lyrics_file",
         "apple_lyrics_prefer_lrclib",
@@ -710,3 +711,12 @@ def test_provider_action_ignores_an_unregistered_provider():
     stub = _schema_stub()
     stub.providerAction = _bind(stub, "providerAction")
     stub.providerAction("ghost", "ghost_signin")  # no provider, no crash
+
+
+def test_apple_engine_setting_offers_auto_and_the_existing_route_without_a_recommendation():
+    field = next(item for item in _providers()["providers_apple"]["fields"] if item["key"] == "apple_engine")
+    assert field["type"] == "enum"
+    assert field["value"] == "auto"
+    assert field["options"] == [{"value": "auto", "label": "Auto"}, {"value": "gamdl", "label": "gamdl"}]
+    data = ModelSettings(apple_engine="gamdl")
+    assert ModelSettings.from_json(data.to_json()).apple_engine == "gamdl"

@@ -671,6 +671,10 @@ class Provider(ABC):
         its card owns. See :class:`ProviderDescriptor`."""
         return ProviderDescriptor(id=cls.id, name=cls.name)
 
+    def engine_details(self) -> list[dict]:
+        """Optional subordinate execution detail, safe for desktop presentation."""
+        return []
+
     def readiness(self, *, enabled: bool | None = True, signed_in: bool | None = None) -> ProviderReadiness:
         """Compose this service's account policy from current, explicit facts.
 

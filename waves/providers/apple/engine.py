@@ -3,9 +3,9 @@
 The cookies tier needs no wrapper or runtime: a Netscape cookies
 export from a logged-in music.apple.com session unlocks AAC 256 stereo and
 Atmos E-AC-3. This module is the only place that speaks gamdl's download
-stack; the provider calls in with plain arguments and gets back a decrypted
-file, so a future engine swap stays behind the provider's methods (spec §4.1:
-no Engine sub-abstraction in v1).
+stack. The subordinate gamdl adapter calls this implementation through Apple's
+provider methods and returns verified staged bytes. Other engines remain
+behind the same provider identity and download adapter.
 
 Per song the flow mirrors gamdl's own CLI wiring (cli/cli.py): catalog media
 -> stream info (codec priority) -> encrypted fetch (N_m3u8DL-RE for m3u8,
